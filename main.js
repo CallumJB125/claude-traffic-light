@@ -2,6 +2,35 @@ const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen } = require('elec
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
+
+const WIDGET_ASPECT = 100 / 230; // width / height — a real traffic light is taller than it is wide
+
+// Best-effort: bring the terminal app most likely running the session that
+// needs attention to the front. We can't target the exact tab/pane from
+// outside the terminal, so this activates the app; the user still has to
+// find the right window, but at least it's the right app, focused.
+const TERMINAL_APPS = ['Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
+
+function activateTerminalApp() {
+  return new Promise((resolve) => {
+    const script = `
+      tell application "System Events"
+        set names to name of every process
+      end tell
+      repeat with candidate in {${TERMINAL_APPS.map((n) => `"${n}"`).join(', ')}}
+        if names contains candidate then
+          tell application candidate to activate
+          return candidate
+        end if
+      end repeat
+      return ""
+    `;
+    execFile('osascript', ['-e', script], (err, stdout) => {
+      resolve(!err && stdout.trim() ? stdout.trim() : null);
+    });
+  });
+}
 
 const ROOT_DIR = path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
@@ -124,18 +153,21 @@ function aggregateState() {
 function createWindow() {
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
+  const defaultWidth = 100;
+  const defaultHeight = Math.round(defaultWidth / WIDGET_ASPECT);
 
   win = new BrowserWindow({
-    width: saved?.width || 90,
-    height: saved?.height || 90,
-    x: saved?.x ?? Math.round(primary.width - 140),
+    width: saved?.width || defaultWidth,
+    height: saved?.height || defaultHeight,
+    x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
     y: saved?.y ?? 80,
-    minWidth: 48,
-    minHeight: 48,
+    minWidth: 60,
+    minHeight: Math.round(60 / WIDGET_ASPECT),
     frame: false,
     transparent: true,
     hasShadow: false,
     resizable: true,
+    movable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,
@@ -147,6 +179,7 @@ function createWindow() {
 
   win.setAlwaysOnTop(true, 'floating', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setAspectRatio(WIDGET_ASPECT);
   win.loadFile('index.html');
 
   win.on('resize', saveBounds);
@@ -210,6 +243,25 @@ ipcMain.handle('open-claude', () => {
 });
 
 ipcMain.handle('get-aggregate-status', () => aggregateState());
+
+// Click handler: jump to whichever session needs the user (red beats amber,
+// most-recently-updated wins ties), by focusing the terminal app it's most
+// likely running in. If nothing needs attention, just open claude.ai.
+ipcMain.handle('go-to-needing-session', async () => {
+  const { sessions } = aggregateState();
+  const needing = sessions
+    .filter((s) => s.state === 'red' || s.state === 'amber')
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+  if (needing.length === 0) {
+    shell.openExternal('https://claude.ai');
+    return { opened: 'claude.ai' };
+  }
+
+  const target = needing.find((s) => s.state === 'red') || needing[0];
+  const activated = await activateTerminalApp();
+  return { opened: activated || 'none-found', cwd: target.cwd };
+});
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
