@@ -152,10 +152,29 @@
     app.addEventListener('mousedown', (e) => {
       dragStart = { x: e.screenX, y: e.screenY };
     });
-    app.addEventListener('click', (e) => {
+    let feedbackTimer = null;
+    function showFeedback(text) {
+      clearTimeout(feedbackTimer);
+      tooltip.textContent = text;
+      tooltip.style.opacity = '1';
+      feedbackTimer = setTimeout(() => {
+        tooltip.style.opacity = '';
+        refresh();
+      }, 3000);
+    }
+
+    app.addEventListener('click', async (e) => {
       const moved = dragStart && (Math.abs(e.screenX - dragStart.x) > 3 || Math.abs(e.screenY - dragStart.y) > 3);
       if (moved) return;
-      window.trafficLight.goToNeedingSession();
+      const result = await window.trafficLight.goToNeedingSession();
+      if (!result) return;
+      if (result.total === 0) {
+        showFeedback('Nothing waiting — opened claude.ai');
+      } else {
+        const folder = result.cwd.split('/').filter(Boolean).pop() || result.cwd;
+        const badge = result.total > 1 ? ` (${result.index}/${result.total})` : '';
+        showFeedback(`→ ${folder}${badge} · path copied`);
+      }
     });
   </script>
 </body>

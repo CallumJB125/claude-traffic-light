@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -135,9 +135,11 @@ function readSessions() {
   return sessions;
 }
 
-// Priority: any session needing you (red) wins, then any still working
-// (green), otherwise everything is idle/waiting (amber). A manual override
-// from the tray menu always wins until it expires or is cleared.
+// Priority: any session needing you (red) wins, then any session waiting on
+// you (amber) — even if everything else is still busy, since that's the
+// actionable state — and only if every session is green does the light show
+// green. A manual override from the tray menu always wins until it expires
+// or is cleared.
 function aggregateState() {
   const override = readManualOverride();
   if (override) return { state: override.state, reason: 'manual', sessions: readSessions() };
@@ -146,8 +148,8 @@ function aggregateState() {
   if (sessions.length === 0) return { state: 'amber', reason: 'idle', sessions: [] };
 
   if (sessions.some((s) => s.state === 'red')) return { state: 'red', reason: 'session', sessions };
-  if (sessions.some((s) => s.state === 'green')) return { state: 'green', reason: 'session', sessions };
-  return { state: 'amber', reason: 'session', sessions };
+  if (sessions.some((s) => s.state === 'amber')) return { state: 'amber', reason: 'session', sessions };
+  return { state: 'green', reason: 'session', sessions };
 }
 
 function createWindow() {
@@ -244,23 +246,43 @@ ipcMain.handle('open-claude', () => {
 
 ipcMain.handle('get-aggregate-status', () => aggregateState());
 
-// Click handler: jump to whichever session needs the user (red beats amber,
-// most-recently-updated wins ties), by focusing the terminal app it's most
-// likely running in. If nothing needs attention, just open claude.ai.
+// Click handler: jump to whichever session needs the user. We can't target
+// an exact terminal tab/pane from outside the terminal, so this activates
+// the terminal app and copies that session's folder to the clipboard. With
+// more than one session waiting, each click cycles to the next one (oldest
+// waiting first, so nothing gets stuck at the back of the queue forever);
+// a red (limit-hit) session always jumps the queue to be shown first.
+let cycleIndex = 0;
+
 ipcMain.handle('go-to-needing-session', async () => {
   const { sessions } = aggregateState();
   const needing = sessions
     .filter((s) => s.state === 'red' || s.state === 'amber')
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 
   if (needing.length === 0) {
     shell.openExternal('https://claude.ai');
-    return { opened: 'claude.ai' };
+    cycleIndex = 0;
+    return { opened: 'claude.ai', total: 0 };
   }
 
-  const target = needing.find((s) => s.state === 'red') || needing[0];
+  const reds = needing.filter((s) => s.state === 'red');
+  const queue = reds.length > 0 ? reds : needing;
+
+  cycleIndex = cycleIndex % queue.length;
+  const target = queue[cycleIndex];
+  const shownIndex = cycleIndex + 1;
+  cycleIndex += 1;
+
+  clipboard.writeText(target.cwd);
   const activated = await activateTerminalApp();
-  return { opened: activated || 'none-found', cwd: target.cwd };
+  return {
+    opened: activated || 'none-found',
+    cwd: target.cwd,
+    state: target.state,
+    index: shownIndex,
+    total: queue.length,
+  };
 });
 
 app.whenReady().then(() => {
