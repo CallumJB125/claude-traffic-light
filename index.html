@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Claude Traffic Light</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  #app {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-app-region: drag;
+    cursor: pointer;
+  }
+
+  .housing {
+    width: 62%;
+    height: 100%;
+    max-width: 100%;
+    aspect-ratio: 1 / 2.6;
+    background: linear-gradient(180deg, #2b2b2f, #17171a);
+    border-radius: 999px;
+    padding: 8%;
+    box-shadow:
+      0 6px 18px rgba(0, 0, 0, 0.45),
+      inset 0 1px 1px rgba(255, 255, 255, 0.08),
+      inset 0 -2px 4px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    -webkit-app-region: no-drag;
+    transition: transform 120ms ease;
+  }
+
+  .housing:active {
+    transform: scale(0.96);
+  }
+
+  .lamp {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: #2a1010;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,0.6);
+    transition: background 200ms ease, box-shadow 200ms ease;
+  }
+
+  .lamp.red.on {
+    background: radial-gradient(circle at 35% 30%, #ff8a80, #ff1f1f 55%, #7a0000 100%);
+    box-shadow: 0 0 12px 4px rgba(255, 40, 40, 0.85), inset 0 2px 3px rgba(0,0,0,0.3);
+  }
+  .lamp.amber { background: #2a2110; }
+  .lamp.amber.on {
+    background: radial-gradient(circle at 35% 30%, #ffe08a, #ffab00 55%, #7a4b00 100%);
+    box-shadow: 0 0 12px 4px rgba(255, 171, 0, 0.85), inset 0 2px 3px rgba(0,0,0,0.3);
+  }
+  .lamp.green { background: #0f2a15; }
+  .lamp.green.on {
+    background: radial-gradient(circle at 35% 30%, #b9ffb0, #2ecc40 55%, #0a5b16 100%);
+    box-shadow: 0 0 12px 4px rgba(46, 204, 64, 0.85), inset 0 2px 3px rgba(0,0,0,0.3);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.25); }
+  }
+
+  #tooltip {
+    position: fixed;
+    bottom: 4px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font: 500 9px -apple-system, system-ui, sans-serif;
+    color: rgba(255,255,255,0.75);
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
+</style>
+</head>
+<body>
+  <div id="app" title="Click to open Claude">
+    <div class="housing">
+      <div class="lamp red" id="lamp-red"></div>
+      <div class="lamp amber" id="lamp-amber"></div>
+      <div class="lamp green" id="lamp-green"></div>
+    </div>
+  </div>
+  <div id="tooltip"></div>
+
+  <script>
+    const lampRed = document.getElementById('lamp-red');
+    const lampAmber = document.getElementById('lamp-amber');
+    const lampGreen = document.getElementById('lamp-green');
+    const tooltip = document.getElementById('tooltip');
+    const app = document.getElementById('app');
+
+    let statusPath = null;
+
+    function applyState(state) {
+      lampRed.classList.toggle('on', state === 'red');
+      lampAmber.classList.toggle('on', state === 'amber');
+      lampGreen.classList.toggle('on', state === 'green');
+    }
+
+    function refresh() {
+      if (!statusPath) return;
+      const data = window.trafficLight.readStatusFile(statusPath);
+      if (!data) return;
+      applyState(data.state);
+      const labels = {
+        green: 'Claude is working',
+        amber: 'Needs your input',
+        red: 'Out of tokens',
+      };
+      tooltip.textContent = labels[data.state] || '';
+    }
+
+    (async () => {
+      statusPath = await window.trafficLight.getStatusPath();
+      refresh();
+      window.trafficLight.onStatusChanged(refresh);
+      setInterval(refresh, 3000);
+    })();
+
+    app.addEventListener('click', () => window.trafficLight.openClaude());
+  </script>
+</body>
+</html>

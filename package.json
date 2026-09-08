@@ -1,0 +1,15 @@
+{
+  "name": "claude-traffic-light",
+  "version": "1.0.0",
+  "description": "A cute floating traffic light that shows Claude Code's status: green (working), amber (needs your input), red (out of tokens).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "install-hooks": "node hooks/install.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}
