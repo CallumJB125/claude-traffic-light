@@ -1,44 +1,53 @@
 # Claude Traffic Light
 
 A tiny, cute traffic-light widget that floats on top of every app on your Mac
-and shows what Claude Code is doing:
+and shows what Claude Code is doing **across every live session at once**:
 
-- 🟢 **Green** — Claude is thinking / working
-- 🟡 **Amber** — Claude is waiting on your input
-- 🔴 **Red** — you're out of tokens / hit a usage limit
+- 🟢 **Green** — at least one session is working
+- 🟡 **Amber** — everything's idle, waiting on your input
+- 🔴 **Red** — a session hit a usage/rate limit (any red wins, so you never miss it)
 
 Click the widget to jump to [claude.ai](https://claude.ai). Drag it anywhere,
 resize it by dragging its edge — it remembers where you left it.
 
-## Install
+## Install (double-clickable app)
 
 ```bash
 npm install
-npm run install-hooks   # wires the widget into Claude Code's hooks
-npm start                # launch the floating widget
+npm run dist        # builds dist/mac-arm64/Claude Traffic Light.app
 ```
 
-`npm run install-hooks` adds a few entries to `~/.claude/settings.json`
-(`UserPromptSubmit`, `PreToolUse`, `Notification`, `Stop`) that call
-`hooks/set-status.js` to update `~/.claude-traffic-light/status.json`
-whenever your Claude Code session changes state. It only appends new hook
-entries — it won't touch anything else already in your settings file.
+Copy `dist/mac-arm64/Claude Traffic Light.app` to `/Applications` and double
+click it. It's unsigned (no Apple Developer ID), so the first launch needs
+right-click → Open once to bypass Gatekeeper.
 
-Restart any running Claude Code sessions after installing the hooks.
+On first launch the app automatically registers its Claude Code hooks in
+`~/.claude/settings.json` (only appends — never touches anything else
+already there). If you move the `.app` afterwards, use the tray menu's
+**Reinstall Claude Code Hooks**, since the hook commands point at the
+`.app`'s path at install time.
+
+Restart any Claude Code sessions that were already running so they pick up
+the new hooks.
+
+## How multi-session monitoring works
+
+Every Claude Code session writes its own status file to
+`~/.claude-traffic-light/sessions/<session_id>.json` via hooks
+(`UserPromptSubmit`, `PreToolUse` → green; `Notification`, `Stop` → amber;
+`SessionEnd` removes the file). The app watches that whole directory and
+aggregates all sessions less than 15 minutes stale — red beats green beats
+amber, so one session running out of tokens always lights up red even if
+three others are still working fine.
 
 ## Manual control
 
-Right-click the tray icon (top menu bar) for "Set state" options if you want
-to override the light by hand, or just edit
-`~/.claude-traffic-light/status.json` directly — the widget picks up changes
-within a few seconds:
+Right-click the tray icon (top menu bar) to install/reinstall the hooks, or
+to force an override state for 5 minutes (handy for testing, or if a session
+dies without firing its `SessionEnd` hook).
 
-```json
-{ "state": "red", "updatedAt": "...", "reason": "manual" }
+## Dev mode
+
+```bash
+npm start   # runs the widget straight from source, no packaging
 ```
-
-## Packaging as a standalone app
-
-This repo runs via `npm start` for development. To ship a double-clickable
-`.app`, add [electron-builder](https://www.electron.build/) and run its
-`build` command — not included here to keep the project dependency-light.
