@@ -37,10 +37,13 @@ if (payload) {
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
 
+// Only the actual notification text is checked — not the whole JSON payload
+// (which also carries cwd/transcript paths that can innocently contain
+// words like "limit" and would otherwise cause false positives).
 let detectedState = state;
-if (data && state === 'amber') {
-  const text = JSON.stringify(data).toLowerCase();
-  if (/usage limit|rate limit|out of tokens|context limit|quota exceeded/.test(text)) {
+if (data && state === 'amber' && typeof data.message === 'string') {
+  const text = data.message.toLowerCase();
+  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) {
     detectedState = 'red';
   }
 }
