@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 
-const WIDGET_ASPECT = 100 / 230; // width / height — a real traffic light is taller than it is wide
+const WIDGET_ASPECT = 64 / 82; // width / height — matches the robot+sign SVG viewBox
 
 // Best-effort: bring the terminal app most likely running the session that
 // needs attention to the front. We can't target the exact tab/pane from
@@ -165,8 +165,10 @@ function createWindow() {
     height: saved?.height || defaultHeight,
     x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
     y: saved?.y ?? 80,
-    minWidth: 60,
-    minHeight: Math.round(60 / WIDGET_ASPECT),
+    minWidth: 80,
+    minHeight: Math.round(80 / WIDGET_ASPECT),
+    maxWidth: 320,
+    maxHeight: Math.round(320 / WIDGET_ASPECT),
     frame: false,
     transparent: true,
     hasShadow: false,

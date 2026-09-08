@@ -15,12 +15,13 @@
     user-select: none;
   }
 
-  /* The outer few pixels are left as plain (non-drag) window chrome so
-     macOS can still grab the true window edge to resize; #app itself is
-     what you drag to move the widget. */
+  /* The outer strip is left as plain (non-drag) window chrome so macOS can
+     still grab the true window edge to resize; #app itself is what you drag
+     to move the widget. Kept generous (10px) so the resize handle is easy
+     to grab, not a hairline. */
   body {
     box-sizing: border-box;
-    padding: 5px;
+    padding: 10px;
   }
 
   /* Deliberately NOT -webkit-app-region: drag — on macOS that region type
@@ -40,51 +41,82 @@
   .housing {
     width: 100%;
     height: 100%;
-    background: linear-gradient(155deg, #34343a, #19191c 65%);
-    border-radius: 22%;
-    padding: 10% 14%;
-    box-sizing: border-box;
-    box-shadow:
-      0 4px 10px rgba(0, 0, 0, 0.35),
-      inset 0 1px 0 rgba(255, 255, 255, 0.08),
-      inset 0 -1px 2px rgba(0, 0, 0, 0.5);
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     transition: transform 120ms ease;
   }
 
   .housing:active {
-    transform: scale(0.97);
+    transform: scale(0.96);
+  }
+
+  .rig {
+    width: 100%;
+    height: 100%;
+    shape-rendering: crispEdges;
   }
 
   .lamp {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: 50%;
-    background: #262024;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55);
-    transition: background 180ms ease, box-shadow 180ms ease;
+    fill: #3a3542;
+    transition: fill 180ms ease;
   }
 
   .lamp.red.on {
-    background: radial-gradient(circle at 35% 30%, #ff9d90, #e2231a 55%, #7a0c07 100%);
-    box-shadow: 0 0 6px 1px rgba(226, 35, 26, 0.55), inset 0 1px 2px rgba(0, 0, 0, 0.25);
+    fill: #e2231a;
+    filter: drop-shadow(0 0 3px rgba(226, 35, 26, 0.85));
   }
   .lamp.amber.on {
-    background: radial-gradient(circle at 35% 30%, #ffe29e, #f2a200 55%, #7a5000 100%);
-    box-shadow: 0 0 6px 1px rgba(242, 162, 0, 0.55), inset 0 1px 2px rgba(0, 0, 0, 0.25);
+    fill: #f2a200;
+    filter: drop-shadow(0 0 3px rgba(242, 162, 0, 0.85));
   }
   .lamp.green.on {
-    background: radial-gradient(circle at 35% 30%, #b8f2a8, #2fae3e 55%, #0a5218 100%);
-    box-shadow: 0 0 6px 1px rgba(47, 174, 62, 0.55), inset 0 1px 2px rgba(0, 0, 0, 0.25);
+    fill: #2fae3e;
+    filter: drop-shadow(0 0 3px rgba(47, 174, 62, 0.85));
     animation: pulse 1.8s ease-in-out infinite;
   }
 
   @keyframes pulse {
-    0%, 100% { filter: brightness(1); }
-    50% { filter: brightness(1.15); }
+    0%, 100% { filter: drop-shadow(0 0 3px rgba(47, 174, 62, 0.85)) brightness(1); }
+    50% { filter: drop-shadow(0 0 5px rgba(47, 174, 62, 0.95)) brightness(1.2); }
+  }
+
+  /* Claude's raised right arm — pivots at the shoulder (where it meets the
+     head) so a rotation reads as a wave, not a spin. */
+  .arm-right {
+    transform-origin: 59.5px 39px;
+  }
+
+  #rig.state-amber .arm-right {
+    animation: wave 0.7s ease-in-out infinite;
+  }
+  @keyframes wave {
+    0%, 100% { transform: rotate(0deg); }
+    30% { transform: rotate(-22deg); }
+    70% { transform: rotate(10deg); }
+  }
+
+  /* Working: a very small idle bob, just enough to read as "alive." */
+  #rig.state-green .claude-body {
+    animation: bob 2.2s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-1.2px); }
+  }
+
+  /* Out of tokens: a short, urgent shake rather than a continuous loop. */
+  #rig.state-red .claude-body {
+    animation: shake 0.5s ease-in-out;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-1.5px); }
+    75% { transform: translateX(1.5px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #rig .arm-right, #rig .claude-body, .lamp.green.on { animation: none !important; }
   }
 
   #tooltip {
@@ -111,9 +143,26 @@
 <body>
   <div id="app" title="">
     <div class="housing">
-      <div class="lamp red" id="lamp-red"></div>
-      <div class="lamp amber" id="lamp-amber"></div>
-      <div class="lamp green" id="lamp-green"></div>
+      <svg class="rig" id="rig" viewBox="0 0 64 82" xmlns="http://www.w3.org/2000/svg">
+        <!-- sign: bar + three lamps. Fixed in place — it's what's being held up. -->
+        <rect x="4" y="24" width="56" height="5" fill="#726c62" />
+        <rect class="lamp red" id="lamp-red" x="7" y="7" width="15" height="15" rx="2.5" />
+        <rect class="lamp amber" id="lamp-amber" x="24.5" y="7" width="15" height="15" rx="2.5" />
+        <rect class="lamp green" id="lamp-green" x="42" y="7" width="15" height="15" rx="2.5" />
+
+        <!-- claude, smaller, planted underneath -->
+        <g class="claude-body" fill="#da7756">
+          <rect x="0" y="29" width="9" height="10" />
+          <rect class="arm-right" x="55" y="29" width="9" height="10" />
+          <rect x="17" y="39" width="30" height="13" />
+          <rect x="4" y="52" width="56" height="7" />
+          <rect x="15" y="59" width="7" height="9" />
+          <rect x="28.5" y="59" width="7" height="9" />
+          <rect x="42" y="59" width="7" height="9" />
+          <rect x="22" y="43.5" width="4.5" height="4.5" fill="#211f1c" />
+          <rect x="37.5" y="43.5" width="4.5" height="4.5" fill="#211f1c" />
+        </g>
+      </svg>
     </div>
     <div id="tooltip"></div>
   </div>
@@ -122,13 +171,24 @@
     const lampRed = document.getElementById('lamp-red');
     const lampAmber = document.getElementById('lamp-amber');
     const lampGreen = document.getElementById('lamp-green');
+    const rig = document.getElementById('rig');
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
+    let lastState = null;
     function applyState(state) {
       lampRed.classList.toggle('on', state === 'red');
       lampAmber.classList.toggle('on', state === 'amber');
       lampGreen.classList.toggle('on', state === 'green');
+      // Only touch the class (and so only restart its CSS animation) when
+      // the state actually changes — refresh() polls every few seconds
+      // regardless, and re-adding an unchanged class would restart the
+      // infinite wave animation on every poll, causing a visible stutter.
+      if (state !== lastState) {
+        rig.classList.remove('state-red', 'state-amber', 'state-green');
+        rig.classList.add(`state-${state}`);
+        lastState = state;
+      }
     }
 
     async function refresh() {
