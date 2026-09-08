@@ -109,17 +109,14 @@
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
-    let statusPath = null;
-
     function applyState(state) {
       lampRed.classList.toggle('on', state === 'red');
       lampAmber.classList.toggle('on', state === 'amber');
       lampGreen.classList.toggle('on', state === 'green');
     }
 
-    function refresh() {
-      if (!statusPath) return;
-      const data = window.trafficLight.readStatusFile(statusPath);
+    async function refresh() {
+      const data = await window.trafficLight.getAggregateStatus();
       if (!data) return;
       applyState(data.state);
       const labels = {
@@ -127,15 +124,17 @@
         amber: 'Needs your input',
         red: 'Out of tokens',
       };
-      tooltip.textContent = labels[data.state] || '';
+      const count = data.sessions?.length || 0;
+      const suffix = data.reason === 'manual'
+        ? ' (manual override)'
+        : count
+          ? ` — ${count} session${count === 1 ? '' : 's'}`
+          : ' (no active sessions)';
+      tooltip.textContent = (labels[data.state] || '') + suffix;
     }
 
-    (async () => {
-      statusPath = await window.trafficLight.getStatusPath();
-      refresh();
-      window.trafficLight.onStatusChanged(refresh);
-      setInterval(refresh, 3000);
-    })();
+    refresh();
+    window.trafficLight.onStatusChanged(refresh);
 
     app.addEventListener('click', () => window.trafficLight.openClaude());
   </script>

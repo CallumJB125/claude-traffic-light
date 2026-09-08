@@ -3,14 +3,61 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const STATUS_DIR = path.join(os.homedir(), '.claude-traffic-light');
-const STATUS_FILE = path.join(STATUS_DIR, 'status.json');
-const BOUNDS_FILE = path.join(STATUS_DIR, 'window-bounds.json');
+const ROOT_DIR = path.join(os.homedir(), '.claude-traffic-light');
+const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
+const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
+const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
+const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
-if (!fs.existsSync(STATUS_DIR)) fs.mkdirSync(STATUS_DIR, { recursive: true });
-if (!fs.existsSync(STATUS_FILE)) {
-  fs.writeFileSync(STATUS_FILE, JSON.stringify({ state: 'amber', updatedAt: new Date().toISOString(), reason: 'idle' }, null, 2));
+// Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
+// just the checked-out hooks/ dir next to main.js.
+const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
+const SET_STATUS_SCRIPT = path.join(HOOKS_DIR, 'set-status.js');
+
+function hookCmd(state, reason) {
+  return `node "${SET_STATUS_SCRIPT}" ${state} ${reason}`;
 }
+
+function areHooksInstalled() {
+  try {
+    const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
+    const stop = settings.hooks?.Stop || [];
+    return stop.some((h) => h.hooks?.some((hh) => hh.command === hookCmd('amber', 'stop')));
+  } catch {
+    return false;
+  }
+}
+
+function installHooks() {
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
+  } catch {
+    // no settings file yet, or unreadable — start fresh rather than clobber silently
+  }
+  settings.hooks = settings.hooks || {};
+
+  const addHook = (event, command) => {
+    settings.hooks[event] = settings.hooks[event] || [];
+    const already = settings.hooks[event].some((h) => h.hooks?.some((hh) => hh.command === command));
+    if (!already) settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command }] });
+  };
+
+  addHook('UserPromptSubmit', hookCmd('green', 'prompt-submit'));
+  addHook('PreToolUse', hookCmd('green', 'tool-use'));
+  addHook('Notification', hookCmd('amber', 'notification'));
+  addHook('Stop', hookCmd('amber', 'stop'));
+  addHook('SessionEnd', hookCmd('amber', 'session-end'));
+
+  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
+  fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
+}
+
+// A session that hasn't updated in this long is assumed dead (crashed,
+// closed without a SessionEnd hook, laptop slept, etc) and is ignored.
+const STALE_MS = 15 * 60 * 1000;
+
+fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 let win;
 let tray;
@@ -26,6 +73,52 @@ function readBounds() {
 function saveBounds() {
   if (!win) return;
   fs.writeFileSync(BOUNDS_FILE, JSON.stringify(win.getBounds(), null, 2));
+}
+
+function readManualOverride() {
+  try {
+    const data = JSON.parse(fs.readFileSync(MANUAL_OVERRIDE_FILE, 'utf8'));
+    if (data.expiresAt && Date.now() > data.expiresAt) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function readSessions() {
+  let files = [];
+  try {
+    files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const now = Date.now();
+  const sessions = [];
+  for (const f of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+      if (now - new Date(data.updatedAt).getTime() > STALE_MS) continue;
+      sessions.push(data);
+    } catch {
+      // skip unreadable/partially-written file
+    }
+  }
+  return sessions;
+}
+
+// Priority: any session needing you (red) wins, then any still working
+// (green), otherwise everything is idle/waiting (amber). A manual override
+// from the tray menu always wins until it expires or is cleared.
+function aggregateState() {
+  const override = readManualOverride();
+  if (override) return { state: override.state, reason: 'manual', sessions: readSessions() };
+
+  const sessions = readSessions();
+  if (sessions.length === 0) return { state: 'amber', reason: 'idle', sessions: [] };
+
+  if (sessions.some((s) => s.state === 'red')) return { state: 'red', reason: 'session', sessions };
+  if (sessions.some((s) => s.state === 'green')) return { state: 'green', reason: 'session', sessions };
+  return { state: 'amber', reason: 'session', sessions };
 }
 
 function createWindow() {
@@ -58,35 +151,53 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
-
   win.on('closed', () => {
     win = null;
   });
 }
 
 function createTray() {
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
   const trayIconPath = path.join(__dirname, 'assets', 'trayTemplate.png');
   try {
     tray = new Tray(trayIconPath);
   } catch {
     return;
   }
+
+  function setManual(state) {
+    fs.writeFileSync(
+      MANUAL_OVERRIDE_FILE,
+      JSON.stringify({ state, expiresAt: Date.now() + 5 * 60 * 1000 }, null, 2)
+    );
+    win?.webContents.send('status-changed');
+  }
+
+  function clearManual() {
+    fs.rm(MANUAL_OVERRIDE_FILE, { force: true }, () => win?.webContents.send('status-changed'));
+  }
+
+  const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
+
   const menu = Menu.buildFromTemplate([
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show / Hide Widget', click: () => (win?.isVisible() ? win.hide() : win?.show()) },
     { type: 'separator' },
     {
-      label: 'Set state: Green (working)',
-      click: () => writeStatus('green', 'manual'),
+      label: hooksLabel,
+      click: () => {
+        installHooks();
+        createTray();
+      },
     },
-    {
-      label: 'Set state: Amber (needs input)',
-      click: () => writeStatus('amber', 'manual'),
-    },
-    {
-      label: 'Set state: Red (out of tokens)',
-      click: () => writeStatus('red', 'manual'),
-    },
+    { type: 'separator' },
+    { label: 'Override: Green (5 min)', click: () => setManual('green') },
+    { label: 'Override: Amber (5 min)', click: () => setManual('amber') },
+    { label: 'Override: Red (5 min)', click: () => setManual('red') },
+    { label: 'Clear override', click: clearManual },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
@@ -94,28 +205,27 @@ function createTray() {
   tray.setContextMenu(menu);
 }
 
-function writeStatus(state, reason) {
-  fs.writeFileSync(STATUS_FILE, JSON.stringify({ state, updatedAt: new Date().toISOString(), reason }, null, 2));
-}
-
 ipcMain.handle('open-claude', () => {
   shell.openExternal('https://claude.ai');
 });
 
-ipcMain.handle('get-status-path', () => STATUS_FILE);
+ipcMain.handle('get-aggregate-status', () => aggregateState());
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
+  if (!areHooksInstalled()) installHooks();
   createWindow();
   createTray();
 
-  fs.watch(STATUS_DIR, { persistent: true }, (eventType, filename) => {
-    if (filename === path.basename(STATUS_FILE) && win) {
-      win.webContents.send('status-changed');
-    }
+  fs.watch(SESSIONS_DIR, { persistent: true }, () => {
+    win?.webContents.send('status-changed');
   });
+
+  // Belt-and-braces poll: covers editors of manual-override.json and any
+  // watcher events the OS coalesces or drops.
+  setInterval(() => win?.webContents.send('status-changed'), 4000);
 });
 
 app.on('window-all-closed', () => {
-  // Keep running in the tray on macOS/other platforms.
+  // Keep running in the tray.
 });

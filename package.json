@@ -5,11 +5,35 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "install-hooks": "node hooks/install.js"
+    "install-hooks": "node hooks/install.js",
+    "dist": "electron-builder --mac"
   },
   "author": "",
   "license": "MIT",
+  "build": {
+    "appId": "com.callumbaker.claude-traffic-light",
+    "productName": "Claude Traffic Light",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "assets/**/*",
+      "hooks/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "hooks",
+        "to": "hooks"
+      }
+    ],
+    "mac": {
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    }
+  },
   "devDependencies": {
-    "electron": "^32.0.0"
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.8"
   }
 }

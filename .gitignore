@@ -4,3 +4,5 @@ out/
 .DS_Store
 .impeccable/
 .omc/
+dist/
+assets/icon-1024.png
