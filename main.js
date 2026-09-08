@@ -19,9 +19,10 @@ function activateTerminalApp() {
         set names to name of every process
       end tell
       repeat with candidate in {${TERMINAL_APPS.map((n) => `"${n}"`).join(', ')}}
-        if names contains candidate then
-          tell application candidate to activate
-          return candidate
+        set candidateName to contents of candidate
+        if names contains candidateName then
+          tell application candidateName to activate
+          return candidateName
         end if
       end repeat
       return ""
