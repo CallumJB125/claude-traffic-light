@@ -27,7 +27,8 @@ function activateTerminalApp() {
       end repeat
       return ""
     `;
-    execFile('osascript', ['-e', script], (err, stdout) => {
+    execFile('osascript', ['-e', script], (err, stdout, stderr) => {
+      if (err) console.log('[main] activateTerminalApp error:', err.message, stderr);
       resolve(!err && stdout.trim() ? stdout.trim() : null);
     });
   });
@@ -243,6 +244,15 @@ function createTray() {
 
 ipcMain.handle('open-claude', () => {
   shell.openExternal('https://claude.ai');
+});
+
+ipcMain.handle('get-window-position', () => {
+  const [x, y] = win?.getPosition() || [0, 0];
+  return { x, y };
+});
+
+ipcMain.on('set-window-position', (e, x, y) => {
+  win?.setPosition(Math.round(x), Math.round(y));
 });
 
 ipcMain.handle('get-aggregate-status', () => aggregateState());

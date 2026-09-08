@@ -23,13 +23,17 @@
     padding: 5px;
   }
 
+  /* Deliberately NOT -webkit-app-region: drag — on macOS that region type
+     swallows plain single clicks (the OS captures mousedown to start a
+     potential window-drag before the click event ever reaches the page,
+     so listeners never fire). Dragging is done manually in JS instead so
+     clicks keep working. */
   #app {
     width: 100%;
     height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    -webkit-app-region: drag;
     cursor: pointer;
   }
 
@@ -148,10 +152,30 @@
     refresh();
     window.trafficLight.onStatusChanged(refresh);
 
-    let dragStart = null;
-    app.addEventListener('mousedown', (e) => {
-      dragStart = { x: e.screenX, y: e.screenY };
+    // Manual window dragging (see the CSS comment on #app for why).
+    let dragOrigin = null; // {mouseX, mouseY, winX, winY} in screen coords
+    let didDrag = false;
+
+    app.addEventListener('mousedown', async (e) => {
+      const winPos = await window.trafficLight.getWindowPosition();
+      dragOrigin = { mouseX: e.screenX, mouseY: e.screenY, winX: winPos.x, winY: winPos.y };
+      didDrag = false;
     });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!dragOrigin || e.buttons !== 1) return;
+      const dx = e.screenX - dragOrigin.mouseX;
+      const dy = e.screenY - dragOrigin.mouseY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
+      if (didDrag) {
+        window.trafficLight.setWindowPosition(dragOrigin.winX + dx, dragOrigin.winY + dy);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      dragOrigin = null;
+    });
+
     let feedbackTimer = null;
     function showFeedback(text) {
       clearTimeout(feedbackTimer);
@@ -163,9 +187,8 @@
       }, 3000);
     }
 
-    app.addEventListener('click', async (e) => {
-      const moved = dragStart && (Math.abs(e.screenX - dragStart.x) > 3 || Math.abs(e.screenY - dragStart.y) > 3);
-      if (moved) return;
+    app.addEventListener('click', async () => {
+      if (didDrag) return;
       const result = await window.trafficLight.goToNeedingSession();
       if (!result) return;
       if (result.total === 0) {
