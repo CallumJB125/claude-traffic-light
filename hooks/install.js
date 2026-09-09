@@ -32,15 +32,28 @@ function addHook(hooks, event, matcher, command) {
 const settings = loadSettings();
 settings.hooks = settings.hooks || {};
 
+// Drop any old install's Stop→amber hook — Stop fires after every single
+// response, including totally routine ones, so it used to mark amber just
+// for finishing a turn. Matched by script name + trailing args, not the
+// full command, since the script's own path can differ between installs
+// (dev checkout vs packaged .app). Only ever strips our own set-status.js
+// calls, never a Stop hook the user or another tool added.
+const isOldStopCmd = (command) => /set-status\.js" amber stop$/.test(command || '');
+if (settings.hooks.Stop) {
+  settings.hooks.Stop = settings.hooks.Stop
+    .map((h) => ({ ...h, hooks: (h.hooks || []).filter((hh) => !isOldStopCmd(hh.command)) }))
+    .filter((h) => h.hooks.length > 0);
+}
+
 // New turn starts -> that session goes green (working).
 addHook(settings.hooks, 'UserPromptSubmit', '', cmd('green', 'prompt-submit'));
 // About to run a tool -> still green (working).
 addHook(settings.hooks, 'PreToolUse', '', cmd('green', 'tool-use'));
-// Needs the user (permission prompt, waiting, or a usage/rate-limit message
-// which set-status.js sniffs from stdin and escalates to red) -> amber.
+// Needs the user (permission prompt, Claude Code's own "still waiting on
+// you" idle nudge, or a usage/rate-limit message which set-status.js sniffs
+// from stdin and escalates to red) -> amber. This is the only "your input
+// is needed" signal — Stop alone isn't, see above.
 addHook(settings.hooks, 'Notification', '', cmd('amber', 'notification'));
-// Turn finished, waiting on you -> amber.
-addHook(settings.hooks, 'Stop', '', cmd('amber', 'stop'));
 // Session ended -> stop counting it entirely.
 addHook(settings.hooks, 'SessionEnd', '', cmd('amber', 'session-end'));
 

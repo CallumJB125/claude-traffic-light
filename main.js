@@ -71,13 +71,19 @@ function hookCmd(state, reason) {
 function areHooksInstalled() {
   try {
     const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
-    const stop = settings.hooks?.Stop || [];
-    return stop.some((h) => h.hooks?.some((hh) => hh.command === hookCmd('amber', 'stop')));
+    const notif = settings.hooks?.Notification || [];
+    return notif.some((h) => h.hooks?.some((hh) => hh.command === hookCmd('amber', 'notification')));
   } catch {
     return false;
   }
 }
 
+// Claude Code's Stop hook fires after every single response — including
+// completely routine ones with nothing blocking you — so it used to mark a
+// session amber just for having finished its last turn, which lit the
+// widget amber almost constantly. Only Notification (a real permission
+// prompt, or Claude Code's own "still waiting on you" idle nudge) is an
+// actual "your input is needed" signal, so only that sets amber now.
 function installHooks() {
   let settings = {};
   try {
@@ -93,19 +99,34 @@ function installHooks() {
     if (!already) settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command }] });
   };
 
+  // Drop any old install's Stop→amber hook — it's what caused the "amber
+  // for no reason" noise. Matched by script name + trailing args rather
+  // than the full command, since the .app's own path can change (moved
+  // out of /Applications, rebuilt to a dev checkout, etc) between installs.
+  // Only ever strips our own set-status.js calls, never a Stop hook the
+  // user or another tool added.
+  const isOldStopCmd = (command) => /set-status\.js" amber stop$/.test(command || '');
+  if (settings.hooks.Stop) {
+    settings.hooks.Stop = settings.hooks.Stop
+      .map((h) => ({ ...h, hooks: (h.hooks || []).filter((hh) => !isOldStopCmd(hh.command)) }))
+      .filter((h) => h.hooks.length > 0);
+  }
+
   addHook('UserPromptSubmit', hookCmd('green', 'prompt-submit'));
   addHook('PreToolUse', hookCmd('green', 'tool-use'));
   addHook('Notification', hookCmd('amber', 'notification'));
-  addHook('Stop', hookCmd('amber', 'stop'));
   addHook('SessionEnd', hookCmd('amber', 'session-end'));
 
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
   fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
 
-// A session that hasn't updated in this long is assumed dead (crashed,
-// closed without a SessionEnd hook, laptop slept, etc) and is ignored.
-const STALE_MS = 15 * 60 * 1000;
+// A session that hasn't updated in this long is assumed closed (terminal
+// force-quit, crash, laptop slept without a graceful SessionEnd) and is
+// dropped from the aggregate — "only open sessions" count. Tighter than
+// before (was 15 min) since that's the sole backstop now that Stop no
+// longer double-checks liveness on every turn.
+const STALE_MS = 6 * 60 * 1000;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
