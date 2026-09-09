@@ -131,7 +131,8 @@ function updateAgents(prevAgents, signal, payload, nowIso) {
   if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
   const p = payload || {};
   const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
-  const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').slice(0, 40);
+  // 'oh-my-claudecode:executor' is 'executor' on a 12px chip.
+  const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
   const status = signal === 'subagent-done' ? 'done' : 'working';
   const existing = agents.find((a) => a.id === id);
   if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since } : a));

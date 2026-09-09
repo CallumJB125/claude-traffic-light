@@ -529,6 +529,35 @@ test('agent scope: a rule can target one agent; sessions default to claude', () 
   assert.equal(look([{ signal: 'tool-use', source: 'Codex' }], rs).pet, 'none');
 });
 
+test('set-status: SubagentStart/Stop build the agents list; a finished turn ends them all', () => {
+  const home = tmpHome();
+  const start = (id, type) => run(home, 'subagent-start', { session_id: 's1', cwd: '/tmp/p', agent_id: id, agent_type: type });
+  start('ag-1', 'oh-my-claudecode:executor');
+  start('ag-2', 'explore');
+  run(home, 'subagent-done', { session_id: 's1', cwd: '/tmp/p', agent_id: 'ag-1' });
+  let d = read(home);
+  assert.deepEqual(d.agents.map((a) => [a.id, a.name, a.kind, a.status]), [
+    ['ag-1', 'executor', 'subagent', 'done'],
+    ['ag-2', 'explore', 'subagent', 'working'],
+  ], 'the plugin prefix is trimmed off the name');
+  assert.equal(d.agents[1].parent, 's1');
+  assert.equal(d.mode, null, 'mode belongs to the watcher, not the hooks');
+  assert.equal(d.iteration, 0);
+  // The watcher's fields and its non-subagent entries survive a hook write.
+  const file = path.join(home, 'sessions', files(home)[0]);
+  const withMode = { ...read(home), mode: 'ralph', iteration: 4 };
+  withMode.agents = withMode.agents.concat([{ id: 't1', name: 'mate', kind: 'teammate', status: 'working' }]);
+  fs.writeFileSync(file, JSON.stringify(withMode));
+  run(home, 'tool-use', { session_id: 's1', cwd: '/tmp/p', tool_name: 'Bash' });
+  d = read(home);
+  assert.deepEqual([d.mode, d.iteration], ['ralph', 4], 'a hook write never erases the mode');
+  assert.ok(d.agents.some((a) => a.id === 't1'), 'nor the watcher-owned agents');
+  run(home, 'stop', { session_id: 's1', cwd: '/tmp/p' });
+  d = read(home);
+  assert.deepEqual(d.agents.filter((a) => a.kind === 'subagent').map((a) => a.status), ['done', 'done'], 'a finished turn finishes its subagents');
+  assert.equal(d.agents.find((a) => a.id === 't1').status, 'working', 'a teammate is not the turn\'s to finish');
+});
+
 // ── hooks/emit.js (other agents) ────────────────────────────────────────────
 const EMIT = path.join(__dirname, '..', 'hooks', 'emit.js');
 function emit(home, args, input) {
