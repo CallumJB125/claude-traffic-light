@@ -44,23 +44,61 @@ time.
 Restart any Claude Code sessions that were already running so they pick up
 the new hooks.
 
+## Lights — decide what the widget means
+
+Right-click the widget (or tray → **Lights…**, ⌘L) to open the rules editor.
+Every Claude Code event is a *signal*; a rule says which signal lights which
+lamp, what colour the eyes go, which pose Claude strikes, and whether to beep
+or throw confetti. The channels are independent and resolve top-down, so a
+"Subagent running" rule can turn the eyes purple while "Claude is working"
+still owns the green lamp. Rules can be scoped to one tool (`Agent`, `Bash`,
+`mcp__*` …), reordered by drag, and previewed live on the real widget with
+**Try on widget**. Two safety rules (permission asks, usage limits) are
+locked above everything else so a stray rule can't hide a real block.
+
+Poses: think, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
+guitar, ak47 (tracer rounds stream across your whole screen from the widget —
+click-through, closes the moment the state changes) and banner, which drops a
+sign over the traffic light with your own text ("Banner says").
+
+Presets: **Classic** (the original behaviour), **Minimal** (lamps only),
+**Tool-aware** (eye colours per tool) — plus your own: type a name at the
+bottom of the Presets menu to save the current rules, and pick or delete
+them there later. Everything is stored in `~/.claude-traffic-light/config.json`
+under `rules` and `presets`.
+
+Signals you can build rules on: you send a prompt · Claude uses a tool · a
+tool finishes · a tool fails · a subagent finishes · Claude finishes a task ·
+Claude is waiting for you · Claude asks permission · usage limit hit · a
+session starts · context compacts · working over 10 minutes · 3+ sessions at
+once · no sessions running. Tool signals can be scoped to one tool name or a
+prefix (`mcp__*`).
+
+Resolution: rules apply top to bottom; the first rule that lights a lamp is
+the state, and rules above it may layer accents (eyes, pose, sound) on top.
+A rule below the lamp owner never leaks into the look.
+
 ## How multi-session monitoring works
 
 Every Claude Code session writes its own status file to
-`~/.claude-traffic-light/sessions/<host>-<session_id>.json` via hooks:
+`~/.claude-traffic-light/sessions/<host>-<session_id>.json` via hooks. The
+hook only records the raw signal — what it *means* is decided by your rules
+in the app, so changing a rule never touches the hooks:
 
-- `UserPromptSubmit` / `PreToolUse` → green (working)
-- `Notification` → amber, but **only** when the message text looks like a
-  real permission/approval request. Claude Code also fires `Notification`
-  for a routine "still waiting on you" idle nudge after a task finishes
-  normally — that's not treated as needing input.
-- `Stop` → a distinct "done" state (green eyes + thumbs up), not amber
+- `UserPromptSubmit` → `prompt-submit`
+- `PreToolUse` / `PostToolUse` / `PostToolUseFailure` → `tool-use` /
+  `tool-done` / `tool-failed` (with the tool name)
+- `SubagentStop` → `subagent-done`
+- `Stop` → `stop`
+- `Notification` → `permission-ask`, `limit-hit` or `idle-nudge`, sniffed
+  from the message text
+- `SessionStart` / `PreCompact` → `session-start` / `compact`
 - `SessionEnd` → removes the file
 
-The app aggregates all non-stale sessions: **red > amber > green > done**.
-A working session pings constantly, so it's dropped after 6 minutes of
-silence (assumed closed); a waiting session only ever gets one event, so it
-gets a 4-hour leash instead (both configurable — see Preferences below).
+The app aggregates all non-stale sessions through your rules. A working
+session pings constantly, so it's dropped after 6 minutes of silence; a
+waiting session (permission ask, limit) only ever gets one event, so it gets a
+4-hour leash instead (both configurable — see Preferences).
 
 ### Syncing across machines
 
@@ -72,6 +110,7 @@ widget. Session filenames are hostname-prefixed so they can't collide.
 ## Manual control
 
 Right-click the tray icon (top menu bar) for:
+- **Lights…** — the rules editor (what each light, eye colour and pose means)
 - **Preferences…** — staleness windows and the alert-sound toggle
 - **Bigger** / **Smaller** — resize
 - **Install/Reinstall Claude Code Hooks**
@@ -82,5 +121,10 @@ Right-click the tray icon (top menu bar) for:
 ## Dev mode
 
 ```bash
-npm start   # runs the widget straight from source, no packaging
+npm test                           # engine + hook script + installer tests
+npx electron . --lights --playtest # drives the editor UI end to end
+npm start                          # runs the widget straight from source
+npx electron . --lights            # …and opens the Lights editor immediately
+npx electron . --lights --shot out.png [--select <ruleId>] [--mode live]
+                                   # captures the editor to a PNG and quits
 ```

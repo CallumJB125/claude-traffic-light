@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Claude Traffic Light</title>
+<link rel="stylesheet" href="rig.css" />
 <style>
   html, body {
     margin: 0;
@@ -15,20 +16,15 @@
     user-select: none;
   }
 
-  /* The outer strip is left as plain (non-drag) window chrome so macOS can
-     grab the true window edge to resize by dragging — that turned out to be
-     the easiest way to resize (easier than scroll/tray, which stay as
-     alternatives). Generous so it's an easy target, not a hairline. */
+  /* The outer strip is plain (non-drag) window chrome so macOS can grab the
+     true window edge to resize by dragging. */
   body {
     box-sizing: border-box;
     padding: 12px;
   }
 
-  /* Deliberately NOT -webkit-app-region: drag — on macOS that region type
-     swallows plain single clicks (the OS captures mousedown to start a
-     potential window-drag before the click event ever reaches the page,
-     so listeners never fire). Dragging is done manually in JS instead so
-     clicks keep working. */
+  /* Deliberately NOT -webkit-app-region: drag — on macOS that swallows plain
+     clicks. Dragging is done manually in JS so clicks keep working. */
   #app {
     width: 100%;
     height: 100%;
@@ -46,166 +42,7 @@
     justify-content: center;
     transition: transform 120ms ease;
   }
-
-  .housing:active {
-    transform: scale(0.96);
-  }
-
-  .rig {
-    width: 100%;
-    height: 100%;
-    shape-rendering: crispEdges;
-  }
-
-  .lamp {
-    fill: #3a3542;
-    transition: fill 180ms ease;
-  }
-
-  .lamp.red.on {
-    fill: #e2231a;
-    filter: drop-shadow(0 0 3px rgba(226, 35, 26, 0.85));
-  }
-  .lamp.amber.on {
-    fill: #f2a200;
-    filter: drop-shadow(0 0 3px rgba(242, 162, 0, 0.85));
-  }
-  .lamp.green.on {
-    fill: #2fae3e;
-    filter: drop-shadow(0 0 3px rgba(47, 174, 62, 0.85));
-    animation: pulse 1.8s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { filter: drop-shadow(0 0 3px rgba(47, 174, 62, 0.85)) brightness(1); }
-    50% { filter: drop-shadow(0 0 5px rgba(47, 174, 62, 0.95)) brightness(1.2); }
-  }
-
-  /* Amber: Claude holds the sign in its left hand only and swings it in a
-     big arc from overhead down to its side, like waving someone in — pivot
-     is the left hand/shoulder grip point, not the sign's own center. */
-  .sign-assembly {
-    transform-origin: 7px 34px;
-  }
-  #rig.state-amber .sign-assembly {
-    animation: wave-sign 1s ease-in-out infinite;
-  }
-  @keyframes wave-sign {
-    0%, 100% { transform: rotate(0deg); }
-    55% { transform: rotate(-100deg); }
-  }
-
-  /* Green: three small thinking-dots pulse in sequence in the gap between
-     the raised arms, right where Claude's "looking" — same idea as a chat
-     app's typing indicator. The rest of the rig stays still. */
-  .think-dot {
-    fill: #f2efe8;
-    stroke: #211f1c;
-    stroke-width: 0.6;
-    opacity: 0;
-  }
-  #rig.state-green .think-dot {
-    animation: think 1.2s ease-in-out infinite;
-  }
-  #rig.state-green .think-dot.d2 { animation-delay: 0.15s; }
-  #rig.state-green .think-dot.d3 { animation-delay: 0.3s; }
-  @keyframes think {
-    0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-1.5px); }
-  }
-
-  /* Done: task finished cleanly. Eyes turn green and the resting (right)
-     arm shows a thumbs up, held until the next prompt or a real block. */
-  #rig.state-done .eye-open {
-    fill: #2fae3e;
-  }
-  .thumbs-up {
-    fill: #da7756;
-    opacity: 0;
-    transform: scale(0.6);
-    transform-origin: 54px 50px;
-    transition: opacity 200ms ease, transform 200ms ease;
-  }
-  #rig.state-done .thumbs-up {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  /* Red: Claude falls asleep. Sign droops, eyes close, a lazy breathing
-     bob, and little Zs drift up and fade. */
-  #rig.state-red .sign-assembly {
-    transform: rotate(10deg);
-    transition: transform 400ms ease;
-  }
-  #rig.state-red .claude-body {
-    animation: breathe 3.2s ease-in-out infinite;
-  }
-  @keyframes breathe {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-1px); }
-  }
-  .eye-open { opacity: 1; }
-  .eye-closed { opacity: 0; }
-  #rig.state-red .eye-open { opacity: 0; }
-  #rig.state-red .eye-closed { opacity: 1; }
-
-  .zzz {
-    opacity: 0;
-    font: 700 8px 'Courier New', monospace;
-    fill: #d7ded6;
-  }
-  #rig.state-red .zzz {
-    animation: float-z 2.8s ease-in infinite;
-  }
-  #rig.state-red .zzz.z2 { animation-delay: 0.55s; }
-  #rig.state-red .zzz.z3 { animation-delay: 1.1s; }
-  #rig.state-red .zzz.z4 { animation-delay: 1.65s; }
-  #rig.state-red .zzz.z5 { animation-delay: 2.2s; }
-  @keyframes float-z {
-    0% { opacity: 0; transform: translate(0, 0) scale(0.7); }
-    15% { opacity: 1; }
-    75% { opacity: 0.7; }
-    100% { opacity: 0; transform: translate(9px, -17px) scale(1.3); }
-  }
-
-  /* One-shot confetti burst, fired from JS only on the transition INTO
-     'done' (not held/looping like the other state visuals) — a little
-     celebration for finishing, not a persistent decoration. */
-  .confetti {
-    opacity: 0;
-  }
-  .confetti.burst {
-    animation: confetti-burst 700ms ease-out forwards;
-  }
-  .confetti.c2.burst { animation-delay: 40ms; }
-  .confetti.c3.burst { animation-delay: 80ms; }
-  .confetti.c4.burst { animation-delay: 30ms; }
-  .confetti.c5.burst { animation-delay: 110ms; }
-  .confetti.c6.burst { animation-delay: 60ms; }
-  @keyframes confetti-burst {
-    0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
-    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.4) rotate(200deg); }
-  }
-
-  /* If red drags on a while, Claude gets visibly fed up rather than
-     sleeping peacefully forever — a straight, slightly annoyed mouth
-     appears after a few minutes of no response. */
-  .grumpy-mouth {
-    opacity: 0;
-    fill: #211f1c;
-  }
-  #rig.grumpy .grumpy-mouth {
-    opacity: 1;
-  }
-  #rig.grumpy .eye-closed {
-    transform: rotate(-8deg);
-    transform-origin: center;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    #rig .sign-assembly, #rig .claude-body, #rig .zzz, #rig .think-dot, #rig .confetti, .lamp.green.on { animation: none !important; }
-    #rig.state-red .sign-assembly { transition: none; }
-  }
+  .housing:active { transform: scale(0.96); }
 
   #tooltip {
     position: fixed;
@@ -222,128 +59,61 @@
     opacity: 0;
     transition: opacity 120ms ease;
   }
-
-  #app:hover #tooltip {
-    opacity: 1;
-  }
+  #app:hover #tooltip { opacity: 1; }
 </style>
 </head>
 <body>
   <div id="app" title="">
-    <div class="housing">
-      <svg class="rig" id="rig" viewBox="0 0 64 82" xmlns="http://www.w3.org/2000/svg">
-        <!-- sign + left hand/arm move as one unit, pivoting at the grip —
-             this is what swings overhead-to-side (amber) and droops (red).
-             The right arm stays down at Claude's side, holding nothing. -->
-        <g class="sign-assembly">
-          <rect x="4" y="24" width="56" height="5" fill="#726c62" />
-          <rect class="lamp red" id="lamp-red" x="7" y="7" width="15" height="15" rx="2.5" />
-          <rect class="lamp amber" id="lamp-amber" x="24.5" y="7" width="15" height="15" rx="2.5" />
-          <rect class="lamp green" id="lamp-green" x="42" y="7" width="15" height="15" rx="2.5" />
-          <rect fill="#da7756" x="0" y="29" width="9" height="10" />
-        </g>
-
-        <!-- claude, smaller, planted underneath -->
-        <g class="claude-body" fill="#da7756">
-          <rect x="17" y="39" width="30" height="13" />
-          <rect x="4" y="52" width="56" height="7" />
-          <rect x="15" y="59" width="7" height="9" />
-          <rect x="28.5" y="59" width="7" height="9" />
-          <rect x="42" y="59" width="7" height="9" />
-          <rect class="eye-open" x="22" y="43.5" width="4.5" height="4.5" fill="#211f1c" />
-          <rect class="eye-open" x="37.5" y="43.5" width="4.5" height="4.5" fill="#211f1c" />
-          <rect class="eye-closed" x="21" y="45.25" width="6.5" height="1.6" rx="0.8" fill="#211f1c" />
-          <rect class="eye-closed" x="36.5" y="45.25" width="6.5" height="1.6" rx="0.8" fill="#211f1c" />
-          <circle class="think-dot d1" cx="24" cy="34" r="2" />
-          <circle class="think-dot d2" cx="32" cy="34" r="2" />
-          <circle class="think-dot d3" cx="40" cy="34" r="2" />
-          <g class="thumbs-up">
-            <rect x="50" y="48" width="8" height="7" rx="1" />
-            <rect x="48" y="42" width="4" height="8" rx="1.5" />
-          </g>
-          <rect class="grumpy-mouth" x="26" y="49" width="12" height="1.8" rx="0.9" />
-        </g>
-        <text class="zzz z1" x="46" y="37">z</text>
-        <text class="zzz z2" x="50" y="32">z</text>
-        <text class="zzz z3" x="54" y="27">z</text>
-        <text class="zzz z4" x="58" y="22">z</text>
-        <text class="zzz z5" x="48" y="24">z</text>
-
-        <g id="confetti-group">
-          <rect class="confetti c1" x="30" y="20" width="3" height="3" fill="#f2a200" style="--dx:-14px;--dy:-18px" />
-          <rect class="confetti c2" x="32" y="20" width="3" height="3" fill="#2fae3e" style="--dx:10px;--dy:-22px" />
-          <rect class="confetti c3" x="34" y="22" width="3" height="3" fill="#e2231a" style="--dx:20px;--dy:-8px" />
-          <rect class="confetti c4" x="30" y="22" width="3" height="3" fill="#f2efe8" style="--dx:-20px;--dy:-6px" />
-          <rect class="confetti c5" x="32" y="24" width="3" height="3" fill="#da7756" style="--dx:6px;--dy:-26px" />
-          <rect class="confetti c6" x="28" y="24" width="3" height="3" fill="#f2a200" style="--dx:-8px;--dy:-24px" />
-        </g>
-      </svg>
-    </div>
+    <div class="housing" id="housing"></div>
     <div id="tooltip"></div>
   </div>
 
+  <script src="rig.js"></script>
   <script>
-    const lampRed = document.getElementById('lamp-red');
-    const lampAmber = document.getElementById('lamp-amber');
-    const lampGreen = document.getElementById('lamp-green');
-    const rig = document.getElementById('rig');
+    const rig = mountRig(document.getElementById('housing'));
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
-    let lastState = null;
-    let redSince = null;
+    let lastRuleId = null;
+    let sleepSince = null;
+    let confettiTimer = null;
     const GRUMPY_AFTER_MS = 3 * 60 * 1000;
-
-    function burstConfetti() {
-      document.querySelectorAll('.confetti').forEach((el) => {
-        el.classList.remove('burst');
-        void el.getBoundingClientRect(); // force reflow so removing+re-adding restarts the animation
-        el.classList.add('burst');
-      });
-    }
-
-    function applyState(state) {
-      lampRed.classList.toggle('on', state === 'red');
-      lampAmber.classList.toggle('on', state === 'amber');
-      lampGreen.classList.toggle('on', state === 'green' || state === 'done');
-      // Only touch the class (and so only restart its CSS animation) when
-      // the state actually changes — refresh() polls every few seconds
-      // regardless, and re-adding an unchanged class would restart the
-      // infinite wave animation on every poll, causing a visible stutter.
-      if (state !== lastState) {
-        rig.classList.remove('state-red', 'state-amber', 'state-green', 'state-done');
-        rig.classList.add(`state-${state}`);
-        if (state === 'done' && lastState !== 'done') burstConfetti();
-        redSince = state === 'red' ? (redSince ?? Date.now()) : null;
-        lastState = state;
-      }
-      rig.classList.toggle('grumpy', redSince !== null && Date.now() - redSince > GRUMPY_AFTER_MS);
-    }
 
     async function refresh() {
       const data = await window.trafficLight.getAggregateStatus();
       if (!data) return;
-      applyState(data.state);
-      const labels = {
-        green: 'Claude is working',
-        amber: 'Needs your input',
-        red: 'Out of tokens',
-        done: 'Task finished',
-      };
+      const look = { ...data.look };
+      sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
+      look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
+      rig.setLook(look);
+      // Confetti fires on entering a celebrating state, then again every 10s
+      // for as long as that state holds.
+      if (look.celebrate && look.ruleId !== lastRuleId) {
+        rig.celebrate();
+        clearInterval(confettiTimer);
+        confettiTimer = setInterval(() => rig.celebrate(), 10000);
+      } else if (!look.celebrate) {
+        clearInterval(confettiTimer);
+        confettiTimer = null;
+      }
+      lastRuleId = look.ruleId;
+
       const count = data.sessions?.length || 0;
       const suffix = data.reason === 'manual'
         ? ' (manual override)'
-        : count
-          ? ` — ${count} session${count === 1 ? '' : 's'}`
-          : ' (no active sessions)';
-      tooltip.textContent = (labels[data.state] || '') + suffix;
+        : data.reason === 'preview'
+          ? ' (preview)'
+          : count
+            ? ` — ${count} session${count === 1 ? '' : 's'}`
+            : ' (no active sessions)';
+      tooltip.textContent = (look.name || 'Claude Traffic Light') + suffix;
     }
 
     refresh();
     window.trafficLight.onStatusChanged(refresh);
+    window.trafficLight.onBurst((ms) => rig.burst(ms));
 
-    // Manual window dragging (see the CSS comment on #app for why).
-    let dragOrigin = null; // {mouseX, mouseY, winX, winY} in screen coords
+    let dragOrigin = null;
     let didDrag = false;
 
     app.addEventListener('mousedown', async (e) => {
@@ -357,18 +127,13 @@
       const dx = e.screenX - dragOrigin.mouseX;
       const dy = e.screenY - dragOrigin.mouseY;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
-      if (didDrag) {
-        window.trafficLight.setWindowPosition(dragOrigin.winX + dx, dragOrigin.winY + dy);
-      }
+      if (didDrag) window.trafficLight.setWindowPosition(dragOrigin.winX + dx, dragOrigin.winY + dy);
     });
 
     window.addEventListener('mouseup', () => {
       dragOrigin = null;
     });
 
-    // Scroll to resize — much easier to hit reliably than dragging the true
-    // window edge of a small frameless widget. Scroll up/away = bigger,
-    // down/toward you = smaller, matching a trackpad zoom gesture.
     let wheelAccum = 0;
     app.addEventListener('wheel', (e) => {
       e.preventDefault();
@@ -402,6 +167,12 @@
         const precision = result.exact ? ' · tab found' : '';
         showFeedback(`→ ${folder}${badge}${precision} · path copied`);
       }
+    });
+
+    // Right-click the widget → Lights editor.
+    app.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      window.trafficLight.openLights();
     });
   </script>
 </body>

@@ -1,91 +1,75 @@
 #!/usr/bin/env node
-// Writes ~/.claude-traffic-light/sessions/<session_id>.json. Called by Claude
-// Code hooks so every live session reports its own state independently; the
-// widget aggregates all of them (see main.js: aggregateState).
+// Writes ~/.claude-traffic-light/sessions/<host>-<session_id>.json with the
+// RAW signal that just happened. What that signal means visually is decided
+// by the rules in the app (rules.js), not here — so changing what a light
+// means never requires reinstalling hooks.
+//
+//   node set-status.js <signal>
+//
+// signal: prompt-submit | tool-use | tool-done | subagent-done | stop |
+//         session-start | compact | notification | session-end
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Override to point at a synced folder (iCloud Drive, a Tailscale share,
-// etc) if you want sessions from multiple machines merged into one widget —
-// set the same value in the environment on every machine before installing
-// hooks there. Defaults to a local, unsynced folder.
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
-
-// Distinguishes sessions from different machines sharing one ROOT_DIR so
-// their session_ids (which could theoretically collide across machines,
-// however unlikely) don't clobber each other.
 const HOST_TAG = os.hostname().split('.')[0];
 
-const [, , stateArg, reasonArg] = process.argv;
-const state = ['green', 'amber', 'red', 'done'].includes(stateArg) ? stateArg : 'amber';
-const reason = reasonArg || 'hook';
+const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-done', 'stop', 'session-start', 'compact', 'notification', 'session-end'];
+const [, , signalArg] = process.argv;
+const signal = KNOWN.includes(signalArg) ? signalArg : null;
+if (!signal) process.exit(0);
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-// Claude Code pipes a JSON payload (including session_id, cwd, etc) on stdin.
-let payload = '';
+let data = null;
 if (!process.stdin.isTTY) {
   try {
-    payload = fs.readFileSync(0, 'utf8');
+    data = JSON.parse(fs.readFileSync(0, 'utf8'));
   } catch {
-    // no stdin piped
-  }
-}
-
-let data = null;
-if (payload) {
-  try {
-    data = JSON.parse(payload);
-  } catch {
-    // ignore unparsable payload
+    // no / unparsable payload
   }
 }
 
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
-const fileKey = `${HOST_TAG}-${sessionId}`;
+const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
 
-if (reason === 'session-end') {
-  const file = path.join(SESSIONS_DIR, `${fileKey}.json`);
-  fs.rm(file, { force: true }, () => {});
+if (signal === 'session-end') {
+  fs.rmSync(file, { force: true });
   process.exit(0);
 }
 
-// Claude Code's Notification hook fires for two different things and its
-// payload doesn't distinguish them by any field except the message text:
-//   - a real permission request ("Claude needs your permission to use X")
-//   - a routine idle nudge once the terminal's sat quiet after Claude
-//     finished ("Claude is waiting for your input")
-// Only the first is an actual block worth surfacing — the second just means
-// a task finished normally, which isn't "needs your input" in any sense
-// that should light up amber. So a notification event only escalates to
-// amber when the message text looks like a real permission/approval ask;
-// otherwise this exits without touching the session file at all, leaving
-// its last real state (almost always still green from the last tool call).
-let detectedState = state;
-if (reason === 'notification') {
+let resolved = signal;
+if (signal === 'notification') {
+  // Notification fires for a real permission ask, a usage-limit message, and
+  // a routine "still waiting on you" idle nudge. Each becomes its own signal
+  // so rules can treat them differently (the default rules ignore the nudge).
   const text = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
-  const isPermissionRequest = /permission|approve|allow|confirm/.test(text);
-  if (!isPermissionRequest) process.exit(0);
+  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) resolved = 'limit-hit';
+  else if (/permission|approve|allow|confirm/.test(text)) resolved = 'permission-ask';
+  else resolved = 'idle-nudge';
 }
 
-// Only the actual notification text is checked — not the whole JSON payload
-// (which also carries cwd/transcript paths that can innocently contain
-// words like "limit" and would otherwise cause false positives).
-if (data && state === 'amber' && typeof data.message === 'string') {
-  const text = data.message.toLowerCase();
-  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) {
-    detectedState = 'red';
-  }
+const tool = (data && (data.tool_name || data.toolName)) || null;
+
+// PreToolUse fires many times a second during a busy turn. Skip the write if
+// nothing changed in the last second — the app polls anyway, and this keeps
+// the fs.watch storm down. `workingSince` marks when the current turn began
+// (for the "working over N minutes" signal) and resets on each new prompt.
+let prev = null;
+try {
+  prev = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (prev.signal === resolved && prev.tool === tool && Date.now() - new Date(prev.updatedAt).getTime() < 1000) process.exit(0);
+} catch {
+  // first write
 }
+const now = new Date().toISOString();
+const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
+const workingSince = resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
 
 fs.writeFileSync(
-  path.join(SESSIONS_DIR, `${fileKey}.json`),
-  JSON.stringify(
-    { sessionId, host: HOST_TAG, cwd, state: detectedState, updatedAt: new Date().toISOString(), reason },
-    null,
-    2
-  )
+  file,
+  JSON.stringify({ sessionId, host: HOST_TAG, cwd, signal: resolved, tool, workingSince, updatedAt: now }, null, 2)
 );
