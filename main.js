@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
+const HostApp = require('./hostapp.js');
 const http = require('http');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -25,7 +26,9 @@ if (DEMO === 'weed') {
 
 // `--demo knock`: walk to the terminal's Dock icon and knock, once, then quit.
 if (DEMO === 'knock') {
-  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-buddy-demo-knock');
+  // Must NOT be the same directory as the demo's Chromium userData
+  // (claude-buddy-demo-knock) — sharing it wedges the app before `ready`.
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-buddy-knock-home');
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
   fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
   fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
@@ -791,12 +794,28 @@ function stopOverlay() {
 }
 
 let overlayFx = 'none';
+// The spotlight beam needs the terminal's Dock icon, which costs two osascript
+// calls. This runs from every broadcast while the effect is on, so it caches
+// the target for a minute and never runs two lookups at once — otherwise it
+// fans out exactly the way maybeRoam used to.
+let spotlightCache = { at: 0, target: null };
+let spotlightBusy = false;
 async function pushScreenFx(fx) {
   if (!overlayWin || overlayWin.isDestroyed()) return;
   const payload = { fx };
   if (fx === 'spotlight' && IS_MAC) {
-    const app = await runningTerminal();
-    const icon = app ? await dockIconRect(app) : null;
+    if (spotlightBusy) return;
+    let icon = spotlightCache.target;
+    if (!icon || Date.now() - spotlightCache.at > 60000) {
+      spotlightBusy = true;
+      try {
+        const app = await runningTerminal();
+        icon = app ? await dockIconRect(app) : null;
+        spotlightCache = { at: Date.now(), target: icon };
+      } finally {
+        spotlightBusy = false;
+      }
+    }
     if (icon && overlayWin && !overlayWin.isDestroyed()) {
       const ob = overlayWin.getBounds();
       const m = widgetMuzzle();
@@ -1235,8 +1254,20 @@ function broadcastStatus() {
 // waiting episode, then every 10 minutes while still ignored.
 let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
 
+// Serialised, time-boxed AppleScript. System Events can stall for minutes
+// (Automation prompt, busy Dock), and an unbounded osascript per status tick
+// once piled up 1,750 processes and exhausted the machine's process table.
+// One in flight at a time; a second caller shares the pending result; hung
+// scripts are killed at 4s.
+const osaInflight = new Map();
 function osa(script) {
-  return new Promise((resolve) => execFile('osascript', ['-e', script], (err, out) => resolve(err ? null : out.trim())));
+  if (osaInflight.has(script)) return osaInflight.get(script);
+  const p = new Promise((resolve) => {
+    const child = execFile('osascript', ['-e', script], { timeout: 4000, killSignal: 'SIGKILL' }, (err, out) => resolve(err ? null : out.trim()));
+    child.on('error', () => resolve(null));
+  }).finally(() => osaInflight.delete(script));
+  osaInflight.set(script, p);
+  return p;
 }
 
 async function frontmostApp() {
@@ -1272,69 +1303,19 @@ async function dockIconRect(appName) {
 // an icon on a second display is simply outside the primary. Either way, walk
 // to the nearest point that is actually on a display, so the knock is visible.
 function clampToDisplay(rect) {
-  const cx = rect.x + rect.w / 2;
-  const cy = rect.y + rect.h / 2;
-  const displays = screen.getAllDisplays();
-  const inside = displays.find((d) => cx >= d.bounds.x && cx < d.bounds.x + d.bounds.width && cy >= d.bounds.y && cy < d.bounds.y + d.bounds.height);
-  if (inside) {
-    const wa = inside.workArea;
-    const hidden = cy > wa.y + wa.height || cy < wa.y || cx < wa.x || cx > wa.x + wa.width;
-    return {
-      ...rect,
-      hidden,
-      x: Math.max(wa.x, Math.min(wa.x + wa.width - rect.w, rect.x)),
-      y: Math.max(wa.y, Math.min(wa.y + wa.height - rect.h, rect.y)),
-      display: inside,
-    };
-  }
-  // Off every display (an auto-hidden Dock parks its icons well below the
-  // screen): pull it back onto whichever display it is nearest.
-  const near = displays.reduce((best, d) => {
-    const dx = Math.max(d.bounds.x - cx, 0, cx - (d.bounds.x + d.bounds.width));
-    const dy = Math.max(d.bounds.y - cy, 0, cy - (d.bounds.y + d.bounds.height));
-    const dist = Math.hypot(dx, dy);
-    return !best || dist < best.dist ? { d, dist } : best;
-  }, null);
-  if (!near) return { ...rect, hidden: true, display: screen.getPrimaryDisplay() };
-  const wa = near.d.workArea;
-  return {
-    ...rect,
-    hidden: true,
-    x: Math.max(wa.x, Math.min(wa.x + wa.width - rect.w, rect.x)),
-    y: Math.max(wa.y, Math.min(wa.y + wa.height - rect.h, rect.y)),
-    display: near.d,
-  };
+  return HostApp.clampRectToDisplays(rect, screen.getAllDisplays());
 }
 
-// Process names are not display names: Ghostty's process is `ghostty`, VS
-// Code's is `Code`, Cursor's is `Cursor`. Matching was case-sensitive, so the
-// roamer never found Ghostty at all and simply never knocked.
-const APP_ALIASES = {
-  Ghostty: ['ghostty'],
-  iTerm2: ['iTerm2', 'iTerm'],
-  Terminal: ['Terminal'],
-  Warp: ['Warp', 'stable'],
-  'Visual Studio Code': ['Code', 'Electron'],
-  'Visual Studio Code - Insiders': ['Code - Insiders'],
-  'Code - OSS': ['Code - OSS'],
-  Cursor: ['Cursor'],
-  Windsurf: ['Windsurf'],
-  kitty: ['kitty'],
-  WezTerm: ['wezterm-gui', 'WezTerm'],
-  Alacritty: ['Alacritty', 'alacritty'],
-  Hyper: ['Hyper'],
-};
-
+// "get name of every process" is the slowest call we make (it can take
+// seconds on a loaded machine) and the answer barely changes, so it is cached
+// for 30 s on top of osa()'s single-flight guard.
+let processNameCache = { at: 0, names: null };
 async function runningProcessNames() {
+  if (processNameCache.names && Date.now() - processNameCache.at < 30000) return processNameCache.names;
   const names = await osa('tell application "System Events" to get name of every process');
-  if (!names) return null;
-  return names.split(',').map((x) => x.trim()).filter(Boolean);
-}
-
-function matchesRunning(appName, running) {
-  const lower = running.map((n) => n.toLowerCase());
-  const wanted = [appName, ...(APP_ALIASES[appName] || [])].map((n) => n.toLowerCase());
-  return wanted.some((w) => lower.includes(w));
+  if (!names) return processNameCache.names; // keep the last good answer rather than failing the roam
+  processNameCache = { at: Date.now(), names: names.split(',').map((x) => x.trim()).filter(Boolean) };
+  return processNameCache.names;
 }
 
 // Which app should Claude knock on? The session that needs you knows, because
@@ -1344,11 +1325,7 @@ function matchesRunning(appName, running) {
 async function terminalForSessions(sessions = []) {
   const running = await runningProcessNames();
   if (!running) return null;
-  const wanting = sessions.filter((s) => WAITING_SIGNALS.has(s.signal));
-  const preferred = [...wanting, ...sessions].map((s) => s.hostApp).filter(Boolean);
-  for (const app of preferred) if (matchesRunning(app, running)) return app;
-  const known = [...TERMINAL_APPS, ...Object.keys(APP_ALIASES)];
-  return known.find((t) => matchesRunning(t, running)) || null;
+  return HostApp.pickTerminal(sessions, running, (sig) => WAITING_SIGNALS.has(sig), TERMINAL_APPS);
 }
 
 async function runningTerminal() {
@@ -1414,13 +1391,23 @@ async function roamAndKnock(st, { force = false } = {}) {
   if (!win) return { ok: false, why: 'no widget' };
   if (roamState.busy) return { ok: false, why: 'already roaming' };
   if (gardenRun) return { ok: false, why: 'gardening' };
-  const appName = await terminalForSessions(st.sessions);
-  if (!appName) return { ok: false, why: 'no terminal app running' };
-  if (!force && (await frontmostApp()) === appName) return { ok: false, why: 'already the front app' };
-  const icon = await dockIconRect(appName);
-  if (!icon) return { ok: false, why: `no Dock icon for ${appName}` };
-  if (roamState.busy) return { ok: false, why: 'already roaming' }; // an await slipped past the first check
+  // busy goes up BEFORE the first await. Deciding whether to knock costs three
+  // osascript calls, and claiming the flag only afterwards is what let every
+  // status tick start another round while the previous one was still waiting —
+  // thousands of hung osascript processes, and an exhausted process table.
   roamState.busy = true;
+  const giveUp = (why) => { roamState.busy = false; return { ok: false, why }; };
+  let appName = null;
+  let icon = null;
+  try {
+    appName = await terminalForSessions(st.sessions);
+    if (!appName) return giveUp('no terminal app running');
+    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app');
+    icon = await dockIconRect(appName);
+    if (!icon) return giveUp(`no Dock icon for ${appName}`);
+  } catch (e) {
+    return giveUp(`could not locate the Dock icon: ${e.message}`);
+  }
   roamState.lastKnock = Date.now();
   const wasVisible = win.isVisible();
   if (!wasVisible) win.showInactive();
@@ -1946,32 +1933,54 @@ function maybePlayAlertSound() {
 
 // Dev captures (--shot, --playtest) and demos run beside the installed app,
 // so they take their own userData (and therefore their own instance lock).
-if (process.argv.includes('--shot') || process.argv.includes('--playtest')) app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
-if (process.argv.includes('--demo')) app.setPath('userData', path.join(os.tmpdir(), `claude-buddy-demo-${DEMO}`));
-
-// A dev run that was killed (^C, a failing playtest, a crash) leaves Chromium's
-// Singleton* files behind, and the next run then quietly quits at
-// requestSingleInstanceLock — the classic "the test just does nothing" failure.
-// Nothing else can legitimately hold the dev profile, so clear it first.
-if (IS_DEV_RUN) {
-  const dev = app.getPath('userData');
-  for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
-    try { fs.rmSync(path.join(dev, f), { force: true, recursive: true }); } catch { /* not there */ }
-  }
+// Dev runs (shots, playtests, demos) each get their OWN profile, keyed by pid.
+//
+// They used to share one fixed dev profile, which meant: a run that was killed
+// (^C, a failed playtest, a crash) left Chromium's Singleton* files behind and
+// the next run quietly quit at requestSingleInstanceLock — and worse, while an
+// earlier dev instance was still alive the new run handed its flags to that
+// dying instance through `second-instance`, whose `new BrowserWindow` throws,
+// so the new process exited having printed nothing at all. That is the "the
+// test just does nothing" failure. A per-pid profile cannot collide, cannot
+// inherit a stale lock, and is deleted on the way out.
+const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `claude-buddy-dev-${process.pid}`) : null;
+if (DEV_PROFILE) {
+  app.setPath('userData', DEV_PROFILE);
+  const sweep = () => { try { fs.rmSync(DEV_PROFILE, { recursive: true, force: true }); } catch { /* already gone */ } };
+  app.on('will-quit', sweep);
+  process.on('exit', sweep);
+  // Sweep profiles orphaned by a hard kill, so /tmp doesn't fill up.
+  try {
+    for (const d of fs.readdirSync(os.tmpdir())) {
+      const m = /^claude-buddy-dev-(\d+)$/.exec(d);
+      if (!m || Number(m[1]) === process.pid) continue;
+      try { process.kill(Number(m[1]), 0); continue; } catch { /* that pid is gone */ }
+      fs.rmSync(path.join(os.tmpdir(), d), { recursive: true, force: true });
+    }
+  } catch { /* nothing to sweep */ }
 }
 
 // One widget, one tray. A second launch (e.g. `open -a … --args --lights`)
 // hands its flags to the running instance instead of starting another.
-if (!app.requestSingleInstanceLock()) {
+const gotLock = app.requestSingleInstanceLock();
+if (DEMO || DIAG) console.error('[startup]', JSON.stringify({ demo: DEMO, gotLock, userData: app.getPath('userData') }));
+if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', (e, argv) => {
-    if (argv.includes('--lights')) createLightsWindow();
-    else win?.show();
+    // This fires on an instance that may be mid-teardown, where opening a
+    // window throws — and an uncaught throw here took the whole app down.
+    try {
+      if (argv.includes('--lights')) createLightsWindow();
+      else win?.show();
+    } catch (err) {
+      console.error('[second-instance] could not surface a window:', err.message);
+    }
   });
 }
 
 app.whenReady().then(() => {
+  if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
@@ -2028,15 +2037,32 @@ app.whenReady().then(() => {
       cwd: process.cwd(), signal: 'permission-ask', tool: 'Bash', updatedAt: new Date().toISOString(),
     }));
     setTimeout(async () => {
-      const st = aggregateState({ ignoreTravel: true });
-      console.log('[demo knock] sessions', JSON.stringify(st.sessions.map((s) => ({ hostApp: s.hostApp, signal: s.signal }))));
-      console.log('[demo knock] terminal', await terminalForSessions(st.sessions));
-      const r = await knockNow();
-      console.log('[demo knock] result', JSON.stringify(r));
+      const report = { sessions: [], terminal: null, result: null };
+      try {
+        const st = aggregateState({ ignoreTravel: true });
+        report.sessions = st.sessions.map((s) => ({ hostApp: s.hostApp, signal: s.signal }));
+        report.terminal = await terminalForSessions(st.sessions);
+        report.result = await knockNow();
+      } catch (e) {
+        report.error = e.stack || e.message;
+      }
+      // stderr, and a file: a GUI Electron process does not reliably deliver
+      // stdout to a redirected shell.
+      console.error('[demo knock]', JSON.stringify(report, null, 2));
+      try { fs.writeFileSync(path.join(os.tmpdir(), 'claude-buddy-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
       setTimeout(() => app.quit(), 2500);
     }, 2000);
   }
+}).catch((e) => {
+  // Without this the app can come up half-initialised and simply sit there —
+  // no widget, no tray, no polling, and nothing in the log to say why.
+  console.error('[startup] failed:', e.stack || e.message);
 });
+
+// Same for anything that escapes a promise anywhere else: log it instead of
+// letting it kill a listener silently.
+process.on('unhandledRejection', (e) => console.error('[unhandled rejection]', (e && e.stack) || e));
+process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
 
 // ── --diag: what the app is actually costing, once a second ────────────────
 function startDiag() {

@@ -28,6 +28,7 @@
       "rig.js",
       "rig.css",
       "rules.js",
+      "hostapp.js",
       "assets/**/*",
       "hooks/**/*",
       "overlay.html",
