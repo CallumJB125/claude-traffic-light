@@ -337,18 +337,18 @@
 .rig.event-ufo .event-ufo { opacity: 1; animation: rig-ufo 4.2s ease-in-out 1; }
 .rig.event-ufo .ufo-lights circle { animation: rig-flash 0.3s steps(1) infinite; }
 .rig.event-ufo .ufo-lights circle:nth-child(2n) { animation-delay: 0.15s; }
-.rig.event-ufo .claude-body { animation: rig-abduct 4.2s ease-in-out 1; }
+.rig.event-ufo .scene { animation: rig-abduct 4.2s ease-in-out 1; }
 @keyframes rig-ufo { 0% { transform: translateY(-30px); opacity: 0; } 15% { transform: translateY(0); opacity: 1; } 85% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(-30px); opacity: 0; } }
 @keyframes rig-abduct { 0%, 20% { transform: translateY(0) rotate(0); } 55% { transform: translateY(-34px) rotate(8deg) scale(0.9); opacity: 0.3; } 65% { transform: translateY(-40px) rotate(-8deg) scale(0.85); opacity: 0; } 80% { transform: translateY(6px); opacity: 1; } 100% { transform: translateY(0); } }
 .rig.event-portal .event-portal { opacity: 1; animation: rig-portal 4.2s ease-in-out 1; }
 .rig.event-portal .portal-ring { animation: rig-portal-spin 0.6s linear infinite; transform-box: fill-box; transform-origin: center; }
-.rig.event-portal .claude-body { animation: rig-enter-portal 4.2s ease-in-out 1; }
+.rig.event-portal .scene { animation: rig-enter-portal 4.2s ease-in-out 1; }
 @keyframes rig-portal { 0% { transform: scale(0); } 12% { transform: scale(1); } 88% { transform: scale(1); } 100% { transform: scale(0); } }
 @keyframes rig-portal-spin { from { transform: scaleX(1); } 50% { transform: scaleX(0.3); } to { transform: scaleX(1); } }
 @keyframes rig-enter-portal { 0%, 15% { transform: translateX(0); } 45% { transform: translateX(28px); opacity: 0.2; } 50% { transform: translateX(-40px); opacity: 0; } 55% { transform: translateX(-40px); opacity: 1; } 85%, 100% { transform: translateX(0); } }
 .rig.event-meteor .event-meteor { opacity: 1; }
 .rig.event-meteor .meteor { animation: rig-meteor 1.4s ease-in 1 forwards; }
-.rig.event-meteor .claude-body { animation: rig-quake 0.4s steps(3) 1.3s 2; }
+.rig.event-meteor .scene { animation: rig-quake 0.4s steps(3) 1.3s 2; }
 @keyframes rig-meteor { 0% { transform: translate(90px, -20px); opacity: 0; } 10% { opacity: 1; } 100% { transform: translate(-10px, 70px); opacity: 0; } }
 @keyframes rig-quake { 0%, 100% { transform: translate(0, 0); } 33% { transform: translate(-1.5px, 1px); } 66% { transform: translate(1.5px, -1px); } }
 .rig.pose-bubble .prop-bubble { opacity: 1; animation: rig-bubble-in 300ms cubic-bezier(0.2, 0.9, 0.3, 1.2) 1; transform-origin: 42px 14px; }
@@ -533,6 +533,10 @@
 @keyframes rig-die { 0% { transform: rotate(0); } 60% { transform: rotate(80deg) translateY(2px); } 75% { transform: rotate(92deg) translateY(4px); } 100% { transform: rotate(88deg) translateY(4px); } }
 @keyframes rig-drop-sign { 0% { transform: rotate(0); } 100% { transform: rotate(35deg) translate(10px, 6px); } }
 
+/* processing (weed → jar): hands work at the table */
+.rig.processing .knock-fist { opacity: 1; animation: rig-grind 0.6s ease-in-out infinite alternate; transform-origin: 53px 49px; }
+@keyframes rig-grind { from { transform: translate(-2px, 1px) rotate(-25deg); } to { transform: translate(3px, -1px) rotate(25deg); } }
+
 /* garden lifecycle */
 .rig .mover { transition: transform 2.6s ease-in-out; transform: translateX(var(--walk, 0px)); }
 .rig .tools > * { opacity: 0; }
@@ -565,8 +569,8 @@
 @keyframes rig-grow { from { transform: scale(0); } to { transform: scale(1); } }
 .rig .edible { transition: opacity 400ms ease, transform 400ms ease; transform-box: fill-box; transform-origin: center; }
 .rig .edible.eaten { opacity: 0; transform: scale(0); }
-.rig.eating.eat-left .claude-body { animation: rig-eat-left 0.9s ease-in-out 1; transform-origin: 32px 68px; }
-.rig.eating.eat-right .claude-body { animation: rig-eat-right 0.9s ease-in-out 1; transform-origin: 32px 68px; }
+.rig.eating.eat-left .scene { animation: rig-eat-left 0.9s ease-in-out 1; transform-origin: 32px 68px; }
+.rig.eating.eat-right .scene { animation: rig-eat-right 0.9s ease-in-out 1; transform-origin: 32px 68px; }
 .rig.eating .grumpy-mouth { opacity: 1; animation: rig-munch 0.22s ease-in-out infinite alternate; transform-origin: 32px 50px; }
 @keyframes rig-eat-left { 0%, 100% { transform: rotate(0) translateY(0); } 40%, 70% { transform: rotate(-16deg) translateY(6px); } }
 @keyframes rig-eat-right { 0%, 100% { transform: rotate(0) translateY(0); } 40%, 70% { transform: rotate(16deg) translateY(6px); } }
@@ -575,7 +579,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
+  .rig .scene, .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
   .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }

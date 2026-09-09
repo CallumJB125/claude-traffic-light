@@ -70,8 +70,11 @@
     if (p.op === 'sow' && pot) { pot.crop = p.crop; pot.sown = performance.now(); pot.growMs = p.growMs; pot.bites = [true, true, true, true]; pot.rack = null; }
     if (p.op === 'bite' && pot) { const k = pot.bites.findIndex((b) => b); if (k >= 0) pot.bites[k] = false; }
     if (p.op === 'harvest' && pot) { pot.crop = null; pot.rack = { t0: performance.now(), dryMs: p.dryMs }; }
-    if (p.op === 'deal' && pot) { garden.deal = { i: p.i, t0: performance.now(), ms: p.ms, claude: { x: p.claude.x - ox, y: p.claude.y - oy, w: p.claude.w, h: p.claude.h }, fromLeft: pot.x > W / 2 }; }
-    if (p.op === 'clearpot' && pot) { pot.crop = null; pot.rack = null; pot.seed = false; garden.deal = null; }
+    if (p.op === 'unrack' && pot) { pot.rack = null; }
+    if (p.op === 'process' && pot) { pot.table = { t0: performance.now(), ms: p.ms }; }
+    if (p.op === 'jar' && pot) { pot.table = null; pot.jar = true; }
+    if (p.op === 'deal' && pot) { pot.jar = false; garden.deal = { i: p.i, t0: performance.now(), ms: p.ms, claude: { x: p.claude.x - ox, y: p.claude.y - oy, w: p.claude.w, h: p.claude.h }, fromLeft: pot.x > W / 2, buyer: makeBuyer(p.seed || 1) }; }
+    if (p.op === 'clearpot' && pot) { pot.crop = null; pot.rack = null; pot.table = null; pot.jar = false; pot.seed = false; garden.deal = null; }
     if (p.op === 'pull') garden.pots.forEach((q) => { q.crop = null; });
     if (p.op === 'clear') { garden.on = false; garden.pots = []; garden.deal = null; }
     kick();
@@ -93,6 +96,8 @@
         ctx.restore();
       }
       if (pot.rack) drawRack(x + 60, y, Math.min(1, (t - pot.rack.t0) / pot.rack.dryMs));
+      if (pot.table) drawTable(x + 60, y, Math.min(1, (t - pot.table.t0) / pot.table.ms), t);
+      if (pot.jar) drawJar(x + 60, y - 2, true);
     }
     if (garden.deal) drawDeal(t);
   }
@@ -103,19 +108,74 @@
     for (const dx of [-14, 0, 14]) { ctx.strokeStyle = '#d7ded6'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + dx, y - 58); ctx.lineTo(x + dx, y - 48); ctx.stroke(); leaf(x + dx, y - 40, 6, 9, c); leaf(x + dx - 4, y - 44, 4, 6, c); leaf(x + dx + 4, y - 44, 4, 6, c); }
     ctx.fillStyle = 'rgba(242,239,232,0.7)'; ctx.font = '10px -apple-system, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(dry >= 1 ? 'dry' : `${Math.round(dry * 100)}%`, x, y + 14);
   }
-  // A second pixel Claude in a hoodie walks in from the edge, swaps a jar for
-  // a few notes at Claude's feet, and walks off the same way.
-  function drawBuyer(x, y, s, walk) {
+  // Processing: a small table with a grinder; the jar fills as he works.
+  function drawTable(x, y, p, t) {
+    ctx.fillStyle = '#6b4420'; ctx.fillRect(x - 30, y - 30, 60, 5); ctx.fillRect(x - 26, y - 25, 4, 25); ctx.fillRect(x + 22, y - 25, 4, 25);
+    // grinder (rotates), bud pile shrinking, jar filling
+    ctx.save(); ctx.translate(x - 12, y - 39); ctx.rotate(Math.sin(t / 120) * 0.6); ctx.fillStyle = '#5a5a66'; ctx.fillRect(-8, -6, 16, 12); ctx.fillStyle = '#7c7c8a'; ctx.fillRect(-8, -9, 16, 4); ctx.restore();
+    const pile = 1 - p; if (pile > 0.02) leaf(x + 10, y - 34, 9 * pile + 2, 4 * pile + 1, '#6e7a30');
+    drawJar(x + 26, y - 30, false, p);
+    ctx.fillStyle = 'rgba(242,239,232,0.7)'; ctx.font = '10px -apple-system, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(`${Math.round(p * 100)}%`, x, y + 14);
+  }
+  function drawJar(x, y, lidOn = true, fill = 1) {
+    ctx.fillStyle = 'rgba(200,230,255,0.85)'; ctx.fillRect(x - 7, y - 18, 14, 18);
+    if (fill > 0) { ctx.fillStyle = '#4f8a3a'; ctx.fillRect(x - 5, y - 2 - 14 * fill, 10, 14 * fill); }
+    if (lidOn) { ctx.fillStyle = '#5a4636'; ctx.fillRect(x - 8, y - 21, 16, 4); }
+  }
+  // The buyer: generated from a seed so every deal brings someone new —
+  // Lagos-rapper or Rastafari looks, mixed from parts.
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; }; }
+  function makeBuyer(seed) {
+    const r = rng(seed);
+    const pick = (arr) => arr[Math.floor(r() * arr.length)];
+    const rasta = r() < 0.45;
+    return {
+      skin: pick(['#5a3a24', '#6e4428', '#8b5a35', '#3f2a1c', '#a06b44']),
+      style: rasta ? 'rasta' : 'rapper',
+      top: rasta ? pick(['#d62828', '#f4a300', '#1a7f3c', '#2b2b2b', '#f2efe8']) : pick(['#111', '#f2efe8', '#ffd400', '#7b2cbf', '#0aa3ff', '#e63946']),
+      pants: pick(['#1a1a1e', '#2a3d8f', '#f2efe8', '#4b2e83', '#3a3a3a']),
+      hat: rasta ? pick(['tam', 'tam', 'none', 'beanie']) : pick(['durag', 'snapback', 'bucket', 'none', 'beanie']),
+      hatColor: pick(['#111', '#d62828', '#f4a300', '#1a7f3c', '#0aa3ff', '#f2efe8', '#7b2cbf']),
+      dreads: rasta ? pick(['long', 'long', 'short']) : pick(['none', 'short', 'none', 'long']),
+      shades: r() < 0.55,
+      chain: !rasta && r() < 0.7,
+      chainColor: pick(['#ffd400', '#e5e5e5', '#ffd400']),
+      grillz: !rasta && r() < 0.35,
+      stripes: rasta && r() < 0.6,
+      boombox: r() < 0.3,
+      spliff: rasta && r() < 0.5,
+    };
+  }
+  // Same proportions as Claude's pixel body: head 30×13 over a 56×7 base, three legs.
+  function drawBuyer(x, y, s, walk, b) {
     const bob = walk ? Math.sin(performance.now() / 90) * 1.5 : 0;
+    const l = walk ? Math.sin(performance.now() / 90) * 3 : 0;
     ctx.save(); ctx.translate(x, y + bob); ctx.scale(s, s);
-    ctx.fillStyle = '#3a3546'; ctx.fillRect(-15, -29, 30, 13); ctx.fillRect(-28, -16, 56, 7); // hoodie body + base
-    ctx.fillStyle = '#3a3546'; ctx.beginPath(); ctx.moveTo(-15, -29); ctx.lineTo(0, -38); ctx.lineTo(15, -29); ctx.closePath(); ctx.fill(); // hood
-    ctx.fillStyle = '#da7756'; ctx.fillRect(-10, -27, 20, 9);                                    // face
-    ctx.fillStyle = '#211f1c'; ctx.fillRect(-7, -25, 3, 3); ctx.fillRect(4, -25, 3, 3);
-    ctx.fillStyle = '#3a3546'; const l = walk ? Math.sin(performance.now() / 90) * 3 : 0; ctx.fillRect(-17, -9, 7, 9 + l); ctx.fillRect(-3.5, -9, 7, 9 - l); ctx.fillRect(10, -9, 7, 9 + l);
+    const R = (px, py, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(px, py, w, h); };
+    // dreads behind the head
+    if (b.dreads !== 'none') { const len = b.dreads === 'long' ? 18 : 7; for (const dx of [-16, -12, -8, 8, 12, 16]) R(dx - 1, -28 + (walk ? Math.sin(performance.now() / 150 + dx) * 1.2 : 0), 2.4, len, '#1c120c'); }
+    // body: top with optional rasta stripes, pants as the base slab, legs
+    R(-15, -29, 30, 13, b.top);
+    if (b.stripes) { R(-15, -29, 30, 4, '#d62828'); R(-15, -25, 30, 4, '#f4a300'); R(-15, -21, 30, 5, '#1a7f3c'); }
+    R(-28, -16, 56, 7, b.pants);
+    R(-17, -9, 7, 9 + l, b.pants); R(-3.5, -9, 7, 9 - l, b.pants); R(10, -9, 7, 9 + l, b.pants);
+    // face
+    R(-10, -27, 20, 9, b.skin);
+    if (b.shades) { R(-9, -25, 8, 4, '#111'); R(1, -25, 8, 4, '#111'); R(-1, -24, 2, 1.5, '#111'); } else { R(-7, -25, 3, 3, '#211f1c'); R(4, -25, 3, 3, '#211f1c'); }
+    if (b.grillz) { R(-4, -20, 8, 1.6, '#ffd400'); }
+    // chain
+    if (b.chain) { ctx.strokeStyle = b.chainColor; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(-10, -17); ctx.quadraticCurveTo(0, -8, 10, -17); ctx.stroke(); R(-2, -12, 4, 4, b.chainColor); }
+    // hats
+    if (b.hat === 'tam') { ctx.fillStyle = '#d62828'; ctx.beginPath(); ctx.ellipse(0, -31, 17, 8, 0, Math.PI, 0); ctx.fill(); R(-17, -31, 34, 2, '#f4a300'); R(-17, -29, 34, 2, '#1a7f3c'); }
+    if (b.hat === 'beanie') { R(-15, -36, 30, 8, b.hatColor); R(-15, -30, 30, 2, '#f2efe8'); }
+    if (b.hat === 'durag') { R(-15, -33, 30, 5, b.hatColor); R(-19, -31, 6, 12, b.hatColor); }
+    if (b.hat === 'snapback') { R(-15, -35, 30, 7, b.hatColor); R(-15, -29, 40, 2.5, b.hatColor); }
+    if (b.hat === 'bucket') { R(-13, -37, 26, 8, b.hatColor); R(-19, -30, 38, 3, b.hatColor); }
+    // props
+    if (b.spliff) { R(8, -21, 7, 1.4, '#f2efe8'); R(14.5, -21, 1.2, 1.4, '#ff5a1f'); }
+    if (b.boombox) { R(18, -16, 16, 10, '#2a2a2e'); R(20, -14, 5, 5, '#7c7c8a'); R(27, -14, 5, 5, '#7c7c8a'); R(22, -19, 8, 3, '#2a2a2e'); }
     ctx.restore();
   }
-  function drawJar(x, y) { ctx.fillStyle = 'rgba(200,230,255,0.85)'; ctx.fillRect(x - 6, y - 14, 12, 14); ctx.fillStyle = '#5a4636'; ctx.fillRect(x - 7, y - 17, 14, 4); ctx.fillStyle = '#4f8a3a'; ctx.fillRect(x - 4, y - 10, 8, 8); }
   function drawNotes(x, y) { for (let i = 0; i < 3; i += 1) { ctx.fillStyle = '#3fa34a'; ctx.fillRect(x - 8 + i * 3, y - 6 - i * 2, 16, 8); ctx.fillStyle = '#2f8a3a'; ctx.fillRect(x - 3 + i * 3, y - 4 - i * 2, 6, 4); } }
   function drawDeal(t) {
     const d = garden.deal;
@@ -128,7 +188,7 @@
     if (p < 0.4) bx = edgeX + (meetX - edgeX) * (p / 0.4);
     else if (p < 0.7) { bx = meetX; walking = false; }
     else bx = meetX + (edgeX - meetX) * ((p - 0.7) / 0.3);
-    drawBuyer(bx, feetY, scale, walking);
+    drawBuyer(bx, feetY, scale, walking, d.buyer);
     if (p >= 0.4 && p < 0.7) {
       const q = (p - 0.4) / 0.3;
       const cx = d.claude.x + (d.fromLeft ? 6 : d.claude.w - 6);

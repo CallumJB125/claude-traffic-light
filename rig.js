@@ -16,6 +16,7 @@
     <symbol id="lamp-star" viewBox="0 0 16 16"><polygon points="8,0.8 10.1,5.6 15.3,6.1 11.4,9.6 12.6,14.7 8,12 3.4,14.7 4.6,9.6 0.7,6.1 5.9,5.6" /></symbol>
     <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
   </defs>
+  <g class="scene">
   <g class="mover">
   <g class="sign-assembly">
     <!-- horizontal, three lamps (default) -->
@@ -57,6 +58,7 @@
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
   </g><!-- /mover -->
+  </g><!-- /scene -->
   <!-- staged garden: pots, bed, plants and tools; driven by the garden machine below -->
   <g class="garden"></g>
   <!-- rare events, drawn over everything -->
@@ -511,7 +513,7 @@
       }
       // Garden actions on the real screen are driven by the main process.
       const act = look.gardenAct || null;
-      for (const a of ['walking', 'carrying', 'pouring', 'watering']) svg.classList.toggle(a, act === a);
+      for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing']) svg.classList.toggle(a, act === a);
       if (act === 'eating') { svg.classList.add('eating', look.facing === 'left' ? 'eat-left' : 'eat-right'); } else if (!garden) svg.classList.remove('eating', 'eat-left', 'eat-right');
       svg.classList.toggle('grumpy', !!look.grumpy);
       // Gardening needs room: the view widens to three widths, Claude centred.

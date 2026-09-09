@@ -849,7 +849,7 @@ const GSPEED = Number(process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED || 1);
 // Slower, bigger: twelve pots spread over the whole display in a jittered
 // grid, so the screen becomes the garden. One plant in thirty is weed — it
 // gets dried on a rack for ten minutes, then a buyer comes for it.
-const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
+const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, PROCESS: 90000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
 
 function gardenGeometry() {
   const b = win.getBounds();
@@ -966,18 +966,41 @@ async function runGarden(base) {
       if (dried) {
         const i = run.pots.indexOf(dried);
         const stand = standAt(dried);
-        dried.state = 'dealing';
+        dried.state = 'processing';
+        // take it down off the rack, then work it into a jar at the table
         gardenAct('walking', { facing: facingTo(stand.x) });
         await moveWidget(stand.x, stand.y, 2500);
         if (!alive()) break;
+        gardenAct('carrying', { facing: 'right' });
+        overlayGarden({ op: 'unrack', i });
+        await wait(2000);
+        gardenAct('processing', { facing: 'right' });
+        overlayGarden({ op: 'process', i, ms: GT.PROCESS });
+        await wait(GT.PROCESS);
+        if (!alive()) break;
+        overlayGarden({ op: 'jar', i });
         gardenAct(null, { facing: 'right' });
-        overlayGarden({ op: 'deal', i, ms: GT.DEAL, claude: { x: win.getBounds().x, y: win.getBounds().y, w: geo.width, h: geo.height } });
+        dried.state = 'jarred';
+        await wait(1500);
+        continue;
+      }
+      const jarred = run.pots.find((p) => p.state === 'jarred');
+      if (jarred) {
+        const i = run.pots.indexOf(jarred);
+        jarred.state = 'dealing';
+        const stand = standAt(jarred);
+        gardenAct('walking', { facing: facingTo(stand.x) });
+        await moveWidget(stand.x, stand.y, 1500);
+        if (!alive()) break;
+        gardenAct(null, { facing: 'right' });
+        // every buyer is generated fresh: a random look each time
+        overlayGarden({ op: 'deal', i, ms: GT.DEAL, seed: Math.floor(Math.random() * 1e9), claude: { x: win.getBounds().x, y: win.getBounds().y, w: geo.width, h: geo.height } });
         await wait(GT.DEAL);
         if (!alive()) break;
         gardenAct('thumbs');
         await wait(1500);
         gardenAct(null);
-        dried.crop = null; dried.state = 'empty';
+        jarred.crop = null; jarred.state = 'empty';
         overlayGarden({ op: 'clearpot', i });
         continue;
       }
@@ -1548,9 +1571,8 @@ function maybePlayAlertSound() {
 
 // Dev captures (--shot, --playtest) and demos run beside the installed app,
 // so they take their own userData (and therefore their own instance lock).
-if (process.argv.includes('--shot') || process.argv.includes('--playtest') || process.argv.includes('--demo')) {
-  app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
-}
+if (process.argv.includes('--shot') || process.argv.includes('--playtest')) app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
+if (process.argv.includes('--demo')) app.setPath('userData', path.join(os.tmpdir(), 'claude-buddy-demo-data'));
 
 // One widget, one tray. A second launch (e.g. `open -a … --args --lights`)
 // hands its flags to the running instance instead of starting another.

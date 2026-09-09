@@ -107,8 +107,12 @@ independently:
   then walks to an edible one every forty seconds and eats it, and fifteen
   minutes after his first bite he pulls everything and replants. One plant
   in thirty is weed: instead of eating it he harvests it onto a drying rack
-  for ten minutes, after which a second Claude in a hoodie walks in from the
-  edge of the screen, swaps a jar for a few notes, and walks off. When the
+  (ten minutes), takes it down and works it at a table with a grinder into
+  a jar (ninety seconds), and then a buyer walks in from the edge of the
+  screen — generated fresh every time from Lagos-rapper and Rastafari
+  parts (skin, fits, durags, tams, snapbacks, dreads, shades, chains,
+  grillz, the odd boombox or spliff) — swaps the jar for a few notes, and
+  walks off. When the
   state changes he walks home and the garden clears. The editor previews a
   compact version at 30×.
 - **Pet** — a duck, cat, blob, dog, bunny, parrot (on the sign), frog,
