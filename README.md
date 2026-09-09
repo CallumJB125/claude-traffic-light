@@ -144,7 +144,8 @@ Signals you can build rules on: you send a prompt · Claude uses a tool · a
 tool finishes · a tool fails · a subagent finishes · Claude finishes a task ·
 Claude is waiting for you · Claude asks permission · usage limit hit · a
 session starts · context compacts · working over 10 minutes · 3+ sessions at
-once · no sessions running. Tool signals can be scoped to one tool name or a
+once · a subagent is running · team mode is running · a ralph loop is running
+· 3+ agents at once · no sessions running. Tool signals can be scoped to one tool name or a
 prefix (`mcp__*`).
 
 Resolution: rules apply top to bottom; the first rule that lights a lamp is
@@ -218,6 +219,53 @@ something out loud, or hide the widget for 30 minutes. Gestures a rule
 leaves on "keep" fall through to the rules below and finally to the
 defaults: click jumps (or pokes when nothing is waiting), double-click pets,
 ⌥-click feeds. Right-click always opens Lights.
+
+## Every agent, not just the one you're talking to
+
+Claude rarely works alone any more, so the widget counts the whole swarm:
+Claude Code subagents (the `Agent` tool), oh-my-claudecode **team**,
+**ralph** and **ultrawork** runs, and Claude Code's native tmux agent teams.
+
+- A row of **12px mini rigs** under Claude's feet, one per live agent,
+  green while it works, amber while it waits, grey once it is done. Eight
+  fit; the rest collapse into a `+N`. Click one to see its name and what it
+  is doing; hover the widget for the full roster (four names, then `+N more`).
+- Rules can fire on **a subagent is running**, **team mode is running**,
+  **a ralph loop is running** and **3+ agents at once**. Three come switched
+  on out of the box: *Ralph loop* (Claude runs on the spot and the sign
+  counts the iteration), *Swarm* (the sign counts the agents, eyes go amber)
+  and *Team mode* (a duck tags along).
+- The sign's number can show **Agents running** or the **Ralph iteration**,
+  and rule text can quote either with `{agents}` and `{iteration}`.
+- Turn the whole thing off with Preferences → **Show agents**.
+
+Subagents arrive through the `SubagentStart` / `SubagentStop` hooks. The
+rest only exists on disk, so the app polls it every 2 seconds — see
+`agents.js` for the files and their shapes:
+
+| File | What it gives |
+| --- | --- |
+| `<project>/.omc/state/subagent-tracking.json` | every OMC-spawned agent: id, type, `parent_mode`, status |
+| `<project>/.omc/state/mission-state.json` | team workers by name, and what each is doing |
+| `<project>/.omc/state/sessions/<id>/ralph-state.json` | `active` and the `iteration` counter |
+| `<project>/.omc/state/sessions/<id>/ultrawork-state.json` | `active` |
+| `<project>/.omc/state/sessions/<id>/team-state.json` | `active` and the `team_name` |
+| `~/.claude/teams/session-<id>/config.json` | native team members, one tmux pane each |
+
+Whatever it finds is merged into the session file, which grew two fields:
+
+```json
+{ "mode": "ralph", "iteration": 7,
+  "agents": [{ "id": "a1", "name": "executor", "kind": "subagent",
+               "status": "working", "since": "…", "parent": "…" }] }
+```
+
+`kind` is one of `subagent`, `teammate`, `ralph`, `ultrawork`; `status` is
+one of `working`, `waiting`, `done`. See it without a real swarm:
+
+```bash
+npx electron . --demo agents   # a ralph loop on iteration 7 with five agents
+```
 
 ## Task progress, rare events, reactions
 

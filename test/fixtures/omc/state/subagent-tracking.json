@@ -1,0 +1,10 @@
+{
+  "agents": [
+    { "agent_id": "a1b2c3", "agent_type": "oh-my-claudecode:executor", "started_at": "2026-09-09T22:39:25.972Z", "parent_mode": "ralph", "status": "running" },
+    { "agent_id": "d4e5f6", "agent_type": "oh-my-claudecode:architect", "started_at": "2026-09-09T22:40:01.000Z", "parent_mode": "team", "status": "completed" }
+  ],
+  "total_spawned": 2,
+  "total_completed": 1,
+  "total_failed": 0,
+  "last_updated": "2026-09-09T22:41:00.000Z"
+}

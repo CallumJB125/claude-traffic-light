@@ -1,0 +1,11 @@
+{
+  "name": "session-sess-1",
+  "createdAt": 1788871233234,
+  "leadAgentId": "team-lead@session-sess-1",
+  "leadSessionId": "sess-1",
+  "members": [
+    { "agentId": "team-lead@session-sess-1", "name": "team-lead", "agentType": "team-lead", "joinedAt": 1788871233234, "tmuxPaneId": "leader", "cwd": "/tmp/proj" },
+    { "agentId": "reliability@session-sess-1", "name": "reliability", "agentType": "oh-my-claudecode:executor", "joinedAt": 1788871421790, "tmuxPaneId": "%26", "model": "opus" },
+    { "agentId": "stats@session-sess-1", "name": "stats", "agentType": "oh-my-claudecode:executor", "joinedAt": 1788871429000, "tmuxPaneId": "%27" }
+  ]
+}

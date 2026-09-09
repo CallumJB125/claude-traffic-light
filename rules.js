@@ -31,6 +31,10 @@
     { id: 'ignored-20', label: 'Ignored for 20 minutes', hook: null, kind: 'virtual' },
     { id: 'ignored-30', label: 'Ignored for 30 minutes', hook: null, kind: 'virtual' },
     { id: 'many-sessions', label: '3+ sessions at once', hook: null, kind: 'virtual' },
+    { id: 'subagents', label: 'A subagent is running', hook: null, kind: 'virtual' },
+    { id: 'team', label: 'Team mode is running', hook: null, kind: 'virtual' },
+    { id: 'ralph', label: 'A ralph loop is running', hook: null, kind: 'virtual' },
+    { id: 'agents-many', label: '3+ agents at once', hook: null, kind: 'virtual' },
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
@@ -40,9 +44,57 @@
   // limit, or the idle nudge after a finished turn.
   const WAITING = new Set(['permission-ask', 'limit-hit']);
   const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge']);
+  // ── Other agents ──────────────────────────────────────────────────────────
+  // A session file may carry `agents` (every subagent / teammate / ralph or
+  // ultrawork worker it knows about) and `mode` (the OMC execution mode).
+  // Anything that has finished stops counting as live.
+  const AGENT_KINDS = ['subagent', 'teammate', 'ralph', 'ultrawork'];
+  const AGENT_STATUSES = ['working', 'waiting', 'done'];
+  const MODES = ['ralph', 'team', 'ultrawork'];
+
+  function normalizeAgent(a, i = 0) {
+    if (!a || typeof a !== 'object') return null;
+    const kind = AGENT_KINDS.includes(a.kind) ? a.kind : 'subagent';
+    const status = AGENT_STATUSES.includes(a.status) ? a.status : 'working';
+    return {
+      id: String(a.id || `${kind}-${i}`).slice(0, 80),
+      name: String(a.name || a.id || kind).slice(0, 40),
+      kind,
+      status,
+      since: a.since || null,
+      parent: a.parent || null,
+    };
+  }
+
+  // Every live (not finished) agent across the given sessions, each tagged
+  // with the cwd of the session that owns it.
+  function liveAgents(sessions) {
+    const out = [];
+    for (const s of sessions) {
+      if (!Array.isArray(s.agents)) continue;
+      s.agents.forEach((a, i) => {
+        const n = normalizeAgent(a, i);
+        if (n && n.status !== 'done') out.push({ ...n, cwd: s.cwd || null });
+      });
+    }
+    return out;
+  }
+
+  function sessionMode(s) {
+    return MODES.includes(s && s.mode) ? s.mode : null;
+  }
+
+  // Highest ralph iteration anyone is on (0 when no loop is running).
+  function ralphIteration(sessions) {
+    let max = 0;
+    for (const s of sessions) if (sessionMode(s) === 'ralph') max = Math.max(max, Number(s.iteration) || 0);
+    return max;
+  }
+
   function virtualSessions(sessions, now = Date.now()) {
     const out = [];
     if (sessions.length >= 3) out.push({ signal: 'many-sessions', virtual: true });
+    let agentTotal = 0;
     for (const s of sessions) {
       const since = s.workingSince ? new Date(s.workingSince).getTime() : null;
       if (since && now - since > LONG_RUNNING_MS && !WAITING.has(s.signal)) out.push({ signal: 'long-running', cwd: s.cwd, virtual: true });
@@ -50,7 +102,14 @@
         const mins = (now - new Date(s.updatedAt).getTime()) / 60000;
         for (const m of [10, 20, 30]) if (mins >= m) out.push({ signal: `ignored-${m}`, cwd: s.cwd, virtual: true });
       }
+      const agents = liveAgents([s]);
+      agentTotal += agents.length;
+      const mode = sessionMode(s);
+      if (agents.some((a) => a.kind === 'subagent')) out.push({ signal: 'subagents', cwd: s.cwd, virtual: true, agents: agents.length });
+      if (mode === 'team' || agents.some((a) => a.kind === 'teammate')) out.push({ signal: 'team', cwd: s.cwd, virtual: true, agents: agents.length });
+      if (mode === 'ralph') out.push({ signal: 'ralph', cwd: s.cwd, virtual: true, agents: agents.length, iteration: Number(s.iteration) || 0 });
     }
+    if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
     return out;
   }
   // Longest anyone has been kept waiting, in minutes (0 when nobody is).
@@ -67,7 +126,7 @@
   const SIGNS = ['h3', 'v3', 'h1', 'h5'];
   const LAMP_SHAPES = ['square', 'round', 'heart', 'star', 'skull'];
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
-  const NUMBERS = ['none', 'sessions', 'minutes', 'tasks'];
+  const NUMBERS = ['none', 'sessions', 'minutes', 'tasks', 'agents', 'ralph'];
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
@@ -143,6 +202,21 @@
         id: 'subagent', name: 'Subagent running', enabled: true,
         when: { signal: ['tool-use'], tool: 'Agent' },
         then: { eyes: '#8b5cf6' },
+      },
+      {
+        id: 'ralph', name: 'Ralph loop', enabled: true,
+        when: { signal: ['ralph'] },
+        then: { pose: 'run', number: 'ralph', text: 'LOOP {iteration}' },
+      },
+      {
+        id: 'swarm', name: 'Swarm', enabled: true,
+        when: { signal: ['agents-many'] },
+        then: { number: 'agents', eyes: '#f2a200' },
+      },
+      {
+        id: 'team', name: 'Team mode', enabled: true,
+        when: { signal: ['team'] },
+        then: { pet: 'duck' },
       },
       {
         id: 'failed', name: 'A tool just failed', enabled: false,
@@ -246,6 +320,16 @@
     return p.endsWith('*') ? name.toLowerCase().startsWith(p.slice(0, -1)) : name.toLowerCase() === p;
   }
 
+  // Rule text can quote live numbers from the session that fired it:
+  // '{iteration}' (ralph loop count) and '{agents}' (agents on that session).
+  function fillText(text, session) {
+    if (!text || !session) return text || null;
+    return text
+      .replace(/\{iteration\}/g, String(Number(session.iteration) || 0))
+      .replace(/\{agents\}/g, String(Number(session.agents) || 0))
+      .slice(0, 24);
+  }
+
   function ruleMatches(rule, session) {
     if (!rule.enabled) return false;
     const sig = sessionSignal(session);
@@ -275,7 +359,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
+    const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -283,7 +367,7 @@
       fired.push(rule.id);
       const t = rule.then;
       if (!owned.eyes && t.eyes) { look.eyes = t.eyes; owned.eyes = rule.id; }
-      if (!owned.pose && t.pose) { look.pose = t.pose; look.text = t.text; owned.pose = rule.id; }
+      if (!owned.pose && t.pose) { look.pose = t.pose; look.text = fillText(t.text, matching[0]); owned.pose = rule.id; }
       if (!owned.costume && t.costume) { look.costume = t.costume; owned.costume = rule.id; }
       if (!owned.body && t.body) { look.body = t.body; owned.body = rule.id; }
       if (!owned.bodyColor && t.bodyColor) { look.bodyColor = t.bodyColor; owned.bodyColor = rule.id; }
@@ -332,5 +416,5 @@
     };
   }
 
-  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
 });

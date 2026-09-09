@@ -222,8 +222,134 @@ test('clicks: per-gesture actions layer like accents and fall back to defaults',
   assert.deepEqual(junk.then.clicks, { alt: { type: 'say', arg: 'hi' } });
 });
 
+// ── other agents: signals ───────────────────────────────────────────────────
+const agent = (id, kind = 'subagent', status = 'working') => ({ id, name: id, kind, status });
+
+test('subagents: one live subagent fires the signal; a finished one does not', () => {
+  const v = (s) => R.virtualSessions([s]).map((x) => x.signal);
+  assert.ok(v({ signal: 'tool-use', agents: [agent('a1')] }).includes('subagents'));
+  assert.ok(!v({ signal: 'tool-use', agents: [agent('a1', 'subagent', 'done')] }).includes('subagents'));
+  assert.ok(!v({ signal: 'tool-use' }).includes('subagents'), 'a session with no agents is silent');
+});
+
+test('team fires on team mode or on a teammate; ralph carries its iteration', () => {
+  const v = (s) => R.virtualSessions([s]);
+  assert.ok(v({ signal: 'tool-use', mode: 'team' }).some((x) => x.signal === 'team'));
+  assert.ok(v({ signal: 'tool-use', agents: [agent('t1', 'teammate')] }).some((x) => x.signal === 'team'));
+  const ralph = v({ signal: 'tool-use', mode: 'ralph', iteration: 7 }).find((x) => x.signal === 'ralph');
+  assert.equal(ralph.iteration, 7);
+  assert.ok(!v({ signal: 'tool-use', mode: 'nonsense' }).some((x) => x.signal === 'ralph'), 'an unknown mode is ignored');
+});
+
+test('agents-many counts live agents across every session, not sessions', () => {
+  const many = R.virtualSessions([
+    { signal: 'tool-use', agents: [agent('a1'), agent('a2')] },
+    { signal: 'tool-use', agents: [agent('b1', 'teammate'), agent('b2', 'subagent', 'done')] },
+  ]).find((x) => x.signal === 'agents-many');
+  assert.equal(many.agents, 3, 'the finished one does not count');
+  assert.ok(!R.virtualSessions([{ signal: 'tool-use', agents: [agent('a1'), agent('a2')] }]).some((x) => x.signal === 'agents-many'));
+});
+
+test('default rules: ralph runs and shows its iteration, swarm counts agents', () => {
+  const l = look([{ signal: 'tool-use', mode: 'ralph', iteration: 7, agents: [agent('a1'), agent('a2'), agent('a3')] }]);
+  assert.equal(l.pose, 'run', 'the ralph rule owns the pose');
+  assert.equal(l.text, 'LOOP 7', '{iteration} is filled in from the session');
+  assert.equal(l.numberOf, 'ralph', 'ralph owns the number before swarm does');
+  assert.equal(l.eyes, '#f2a200', 'swarm still layers its eyes');
+  assert.equal(l.lamp, 'green', 'and working still owns the lamp');
+  const swarm = look([{ signal: 'tool-use', agents: [agent('a1'), agent('a2'), agent('a3')] }]);
+  assert.equal(swarm.numberOf, 'agents');
+  const team = look([{ signal: 'tool-use', mode: 'team' }]);
+  assert.equal(team.pet, 'duck');
+});
+
+test('liveAgents and ralphIteration read the session set', () => {
+  const sessions = [
+    { cwd: '/x/one', mode: 'ralph', iteration: 3, agents: [agent('a1'), agent('a2', 'subagent', 'done')] },
+    { cwd: '/x/two', mode: 'ralph', iteration: 9, agents: [{ id: 'b1' }] },
+  ];
+  assert.deepEqual(R.liveAgents(sessions).map((a) => [a.name, a.kind, a.status, a.cwd]), [
+    ['a1', 'subagent', 'working', '/x/one'],
+    ['b1', 'subagent', 'working', '/x/two'],
+  ], 'defaults fill in for a bare entry');
+  assert.equal(R.ralphIteration(sessions), 9, 'the furthest loop wins');
+  assert.equal(R.ralphIteration([{ mode: 'team' }]), 0);
+});
+
+test('the new signals are offered in the editor and the number modes grow', () => {
+  for (const id of ['subagents', 'team', 'ralph', 'agents-many']) {
+    assert.ok(R.SIGNALS.some((s) => s.id === id && s.kind === 'virtual'), `${id} is listed`);
+  }
+  assert.ok(R.NUMBERS.includes('agents') && R.NUMBERS.includes('ralph'));
+  for (const r of R.defaultRules()) assert.equal(typeof r.enabled, 'boolean');
+  const added = R.defaultRules().filter((r) => ['ralph', 'swarm', 'team'].includes(r.id));
+  assert.equal(added.length, 3);
+  for (const r of added) { assert.equal(r.enabled, true); assert.equal(!!r.locked, false); }
+});
+
+// ── other agents: reading OMC and Claude Code state off disk ────────────────
+const A = require('../agents.js');
+const FIX = path.join(__dirname, 'fixtures', 'omc');
+const scan = (session, extra = {}) => A.scanAgents(session, { stateDir: path.join(FIX, 'state'), teamsDir: path.join(FIX, 'teams'), now: 1788871500000, ...extra });
+
+test('omc state: ralph iteration, team mode and every agent it can see', () => {
+  const r = scan({ sessionId: 'sess-1', cwd: '/tmp/proj' });
+  assert.equal(r.mode, 'team', 'team-state wins over the ralph and ultrawork loops');
+  assert.equal(r.iteration, 7, 'the ralph iteration still comes through');
+  const by = Object.fromEntries(r.agents.map((a) => [a.name, a]));
+  assert.deepEqual([by.executor.kind, by.executor.status], ['ralph', 'working'], 'parent_mode names the kind');
+  assert.equal(by.architect.status, 'done', '"completed" is done');
+  assert.equal(by['verifier:bbf12aa'].status, 'waiting', '"blocked" is waiting');
+  assert.equal(by['executor:aaf55ec'].kind, 'teammate');
+  assert.ok(!r.agents.some((a) => a.name === 'writer:ccc'), 'a finished mission contributes nobody');
+  assert.deepEqual(r.agents.filter((a) => a.id.includes('@session')).map((a) => a.name), ['reliability', 'stats'], 'tmux teammates, minus the lead');
+  assert.equal(new Set(r.agents.map((a) => a.id)).size, r.agents.length, 'no duplicates');
+});
+
+test('omc state: a stale team config and a foreign session contribute nothing', () => {
+  const old = scan({ sessionId: 'sess-1', cwd: '/tmp/proj' }, { now: 1788871500000 + A.TEAM_MEMBER_MAX_AGE_MS });
+  assert.ok(!old.agents.some((a) => a.id.includes('@session')), 'members that joined long ago are gone');
+  const other = scan({ sessionId: 'sess-9', cwd: '/tmp/proj' });
+  assert.equal(other.mode, null, 'no per-session state for sess-9');
+  assert.equal(other.iteration, 0);
+  assert.ok(!other.agents.some((a) => a.id.includes('@session')), 'the team belongs to sess-1');
+  const nothing = A.scanAgents({ sessionId: 'x', cwd: '/nope' }, { stateDir: '/nope/.omc/state', teamsDir: '/nope' });
+  assert.deepEqual(nothing, { mode: null, iteration: 0, agents: [] });
+});
+
+test('mergeAgents keeps hook-owned subagents and never double-counts', () => {
+  const found = [{ id: 'a1', name: 'executor', kind: 'ralph', status: 'working' }];
+  const merged = A.mergeAgents([{ id: 'a1', kind: 'subagent' }, { id: 'z9', kind: 'subagent' }, { id: 'old', kind: 'teammate' }], found);
+  assert.deepEqual(merged.map((a) => a.id), ['z9', 'a1'], 'a stale teammate is dropped; the scan wins on a1');
+});
+
+test('agentStatus folds every vocabulary into three states', () => {
+  for (const s of ['running', 'in_progress', 'active', '', undefined]) assert.equal(A.agentStatus(s), 'working');
+  for (const s of ['completed', 'done', 'failed', 'cancelled']) assert.equal(A.agentStatus(s), 'done');
+  for (const s of ['blocked', 'pending', 'waiting']) assert.equal(A.agentStatus(s), 'waiting');
+});
+
 // ── stats.js ────────────────────────────────────────────────────────────────
 const St = require('../stats.js');
+
+test('stats: agents are counted once each and ralph iterations accrue by growth', () => {
+  const st = { days: {} };
+  const now = Date.parse('2026-09-09T10:00:00');
+  const s = (agents, iteration) => [{ sessionId: 's1', cwd: '/x/p', signal: 'tool-use', mode: 'ralph', iteration, agents }];
+  St.tick(st, s([agent('a1')], 1), now, 4000);
+  St.tick(st, s([agent('a1'), agent('a2')], 3), now + 4000, 4000);
+  St.tick(st, s([agent('a1', 'subagent', 'done'), agent('a2')], 3), now + 8000, 4000);
+  const d = st.days[St.dayKey(now)];
+  assert.equal(d.agents, 2, 'the same agent is never credited twice');
+  assert.equal(d.ralphIters, 3, 'iteration 1 then 3');
+  // A fresh loop restarts the counter; only the new growth counts.
+  St.tick(st, s([agent('a1')], 1), now + 12000, 4000);
+  assert.equal(d.ralphIters, 4);
+  // A session that is not looping contributes no iterations.
+  St.tick(st, [{ sessionId: 's2', cwd: '/x/p', signal: 'tool-use', agents: [agent('c1')] }], now + 16000, 4000);
+  assert.equal(d.ralphIters, 4);
+  assert.equal(d.agents, 3);
+});
 
 test('stats: ticks accrue to the right bucket and project; big gaps are dropped', () => {
   const st = { days: {} };

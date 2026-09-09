@@ -1,0 +1,11 @@
+{
+  "active": true,
+  "iteration": 7,
+  "max_iterations": 100,
+  "started_at": "2026-09-09T22:39:25.972Z",
+  "prompt": "keep going",
+  "session_id": "sess-1",
+  "project_path": "/tmp/proj",
+  "linked_ultrawork": true,
+  "last_checked_at": "2026-09-09T22:39:25.972Z"
+}

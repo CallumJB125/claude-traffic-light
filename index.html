@@ -97,6 +97,10 @@
     const app = document.getElementById('app');
 
     let lastRuleId = null;
+    // The agents roster is a hover reveal, so it never covers Claude at rest.
+    let hovering = false;
+    app.addEventListener('mouseenter', () => { hovering = true; if (rig.look) rig.setLook({ ...rig.look, showRoster: true }); });
+    app.addEventListener('mouseleave', () => { hovering = false; if (rig.look) rig.setLook({ ...rig.look, showRoster: false }); });
     let sleepSince = null;
     let currentRequest = null;
     let confettiTimer = null;
@@ -105,7 +109,7 @@
     async function refresh() {
       const data = await window.trafficLight.getAggregateStatus();
       if (!data) return;
-      const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}) };
+      const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}), showRoster: hovering };
       sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
       look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
       rig.setLook(look);
@@ -207,6 +211,9 @@
     app.addEventListener('dblclick', () => { clearTimeout(clickTimer); clickTimer = null; gesture('double'); });
     app.addEventListener('click', (e) => {
       if (didDrag) return;
+      // Clicking an agent chip names it and says what it is doing.
+      const chip = e.target.closest && e.target.closest('.minion');
+      if (chip) { showFeedback(`${chip.dataset.name} — ${chip.dataset.status}`); return; }
       if (e.target.closest && e.target.closest('.pet')) { if (rig.pokePet()) { showFeedback('!'); return; } }
       if (e.altKey) { gesture('alt'); return; }
       if (clickTimer) return;

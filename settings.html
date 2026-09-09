@@ -128,6 +128,7 @@
 
   <div class="field">
     <label class="row"><input type="checkbox" id="showTasks" /> Show task progress on the sign</label>
+    <label class="row"><input type="checkbox" id="showAgents" /> Show agents (a chip per subagent, teammate or ralph worker)</label>
     <div class="hint">A tiny 3/7 on the crossbar while Claude works through a task list.</div>
   </div>
 
@@ -177,6 +178,7 @@
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
       document.getElementById('showTasks').checked = config.showTasks !== false;
+      document.getElementById('showAgents').checked = config.showAgents !== false;
       document.getElementById('roam').checked = config.roam !== false;
       document.getElementById('randomEvents').checked = config.randomEvents !== false;
     }
@@ -191,6 +193,7 @@
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
         showTasks: document.getElementById('showTasks').checked,
+        showAgents: document.getElementById('showAgents').checked,
         roam: document.getElementById('roam').checked,
         randomEvents: document.getElementById('randomEvents').checked,
       });

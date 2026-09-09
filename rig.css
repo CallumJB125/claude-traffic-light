@@ -334,6 +334,18 @@
 /* Rare events */
 .rig .event { opacity: 0; }
 .rig .tasks-label { font: 700 4.2px ui-monospace, Menlo, monospace; fill: #f2efe8; letter-spacing: 0.02em; }
+/* Other agents: a mini rig per agent under Claude's feet, plus the roster. */
+.rig .minion-more { font: 700 4.6px ui-monospace, Menlo, monospace; fill: #b9b3a9; }
+.rig .agent-line { font: 700 3.4px ui-monospace, Menlo, monospace; fill: #f2efe8; letter-spacing: 0.02em; }
+.rig .agent-line.agent-more { fill: #b9b3a9; }
+/* The bob lives on an inner group: a CSS transform on .minion itself would
+   override the translate that positions the chip. */
+.rig .minion-working .minion-in { animation: rig-minion-bob 1.4s ease-in-out infinite; }
+.rig .minion-waiting .minion-in { animation: rig-flash 1s steps(1) infinite; }
+.rig .minion-done { opacity: 0.45; }
+.rig .minion:nth-of-type(2n) .minion-in { animation-delay: 0.35s; }
+.rig .minion:nth-of-type(3n) .minion-in { animation-delay: 0.7s; }
+@keyframes rig-minion-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
 .rig.event-ufo .event-ufo { opacity: 1; animation: rig-ufo 4.2s ease-in-out 1; }
 .rig.event-ufo .ufo-lights circle { animation: rig-flash 0.3s steps(1) infinite; }
 .rig.event-ufo .ufo-lights circle:nth-child(2n) { animation-delay: 0.15s; }

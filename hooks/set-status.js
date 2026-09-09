@@ -109,6 +109,36 @@ if (signal === 'notification') {
 
 const tool = (data && (data.tool_name || data.toolName)) || null;
 
+// ── Other agents ────────────────────────────────────────────────────────────
+// SubagentStart/Stop carry the agent's id and type; every one Claude spawns
+// becomes an entry in the session file's `agents` list so the widget can show
+// a chip per agent. Teammate/ralph/ultrawork entries come from the app's OMC
+// watcher instead and are preserved here untouched.
+const DONE_KEEP_MS = 120000;   // a finished agent lingers this long
+const AGENT_MAX_MS = 3600000;  // …and a "working" one can never outlive this
+function updateAgents(prevAgents, signal, payload, nowIso) {
+  const now = Date.parse(nowIso);
+  let agents = (Array.isArray(prevAgents) ? prevAgents : []).filter((a) => {
+    if (!a || typeof a !== 'object') return false;
+    const t = Date.parse(a.since || '') || now;
+    if (a.kind && a.kind !== 'subagent') return true; // owned by the watcher
+    return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
+  });
+  // A finished turn means every subagent it spawned is finished too.
+  if (signal === 'stop' || signal === 'session-start') {
+    return agents.map((a) => (a.kind === 'subagent' && a.status !== 'done' ? { ...a, status: 'done' } : a));
+  }
+  if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
+  const p = payload || {};
+  const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
+  const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').slice(0, 40);
+  const status = signal === 'subagent-done' ? 'done' : 'working';
+  const existing = agents.find((a) => a.id === id);
+  if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since } : a));
+  else agents = agents.concat([{ id, name, kind: 'subagent', status, since: nowIso, parent: sessionId }]);
+  return agents.slice(-32);
+}
+
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps
 // the fs.watch storm down. `workingSince` marks when the current turn began
@@ -116,7 +146,9 @@ const tool = (data && (data.tool_name || data.toolName)) || null;
 let prev = null;
 try {
   prev = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (prev.signal === resolved && prev.tool === tool && Date.now() - new Date(prev.updatedAt).getTime() < 1000) process.exit(0);
+  // Subagent events carry bookkeeping the throttle must never drop.
+  const SUBAGENT = resolved === 'subagent-start' || resolved === 'subagent-done';
+  if (!SUBAGENT && prev.signal === resolved && prev.tool === tool && Date.now() - new Date(prev.updatedAt).getTime() < 1000) process.exit(0);
 } catch {
   // first write
 }
@@ -130,7 +162,18 @@ if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, 
 // Task events are bookkeeping, not a state change: keep the previous signal.
 const signalOut = resolved === 'task-created' || resolved === 'task-done' ? (prev?.signal || 'tool-use') : resolved;
 
+const agents = updateAgents(prev?.agents, resolved, data, now);
+
 fs.writeFileSync(
   file,
-  JSON.stringify({ sessionId, host: HOST_TAG, cwd, signal: signalOut, tool: signalOut === resolved ? tool : (prev?.tool ?? null), workingSince, tasks, updatedAt: now }, null, 2)
+  JSON.stringify({
+    sessionId, host: HOST_TAG, cwd, signal: signalOut,
+    tool: signalOut === resolved ? tool : (prev?.tool ?? null),
+    workingSince, tasks, agents,
+    // Execution mode and ralph iteration are owned by the app's OMC watcher;
+    // carry them through so a hook write never erases them.
+    mode: prev?.mode ?? null,
+    iteration: prev?.iteration ?? 0,
+    updatedAt: now,
+  }, null, 2)
 );

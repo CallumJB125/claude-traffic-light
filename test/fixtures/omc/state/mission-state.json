@@ -1,0 +1,22 @@
+{
+  "updatedAt": "2026-09-09T22:41:00.000Z",
+  "missions": [
+    {
+      "id": "session:sess-1:swarm",
+      "source": "session",
+      "name": "swarm",
+      "status": "in_progress",
+      "workerCount": 2,
+      "taskCounts": { "total": 4, "pending": 1, "blocked": 0, "inProgress": 2, "completed": 1, "failed": 0 },
+      "agents": [
+        { "name": "executor:aaf55ec", "role": "executor", "status": "in_progress", "currentStep": "editing rules.js", "updatedAt": "2026-09-09T22:41:00.000Z" },
+        { "name": "verifier:bbf12aa", "role": "verifier", "status": "blocked", "currentStep": null, "updatedAt": "2026-09-09T22:40:30.000Z" }
+      ]
+    },
+    {
+      "id": "session:sess-1:old",
+      "status": "done",
+      "agents": [{ "name": "writer:ccc", "role": "writer", "status": "done" }]
+    }
+  ]
+}

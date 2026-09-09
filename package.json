@@ -33,6 +33,7 @@
       "overlay.html",
       "overlay-preload.js",
       "stats.js",
+      "agents.js",
       "tray.html",
       "tray-preload.js"
     ],

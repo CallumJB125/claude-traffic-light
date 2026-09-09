@@ -1204,7 +1204,7 @@
     picker($('signs'), R.SIGNS, r.then.sign, (o) => ({ lamp: litLamp, sign: o || 'h3', lampShape: r.then.lampShape || 'square' }), (o) => { r.then.sign = o; });
     picker($('shapes'), R.LAMP_SHAPES, r.then.lampShape, (o) => ({ lamp: litLamp, lampShape: o || 'square', sign: r.then.sign || 'h3' }), (o) => { r.then.lampShape = o; });
     picker($('signfx'), R.SIGN_FX, r.then.signFx, (o) => ({ lamp: litLamp, signFx: o || 'none' }), (o) => { r.then.signFx = o; });
-    $('number').innerHTML = [['', 'Keep'], ['none', 'No number (lamps)'], ['sessions', 'Sessions running'], ['minutes', 'Minutes waiting on you'], ['tasks', 'Tasks left']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    $('number').innerHTML = [['', 'Keep'], ['none', 'No number (lamps)'], ['sessions', 'Sessions running'], ['minutes', 'Minutes waiting on you'], ['tasks', 'Tasks left'], ['agents', 'Agents running'], ['ralph', 'Ralph iteration']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
     $('number').value = r.then.number || '';
     const sfx = $('screenfx');
     sfx.innerHTML = '';

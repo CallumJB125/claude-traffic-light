@@ -29,7 +29,35 @@
   }
 
   function emptyDay() {
-    return { working: 0, waiting: 0, idle: 0, done: 0, projects: {}, sessionsPeak: 0 };
+    return { working: 0, waiting: 0, idle: 0, done: 0, projects: {}, sessionsPeak: 0, agents: 0, ralphIters: 0 };
+  }
+
+  // How many other agents ran today, and how many ralph iterations went by.
+  // Both are edge-counted: an agent id is only ever credited once (`seenAgents`
+  // remembers the day it was first seen), and a ralph loop credits the growth
+  // of its iteration counter (`seenRalph` remembers where it was last tick, and
+  // a counter that goes backwards means a fresh loop started).
+  function accrueAgents(stats, sessions, now, key, day) {
+    const seenAgents = stats.seenAgents || (stats.seenAgents = {});
+    const seenRalph = stats.seenRalph || (stats.seenRalph = {});
+    for (const s of sessions) {
+      for (const a of Array.isArray(s.agents) ? s.agents : []) {
+        if (!a || !a.id) continue;
+        const k = `${s.sessionId || s.cwd || ''}:${a.id}`;
+        if (seenAgents[k]) continue;
+        seenAgents[k] = key;
+        day.agents += 1;
+      }
+      if (s.mode !== 'ralph') continue;
+      const k = s.sessionId || s.cwd || 'ralph';
+      const iter = Number(s.iteration) || 0;
+      const last = Number(seenRalph[k]) || 0;
+      day.ralphIters += iter >= last ? iter - last : iter;
+      seenRalph[k] = iter;
+    }
+    // Bounded: yesterday's ids are enough to keep an agent from double-counting.
+    const cutoff = dayKey(now - 86400000);
+    for (const k of Object.keys(seenAgents)) if (seenAgents[k] < cutoff) delete seenAgents[k];
   }
 
   // Attribute `elapsedMs` (time since the previous tick) to today's bucket.
@@ -37,9 +65,11 @@
   // happened to be current, so anything over `maxGapMs` is dropped.
   function tick(stats, sessions, now = Date.now(), elapsedMs = 0, maxGapMs = 60000) {
     if (!stats.days) stats.days = {};
-    if (elapsedMs <= 0 || elapsedMs > maxGapMs) return stats;
     const key = dayKey(now);
     const day = stats.days[key] || (stats.days[key] = emptyDay());
+    if (day.agents == null) { day.agents = 0; day.ralphIters = 0; } // day written by an older build
+    accrueAgents(stats, sessions, now, key, day);
+    if (elapsedMs <= 0 || elapsedMs > maxGapMs) return stats;
     day[kindOf(sessions)] += elapsedMs;
     day.sessionsPeak = Math.max(day.sessionsPeak, sessions.length);
     for (const s of sessions) {

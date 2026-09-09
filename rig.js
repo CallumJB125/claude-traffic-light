@@ -420,6 +420,10 @@
     <rect class="confetti c5" x="32" y="24" width="3" height="3" fill="#da7756" style="--dx:6px;--dy:-26px" />
     <rect class="confetti c6" x="28" y="24" width="3" height="3" fill="#f2a200" style="--dx:-8px;--dy:-24px" />
   </g>
+  <!-- one mini rig per other agent (subagent, teammate, ralph/ultrawork worker) -->
+  <g class="minions"></g>
+  <!-- the agents roster, a tasks-label-style list of who is doing what -->
+  <g class="agents-label"></g>
 </svg>`;
 
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
@@ -537,6 +541,9 @@
       const tl = svg.querySelector('.tasks-label');
       const tasksText = look.tasks && look.tasks.created > 0 ? `${look.tasks.done}/${look.tasks.created}` : '';
       if (tl.textContent !== tasksText) tl.textContent = tasksText;
+      // Chips for every other agent; the roster only while you're hovering,
+      // so it never sits on top of Claude.
+      drawMinions(look.minions, !!look.showRoster);
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
@@ -580,6 +587,70 @@
     ];
     const ns = 'http://www.w3.org/2000/svg';
     const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); return e; };
+
+    // ── Other agents ────────────────────────────────────────────────────────
+    // One 12px mini rig per live agent, in a row under Claude's feet, coloured
+    // by what that agent is doing. Eight is the most that fits; the rest
+    // collapse into a "+N". Each chip carries its name so the widget can show
+    // a bubble on click.
+    const MINION_FILL = { working: '#2fae3e', waiting: '#f2a200', done: '#726c62' };
+    const MINION_MAX = 8;
+    const ROSTER_MAX = 4;
+    let minionKey = null;
+    function drawMinions(list, showRoster) {
+      const arr = (Array.isArray(list) ? list : []).slice(0, 32);
+      const key = `${showRoster ? 1 : 0}|${arr.map((a) => `${a.name}:${a.status}`).join(',')}`;
+      if (key === minionKey) return;
+      minionKey = key;
+      const g = svg.querySelector('.minions');
+      const r = svg.querySelector('.agents-label');
+      while (g.firstChild) g.removeChild(g.firstChild);
+      while (r.firstChild) r.removeChild(r.firstChild);
+      if (!arr.length) return;
+      const shown = arr.slice(0, MINION_MAX);
+      const extra = arr.length - shown.length;
+      const pitch = 7;
+      const width = shown.length * pitch - 0.1 + (extra > 0 ? 7 : 0);
+      const x0 = 32 - width / 2;
+      shown.forEach((a, i) => {
+        const fill = MINION_FILL[a.status] || MINION_FILL.working;
+        const chip = mk('g', { class: `minion minion-${a.status}`, transform: `translate(${x0 + i * pitch} 71)`, 'data-name': a.name, 'data-status': a.status, style: 'pointer-events:auto;cursor:pointer' });
+        const inner = mk('g', { class: 'minion-in' });
+        inner.appendChild(mk('rect', { x: 0.7, y: 0, width: 5.5, height: 4, rx: 1, fill }));
+        inner.appendChild(mk('rect', { x: 2, y: 1.3, width: 1.1, height: 1.5, fill: '#211f1c' }));
+        inner.appendChild(mk('rect', { x: 3.8, y: 1.3, width: 1.1, height: 1.5, fill: '#211f1c' }));
+        inner.appendChild(mk('rect', { x: 0, y: 4.5, width: 6.9, height: 1.6, fill }));
+        inner.appendChild(mk('rect', { x: 1.2, y: 6.1, width: 1.4, height: 1.4, fill }));
+        inner.appendChild(mk('rect', { x: 4.3, y: 6.1, width: 1.4, height: 1.4, fill }));
+        chip.appendChild(inner);
+        const title = mk('title', {});
+        title.textContent = `${a.name} — ${a.status}`;
+        chip.appendChild(title);
+        g.appendChild(chip);
+      });
+      if (extra > 0) {
+        const more = mk('text', { class: 'minion-more', x: x0 + shown.length * pitch + 3.4, y: 77.2, 'text-anchor': 'middle' });
+        more.textContent = `+${extra}`;
+        g.appendChild(more);
+      }
+      if (!showRoster) return;
+      // The roster: who is doing what, capped at four lines, over the torso.
+      const lines = arr.slice(0, ROSTER_MAX);
+      const rows = lines.length + (arr.length > ROSTER_MAX ? 1 : 0);
+      r.appendChild(mk('rect', { x: 5, y: 39.5, width: 54, height: rows * 4.6 + 1.8, rx: 1.5, fill: '#151517', 'fill-opacity': 0.82 }));
+      lines.forEach((a, i) => {
+        const t = mk('text', { class: 'agent-line', x: 7.5, y: 44.2 + i * 4.6 });
+        t.textContent = `${a.name}`.slice(0, 13).toUpperCase();
+        r.appendChild(t);
+        r.appendChild(mk('rect', { x: 54.5, y: 41.2 + i * 4.6, width: 2.6, height: 2.6, rx: 0.7, fill: MINION_FILL[a.status] || MINION_FILL.working }));
+      });
+      if (arr.length > ROSTER_MAX) {
+        const t = mk('text', { class: 'agent-line agent-more', x: 7.5, y: 44.2 + ROSTER_MAX * 4.6 });
+        t.textContent = `+${arr.length - ROSTER_MAX} MORE`;
+        r.appendChild(t);
+      }
+    }
+
     if (!svg.querySelector('.tools')) svg.querySelector('.mover').appendChild(drawTools());
     let garden = null;       // { t0, speed, pots:[{x, crop, planted, grown}], firstBite, lastBite, rotateAt, timer }
     const gardenEl = () => svg.querySelector('.garden');

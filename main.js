@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
+const Agents = require('./agents.js');
 const http = require('http');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -21,6 +22,30 @@ if (DEMO === 'weed') {
   fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
   const demoRules = Rules.defaultRules().map((r) => (r.id === 'idle' ? { ...r, then: { ...r.then, effect: 'garden', pose: 'none' } } : r));
   fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'config.json'), JSON.stringify({ rules: demoRules, roam: false, randomEvents: false, seasonal: false, showTasks: false }));
+}
+// `--demo agents`: a fake session running a ralph loop on iteration 7 with
+// five other agents attached, so the chips, the roster and the ralph number
+// can be seen without waiting for a real swarm.
+if (DEMO === 'agents') {
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-traffic-light-demo-agents');
+  process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
+  fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
+  fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'config.json'), JSON.stringify({ rules: Rules.defaultRules(), roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: true }));
+  const since = new Date().toISOString();
+  const agent = (id, name, kind, status) => ({ id, name, kind, status, since, parent: 'demo' });
+  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions', 'demo-agents.json'), JSON.stringify({
+    sessionId: 'demo', host: 'demo', cwd: '/demo/claude-buddy', signal: 'tool-use', tool: 'Agent',
+    workingSince: since, tasks: { created: 0, done: 0 }, mode: 'ralph', iteration: 7,
+    agents: [
+      agent('a1', 'executor', 'subagent', 'working'),
+      agent('a2', 'explore', 'subagent', 'working'),
+      agent('a3', 'reliability', 'teammate', 'waiting'),
+      agent('a4', 'stats', 'teammate', 'working'),
+      agent('a5', 'verifier', 'ralph', 'done'),
+    ],
+    updatedAt: since,
+  }, null, 2));
 }
 
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
@@ -135,6 +160,7 @@ const DEFAULT_CONFIG = {
   seasonal: true,
   askFromWidget: false,
   showTasks: true,
+  showAgents: true,
   roam: true,
   randomEvents: true,
 };
@@ -349,6 +375,34 @@ function readSessions(config) {
   return sessions;
 }
 
+// ── Other agents: OMC modes and Claude Code teams ───────────────────────────
+// agents.js reads them off disk (see it for the exact file layout and shapes).
+// Poll every couple of seconds and merge what it finds into the session files,
+// so the session file stays the one schema everything downstream reads.
+const OMC_POLL_MS = 2000;
+
+function syncAgents() {
+  let files = [];
+  try {
+    files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
+  } catch {
+    return;
+  }
+  for (const f of files) {
+    const file = path.join(SESSIONS_DIR, f);
+    const s = Agents.readJson(file);
+    if (!s || !s.sessionId) continue;
+    const found = Agents.scanAgents(s);
+    const next = { ...s, agents: Agents.mergeAgents(s.agents, found.agents), mode: found.mode, iteration: found.iteration };
+    if (JSON.stringify(next) === JSON.stringify(s)) continue;
+    try {
+      fs.writeFileSync(file, JSON.stringify(next, null, 2));
+    } catch {
+      // a hook is mid-write; the next poll picks it up
+    }
+  }
+}
+
 // A tray override is a synthetic session carrying the signal that the
 // default rules map to that colour, so it flows through the user's rules.
 const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit' };
@@ -390,7 +444,8 @@ function aggregateState(opts = {}) {
     const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]).look;
     return { look: { ...asked, tasks }, reason: 'session', sessions, fired: ['permission'], owned, pending, tasks };
   }
-  return { look: { ...withNumber(look, sessions, tasks), tasks }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks };
+  const minions = config.showAgents ? Rules.liveAgents(sessions).slice(0, 32) : [];
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks, minions };
 }
 
 // Number mode: the digit the sign shows instead of a colour.
@@ -400,6 +455,8 @@ function withNumber(look, sessions, tasks) {
   if (look.numberOf === 'sessions') n = sessions.length;
   else if (look.numberOf === 'minutes') n = look.waitMinutes || 0;
   else if (look.numberOf === 'tasks') n = tasks ? Math.max(0, tasks.created - tasks.done) : 0;
+  else if (look.numberOf === 'agents') n = Rules.liveAgents(sessions).length;
+  else if (look.numberOf === 'ralph') n = Rules.ralphIteration(sessions);
   return { ...look, number: n == null ? null : Math.min(99, n) };
 }
 
@@ -814,7 +871,8 @@ function ensureTrayRenderer() {
 async function paintTray() {
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
-  trayRenderWin.webContents.send('look', { ...look, facing: 'right' });
+  // No agent chips in the menu bar: 22px has no room for them.
+  trayRenderWin.webContents.send('look', { ...look, minions: [], facing: 'right' });
   const img = await trayRenderWin.webContents.capturePage();
   const size = img.getSize();
   if (!size.width) return;
@@ -1657,6 +1715,8 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 4000);
   setInterval(flushStats, 30000);
+  // Other agents live on disk, not in hooks: poll for them.
+  if (!DEMO) { syncAgents(); setInterval(syncAgents, OMC_POLL_MS); }
 
   setInterval(() => {
     if (!areHooksInstalled()) installHooks();
