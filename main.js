@@ -7,6 +7,7 @@ const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
 const Agents = require('./agents.js');
+const HostApp = require('./hostapp.js');
 const http = require('http');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -46,6 +47,39 @@ if (DEMO === 'agents') {
     ],
     updatedAt: since,
   }, null, 2));
+}
+
+// `--demo knock`: walk to the terminal's Dock icon and knock, once, then quit.
+if (DEMO === 'knock') {
+  // Must NOT be the same directory as the demo's Chromium userData
+  // (claude-buddy-demo-knock) — sharing it wedges the app before `ready`.
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-buddy-knock-home');
+  process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
+  fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
+  fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
+}
+
+// `--diag`: once a second, print CPU, heap, live timer and window counts to
+// stdout. Used to measure the app's idle cost before/after a change.
+const DIAG = process.argv.includes('--diag');
+// Dev runs (shots, playtests, demos) must never touch the real install: no
+// hook writes, no login item, no stale lock left behind.
+const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--playtest') || process.argv.includes('--lights');
+
+// Every interval/timeout the app owns goes through these so --diag can count
+// them and so nothing can leak a live timer on shutdown.
+const liveTimers = new Set();
+function every(ms, fn, label) {
+  const id = setInterval(fn, ms);
+  id.__label = label || 'interval';
+  liveTimers.add(id);
+  return id;
+}
+function stopTimer(id) {
+  if (!id) return null;
+  clearInterval(id);
+  liveTimers.delete(id);
+  return null;
 }
 
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
@@ -167,7 +201,21 @@ const DEFAULT_CONFIG = {
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
+// loadConfig() is called several times per status broadcast (and a broadcast
+// happens on every session-file write), so the parsed config is cached and
+// only rebuilt when the file's mtime/size actually change.
+let configCache = { key: null, value: null };
 function loadConfig() {
+  let stat = null;
+  try { stat = fs.statSync(CONFIG_FILE); } catch { /* no config yet */ }
+  const key = stat ? `${stat.mtimeMs}:${stat.size}` : 'none';
+  if (configCache.value && configCache.key === key) return configCache.value;
+  const value = buildConfig();
+  configCache = { key, value };
+  return value;
+}
+
+function buildConfig() {
   let saved = {};
   try {
     saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -198,6 +246,7 @@ function saveConfig(partial) {
   if (partial.presets) next.presets = partial.presets;
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
+  configCache = { key: null, value: null }; // two writes inside one ms would share an mtime
   return next;
 }
 
@@ -349,6 +398,24 @@ const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
 // A working session pings constantly, so silence really means it's gone. A
 // waiting session (permission ask, limit) gets one event and then nothing
 // until you respond, so it gets a much longer leash. Both configurable.
+// A busy turn rewrites its session file several times a second, and each
+// write wakes a broadcast; re-reading and re-parsing every file every time is
+// what made the app crawl with a few sessions open. Parsed files are cached by
+// mtime+size, so a poll over unchanged files costs one stat each.
+const sessionFileCache = new Map(); // name -> { key, data }
+function readSessionFile(name) {
+  const full = path.join(SESSIONS_DIR, name);
+  let stat;
+  try { stat = fs.statSync(full); } catch { sessionFileCache.delete(name); return null; }
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = sessionFileCache.get(name);
+  if (hit && hit.key === key) return hit.data;
+  let data = null;
+  try { data = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { data = null; } // partial write
+  sessionFileCache.set(name, { key, data });
+  return data;
+}
+
 function readSessions(config) {
   let files = [];
   try {
@@ -356,13 +423,18 @@ function readSessions(config) {
   } catch {
     return [];
   }
+  if (sessionFileCache.size > files.length) {
+    const live = new Set(files);
+    for (const k of sessionFileCache.keys()) if (!live.has(k)) sessionFileCache.delete(k);
+  }
   const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
   const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
   const now = Date.now();
   const sessions = [];
   for (const f of files) {
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+      const data = readSessionFile(f);
+      if (!data) continue;
       const signal = Rules.sessionSignal(data);
       if (!signal) continue;
       const staleAfter = WAITING_SIGNALS.has(signal) ? waitingStaleMs : workingStaleMs;
@@ -416,7 +488,19 @@ function sumTasks(sessions) {
   return { created, done };
 }
 
+// One broadcast asks for the resolved state three or four times (the widget,
+// the overlay, the garden, the roamer, the alert sound). Resolving it once and
+// handing out the same object for 200 ms turns that back into one pass.
+let stateMemo = { at: 0, key: null, value: null };
 function aggregateState(opts = {}) {
+  const key = `${!!opts.ignoreTravel}|${travelLook ? `${travelLook.name}:${travelLook.gardenAct}:${travelLook.pose}` : ''}|${previewLook ? previewLook.expiresAt : ''}`;
+  if (stateMemo.value && stateMemo.key === key && Date.now() - stateMemo.at < 200) return stateMemo.value;
+  const value = computeState(opts);
+  stateMemo = { at: Date.now(), key, value };
+  return value;
+}
+
+function computeState(opts = {}) {
   const config = loadConfig();
   const sessions = readSessions(config);
   const pending = config.askFromWidget ? readRequests() : [];
@@ -520,6 +604,10 @@ function createWindow() {
   const reveal = () => { if (win && !win.isVisible() && loadConfig().showWidget) win.showInactive(); };
   win.webContents.once('did-finish-load', reveal);
   setTimeout(reveal, 1500);
+
+  guardRenderer(win, 'widget', () => { win = null; createWindow(); });
+  // A reload loses the widget's state; re-push it as soon as it's back.
+  win.webContents.on('did-finish-load', () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
@@ -748,9 +836,9 @@ function pushAim() {
 
 function stopOverlay() {
   overlayFx = 'none';
-  clearInterval(burstTimer); burstTimer = null;
-  clearInterval(snipeTimer); snipeTimer = null;
-  clearInterval(aimTimer); aimTimer = null;
+  burstTimer = stopTimer(burstTimer);
+  snipeTimer = stopTimer(snipeTimer);
+  aimTimer = stopTimer(aimTimer);
   overlayPose = null;
   win?.webContents.send('aim', { facing: widgetMuzzle()?.facing || 'right', aimAngle: 0 });
   if (!overlayWin) return;
@@ -763,12 +851,28 @@ function stopOverlay() {
 }
 
 let overlayFx = 'none';
+// The spotlight beam needs the terminal's Dock icon, which costs two osascript
+// calls. This runs from every broadcast while the effect is on, so it caches
+// the target for a minute and never runs two lookups at once — otherwise it
+// fans out exactly the way maybeRoam used to.
+let spotlightCache = { at: 0, target: null };
+let spotlightBusy = false;
 async function pushScreenFx(fx) {
   if (!overlayWin || overlayWin.isDestroyed()) return;
   const payload = { fx };
   if (fx === 'spotlight' && IS_MAC) {
-    const app = await runningTerminal();
-    const icon = app ? await dockIconRect(app) : null;
+    if (spotlightBusy) return;
+    let icon = spotlightCache.target;
+    if (!icon || Date.now() - spotlightCache.at > 60000) {
+      spotlightBusy = true;
+      try {
+        const app = await runningTerminal();
+        icon = app ? await dockIconRect(app) : null;
+        spotlightCache = { at: Date.now(), target: icon };
+      } finally {
+        spotlightBusy = false;
+      }
+    }
     if (icon && overlayWin && !overlayWin.isDestroyed()) {
       const ob = overlayWin.getBounds();
       const m = widgetMuzzle();
@@ -816,11 +920,14 @@ function updateOverlay(look) {
     if (!overlayWin) return;
     overlayWin.showInactive();
     overlayWin.setBounds(m.display.bounds);
-    if (gun) aimTimer = setInterval(pushAim, 120);
-    if (gun === 'ak47') { fireBurst(); burstTimer = setInterval(fireBurst, BURST_EVERY_MS); }
-    else if (gun === 'sniper') { fireSnipe(); snipeTimer = setInterval(fireSnipe, SNIPE_EVERY_MS); }
+    if (gun) aimTimer = every(120, pushAim, 'aim');
+    if (gun === 'ak47') { fireBurst(); burstTimer = every(BURST_EVERY_MS, fireBurst, 'burst'); }
+    else if (gun === 'sniper') { fireSnipe(); snipeTimer = every(SNIPE_EVERY_MS, fireSnipe, 'snipe'); }
     if (overlayFx !== 'none') pushScreenFx(overlayFx);
   });
+  // If the overlay's renderer dies, tear the whole thing down rather than
+  // leaving a transparent always-on-top window with a dead canvas on screen.
+  guardRenderer(overlayWin, 'overlay', () => stopOverlay());
   overlayWin.on('closed', () => { overlayWin = null; });
   win.setAlwaysOnTop(true, 'screen-saver', 2);
 }
@@ -868,26 +975,43 @@ function ensureTrayRenderer() {
   trayRenderWin.on('closed', () => { trayRenderWin = null; });
 }
 
-async function paintTray() {
+// capturePage() is expensive (an offscreen paint plus a PNG encode), so the
+// menu-bar icon is only re-rendered when the look actually changes or an
+// animated channel needs a new frame — not twice a second forever.
+let trayLookKey = null;
+let trayPainting = false;
+const TRAY_ANIMATED = new Set(['pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'sos']);
+async function paintTray(force = false) {
+  if (trayPainting) return;
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
-  // No agent chips in the menu bar: 22px has no room for them.
-  trayRenderWin.webContents.send('look', { ...look, minions: [], facing: 'right' });
-  const img = await trayRenderWin.webContents.capturePage();
-  const size = img.getSize();
-  if (!size.width) return;
-  const scale = size.width / 18;
-  tray.setImage(nativeImage.createFromBuffer(img.toPNG(), { scaleFactor: scale }));
+  const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.body, look.number]);
+  const animated = TRAY_ANIMATED.has(look.lampFx) || ['blink', 'nod', 'bounce', 'run', 'knock', 'spin', 'party'].includes(look.pose);
+  if (!force && !animated && key === trayLookKey) return;
+  trayLookKey = key;
+  trayPainting = true;
+  try {
+    // No agent chips in the menu bar: 22px has no room for them.
+    trayRenderWin.webContents.send('look', { ...look, minions: [], facing: 'right' });
+    const img = await trayRenderWin.webContents.capturePage();
+    const size = img.getSize();
+    if (!size.width) return;
+    const scale = size.width / 18;
+    tray.setImage(nativeImage.createFromBuffer(img.toPNG(), { scaleFactor: scale }));
+  } finally {
+    trayPainting = false;
+  }
 }
 
 function updateTrayMode() {
   const on = loadConfig().menuBarMode;
   if (on) {
     ensureTrayRenderer();
-    if (!trayTimer) trayTimer = setInterval(() => paintTray().catch(() => {}), 500);
+    trayLookKey = null;
+    if (!trayTimer) trayTimer = every(500, () => paintTray().catch(() => {}), 'tray');
   } else {
-    clearInterval(trayTimer);
-    trayTimer = null;
+    trayTimer = stopTimer(trayTimer);
+    trayLookKey = null;
     if (trayRenderWin) { trayRenderWin.close(); trayRenderWin = null; }
     tray?.setImage(path.join(__dirname, 'assets', IS_WIN ? 'tray-win.png' : 'trayTemplate.png'));
   }
@@ -948,9 +1072,23 @@ function overlayGarden(payload) {
 
 async function runGarden(base) {
   console.log('[garden] start');
-  const geo = gardenGeometry();
+  // `run` is declared before anything that can throw: the finally block below
+  // reads it, and a throw from gardenGeometry() used to hit the temporal dead
+  // zone there — masking the real error and leaving travelLook stuck, which
+  // freezes the widget's look until a restart.
+  let run = null;
+  let geo;
+  try {
+    geo = gardenGeometry();
+  } catch (e) {
+    console.log('[garden] could not lay out the garden:', e.message);
+    travelLook = null;
+    gardenRun = null;
+    broadcastStatus();
+    return;
+  }
   gardenRun = { base, home: win.getBounds(), pots: [], firstBite: null, lastBite: 0, rotations: 0, stop: false, label: 'Gardening', geo, planted: 0 };
-  const run = gardenRun;
+  run = gardenRun;
   const alive = () => gardenRun === run && !run.stop;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const standAt = (pot) => ({ x: pot.x - Math.round(geo.width * 0.75), y: pot.y - geo.height + 14 });   // stand left of the pot, feet at its base
@@ -1147,6 +1285,15 @@ function updateGarden(st) {
 }
 
 function broadcastStatus() {
+  // travelLook is only ever legitimate while the garden or a roam is running.
+  // If one of those died (a throw, a crashed renderer, a closed window) the
+  // widget would otherwise be frozen on a walk pose forever — this is the one
+  // place that can always see it, so it always clears it.
+  if (travelLook && !gardenRun && !roamState.busy) {
+    console.log('[status] clearing a stranded travelLook');
+    travelLook = null;
+    stateMemo = { at: 0, key: null, value: null };
+  }
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   try {
@@ -1163,7 +1310,7 @@ function broadcastStatus() {
 // When something needs you and the terminal isn't the front app, Claude runs
 // along the screen to that app's Dock icon, knocks, and runs home. Once per
 // waiting episode, then every 10 minutes while still ignored.
-let roamState = { lastKnock: 0, waitingSince: null, busy: false, home: null };
+let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
 
 // Serialised, time-boxed AppleScript. System Events can stall for minutes
 // (Automation prompt, busy Dock), and an unbounded osascript per status tick
@@ -1185,19 +1332,62 @@ async function frontmostApp() {
   return osa('tell application "System Events" to get name of first application process whose frontmost is true');
 }
 
+// The Dock lists items under their *display* name ("Ghostty"), which is not
+// always the process name ("ghostty") — so the lookup is case-insensitive and
+// falls back to scanning the list. Returns the icon's screen rect plus how the
+// Dock is arranged, so a hidden Dock still gives us somewhere to knock.
 async function dockIconRect(appName) {
-  const out = await osa(`tell application "System Events" to tell process "Dock" to get {position, size} of UI element "${appName}" of list 1`);
-  if (!out) return null;
+  const safe = escapeForAppleScript(appName);
+  let out = await osa(`tell application "System Events" to tell process "Dock" to get {position, size} of UI element "${safe}" of list 1`);
+  if (!out) {
+    // Case or punctuation mismatch: find the matching item by name instead.
+    const names = await osa('tell application "System Events" to tell process "Dock" to get name of every UI element of list 1');
+    if (!names) return null;
+    const want = appName.toLowerCase();
+    const hit = names.split(',').map((x) => x.trim()).find((n) => n.toLowerCase() === want)
+      || names.split(',').map((x) => x.trim()).find((n) => n.toLowerCase().startsWith(want) || want.startsWith(n.toLowerCase()));
+    if (!hit || hit === 'missing value') return null;
+    out = await osa(`tell application "System Events" to tell process "Dock" to get {position, size} of UI element "${escapeForAppleScript(hit)}" of list 1`);
+    if (!out) return null;
+  }
   const n = out.split(',').map((x) => Number(x.trim()));
   if (n.length < 4 || n.some(Number.isNaN)) return null;
-  return { x: n[0], y: n[1], w: n[2], h: n[3] };
+  const rect = { x: n[0], y: n[1], w: n[2], h: n[3] };
+  if (rect.w < 2 || rect.h < 2) return null;
+  return clampToDisplay(rect);
+}
+
+// A hidden Dock reports its icons off the bottom (or side) of the screen, and
+// an icon on a second display is simply outside the primary. Either way, walk
+// to the nearest point that is actually on a display, so the knock is visible.
+function clampToDisplay(rect) {
+  return HostApp.clampRectToDisplays(rect, screen.getAllDisplays());
+}
+
+// "get name of every process" is the slowest call we make (it can take
+// seconds on a loaded machine) and the answer barely changes, so it is cached
+// for 30 s on top of osa()'s single-flight guard.
+let processNameCache = { at: 0, names: null };
+async function runningProcessNames() {
+  if (processNameCache.names && Date.now() - processNameCache.at < 30000) return processNameCache.names;
+  const names = await osa('tell application "System Events" to get name of every process');
+  if (!names) return processNameCache.names; // keep the last good answer rather than failing the roam
+  processNameCache = { at: Date.now(), names: names.split(',').map((x) => x.trim()).filter(Boolean) };
+  return processNameCache.names;
+}
+
+// Which app should Claude knock on? The session that needs you knows, because
+// the hook recorded it (`hostApp`). Only if nothing recorded one — an old
+// session file, or another agent posting over the HTTP endpoint — do we fall
+// back to "whatever terminal happens to be running".
+async function terminalForSessions(sessions = []) {
+  const running = await runningProcessNames();
+  if (!running) return null;
+  return HostApp.pickTerminal(sessions, running, (sig) => WAITING_SIGNALS.has(sig), TERMINAL_APPS);
 }
 
 async function runningTerminal() {
-  const names = await osa('tell application "System Events" to get name of every process');
-  if (!names) return null;
-  const set = new Set(names.split(',').map((x) => x.trim()));
-  return TERMINAL_APPS.find((t) => set.has(t)) || null;
+  return terminalForSessions(aggregateState().sessions);
 }
 
 function tween(from, to, ms, onStep) {
@@ -1205,16 +1395,120 @@ function tween(from, to, ms, onStep) {
   if (!nums.every(Number.isFinite)) { console.log('[tween] skipped, non-finite input', JSON.stringify({ from, to, ms })); return Promise.resolve(); }
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const id = setInterval(() => {
+    // A tween that outlives its window (quit, crash, reload) must not keep a
+    // 60 Hz interval alive forever, and a throwing step must still clear it.
+    const id = every(16, () => {
+      if (!win || win.isDestroyed()) { stopTimer(id); resolve(); return; }
       const p = Math.min(1, (Date.now() - t0) / ms);
       const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-      onStep({ x: Math.round(from.x + (to.x - from.x) * e), y: Math.round(from.y + (to.y - from.y) * e) });
-      if (p >= 1) { clearInterval(id); resolve(); }
-    }, 16);
+      try {
+        onStep({ x: Math.round(from.x + (to.x - from.x) * e), y: Math.round(from.y + (to.y - from.y) * e) });
+      } catch (err) {
+        console.log('[tween] step failed:', err.message);
+        stopTimer(id); resolve(); return;
+      }
+      if (p >= 1) { stopTimer(id); resolve(); }
+    }, 'tween');
   });
 }
 
-async function maybeRoam(st) {
+// The Dock gives no API for making another app's icon bounce, so the bounce
+// the user sees is Claude physically hopping on the icon. Our own Dock tile is
+// asked to bounce too, which is a no-op while the tile is hidden but shows up
+// for anyone running with the Dock icon visible.
+function bounceOwnDock() {
+  if (!IS_MAC || !app.dock) return;
+  try { app.dock.bounce('critical'); } catch { /* dock icon hidden */ }
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The knock itself: three knocks, each with a hop on the icon and a sound,
+// then "hey!" with the app's name in a speech bubble.
+async function performKnock(appName, target, base) {
+  const knockSound = loadConfig().soundOnAmber ? (base.sound || 'Tink') : null;
+  for (let i = 0; i < 3; i += 1) {
+    travelLook = { ...base, pose: 'knock', facing: 'right', aimAngle: 0, text: 'KNOCK', name: `Knocking on ${appName}` };
+    broadcastStatus();
+    if (knockSound) playSound(knockSound);
+    bounceOwnDock();
+    // hop up off the icon and land back on it
+    await tween(target, { x: target.x, y: target.y - 16 }, 130, (pt) => win?.setPosition(pt.x, pt.y));
+    await tween({ x: target.x, y: target.y - 16 }, target, 130, (pt) => win?.setPosition(pt.x, pt.y));
+    await wait(220);
+  }
+  travelLook = { ...base, pose: 'bubble', facing: 'right', aimAngle: 0, text: `HEY! ${appName}`, name: `${appName} needs you` };
+  broadcastStatus();
+  await wait(1800);
+}
+
+// One roam: run to the Dock icon, knock, run home. `force` skips the "is it
+// already the front app / is a knock due" checks, for the tray item and demo.
+async function roamAndKnock(st, { force = false } = {}) {
+  if (!IS_MAC) return { ok: false, why: 'macOS only' };
+  if (!win) return { ok: false, why: 'no widget' };
+  if (roamState.busy) return { ok: false, why: 'already roaming' };
+  if (gardenRun) return { ok: false, why: 'gardening' };
+  // busy goes up BEFORE the first await. Deciding whether to knock costs three
+  // osascript calls, and claiming the flag only afterwards is what let every
+  // status tick start another round while the previous one was still waiting —
+  // thousands of hung osascript processes, and an exhausted process table.
+  roamState.busy = true;
+  const giveUp = (why) => { roamState.busy = false; return { ok: false, why }; };
+  let appName = null;
+  let icon = null;
+  try {
+    appName = await terminalForSessions(st.sessions);
+    if (!appName) return giveUp('no terminal app running');
+    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app');
+    icon = await dockIconRect(appName);
+    if (!icon) return giveUp(`no Dock icon for ${appName}`);
+  } catch (e) {
+    return giveUp(`could not locate the Dock icon: ${e.message}`);
+  }
+  roamState.lastKnock = Date.now();
+  const wasVisible = win.isVisible();
+  if (!wasVisible) win.showInactive();
+  const home = roamState.home || win.getBounds();
+  roamState.home = home;
+  const base = { ...st.look, effect: 'none' };
+  // Stand on top of the icon, clamped so he never walks off the display.
+  const wa = (icon.display || screen.getPrimaryDisplay()).workArea;
+  const target = {
+    x: Math.round(Math.max(wa.x, Math.min(wa.x + wa.width - home.width, icon.x + icon.w / 2 - home.width / 2))),
+    y: Math.round(Math.max(wa.y, Math.min(wa.y + wa.height - home.height, icon.y - home.height + 6))),
+  };
+  const facing = target.x < home.x ? 'left' : 'right';
+  try {
+    travelLook = { ...base, pose: 'run', facing, aimAngle: 0, name: `Running to ${appName}` };
+    broadcastStatus();
+    await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+    await performKnock(appName, target, base);
+    travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
+    broadcastStatus();
+    await tween(target, { x: home.x, y: home.y }, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+    return { ok: true, app: appName, icon: { x: icon.x, y: icon.y, w: icon.w, h: icon.h, hidden: !!icon.hidden } };
+  } catch (e) {
+    // Whatever went wrong, the widget must not be left mid-walk.
+    console.log('[roam] failed:', e.stack || e.message);
+    return { ok: false, why: e.message };
+  } finally {
+    travelLook = null;
+    try { if (win && !win.isDestroyed()) win.setBounds(home); } catch { /* window gone */ }
+    if (!wasVisible) win?.hide();
+    roamState.busy = false;
+    stateMemo = { at: 0, key: null, value: null };
+    broadcastStatus();
+  }
+}
+
+// Tray → "Knock now", and `--demo knock`.
+async function knockNow() {
+  const st = aggregateState({ ignoreTravel: true });
+  return roamAndKnock(st, { force: true });
+}
+
+function maybeRoam(st) {
   const config = loadConfig();
   if (!IS_MAC || !config.roam || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
@@ -1222,34 +1516,19 @@ async function maybeRoam(st) {
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
-  roamState.busy = true;
-  const app = await runningTerminal().catch(() => null);
-  if (!app) { roamState.busy = false; roamState.lastKnock = Date.now(); return; }
-  if ((await frontmostApp()) === app) { roamState.busy = false; return; } // they're looking at it already
-  const icon = await dockIconRect(app);
-  if (!icon) { roamState.busy = false; roamState.lastKnock = Date.now(); return; }
-  roamState.lastKnock = Date.now();
-  const home = win.getBounds();
-  roamState.home = home;
-  const base = st.look;
-  const target = { x: Math.round(icon.x + icon.w / 2 - home.width / 2), y: Math.round(icon.y - home.height + 6) };
-  const facing = target.x < home.x ? 'left' : 'right';
-  try {
-    travelLook = { ...base, pose: 'run', facing, aimAngle: 0, name: `Running to ${app}` };
-    broadcastStatus();
-    await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
-    travelLook = { ...base, pose: 'knock', facing: 'right', text: 'KNOCK KNOCK', name: `Knocking on ${app}` };
-    broadcastStatus();
-    await new Promise((r) => setTimeout(r, 2400));
-    travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
-    broadcastStatus();
-    await tween(target, { x: home.x, y: home.y }, 1400, (pt) => win?.setPosition(pt.x, pt.y));
-  } finally {
-    travelLook = null;
-    win?.setBounds(home);
-    roamState.busy = false;
-    broadcastStatus();
-  }
+  // maybeRoam runs from every broadcast, and the checks above it are all
+  // synchronous — but deciding whether to roam needs three osascript spawns.
+  // Without this guard a waiting session fired a fresh trio of `osascript`
+  // processes every 4 seconds (and on every session-file write), which is what
+  // made the machine crawl while a permission prompt sat unanswered.
+  if (roamState.probing) return;
+  if (Date.now() - roamState.lastProbe < 20000) return;
+  roamState.probing = true;
+  roamState.lastProbe = Date.now();
+  roamAndKnock(st)
+    .then((r) => { if (!r.ok) console.log('[roam] skipped:', r.why); })
+    .catch((e) => console.log('[roam]', e.message))
+    .finally(() => { roamState.probing = false; });
 }
 
 // ── Rare events ────────────────────────────────────────────────────────────
@@ -1322,6 +1601,7 @@ function createTray() {
     { type: 'separator' },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
+    { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
     { type: 'separator' },
     { label: 'Bigger', click: () => resizeBy(1.25) },
     { label: 'Smaller', click: () => resizeBy(0.8) },
@@ -1427,16 +1707,55 @@ ipcMain.handle('get-stats', () => Stats.summary(stats));
 
 // ── Costs, from ccusage (the same source as the user's cost alerts) ────────
 let costCache = { at: 0, data: null };
+let costInFlight = null;
+const COST_TTL_MS = 5 * 60 * 1000;
 function runCcusage(args) {
   return new Promise((resolve) => {
-    execFile('ccusage', [...args, '--json', '--offline'], { env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin` }, maxBuffer: 16 * 1024 * 1024 }, (err, out) => {
+    // ccusage walks every transcript on disk; it must never be allowed to run
+    // forever or pile up, so it gets a hard timeout and is killed on expiry.
+    execFile('ccusage', [...args, '--json', '--offline'], {
+      env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin` },
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 25000,
+      killSignal: 'SIGKILL',
+    }, (err, out) => {
       if (err) return resolve(null);
       try { resolve(JSON.parse(out)); } catch { resolve(null); }
     });
   });
 }
-async function getCosts() {
-  if (Date.now() - costCache.at < 60000 && costCache.data) return costCache.data;
+// Never more than one ccusage pass at a time, and at most one per 5 minutes:
+// the Stats tab used to be able to fan out a spawn per repaint.
+function getCosts() {
+  if (Date.now() - costCache.at < COST_TTL_MS && costCache.data) return Promise.resolve(costCache.data);
+  if (costInFlight) return costInFlight;
+  costInFlight = computeCosts().finally(() => { costInFlight = null; });
+  return costInFlight;
+}
+// ~/.claude/projects holds one directory per project and one .jsonl per
+// session. The old code did an existsSync per (session × directory) on the
+// main thread — thousands of blocking stats per Stats open. Instead each
+// directory is listed once into a session-id → path map, cached by mtime, and
+// the whole index is rebuilt at most once every 5 minutes.
+let transcriptCache = { at: 0, dirKeys: '', index: new Map() };
+function transcriptIndex() {
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(root, d.name)); } catch { return new Map(); }
+  let dirKeys = '';
+  for (const d of dirs) { try { dirKeys += `${d}:${fs.statSync(d).mtimeMs};`; } catch { /* vanished */ } }
+  if (transcriptCache.index.size && transcriptCache.dirKeys === dirKeys && Date.now() - transcriptCache.at < COST_TTL_MS) return transcriptCache.index;
+  const index = new Map();
+  for (const dir of dirs) {
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) if (f.endsWith('.jsonl')) index.set(f.slice(0, -6), path.join(dir, f));
+  }
+  transcriptCache = { at: Date.now(), dirKeys, index };
+  return index;
+}
+
+async function computeCosts() {
   const since = new Date(Date.now() - 6 * 86400000);
   const ymd = `${since.getFullYear()}${String(since.getMonth() + 1).padStart(2, '0')}${String(since.getDate()).padStart(2, '0')}`;
   const [daily, session] = await Promise.all([runCcusage(['daily', '--since', ymd]), runCcusage(['session', '--since', ymd])]);
@@ -1453,22 +1772,17 @@ async function getCosts() {
   } catch { /* none */ }
   // Finished sessions have no session file any more; their transcript
   // (~/.claude/projects/<dir>/<id>.jsonl) records the cwd on its first lines.
-  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
-  let transcriptDirs = [];
-  try { transcriptDirs = fs.readdirSync(projectsRoot).map((d) => path.join(projectsRoot, d)); } catch { /* none */ }
+  const index = transcriptIndex();
   const cwdFromTranscript = (id) => {
-    if (cwdById[id]) return cwdById[id];
-    for (const dir of transcriptDirs) {
-      const f = path.join(dir, `${id}.jsonl`);
-      if (!fs.existsSync(f)) continue;
-      try {
-        const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(4096); const n = fs.readSync(fd, buf, 0, 4096, 0); fs.closeSync(fd);
-        const m = /"cwd":"([^"]+)"/.exec(buf.toString('utf8', 0, n));
-        cwdById[id] = m ? m[1] : null;
-        return cwdById[id];
-      } catch { return null; }
-    }
-    return null;
+    if (cwdById[id] !== undefined && cwdById[id] !== null) return cwdById[id];
+    const f = index.get(id);
+    if (!f) return null;
+    try {
+      const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(4096); const n = fs.readSync(fd, buf, 0, 4096, 0); fs.closeSync(fd);
+      const m = /"cwd":"([^"]+)"/.exec(buf.toString('utf8', 0, n));
+      cwdById[id] = m ? m[1] : null;
+      return cwdById[id];
+    } catch { return null; }
   };
   const projects = {};
   const sessions = [];
@@ -1677,26 +1991,61 @@ function maybePlayAlertSound() {
 
 // Dev captures (--shot, --playtest) and demos run beside the installed app,
 // so they take their own userData (and therefore their own instance lock).
-if (process.argv.includes('--shot') || process.argv.includes('--playtest')) app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
-if (process.argv.includes('--demo')) app.setPath('userData', path.join(os.tmpdir(), 'claude-buddy-demo-data'));
+// Dev runs (shots, playtests, demos) each get their OWN profile, keyed by pid.
+//
+// They used to share one fixed dev profile, which meant: a run that was killed
+// (^C, a failed playtest, a crash) left Chromium's Singleton* files behind and
+// the next run quietly quit at requestSingleInstanceLock — and worse, while an
+// earlier dev instance was still alive the new run handed its flags to that
+// dying instance through `second-instance`, whose `new BrowserWindow` throws,
+// so the new process exited having printed nothing at all. That is the "the
+// test just does nothing" failure. A per-pid profile cannot collide, cannot
+// inherit a stale lock, and is deleted on the way out.
+const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `claude-buddy-dev-${process.pid}`) : null;
+if (DEV_PROFILE) {
+  app.setPath('userData', DEV_PROFILE);
+  const sweep = () => { try { fs.rmSync(DEV_PROFILE, { recursive: true, force: true }); } catch { /* already gone */ } };
+  app.on('will-quit', sweep);
+  process.on('exit', sweep);
+  // Sweep profiles orphaned by a hard kill, so /tmp doesn't fill up.
+  try {
+    for (const d of fs.readdirSync(os.tmpdir())) {
+      const m = /^claude-buddy-dev-(\d+)$/.exec(d);
+      if (!m || Number(m[1]) === process.pid) continue;
+      try { process.kill(Number(m[1]), 0); continue; } catch { /* that pid is gone */ }
+      fs.rmSync(path.join(os.tmpdir(), d), { recursive: true, force: true });
+    }
+  } catch { /* nothing to sweep */ }
+}
 
 // One widget, one tray. A second launch (e.g. `open -a … --args --lights`)
 // hands its flags to the running instance instead of starting another.
-if (!app.requestSingleInstanceLock()) {
+const gotLock = app.requestSingleInstanceLock();
+if (DEMO || DIAG) console.error('[startup]', JSON.stringify({ demo: DEMO, gotLock, userData: app.getPath('userData') }));
+if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', (e, argv) => {
-    if (argv.includes('--lights')) createLightsWindow();
-    else win?.show();
+    // This fires on an instance that may be mid-teardown, where opening a
+    // window throws — and an uncaught throw here took the whole app down.
+    try {
+      if (argv.includes('--lights')) createLightsWindow();
+      else win?.show();
+    } catch (err) {
+      console.error('[second-instance] could not surface a window:', err.message);
+    }
   });
 }
 
 app.whenReady().then(() => {
+  if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
-  if (!areHooksInstalled()) installHooks();
+  // Dev runs share the machine with a real install: they must not rewrite the
+  // user's hooks or claim Open at Login out from under it.
+  if (!IS_DEV_RUN && !areHooksInstalled()) installHooks();
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
-  if (!fs.existsSync(autoLaunchMarker)) {
+  if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
     app.setLoginItemSettings({ openAtLogin: true });
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(autoLaunchMarker, new Date().toISOString());
@@ -1716,24 +2065,103 @@ app.whenReady().then(() => {
   }
   if (process.argv.includes('--lights')) createLightsWindow();
 
+  // A busy turn writes its session file many times a second and every write
+  // fires this watcher — coalesce them into at most one refresh per 200 ms.
+  let watchTimer = null;
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {
-    broadcastStatus();
-    maybePlayAlertSound();
+    if (watchTimer) return;
+    watchTimer = setTimeout(() => {
+      watchTimer = null;
+      broadcastStatus();
+      maybePlayAlertSound();
+    }, 200);
   });
 
-  setInterval(() => {
+  every(4000, () => {
     broadcastStatus();
     maybePlayAlertSound();
     tickStats(readSessions(loadConfig()));
-  }, 4000);
-  setInterval(flushStats, 30000);
+  }, 'poll');
+  every(30000, flushStats, 'stats-flush');
   // Other agents live on disk, not in hooks: poll for them.
-  if (!DEMO) { syncAgents(); setInterval(syncAgents, OMC_POLL_MS); }
+  if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 
-  setInterval(() => {
-    if (!areHooksInstalled()) installHooks();
-  }, 10 * 60 * 1000);
+  if (!IS_DEV_RUN) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
+
+  if (DIAG) startDiag();
+  if (DEMO === 'knock') {
+    // A session that is waiting on you, running in whatever terminal launched
+    // the demo — exactly the situation the roamer exists for.
+    fs.writeFileSync(path.join(SESSIONS_DIR, 'demo-knock.json'), JSON.stringify({
+      sessionId: 'demo-knock', host: 'demo', hostApp: process.env.CLAUDE_BUDDY_DEMO_APP || null,
+      cwd: process.cwd(), signal: 'permission-ask', tool: 'Bash', updatedAt: new Date().toISOString(),
+    }));
+    setTimeout(async () => {
+      const report = { sessions: [], terminal: null, result: null };
+      try {
+        const st = aggregateState({ ignoreTravel: true });
+        report.sessions = st.sessions.map((s) => ({ hostApp: s.hostApp, signal: s.signal }));
+        report.terminal = await terminalForSessions(st.sessions);
+        report.result = await knockNow();
+      } catch (e) {
+        report.error = e.stack || e.message;
+      }
+      // stderr, and a file: a GUI Electron process does not reliably deliver
+      // stdout to a redirected shell.
+      console.error('[demo knock]', JSON.stringify(report, null, 2));
+      try { fs.writeFileSync(path.join(os.tmpdir(), 'claude-buddy-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
+      setTimeout(() => app.quit(), 2500);
+    }, 2000);
+  }
+}).catch((e) => {
+  // Without this the app can come up half-initialised and simply sit there —
+  // no widget, no tray, no polling, and nothing in the log to say why.
+  console.error('[startup] failed:', e.stack || e.message);
 });
+
+// Same for anything that escapes a promise anywhere else: log it instead of
+// letting it kill a listener silently.
+process.on('unhandledRejection', (e) => console.error('[unhandled rejection]', (e && e.stack) || e));
+process.on('uncaughtException', (e) => console.error('[uncaught]', (e && e.stack) || e));
+
+// ── --diag: what the app is actually costing, once a second ────────────────
+function startDiag() {
+  let lastCpu = process.cpuUsage();
+  let lastAt = Date.now();
+  every(1000, () => {
+    const cpu = process.cpuUsage();
+    const now = Date.now();
+    const elapsedUs = Math.max(1, (now - lastAt) * 1000);
+    const pct = ((cpu.user - lastCpu.user + cpu.system - lastCpu.system) / elapsedUs) * 100;
+    lastCpu = cpu; lastAt = now;
+    const mem = process.memoryUsage();
+    console.log('[diag] ' + JSON.stringify({
+      cpuPct: Number(pct.toFixed(1)),
+      heapMB: Number((mem.heapUsed / 1048576).toFixed(1)),
+      rssMB: Number((mem.rss / 1048576).toFixed(1)),
+      timers: liveTimers.size,
+      windows: BrowserWindow.getAllWindows().length,
+      sessionCache: sessionFileCache.size,
+      overlay: !!overlayWin,
+      garden: !!gardenRun,
+      travel: !!travelLook,
+    }));
+  }, 'diag');
+}
+
+// ── Watchdog: a wedged or crashed renderer gets reloaded, not left frozen ──
+function guardRenderer(w, name, recreate) {
+  if (!w) return;
+  w.webContents.on('unresponsive', () => {
+    console.log(`[watchdog] ${name} unresponsive — reloading`);
+    try { w.webContents.reloadIgnoringCache(); } catch { /* gone */ }
+  });
+  w.webContents.on('render-process-gone', (e, details) => {
+    console.log(`[watchdog] ${name} render process gone:`, details.reason);
+    if (w.isDestroyed()) { recreate?.(); return; }
+    try { w.webContents.reloadIgnoringCache(); } catch { recreate?.(); }
+  });
+}
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
 app.on('before-quit', () => { flushStats(); lightsWin?.destroy(); settingsWin?.destroy(); });

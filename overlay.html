@@ -18,13 +18,16 @@
   window.__errs = [];
   window.addEventListener('error', (e) => window.__errs.push(`${e.message} @${e.lineno}:${e.colno}`));
   const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
+  // `let`, not `const`: the pot cache temporarily points the drawing helpers
+  // at an offscreen context.
+  let ctx = canvas.getContext('2d');
+  const screenCtx = ctx;
   const dpr = window.devicePixelRatio || 1;
   let W = 0, H = 0;
   function resize() {
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = W * dpr; canvas.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    screenCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener('resize', resize);
   resize();
@@ -140,6 +143,53 @@
     ctx.strokeStyle = 'rgba(217,201,168,0.7)'; ctx.lineWidth = 1;
     for (let i = 1; i < 6; i += 1) { const tt = i / 6; const px = h.x - h.w / 2 + h.w * tt; const py = h.y - 62 + (1 - Math.abs(tt - 0.5) * 2) * (42 + sway); ctx.beginPath(); ctx.moveTo(px, py - 6); ctx.lineTo(px, py + 6); ctx.stroke(); }
   }
+  // ── Cached pot rendering ────────────────────────────────────────────────
+  // A pot with a full-grown crop is a static picture: the only thing that
+  // changes frame to frame is a 2px sway. Redrawing twelve serrated cannabis
+  // plants (hundreds of paths each) sixty times a second was the single most
+  // expensive thing the app did. Each pot is drawn once into its own small
+  // offscreen canvas and blitted after that, re-rendered only when something
+  // about it actually changes.
+  // Tall enough for a fully-grown, fully-overgrown cannabis plant (66 units of
+  // stem above the soil line, ×1.8 at peak neglect) plus the pot below it.
+  const POT_CACHE_W = 220, POT_CACHE_H = 250, POT_CACHE_OX = 110, POT_CACHE_OY = 210;
+  // Growth and the overgrowth swell are quantised: the crop only re-renders
+  // when it visibly changes size, not on every frame of a four-minute grow.
+  function potSignature(pot, t, big) {
+    const grow = pot.crop ? Math.round(Math.min(1, (t - pot.sown) / pot.growMs) * 40) : -1;
+    return [pot.dirt, pot.seed, pot.water, pot.crop, grow, Math.round(big * 20), pot.bites.join(''), pot.jar ? 1 : 0].join('|');
+  }
+  function potLayer(pot, t, big) {
+    const sig = potSignature(pot, t, big);
+    if (pot._sig === sig && pot._layer) return pot._layer;
+    if (!pot._layer) {
+      pot._layer = document.createElement('canvas');
+      pot._layer.width = POT_CACHE_W * dpr; pot._layer.height = POT_CACHE_H * dpr;
+    }
+    const lc = pot._layer.getContext('2d');
+    lc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lc.clearRect(0, 0, POT_CACHE_W, POT_CACHE_H);
+    // Draw into the layer with the real ctx pointed at it, so the existing
+    // drawing helpers need no changes.
+    const real = ctx;
+    ctx = lc;
+    const x = POT_CACHE_OX, y = POT_CACHE_OY;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x, y + 2, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b8683a'; ctx.beginPath(); ctx.moveTo(x - 22, y - 34); ctx.lineTo(x + 22, y - 34); ctx.lineTo(x + 17, y); ctx.lineTo(x - 17, y); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#c9784a'; ctx.fillRect(x - 25, y - 38, 50, 7);
+    if (pot.dirt) { ctx.fillStyle = pot.water ? '#2f1f14' : '#4a3222'; ctx.fillRect(x - 19, y - 32, 38, 9); }
+    if (pot.seed && !pot.crop && !pot.rack) { ctx.fillStyle = '#f2d16b'; ctx.beginPath(); ctx.arc(x, y - 27, 2.5, 0, Math.PI * 2); ctx.fill(); }
+    if (pot.crop) {
+      const gr = Math.min(1, (t - pot.sown) / pot.growMs) * big;
+      ctx.save(); ctx.translate(x, y - 30); ctx.scale(gr, gr);
+      drawCrop(pot.crop, pot.bites);
+      ctx.restore();
+    }
+    ctx = real;
+    pot._sig = sig;
+    return pot._layer;
+  }
+
   function drawGarden(t) {
     if (!garden.on) return;
     const g = overgrowth(t);
@@ -159,19 +209,13 @@
         ctx.fillStyle = `rgba(180,140,110,${0.5 * (1 - age)})`; ctx.beginPath(); ctx.arc(x, y - 18, 18 + 40 * age, 0, Math.PI * 2); ctx.fill();
         continue;
       }
-      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x, y + 2, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#b8683a'; ctx.beginPath(); ctx.moveTo(x - 22, y - 34); ctx.lineTo(x + 22, y - 34); ctx.lineTo(x + 17, y); ctx.lineTo(x - 17, y); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#c9784a'; ctx.fillRect(x - 25, y - 38, 50, 7);
-      if (pot.dirt) { ctx.fillStyle = pot.water ? '#2f1f14' : '#4a3222'; ctx.fillRect(x - 19, y - 32, 38, 9); }
-      if (pot.seed && !pot.crop && !pot.rack) { ctx.fillStyle = '#f2d16b'; ctx.beginPath(); ctx.arc(x, y - 27, 2.5, 0, Math.PI * 2); ctx.fill(); }
-      if (pot.crop) {
-        const g = Math.min(1, (t - pot.sown) / pot.growMs);
-        const sway = Math.sin(t / 900 + x) * 2 * g;
-        const big = 1 + 0.8 * overgrowth(t);
-        ctx.save(); ctx.translate(x + sway, y - 30); ctx.scale(g * big, g * big);
-        drawCrop(pot.crop, pot.bites);
-        ctx.restore();
-      }
+      // The pot and its crop come from the cache; the sway and the overgrowth
+      // swell are applied as a cheap transform on the blit.
+      const grown = pot.crop ? Math.min(1, (t - pot.sown) / pot.growMs) : 0;
+      const sway = pot.crop ? Math.sin(t / 900 + x) * 2 * grown : 0;
+      const big = pot.crop ? 1 + 0.8 * g : 1;
+      const layer = potLayer(pot, t, big);
+      ctx.drawImage(layer, 0, 0, layer.width, layer.height, x + sway - POT_CACHE_OX, y - POT_CACHE_OY, POT_CACHE_W, POT_CACHE_H);
       if (pot.rack) drawRack(x + 60, y, Math.min(1, (t - pot.rack.t0) / pot.rack.dryMs));
       if (pot.table) drawTable(x + 60, y, Math.min(1, (t - pot.table.t0) / pot.table.ms), t);
       if (pot.jar) drawJar(x + 60, y - 2, true);

@@ -203,9 +203,24 @@ appears, so nothing can get stuck. Restart open sessions after toggling it.
 ## Running to your terminal
 
 When something needs you and the terminal isn't the front app, Claude runs
-across the screen to that app's Dock icon (Ghostty, iTerm, Terminal, Warp…),
-knocks, and runs home — once per waiting episode, then every 10 minutes while
-ignored. Preferences → **Run to the terminal and knock**.
+across the screen to that app's Dock icon, **knocks three times** — hopping on
+the icon, with a sound each time — and holds up a **"hey!"** speech bubble with
+the app's name before running home. Once per waiting episode, then every 10
+minutes while ignored. Preferences → **Run to the terminal and knock**.
+
+He knocks on the app that is *actually running that session*, not just any
+terminal: the hook records it in the session file (`hostApp`) from the app's
+bundle id, `TERM_PROGRAM`, or by walking up the process tree — which also
+resolves **tmux**, where the pane's own tree dead-ends at the tmux server and
+only the tmux *client* leads back to the real window. Ghostty, iTerm2,
+Terminal, Warp, kitty, WezTerm, Alacritty, Hyper, VS Code, Cursor and Windsurf
+are all recognised, and the Dock lookup is case-insensitive (Ghostty's process
+is `ghostty` but its Dock item is `Ghostty` — matching those case-sensitively
+was why it never knocked). A Dock on the left or right, auto-hidden, or on a
+second display all still work: the target is clamped back onto a real display.
+
+Tray → **Knock now** does it on demand, and `npx electron . --demo knock`
+runs the whole thing once and prints what it found.
 
 ## Program the clicks
 
@@ -338,6 +353,8 @@ Right-click the tray icon (top menu bar) for:
 
 ```bash
 npx electron . --demo weed         # a self-contained, sped-up showing of the garden's weed scene
+npx electron . --demo knock        # walk to the terminal's Dock icon, knock, report, quit
+npx electron . --diag              # per-second CPU, heap, live timer and window counts on stdout
 npm test                           # engine + hook script + installer tests
 npx electron . --lights --playtest # drives the editor UI end to end
 npm start                          # runs the widget straight from source
