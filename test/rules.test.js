@@ -207,6 +207,16 @@ test('set-status: session-end removes the file; unknown signals write nothing', 
   assert.equal(files(home).length, 0);
 });
 
+test('set-status: legacy "<colour> <reason>" hook form still reports the signal', () => {
+  const home = tmpHome();
+  const r = spawnSync(process.execPath, [SET_STATUS, 'green', 'tool-use'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: JSON.stringify({ session_id: 'old', tool_name: 'Edit' }) });
+  assert.equal(r.status, 0);
+  assert.equal(read(home).signal, 'tool-use');
+  assert.equal(read(home).tool, 'Edit');
+  const r2 = spawnSync(process.execPath, [SET_STATUS, 'amber', 'nonsense'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: tmpHome() }, input: '' });
+  assert.equal(r2.status, 0);
+});
+
 test('set-status: garbage stdin does not crash', () => {
   const home = tmpHome();
   const r = spawnSync(process.execPath, [SET_STATUS, 'stop'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '{not json' });

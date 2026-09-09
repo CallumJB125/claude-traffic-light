@@ -17,8 +17,11 @@ const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
 
 const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-done', 'stop', 'session-start', 'compact', 'notification', 'session-end'];
-const [, , signalArg] = process.argv;
-const signal = KNOWN.includes(signalArg) ? signalArg : null;
+// Sessions started under an older install still call `<colour> <reason>`
+// (e.g. `green tool-use`); the reason is the signal we want.
+const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
+const [, , a, b] = process.argv;
+const signal = KNOWN.includes(a) ? a : (['green', 'amber', 'red', 'done'].includes(a) && LEGACY_REASONS[b]) || null;
 if (!signal) process.exit(0);
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
