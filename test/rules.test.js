@@ -116,8 +116,12 @@ test('virtual signals: many-sessions and long-running', () => {
 test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
-  assert.deepEqual(r.when, { signal: ['stop'], tool: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null });
+  assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null });
+  assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
+  assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
+  assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
+  assert.equal(R.normalizeRule({ then: { eyes: 'laser' } }).then.eyes, 'laser');
   assert.match(r.id, /^[a-z0-9]{6}$/);
 });
 
@@ -144,6 +148,47 @@ test('costume is an accent channel: layers above the lamp owner, never leaks fro
   assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).costume, 'none');
   assert.equal(R.normalizeRule({ then: { costume: 'dragon' } }).then.costume, null);
   assert.equal(R.previewLook({ then: { costume: 'halo' } }).costume, 'halo');
+});
+
+test('project scope: folder name or prefix glob', () => {
+  const rs = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'bondly*' }, then: { bodyColor: '#1155cc' } }, ...rules()];
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/bondly-cf' }], rs).bodyColor, '#1155cc');
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/other' }], rs).bodyColor, null);
+  const exact = [{ id: 'b', name: 'b', when: { signal: ['tool-use'], cwd: 'redoubt' }, then: { pet: 'duck' } }, ...rules()];
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/Redoubt' }], exact).pet, 'duck');
+  assert.equal(look([{ signal: 'tool-use', cwd: '/x/redoubt-2' }], exact).pet, 'none');
+});
+
+test('rage meter: ignored-N signals from waiting age; waitMinutes reported', () => {
+  const now = Date.parse('2026-09-09T12:00:00Z');
+  const ago = (m) => new Date(now - m * 60000).toISOString();
+  const l10 = look([{ signal: 'idle-nudge', updatedAt: ago(12) }], rules(), now);
+  assert.equal(l10.pose, 'none', 'default rules: 12 min → still the plain waiting look');
+  assert.equal(l10.waitMinutes, 12);
+  const l20 = look([{ signal: 'idle-nudge', updatedAt: ago(21) }], rules(), now);
+  assert.equal(l20.pose, 'arms');
+  assert.equal(l20.effect, 'beard');
+  assert.equal(l20.lamp, 'green', 'lamp still from the waiting rule below');
+  const busy = look([{ signal: 'tool-use', updatedAt: ago(40) }], rules(), now);
+  assert.equal(busy.waitMinutes, 0, 'a working session is not waiting');
+  assert.deepEqual(R.virtualSessions([{ signal: 'permission-ask', updatedAt: ago(35) }], now).map((v) => v.signal), ['ignored-10', 'ignored-20', 'ignored-30']);
+});
+
+test('seasonal costumes by date', () => {
+  assert.equal(R.seasonalCostume(Date.parse('2026-12-20T12:00:00')), 'santa');
+  assert.equal(R.seasonalEffect(Date.parse('2026-12-20T12:00:00')), 'snow');
+  assert.equal(R.seasonalCostume(Date.parse('2026-10-30T12:00:00')), 'pumpkin');
+  assert.equal(R.seasonalCostume(Date.parse('2026-04-05T12:00:00')), 'bunny');
+  assert.equal(R.seasonalCostume(Date.parse('2026-01-01T12:00:00')), 'partyhat');
+  assert.equal(R.seasonalCostume(Date.parse('2026-09-09T12:00:00')), null);
+});
+
+test('body, effect and pet are accent channels', () => {
+  const rs = [{ id: 'g', name: 'g', when: { signal: ['tool-use'], tool: 'Agent' }, then: { body: 'ghost', effect: 'fire', pet: 'blob' } }, ...rules()];
+  const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
+  assert.deepEqual([l.body, l.effect, l.pet, l.lamp], ['ghost', 'fire', 'blob', 'green']);
+  const p = R.previewLook({ then: { effect: 'beard' } });
+  assert.equal(p.waitMinutes, 20, 'preview shows a grown beard');
 });
 
 // ── stats.js ────────────────────────────────────────────────────────────────

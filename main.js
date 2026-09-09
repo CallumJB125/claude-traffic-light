@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -102,6 +102,7 @@ const DEFAULT_CONFIG = {
   soundOnAmber: true,
   showWidget: true,
   menuBarMode: false,
+  seasonal: true,
 };
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
@@ -116,6 +117,14 @@ function loadConfig() {
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
+  // Migration: configs saved before the idle nudge became a waiting signal
+  // have no rule for it, and the widget would go dark after a finished turn.
+  // Slot the default "Waiting for you" rule in just above "Nothing running".
+  if (!config.rules.some((r) => r.when.signal.includes('idle-nudge'))) {
+    const nudge = Rules.defaultRules().find((r) => r.id === 'nudge');
+    const at = config.rules.findIndex((r) => r.when.signal.includes('idle'));
+    config.rules.splice(at < 0 ? config.rules.length : at, 0, Rules.normalizeRule(nudge));
+  }
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
     .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: p.rules.map(Rules.normalizeRule) }));
@@ -206,7 +215,10 @@ function readManualOverride() {
   }
 }
 
-const WAITING_SIGNALS = new Set(Rules.SIGNALS.filter((s) => s.kind === 'waiting').map((s) => s.id));
+// Anything waiting on the person keeps its file for hours (no heartbeat
+// while it waits); that now includes the post-turn idle nudge, so the
+// ignored-for-N-minutes signals can build on it.
+const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
 
 // A working session pings constantly, so silence really means it's gone. A
 // waiting session (permission ask, limit) gets one event and then nothing
@@ -256,7 +268,20 @@ function aggregateState() {
     return { look, reason: 'manual', sessions, fired, owned };
   }
   const { look, fired, owned } = Rules.resolve(config.rules, sessions);
+  if (config.seasonal) {
+    if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
+    if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
+  }
   return { look, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned };
+}
+
+// ── Sounds ──────────────────────────────────────────────────────────────────
+function playSound(name) {
+  if (!name) return;
+  if (name === 'beep') { shell.beep(); return; }
+  const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
+  if (!fs.existsSync(file)) { shell.beep(); return; }
+  execFile('afplay', [file], () => {});
 }
 
 function createWindow() {
@@ -313,7 +338,7 @@ function createSettingsWindow() {
   }
   settingsWin = new BrowserWindow({
     width: 360,
-    height: 560,
+    height: 640,
     useContentSize: true,
     resizable: false,
     minimizable: false,
@@ -366,7 +391,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  if (arg('--costume')) query.costume = arg('--costume');
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -740,6 +765,17 @@ ipcMain.handle('save-config', (e, partial) => {
 
 ipcMain.handle('get-stats', () => Stats.summary(stats));
 
+ipcMain.handle('preview-sound', (e, name) => playSound(name));
+
+ipcMain.handle('choose-sound-file', async () => {
+  const r = await dialog.showOpenDialog(lightsWin || undefined, {
+    title: 'Choose a sound',
+    properties: ['openFile'],
+    filters: [{ name: 'Audio', extensions: ['aiff', 'aif', 'wav', 'mp3', 'm4a', 'caf'] }],
+  });
+  return r.canceled || !r.filePaths[0] ? null : `file:${r.filePaths[0]}`;
+});
+
 ipcMain.handle('reset-rules', () => {
   const next = saveConfig({ rules: Rules.defaultRules() });
   broadcastStatus();
@@ -769,7 +805,7 @@ function maybePlayAlertSound() {
   const { look, reason, owned } = aggregateState();
   if (reason === 'preview') return;
   const key = look.sound ? `${look.sound}:${owned.sound}` : null;
-  if (config.soundOnAmber && key && key !== lastSoundKey) shell.beep();
+  if (config.soundOnAmber && key && key !== lastSoundKey) playSound(look.sound);
   lastSoundKey = key;
 }
 

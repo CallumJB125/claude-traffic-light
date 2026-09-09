@@ -187,12 +187,87 @@
 @keyframes rig-banner-in { 0% { transform: translateY(-24px); } 100% { transform: translateY(0); } }
 @keyframes rig-banner-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
 
+/* Body: colour is a variable so a rule (or a project) can recolour Claude;
+   whole-sprite swaps hide the default body and show a variant. */
+.rig .body-default, .rig .sign-assembly > rect:last-child, .rig .thumbs-up, .rig .arms-crossed { fill: var(--body-color, #da7756); }
+.rig .body { opacity: 0; }
+.rig.body-claude .body-default, .rig.body-dog .body-dog, .rig.body-cat .body-cat, .rig.body-frog .body-frog,
+.rig.body-robot .body-robot, .rig.body-ghost .body-ghost { opacity: 1; }
+.rig.body-ghost .body-ghost { animation: rig-float 2.4s ease-in-out infinite; }
+@keyframes rig-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+.rig .wag { transform-origin: 59px 53px; }
+.rig.body-dog .wag { animation: rig-wag 0.35s ease-in-out infinite alternate; }
+.rig.body-robot .antenna { animation: rig-flash 0.8s steps(1) infinite; }
+.rig.body-cat .cat-tail { transform-origin: 60px 56px; animation: rig-devil-tail 1.6s ease-in-out infinite alternate; }
+
+/* Mood eyes: replace or decorate the plain eyes. */
+.rig .eyefx { opacity: 0; }
+.rig.eyes-heart .eyefx-heart, .rig.eyes-dizzy .eyefx-dizzy, .rig.eyes-x .eyefx-x, .rig.eyes-tears .eyefx-tears, .rig.eyes-laser .eyefx-laser { opacity: 1; }
+.rig.eyes-heart .eye-open, .rig.eyes-dizzy .eye-open, .rig.eyes-x .eye-open { opacity: 0; }
+.rig.eyes-heart .eyefx-heart { animation: rig-heartbeat 0.9s ease-in-out infinite; transform-origin: 32px 46px; }
+@keyframes rig-heartbeat { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.18); } }
+.rig .spiral { transform-origin: center; transform-box: fill-box; }
+.rig.eyes-dizzy .spiral { animation: rig-spin 1.2s linear infinite; }
+.rig .tear { opacity: 0; }
+.rig.eyes-tears .tear { animation: rig-tear 1.4s ease-in infinite; }
+.rig.eyes-tears .tear.t2 { animation-delay: 0.7s; }
+@keyframes rig-tear { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(9px); } }
+.rig.eyes-laser .beam { animation: rig-flash 0.16s steps(1) infinite; }
+
+/* Poses: tap (foot tapping) and arms (arms crossed). */
+.rig .arms-crossed { opacity: 0; }
+.rig.pose-arms .arms-crossed { opacity: 1; }
+.rig.pose-tap .body-default rect:nth-child(5), .rig.pose-tap .body-dog rect:nth-child(5), .rig.pose-tap .body-cat rect:nth-child(5) { animation: rig-tap 0.5s ease-in-out infinite; transform-origin: 45px 59px; }
+@keyframes rig-tap { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-14deg) translateY(-1px); } }
+
+/* Pose: run — legs pump, body bobs, speed lines streak behind. */
+.rig.pose-run .body rect:nth-child(3), .rig.pose-run .body rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.pose-run .body rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.pose-run .claude-body { animation: rig-run-bob 0.3s ease-in-out infinite alternate; }
+.rig.pose-run .speed-lines { animation: rig-speed 0.3s linear infinite; }
+@keyframes rig-leg-a { from { transform: translateY(-3px) rotate(6deg); } to { transform: translateY(0) rotate(-6deg); } }
+@keyframes rig-leg-b { from { transform: translateY(0) rotate(-6deg); } to { transform: translateY(-3px) rotate(6deg); } }
+@keyframes rig-run-bob { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
+@keyframes rig-speed { 0% { opacity: 0; transform: translateX(3px); } 30% { opacity: 0.9; } 100% { opacity: 0; transform: translateX(-4px); } }
+
+/* Speech bubble */
+.rig.pose-bubble .prop-bubble { opacity: 1; animation: rig-bubble-in 300ms cubic-bezier(0.2, 0.9, 0.3, 1.2) 1; transform-origin: 42px 14px; }
+.rig .bubble-text { font: 700 6.5px -apple-system, system-ui, sans-serif; fill: #211f1c; }
+@keyframes rig-bubble-in { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* Pets */
+.rig .pet { opacity: 0; transition: opacity 150ms ease; transform-origin: 60px 68px; }
+.rig.pet-duck .pet-duck, .rig.pet-cat .pet-cat, .rig.pet-blob .pet-blob { opacity: 1; animation: rig-pet-bob 1.1s ease-in-out infinite; }
+@keyframes rig-pet-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.2px); } }
+
+/* Effects */
+.rig .effect { opacity: 0; transition: opacity 200ms ease; }
+.rig.effect-rain .effect-rain, .rig.effect-sun .effect-sun, .rig.effect-snow .effect-snow, .rig.effect-sparkles .effect-sparkles,
+.rig.effect-fire .effect-fire, .rig.effect-beard .effect-beard { opacity: 1; }
+.rig .drop { opacity: 0; }
+.rig.effect-rain .drop { animation: rig-drop 1s linear infinite; }
+.rig.effect-rain .drop.d2 { animation-delay: 0.33s; } .rig.effect-rain .drop.d3 { animation-delay: 0.66s; }
+@keyframes rig-drop { 0% { opacity: 0; transform: translateY(0); } 10% { opacity: 1; } 100% { opacity: 0; transform: translateY(30px); } }
+.rig.effect-sun .rays { transform-origin: 10px 5px; animation: rig-spin 8s linear infinite reverse; }
+.rig .flake { opacity: 0; }
+.rig.effect-snow .flake { animation: rig-flake 3.2s linear infinite; }
+.rig.effect-snow .flake.f2 { animation-delay: 0.6s; } .rig.effect-snow .flake.f3 { animation-delay: 1.2s; } .rig.effect-snow .flake.f4 { animation-delay: 1.8s; } .rig.effect-snow .flake.f5 { animation-delay: 2.4s; }
+@keyframes rig-flake { 0% { opacity: 0; transform: translate(0, 0); } 10% { opacity: 1; } 100% { opacity: 0; transform: translate(3px, 70px); } }
+.rig .spk { opacity: 0; transform-box: fill-box; transform-origin: center; }
+.rig.effect-sparkles .spk { animation: rig-sparkle 1.5s ease-in-out infinite; }
+.rig.effect-sparkles .spk.k2 { animation-delay: 0.5s; } .rig.effect-sparkles .spk.k3 { animation-delay: 1s; }
+  .rig .speed-lines, .rig .flame { transform-box: fill-box; transform-origin: bottom center; }
+.rig.effect-fire .flame { animation: rig-flame 0.4s ease-in-out infinite alternate; }
+@keyframes rig-flame { from { transform: scaleY(0.85) scaleX(1.05); } to { transform: scaleY(1.15) scaleX(0.95); } }
+.rig .beard { transform-origin: 32px 51px; transform: scaleY(var(--beard, 0.3)); transition: transform 600ms ease; }
+
 /* Costumes: independent of pose; shown by .costume-<name> on the rig. */
 .rig .costume { opacity: 0; transition: opacity 150ms ease; }
 .rig.costume-dog .costume-dog, .rig.costume-cat .costume-cat, .rig.costume-unicorn .costume-unicorn,
 .rig.costume-crown .costume-crown, .rig.costume-partyhat .costume-partyhat, .rig.costume-shades .costume-shades,
 .rig.costume-halo .costume-halo, .rig.costume-devil .costume-devil, .rig.costume-wizard .costume-wizard,
-.rig.costume-tophat .costume-tophat { opacity: 1; }
+.rig.costume-tophat .costume-tophat, .rig.costume-santa .costume-santa, .rig.costume-pumpkin .costume-pumpkin,
+.rig.costume-bunny .costume-bunny { opacity: 1; }
 .rig .dog-tail { transform-origin: 59px 53px; }
 .rig.costume-dog .dog-tail { animation: rig-wag 0.35s ease-in-out infinite alternate; }
 @keyframes rig-wag { from { transform: rotate(-25deg); } to { transform: rotate(25deg); } }
@@ -229,7 +304,8 @@
 @media (prefers-reduced-motion: reduce) {
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
-  .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail {
+  .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
+  .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

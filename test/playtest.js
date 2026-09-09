@@ -59,7 +59,7 @@
     poseBtn('bounce').click();
     ok(stageLook().cls.includes('pose-bounce'), 'pose applies on the stage');
     ok(poseBtn('bounce').classList.contains('on'), 'pose button shows selected');
-    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 15, 'all 14 poses + keep are offered');
+    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 19, 'all 18 poses + keep are offered');
     ok($('text-row').hidden, 'banner text row hidden for a non-banner pose');
     poseBtn('banner').click();
     ok(!$('text-row').hidden, 'banner text row appears for the banner pose');
@@ -69,15 +69,25 @@
     ok(stageLook().cls.includes('pose-ak47'), 'ak47 pose applies');
     poseBtn('bounce').click();
     const costumeBtn = (c) => Array.from($('costumes').querySelectorAll('.posebtn')).find((b) => b.title === c);
-    ok(Array.from($('costumes').querySelectorAll('.posebtn')).length === 12, 'all 11 costumes + keep are offered');
+    ok(Array.from($('costumes').querySelectorAll('.posebtn')).length === 15, 'all 14 costumes + keep are offered');
     costumeBtn('unicorn').click();
     ok(stageLook().cls.includes('costume-unicorn'), 'costume applies on the stage');
+    const pick = (id, title) => Array.from($(id).querySelectorAll('.posebtn')).find((b) => b.title === title).click();
+    pick('bodies', 'robot'); ok(stageLook().cls.includes('body-robot'), 'body swap applies on the stage');
+    pick('effects', 'rain'); ok(stageLook().cls.includes('effect-rain'), 'effect applies on the stage');
+    pick('pets', 'duck'); ok(stageLook().cls.includes('pet-duck'), 'pet applies on the stage');
+    pick('moods', 'heart'); ok(stageLook().cls.includes('eyes-heart'), 'mood eyes apply on the stage');
+    setInput($('body-color'), '#1155cc');
+    ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--body-color') === '#1155cc', 'body colour reaches the stage');
+    setInput($('cwd'), 'bondly*');
+    setInput($('sound'), 'Glass');
+    ok(!$('sound-play').disabled, 'sound picked enables play');
+    setInput($('eye-color'), '#ff00aa');
     setInput($('lamp-color'), '#00ffff');
     ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--lamp-on') === '#00ffff', 'custom lamp colour reaches the stage');
     $('celebrate').checked = true; fire($('celebrate'), 'change');
-    $('sound').checked = true; fire($('sound'), 'change');
     const chipsInRow = rowByName('Playtest rule').querySelectorAll('.chip').length;
-    ok(chipsInRow === 4, `list row shows lamp, eyes, pose and costume chips (${chipsInRow})`);
+    ok(chipsInRow === 8, `list row shows a chip per set channel (${chipsInRow})`);
 
     // ── keyboard reorder
     const me = rowByName('Playtest rule');
@@ -113,9 +123,10 @@
     ok(saved.rules.length === dirtyCount && saved.rules.some((r) => r.name === 'Playtest rule'), 'Save persists to config.json');
     ok($('save-btn').disabled, 'clean after save');
     const pt = saved.rules.find((r) => r.name === 'Playtest rule');
-    ok(pt && pt.then.lamp === 'amber' && pt.then.lampColor === '#00ffff' && pt.then.eyes === '#ff00aa' && pt.then.pose === 'bounce' && pt.then.sound === 'beep' && pt.then.celebrate === true && pt.when.tool === 'mcp__*', 'saved rule carries every channel');
+    ok(pt && pt.then.lamp === 'amber' && pt.then.lampColor === '#00ffff' && pt.then.eyes === '#ff00aa' && pt.then.pose === 'bounce' && pt.then.celebrate === true && pt.when.tool === 'mcp__*', 'saved rule carries every channel');
     ok(pt && pt.then.text === 'feed me tokens please no', 'banner text persists with the rule');
     ok(pt && pt.then.costume === 'unicorn', 'costume persists with the rule');
+    ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*', 'body, effect, pet, body colour, sound and project scope persist');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 
     rowByName('Playtest rule').click();
@@ -132,9 +143,12 @@
     // ── presets: built-in, then user-saved
     $('presets-btn').click();
     ok(!$('presets').hidden, 'Presets menu opens');
+    document.querySelector('#presets [data-preset="party"]').click();
+    ok(rows().some((r) => r.querySelector('.chip[title="pet: duck"]')), 'Party preset applies pets');
+    $('presets-btn').click();
     document.querySelector('#presets [data-preset="minimal"]').click();
     ok($('presets').hidden, 'menu closes after picking');
-    ok(rows().every((r) => !r.querySelector('.chip.pose')), 'Minimal preset has no poses');
+    ok(rows().every((r) => !r.querySelector('.chip.pose-chip')), 'Minimal preset has no poses');
     $('presets-btn').click();
     ok($('preset-save').disabled, 'Save preset disabled with empty name');
     setInput($('preset-name'), 'Playtest set');
@@ -153,7 +167,7 @@
     document.querySelector('#presets [data-preset="classic"]').click();
     $('presets-btn').click();
     document.querySelector('#user-presets [data-user]').click();
-    ok(rows().every((r) => !r.querySelector('.chip.pose')), 'applying the user preset restores its rules');
+    ok(rows().every((r) => !r.querySelector('.chip.pose-chip')), 'applying the user preset restores its rules');
     $('presets-btn').click();
     document.querySelector('#user-presets [data-remove]').click();
     await sleep(150);

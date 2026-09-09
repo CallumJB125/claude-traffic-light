@@ -15,16 +15,75 @@
     <rect class="lamp" data-slot="green" x="42" y="7" width="15" height="15" rx="2.5" />
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
   </g>
-  <g class="claude-body" fill="#da7756">
-    <rect x="17" y="39" width="30" height="13" />
-    <rect x="4" y="52" width="56" height="7" />
-    <rect x="15" y="59" width="7" height="9" />
-    <rect x="28.5" y="59" width="7" height="9" />
-    <rect x="42" y="59" width="7" height="9" />
+  <g class="claude-body">
+    <g class="body body-default">
+      <rect x="17" y="39" width="30" height="13" />
+      <rect x="4" y="52" width="56" height="7" />
+      <rect x="15" y="59" width="7" height="9" />
+      <rect x="28.5" y="59" width="7" height="9" />
+      <rect x="42" y="59" width="7" height="9" />
+    </g>
+    <!-- body swaps: whole-sprite variants sharing the eye positions -->
+    <g class="body body-dog" fill="#b07a4a">
+      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
+      <rect x="15" y="59" width="7" height="9" /><rect x="28.5" y="59" width="7" height="9" /><rect x="42" y="59" width="7" height="9" />
+      <rect x="11" y="38" width="6" height="13" rx="3" fill="#7d5230" /><rect x="47" y="38" width="6" height="13" rx="3" fill="#7d5230" />
+      <rect x="27" y="47.5" width="10" height="4.5" rx="2" fill="#e8c9a8" /><rect x="30.5" y="46.5" width="3" height="2" rx="1" fill="#211f1c" />
+      <rect class="wag" x="59" y="52" width="7" height="2.2" rx="1" fill="#7d5230" />
+    </g>
+    <g class="body body-cat" fill="#8c8c96">
+      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
+      <rect x="15" y="59" width="7" height="9" /><rect x="28.5" y="59" width="7" height="9" /><rect x="42" y="59" width="7" height="9" />
+      <polygon points="18,40 21,31 26,39" /><polygon points="38,39 43,31 46,40" />
+      <polygon points="20,38 21.5,34 24,38" fill="#f4a7c0" /><polygon points="40,38 42.5,34 44,38" fill="#f4a7c0" />
+      <rect x="30.5" y="47" width="3" height="2" rx="1" fill="#f4a7c0" />
+      <rect x="15" y="48.5" width="6" height="0.7" fill="#211f1c" /><rect x="43" y="48.5" width="6" height="0.7" fill="#211f1c" />
+      <path class="cat-tail" d="M60 56 q7 -4 4 -10" fill="none" stroke="#8c8c96" stroke-width="2.2" stroke-linecap="round" />
+    </g>
+    <g class="body body-frog" fill="#5fbf5a">
+      <rect x="17" y="41" width="30" height="11" rx="3" /><rect x="4" y="52" width="56" height="7" />
+      <rect x="13" y="59" width="9" height="9" rx="2" /><rect x="42" y="59" width="9" height="9" rx="2" />
+      <circle cx="24" cy="40" r="4.5" /><circle cx="40" cy="40" r="4.5" />
+      <rect x="24" y="49" width="16" height="1.2" rx="0.6" fill="#2d6b2a" />
+    </g>
+    <g class="body body-robot" fill="#9aa3ad">
+      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
+      <rect x="13" y="59" width="38" height="9" rx="4" fill="#5c646d" />
+      <rect x="31" y="32" width="2" height="7" fill="#5c646d" /><circle class="antenna" cx="32" cy="31" r="2" fill="#e2231a" />
+      <rect x="19" y="41" width="26" height="9" fill="#5c646d" />
+      <circle cx="8" cy="55.5" r="1" fill="#5c646d" /><circle cx="56" cy="55.5" r="1" fill="#5c646d" />
+      <rect x="27" y="47.5" width="10" height="1.4" fill="#38bdf8" />
+    </g>
+    <g class="body body-ghost" fill="#eef0f5" opacity="0.92">
+      <path d="M17 39 h30 v27 l-5 -4 l-5 4 l-5 -4 l-5 4 l-5 -4 l-5 4 z" />
+    </g>
+    <g class="speed-lines" stroke="#f2efe8" stroke-width="1.2" stroke-linecap="round" opacity="0">
+      <line x1="2" y1="56" x2="9" y2="56" /><line x1="0" y1="61" x2="8" y2="61" /><line x1="3" y1="66" x2="9" y2="66" />
+    </g>
+    <!-- arms crossed (rage pose) -->
+    <g class="arms-crossed">
+      <rect x="14" y="52" width="22" height="4" rx="1.5" transform="rotate(-14 25 54)" />
+      <rect x="28" y="52" width="22" height="4" rx="1.5" transform="rotate(14 39 54)" />
+    </g>
     <rect class="eye-open" x="22" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-open" x="37.5" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-closed" x="21" y="45.25" width="6.5" height="1.6" rx="0.8" />
     <rect class="eye-closed" x="36.5" y="45.25" width="6.5" height="1.6" rx="0.8" />
+    <g class="eyefx eyefx-heart" fill="#f472b6">
+      <path d="M24.2 49 l-3 -3 a1.7 1.7 0 0 1 3 -2 a1.7 1.7 0 0 1 3 2 z" /><path d="M39.7 49 l-3 -3 a1.7 1.7 0 0 1 3 -2 a1.7 1.7 0 0 1 3 2 z" />
+    </g>
+    <g class="eyefx eyefx-dizzy" fill="none" stroke="#211f1c" stroke-width="0.9">
+      <path class="spiral" d="M24.2 45.7 m2 0 a2 2 0 1 1 -2 -2 a1.2 1.2 0 1 1 1.2 1.2" /><path class="spiral" d="M39.7 45.7 m2 0 a2 2 0 1 1 -2 -2 a1.2 1.2 0 1 1 1.2 1.2" />
+    </g>
+    <g class="eyefx eyefx-x" stroke="#211f1c" stroke-width="1.2" stroke-linecap="round">
+      <path d="M22 43.5 l4.5 4.5 M26.5 43.5 l-4.5 4.5 M37.5 43.5 l4.5 4.5 M42 43.5 l-4.5 4.5" />
+    </g>
+    <g class="eyefx eyefx-tears" fill="#38bdf8">
+      <rect class="tear t1" x="23" y="48.5" width="1.6" height="2.6" rx="0.8" /><rect class="tear t2" x="38.5" y="48.5" width="1.6" height="2.6" rx="0.8" />
+    </g>
+    <g class="eyefx eyefx-laser">
+      <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
+    </g>
     <circle class="think-dot d1" cx="24" cy="34" r="2" />
     <circle class="think-dot d2" cx="32" cy="34" r="2" />
     <circle class="think-dot d3" cx="40" cy="34" r="2" />
@@ -125,6 +184,54 @@
     <rect x="17" y="38" width="30" height="2.5" rx="1" fill="#1a1a1e" />
     <rect x="22" y="34" width="20" height="2.5" fill="#e2231a" />
   </g>
+  <g class="costume costume-santa">
+    <path d="M18 39 q14 -12 27 -2 l1 2 z" fill="#e2231a" /><rect x="16" y="37" width="32" height="3" rx="1.5" fill="#f2efe8" /><circle cx="46" cy="36" r="2.2" fill="#f2efe8" />
+  </g>
+  <g class="costume costume-pumpkin">
+    <ellipse cx="32" cy="34" rx="8" ry="5.5" fill="#f28c28" /><rect x="31" y="27" width="2" height="3" fill="#2d6b2a" />
+    <polygon points="28,32 30,34 26,34" fill="#211f1c" /><polygon points="36,32 38,34 34,34" fill="#211f1c" /><path d="M27 36 q5 3 10 0" fill="none" stroke="#211f1c" stroke-width="0.9" />
+  </g>
+  <g class="costume costume-bunny">
+    <rect x="21" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="22.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
+    <rect x="38" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="39.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
+  </g>
+  <!-- pets: a small companion beside the feet -->
+  <g class="pet pet-duck">
+    <rect x="55" y="61" width="8" height="7" rx="3" fill="#f2d16b" /><rect x="60" y="58" width="5" height="5" rx="2" fill="#f2d16b" /><rect x="64.5" y="60" width="3" height="1.6" fill="#f28c28" /><rect x="62" y="59.5" width="1" height="1" fill="#211f1c" />
+  </g>
+  <g class="pet pet-cat">
+    <rect x="55" y="61" width="9" height="7" rx="2" fill="#8c8c96" /><rect x="60" y="57" width="5" height="5" fill="#8c8c96" /><polygon points="60,57 61,54.5 62,57" fill="#8c8c96" /><polygon points="63,57 64,54.5 65,57" fill="#8c8c96" /><rect x="61" y="58.5" width="1" height="1" fill="#211f1c" /><rect x="63" y="58.5" width="1" height="1" fill="#211f1c" />
+  </g>
+  <g class="pet pet-blob">
+    <path d="M55 68 q0 -8 5 -8 q5 0 5 8 z" fill="#2fae3e" /><rect x="58" y="63" width="1.2" height="1.2" fill="#211f1c" /><rect x="61" y="63" width="1.2" height="1.2" fill="#211f1c" />
+  </g>
+  <!-- effects: weather and growing things -->
+  <g class="effect effect-rain">
+    <path d="M22 4 a5 5 0 0 1 9 -2 a4 4 0 0 1 7 3 h-16 z" fill="#8f96a3" /><rect x="20" y="4" width="20" height="3" rx="1.5" fill="#8f96a3" />
+    <rect class="drop d1" x="23" y="8" width="1.2" height="3" rx="0.6" fill="#38bdf8" /><rect class="drop d2" x="29" y="8" width="1.2" height="3" rx="0.6" fill="#38bdf8" /><rect class="drop d3" x="35" y="8" width="1.2" height="3" rx="0.6" fill="#38bdf8" />
+  </g>
+  <g class="effect effect-sun">
+    <g class="rays" fill="#f2a200"><rect x="9.3" y="-1" width="1.4" height="4" /><rect x="9.3" y="7" width="1.4" height="4" /><rect x="4" y="4.3" width="4" height="1.4" /><rect x="12" y="4.3" width="4" height="1.4" /></g>
+    <circle cx="10" cy="5" r="3.2" fill="#f2d16b" />
+  </g>
+  <g class="effect effect-snow" fill="#f2efe8">
+    <rect class="flake f1" x="10" y="0" width="1.6" height="1.6" /><rect class="flake f2" x="30" y="0" width="1.6" height="1.6" /><rect class="flake f3" x="50" y="0" width="1.6" height="1.6" /><rect class="flake f4" x="20" y="0" width="1.2" height="1.2" /><rect class="flake f5" x="42" y="0" width="1.2" height="1.2" />
+  </g>
+  <g class="effect effect-sparkles" fill="#f2d16b">
+    <polygon class="spk k1" points="12,34 13,37 16,38 13,39 12,42 11,39 8,38 11,37" /><polygon class="spk k2" points="54,28 55,31 58,32 55,33 54,36 53,33 50,32 53,31" /><polygon class="spk k3" points="48,44 48.7,46 50.7,46.7 48.7,47.4 48,49.4 47.3,47.4 45.3,46.7 47.3,46" />
+  </g>
+  <g class="effect effect-fire">
+    <path class="flame" d="M12 68 q3 -8 6 0 q1 -5 3 0 q-2 6 -9 6 z" fill="#f28c28" /><path class="flame" d="M42 68 q3 -8 6 0 q1 -5 3 0 q-2 6 -9 6 z" fill="#f28c28" /><path class="flame" d="M27 68 q3 -6 6 0 q-1 5 -6 5 z" fill="#f2a200" />
+  </g>
+  <g class="effect effect-beard">
+    <path class="beard" d="M22 51 q10 6 20 0 v3 q-10 8 -20 0 z" fill="#5a4636" />
+  </g>
+  <!-- speech bubble pose -->
+  <g class="prop prop-bubble">
+    <rect x="30" y="0" width="34" height="13" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" />
+    <polygon points="40,12.6 44,12.6 42,18" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" /><rect x="40.5" y="11.5" width="3" height="2" fill="#f2efe8" />
+    <text class="bubble-text" x="47" y="9" text-anchor="middle" textLength="28" lengthAdjust="spacingAndGlyphs">BRB</text>
+  </g>
   <!-- prop: banner, dropped over the sign, with the rule's own text -->
   <g class="prop prop-banner">
     <rect x="1" y="3" width="62" height="17" rx="2" fill="#f2efe8" stroke="#211f1c" stroke-width="1" />
@@ -146,8 +253,12 @@
   </g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'banner'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'banner', 'bubble', 'tap', 'arms', 'run'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
+  const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
+  const EYE_MOODS = ['heart', 'dizzy', 'x', 'tears', 'laser'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
+  const PETS = ['none', 'duck', 'cat', 'blob'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e' };
 
@@ -178,7 +289,19 @@
 
       const eyes = look.eyes || 'default';
       svg.classList.toggle('eyes-closed', eyes === 'closed');
-      svg.style.setProperty('--eye-color', /^#/.test(eyes) ? eyes : '#211f1c');
+      for (const m of EYE_MOODS) svg.classList.toggle(`eyes-${m}`, eyes === m);
+      svg.style.setProperty('--eye-color', /^#/.test(eyes) ? eyes : eyes === 'laser' ? '#ff3b30' : '#211f1c');
+
+      const body = BODIES.includes(look.body) ? look.body : 'claude';
+      for (const b of BODIES) svg.classList.toggle(`body-${b}`, body === b);
+      svg.style.setProperty('--body-color', /^#[0-9a-f]{6}$/i.test(look.bodyColor || '') ? look.bodyColor : '#da7756');
+      const effect = EFFECTS.includes(look.effect) ? look.effect : 'none';
+      for (const e of EFFECTS) svg.classList.toggle(`effect-${e}`, effect === e);
+      const pet = PETS.includes(look.pet) ? look.pet : 'none';
+      for (const pp of PETS) svg.classList.toggle(`pet-${pp}`, pet === pp);
+      // Beard length follows how long you've kept Claude waiting (0–30 min).
+      const wait = Math.max(0, Math.min(30, Number(look.waitMinutes) || 0));
+      svg.style.setProperty('--beard', String(0.3 + (wait / 30) * 2.2));
 
       const pose = POSES.includes(look.pose) ? look.pose : 'none';
       // Only touch pose classes on a real change so a poll doesn't restart
@@ -197,6 +320,9 @@
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);
       const t = svg.querySelector('.banner-text');
       if (t.textContent !== text) t.textContent = text;
+      const bt = svg.querySelector('.bubble-text');
+      const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
+      if (bt.textContent !== btext) bt.textContent = btext;
       current = { ...look, pose, costume };
     }
 
@@ -221,5 +347,9 @@
   window.mountRig = mountRig;
   window.RIG_POSES = POSES;
   window.RIG_COSTUMES = COSTUMES;
+  window.RIG_BODIES = BODIES;
+  window.RIG_EFFECTS = EFFECTS;
+  window.RIG_PETS = PETS;
+  window.RIG_EYE_MOODS = EYE_MOODS;
   window.RIG_DEFAULT_TEXT = DEFAULT_TEXT;
 })();

@@ -117,6 +117,11 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="seasonal" /> Seasonal costumes</label>
+    <div class="hint">Santa hat and snow in December, pumpkin at Halloween, bunny ears at Easter — unless a rule already picked a costume.</div>
+  </div>
+
+  <div class="field">
     <label>What the lights mean</label>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
@@ -139,6 +144,7 @@
       soundInput.checked = config.soundOnAmber;
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
+      document.getElementById('seasonal').checked = config.seasonal !== false;
     }
 
     document.getElementById('save').addEventListener('click', async () => {
@@ -148,6 +154,7 @@
         soundOnAmber: soundInput.checked,
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
+        seasonal: document.getElementById('seasonal').checked,
       });
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 1500);

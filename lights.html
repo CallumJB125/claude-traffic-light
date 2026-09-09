@@ -361,6 +361,8 @@
   #name { width: 240px; }
   #tool { width: 150px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 
+  .select { height: 26px; padding: 0 26px 0 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-2); appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 11px, calc(100% - 10px) 11px; background-size: 4px 4px; background-repeat: no-repeat; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .select:focus { border-color: var(--accent); box-shadow: var(--focus); }
   .toggle {
     display: inline-flex; align-items: center; gap: 6px;
     color: var(--muted);
@@ -601,6 +603,14 @@
           </div>
         </div>
 
+        <div class="row">
+          <div class="lbl">Only project</div>
+          <div class="field">
+            <input type="text" id="cwd" placeholder="any project" spellcheck="false" />
+            <div class="hint">Folder name of the session, or a prefix with <code>*</code> — e.g. <code>bondly*</code>.</div>
+          </div>
+        </div>
+
         <div class="hr"></div>
 
         <div class="row">
@@ -620,6 +630,7 @@
             <label class="swatch custom" id="eye-color-swatch" title="Custom eye colour">
               <input type="color" id="eye-color" />
             </label>
+            <div class="poses" id="moods"></div>
             <div class="hint">Dashed leaves a channel to the next rule below — eyes can change without touching the lamp.</div>
           </div>
         </div>
@@ -634,6 +645,26 @@
           <div class="field"><div class="poses" id="costumes"></div></div>
         </div>
 
+        <div class="row">
+          <div class="lbl">Body</div>
+          <div class="field">
+            <div class="poses" id="bodies"></div>
+            <label class="swatch custom" id="body-color-swatch" title="Body colour (e.g. a project's brand colour)">
+              <input type="color" id="body-color" />
+            </label>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Effect</div>
+          <div class="field"><div class="poses" id="effects"></div></div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Pet</div>
+          <div class="field"><div class="poses" id="pets"></div></div>
+        </div>
+
         <div class="row" id="text-row" hidden>
           <div class="lbl">Banner says</div>
           <div class="field">
@@ -645,7 +676,9 @@
         <div class="row">
           <div class="lbl">Also</div>
           <div class="field">
-            <label class="toggle"><input type="checkbox" id="sound" /> Beep when this starts</label>
+            <select id="sound" class="select" aria-label="Sound when this starts"></select>
+            <button type="button" class="btn" id="sound-file" title="Use your own audio file">File…</button>
+            <button type="button" class="btn ghost" id="sound-play" title="Play it"><svg viewBox="0 0 16 16"><path d="M4 3l9 5-9 5z"/></svg></button>
             <label class="toggle"><input type="checkbox" id="celebrate" /> Confetti burst</label>
           </div>
         </div>
@@ -709,6 +742,8 @@
   <button data-preset="classic"><span>Classic</span><small>The original three lights and poses</small></button>
   <button data-preset="minimal"><span>Minimal</span><small>Lamps only — no poses, eyes or sounds</small></button>
   <button data-preset="tools"><span>Tool-aware</span><small>Eye colours for subagents, shell, edits and MCP</small></button>
+  <button data-preset="loud"><span>Loud</span><small>Sounds, bullets and an escalating rage meter when ignored</small></button>
+  <button data-preset="party"><span>Party</span><small>Running, pets, costumes, hearts and fire</small></button>
   <div class="menu-head" id="user-presets-head">Yours</div>
   <div id="user-presets"></div>
   <form id="preset-form" class="menu-form">
@@ -727,6 +762,10 @@
   const ICON = {
     lock: '<svg class="lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
     costume: '<svg viewBox="0 0 16 16"><path d="M3 13h10l-1-6H4zM5 7l3-4 3 4"/></svg>',
+    body: '<svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-3 2-5 5-5s5 2 5 5"/></svg>',
+    effect: '<svg viewBox="0 0 16 16"><path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l2 2M10 10l2 2M12 4l-2 2M6 10l-2 2"/></svg>',
+    pet: '<svg viewBox="0 0 16 16"><path d="M4 12a4 4 0 0 1 8 0zM5 8l-1-4 3 2M11 8l1-4-3 2"/></svg>',
+    sound: '<svg viewBox="0 0 16 16"><path d="M3 6h3l4-3v10l-4-3H3zM12 6a3 3 0 0 1 0 4"/></svg>',
     grip: '<svg viewBox="0 0 10 14"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="11" r="1.2"/><circle cx="7" cy="11" r="1.2"/></svg>',
     pose: {
       think: '<svg viewBox="0 0 16 16"><circle cx="4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12" cy="8" r="1"/></svg>',
@@ -807,8 +846,12 @@
         <span class="chips">
           ${t.lamp ? `<span class="chip" style="--chip:${lampC || '#3a3542'}" title="Lamp"></span>` : ''}
           ${eyeC ? `<span class="chip eye" style="--chip:${eyeC}" title="Eyes"></span>` : t.eyes === 'closed' ? '<span class="chip eye" style="--chip:#211f1c" title="Eyes closed"></span>' : ''}
-          ${t.pose && t.pose !== 'none' ? `<span class="chip pose" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
+          ${t.pose && t.pose !== 'none' ? `<span class="chip pose pose-chip" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
           ${t.costume && t.costume !== 'none' ? `<span class="chip pose" title="${t.costume}">${ICON.costume}</span>` : ''}
+          ${t.body && t.body !== 'claude' ? `<span class="chip pose" title="body: ${t.body}">${ICON.body}</span>` : ''}
+          ${t.effect && t.effect !== 'none' ? `<span class="chip pose" title="effect: ${t.effect}">${ICON.effect}</span>` : ''}
+          ${t.pet && t.pet !== 'none' ? `<span class="chip pose" title="pet: ${t.pet}">${ICON.pet}</span>` : ''}
+          ${t.sound ? `<span class="chip pose" title="sound: ${escape(t.sound.replace(/^file:/, ''))}">${ICON.sound}</span>` : ''}
         </span>`;
       li.querySelector('input').addEventListener('change', (e) => {
         r.enabled = e.target.checked;
@@ -971,27 +1014,64 @@
       poses.appendChild(b);
     }
 
-    const costumes = $('costumes');
-    costumes.innerHTML = '';
-    for (const c of [null, ...R.COSTUMES]) {
+    // Mini-rig pickers for every sprite channel: keep (null) + each option.
+    const picker = (container, options, current, lookFor, onPick, noneLabel = 'none') => {
+      container.innerHTML = '';
+      for (const o of [null, ...options]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'posebtn' + (current === o ? ' on' : '');
+        b.title = o === null ? 'Leave to other rules' : o;
+        const mini = document.createElement('div');
+        mini.className = 'mini';
+        b.appendChild(mini);
+        const lbl = document.createElement('span');
+        lbl.textContent = o === null ? 'keep' : o === 'claude' ? 'claude' : o;
+        b.appendChild(lbl);
+        mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
+        if (o === null) mini.style.opacity = '0.35';
+        b.addEventListener('click', () => { onPick(o); touch(); });
+        container.appendChild(b);
+      }
+    };
+    picker($('costumes'), R.COSTUMES, r.then.costume, (o) => ({ costume: o || 'none' }), (o) => { r.then.costume = o; });
+    picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
+    picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
+    picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
+    // mood eyes ride in the eyes row (no keep button — the eye buttons have one)
+    const moods = $('moods');
+    moods.innerHTML = '';
+    for (const m of R.EYE_MOODS) {
       const b = document.createElement('button');
-      b.className = 'posebtn' + (r.then.costume === c ? ' on' : '');
-      b.title = c === null ? 'Leave to other rules' : c;
+      b.type = 'button';
+      b.className = 'posebtn' + (r.then.eyes === m ? ' on' : '');
+      b.title = m;
       const mini = document.createElement('div');
       mini.className = 'mini';
       b.appendChild(mini);
       const lbl = document.createElement('span');
-      lbl.textContent = c === null ? 'keep' : c;
+      lbl.textContent = m;
       b.appendChild(lbl);
-      mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', costume: c || 'none' });
-      if (c === null) mini.style.opacity = '0.35';
-      b.addEventListener('click', () => { r.then.costume = c; touch(); });
-      costumes.appendChild(b);
+      mountRig(mini).setLook({ lamp: 'off', eyes: m, pose: 'none' });
+      b.addEventListener('click', () => { r.then.eyes = m; touch(); });
+      moods.appendChild(b);
     }
+    const bodySw = $('body-color-swatch');
+    bodySw.classList.toggle('has', !!r.then.bodyColor);
+    bodySw.classList.toggle('on', !!r.then.bodyColor);
+    bodySw.style.setProperty('--c', r.then.bodyColor || '');
+    $('body-color').value = r.then.bodyColor || '#da7756';
+    $('cwd').value = r.when.cwd || '';
 
-    $('sound').checked = r.then.sound === 'beep';
+    const sel = $('sound');
+    const soundOpts = [['', 'No sound'], ...R.SOUNDS.map((x) => [x, x === 'beep' ? 'System beep' : x])];
+    if (r.then.sound && r.then.sound.startsWith('file:')) soundOpts.push([r.then.sound, r.then.sound.slice(5).split('/').pop()]);
+    sel.innerHTML = soundOpts.map(([v, l]) => `<option value="${escape(v)}">${escape(l)}</option>`).join('');
+    sel.value = r.then.sound || '';
+    $('sound-play').disabled = !r.then.sound;
     $('celebrate').checked = !!r.then.celebrate;
-    $('text-row').hidden = r.then.pose !== 'banner';
+    $('text-row').hidden = !(r.then.pose === 'banner' || r.then.pose === 'bubble');
+    $('text-row').querySelector('.lbl').textContent = r.then.pose === 'bubble' ? 'Bubble says' : 'Banner says';
     $('text').value = r.then.text || '';
   }
 
@@ -1008,7 +1088,11 @@
   $('lamp-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; if (!r.then.lamp || r.then.lamp === 'off') r.then.lamp = 'amber'; r.then.lampColor = e.target.value; touch(); });
   $('eye-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.eyes = e.target.value; touch(); });
   $('text').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.text = e.target.value.trim().slice(0, 24) || null; setDirty(true); renderStage(); });
-  $('sound').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.sound = e.target.checked ? 'beep' : null; setDirty(true); });
+  $('sound').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.sound = e.target.value || null; setDirty(true); $('sound-play').disabled = !r.then.sound; renderList(); });
+  $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
+  $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
+  $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
+  $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
 
@@ -1090,7 +1174,9 @@
 
   const PRESETS = {
     classic: () => R.defaultRules(),
-    minimal: () => R.defaultRules().filter((r) => !['subagent', 'shell'].includes(r.id)).map((r) => ({ ...r, then: { ...r.then, pose: 'none', eyes: r.id === 'limit' ? 'closed' : null, celebrate: false, sound: r.locked ? 'beep' : null } })),
+    minimal: () => R.defaultRules()
+      .filter((r) => !['subagent', 'shell', 'failed', 'ignored'].includes(r.id))
+      .map((r) => ({ ...r, then: { lamp: r.then.lamp, eyes: r.id === 'limit' ? 'closed' : null, pose: 'none', sound: r.locked ? 'beep' : null, celebrate: false } })),
     tools: () => {
       const d = R.defaultRules().map((r) => (r.id === 'shell' ? { ...r, enabled: true } : r));
       const at = d.findIndex((r) => r.id === 'working');
@@ -1126,6 +1212,31 @@
     renderList(); renderEditor(); renderStage();
   }
 
+  PRESETS.loud = () => {
+    const d = R.defaultRules();
+    const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
+    set('limit', { sound: 'Sosumi', pose: 'sleep' });
+    set('permission', { sound: 'Hero', pose: 'ak47' });
+    set('nudge', { pose: 'bubble', text: 'YOUR TURN', sound: 'Glass' });
+    const i = d.findIndex((x) => x.id === 'ignored');
+    d.splice(i, 1,
+      { id: 'ig10', name: 'Ignored 10 min', enabled: true, when: { signal: ['ignored-10'] }, then: { pose: 'tap' } },
+      { id: 'ig20', name: 'Ignored 20 min', enabled: true, when: { signal: ['ignored-20'] }, then: { pose: 'arms', effect: 'beard' } },
+      { id: 'ig30', name: 'Ignored 30 min', enabled: true, when: { signal: ['ignored-30'] }, then: { pose: 'banner', text: 'HELLO??', eyes: 'laser', sound: 'Funk' } },
+    );
+    return d;
+  };
+  PRESETS.party = () => {
+    const d = R.defaultRules();
+    const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
+    set('working', { pose: 'run', pet: 'duck' });
+    set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart' });
+    set('limit', { body: 'ghost', effect: 'rain', eyes: 'x' });
+    set('permission', { pose: 'wave', costume: 'crown' });
+    set('failed', { eyes: 'dizzy', effect: 'fire' });
+    d.find((x) => x.id === 'failed').enabled = true;
+    return d;
+  };
   $('presets-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     const open = $('presets').hidden;
@@ -1254,7 +1365,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none' }); stageFire(q.get('pose') === 'ak47'); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose') === 'ak47'); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

@@ -56,16 +56,37 @@ still owns the green lamp. Rules can be scoped to one tool (`Agent`, `Bash`,
 **Try on widget**. Two safety rules (permission asks, usage limits) are
 locked above everything else so a stray rule can't hide a real block.
 
-Poses: think, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
+Poses: think, run, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
+tap, arms (crossed), bubble (a speech bubble with your text),
 guitar, ak47 (tracer rounds stream across your whole screen from the widget —
 click-through, closes the moment the state changes) and banner, which drops a
 sign over the traffic light with your own text ("Banner says").
 
-Costumes are a channel of their own, layered like eye colour: dog, cat,
-unicorn, crown, party hat, shades, halo, devil, wizard, top hat.
+Beyond the lamp, each rule can set any of these channels, all layered
+independently:
+
+- **Eyes** — a colour, closed, or a mood: heart, dizzy, x, tears, laser.
+- **Costume** — dog, cat, unicorn, crown, party hat, shades, halo, devil,
+  wizard, top hat, santa, pumpkin, bunny. Seasonal ones apply themselves in
+  December, at Halloween, on New Year's Day and around Easter (Preferences →
+  Seasonal costumes) whenever no rule picked one.
+- **Body** — Claude becomes a dog, cat, frog, robot or ghost; or keeps his
+  shape in any colour (handy with **Only project**, so each project gets its
+  own Claude).
+- **Effect** — rain cloud, sun, snow, sparkles, fire, or a beard that grows
+  the longer you keep him waiting.
+- **Pet** — a duck, cat or blob at his feet.
+- **Sound** — the system beep, any macOS system sound, or an audio file.
+
+Rules can also be scoped to a project (folder name or `bondly*` prefix).
+
+Rage meter: *Ignored for 10 / 20 / 30 minutes* are signals you can rule on;
+the **Loud** preset escalates from foot-tapping to arms crossed and a beard
+to a banner with laser eyes.
 
 Presets: **Classic** (the original behaviour), **Minimal** (lamps only),
-**Tool-aware** (eye colours per tool) — plus your own: type a name at the
+**Tool-aware** (eye colours per tool), **Loud** (sounds, bullets, rage meter),
+**Party** (running, pets, costumes, hearts, fire) — plus your own: type a name at the
 bottom of the Presets menu to save the current rules, and pick or delete
 them there later. Everything is stored in `~/.claude-traffic-light/config.json`
 under `rules` and `presets`.
