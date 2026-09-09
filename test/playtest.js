@@ -59,7 +59,7 @@
     poseBtn('bounce').click();
     ok(stageLook().cls.includes('pose-bounce'), 'pose applies on the stage');
     ok(poseBtn('bounce').classList.contains('on'), 'pose button shows selected');
-    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 19, 'all 18 poses + keep are offered');
+    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 20, 'all 19 poses + keep are offered');
     ok($('text-row').hidden, 'banner text row hidden for a non-banner pose');
     poseBtn('banner').click();
     ok(!$('text-row').hidden, 'banner text row appears for the banner pose');

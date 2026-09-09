@@ -82,7 +82,7 @@
     async function refresh() {
       const data = await window.trafficLight.getAggregateStatus();
       if (!data) return;
-      const look = { ...data.look };
+      const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}) };
       sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
       look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
       rig.setLook(look);
@@ -112,6 +112,10 @@
     refresh();
     window.trafficLight.onStatusChanged(refresh);
     window.trafficLight.onBurst((ms) => rig.burst(ms));
+    // Aim updates arrive ~8x/s while a gun pose is live; re-apply the current
+    // look with the new facing/angle without waiting for the next poll.
+    let aim = { facing: 'right', aimAngle: 0 };
+    window.trafficLight.onAim((a) => { aim = a; if (rig.look) rig.setLook({ ...rig.look, ...aim }); });
 
     let dragOrigin = null;
     let didDrag = false;

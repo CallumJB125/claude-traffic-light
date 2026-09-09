@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   openLights: () => ipcRenderer.invoke('open-lights'),
   onBurst: (cb) => ipcRenderer.on('burst', (e, ms) => cb(ms)),
+  onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
 });

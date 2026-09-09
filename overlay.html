@@ -27,34 +27,41 @@
   window.addEventListener('resize', resize);
   resize();
 
-  let muzzle = null; // {x, y, dir}
+  let muzzle = null; // {x, y, dir:{x,y}}
   let firingUntil = 0;
   const bullets = [];
   const sparks = [];
   let lastShot = 0;
   let raf = null;
   const firing = () => performance.now() < firingUntil;
+  // sniper state
+  let scope = null;     // {x, y, until}
+  let cursor = null;    // tracked cursor, for the reticle
+  const shots = [];     // {mx,my,tx,ty,t0}
+  const holes = [];     // {x,y,t0}
+  const kick = () => { if (!raf) loop(performance.now()); };
 
-  // A burst: fire for `ms` from the given muzzle, then let the rounds fly off.
-  window.overlay.onBurst((m, ms) => {
-    muzzle = m;
-    firingUntil = performance.now() + ms;
-    lastShot = 0;
-    if (!raf) loop(performance.now());
-  });
-  window.overlay.onStop(() => { firingUntil = 0; });
+  window.overlay.onBurst((m, ms) => { muzzle = m; firingUntil = performance.now() + ms; lastShot = 0; kick(); });
+  window.overlay.onStop(() => { firingUntil = 0; scope = null; });
+  window.overlay.onTrack((t) => { cursor = t; });
+  window.overlay.onScope((t) => { scope = { x: t.x, y: t.y, until: performance.now() + 700 }; cursor = t; kick(); });
+  window.overlay.onSnipe((m, t) => { scope = null; shots.push({ mx: m.x, my: m.y, tx: t.x, ty: t.y, t0: performance.now() }); holes.push({ x: t.x, y: t.y, t0: performance.now() }); kick(); });
 
   function loop(t) {
-    if (!firing() && bullets.length === 0 && sparks.length === 0) { ctx.clearRect(0, 0, W, H); raf = null; return; }
+    const busy = firing() || bullets.length || sparks.length || (scope && t < scope.until) || shots.length || holes.length;
+    if (!busy) { ctx.clearRect(0, 0, W, H); raf = null; return; }
     raf = requestAnimationFrame(loop);
     ctx.clearRect(0, 0, W, H);
+
+    // ── AK burst: rounds along the aim vector with a little spread
     if (firing() && muzzle && t - lastShot > 90) {
       lastShot = t;
-      const spread = (Math.random() - 0.5) * 0.06;
-      bullets.push({ x: muzzle.x, y: muzzle.y, vx: muzzle.dir * 38, vy: spread * 38 + (Math.random() - 0.5) * 1.2, life: 1 });
-      for (let i = 0; i < 3; i += 1) sparks.push({ x: muzzle.x, y: muzzle.y, vx: muzzle.dir * (4 + Math.random() * 6), vy: (Math.random() - 0.5) * 6, life: 1 });
+      const spread = (Math.random() - 0.5) * 0.08;
+      const c = Math.cos(spread), s = Math.sin(spread);
+      const dx = muzzle.dir.x * c - muzzle.dir.y * s, dy = muzzle.dir.x * s + muzzle.dir.y * c;
+      bullets.push({ x: muzzle.x, y: muzzle.y, vx: dx * 38, vy: dy * 38 });
+      for (let i = 0; i < 3; i += 1) sparks.push({ x: muzzle.x, y: muzzle.y, vx: dx * (4 + Math.random() * 6) + (Math.random() - 0.5) * 3, vy: dy * (4 + Math.random() * 6) + (Math.random() - 0.5) * 3, life: 1 });
     }
-    // muzzle glow
     if (firing() && muzzle) {
       const g = ctx.createRadialGradient(muzzle.x, muzzle.y, 0, muzzle.x, muzzle.y, 26);
       g.addColorStop(0, 'rgba(255, 220, 120, 0.55)');
@@ -65,18 +72,16 @@
     for (let i = bullets.length - 1; i >= 0; i -= 1) {
       const b = bullets[i];
       b.x += b.vx; b.y += b.vy;
-      if (b.x < -80 || b.x > W + 80 || b.y < -40 || b.y > H + 40) { bullets.splice(i, 1); continue; }
-      // tracer: a bright core with a fading tail behind it
-      const tail = 70 * Math.sign(b.vx);
-      const grad = ctx.createLinearGradient(b.x - tail, b.y, b.x, b.y);
+      if (b.x < -80 || b.x > W + 80 || b.y < -80 || b.y > H + 80) { bullets.splice(i, 1); continue; }
+      const n = Math.hypot(b.vx, b.vy) || 1;
+      const tx = b.x - (b.vx / n) * 70, ty = b.y - (b.vy / n) * 70;
+      const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
       grad.addColorStop(0, 'rgba(255, 180, 60, 0)');
       grad.addColorStop(1, 'rgba(255, 230, 150, 0.9)');
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 3;
-      ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(b.x - tail, b.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.strokeStyle = grad; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
       ctx.fillStyle = '#fff5d6';
-      ctx.fillRect(b.x - 4, b.y - 1.5, 8, 3);
+      ctx.beginPath(); ctx.arc(b.x, b.y, 2.2, 0, Math.PI * 2); ctx.fill();
     }
     for (let i = sparks.length - 1; i >= 0; i -= 1) {
       const s = sparks[i];
@@ -84,6 +89,53 @@
       if (s.life <= 0) { sparks.splice(i, 1); continue; }
       ctx.fillStyle = `rgba(255, 200, 90, ${s.life})`;
       ctx.fillRect(s.x, s.y, 2, 2);
+    }
+
+    // ── Sniper: reticle locks onto the cursor, then a single bright shot
+    if (scope && t < scope.until && cursor) {
+      const p = 1 - (scope.until - t) / 700;
+      const r = 34 - 18 * p;
+      ctx.strokeStyle = `rgba(255, 60, 48, ${0.35 + 0.6 * p})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cursor.x, cursor.y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(cursor.x + dx * (r + 6), cursor.y + dy * (r + 6)); ctx.lineTo(cursor.x + dx * (r - 8), cursor.y + dy * (r - 8)); }
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255, 60, 48, 0.9)';
+      ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+    for (let i = shots.length - 1; i >= 0; i -= 1) {
+      const sh = shots[i];
+      const age = t - sh.t0;
+      if (age > 320) { shots.splice(i, 1); continue; }
+      const a = 1 - age / 320;
+      ctx.strokeStyle = `rgba(255, 245, 214, ${a})`; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(sh.mx, sh.my); ctx.lineTo(sh.tx, sh.ty); ctx.stroke();
+      ctx.strokeStyle = `rgba(255, 170, 60, ${a * 0.5})`; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(sh.mx, sh.my); ctx.lineTo(sh.tx, sh.ty); ctx.stroke();
+      const g = ctx.createRadialGradient(sh.mx, sh.my, 0, sh.mx, sh.my, 34);
+      g.addColorStop(0, `rgba(255, 220, 120, ${0.7 * a})`); g.addColorStop(1, 'rgba(255, 160, 40, 0)');
+      ctx.fillStyle = g; ctx.fillRect(sh.mx - 34, sh.my - 34, 68, 68);
+    }
+    // bullet hole with glass cracks, fading over 2.5s
+    for (let i = holes.length - 1; i >= 0; i -= 1) {
+      const h = holes[i];
+      const age = t - h.t0;
+      if (age > 2500) { holes.splice(i, 1); continue; }
+      const a = age < 2000 ? 1 : 1 - (age - 2000) / 500;
+      ctx.fillStyle = `rgba(20, 20, 24, ${0.85 * a})`;
+      ctx.beginPath(); ctx.arc(h.x, h.y, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(230, 236, 245, ${0.75 * a})`; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let k = 0; k < 7; k += 1) {
+        const ang = (k / 7) * Math.PI * 2 + 0.4 * Math.sin(k * 3.1);
+        const len = 10 + ((k * 37) % 14);
+        ctx.moveTo(h.x + Math.cos(ang) * 4, h.y + Math.sin(ang) * 4);
+        ctx.lineTo(h.x + Math.cos(ang) * len, h.y + Math.sin(ang) * len);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(230, 236, 245, ${0.35 * a})`;
+      ctx.beginPath(); ctx.arc(h.x, h.y, 9, 0, Math.PI * 2); ctx.stroke();
     }
   }
 </script>

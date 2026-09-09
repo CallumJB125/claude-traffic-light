@@ -108,7 +108,8 @@
       <text class="note n2" x="52" y="40">♫</text>
       <text class="note n3" x="42" y="36">♪</text>
     </g>
-    <!-- prop: rifle, held at the hip, firing to the right -->
+    <!-- guns: wrapped in an aim group that rotates toward the cursor -->
+    <g class="gun-aim">
     <g class="prop prop-ak">
       <g class="ak-body">
         <rect x="36" y="50" width="9" height="5" rx="1" fill="#7a4a24" />
@@ -122,6 +123,21 @@
       <rect class="casing c1" x="52" y="46" width="1.6" height="2.6" rx="0.4" fill="#e0b040" />
       <rect class="casing c2" x="52" y="46" width="1.6" height="2.6" rx="0.4" fill="#e0b040" />
       <rect class="casing c3" x="52" y="46" width="1.6" height="2.6" rx="0.4" fill="#e0b040" />
+    </g>
+    <!-- prop: sniper rifle with a scope; one shot at a time -->
+    <g class="prop prop-sniper">
+      <g class="sn-body">
+        <rect x="34" y="50" width="11" height="4.5" rx="1" fill="#4b3a2a" />
+        <rect x="43" y="48.5" width="16" height="4" fill="#2f3136" />
+        <rect x="58" y="49.5" width="16" height="1.8" fill="#26282c" />
+        <rect x="47" y="45" width="9" height="2.6" rx="1.3" fill="#1f2937" />
+        <rect x="55.5" y="45.3" width="2" height="2" fill="#38bdf8" />
+        <rect x="49" y="47.5" width="1.5" height="1.2" fill="#1f2937" />
+        <rect x="61" y="51.3" width="1.2" height="4" fill="#26282c" transform="rotate(-20 61 51)" /><rect x="63" y="51.3" width="1.2" height="4" fill="#26282c" transform="rotate(20 63 51)" />
+        <rect x="41" y="52" width="5" height="4" rx="1" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
+      </g>
+      <polygon class="muzzle" points="74,50.5 82,46 77,50.5 83,51 77,51.5 82,55" fill="#ffd166" />
+    </g>
     </g>
   </g>
   <!-- costumes: worn on the head/face, independent of pose -->
@@ -253,7 +269,7 @@
   </g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'banner', 'bubble', 'tap', 'arms', 'run'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'dizzy', 'x', 'tears', 'laser'];
@@ -312,6 +328,9 @@
       }
       svg.classList.toggle('grumpy', !!look.grumpy);
       svg.classList.toggle('face-left', look.facing === 'left');
+      // Gun elevation toward the cursor, degrees, positive = downward.
+      const aim = Math.max(-35, Math.min(35, Number(look.aimAngle) || 0));
+      svg.style.setProperty('--aim', `${look.facing === 'left' ? -aim : aim}deg`);
       const costume = COSTUMES.includes(look.costume) ? look.costume : 'none';
       if (!current || current.costume !== costume) {
         for (const c of COSTUMES) svg.classList.remove(`costume-${c}`);

@@ -399,6 +399,7 @@ function createLightsWindow() {
       lightsWin.show();
       lightsWin.focus();
       setTimeout(async () => {
+        if (arg('--wait')) await new Promise((r) => setTimeout(r, Number(arg('--wait'))));
         // Dev: `--playtest` runs test/playtest.js inside the editor window and
         // prints its report; exits non-zero on any failure.
         if (process.argv.includes('--playtest')) {
@@ -434,7 +435,7 @@ function createLightsWindow() {
           broadcastStatus();
           await new Promise((r) => setTimeout(r, 900));
           if (overlayWin) {
-            console.log('[shot] overlay bounds', JSON.stringify(overlayWin.getBounds()), 'aim', JSON.stringify(aimForOverlay()), 'screen', JSON.stringify(widgetMuzzle()?.screenPoint));
+            console.log('[shot] overlay bounds', JSON.stringify(overlayWin.getBounds()), 'aim', JSON.stringify(aimAtCursor('ak47')?.muzzle));
             fs.writeFileSync(ov, (await overlayWin.webContents.capturePage()).toPNG());
             if (win) fs.writeFileSync(ov.replace(/\.png$/, '-widget.png'), (await win.webContents.capturePage()).toPNG());
             console.log('[shot] widget bounds', JSON.stringify(win?.getBounds()));
@@ -459,72 +460,106 @@ function createLightsWindow() {
 let overlayWin = null;
 let overlayDisplayId = null;
 let burstTimer = null;
+let snipeTimer = null;
+let aimTimer = null;
+let overlayPose = null;
 const BURST_MS = 1200;
 const BURST_EVERY_MS = 15000;
+const SNIPE_EVERY_MS = 7000;
+const AIM_CLAMP_DEG = 35;
 
-function widgetMuzzle() {
+// Where the gun is, where the cursor is, and the angle between them.
+// Rig coords: the grip pivot is (44,50) facing right, (20,50) mirrored; the
+// AK muzzle sits 23 units from the pivot, the sniper's 39. The rig rotates
+// the gun by `angle` (degrees, positive = down), so the muzzle's screen
+// position follows the same rotation and rounds leave the barrel.
+function aimAtCursor(pose) {
   if (!win) return null;
   const b = win.getBounds();
   const display = screen.getDisplayMatching(b);
-  const wa = display.workArea;
-  // Rig viewBox is 64x82 inside a 12px body padding; the rifle tip sits at
-  // x=67 (facing right) or x=-3 (mirrored, see rig.css .face-left), y=50.
+  const cursor = screen.getCursorScreenPoint();
   const inner = { x: b.x + 12, y: b.y + 12, w: b.width - 24, h: b.height - 24 };
   const sx = inner.w / 64;
   const sy = inner.h / 82;
-  const dir = inner.x + inner.w / 2 - wa.x < wa.width / 2 ? 1 : -1;
-  const x = inner.x + (dir === 1 ? 67 : -3) * sx;
-  const y = inner.y + 50 * sy;
-  return { display, screenPoint: { x, y }, dir, facing: dir === 1 ? 'right' : 'left' };
+  const centreX = inner.x + 32 * sx;
+  const facing = cursor.x >= centreX ? 'right' : 'left';
+  const pivot = { x: inner.x + (facing === 'right' ? 44 : 20) * sx, y: inner.y + 50 * sy };
+  const dx = Math.abs(cursor.x - pivot.x);
+  const dy = cursor.y - pivot.y;
+  let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  angle = Math.max(-AIM_CLAMP_DEG, Math.min(AIM_CLAMP_DEG, angle));
+  const len = (pose === 'sniper' ? 39 : 23) * sx;
+  const rad = (angle * Math.PI) / 180;
+  const dirX = facing === 'right' ? 1 : -1;
+  const muzzle = { x: pivot.x + dirX * Math.cos(rad) * len, y: pivot.y + Math.sin(rad) * len };
+  // Direction of fire: straight at the cursor from the muzzle.
+  const vx = cursor.x - muzzle.x, vy = cursor.y - muzzle.y;
+  const n = Math.hypot(vx, vy) || 1;
+  return { display, facing, angle, muzzle, cursor, dir: { x: vx / n, y: vy / n } };
 }
 
-// Aim is expressed in the overlay window's own coordinates, from its REAL
-// bounds — macOS may shift a window that starts at the display origin below
-// the menu bar, and an aim computed from display bounds would then land the
-// rounds below the barrel.
-function aimForOverlay() {
-  const m = widgetMuzzle();
-  if (!m || !overlayWin) return null;
+function toOverlay(pt) {
   const ob = overlayWin.getBounds();
-  return { x: m.screenPoint.x - ob.x, y: m.screenPoint.y - ob.y, dir: m.dir };
+  return { x: pt.x - ob.x, y: pt.y - ob.y };
 }
 
 function fireBurst() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
-  const aim = aimForOverlay();
-  if (!aim) return;
-  overlayWin.webContents.send('burst', aim, BURST_MS);
+  const a = aimAtCursor('ak47');
+  if (!a) return;
+  overlayWin.webContents.send('burst', { ...toOverlay(a.muzzle), dir: a.dir }, BURST_MS);
   win?.webContents.send('burst', BURST_MS);
 }
 
+function fireSnipe() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const a = aimAtCursor('sniper');
+  if (!a) return;
+  // Scope the cursor for a moment, then the shot lands where it is THEN.
+  overlayWin.webContents.send('scope', toOverlay(a.cursor));
+  setTimeout(() => {
+    if (!overlayWin || overlayWin.isDestroyed()) return;
+    const b = aimAtCursor('sniper');
+    if (!b) return;
+    overlayWin.webContents.send('snipe', toOverlay(b.muzzle), toOverlay(b.cursor));
+    win?.webContents.send('burst', 250);
+  }, 700);
+}
+
+// Keep the gun pointed at the cursor while a gun pose is live.
+function pushAim() {
+  if (!win || !overlayPose) return;
+  const a = aimAtCursor(overlayPose);
+  if (!a) return;
+  win.webContents.send('aim', { facing: a.facing, aimAngle: a.angle });
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('track', toOverlay(a.cursor));
+}
+
 function stopOverlay() {
-  clearInterval(burstTimer);
-  burstTimer = null;
+  clearInterval(burstTimer); burstTimer = null;
+  clearInterval(snipeTimer); snipeTimer = null;
+  clearInterval(aimTimer); aimTimer = null;
+  overlayPose = null;
+  win?.webContents.send('aim', { facing: widgetMuzzle()?.facing || 'right', aimAngle: 0 });
   if (!overlayWin) return;
   const w = overlayWin;
   overlayWin = null;
   if (!w.isDestroyed()) {
     w.webContents.send('stop');
-    setTimeout(() => { if (!w.isDestroyed()) w.close(); }, 1500);
-  }
-}
-
-function prefersReducedMotion() {
-  try {
-    return process.platform === 'darwin' && systemPreferences.getAnimationSettings().prefersReducedMotion;
-  } catch {
-    return false;
+    setTimeout(() => { if (!w.isDestroyed()) w.close(); }, 2500);
   }
 }
 
 function updateOverlay(look) {
-  const wants = look.pose === 'ak47' && win && win.isVisible() && !prefersReducedMotion();
+  const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
+  const wants = gun && win && win.isVisible() && !prefersReducedMotion();
   if (!wants) { stopOverlay(); return; }
   const m = widgetMuzzle();
   if (!m) return;
-  if (overlayWin && overlayDisplayId !== m.display.id) stopOverlay();
+  if (overlayWin && (overlayDisplayId !== m.display.id || overlayPose !== gun)) stopOverlay();
   if (overlayWin) return;
   overlayDisplayId = m.display.id;
+  overlayPose = gun;
   overlayWin = new BrowserWindow({
     ...m.display.bounds,
     frame: false,
@@ -546,16 +581,35 @@ function updateOverlay(look) {
   overlayWin.once('ready-to-show', () => {
     if (!overlayWin) return;
     overlayWin.showInactive();
-    // Re-assert the display bounds now that the level allows covering the
-    // menu bar; the aim is computed from whatever bounds we actually got.
     overlayWin.setBounds(m.display.bounds);
-    fireBurst();
-    clearInterval(burstTimer);
-    burstTimer = setInterval(fireBurst, BURST_EVERY_MS);
+    aimTimer = setInterval(pushAim, 120);
+    if (gun === 'ak47') { fireBurst(); burstTimer = setInterval(fireBurst, BURST_EVERY_MS); }
+    else { fireSnipe(); snipeTimer = setInterval(fireSnipe, SNIPE_EVERY_MS); }
   });
   overlayWin.on('closed', () => { overlayWin = null; });
-  // The widget sits above the overlay so it is never painted over.
   win.setAlwaysOnTop(true, 'screen-saver', 2);
+}
+
+function widgetMuzzle() {
+  if (!win) return null;
+  const b = win.getBounds();
+  const display = screen.getDisplayMatching(b);
+  const wa = display.workArea;
+  const inner = { x: b.x + 12, y: b.y + 12, w: b.width - 24, h: b.height - 24 };
+  const sx = inner.w / 64;
+  const sy = inner.h / 82;
+  const dir = inner.x + inner.w / 2 - wa.x < wa.width / 2 ? 1 : -1;
+  const x = inner.x + (dir === 1 ? 67 : -3) * sx;
+  const y = inner.y + 50 * sy;
+  return { display, screenPoint: { x, y }, dir, facing: dir === 1 ? 'right' : 'left' };
+}
+
+function prefersReducedMotion() {
+  try {
+    return process.platform === 'darwin' && systemPreferences.getAnimationSettings().prefersReducedMotion;
+  } catch {
+    return false;
+  }
 }
 
 // ── Menu-bar mode ───────────────────────────────────────────────────────────
@@ -563,7 +617,6 @@ function updateOverlay(look) {
 // the tray image. Off by default; the template icon is used otherwise.
 let trayRenderWin = null;
 let trayTimer = null;
-let trayLastKey = null;
 
 function ensureTrayRenderer() {
   if (trayRenderWin) return;
@@ -587,11 +640,8 @@ async function paintTray() {
   const img = await trayRenderWin.webContents.capturePage();
   const size = img.getSize();
   if (!size.width) return;
-  // capturePage returns device pixels; tell the tray the scale so it draws
-  // at 18x22 points.
   const scale = size.width / 18;
-  const icon = nativeImage.createFromBuffer(img.toPNG(), { scaleFactor: scale });
-  tray.setImage(icon);
+  tray.setImage(nativeImage.createFromBuffer(img.toPNG(), { scaleFactor: scale }));
 }
 
 function updateTrayMode() {

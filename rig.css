@@ -139,7 +139,7 @@
 /* Props are hidden until their pose asks for them. */
 .rig .prop { opacity: 0; transition: opacity 150ms ease; }
 .rig.pose-guitar .prop-guitar, .rig.pose-guitar .prop-notes,
-.rig.pose-ak47 .prop-ak,
+.rig.pose-ak47 .prop-ak, .rig.pose-sniper .prop-sniper,
 .rig.pose-banner .prop-banner { opacity: 1; }
 
 /* Pose: guitar — strum hand rocks, body sways, notes float off. */
@@ -157,10 +157,12 @@
   100% { opacity: 0; transform: translate(6px, -14px) rotate(15deg); }
 }
 
-/* The rifle faces the direction the overlay fires; mirrored about Claude's
-   centre line when the widget sits on the right half of the screen. */
-.rig .prop-ak { transform-origin: 32px 0; }
-.rig.face-left .prop-ak { transform: scaleX(-1); }
+/* Guns face the cursor: the aim group rotates about the grip (44,50), and
+   when the cursor is to the left the gun is mirrored about Claude's centre
+   line (pivot then at 20,50). --aim is set by rig.js from look.aimAngle. */
+.rig .gun-aim { transform-origin: 44px 50px; transform: rotate(var(--aim, 0deg)); transition: transform 220ms ease-out; }
+.rig.face-left .gun-aim { transform-origin: 20px 50px; }
+.rig.face-left .prop-ak, .rig.face-left .prop-sniper { transform: translate(64px, 0) scaleX(-1); }
 
 /* Pose: ak47 — Claude holds the rifle at the hip; during a burst (rig.burst(),
    every 15s while the pose holds) it recoils, flashes and ejects casings. The
@@ -180,6 +182,15 @@
   0% { opacity: 1; transform: translate(0, 0) rotate(0); }
   100% { opacity: 0; transform: translate(-9px, -12px) rotate(200deg); }
 }
+
+/* Pose: sniper — steady aim; a single shot every 7s kicks the whole body
+   and flashes the muzzle (rig.burst(250)). */
+.rig.pose-sniper.firing .sn-body { animation: rig-kick 0.25s ease-out 1; }
+.rig.pose-sniper.firing .claude-body { animation: rig-kick-body 0.25s ease-out 1; }
+.rig.pose-sniper.firing .prop-sniper .muzzle { opacity: 1; animation: rig-flash-once 0.25s steps(1) 1; }
+@keyframes rig-kick { 0% { transform: translateX(-3px) rotate(-3deg); } 100% { transform: none; } }
+@keyframes rig-kick-body { 0% { transform: translateX(-1.5px); } 100% { transform: none; } }
+@keyframes rig-flash-once { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 
 /* Pose: banner — drops over the sign and sways on its string. */
 .rig.pose-banner .prop-banner { animation: rig-banner-in 500ms cubic-bezier(0.2, 0.9, 0.3, 1.2) 1, rig-banner-sway 2.4s ease-in-out 0.5s infinite; transform-origin: 32px 0px; }
@@ -305,7 +316,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
+  .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

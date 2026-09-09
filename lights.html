@@ -263,6 +263,7 @@
       var(--bg);
     overflow: hidden;
   }
+  #stage-fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #stage .rig-wrap {
     width: 124px;
     height: 159px;
@@ -567,6 +568,7 @@
           <div class="floor"></div>
           <div id="stage-rig" style="position:absolute;inset:0"></div>
         </div>
+        <canvas id="stage-fx" aria-hidden="true"></canvas>
         <div class="side">
           <div class="seg" role="group" aria-label="Preview source">
             <button id="mode-rule" class="on">This rule</button>
@@ -780,6 +782,7 @@
       party: '<svg viewBox="0 0 16 16"><path d="M4 13l3-8 5 5zM11 3l1 1M13 7l1-1M9 2v1"/></svg>',
       guitar: '<svg viewBox="0 0 16 16"><path d="M9 3l4 4M5.5 8.5l3-3M3 13a3 3 0 1 1 4-4"/></svg>',
       ak47: '<svg viewBox="0 0 16 16"><path d="M2 9h9l3-2M5 9v3M8 9v2"/></svg>',
+      sniper: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4"/><path d="M8 2v3M8 11v3M2 8h3M11 8h3"/></svg>',
       banner: '<svg viewBox="0 0 16 16"><path d="M3 3h10v7H8l-2 2v-2H3z"/></svg>',
     },
   };
@@ -795,13 +798,83 @@
 
   const stage = mountRig($('stage-rig'));
   let stageConfetti = null;
+  // ── Stage gun demo: tracers / a scoped shot drawn over the stage, aimed at
+  // a target on the stage's right, so the preview shows the real effect.
+  const fx = (() => {
+    const canvas = $('stage-fx');
+    const ctx = canvas.getContext('2d');
+    const bullets = [], sparks = [], shots = [], holes = [];
+    let firingUntil = 0, lastShot = 0, raf = null, scope = null;
+    function size() { const r = canvas.getBoundingClientRect(); canvas.width = r.width * devicePixelRatio; canvas.height = r.height * devicePixelRatio; ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); return r; }
+    function muzzle(len) {
+      const sr = stage.svg.getBoundingClientRect(); const cr = canvas.getBoundingClientRect();
+      const sx = sr.width / 64, sy = sr.height / 82;
+      return { x: sr.left - cr.left + (44 + len) * sx, y: sr.top - cr.top + 50 * sy };
+    }
+    function target() { const r = canvas.getBoundingClientRect(); return { x: r.width * 0.62, y: r.height * 0.42 }; }
+    function kick() { if (!raf) raf = requestAnimationFrame(loop); }
+    function loop(t) {
+      const r = size();
+      const busy = t < firingUntil || bullets.length || sparks.length || shots.length || holes.length || (scope && t < scope.until);
+      raf = busy ? requestAnimationFrame(loop) : null;
+      ctx.clearRect(0, 0, r.width, r.height);
+      if (t < firingUntil && t - lastShot > 90) {
+        lastShot = t; const m = muzzle(23);
+        const sp = (Math.random() - 0.5) * 0.1;
+        bullets.push({ x: m.x, y: m.y, vx: Math.cos(sp) * 14, vy: Math.sin(sp) * 14 });
+        for (let i = 0; i < 3; i += 1) sparks.push({ x: m.x, y: m.y, vx: 2 + Math.random() * 3, vy: (Math.random() - 0.5) * 3, life: 1 });
+      }
+      for (let i = bullets.length - 1; i >= 0; i -= 1) {
+        const b = bullets[i]; b.x += b.vx; b.y += b.vy;
+        if (b.x > r.width + 20) { bullets.splice(i, 1); continue; }
+        const n = Math.hypot(b.vx, b.vy) || 1, tx = b.x - (b.vx / n) * 28, ty = b.y - (b.vy / n) * 28;
+        const g = ctx.createLinearGradient(tx, ty, b.x, b.y); g.addColorStop(0, 'rgba(255,180,60,0)'); g.addColorStop(1, 'rgba(255,230,150,0.9)');
+        ctx.strokeStyle = g; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      for (let i = sparks.length - 1; i >= 0; i -= 1) {
+        const p = sparks[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life -= 0.07;
+        if (p.life <= 0) { sparks.splice(i, 1); continue; }
+        ctx.fillStyle = `rgba(255,200,90,${p.life})`; ctx.fillRect(p.x, p.y, 1.5, 1.5);
+      }
+      if (scope && t < scope.until) {
+        const p = 1 - (scope.until - t) / 700, rr = 18 - 9 * p, c = target();
+        ctx.strokeStyle = `rgba(255,60,48,${0.35 + 0.6 * p})`; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(c.x, c.y, rr, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(c.x + dx * (rr + 4), c.y + dy * (rr + 4)); ctx.lineTo(c.x + dx * (rr - 5), c.y + dy * (rr - 5)); } ctx.stroke();
+      }
+      for (let i = shots.length - 1; i >= 0; i -= 1) {
+        const sh = shots[i], age = t - sh.t0; if (age > 320) { shots.splice(i, 1); continue; }
+        const a = 1 - age / 320;
+        ctx.strokeStyle = `rgba(255,245,214,${a})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sh.mx, sh.my); ctx.lineTo(sh.tx, sh.ty); ctx.stroke();
+        ctx.strokeStyle = `rgba(255,170,60,${a * 0.5})`; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(sh.mx, sh.my); ctx.lineTo(sh.tx, sh.ty); ctx.stroke();
+      }
+      for (let i = holes.length - 1; i >= 0; i -= 1) {
+        const h = holes[i], age = t - h.t0; if (age > 2500) { holes.splice(i, 1); continue; }
+        const a = age < 2000 ? 1 : 1 - (age - 2000) / 500;
+        ctx.fillStyle = `rgba(20,20,24,${0.85 * a})`; ctx.beginPath(); ctx.arc(h.x, h.y, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(230,236,245,${0.75 * a})`; ctx.lineWidth = 1; ctx.beginPath();
+        for (let k = 0; k < 7; k += 1) { const ang = (k / 7) * Math.PI * 2 + 0.4 * Math.sin(k * 3.1), len = 7 + ((k * 37) % 9); ctx.moveTo(h.x + Math.cos(ang) * 3, h.y + Math.sin(ang) * 3); ctx.lineTo(h.x + Math.cos(ang) * len, h.y + Math.sin(ang) * len); }
+        ctx.stroke();
+      }
+    }
+    return {
+      burst(ms) { firingUntil = performance.now() + ms; lastShot = 0; kick(); },
+      snipe() { scope = { until: performance.now() + 700 }; kick(); setTimeout(() => { const m = muzzle(39), c = target(); shots.push({ mx: m.x, my: m.y, tx: c.x, ty: c.y, t0: performance.now() }); holes.push({ x: c.x, y: c.y, t0: performance.now() }); stage.burst(250); kick(); }, 700); },
+      clear() { firingUntil = 0; scope = null; bullets.length = sparks.length = shots.length = holes.length = 0; kick(); },
+    };
+  })();
+
   let stageBurst = null;
-  function stageFire(on) {
+  function stageFire(pose) {
     clearInterval(stageBurst);
     stageBurst = null;
-    if (!on) return;
-    stage.burst(1200);
-    stageBurst = setInterval(() => stage.burst(1200), 15000);
+    fx.clear();
+    if (pose === 'ak47') {
+      const go = () => { stage.burst(1200); fx.burst(1200); };
+      go(); stageBurst = setInterval(go, 15000);
+    } else if (pose === 'sniper') {
+      fx.snipe(); stageBurst = setInterval(() => fx.snipe(), 7000);
+    }
   }
   function stageCelebrate(on) {
     clearInterval(stageConfetti);
@@ -1110,7 +1183,7 @@
       const own = R.previewLook(r);
       stage.setLook(own);
       stageCelebrate(!!own.celebrate);
-      stageFire(own.pose === 'ak47');
+      stageFire(own.pose);
       const sample = { signal: r.when.signal[0] || 'idle', tool: r.when.tool && !r.when.tool.endsWith('*') ? r.when.tool : (r.when.tool ? r.when.tool.slice(0, -1) + 'x' : null) };
       const { owned } = R.resolve(rules.map((x) => (x.id === r.id ? { ...x, enabled: true } : x)), [sample]);
       const parts = [];
@@ -1122,7 +1195,7 @@
       if (!live) return;
       stage.setLook(live.look);
       stageCelebrate(!!live.look.celebrate);
-      stageFire(live.look.pose === 'ak47');
+      stageFire(live.look.pose);
       const n = live.sessions.length;
       cap.innerHTML = `<b>${escape(live.look.name || 'Nothing matched')}</b><br><span class="owner">${live.reason === 'manual' ? 'manual override' : n ? `${n} live session${n === 1 ? '' : 's'}` : 'no sessions'}</span>`;
     }
@@ -1365,7 +1438,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose') === 'ak47'); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

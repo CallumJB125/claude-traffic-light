@@ -58,9 +58,15 @@ locked above everything else so a stray rule can't hide a real block.
 
 Poses: think, run, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
 tap, arms (crossed), bubble (a speech bubble with your text),
-guitar, ak47 (tracer rounds stream across your whole screen from the widget —
-click-through, closes the moment the state changes) and banner, which drops a
-sign over the traffic light with your own text ("Banner says").
+guitar, ak47, sniper, and banner, which drops a sign over the traffic light
+with your own text ("Banner says").
+
+The guns aim at your cursor. The rifle on the widget physically turns to
+face it, and a click-through overlay draws the rounds from the barrel's tip:
+**ak47** fires a burst every 15 seconds; **sniper** scopes your cursor with a
+reticle, then puts a single shot and a cracked-glass bullet hole exactly
+where it was, every 7 seconds. The overlay closes the moment the state
+changes and never runs under Reduce Motion.
 
 Beyond the lamp, each rule can set any of these channels, all layered
 independently:
