@@ -15,13 +15,12 @@
     user-select: none;
   }
 
-  /* The outer strip is left as plain (non-drag) window chrome so macOS can
-     still grab the true window edge to resize; #app itself is what you drag
-     to move the widget. Kept generous (10px) so the resize handle is easy
-     to grab, not a hairline. */
+  /* No padding — resizing is done by scroll-wheel and the tray menu's
+     Bigger/Smaller items, not by dragging the window's true edge, so there's
+     no need to leave dead space around the widget for that. */
   body {
     box-sizing: border-box;
-    padding: 10px;
+    padding: 0;
   }
 
   /* Deliberately NOT -webkit-app-region: drag — on macOS that region type
@@ -81,18 +80,18 @@
     50% { filter: drop-shadow(0 0 5px rgba(47, 174, 62, 0.95)) brightness(1.2); }
   }
 
-  /* Amber: Claude holds the sign in its right hand only and swings it in a
+  /* Amber: Claude holds the sign in its left hand only and swings it in a
      big arc from overhead down to its side, like waving someone in — pivot
-     is the right hand/shoulder grip point, not the sign's own center. */
+     is the left hand/shoulder grip point, not the sign's own center. */
   .sign-assembly {
-    transform-origin: 57px 34px;
+    transform-origin: 7px 34px;
   }
   #rig.state-amber .sign-assembly {
     animation: wave-sign 1s ease-in-out infinite;
   }
   @keyframes wave-sign {
     0%, 100% { transform: rotate(0deg); }
-    55% { transform: rotate(100deg); }
+    55% { transform: rotate(-100deg); }
   }
 
   /* Green: three small thinking-dots pulse in sequence in the gap between
@@ -117,7 +116,7 @@
   /* Red: Claude falls asleep. Sign droops, eyes close, a lazy breathing
      bob, and little Zs drift up and fade. */
   #rig.state-red .sign-assembly {
-    transform: rotate(-10deg);
+    transform: rotate(10deg);
     transition: transform 400ms ease;
   }
   #rig.state-red .claude-body {
@@ -181,15 +180,15 @@
   <div id="app" title="">
     <div class="housing">
       <svg class="rig" id="rig" viewBox="0 0 64 82" xmlns="http://www.w3.org/2000/svg">
-        <!-- sign + right hand/arm move as one unit, pivoting at the grip —
+        <!-- sign + left hand/arm move as one unit, pivoting at the grip —
              this is what swings overhead-to-side (amber) and droops (red).
-             The left arm stays down at Claude's side, holding nothing. -->
+             The right arm stays down at Claude's side, holding nothing. -->
         <g class="sign-assembly">
           <rect x="4" y="24" width="56" height="5" fill="#726c62" />
           <rect class="lamp red" id="lamp-red" x="7" y="7" width="15" height="15" rx="2.5" />
           <rect class="lamp amber" id="lamp-amber" x="24.5" y="7" width="15" height="15" rx="2.5" />
           <rect class="lamp green" id="lamp-green" x="42" y="7" width="15" height="15" rx="2.5" />
-          <rect fill="#da7756" x="55" y="29" width="9" height="10" />
+          <rect fill="#da7756" x="0" y="29" width="9" height="10" />
         </g>
 
         <!-- claude, smaller, planted underneath -->
@@ -285,6 +284,19 @@
     window.addEventListener('mouseup', () => {
       dragOrigin = null;
     });
+
+    // Scroll to resize — much easier to hit reliably than dragging the true
+    // window edge of a small frameless widget. Scroll up/away = bigger,
+    // down/toward you = smaller, matching a trackpad zoom gesture.
+    let wheelAccum = 0;
+    app.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      wheelAccum += e.deltaY;
+      if (Math.abs(wheelAccum) < 12) return;
+      const factor = wheelAccum < 0 ? 1.06 : 0.94;
+      wheelAccum = 0;
+      window.trafficLight.resizeWindowBy(factor);
+    }, { passive: false });
 
     let feedbackTimer = null;
     function showFeedback(text) {

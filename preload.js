@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('trafficLight', {
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
   setWindowPosition: (x, y) => ipcRenderer.send('set-window-position', x, y),
+  resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
 });

@@ -5,6 +5,25 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the robot+sign SVG viewBox
+const MIN_WIDTH = 80;
+const MAX_WIDTH = 320;
+
+function resizeBy(factor) {
+  if (!win) return;
+  const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
+  const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
+  const newHeight = Math.round(newWidth / WIDGET_ASPECT);
+  // Anchor on the window's center so scrolling/clicking to resize doesn't
+  // walk the widget across the screen.
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  win.setBounds({
+    x: Math.round(cx - newWidth / 2),
+    y: Math.round(cy - newHeight / 2),
+    width: newWidth,
+    height: newHeight,
+  });
+}
 
 // Best-effort: bring the terminal app most likely running the session that
 // needs attention to the front. We can't target the exact tab/pane from
@@ -165,10 +184,10 @@ function createWindow() {
     height: saved?.height || defaultHeight,
     x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
     y: saved?.y ?? 80,
-    minWidth: 80,
-    minHeight: Math.round(80 / WIDGET_ASPECT),
-    maxWidth: 320,
-    maxHeight: Math.round(320 / WIDGET_ASPECT),
+    minWidth: MIN_WIDTH,
+    minHeight: Math.round(MIN_WIDTH / WIDGET_ASPECT),
+    maxWidth: MAX_WIDTH,
+    maxHeight: Math.round(MAX_WIDTH / WIDGET_ASPECT),
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -225,6 +244,9 @@ function createTray() {
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show / Hide Widget', click: () => (win?.isVisible() ? win.hide() : win?.show()) },
     { type: 'separator' },
+    { label: 'Bigger', click: () => resizeBy(1.25) },
+    { label: 'Smaller', click: () => resizeBy(0.8) },
+    { type: 'separator' },
     {
       label: hooksLabel,
       click: () => {
@@ -255,6 +277,13 @@ ipcMain.handle('get-window-position', () => {
 
 ipcMain.on('set-window-position', (e, x, y) => {
   win?.setPosition(Math.round(x), Math.round(y));
+});
+
+// Scroll-to-resize: far easier to hit than dragging the true window edge of
+// a small frameless widget. `factor` is a small multiplier per wheel tick
+// (e.g. 1.03 / 0.97), not an absolute size.
+ipcMain.on('resize-window-by', (e, factor) => {
+  resizeBy(factor);
 });
 
 ipcMain.handle('get-aggregate-status', () => aggregateState());
