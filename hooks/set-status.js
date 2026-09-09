@@ -10,7 +10,7 @@ const ROOT_DIR = path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 
 const [, , stateArg, reasonArg] = process.argv;
-const state = ['green', 'amber', 'red'].includes(stateArg) ? stateArg : 'amber';
+const state = ['green', 'amber', 'red', 'done'].includes(stateArg) ? stateArg : 'amber';
 const reason = reasonArg || 'hook';
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });

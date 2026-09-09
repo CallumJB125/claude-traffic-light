@@ -54,6 +54,10 @@ addHook(settings.hooks, 'PreToolUse', '', cmd('green', 'tool-use'));
 // from stdin and escalates to red) -> amber. This is the only "your input
 // is needed" signal — Stop alone isn't, see above.
 addHook(settings.hooks, 'Notification', '', cmd('amber', 'notification'));
+// Finished a task cleanly (distinct from the removed amber-on-Stop) ->
+// eyes go green and Claude gives a thumbs up until the next prompt starts
+// or something actually needs you.
+addHook(settings.hooks, 'Stop', '', cmd('done', 'stop'));
 // Session ended -> stop counting it entirely.
 addHook(settings.hooks, 'SessionEnd', '', cmd('amber', 'session-end'));
 

@@ -114,6 +114,23 @@
     30% { opacity: 1; transform: translateY(-1.5px); }
   }
 
+  /* Done: task finished cleanly. Eyes turn green and the resting (right)
+     arm shows a thumbs up, held until the next prompt or a real block. */
+  #rig.state-done .eye-open {
+    fill: #2fae3e;
+  }
+  .thumbs-up {
+    fill: #da7756;
+    opacity: 0;
+    transform: scale(0.6);
+    transform-origin: 54px 50px;
+    transition: opacity 200ms ease, transform 200ms ease;
+  }
+  #rig.state-done .thumbs-up {
+    opacity: 1;
+    transform: scale(1);
+  }
+
   /* Red: Claude falls asleep. Sign droops, eyes close, a lazy breathing
      bob, and little Zs drift up and fade. */
   #rig.state-red .sign-assembly {
@@ -206,6 +223,10 @@
           <circle class="think-dot d1" cx="24" cy="34" r="2" />
           <circle class="think-dot d2" cx="32" cy="34" r="2" />
           <circle class="think-dot d3" cx="40" cy="34" r="2" />
+          <g class="thumbs-up">
+            <rect x="50" y="48" width="8" height="7" rx="1" />
+            <rect x="48" y="42" width="4" height="8" rx="1.5" />
+          </g>
         </g>
         <text class="zzz z1" x="46" y="37">z</text>
         <text class="zzz z2" x="50" y="32">z</text>
@@ -229,13 +250,13 @@
     function applyState(state) {
       lampRed.classList.toggle('on', state === 'red');
       lampAmber.classList.toggle('on', state === 'amber');
-      lampGreen.classList.toggle('on', state === 'green');
+      lampGreen.classList.toggle('on', state === 'green' || state === 'done');
       // Only touch the class (and so only restart its CSS animation) when
       // the state actually changes — refresh() polls every few seconds
       // regardless, and re-adding an unchanged class would restart the
       // infinite wave animation on every poll, causing a visible stutter.
       if (state !== lastState) {
-        rig.classList.remove('state-red', 'state-amber', 'state-green');
+        rig.classList.remove('state-red', 'state-amber', 'state-green', 'state-done');
         rig.classList.add(`state-${state}`);
         lastState = state;
       }
@@ -249,6 +270,7 @@
         green: 'Claude is working',
         amber: 'Needs your input',
         red: 'Out of tokens',
+        done: 'Task finished',
       };
       const count = data.sessions?.length || 0;
       const suffix = data.reason === 'manual'

@@ -115,6 +115,10 @@ function installHooks() {
   addHook('UserPromptSubmit', hookCmd('green', 'prompt-submit'));
   addHook('PreToolUse', hookCmd('green', 'tool-use'));
   addHook('Notification', hookCmd('amber', 'notification'));
+  // Finished a task cleanly (not the same as the old amber-on-Stop this
+  // replaced) — eyes go green and Claude gives a thumbs up until the next
+  // prompt starts or something actually needs you.
+  addHook('Stop', hookCmd('done', 'stop'));
   addHook('SessionEnd', hookCmd('amber', 'session-end'));
 
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
@@ -177,7 +181,7 @@ function readSessions() {
   for (const f of files) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
-      const staleAfter = data.state === 'green' ? WORKING_STALE_MS : WAITING_STALE_MS;
+      const staleAfter = data.state === 'green' || data.state === 'done' ? WORKING_STALE_MS : WAITING_STALE_MS;
       if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
       sessions.push(data);
     } catch {
@@ -201,6 +205,11 @@ function aggregateState() {
 
   if (sessions.some((s) => s.state === 'red')) return { state: 'red', reason: 'session', sessions };
   if (sessions.some((s) => s.state === 'amber')) return { state: 'amber', reason: 'session', sessions };
+  if (sessions.some((s) => s.state === 'green')) return { state: 'green', reason: 'session', sessions };
+  // Nothing red/amber/actively-working — if at least one session just
+  // finished a task cleanly, show that instead of plain green so finishing
+  // something actually reads as a small win, not silence.
+  if (sessions.some((s) => s.state === 'done')) return { state: 'done', reason: 'session', sessions };
   return { state: 'green', reason: 'session', sessions };
 }
 
