@@ -1316,12 +1316,14 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 4000);
   setInterval(flushStats, 30000);
-  app.on('before-quit', flushStats);
 
   setInterval(() => {
     if (!areHooksInstalled()) installHooks();
   }, 10 * 60 * 1000);
 });
+
+// Quitting must not be vetoed by the editor's unsaved-changes prompt.
+app.on('before-quit', () => { flushStats(); lightsWin?.destroy(); settingsWin?.destroy(); });
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
 
