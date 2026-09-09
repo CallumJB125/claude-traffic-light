@@ -16,7 +16,7 @@ const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir()
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
 
-const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-done', 'stop', 'session-start', 'compact', 'notification', 'session-end'];
+const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end'];
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };

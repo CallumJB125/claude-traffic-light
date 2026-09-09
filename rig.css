@@ -213,8 +213,25 @@
 
 /* Mood eyes: replace or decorate the plain eyes. */
 .rig .eyefx { opacity: 0; }
-.rig.eyes-heart .eyefx-heart, .rig.eyes-dizzy .eyefx-dizzy, .rig.eyes-x .eyefx-x, .rig.eyes-tears .eyefx-tears, .rig.eyes-laser .eyefx-laser { opacity: 1; }
-.rig.eyes-heart .eye-open, .rig.eyes-dizzy .eye-open, .rig.eyes-x .eye-open { opacity: 0; }
+.rig.eyes-heart .eyefx-heart, .rig.eyes-dizzy .eyefx-dizzy, .rig.eyes-x .eyefx-x, .rig.eyes-tears .eyefx-tears, .rig.eyes-laser .eyefx-laser,
+.rig.eyes-happy .eyefx-happy, .rig.eyes-angry .eyefx-angry, .rig.eyes-sad .eyefx-sad, .rig.eyes-surprised .eyefx-surprised, .rig.eyes-wink .eyefx-wink,
+.rig.eyes-star .eyefx-star, .rig.eyes-money .eyefx-money, .rig.eyes-sleepy .eyefx-sleepy, .rig.eyes-suspicious .eyefx-suspicious, .rig.eyes-roll .eyefx-roll,
+.rig.eyes-googly .eyefx-googly { opacity: 1; }
+/* moods that replace the plain eyes (brows-only moods keep them) */
+.rig.eyes-heart .eye-open, .rig.eyes-dizzy .eye-open, .rig.eyes-x .eye-open, .rig.eyes-happy .eye-open, .rig.eyes-surprised .eye-open, .rig.eyes-wink .eye-open,
+.rig.eyes-star .eye-open, .rig.eyes-money .eye-open, .rig.eyes-sleepy .eye-open, .rig.eyes-suspicious .eye-open, .rig.eyes-roll .eye-open, .rig.eyes-googly .eye-open { opacity: 0; }
+.rig .starpupil { transform-box: fill-box; transform-origin: center; }
+.rig.eyes-star .starpupil { animation: rig-twinkle 1.2s ease-in-out infinite; }
+@keyframes rig-twinkle { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.2) rotate(15deg); } }
+.rig .rollpupil { transform-box: fill-box; transform-origin: center; }
+.rig.eyes-roll .rollpupil { animation: rig-roll 2.2s ease-in-out infinite; }
+@keyframes rig-roll { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(1.2px, -1.2px); } 50% { transform: translate(0, -1.4px); } 75% { transform: translate(-1.2px, -1.2px); } }
+.rig .googly { transform-box: fill-box; transform-origin: center; }
+.rig.eyes-googly .googly { animation: rig-googly 0.9s ease-in-out infinite; }
+.rig.eyes-googly .googly.g2 { animation-delay: 0.3s; animation-direction: reverse; }
+@keyframes rig-googly { 0%, 100% { transform: translate(-1.4px, 0.6px); } 33% { transform: translate(1.2px, 1.2px); } 66% { transform: translate(0.6px, -1.4px); } }
+.rig.eyes-sleepy .eyefx-sleepy { animation: rig-droop 3s ease-in-out infinite; transform-origin: 32px 43.5px; }
+@keyframes rig-droop { 0%, 70%, 100% { transform: scaleY(1); } 85% { transform: scaleY(1.6); } }
 .rig.eyes-heart .eyefx-heart { animation: rig-heartbeat 0.9s ease-in-out infinite; transform-origin: 32px 46px; }
 @keyframes rig-heartbeat { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.18); } }
 .rig .spiral { transform-origin: center; transform-box: fill-box; }
@@ -316,7 +333,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
+  .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

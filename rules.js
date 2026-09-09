@@ -16,7 +16,10 @@
     { id: 'tool-use', label: 'Claude uses a tool', hook: 'PreToolUse', kind: 'working', tool: true },
     { id: 'tool-done', label: 'A tool finishes', hook: 'PostToolUse', kind: 'working', tool: true },
     { id: 'tool-failed', label: 'A tool fails', hook: 'PostToolUseFailure', kind: 'working', tool: true },
+    { id: 'subagent-start', label: 'A subagent starts', hook: 'SubagentStart', kind: 'working' },
     { id: 'subagent-done', label: 'A subagent finishes', hook: 'SubagentStop', kind: 'working' },
+    { id: 'permission-denied', label: 'You deny a permission', hook: 'PermissionDenied', kind: 'working' },
+    { id: 'turn-failed', label: 'A turn fails', hook: 'StopFailure', kind: 'working' },
     { id: 'stop', label: 'Claude finishes a task', hook: 'Stop', kind: 'working' },
     { id: 'idle-nudge', label: 'Claude is waiting for you', hook: 'Notification', kind: 'working' },
     { id: 'permission-ask', label: 'Claude asks permission', hook: 'Notification', kind: 'waiting' },
@@ -63,7 +66,7 @@
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
-  const EYE_MOODS = ['heart', 'dizzy', 'x', 'tears', 'laser'];
+  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
   // macOS system sounds, by name; 'beep' is the system alert; 'file:<path>' plays a chosen file.

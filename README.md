@@ -71,7 +71,9 @@ changes and never runs under Reduce Motion.
 Beyond the lamp, each rule can set any of these channels, all layered
 independently:
 
-- **Eyes** — a colour, closed, or a mood: heart, dizzy, x, tears, laser.
+- **Eyes** — a colour, closed, or a mood: heart, happy, angry, sad,
+  surprised, wink, star, money, sleepy, suspicious, rolling, googly, dizzy,
+  x, tears, laser.
 - **Costume** — dog, cat, unicorn, crown, party hat, shades, halo, devil,
   wizard, top hat, santa, pumpkin, bunny. Seasonal ones apply themselves in
   December, at Halloween, on New Year's Day and around Easter (Preferences →
@@ -132,7 +134,8 @@ in the app, so changing a rule never touches the hooks:
 - `UserPromptSubmit` → `prompt-submit`
 - `PreToolUse` / `PostToolUse` / `PostToolUseFailure` → `tool-use` /
   `tool-done` / `tool-failed` (with the tool name)
-- `SubagentStop` → `subagent-done`
+- `SubagentStart` / `SubagentStop` → `subagent-start` / `subagent-done`
+- `PermissionDenied` → `permission-denied`; `StopFailure` → `turn-failed`
 - `Stop` → `stop`
 - `Notification` → `permission-ask`, `limit-hit` or `idle-nudge`, sniffed
   from the message text

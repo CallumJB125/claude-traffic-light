@@ -81,6 +81,43 @@
     <g class="eyefx eyefx-tears" fill="#38bdf8">
       <rect class="tear t1" x="23" y="48.5" width="1.6" height="2.6" rx="0.8" /><rect class="tear t2" x="38.5" y="48.5" width="1.6" height="2.6" rx="0.8" />
     </g>
+    <g class="eyefx eyefx-happy" fill="none" stroke="#211f1c" stroke-width="1.3" stroke-linecap="round">
+      <path d="M21.5 47 l2.8 -3 l2.8 3" /><path d="M37 47 l2.8 -3 l2.8 3" />
+    </g>
+    <g class="eyefx eyefx-angry" fill="#211f1c">
+      <rect x="20.5" y="41" width="7" height="1.6" rx="0.8" transform="rotate(18 24 41.8)" /><rect x="36.5" y="41" width="7" height="1.6" rx="0.8" transform="rotate(-18 40 41.8)" />
+    </g>
+    <g class="eyefx eyefx-sad" fill="#211f1c">
+      <rect x="20.5" y="41" width="7" height="1.6" rx="0.8" transform="rotate(-18 24 41.8)" /><rect x="36.5" y="41" width="7" height="1.6" rx="0.8" transform="rotate(18 40 41.8)" />
+    </g>
+    <g class="eyefx eyefx-surprised">
+      <circle cx="24.25" cy="45.75" r="3.4" fill="#f2efe8" /><circle cx="39.75" cy="45.75" r="3.4" fill="#f2efe8" /><circle cx="24.25" cy="45.75" r="1.6" fill="#211f1c" /><circle cx="39.75" cy="45.75" r="1.6" fill="#211f1c" />
+      <ellipse cx="32" cy="50" rx="2.2" ry="1.4" fill="#211f1c" />
+    </g>
+    <g class="eyefx eyefx-wink" fill="#211f1c">
+      <rect x="21" y="45.25" width="6.5" height="1.6" rx="0.8" /><rect x="37.5" y="43.5" width="4.5" height="4.5" fill="var(--eye-color)" />
+    </g>
+    <g class="eyefx eyefx-star" fill="#f2d16b">
+      <polygon class="starpupil" points="24.25,41.5 25.5,44.5 28.7,44.7 26.2,46.7 27,49.9 24.25,48.2 21.5,49.9 22.3,46.7 19.8,44.7 23,44.5" /><polygon class="starpupil" points="39.75,41.5 41,44.5 44.2,44.7 41.7,46.7 42.5,49.9 39.75,48.2 37,49.9 37.8,46.7 35.3,44.7 38.5,44.5" />
+    </g>
+    <g class="eyefx eyefx-money" fill="#2fae3e">
+      <text x="24.25" y="49" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system, system-ui, sans-serif">$</text><text x="39.75" y="49" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system, system-ui, sans-serif">$</text>
+    </g>
+    <g class="eyefx eyefx-sleepy" fill="#211f1c">
+      <rect x="22" y="43.5" width="4.5" height="2.2" /><rect x="37.5" y="43.5" width="4.5" height="2.2" />
+    </g>
+    <g class="eyefx eyefx-suspicious" fill="#211f1c">
+      <rect x="21" y="44.5" width="6.5" height="2" rx="0.6" /><rect x="36.5" y="44.5" width="6.5" height="2" rx="0.6" />
+      <rect x="20.5" y="42" width="7" height="1.4" rx="0.7" /><rect x="36.5" y="42" width="7" height="1.4" rx="0.7" />
+    </g>
+    <g class="eyefx eyefx-roll">
+      <rect x="22" y="43.5" width="4.5" height="4.5" fill="#f2efe8" /><rect x="37.5" y="43.5" width="4.5" height="4.5" fill="#f2efe8" />
+      <rect class="rollpupil" x="23.3" y="44.8" width="1.9" height="1.9" fill="#211f1c" /><rect class="rollpupil" x="38.8" y="44.8" width="1.9" height="1.9" fill="#211f1c" />
+    </g>
+    <g class="eyefx eyefx-googly">
+      <circle cx="24.25" cy="45.75" r="3.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><circle cx="39.75" cy="45.75" r="3.2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" />
+      <circle class="googly g1" cx="24.25" cy="45.75" r="1.5" fill="#211f1c" /><circle class="googly g2" cx="39.75" cy="45.75" r="1.5" fill="#211f1c" />
+    </g>
     <g class="eyefx eyefx-laser">
       <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
     </g>
@@ -272,7 +309,7 @@
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
-  const EYE_MOODS = ['heart', 'dizzy', 'x', 'tears', 'laser'];
+  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
