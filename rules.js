@@ -69,11 +69,11 @@
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
   const NUMBERS = ['none', 'sessions', 'minutes', 'tasks'];
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
   // What a gesture on the avatar can do. `arg` is free text where noted.
   const ACTIONS = [
@@ -189,7 +189,7 @@
       name: r.name || 'Untitled rule',
       locked: !!r.locked,
       enabled: r.enabled !== false,
-      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null },
+      when: { signal, tool: (r.when?.tool || '').trim() || null, cwd: (r.when?.cwd || '').trim() || null, source: (r.when?.source || '').trim().toLowerCase() || null },
       then: {
         lamp: LAMPS.includes(r.then?.lamp) ? r.then.lamp : null,
         lampColor: /^#[0-9a-f]{6}$/i.test(r.then?.lampColor || '') ? r.then.lampColor : null,
@@ -250,6 +250,8 @@
     if (!rule.enabled) return false;
     const sig = sessionSignal(session);
     if (!sig || !rule.when.signal.includes(sig)) return false;
+    const src = (session.source || 'claude').toLowerCase();
+    if (rule.when.source && rule.when.source !== src) return false;
     return toolMatches(rule.when.tool, session.tool) && cwdMatches(rule.when.cwd, session.cwd);
   }
 

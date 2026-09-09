@@ -142,6 +142,16 @@
   </div>
 
   <div class="field">
+    <label>Connect other agents</label>
+    <div class="row" style="flex-wrap:wrap;gap:6px">
+      <button type="button" data-agent="cursor">Cursor</button>
+      <button type="button" data-agent="codex">Codex CLI</button>
+      <button type="button" data-agent="gemini">Gemini CLI</button>
+    </div>
+    <div class="hint" id="connect-hint">Writes each tool's hook config so its sessions light the widget too. Anything else can POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> or run <code id="emit-path">emit.js</code>.</div>
+  </div>
+
+  <div class="field">
     <label>What the lights mean</label>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
@@ -188,6 +198,11 @@
       setTimeout(() => (status.textContent = ''), 1500);
     });
 
+    document.querySelectorAll('[data-agent]').forEach((b) => b.addEventListener('click', async () => {
+      const r = await window.settingsApi.connectAgent(b.dataset.agent);
+      document.getElementById('connect-hint').textContent = r && r.ok ? `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.` : 'Could not connect.';
+    }));
+    window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; });
     load();
   </script>
 </body>

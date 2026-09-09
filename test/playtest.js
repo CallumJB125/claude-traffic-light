@@ -59,7 +59,7 @@
     poseBtn('bounce').click();
     ok(stageLook().cls.includes('pose-bounce'), 'pose applies on the stage');
     ok(poseBtn('bounce').classList.contains('on'), 'pose button shows selected');
-    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 22, 'all 21 poses + keep are offered');
+    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 30, 'all 29 poses + keep are offered');
     ok($('text-row').hidden, 'banner text row hidden for a non-banner pose');
     poseBtn('banner').click();
     ok(!$('text-row').hidden, 'banner text row appears for the banner pose');
@@ -86,6 +86,7 @@
     setInput($('body-color'), '#1155cc');
     ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--body-color') === '#1155cc', 'body colour reaches the stage');
     setInput($('cwd'), 'bondly*');
+    setInput($('source'), 'cursor');
     const clickSel = $('click-field').querySelector('select');
     setInput(clickSel, 'url');
     ok(!$('click-field').querySelector('input').hidden, 'argument field appears for actions that take one');
@@ -140,7 +141,7 @@
     ok(pt && pt.then.clicks.click.type === 'url' && pt.then.clicks.click.arg === 'https://example.com' && pt.then.clicks.double.type === 'snooze' && !pt.then.clicks.alt, 'programmed gestures persist');
     ok(pt && pt.then.lampFx === 'strobe', 'lamp effect persists');
     ok(pt && pt.then.sign === 'h5' && pt.then.lampShape === 'heart' && pt.then.signFx === 'neon' && pt.then.number === 'tasks' && pt.then.screenFx === 'confetti', 'sign, shape, sign effect, number and screen effect persist');
-    ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*', 'body, effect, pet, body colour, sound and project scope persist');
+    ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*' && pt.when.source === 'cursor', 'body, effect, pet, body colour, sound, project and agent scope persist');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 
     rowByName('Playtest rule').click();

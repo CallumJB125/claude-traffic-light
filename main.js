@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
+const http = require('http');
 
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
 const MIN_WIDTH = 80;
@@ -29,13 +30,27 @@ function resizeBy(factor) {
 // Best-effort: bring the terminal app most likely running the session that
 // needs attention to the front, and try to raise the window whose title
 // mentions the target folder via the Accessibility API.
-const TERMINAL_APPS = ['Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
+const TERMINAL_APPS = process.platform === 'win32'
+  ? ['WindowsTerminal', 'wt', 'Windows Terminal', 'powershell', 'cmd', 'Alacritty', 'WezTerm', 'Code', 'Cursor']
+  : ['Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
 
 function escapeForAppleScript(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function activateTerminalApp(folderHint) {
+  if (IS_WIN) {
+    // Best effort: AppActivate matches a window title containing the folder,
+    // falling back to a terminal's own name.
+    return new Promise((resolve) => {
+      const tries = [folderHint, 'Windows Terminal', 'PowerShell', 'Command Prompt'].filter(Boolean);
+      const ps = `$w = New-Object -ComObject WScript.Shell; foreach ($t in @(${tries.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})) { if ($w.AppActivate($t)) { Write-Output $t; exit } }; Write-Output NONE`;
+      execFile('powershell', ['-NoProfile', '-c', ps], (err, out) => {
+        const hit = (out || '').trim();
+        resolve(!err && hit && hit !== 'NONE' ? { app: hit, exact: hit === folderHint } : null);
+      });
+    });
+  }
   return new Promise((resolve) => {
     const hint = escapeForAppleScript((folderHint || '').toLowerCase());
     const script = `
@@ -173,6 +188,9 @@ function flushStats() {
 // the checked-out hooks/ dir next to main.js.
 const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
 const SET_STATUS_SCRIPT = path.join(HOOKS_DIR, 'set-status.js');
+const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
+const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
 
 function readClaudeSettings() {
   try {
@@ -198,6 +216,39 @@ function installHooks() {
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
+
+// ── Local endpoint: any agent can POST a signal ────────────────────────────
+//   curl -X POST http://127.0.0.1:47172/signal -H 'content-type: application/json' \
+//        -d '{"source":"chatgpt","session":"abc","signal":"tool-use","tool":"Bash","cwd":"/x"}'
+const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.id).concat(['session-end']));
+function startSignalServer() {
+  const server = http.createServer((req, res) => {
+    const done = (code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(body)); };
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST, GET' }); return res.end(); }
+    if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })) }); }
+    if (req.method !== 'POST' || req.url !== '/signal') return done(404, { error: 'POST /signal or GET /status' });
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
+    req.on('end', () => {
+      let d; try { d = JSON.parse(body || '{}'); } catch { return done(400, { error: 'bad json' }); }
+      if (!KNOWN_SIGNALS.has(d.signal)) return done(400, { error: 'unknown signal', known: [...KNOWN_SIGNALS] });
+      const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
+      const session = String(d.session || 'default').replace(/[^\w.-]/g, '').slice(0, 80) || 'default';
+      const file = path.join(SESSIONS_DIR, `${os.hostname().split('.')[0]}-${source}-${session}.json`);
+      if (d.signal === 'session-end') { fs.rmSync(file, { force: true }); broadcastStatus(); return done(200, { ok: true }); }
+      let prev = null; try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
+      const now = new Date().toISOString();
+      const turnEnd = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
+      const workingSince = d.signal === 'prompt-submit' ? now : turnEnd.has(d.signal) ? null : (prev?.workingSince || now);
+      fs.writeFileSync(file, JSON.stringify({ sessionId: session, host: os.hostname().split('.')[0], source, cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', signal: d.signal, tool: typeof d.tool === 'string' ? d.tool.slice(0, 80) : null, workingSince, tasks: prev?.tasks || { created: 0, done: 0 }, updatedAt: now }, null, 2));
+      broadcastStatus();
+      done(200, { ok: true });
+    });
+  });
+  server.on('error', (e) => console.log('[signal server]', e.message));
+  server.listen(SIGNAL_PORT, '127.0.0.1');
+}
 
 // ── Pending permission requests (from the PermissionRequest hook) ──────────
 function readRequests() {
@@ -341,9 +392,19 @@ function playSound(name) {
   if (!name) return;
   win?.webContents.send('sound-flash');
   if (name === 'beep') { shell.beep(); return; }
+  if (IS_WIN) {
+    if (!name.startsWith('file:')) { shell.beep(); return; }
+    execFile('powershell', ['-NoProfile', '-c', `(New-Object Media.SoundPlayer '${name.slice(5).replace(/'/g, "''")}').PlaySync()`], () => {});
+    return;
+  }
   const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
   if (!fs.existsSync(file)) { shell.beep(); return; }
   execFile('afplay', [file], () => {});
+}
+
+function speak(text) {
+  if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => {});
+  else execFile('say', [text], () => {});
 }
 
 function createWindow() {
@@ -417,7 +478,7 @@ function createSettingsWindow() {
   });
   settingsWin.setMenuBarVisibility(false);
   settingsWin.loadFile('settings.html');
-  if (process.platform === 'darwin') app.dock.show();
+  if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
     if (process.platform === 'darwin' && !lightsWin) app.dock.hide();
@@ -478,6 +539,7 @@ function createLightsWindow() {
         }
         const img = await lightsWin.webContents.capturePage();
         fs.writeFileSync(process.argv[shotAt + 1], img.toPNG());
+        if (process.argv.includes('--rigdbg')) console.log('[shot] rigdbg', await lightsWin.webContents.executeJavaScript(`(() => { const s = document.querySelector('#stage-rig svg'); const q = (sel) => { const e = s.querySelector(sel); return e ? getComputedStyle(e).opacity : 'MISSING'; }; return JSON.stringify({ cls: s.className.baseVal, grin: q('.grin'), skate: q('.skate'), table: q('.table'), errs: window.__errs || [] }); })()`));
         // Dev: `--shot-overlay out.png` previews the ak47 pose on the widget
         // and captures the bullet overlay window.
         // Dev: `--shot-widget out.png` captures the widget with its real look.
@@ -515,7 +577,7 @@ function createLightsWindow() {
       }, 2000);
     });
   }
-  if (process.platform === 'darwin') app.dock.show();
+  if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
     if (process.platform === 'darwin' && !settingsWin) app.dock.hide();
@@ -625,7 +687,7 @@ let overlayFx = 'none';
 async function pushScreenFx(fx) {
   if (!overlayWin || overlayWin.isDestroyed()) return;
   const payload = { fx };
-  if (fx === 'spotlight') {
+  if (fx === 'spotlight' && IS_MAC) {
     const app = await runningTerminal();
     const icon = app ? await dockIconRect(app) : null;
     if (icon && overlayWin && !overlayWin.isDestroyed()) {
@@ -747,7 +809,7 @@ function updateTrayMode() {
     clearInterval(trayTimer);
     trayTimer = null;
     if (trayRenderWin) { trayRenderWin.close(); trayRenderWin = null; }
-    tray?.setImage(path.join(__dirname, 'assets', 'trayTemplate.png'));
+    tray?.setImage(path.join(__dirname, 'assets', IS_WIN ? 'tray-win.png' : 'trayTemplate.png'));
   }
 }
 
@@ -811,7 +873,7 @@ function tween(from, to, ms, onStep) {
 
 async function maybeRoam(st) {
   const config = loadConfig();
-  if (!config.roam || !win || !win.isVisible() || roamState.busy || previewLook) return;
+  if (!IS_MAC || !config.roam || !win || !win.isVisible() || roamState.busy || previewLook) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -877,7 +939,7 @@ function createTray() {
     tray.destroy();
     tray = null;
   }
-  const trayIconPath = path.join(__dirname, 'assets', 'trayTemplate.png');
+  const trayIconPath = path.join(__dirname, 'assets', IS_WIN ? 'tray-win.png' : 'trayTemplate.png');
   try {
     tray = new Tray(trayIconPath);
   } catch {
@@ -1050,22 +1112,24 @@ async function runAction(action, st) {
     case 'feed': return { react: { pose: 'munch', eyes: 'happy' }, ms: 1800, feedback: 'nom' };
     case 'lights': createLightsWindow(); return { feedback: 'Lights' };
     case 'stats': createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'stats')); lightsWin?.webContents.send('show-view', 'stats'); return { feedback: 'Stats' };
-    case 'finder': if (!cwd) return { feedback: 'no session folder' }; shell.openPath(cwd); return { feedback: `Finder → ${folderHint}` };
+    case 'finder': if (!cwd) return { feedback: 'no session folder' }; shell.openPath(cwd); return { feedback: `${IS_WIN ? 'Explorer' : 'Finder'} → ${folderHint}` };
     case 'editor': {
       if (!cwd) return { feedback: 'no session folder' };
-      execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      if (IS_WIN) execFile('cmd', ['/c', 'start', '', action.arg || 'code', cwd], () => {});
+      else execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
     case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
-      // The user's own command, run in their login shell; the session folder is CLAUDE_CWD.
-      execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
+      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
       return { feedback: 'ran' };
     }
-    case 'shortcut': if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
-    case 'say': execFile('say', [action.arg || (target ? `${folderHint} needs you` : 'hello')], () => {}); return { react: { pose: 'bubble' }, ms: 1500, feedback: 'said' };
+    case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
+    case 'say': speak(action.arg || (target ? `${folderHint} needs you` : 'hello')); return { react: { pose: 'bubble' }, ms: 1500, feedback: 'said' };
     case 'snooze': {
       win?.hide();
       clearTimeout(snoozeTimer);
@@ -1120,6 +1184,51 @@ function applyStrip(show) {
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));
+
+ipcMain.handle('export-rules', async (e, rules) => {
+  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+  if (r.canceled || !r.filePath) return null;
+  fs.writeFileSync(r.filePath, JSON.stringify({ v: 1, app: 'claude-traffic-light', rules: (rules || []).map(Rules.normalizeRule) }, null, 2));
+  return r.filePath;
+});
+
+ipcMain.handle('import-rules', async () => {
+  const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import rules', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
+    const rules = Array.isArray(parsed) ? parsed : parsed.rules;
+    if (!Array.isArray(rules)) return { error: 'No rules in that file' };
+    return { rules: rules.map(Rules.normalizeRule) };
+  } catch (err) { return { error: `Could not read: ${err.message}` }; }
+});
+
+// Connect other agents: writes their hook config files.
+ipcMain.handle('connect-agent', (e, which) => {
+  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return {}; } };
+  const home = os.homedir();
+  if (which === 'cursor') {
+    const f = path.join(home, '.cursor', 'hooks.json');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify(Hooks.installCursor(readJson(f), EMIT_SCRIPT), null, 2));
+    return { ok: true, file: f };
+  }
+  if (which === 'codex') {
+    const f = path.join(home, '.codex', 'config.toml');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    let cur = ''; try { cur = fs.readFileSync(f, 'utf8'); } catch { /* none */ }
+    fs.writeFileSync(f, Hooks.installCodex(cur, EMIT_SCRIPT));
+    return { ok: true, file: f };
+  }
+  if (which === 'gemini') {
+    const f = path.join(home, '.gemini', 'settings.json');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify(Hooks.installGemini(readJson(f), EMIT_SCRIPT), null, 2));
+    return { ok: true, file: f };
+  }
+  return { ok: false };
+});
+ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT }));
 
 ipcMain.handle('choose-sound-file', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
@@ -1193,6 +1302,7 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+  startSignalServer();
   if (process.argv.includes('--lights')) createLightsWindow();
 
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {

@@ -520,6 +520,9 @@
   #presets .user button.x { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; color: var(--faint); border-radius: 5px; }
   #presets .user button.x:hover { color: #ff8a80; background: rgba(184, 68, 58, 0.15); }
   #presets .user button.x svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
+  #presets .menu-share { display: flex; flex-direction: column; }
+  #presets .menu-share button { width: 100%; text-align: left; padding: 6px 8px; border: none; border-radius: 5px; background: transparent; display: flex; flex-direction: column; gap: 1px; }
+  #presets .menu-share button:hover { background: var(--accent-soft); }
   #presets .menu-form { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
   #presets .menu-form input { min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
   #presets .menu-form input:focus { border-color: var(--accent); box-shadow: var(--focus); }
@@ -602,6 +605,15 @@
             <input type="text" id="tool" list="tool-list" placeholder="any tool" spellcheck="false" />
             <datalist id="tool-list"></datalist>
             <div class="hint">Exact name, or a prefix with <code>*</code> — e.g. <code>mcp__*</code> for every MCP tool.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Only agent</div>
+          <div class="field">
+            <select id="source" class="select" aria-label="Only this agent">
+              <option value="">any agent</option><option value="claude">Claude Code</option><option value="cursor">Cursor</option><option value="codex">Codex CLI</option><option value="gemini">Gemini CLI</option><option value="chatgpt">ChatGPT</option><option value="custom">Custom</option>
+            </select>
           </div>
         </div>
 
@@ -799,12 +811,24 @@
   <button data-preset="party"><span>Party</span><small>Running, pets, costumes, hearts and fire</small></button>
   <div class="menu-head" id="user-presets-head">Yours</div>
   <div id="user-presets"></div>
+  <div class="menu-head">Share</div>
+  <div class="menu-share">
+    <button type="button" id="share-copy"><span>Copy share code</span><small>Current rules as a code you can paste anywhere</small></button>
+    <button type="button" id="share-paste"><span>Paste a share code…</span><small>Loads someone's rules (you can still Save or Revert)</small></button>
+    <button type="button" id="share-export"><span>Export to file…</span><small>JSON you can commit or send</small></button>
+    <button type="button" id="share-import"><span>Import from file…</span><small></small></button>
+  </div>
+  <form id="share-form" class="menu-form" hidden>
+    <input type="text" id="share-code" placeholder="ctl1:…" autocomplete="off" spellcheck="false" />
+    <button type="submit" class="btn primary">Load</button>
+  </form>
   <form id="preset-form" class="menu-form">
     <input type="text" id="preset-name" maxlength="30" placeholder="Save current rules as…" autocomplete="off" />
     <button type="submit" class="btn primary" id="preset-save">Save</button>
   </form>
 </div>
 
+<script>window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno));</script>
 <script src="rig.js"></script>
 <script src="rules.js"></script>
 <script src="stats.js"></script>
@@ -1204,6 +1228,7 @@
     bodySw.style.setProperty('--c', r.then.bodyColor || '');
     $('body-color').value = r.then.bodyColor || '#da7756';
     $('cwd').value = r.when.cwd || '';
+    $('source').value = r.when.source || '';
 
     // Programmable gestures: a select per gesture plus an argument field
     // for actions that take one. "Keep" leaves it to the rules below (and
@@ -1261,6 +1286,7 @@
   $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
   $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
   $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
+  $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
@@ -1429,6 +1455,43 @@
       renderUserPresets();
     }
   });
+  // ── Sharing: a compact code (deflate + base64url) or a JSON file. Codes
+  // are versioned ("ctl1:") so a future format can still read old ones.
+  async function encodeShare(rulesToShare) {
+    const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', rules: rulesToShare.map(R.normalizeRule) });
+    const bytes = new TextEncoder().encode(json);
+    const cs = new CompressionStream('deflate-raw');
+    const w = cs.writable.getWriter(); w.write(bytes); w.close();
+    const buf = new Uint8Array(await new Response(cs.readable).arrayBuffer());
+    let bin = ''; for (const b of buf) bin += String.fromCharCode(b);
+    return 'ctl1:' + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  async function decodeShare(code) {
+    const m = /^ctl1:([A-Za-z0-9_-]+)$/.exec(String(code).trim());
+    if (!m) throw new Error('Not a share code');
+    const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (m[1].length % 4)) % 4);
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    const ds = new DecompressionStream('deflate-raw');
+    const w = ds.writable.getWriter(); w.write(bytes); w.close();
+    const json = await new Response(ds.readable).text();
+    const parsed = JSON.parse(json);
+    if (!parsed || !Array.isArray(parsed.rules)) throw new Error('Share code has no rules');
+    return parsed.rules;
+  }
+  function flash(msg) { $('save-state').textContent = msg; setTimeout(() => { if (!dirty) $('save-state').textContent = ''; else setDirty(true); }, 2200); }
+  $('share-copy').addEventListener('click', async (e) => { e.stopPropagation(); const code = await encodeShare(rules); await navigator.clipboard.writeText(code); $('presets').hidden = true; flash(`Share code copied (${code.length} chars)`); });
+  $('share-paste').addEventListener('click', async (e) => { e.stopPropagation(); $('share-form').hidden = false; $('share-code').value = ''; try { const t = await navigator.clipboard.readText(); if (/^ctl1:/.test(t.trim())) $('share-code').value = t.trim(); } catch { /* clipboard not readable */ } $('share-code').focus(); });
+  $('share-form').addEventListener('submit', async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try { applyRules(await decodeShare($('share-code').value)); $('share-form').hidden = true; flash('Loaded shared rules — Save to keep them'); }
+    catch (err) { flash(err.message); }
+  });
+  $('share-export').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.exportRules(rules.map(R.normalizeRule)); if (r) flash(`Exported to ${r.split('/').pop()}`); });
+  $('share-import').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.importRules(); if (r && Array.isArray(r.rules)) { applyRules(r.rules); flash('Imported — Save to keep them'); } else if (r && r.error) flash(r.error); });
+  $('share-code').addEventListener('click', (e) => e.stopPropagation());
+  $('share-form').addEventListener('click', (e) => e.stopPropagation());
+
   $('preset-name').addEventListener('input', (e) => { $('preset-save').disabled = !e.target.value.trim(); });
   $('preset-form').addEventListener('submit', async (e) => {
     e.preventDefault();

@@ -116,7 +116,7 @@ test('virtual signals: many-sessions and long-running', () => {
 test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
-  assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null });
+  assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null, source: null });
   assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
@@ -394,6 +394,65 @@ test('set-status: task events count without changing the state', () => {
   assert.equal(d.signal, 'tool-use', 'task bookkeeping keeps the last real signal');
   run(home, 'prompt-submit', { session_id: 't' });
   assert.deepEqual(read(home).tasks, { created: 0, done: 0 }, 'a new prompt resets the count');
+});
+
+test('agent scope: a rule can target one agent; sessions default to claude', () => {
+  const rs = [{ id: 'c', name: 'c', when: { signal: ['tool-use'], source: 'cursor' }, then: { pet: 'cat' } }, ...rules()];
+  assert.equal(look([{ signal: 'tool-use', source: 'cursor' }], rs).pet, 'cat');
+  assert.equal(look([{ signal: 'tool-use' }], rs).pet, 'none');
+  assert.equal(look([{ signal: 'tool-use', source: 'Codex' }], rs).pet, 'none');
+});
+
+// ── hooks/emit.js (other agents) ────────────────────────────────────────────
+const EMIT = path.join(__dirname, '..', 'hooks', 'emit.js');
+function emit(home, args, input) {
+  const r = spawnSync(process.execPath, [EMIT, ...args], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: input === undefined ? '' : input });
+  assert.equal(r.status, 0, r.stderr.toString());
+  return r.stdout.toString();
+}
+
+test('emit: generic signal with source/session/cwd/tool', () => {
+  const home = tmpHome();
+  emit(home, ['tool-use', '--source', 'chatgpt', '--session', 'abc', '--cwd', '/p/q', '--tool', 'Bash']);
+  const d = read(home);
+  assert.equal(files(home)[0], `${os.hostname().split('.')[0]}-chatgpt-abc.json`);
+  assert.deepEqual([d.source, d.signal, d.tool, d.cwd], ['chatgpt', 'tool-use', 'Bash', '/p/q']);
+  emit(home, ['session-end', '--source', 'chatgpt', '--session', 'abc']);
+  assert.equal(files(home).length, 0);
+  emit(home, ['dance', '--source', 'x']);
+  assert.equal(files(home).length, 0, 'unknown signals write nothing');
+});
+
+test('emit: Cursor hook payloads map to signals and reply allow', () => {
+  const home = tmpHome();
+  const out = emit(home, ['--cursor', 'beforeShellExecution'], JSON.stringify({ conversation_id: 'c1', workspace_roots: ['/w/proj'], command: 'ls' }));
+  assert.deepEqual(JSON.parse(out), { permission: 'allow', continue: true });
+  const d = read(home);
+  assert.deepEqual([d.source, d.signal, d.tool, d.cwd, d.sessionId], ['cursor', 'tool-use', 'Bash', '/w/proj', 'c1']);
+  emit(home, ['--cursor', 'stop'], JSON.stringify({ conversation_id: 'c1' }));
+  assert.equal(read(home).signal, 'stop');
+});
+
+test('emit: Codex notify payload marks a finished turn', () => {
+  const home = tmpHome();
+  emit(home, ['--codex', JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 't9', cwd: '/c' })]);
+  const d = read(home);
+  assert.deepEqual([d.source, d.signal, d.sessionId], ['codex', 'stop', 't9']);
+});
+
+test('adapters: cursor/codex/gemini config writers are idempotent and keep foreign entries', () => {
+  const cur = H.installCursor({ version: 1, hooks: { stop: [{ command: 'echo mine' }] } }, '/e/emit.js');
+  const twice = H.installCursor(cur, '/e/emit.js');
+  assert.deepEqual(cur, twice);
+  assert.deepEqual(cur.hooks.stop.map((h) => h.command), ['echo mine', 'node "/e/emit.js" --cursor stop']);
+  assert.ok(cur.hooks.beforeShellExecution.length === 1);
+  const toml = H.installCodex('model = "o3"\nnotify = ["old"]\n', '/e/emit.js');
+  assert.equal(toml, 'notify = ["node", "/e/emit.js", "--codex"]\nmodel = "o3"\n');
+  assert.equal(H.installCodex(toml, '/e/emit.js'), toml);
+  const gem = H.installGemini({ theme: 'x', hooks: { BeforeTool: [{ matcher: '', hooks: [{ type: 'command', command: 'echo keep' }] }] } }, '/e/emit.js');
+  assert.equal(gem.theme, 'x');
+  assert.equal(gem.hooks.BeforeTool.length, 2);
+  assert.deepEqual(H.installGemini(gem, '/e/emit.js'), gem);
 });
 
 // ── hooks/install.js ────────────────────────────────────────────────────────

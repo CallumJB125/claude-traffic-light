@@ -55,6 +55,8 @@
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
+  <!-- procedural garden: filled by rig.js when effect === 'garden' -->
+  <g class="garden"></g>
   <!-- rare events, drawn over everything -->
   <g class="event event-ufo">
     <ellipse cx="32" cy="8" rx="16" ry="4" fill="#9aa3ad" /><ellipse cx="32" cy="5.5" rx="8" ry="4.5" fill="#cfe9ff" opacity="0.9" />
@@ -113,6 +115,24 @@
     <g class="knock-fist"><rect x="50" y="46" width="6" height="6" rx="1.5" fill="#da7756" stroke="#211f1c" stroke-width="0.5" /></g>
     <!-- cookie: the token treat you feed him (⌥-click) -->
     <g class="cookie"><circle cx="54" cy="46" r="3.6" fill="#c98a4b" /><circle cx="52.8" cy="45" r="0.8" fill="#5a3a1a" /><circle cx="55.4" cy="47.2" r="0.8" fill="#5a3a1a" /><circle cx="54.6" cy="44.4" r="0.6" fill="#5a3a1a" /></g>
+    <!-- big toothy grin -->
+    <g class="grin"><rect x="23" y="48.5" width="18" height="3.6" rx="1.8" fill="#211f1c" /><rect x="24.5" y="49.2" width="15" height="1.6" fill="#f2efe8" /><rect x="28" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="31.5" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="35" y="49.2" width="0.6" height="1.6" fill="#211f1c" /></g>
+    <!-- selfie: phone held out, flash burst -->
+    <g class="selfie"><rect x="50" y="40" width="7" height="11" rx="1.5" fill="#1a1a1e" stroke="#9aa3ad" stroke-width="0.6" /><circle class="flashbulb" cx="53.5" cy="42.3" r="1.1" fill="#fff5d6" /></g>
+    <!-- cigarette: held at the mouth, smoke drifts up -->
+    <g class="cig"><rect x="40" y="48.6" width="7" height="1.6" fill="#f2efe8" /><rect x="45.8" y="48.6" width="1.4" height="1.6" fill="#e2231a" /><circle class="puff p1" cx="48" cy="47" r="1.3" fill="#b8b8c0" /><circle class="puff p2" cx="48" cy="47" r="1.6" fill="#b8b8c0" /><circle class="puff p3" cx="48" cy="47" r="1.1" fill="#b8b8c0" /></g>
+    <!-- zyn tin + pouch -->
+    <g class="zyn"><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g>
+    <!-- table, rolled note, line -->
+    <g class="table"><rect x="6" y="61" width="52" height="2" fill="#8a5a2b" /><rect x="9" y="63" width="2" height="6" fill="#6b4420" /><rect x="53" y="63" width="2" height="6" fill="#6b4420" /><rect class="line" x="20" y="59.6" width="24" height="1" fill="#f2efe8" /><rect class="note" x="42" y="52" width="1.6" height="8" fill="#2fae3e" transform="rotate(25 42 52)" /></g>
+    <!-- syringe -->
+    <g class="needle"><rect x="50" y="43" width="8" height="3" rx="0.6" fill="#d7ded6" stroke="#211f1c" stroke-width="0.4" /><rect x="58" y="44" width="4" height="0.8" fill="#9aa3ad" /><rect class="plunger" x="47" y="43.8" width="4" height="1.4" fill="#e2231a" /></g>
+    <!-- muscles: arm bulges that grow over time -->
+    <g class="muscles" fill="var(--body-color, #da7756)"><ellipse class="bicep b1" cx="9" cy="54" rx="1" ry="1" /><ellipse class="bicep b2" cx="55" cy="54" rx="1" ry="1" /></g>
+    <!-- skateboard -->
+    <g class="skate"><rect x="12" y="69" width="40" height="3" rx="1.5" fill="#5b3fb8" /><circle cx="19" cy="73" r="1.6" fill="#f2efe8" /><circle cx="45" cy="73" r="1.6" fill="#f2efe8" /></g>
+    <!-- halo + Xs for dead -->
+    <g class="dead"><ellipse cx="32" cy="34" rx="9" ry="2.4" fill="none" stroke="#f2d16b" stroke-width="1.4" /></g>
     <g class="speed-lines" stroke="#f2efe8" stroke-width="1.2" stroke-linecap="round" opacity="0">
       <line x1="2" y1="56" x2="9" y2="56" /><line x1="0" y1="61" x2="8" y2="61" /><line x1="3" y1="66" x2="9" y2="66" />
     </g>
@@ -362,13 +382,13 @@
   </g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e', blue: '#2f6bff', pink: '#f472b6' };
@@ -435,6 +455,8 @@
       svg.style.setProperty('--body-color', /^#[0-9a-f]{6}$/i.test(look.bodyColor || '') ? look.bodyColor : '#da7756');
       const effect = EFFECTS.includes(look.effect) ? look.effect : 'none';
       for (const e of EFFECTS) svg.classList.toggle(`effect-${e}`, effect === e);
+      if (effect === 'garden' && (!current || current.effect !== 'garden')) plantGarden();
+      if (effect !== 'garden' && current && current.effect === 'garden') clearGarden();
       const pet = PETS.includes(look.pet) ? look.pet : 'none';
       for (const pp of PETS) svg.classList.toggle(`pet-${pp}`, pet === pp);
       // Beard length follows how long you've kept Claude waiting (0–30 min).
@@ -489,6 +511,53 @@
       clearTimeout(reactTimer);
       reactTimer = setTimeout(() => { if (current) setLook({ ...current, ...base, aimAngle: current.aimAngle, facing: current.facing }); }, ms);
     }
+    // ── Garden: a random assortment planted around the feet; edible things
+    // get eaten every so often (Claude leans in, the item vanishes, munch).
+    let gardenTimer = null;
+    const ns = 'http://www.w3.org/2000/svg';
+    const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); return e; };
+    const PLANTS = [
+      { kind: 'flower', w: 5, edible: false, draw: (g, x, c) => { g.appendChild(mk('rect', { x: x - 0.5, y: 60, width: 1, height: 8, fill: '#2fae3e' })); for (const [dx, dy] of [[-2, -1], [2, -1], [0, -3], [0, 1]]) g.appendChild(mk('circle', { cx: x + dx, cy: 60 + dy, r: 1.5, fill: c })); g.appendChild(mk('circle', { cx: x, cy: 60, r: 1.1, fill: '#f2d16b' })); } },
+      { kind: 'tulip', w: 4, edible: false, draw: (g, x, c) => { g.appendChild(mk('rect', { x: x - 0.5, y: 61, width: 1, height: 7, fill: '#2fae3e' })); g.appendChild(mk('path', { d: `M${x - 2} 62 v-3 l2 -2 l2 2 v3 z`, fill: c })); } },
+      { kind: 'bush', w: 8, edible: false, draw: (g, x) => { g.appendChild(mk('ellipse', { cx: x, cy: 65, rx: 4, ry: 3, fill: '#2f8a3a' })); g.appendChild(mk('ellipse', { cx: x - 2, cy: 64, rx: 2.5, ry: 2, fill: '#3fa34a' })); } },
+      { kind: 'berries', w: 7, edible: true, draw: (g, x) => { g.appendChild(mk('ellipse', { cx: x, cy: 65, rx: 3.5, ry: 2.8, fill: '#2f8a3a' })); for (const [dx, dy] of [[-1.5, -1], [1.5, 0], [0, 1]]) g.appendChild(mk('circle', { class: 'edible', cx: x + dx, cy: 65 + dy, r: 0.9, fill: '#5b3fb8' })); } },
+      { kind: 'carrot', w: 4, edible: true, draw: (g, x) => { g.appendChild(mk('path', { class: 'edible', d: `M${x - 1.5} 63 h3 l-1.5 5 z`, fill: '#f28c28' })); g.appendChild(mk('path', { d: `M${x} 63 l-2 -3 M${x} 63 l2 -3 M${x} 63 v-3.5`, stroke: '#2fae3e', 'stroke-width': 0.8, fill: 'none' })); } },
+      { kind: 'tree', w: 12, edible: true, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 1.2, y: 56, width: 2.4, height: 12, fill: '#6b4420' })); g.appendChild(mk('circle', { cx: x, cy: 54, r: 6, fill: '#2f8a3a' })); g.appendChild(mk('circle', { cx: x - 3, cy: 56, r: 4, fill: '#3fa34a' })); for (const [dx, dy] of [[-3, 52], [2, 51], [3.5, 56], [-1, 57]]) g.appendChild(mk('circle', { class: 'edible', cx: x + dx, cy: dy, r: 1.1, fill: '#e2231a' })); } },
+      { kind: 'mushroom', w: 4, edible: false, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 0.8, y: 64, width: 1.6, height: 4, fill: '#f2efe8' })); g.appendChild(mk('path', { d: `M${x - 2.5} 64.5 a2.5 2.5 0 0 1 5 0 z`, fill: '#e2231a' })); g.appendChild(mk('circle', { cx: x - 0.8, cy: 63.2, r: 0.5, fill: '#f2efe8' })); } },
+      { kind: 'cactus', w: 4, edible: false, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 1.2, y: 60, width: 2.4, height: 8, rx: 1, fill: '#3fa34a' })); g.appendChild(mk('rect', { x: x - 3, y: 62, width: 1.8, height: 3, rx: 0.8, fill: '#3fa34a' })); } },
+      { kind: 'sunflower', w: 6, edible: true, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 0.5, y: 56, width: 1, height: 12, fill: '#2fae3e' })); for (let k = 0; k < 8; k += 1) { const a = (k / 8) * Math.PI * 2; g.appendChild(mk('ellipse', { cx: x + Math.cos(a) * 2.6, cy: 56 + Math.sin(a) * 2.6, rx: 1.2, ry: 0.8, fill: '#f2a200', transform: `rotate(${(a * 180) / Math.PI} ${x + Math.cos(a) * 2.6} ${56 + Math.sin(a) * 2.6})` })); } g.appendChild(mk('circle', { class: 'edible', cx: x, cy: 56, r: 1.8, fill: '#5a3a1a' })); } },
+    ];
+    const PETALS = ['#f472b6', '#e2231a', '#f2a200', '#38bdf8', '#a78bfa', '#f2efe8'];
+    function plantGarden() {
+      const g = svg.querySelector('.garden');
+      g.innerHTML = '';
+      // random spread on both sides and in front of the feet, avoiding the legs
+      const spots = [4, 10, 24, 38, 54, 60].sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 3));
+      spots.forEach((x, i) => {
+        const p = PLANTS[Math.floor(Math.random() * PLANTS.length)];
+        const wrap = mk('g', { class: `plant plant-${p.kind}`, style: `--grow-delay:${i * 0.35}s; transform-origin:${x}px 68px` });
+        p.draw(wrap, x, PETALS[Math.floor(Math.random() * PETALS.length)]);
+        g.appendChild(wrap);
+      });
+      clearInterval(gardenTimer);
+      gardenTimer = setInterval(eatSomething, 9000);
+    }
+    function clearGarden() {
+      clearInterval(gardenTimer);
+      gardenTimer = null;
+      const g = svg.querySelector('.garden');
+      if (g) g.innerHTML = '';
+    }
+    function eatSomething() {
+      const bites = Array.from(svg.querySelectorAll('.garden .edible'));
+      if (!bites.length) return;
+      const bite = bites[Math.floor(Math.random() * bites.length)];
+      const towards = Number(bite.getAttribute('cx') || 32) < 32 ? 'left' : 'right';
+      svg.classList.add('eating', `eat-${towards}`);
+      bite.classList.add('eaten');
+      setTimeout(() => { bite.remove(); svg.classList.remove('eating', 'eat-left', 'eat-right'); }, 900);
+    }
+
     let flashTimer = null;
     // Sound-reactive: the lamps flicker for a beat when a sound fires.
     function flash(ms = 600) {

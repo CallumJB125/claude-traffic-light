@@ -58,7 +58,9 @@ locked above everything else so a stray rule can't hide a real block.
 
 Poses: think, run, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
 tap, arms (crossed), bubble (a speech bubble with your text),
-guitar, ak47, sniper, and banner, which drops a sign over the traffic light
+guitar, ak47, sniper, kickflip, selfie (with a blinding flash), grin,
+smoke, zyn, line, juice (a jab, then the biceps grow until the state
+changes), dead, and banner, which drops a sign over the traffic light
 with your own text ("Banner says").
 
 The guns aim at your cursor. The rifle on the widget physically turns to
@@ -93,8 +95,10 @@ independently:
 - **Body** — Claude becomes a dog, cat, frog, robot or ghost; or keeps his
   shape in any colour (handy with **Only project**, so each project gets its
   own Claude).
-- **Effect** — rain cloud, sun, snow, sparkles, fire, or a beard that grows
-  the longer you keep him waiting.
+- **Effect** — rain cloud, sun, snow, sparkles, fire, a beard that grows the
+  longer you keep him waiting, or a **garden**: a random planting of flowers,
+  bushes, carrots, berries, fruit trees, sunflowers, mushrooms and cacti
+  around his feet, with the edible ones eaten one by one.
 - **Pet** — a duck, cat or blob at his feet.
 - **Sound** — the system beep, any macOS system sound, or an audio file.
 
@@ -121,6 +125,44 @@ prefix (`mcp__*`).
 Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
+
+## Share your rules
+
+Presets menu → **Copy share code** puts your whole ruleset on the clipboard
+as a short `ctl1:…` code; **Paste a share code…** loads someone else's (then
+Save to keep it). **Export to file…** / **Import from file…** do the same as
+JSON.
+
+## Other agents, not just Claude Code
+
+Every session is tagged with its **source**, and rules can be scoped to one
+agent (**Only agent**). Preferences → **Connect other agents** writes the
+hook config for:
+
+- **Cursor** — `~/.cursor/hooks.json` (prompt, shell, MCP, file edits, stop)
+- **Codex CLI** — `notify` in `~/.codex/config.toml` (turn complete)
+- **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
+
+Anything else — ChatGPT desktop via a Shortcut, a script, another IDE — can
+POST to the local endpoint or run the emitter:
+
+```bash
+curl -X POST http://127.0.0.1:47172/signal -H 'content-type: application/json' \
+  -d '{"source":"chatgpt","session":"abc","signal":"tool-use","tool":"Bash","cwd":"/path"}'
+node hooks/emit.js permission-ask --source myagent --session abc --cwd /path
+curl http://127.0.0.1:47172/status     # the resolved look + live sessions
+```
+
+Signals: prompt-submit, tool-use, tool-done, tool-failed, stop,
+permission-ask, limit-hit, idle-nudge, session-start, session-end,
+subagent-start, subagent-done.
+
+## Windows
+
+`npm run dist:win` builds an installer and a portable exe. The widget,
+Lights, rules, overlay effects, sounds (system beep or a file), speech and
+the local endpoint all work; Dock-icon roaming, macOS Shortcuts and the
+menu-bar template icon are macOS-only.
 
 ## Answer permission prompts from the widget
 

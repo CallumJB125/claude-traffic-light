@@ -69,7 +69,46 @@ function isInstalled(settings, scriptPath = SET_STATUS_SCRIPT, options = {}) {
   return HOOK_EVENTS.every(([e, s]) => has(e, s)) && OPTIONAL_EVENTS.every(([e, s]) => has(e, s) === wantAsk);
 }
 
-module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd };
+// ── Other agents ────────────────────────────────────────────────────────────
+const EMIT_SCRIPT = path.join(__dirname, 'emit.js');
+
+// Cursor: ~/.cursor/hooks.json ({version:1, hooks:{event:[{command}]}}).
+function installCursor(hooksJson, emitPath = EMIT_SCRIPT) {
+  const out = hooksJson && typeof hooksJson === 'object' ? { ...hooksJson } : {};
+  out.version = out.version || 1;
+  out.hooks = { ...(out.hooks || {}) };
+  const ours = (c) => /emit\.js" --cursor /.test(c || '');
+  for (const ev of ['beforeSubmitPrompt', 'beforeShellExecution', 'beforeMCPExecution', 'afterFileEdit', 'stop']) {
+    const list = (out.hooks[ev] || []).filter((h) => !ours(h.command));
+    list.push({ command: `node "${emitPath}" --cursor ${ev}` });
+    out.hooks[ev] = list;
+  }
+  return out;
+}
+
+// Codex CLI: ~/.codex/config.toml — a `notify` array. Returns the new file text.
+function installCodex(tomlText, emitPath = EMIT_SCRIPT) {
+  const line = `notify = ["node", "${emitPath}", "--codex"]`;
+  const lines = String(tomlText || '').split('\n').filter((l) => !/^\s*notify\s*=/.test(l));
+  return [line, ...lines].join('\n').replace(/\n+$/, '') + '\n';
+}
+
+// Gemini CLI: ~/.gemini/settings.json — best effort, mirrors the Claude
+// hook shape it documents (hooks: {Event: [{matcher, hooks:[{type, command}]}]}).
+function installGemini(settings, emitPath = EMIT_SCRIPT) {
+  const out = settings && typeof settings === 'object' ? { ...settings } : {};
+  out.hooks = { ...(out.hooks || {}) };
+  const ours = (c) => /emit\.js" /.test(c || '');
+  const add = (ev, signal) => {
+    const list = (out.hooks[ev] || []).map((h) => ({ ...h, hooks: (h.hooks || []).filter((hh) => !ours(hh.command)) })).filter((h) => h.hooks.length);
+    list.push({ matcher: '', hooks: [{ type: 'command', command: `node "${emitPath}" ${signal} --source gemini` }] });
+    out.hooks[ev] = list;
+  };
+  add('BeforeTool', 'tool-use'); add('AfterTool', 'tool-done'); add('AfterAgent', 'stop'); add('SessionStart', 'session-start'); add('SessionEnd', 'session-end');
+  return out;
+}
+
+module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd, installCursor, installCodex, installGemini, EMIT_SCRIPT };
 
 if (require.main === module) {
   let settings = {};
