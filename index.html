@@ -187,33 +187,23 @@
     document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'deny'); });
     window.trafficLight.onEvent((name) => rig.playEvent(name));
 
-    // Reactions: click = jump to whoever needs you, or a poke; double-click =
-    // pet; ⌥-click = feed him a cookie.
+    // Gestures are programmable per state (Lights → On click). The main
+    // process resolves the action; we just show feedback and any reaction.
+    async function gesture(g) {
+      const r = await window.trafficLight.gesture(g);
+      if (!r) return;
+      if (r.react) rig.react(r.react, r.ms || 1400);
+      if (r.feedback) showFeedback(r.feedback);
+    }
     let clickTimer = null;
-    app.addEventListener('dblclick', (e) => {
-      clearTimeout(clickTimer); clickTimer = null;
-      rig.react({ eyes: 'heart', pose: 'nod' }, 2000);
-      showFeedback('purr');
-    });
-    app.addEventListener('click', async (e) => {
+    app.addEventListener('dblclick', () => { clearTimeout(clickTimer); clickTimer = null; gesture('double'); });
+    app.addEventListener('click', (e) => {
       if (didDrag) return;
-      if (e.altKey) { rig.react({ pose: 'munch', eyes: 'happy' }, 1800); showFeedback('nom'); return; }
+      if (e.altKey) { gesture('alt'); return; }
       if (clickTimer) return;
-      clickTimer = setTimeout(async () => {
-        clickTimer = null;
-        const result = await window.trafficLight.goToNeedingSession();
-        if (!result) return;
-        if (result.total === 0) {
-          rig.react({ eyes: 'surprised', pose: 'bounce' }, 1200);
-          showFeedback('boop');
-        } else {
-          const folder = result.cwd.split('/').filter(Boolean).pop() || result.cwd;
-          const badge = result.total > 1 ? ` (${result.index}/${result.total})` : '';
-          const precision = result.exact ? ' · tab found' : '';
-          showFeedback(`→ ${folder}${badge}${precision} · path copied`);
-        }
-      }, 230);
+      clickTimer = setTimeout(() => { clickTimer = null; gesture('click'); }, 230);
     });
+
     // Right-click the widget → Lights editor.
     app.addEventListener('contextmenu', (e) => {
       e.preventDefault();

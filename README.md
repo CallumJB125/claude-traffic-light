@@ -126,6 +126,19 @@ across the screen to that app's Dock icon (Ghostty, iTerm, Terminal, Warp…),
 knocks, and runs home — once per waiting episode, then every 10 minutes while
 ignored. Preferences → **Run to the terminal and knock**.
 
+## Program the clicks
+
+Each rule has an **On click** section: what a click, a double-click and an
+⌥-click do while that state is showing. Actions: jump to the session that
+needs you, bring the terminal forward, allow or deny the pending permission,
+poke / pet / feed, open Lights or Stats, open the session's folder in Finder
+or in an app of your choice, copy its path, open a URL, run a shell command
+(the session folder is in `$CLAUDE_CWD`), run a macOS Shortcut, say
+something out loud, or hide the widget for 30 minutes. Gestures a rule
+leaves on "keep" fall through to the rules below and finally to the
+defaults: click jumps (or pokes when nothing is waiting), double-click pets,
+⌥-click feeds. Right-click always opens Lights.
+
 ## Task progress, rare events, reactions
 
 - A tiny **3/7** on the sign's crossbar while Claude works through a task

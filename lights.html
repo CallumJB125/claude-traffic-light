@@ -675,6 +675,21 @@
           </div>
         </div>
 
+        <div class="hr"></div>
+
+        <div class="row">
+          <div class="lbl section">On click</div>
+          <div class="field" id="click-field"></div>
+        </div>
+        <div class="row">
+          <div class="lbl">Double-click</div>
+          <div class="field" id="double-field"></div>
+        </div>
+        <div class="row">
+          <div class="lbl">⌥-click</div>
+          <div class="field" id="alt-field"></div>
+        </div>
+
         <div class="row">
           <div class="lbl">Also</div>
           <div class="field">
@@ -1136,6 +1151,32 @@
     $('body-color').value = r.then.bodyColor || '#da7756';
     $('cwd').value = r.when.cwd || '';
 
+    // Programmable gestures: a select per gesture plus an argument field
+    // for actions that take one. "Keep" leaves it to the rules below (and
+    // finally the defaults: click jumps, double-click pets, ⌥-click feeds).
+    for (const g of R.GESTURES) {
+      const field = $(`${g}-field`);
+      field.innerHTML = '';
+      const cur = r.then.clicks[g] || null;
+      const sel = document.createElement('select');
+      sel.className = 'select';
+      sel.setAttribute('aria-label', `${g} action`);
+      sel.innerHTML = `<option value="">Keep (${R.ACTIONS.find((a) => a.id === R.DEFAULT_CLICKS[g].type).label.toLowerCase()})</option>` + R.ACTIONS.map((a) => `<option value="${a.id}">${escape(a.label)}</option>`).join('');
+      sel.value = cur ? cur.type : '';
+      const def = R.ACTIONS.find((a) => a.id === (cur && cur.type));
+      const argInput = document.createElement('input');
+      argInput.type = 'text';
+      argInput.placeholder = def?.arg || '';
+      argInput.value = cur?.arg || '';
+      argInput.style.width = '210px';
+      argInput.hidden = !def?.arg;
+      argInput.setAttribute('aria-label', `${g} action argument`);
+      sel.addEventListener('change', () => { r.then.clicks[g] = sel.value ? { type: sel.value, arg: argInput.value.trim() || null } : undefined; if (!sel.value) delete r.then.clicks[g]; touch(); });
+      argInput.addEventListener('input', () => { if (r.then.clicks[g]) { r.then.clicks[g].arg = argInput.value.trim() || null; setDirty(true); } });
+      field.appendChild(sel);
+      field.appendChild(argInput);
+    }
+
     const sel = $('sound');
     const soundOpts = [['', 'No sound'], ...R.SOUNDS.map((x) => [x, x === 'beep' ? 'System beep' : x])];
     if (r.then.sound && r.then.sound.startsWith('file:')) soundOpts.push([r.then.sound, r.then.sound.slice(5).split('/').pop()]);
@@ -1360,6 +1401,7 @@
     if (v === 'stats') renderStats();
   }
   $('view-rules').addEventListener('click', () => setView('rules'));
+  window.lightsApi.onShowView((v) => setView(v));
   $('view-stats').addEventListener('click', () => setView('stats'));
 
   async function renderStats() {
@@ -1435,6 +1477,7 @@
     if (q.get('mode') === 'live') previewMode = 'live';
     if (q.get('view') === 'stats') setView('stats');
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
+    if (q.get('scroll')) $('editor').scrollTop = Number(q.get('scroll'));
     setDirty(false);
     renderList(); renderEditor(); renderStage();
     refreshLive();

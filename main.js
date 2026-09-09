@@ -442,7 +442,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -929,8 +929,6 @@ ipcMain.handle('get-aggregate-status', () => {
 // Click handler: jump to whichever session needs the user — the ones whose
 // live signal is a waiting one. Cycles through them, oldest first; a limit
 // hit jumps the queue.
-let cycleIndex = 0;
-
 ipcMain.handle('go-to-needing-session', async () => {
   const { sessions } = aggregateState();
   const needing = sessions
@@ -976,6 +974,87 @@ ipcMain.handle('save-config', (e, partial) => {
 });
 
 ipcMain.handle('get-stats', () => Stats.summary(stats));
+
+// ── Gestures on the avatar → the action the current state programmed ──────
+let snoozeTimer = null;
+let cycleIndex = 0;
+async function runAction(action, st) {
+  const needing = st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  const target = needing[0] || st.sessions[0] || null;
+  const cwd = target?.cwd || null;
+  const folderHint = cwd ? cwd.split('/').filter(Boolean).pop() : '';
+  switch (action.type) {
+    case 'jump': {
+      if (!needing.length) return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+      const r = await jumpToNeeding();
+      return { feedback: r };
+    }
+    case 'terminal': {
+      const a = await activateTerminalApp(folderHint);
+      return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
+    }
+    case 'allow': case 'deny': {
+      const req = st.pending && st.pending[0];
+      if (!req) return { feedback: 'nothing to answer' };
+      answerRequest(req.id, action.type);
+      setTimeout(broadcastStatus, 250);
+      return { feedback: action.type === 'allow' ? 'allowed' : 'denied' };
+    }
+    case 'poke': return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+    case 'pet': return { react: { eyes: 'heart', pose: 'nod' }, ms: 2000, feedback: 'purr' };
+    case 'feed': return { react: { pose: 'munch', eyes: 'happy' }, ms: 1800, feedback: 'nom' };
+    case 'lights': createLightsWindow(); return { feedback: 'Lights' };
+    case 'stats': createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'stats')); lightsWin?.webContents.send('show-view', 'stats'); return { feedback: 'Stats' };
+    case 'finder': if (!cwd) return { feedback: 'no session folder' }; shell.openPath(cwd); return { feedback: `Finder → ${folderHint}` };
+    case 'editor': {
+      if (!cwd) return { feedback: 'no session folder' };
+      execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
+    }
+    case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
+    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
+    case 'shell': {
+      if (!action.arg) return { feedback: 'no command set' };
+      // The user's own command, run in their login shell; the session folder is CLAUDE_CWD.
+      execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      return { feedback: 'ran' };
+    }
+    case 'shortcut': if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
+    case 'say': execFile('say', [action.arg || (target ? `${folderHint} needs you` : 'hello')], () => {}); return { react: { pose: 'bubble' }, ms: 1500, feedback: 'said' };
+    case 'snooze': {
+      win?.hide();
+      clearTimeout(snoozeTimer);
+      snoozeTimer = setTimeout(() => { if (loadConfig().showWidget) win?.showInactive(); }, 30 * 60 * 1000);
+      return { feedback: 'back in 30 min' };
+    }
+    default: return { feedback: '' };
+  }
+}
+
+async function jumpToNeeding() {
+  const { sessions } = aggregateState();
+  const needing = sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  if (!needing.length) return 'nothing waiting';
+  const limits = needing.filter((s) => s.signal === 'limit-hit');
+  const queue = limits.length > 0 ? limits : needing;
+  cycleIndex = cycleIndex % queue.length;
+  const target = queue[cycleIndex];
+  const shownIndex = cycleIndex + 1;
+  cycleIndex += 1;
+  clipboard.writeText(target.cwd);
+  const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
+  const activated = await activateTerminalApp(folderHint);
+  const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
+  return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
+}
+
+ipcMain.handle('gesture', async (e, gesture) => {
+  const st = aggregateState();
+  if (st.reason === 'travel') return { feedback: '' };
+  const action = (st.look.clicks && st.look.clicks[gesture]) || Rules.DEFAULT_CLICKS[gesture];
+  if (!action) return { feedback: '' };
+  try { return await runAction(action, st); } catch (err) { return { feedback: err.message }; }
+});
 
 ipcMain.handle('answer-request', (e, id, decision) => {
   const ok = answerRequest(String(id), String(decision));

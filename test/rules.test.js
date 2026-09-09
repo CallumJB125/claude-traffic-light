@@ -117,7 +117,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -189,6 +189,20 @@ test('body, effect and pet are accent channels', () => {
   assert.deepEqual([l.body, l.effect, l.pet, l.lamp], ['ghost', 'fire', 'blob', 'green']);
   const p = R.previewLook({ then: { effect: 'beard' } });
   assert.equal(p.waitMinutes, 20, 'preview shows a grown beard');
+});
+
+test('clicks: per-gesture actions layer like accents and fall back to defaults', () => {
+  const rs = [
+    { id: 'a', name: 'a', when: { signal: ['tool-use'], tool: 'Agent' }, then: { clicks: { click: { type: 'url', arg: 'https://x.dev' } } } },
+    ...rules(),
+  ];
+  const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
+  assert.deepEqual(l.clicks.click, { type: 'url', arg: 'https://x.dev' });
+  assert.deepEqual(l.clicks.double, R.DEFAULT_CLICKS.double, 'unset gestures fall back');
+  const plain = look([{ signal: 'tool-use', tool: 'Bash' }], rs);
+  assert.equal(plain.clicks.click.type, 'jump');
+  const junk = R.normalizeRule({ then: { clicks: { click: { type: 'explode' }, alt: { type: 'say', arg: '  hi  ' }, weird: { type: 'jump' } } } });
+  assert.deepEqual(junk.then.clicks, { alt: { type: 'say', arg: 'hi' } });
 });
 
 // ── stats.js ────────────────────────────────────────────────────────────────

@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('lightsApi', {
   previewOnWidget: (look, ms) => ipcRenderer.invoke('preview-on-widget', look, ms),
   openPreferences: () => ipcRenderer.invoke('open-preferences'),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
+  onShowView: (cb) => ipcRenderer.on('show-view', (e, v) => cb(v)),
 });

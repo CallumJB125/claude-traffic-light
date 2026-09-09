@@ -80,6 +80,11 @@
     setInput($('body-color'), '#1155cc');
     ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--body-color') === '#1155cc', 'body colour reaches the stage');
     setInput($('cwd'), 'bondly*');
+    const clickSel = $('click-field').querySelector('select');
+    setInput(clickSel, 'url');
+    ok(!$('click-field').querySelector('input').hidden, 'argument field appears for actions that take one');
+    setInput($('click-field').querySelector('input'), 'https://example.com');
+    setInput($('double-field').querySelector('select'), 'snooze');
     setInput($('sound'), 'Glass');
     ok(!$('sound-play').disabled, 'sound picked enables play');
     setInput($('eye-color'), '#ff00aa');
@@ -126,6 +131,7 @@
     ok(pt && pt.then.lamp === 'amber' && pt.then.lampColor === '#00ffff' && pt.then.eyes === '#ff00aa' && pt.then.pose === 'bounce' && pt.then.celebrate === true && pt.when.tool === 'mcp__*', 'saved rule carries every channel');
     ok(pt && pt.then.text === 'feed me tokens please no', 'banner text persists with the rule');
     ok(pt && pt.then.costume === 'unicorn', 'costume persists with the rule');
+    ok(pt && pt.then.clicks.click.type === 'url' && pt.then.clicks.click.arg === 'https://example.com' && pt.then.clicks.double.type === 'snooze' && !pt.then.clicks.alt, 'programmed gestures persist');
     ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*', 'body, effect, pet, body colour, sound and project scope persist');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 

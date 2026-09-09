@@ -69,6 +69,30 @@
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
+  // What a gesture on the avatar can do. `arg` is free text where noted.
+  const ACTIONS = [
+    { id: 'jump', label: 'Jump to the session that needs you' },
+    { id: 'terminal', label: 'Bring the terminal to the front' },
+    { id: 'allow', label: 'Allow the pending permission' },
+    { id: 'deny', label: 'Deny the pending permission' },
+    { id: 'poke', label: 'Poke him' },
+    { id: 'pet', label: 'Pet him' },
+    { id: 'feed', label: 'Feed him a cookie' },
+    { id: 'lights', label: 'Open Lights' },
+    { id: 'stats', label: 'Open Stats' },
+    { id: 'finder', label: "Open the session's folder in Finder" },
+    { id: 'editor', label: "Open the session's folder in…", arg: 'App name, e.g. Visual Studio Code' },
+    { id: 'copy-path', label: "Copy the session's folder path" },
+    { id: 'url', label: 'Open a URL', arg: 'https://…' },
+    { id: 'shell', label: 'Run a shell command', arg: 'e.g. open -a Slack' },
+    { id: 'shortcut', label: 'Run a macOS Shortcut', arg: 'Shortcut name' },
+    { id: 'say', label: 'Say something out loud', arg: 'Text to speak' },
+    { id: 'snooze', label: 'Hide the widget for 30 minutes' },
+    { id: 'none', label: 'Do nothing' },
+  ];
+  const GESTURES = ['click', 'double', 'alt'];
+  const DEFAULT_CLICKS = { click: { type: 'jump' }, double: { type: 'pet' }, alt: { type: 'feed' } };
+
   // macOS system sounds, by name; 'beep' is the system alert; 'file:<path>' plays a chosen file.
   const SOUNDS = ['beep', 'Glass', 'Pop', 'Funk', 'Hero', 'Submarine', 'Sosumi', 'Blow', 'Ping', 'Purr'];
 
@@ -173,8 +197,19 @@
         bodyColor: /^#[0-9a-f]{6}$/i.test(r.then?.bodyColor || '') ? r.then.bodyColor : null,
         effect: EFFECTS.includes(r.then?.effect) ? r.then.effect : null,
         pet: PETS.includes(r.then?.pet) ? r.then.pet : null,
+        clicks: normalizeClicks(r.then?.clicks),
       },
     };
+  }
+
+  function normalizeClicks(c) {
+    const out = {};
+    for (const g of GESTURES) {
+      const a = c && c[g];
+      if (!a || !ACTIONS.some((x) => x.id === a.type)) continue;
+      out[g] = { type: a.type, arg: typeof a.arg === 'string' && a.arg.trim() ? a.arg.trim().slice(0, 500) : null };
+    }
+    return out;
   }
 
   function toolMatches(pattern, tool) {
@@ -226,7 +261,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now) };
+    const look = { lamp: 'off', lampColor: null, eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -240,11 +275,13 @@
       if (!owned.bodyColor && t.bodyColor) { look.bodyColor = t.bodyColor; owned.bodyColor = rule.id; }
       if (!owned.effect && t.effect) { look.effect = t.effect; owned.effect = rule.id; }
       if (!owned.pet && t.pet) { look.pet = t.pet; owned.pet = rule.id; }
+      for (const g of GESTURES) if (!look.clicks[g] && t.clicks[g]) look.clicks[g] = t.clicks[g];
       if (!owned.sound && t.sound) { look.sound = t.sound; owned.sound = rule.id; }
       if (t.celebrate && !owned.celebrate) { look.celebrate = true; owned.celebrate = rule.id; }
       if (!look.name) { look.name = rule.name; look.ruleId = rule.id; }
       if (t.lamp) { look.lamp = t.lamp; look.lampColor = t.lampColor; owned.lamp = rule.id; break; }
     }
+    for (const g of GESTURES) if (!look.clicks[g]) look.clicks[g] = DEFAULT_CLICKS[g];
     return { look, fired, owned };
   }
 
@@ -268,5 +305,5 @@
     };
   }
 
-  return { seasonalCostume, seasonalEffect, SIGNALS, TOOL_SUGGESTIONS, LAMPS, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
 });
