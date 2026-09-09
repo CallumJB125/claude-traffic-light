@@ -537,6 +537,13 @@
 .rig.processing .knock-fist { opacity: 1; animation: rig-grind 0.6s ease-in-out infinite alternate; transform-origin: 53px 49px; }
 @keyframes rig-grind { from { transform: translate(-2px, 1px) rotate(-25deg); } to { transform: translate(3px, -1px) rotate(25deg); } }
 
+/* smashing: hammer swings down hard, body lunges with it */
+.rig .hammer { opacity: 0; transform-origin: 50px 53px; }
+.rig.smashing .hammer { opacity: 1; animation: rig-hammer 0.55s cubic-bezier(0.6, 0, 0.3, 1) infinite; }
+.rig.smashing .scene { animation: rig-lunge 0.55s cubic-bezier(0.6, 0, 0.3, 1) infinite; transform-origin: 32px 68px; }
+@keyframes rig-hammer { 0%, 100% { transform: rotate(-70deg); } 45% { transform: rotate(-70deg); } 60% { transform: rotate(25deg); } 75% { transform: rotate(20deg); } }
+@keyframes rig-lunge { 0%, 45%, 100% { transform: translate(0, 0) rotate(0); } 60% { transform: translate(3px, 1px) rotate(6deg); } }
+
 /* garden lifecycle */
 .rig .mover { transition: transform 2.6s ease-in-out; transform: translateX(var(--walk, 0px)); }
 .rig .tools > * { opacity: 0; }
@@ -579,7 +586,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .scene, .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
+  .rig .hammer, .rig .scene, .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
   .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }

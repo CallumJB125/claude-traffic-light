@@ -147,6 +147,8 @@
     <g class="needle"><rect x="50" y="43" width="8" height="3" rx="0.6" fill="#d7ded6" stroke="#211f1c" stroke-width="0.4" /><rect x="58" y="44" width="4" height="0.8" fill="#9aa3ad" /><rect class="plunger" x="47" y="43.8" width="4" height="1.4" fill="#e2231a" /></g>
     <!-- muscles: arm bulges that grow over time -->
     <g class="muscles" fill="var(--body-color, #da7756)"><ellipse class="bicep b1" cx="9" cy="54" rx="1" ry="1" /><ellipse class="bicep b2" cx="55" cy="54" rx="1" ry="1" /></g>
+    <!-- hammer, for tearing the garden down -->
+    <g class="hammer"><rect x="49" y="40" width="2.2" height="14" rx="1" fill="#8a5a2b" /><rect x="45" y="36" width="10.5" height="5.5" rx="1.2" fill="#4a4a52" /><rect x="45" y="36" width="10.5" height="1.6" fill="#6a6a74" /></g>
     <!-- skateboard -->
     <g class="skate"><rect x="12" y="69" width="40" height="3" rx="1.5" fill="#5b3fb8" /><circle cx="19" cy="73" r="1.6" fill="#f2efe8" /><circle cx="45" cy="73" r="1.6" fill="#f2efe8" /></g>
     <!-- halo + Xs for dead -->
@@ -513,7 +515,7 @@
       }
       // Garden actions on the real screen are driven by the main process.
       const act = look.gardenAct || null;
-      for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing']) svg.classList.toggle(a, act === a);
+      for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing', 'smashing']) svg.classList.toggle(a, act === a);
       if (act === 'eating') { svg.classList.add('eating', look.facing === 'left' ? 'eat-left' : 'eat-right'); } else if (!garden) svg.classList.remove('eating', 'eat-left', 'eat-right');
       svg.classList.toggle('grumpy', !!look.grumpy);
       // Gardening needs room: the view widens to three widths, Claude centred.

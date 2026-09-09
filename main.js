@@ -362,7 +362,7 @@ function sumTasks(sessions) {
   return { created, done };
 }
 
-function aggregateState() {
+function aggregateState(opts = {}) {
   const config = loadConfig();
   const sessions = readSessions(config);
   const pending = config.askFromWidget ? readRequests() : [];
@@ -370,7 +370,7 @@ function aggregateState() {
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
-  if (travelLook) {
+  if (travelLook && !opts.ignoreTravel) {
     return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks };
   }
   const override = readManualOverride();
@@ -849,7 +849,7 @@ const GSPEED = Number(process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED || 1);
 // Slower, bigger: twelve pots spread over the whole display in a jittered
 // grid, so the screen becomes the garden. One plant in thirty is weed — it
 // gets dried on a rack for ten minutes, then a buyer comes for it.
-const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, PROCESS: 90000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
+const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, PROCESS: 90000 / GSPEED, SMASH_RUN: 7000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
 
 function gardenGeometry() {
   const b = win.getBounds();
@@ -1032,6 +1032,21 @@ async function runGarden(base) {
   } finally {
     console.log('[garden] end', JSON.stringify({ stop: run.stop, same: gardenRun === run }));
     if (gardenRun === run) {
+      // Teardown: run to every pot (7 s each), smash it with a hammer, watch
+      // it blow apart, then go home.
+      try {
+        for (const pot of run.pots) {
+          if (gardenRun !== run || !win || win.isDestroyed()) break;
+          const stand = standAt(pot);
+          gardenAct('walking', { facing: facingTo(stand.x) });
+          await moveWidget(stand.x, stand.y, GT.SMASH_RUN);
+          gardenAct('smashing', { facing: 'right' });
+          await wait(1100);
+          overlayGarden({ op: 'smash', i: run.pots.indexOf(pot) });
+          await wait(700);
+        }
+      } catch (e) { console.log('[garden] teardown', e.message); }
+      gardenAct(null);
       overlayGarden({ op: 'clear' });
       travelLook = null;
       const home = run.home;
@@ -1600,8 +1615,13 @@ app.whenReady().then(() => {
   createTray();
   startSignalServer();
   if (DEMO === 'weed') {
-    // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, deals 30 s each
-    setTimeout(() => app.quit(), 8 * 60 * 1000);
+    // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
+    // at 6½ min a fake session appears so the state changes and the hammer teardown plays.
+    setTimeout(() => {
+      fs.writeFileSync(path.join(SESSIONS_DIR, 'demo-session.json'), JSON.stringify({ sessionId: 'demo', host: 'demo', cwd: '/demo', signal: 'tool-use', tool: 'Bash', updatedAt: new Date().toISOString() }));
+      broadcastStatus();
+    }, 6.5 * 60 * 1000);
+    setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
 

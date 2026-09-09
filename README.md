@@ -112,8 +112,12 @@ independently:
   screen — generated fresh every time from Lagos-rapper and Rastafari
   parts (skin, fits, durags, tams, snapbacks, dreads, shades, chains,
   grillz, the odd boombox or spliff) — swaps the jar for a few notes, and
-  walks off. When the
-  state changes he walks home and the garden clears. The editor previews a
+  walks off. The plant is drawn properly — palmate serrated leaves, colas
+  with orange pistils — and the process follows the real one: branches hung
+  upside-down to dry, then bucked and trimmed with scissors over a tray,
+  weighed, and jarred to cure. When the state changes he runs to every pot
+  (seven seconds each), smashes it with a hammer, it blows apart, and then
+  he walks home. The editor previews a
   compact version at 30×.
 - **Pet** — a duck, cat, blob, dog, bunny, parrot (on the sign), frog,
   snail or dragon at his feet, each with its own idle; click a pet and it
