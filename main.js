@@ -1165,8 +1165,20 @@ function broadcastStatus() {
 // waiting episode, then every 10 minutes while still ignored.
 let roamState = { lastKnock: 0, waitingSince: null, busy: false, home: null };
 
+// Serialised, time-boxed AppleScript. System Events can stall for minutes
+// (Automation prompt, busy Dock), and an unbounded osascript per status tick
+// once piled up 1,750 processes and exhausted the machine's process table.
+// One in flight at a time; a second caller shares the pending result; hung
+// scripts are killed at 4s.
+const osaInflight = new Map();
 function osa(script) {
-  return new Promise((resolve) => execFile('osascript', ['-e', script], (err, out) => resolve(err ? null : out.trim())));
+  if (osaInflight.has(script)) return osaInflight.get(script);
+  const p = new Promise((resolve) => {
+    const child = execFile('osascript', ['-e', script], { timeout: 4000, killSignal: 'SIGKILL' }, (err, out) => resolve(err ? null : out.trim()));
+    child.on('error', () => resolve(null));
+  }).finally(() => osaInflight.delete(script));
+  osaInflight.set(script, p);
+  return p;
 }
 
 async function frontmostApp() {
@@ -1210,12 +1222,12 @@ async function maybeRoam(st) {
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
-  const app = await runningTerminal();
-  if (!app) return;
-  if ((await frontmostApp()) === app) return; // they're looking at it already
-  const icon = await dockIconRect(app);
-  if (!icon) return;
   roamState.busy = true;
+  const app = await runningTerminal().catch(() => null);
+  if (!app) { roamState.busy = false; roamState.lastKnock = Date.now(); return; }
+  if ((await frontmostApp()) === app) { roamState.busy = false; return; } // they're looking at it already
+  const icon = await dockIconRect(app);
+  if (!icon) { roamState.busy = false; roamState.lastKnock = Date.now(); return; }
   roamState.lastKnock = Date.now();
   const home = win.getBounds();
   roamState.home = home;
