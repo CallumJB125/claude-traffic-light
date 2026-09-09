@@ -626,6 +626,11 @@
         </div>
 
         <div class="row">
+          <div class="lbl">Lamp effect</div>
+          <div class="field"><div class="poses" id="lampfx"></div></div>
+        </div>
+
+        <div class="row">
           <div class="lbl">Eyes</div>
           <div class="field">
             <div class="lamps" id="eyes"></div>
@@ -1122,6 +1127,7 @@
         container.appendChild(b);
       }
     };
+    picker($('lampfx'), R.LAMP_FX, r.then.lampFx, (o) => ({ lamp: r.then.lamp && r.then.lamp !== 'off' ? r.then.lamp : 'green', lampColor: r.then.lampColor, lampFx: o || 'none' }), (o) => { r.then.lampFx = o; });
     picker($('costumes'), R.COSTUMES, r.then.costume, (o) => ({ costume: o || 'none' }), (o) => { r.then.costume = o; });
     picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
@@ -1329,8 +1335,8 @@
   PRESETS.loud = () => {
     const d = R.defaultRules();
     const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
-    set('limit', { sound: 'Sosumi', pose: 'sleep' });
-    set('permission', { sound: 'Hero', pose: 'ak47' });
+    set('limit', { sound: 'Sosumi', pose: 'sleep', lampFx: 'sos' });
+    set('permission', { sound: 'Hero', pose: 'ak47', lampFx: 'strobe' });
     set('nudge', { pose: 'bubble', text: 'YOUR TURN', sound: 'Glass' });
     const i = d.findIndex((x) => x.id === 'ignored');
     d.splice(i, 1,
@@ -1344,7 +1350,8 @@
     const d = R.defaultRules();
     const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
     set('working', { pose: 'run', pet: 'duck' });
-    set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart' });
+    set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart', lampFx: 'chase' });
+    set('working', { pose: 'run', pet: 'duck', lampFx: 'breathe' });
     set('limit', { body: 'ghost', effect: 'rain', eyes: 'x' });
     set('permission', { pose: 'wave', costume: 'crown' });
     set('failed', { eyes: 'dizzy', effect: 'fire' });
@@ -1482,7 +1489,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

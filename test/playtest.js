@@ -73,6 +73,7 @@
     costumeBtn('unicorn').click();
     ok(stageLook().cls.includes('costume-unicorn'), 'costume applies on the stage');
     const pick = (id, title) => Array.from($(id).querySelectorAll('.posebtn')).find((b) => b.title === title).click();
+    pick('lampfx', 'strobe'); ok(stageLook().cls.includes('lampfx-strobe'), 'lamp effect applies on the stage');
     pick('bodies', 'robot'); ok(stageLook().cls.includes('body-robot'), 'body swap applies on the stage');
     pick('effects', 'rain'); ok(stageLook().cls.includes('effect-rain'), 'effect applies on the stage');
     pick('pets', 'duck'); ok(stageLook().cls.includes('pet-duck'), 'pet applies on the stage');
@@ -132,6 +133,7 @@
     ok(pt && pt.then.text === 'feed me tokens please no', 'banner text persists with the rule');
     ok(pt && pt.then.costume === 'unicorn', 'costume persists with the rule');
     ok(pt && pt.then.clicks.click.type === 'url' && pt.then.clicks.click.arg === 'https://example.com' && pt.then.clicks.double.type === 'snooze' && !pt.then.clicks.alt, 'programmed gestures persist');
+    ok(pt && pt.then.lampFx === 'strobe', 'lamp effect persists');
     ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*', 'body, effect, pet, body colour, sound and project scope persist');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 

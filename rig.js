@@ -325,6 +325,7 @@
 
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
   const EVENTS = ['ufo', 'portal', 'meteor'];
+  const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
@@ -350,10 +351,17 @@
       const lamp = look.lamp || 'off';
       const lit = SLOT_COLORS[lamp] ? lamp : null;
       const color = look.lampColor || (lit ? SLOT_COLORS[lit] : null);
+      const fx = LAMP_FX.includes(look.lampFx) ? look.lampFx : 'none';
+      const groupFx = fx === 'chase' || fx === 'police' || fx === 'all';
       for (const el of lamps) {
-        const on = lit && el.dataset.slot === lit;
+        const on = (lit && el.dataset.slot === lit) || groupFx;
         el.classList.toggle('on', !!on);
-        el.classList.toggle('pulse', !!on && look.pulse !== false && lit === 'green' && !look.lampColor);
+        // pulse is the original green behaviour unless a rule chose an effect
+        el.classList.toggle('pulse', !!on && fx === 'none' && lit === 'green' && !look.lampColor);
+      }
+      if (!current || current.lampFx !== fx) {
+        for (const f of LAMP_FX) svg.classList.remove(`lampfx-${f}`);
+        if (fx !== 'none') svg.classList.add(`lampfx-${fx}`);
       }
       svg.style.setProperty('--lamp-on', color || 'var(--lamp-off)');
       svg.style.setProperty('--lamp-glow', color ? hexToRgba(color, 0.85) : 'transparent');
@@ -400,7 +408,7 @@
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
-      current = { ...look, pose, costume };
+      current = { ...look, pose, costume, lampFx: fx };
     }
 
     let eventTimer = null;
@@ -448,5 +456,6 @@
   window.RIG_PETS = PETS;
   window.RIG_EYE_MOODS = EYE_MOODS;
   window.RIG_EVENTS = EVENTS;
+  window.RIG_LAMP_FX = LAMP_FX;
   window.RIG_DEFAULT_TEXT = DEFAULT_TEXT;
 })();

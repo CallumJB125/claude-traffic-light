@@ -63,6 +63,7 @@
   const TOOL_SUGGESTIONS = ['Agent', 'Bash', 'Edit', 'Write', 'Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'mcp__*'];
 
   const LAMPS = ['off', 'red', 'amber', 'green'];
+  const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
@@ -187,6 +188,7 @@
       then: {
         lamp: LAMPS.includes(r.then?.lamp) ? r.then.lamp : null,
         lampColor: /^#[0-9a-f]{6}$/i.test(r.then?.lampColor || '') ? r.then.lampColor : null,
+        lampFx: LAMP_FX.includes(r.then?.lampFx) ? r.then.lampFx : null,
         eyes: r.then?.eyes === 'closed' || EYE_MOODS.includes(r.then?.eyes) || /^#[0-9a-f]{6}$/i.test(r.then?.eyes || '') ? r.then.eyes : (r.then?.eyes === 'default' ? 'default' : null),
         pose: POSES.includes(r.then?.pose) ? r.then.pose : null,
         sound: SOUNDS.includes(r.then?.sound) || /^file:.+/.test(r.then?.sound || '') ? r.then.sound : null,
@@ -261,7 +263,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
+    const look = { lamp: 'off', lampColor: null, lampFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -279,6 +281,7 @@
       if (!owned.sound && t.sound) { look.sound = t.sound; owned.sound = rule.id; }
       if (t.celebrate && !owned.celebrate) { look.celebrate = true; owned.celebrate = rule.id; }
       if (!look.name) { look.name = rule.name; look.ruleId = rule.id; }
+      if (!owned.lampFx && t.lampFx) { look.lampFx = t.lampFx; owned.lampFx = rule.id; }
       if (t.lamp) { look.lamp = t.lamp; look.lampColor = t.lampColor; owned.lamp = rule.id; break; }
     }
     for (const g of GESTURES) if (!look.clicks[g]) look.clicks[g] = DEFAULT_CLICKS[g];
@@ -291,6 +294,7 @@
     return {
       lamp: r.then.lamp || 'off',
       lampColor: r.then.lampColor,
+      lampFx: r.then.lampFx || 'none',
       eyes: r.then.eyes || 'default',
       pose: r.then.pose || 'none',
       text: r.then.text,
@@ -305,5 +309,5 @@
     };
   }
 
-  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
 });

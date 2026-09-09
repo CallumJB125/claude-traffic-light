@@ -71,6 +71,9 @@ changes and never runs under Reduce Motion.
 Beyond the lamp, each rule can set any of these channels, all layered
 independently:
 
+- **Lamp effect** — pulse, strobe, breathe, flicker (faulty neon), chase
+  (lamps in sequence), police (red/blue), rainbow, all three lit, or SOS in
+  morse.
 - **Eyes** — a colour, closed, or a mood: heart, happy, angry, sad,
   surprised, wink, star, money, sleepy, suspicious, rolling, googly, dizzy,
   x, tears, laser.

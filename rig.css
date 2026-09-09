@@ -32,6 +32,36 @@
   50% { filter: drop-shadow(0 0 5px var(--lamp-glow)) brightness(1.2); }
 }
 
+/* Lamp effects (look.lampFx). Group effects light lamps in their own colour
+   regardless of which slot the rule chose. */
+.rig.lampfx-strobe .lamp.on { animation: rig-strobe 0.12s steps(1) infinite; }
+@keyframes rig-strobe { 0% { fill: var(--lamp-on); filter: drop-shadow(0 0 6px var(--lamp-glow)) brightness(1.4); } 50% { fill: var(--lamp-off); filter: none; } }
+.rig.lampfx-breathe .lamp.on { animation: rig-breathe-lamp 3s ease-in-out infinite; }
+@keyframes rig-breathe-lamp { 0%, 100% { filter: drop-shadow(0 0 1px var(--lamp-glow)) brightness(0.7); } 50% { filter: drop-shadow(0 0 7px var(--lamp-glow)) brightness(1.25); } }
+.rig.lampfx-flicker .lamp.on { animation: rig-flicker 2.4s steps(1) infinite; }
+@keyframes rig-flicker { 0%, 9%, 11%, 19%, 21%, 68%, 70%, 100% { opacity: 1; } 10%, 20%, 69% { opacity: 0.25; } 20.5% { opacity: 0.6; } }
+.rig.lampfx-chase .lamp[data-slot="red"] { animation: rig-chase 0.9s steps(1) infinite; --chase-c: var(--lamp-red); --chase-g: rgba(226, 35, 26, 0.85); }
+.rig.lampfx-chase .lamp[data-slot="amber"] { animation: rig-chase 0.9s steps(1) infinite 0.3s; --chase-c: var(--lamp-amber); --chase-g: rgba(242, 162, 0, 0.85); }
+.rig.lampfx-chase .lamp[data-slot="green"] { animation: rig-chase 0.9s steps(1) infinite 0.6s; --chase-c: var(--lamp-green); --chase-g: rgba(47, 174, 62, 0.85); }
+@keyframes rig-chase { 0% { fill: var(--chase-c); filter: drop-shadow(0 0 4px var(--chase-g)); } 34% { fill: var(--lamp-off); filter: none; } }
+.rig.lampfx-police .lamp[data-slot="red"] { animation: rig-police-a 0.5s steps(1) infinite; }
+.rig.lampfx-police .lamp[data-slot="green"] { animation: rig-police-b 0.5s steps(1) infinite; }
+.rig.lampfx-police .lamp[data-slot="amber"] { fill: var(--lamp-off); filter: none; }
+@keyframes rig-police-a { 0% { fill: #e2231a; filter: drop-shadow(0 0 6px rgba(226, 35, 26, 0.9)); } 50% { fill: var(--lamp-off); filter: none; } }
+@keyframes rig-police-b { 0% { fill: var(--lamp-off); filter: none; } 50% { fill: #2f6bff; filter: drop-shadow(0 0 6px rgba(47, 107, 255, 0.9)); } }
+.rig.lampfx-rainbow .lamp.on { animation: rig-rainbow 2.4s linear infinite; }
+@keyframes rig-rainbow { from { filter: drop-shadow(0 0 4px var(--lamp-glow)) hue-rotate(0deg); } to { filter: drop-shadow(0 0 4px var(--lamp-glow)) hue-rotate(360deg); } }
+.rig.lampfx-all .lamp[data-slot="red"] { fill: var(--lamp-red); filter: drop-shadow(0 0 3px rgba(226, 35, 26, 0.85)); }
+.rig.lampfx-all .lamp[data-slot="amber"] { fill: var(--lamp-amber); filter: drop-shadow(0 0 3px rgba(242, 162, 0, 0.85)); }
+.rig.lampfx-all .lamp[data-slot="green"] { fill: var(--lamp-green); filter: drop-shadow(0 0 3px rgba(47, 174, 62, 0.85)); }
+.rig.lampfx-sos .lamp.on { animation: rig-sos 3.6s steps(1) infinite; }
+/* · · ·  — — —  · · ·  with unit 0.15s */
+@keyframes rig-sos {
+  0%, 4.2%, 8.4%, 16.6%, 29%, 41.6%, 58.3%, 62.5%, 66.6% { opacity: 1; }
+  2.1%, 6.3%, 10.5%, 25%, 37.5%, 50%, 60.4%, 64.6%, 68.7%, 100% { opacity: 0.18; }
+  12.5% { opacity: 0.18; }
+}
+
 .rig .eye-open { fill: var(--eye-color); opacity: 1; transition: fill 180ms ease; }
 .rig .eye-closed { fill: #211f1c; opacity: 0; }
 .rig.eyes-closed .eye-open { opacity: 0; }
@@ -366,7 +396,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
+  .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

@@ -442,7 +442,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
