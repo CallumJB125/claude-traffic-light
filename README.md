@@ -1,7 +1,7 @@
-# Claude Traffic Light
+# Claude Buddy
 
-A tiny pixel-Claude widget that floats on top of every app on your Mac and
-holds up a traffic-light sign showing what Claude Code is doing **across
+Formerly *Claude Traffic Light*. A tiny pixel-Claude widget that floats on
+top of every app on your Mac and holds up a traffic-light sign showing what Claude Code is doing **across
 every live session at once**:
 
 - 🟢 **Green** — at least one session is working
@@ -23,10 +23,10 @@ menu's Bigger/Smaller.
 
 ```bash
 npm install
-npm run dist        # builds dist/mac-arm64/Claude Traffic Light.app
+npm run dist        # builds dist/mac-arm64/Claude Buddy.app
 ```
 
-Copy `dist/mac-arm64/Claude Traffic Light.app` to `/Applications` and double
+Copy `dist/mac-arm64/Claude Buddy.app` to `/Applications` and double
 click it. It's unsigned (no Apple Developer ID), so the first launch needs
 right-click → Open once to bypass Gatekeeper.
 
@@ -278,6 +278,7 @@ Right-click the tray icon (top menu bar) for:
 ## Dev mode
 
 ```bash
+npx electron . --demo weed         # a self-contained, sped-up showing of the garden's weed scene
 npm test                           # engine + hook script + installer tests
 npx electron . --lights --playtest # drives the editor UI end to end
 npm start                          # runs the widget straight from source

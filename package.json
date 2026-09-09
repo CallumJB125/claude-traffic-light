@@ -1,7 +1,7 @@
 {
-  "name": "claude-traffic-light",
+  "name": "claude-buddy",
   "version": "1.0.0",
-  "description": "A cute floating traffic light that shows Claude Code's status: green (working), amber (needs your input), red (out of tokens).",
+  "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -15,8 +15,8 @@
   "author": "",
   "license": "MIT",
   "build": {
-    "appId": "com.callumbaker.claude-traffic-light",
-    "productName": "Claude Traffic Light",
+    "appId": "com.callumbaker.claude-buddy",
+    "productName": "Claude Buddy",
     "files": [
       "main.js",
       "preload.js",

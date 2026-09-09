@@ -8,6 +8,21 @@ const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
 const http = require('http');
 
+// `--demo weed`: a self-contained showing of the garden's weed scene — its
+// own home folder, a 24x clock, every plant is weed, a long deal, then quit.
+const DEMO = process.argv.includes('--demo') ? process.argv[process.argv.indexOf('--demo') + 1] || 'weed' : null;
+if (DEMO === 'weed') {
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-traffic-light-demo');
+  process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED = '24';
+  process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN = '1';
+  process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS = '30000';
+  process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47180';
+  fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
+  fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
+  const demoRules = Rules.defaultRules().map((r) => (r.id === 'idle' ? { ...r, then: { ...r.then, effect: 'garden', pose: 'none' } } : r));
+  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'config.json'), JSON.stringify({ rules: demoRules, roam: false, randomEvents: false, seasonal: false, showTasks: false }));
+}
+
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
 const MIN_WIDTH = 80;
 const MAX_WIDTH = 320;
@@ -471,7 +486,7 @@ function createSettingsWindow() {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    title: 'Claude Traffic Light Preferences',
+    title: 'Claude Buddy Preferences',
     webPreferences: {
       preload: path.join(__dirname, 'settings-preload.js'),
       contextIsolation: true,
@@ -855,8 +870,9 @@ function gardenGeometry() {
 }
 
 async function moveWidget(x, y, ms) {
+  if (!win || win.isDestroyed()) return;
   const from = win.getBounds();
-  await tween({ x: from.x, y: from.y }, { x, y }, ms, (pt) => win?.setPosition(pt.x, pt.y));
+  await tween({ x: from.x, y: from.y }, { x: Math.round(x), y: Math.round(y) }, Math.max(1, ms), (pt) => { try { if (win && !win.isDestroyed()) win.setPosition(pt.x, pt.y); } catch { /* window gone */ } });
 }
 
 function gardenAct(act, extra = {}) {
@@ -1056,6 +1072,8 @@ async function runningTerminal() {
 }
 
 function tween(from, to, ms, onStep) {
+  const nums = [from?.x, from?.y, to?.x, to?.y, ms];
+  if (!nums.every(Number.isFinite)) { console.log('[tween] skipped, non-finite input', JSON.stringify({ from, to, ms })); return Promise.resolve(); }
   return new Promise((resolve) => {
     const t0 = Date.now();
     const id = setInterval(() => {
@@ -1201,7 +1219,7 @@ function createTray() {
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
-  tray.setToolTip('Claude Traffic Light');
+  tray.setToolTip('Claude Buddy');
   tray.setContextMenu(menu);
   updateTrayMode();
 }
@@ -1528,9 +1546,9 @@ function maybePlayAlertSound() {
   lastSoundKey = key;
 }
 
-// Dev captures (--shot, --playtest) must run beside the installed app, so
-// they take their own userData (and therefore their own instance lock).
-if (process.argv.includes('--shot') || process.argv.includes('--playtest')) {
+// Dev captures (--shot, --playtest) and demos run beside the installed app,
+// so they take their own userData (and therefore their own instance lock).
+if (process.argv.includes('--shot') || process.argv.includes('--playtest') || process.argv.includes('--demo')) {
   app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
 }
 
@@ -1559,6 +1577,10 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startSignalServer();
+  if (DEMO === 'weed') {
+    // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, deals 30 s each
+    setTimeout(() => app.quit(), 8 * 60 * 1000);
+  }
   if (process.argv.includes('--lights')) createLightsWindow();
 
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {

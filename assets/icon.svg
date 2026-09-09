@@ -1,20 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2a2630"/>
-      <stop offset="1" stop-color="#17151a"/>
+      <stop offset="0" stop-color="#f4c89a"/>
+      <stop offset="0.55" stop-color="#e0885f"/>
+      <stop offset="1" stop-color="#8f3f2a"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.32" r="0.55">
-      <stop offset="0" stop-color="#2fae3e" stop-opacity="0.32"/>
-      <stop offset="0.6" stop-color="#2fae3e" stop-opacity="0.06"/>
-      <stop offset="1" stop-color="#2fae3e" stop-opacity="0"/>
+    <radialGradient id="sun" cx="0.5" cy="0.22" r="0.5">
+      <stop offset="0" stop-color="#fff2c8" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#fff2c8" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="floor" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#000" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+      <stop offset="0" stop-color="#3a1a10" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3a1a10" stop-opacity="0"/>
     </radialGradient>
-    <filter id="lampglow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="14" result="b"/>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="16" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <clipPath id="squircle">
@@ -24,32 +24,38 @@
 
   <g clip-path="url(#squircle)">
     <rect width="1024" height="1024" fill="url(#bg)"/>
-    <rect width="1024" height="1024" fill="url(#glow)"/>
-    <ellipse cx="512" cy="812" rx="300" ry="42" fill="url(#floor)"/>
+    <rect width="1024" height="1024" fill="url(#sun)"/>
+    <!-- ground -->
+    <rect x="0" y="790" width="1024" height="234" fill="#5a2a1c"/>
+    <rect x="0" y="790" width="1024" height="22" fill="#7a3d2a"/>
+    <ellipse cx="512" cy="800" rx="330" ry="34" fill="url(#floor)"/>
   </g>
 
-  <!-- rig: the widget's 64x82 geometry scaled x11, centred and nudged up -->
+  <!-- rig geometry ×11, centred; the sign faces the viewer, green lit -->
   <g transform="translate(160 118) scale(11)" shape-rendering="crispEdges">
-    <!-- sign -->
-    <rect x="4" y="24" width="56" height="5" fill="#726c62"/>
+    <rect x="4" y="24" width="56" height="5" fill="#6f665a"/>
     <rect x="7" y="7" width="15" height="15" rx="2.5" fill="#3a3542"/>
     <rect x="24.5" y="7" width="15" height="15" rx="2.5" fill="#3a3542"/>
-    <rect x="42" y="7" width="15" height="15" rx="2.5" fill="#2fae3e" filter="url(#lampglow)"/>
+    <rect x="42" y="7" width="15" height="15" rx="2.5" fill="#2fae3e" filter="url(#glow)"/>
     <rect x="42" y="7" width="15" height="15" rx="2.5" fill="#2fae3e"/>
-    <rect x="0" y="29" width="9" height="10" fill="#da7756"/>
-    <!-- claude -->
-    <g fill="#da7756">
+    <rect x="0" y="29" width="9" height="10" fill="#c9613e"/>
+    <g fill="#c9613e">
       <rect x="17" y="39" width="30" height="13"/>
       <rect x="4" y="52" width="56" height="7"/>
       <rect x="15" y="59" width="7" height="9"/>
       <rect x="28.5" y="59" width="7" height="9"/>
       <rect x="42" y="59" width="7" height="9"/>
     </g>
-    <rect x="22" y="43.5" width="4.5" height="4.5" fill="#211f1c"/>
-    <rect x="37.5" y="43.5" width="4.5" height="4.5" fill="#211f1c"/>
-    <!-- thinking dots -->
-    <circle cx="24" cy="34" r="2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.6" opacity="0.35"/>
-    <circle cx="32" cy="34" r="2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.6" opacity="0.7"/>
-    <circle cx="40" cy="34" r="2" fill="#f2efe8" stroke="#211f1c" stroke-width="0.6"/>
+    <!-- happy eyes -->
+    <path d="M21.5 47 l2.8 -3 l2.8 3" fill="none" stroke="#211f1c" stroke-width="1.3" stroke-linecap="round"/>
+    <path d="M37 47 l2.8 -3 l2.8 3" fill="none" stroke="#211f1c" stroke-width="1.3" stroke-linecap="round"/>
+    <!-- party hat -->
+    <polygon points="24,39 40,39 32,22" fill="#38bdf8"/>
+    <polygon points="26.5,34 37.5,34 35.5,30 28.5,30" fill="#f2a200"/>
+    <circle cx="32" cy="22" r="2" fill="#f2efe8"/>
+    <!-- duck at his feet -->
+    <rect x="55" y="61" width="8" height="7" rx="3" fill="#f2d16b"/><rect x="60" y="58" width="5" height="5" rx="2" fill="#f2d16b"/><rect x="64.5" y="60" width="3" height="1.6" fill="#f28c28"/><rect x="62" y="59.5" width="1" height="1" fill="#211f1c"/>
+    <!-- a sprout on the other side -->
+    <rect x="-3.5" y="61" width="1" height="7" fill="#2fae3e"/><ellipse cx="-5.5" cy="61" rx="2.2" ry="1.2" fill="#3fa34a"/><ellipse cx="-1" cy="61" rx="2.2" ry="1.2" fill="#3fa34a"/>
   </g>
 </svg>
