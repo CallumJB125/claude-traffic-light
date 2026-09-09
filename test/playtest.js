@@ -208,6 +208,34 @@
     ok($('main').dataset.view === 'stats' && $('rules').offsetParent === null, 'Stats view replaces the rules layout');
     ok($('chart').querySelectorAll('text').length >= 7, 'chart draws a label per day');
     ok(/working/.test($('stats-totals').textContent), 'totals line renders');
+    ok($('today-working').textContent && $('today-cost').textContent, 'today strip shows hero numbers');
+    ok($('today-working-d').textContent.length > 0, 'today strip explains the delta vs the average');
+    ok($('heat').querySelectorAll('.cellbox').length === 7 * 24, 'heatmap draws 7 days × 24 hours');
+    ok($('heat').querySelectorAll('.hours span').length === 24, 'heatmap labels the hour axis');
+    ok(!!$('resp'), 'response-time chart is present');
+    // range picker: 30 days widens the bar chart
+    const bars7 = $('chart').querySelectorAll('rect.seg').length;
+    document.querySelector('#range [data-days="30"]').click();
+    await sleep(200);
+    ok(/Last 30 days/.test($('stats-range-title').textContent), 'range picker switches to 30 days');
+    ok($('heat').querySelectorAll('.cellbox').length === 7 * 24, 'heatmap stays on the last 7 days at any range');
+    document.querySelector('#range [data-days="7"]').click();
+    await sleep(200);
+    ok($('chart').querySelectorAll('rect.seg').length === bars7, 'range picker switches back to 7 days');
+    // project cards filter the bars (only when some project time has accrued)
+    const card = document.querySelector('#project-cards .card');
+    if (card) {
+      const name = card.querySelector('.cname').textContent;
+      card.click();
+      await sleep(200);
+      ok(!$('filter-note').hidden && $('filter-note').textContent.includes(name), 'clicking a project card filters the bars');
+      $('filter-note').querySelector('button').click();
+      await sleep(200);
+      ok($('filter-note').hidden, 'clearing the filter restores every project');
+    } else {
+      ok(true, 'no project time recorded yet, card filter skipped');
+    }
+    ok(typeof window.lightsApi.exportStats === 'function' && !!$('export-json') && !!$('export-csv'), 'JSON and CSV export are wired up');
     $('view-rules').click();
     ok($('main').dataset.view === 'rules', 'back to rules');
 

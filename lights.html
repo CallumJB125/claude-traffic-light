@@ -457,6 +457,7 @@
 
   /* ── Stats view ──────────────────────────────────────────────────────── */
   #stats { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #stats > * { flex: none; }
   .stats-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
   .stats-title { font-weight: 600; }
   .stats-title.small { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
@@ -488,6 +489,62 @@
   table.days th:first-child, table.days td:first-child { text-align: left; }
   table.days td { text-align: right; padding: 3px 0; border-top: 1px solid var(--line); color: var(--muted); }
   table.days td:first-child { color: var(--text); }
+
+  /* Today strip: three hero numbers with a delta against the daily average */
+  .today {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  .today .cell { background: var(--panel); padding: 10px 12px 11px; }
+  .today .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .today .v { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 3px; line-height: 1.05; }
+  .today .d { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .today .d.up { color: #4fbe5c; }
+  .today .d.down { color: #d97b6c; }
+  .today .d .arrow { font-size: 9px; }
+
+  .stats-bar { display: flex; align-items: center; gap: 8px; }
+  .stats-bar .spacer { flex: 1; }
+  .stats-bar .seg button { padding: 0 9px; }
+  .filter-note { color: var(--accent); font-size: 11px; }
+  .filter-note button { background: none; border: none; color: var(--muted); padding: 0 0 0 6px; text-decoration: underline; }
+
+  /* Per-project cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 8px; }
+  .card {
+    text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 10px; display: flex; flex-direction: column; gap: 2px;
+    transition: border-color var(--t), background var(--t);
+  }
+  .card:hover { border-color: var(--line-strong); }
+  .card.on { border-color: var(--accent); background: var(--accent-soft); }
+  .card .cname { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .cnums { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .card .ctools { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+  .card .tool {
+    font-size: 10px; color: var(--muted); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 4px; font-variant-numeric: tabular-nums;
+  }
+  .card .tool.bad { border-color: #6b3a34; color: #d97b6c; }
+  .card .spark { height: 14px; display: flex; align-items: flex-end; gap: 2px; margin-top: 6px; }
+  .card .spark i { flex: 1; background: var(--line); border-radius: 1px; min-height: 1px; }
+
+  /* Heatmap */
+  .heat { display: grid; grid-template-columns: 30px 1fr; gap: 6px; align-items: center; }
+  .heat .row { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+  .heat .lab { font-size: 10px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
+  .heat .cellbox { height: 12px; border-radius: 2px; background: var(--line); }
+  .heat .hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; font-size: 9px; color: var(--faint); text-align: center; }
+  .heat .hours span:nth-child(even) { visibility: hidden; }
+
+  /* Response time */
+  #resp { width: 100%; height: 92px; display: block; font: 11px -apple-system, system-ui, sans-serif; }
+  #resp text { fill: var(--muted); font-variant-numeric: tabular-nums; }
+  #resp .grid { stroke: var(--line); stroke-width: 1; }
+  #resp .worst { stroke: #f2a200; stroke-width: 2; stroke-linecap: round; }
+  #resp .med { fill: var(--accent); }
+  .legend .sw.med { background: var(--accent); }
+  .legend .sw.worst { background: #f2a200; }
 
   /* Presets popover */
   #presets {
@@ -753,9 +810,27 @@
     </section>
 
     <section id="stats" aria-label="Stats">
+      <div class="today" id="today-strip">
+        <div class="cell"><div class="k">Working today</div><div class="v" id="today-working">—</div><div class="d" id="today-working-d"></div></div>
+        <div class="cell"><div class="k">Waiting on you</div><div class="v" id="today-waiting">—</div><div class="d" id="today-waiting-d"></div></div>
+        <div class="cell"><div class="k">Cost today</div><div class="v" id="today-cost">—</div><div class="d" id="today-cost-d"></div></div>
+      </div>
+
+      <div class="stats-bar">
+        <div class="seg" id="range" role="tablist" aria-label="Range">
+          <button data-days="7" class="on" role="tab">7d</button>
+          <button data-days="30" role="tab">30d</button>
+          <button data-days="60" role="tab">60d</button>
+        </div>
+        <span class="filter-note" id="filter-note" hidden></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="export-json">Export JSON</button>
+        <button class="btn ghost" id="export-csv">Export CSV</button>
+      </div>
+
       <div class="stats-head">
         <div>
-          <div class="stats-title">Last 7 days</div>
+          <div class="stats-title" id="stats-range-title">Last 7 days</div>
           <div class="stats-sub" id="stats-totals"></div>
         </div>
         <div class="legend" aria-hidden="true">
@@ -776,6 +851,32 @@
         </svg>
         <div id="chart-tip" class="tip" hidden></div>
       </div>
+
+      <div>
+        <div class="stats-title small">Projects — click a card to filter the bars</div>
+        <div class="cards" id="project-cards"></div>
+      </div>
+
+      <div class="stats-cols">
+        <div>
+          <div class="stats-head">
+            <div class="stats-title small" style="margin:0">How long prompts wait</div>
+            <div class="legend" aria-hidden="true"><span><i class="sw med"></i>Median</span><span><i class="sw worst"></i>Worst</span></div>
+          </div>
+          <div class="chart-wrap" style="margin-top:6px">
+            <svg id="resp" viewBox="0 0 320 92" preserveAspectRatio="none" role="img" aria-label="Median and worst permission-prompt latency per day"></svg>
+            <div id="resp-tip" class="tip" hidden></div>
+          </div>
+        </div>
+        <div>
+          <div class="stats-title small">When you work</div>
+          <div class="chart-wrap" style="margin-top:6px">
+            <div class="heat" id="heat"></div>
+            <div id="heat-tip" class="tip" hidden></div>
+          </div>
+        </div>
+      </div>
+
       <div class="stats-cols">
         <div>
           <div class="stats-title small">Spend (ccusage)</div>
@@ -794,7 +895,7 @@
         </div>
         <div>
           <div class="stats-title small">Days</div>
-          <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Idle</th><th>Peak</th><th>Cost</th></tr></thead><tbody></tbody></table>
+          <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Peak</th><th>Reply</th><th>Cost</th></tr></thead><tbody></tbody></table>
         </div>
       </div>
     </section>
@@ -1600,51 +1701,204 @@
   window.lightsApi.onShowView((v) => setView(v));
   $('view-stats').addEventListener('click', () => setView('stats'));
 
-  async function renderStats() {
-    const sum = await window.lightsApi.getStats();
-    if (!sum) return;
-    const { days, projects, totals } = sum;
-    $('stats-totals').textContent = `${S.fmt(totals.working)} working · ${S.fmt(totals.waiting)} waiting on you · ${S.fmt(totals.idle)} idle`;
+  let rangeDays = 7;
+  let projectFilter = null;
+  const NS = 'http://www.w3.org/2000/svg';
+  const svgEl = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+  const usd = (v) => `$${(v || 0).toFixed(2)}`;
+  const compact = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n || 0)));
+  // Tooltips follow the cursor inside their own chart box.
+  function attachTip(node, wrap, tip, text) {
+    node.addEventListener('mousemove', (e) => {
+      const box = wrap.getBoundingClientRect();
+      tip.hidden = false;
+      tip.textContent = text;
+      tip.style.left = `${e.clientX - box.left}px`;
+      tip.style.top = `${e.clientY - box.top}px`;
+    });
+    node.addEventListener('mouseleave', () => { tip.hidden = true; });
+  }
 
+  $('range').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-days]');
+    if (!b) return;
+    rangeDays = Number(b.dataset.days);
+    Array.from($('range').children).forEach((x) => x.classList.toggle('on', x === b));
+    renderStats();
+  });
+  $('export-json').addEventListener('click', () => window.lightsApi.exportStats('json', rangeDays));
+  $('export-csv').addEventListener('click', () => window.lightsApi.exportStats('csv', rangeDays));
+  $('filter-note').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') { projectFilter = null; renderStats(); } });
+
+  // Today's hero number plus how it compares with the daily average.
+  function setHero(id, text, field, format, goodUp, eps) {
+    $(id).textContent = text;
+    const d = $(`${id}-d`);
+    if (!field.hasAverage) { d.className = 'd'; d.textContent = 'no earlier days yet'; return; }
+    const diff = field.delta;
+    if (Math.abs(diff) <= eps) { d.className = 'd'; d.textContent = `on par with ${format(field.average)} avg`; return; }
+    const up = diff > 0;
+    d.className = `d ${up === goodUp ? 'up' : 'down'}`;
+    d.innerHTML = `<span class="arrow">${up ? '▲' : '▼'}</span> ${escape(format(Math.abs(diff)))} vs ${escape(format(field.average))} avg`;
+  }
+
+  // Time first so the page is never blocked on ccusage, then again once the
+  // costs are in — fetching them also snapshots each day's spend into stats.
+  async function renderStats() {
+    const sum = await window.lightsApi.getStats(rangeDays);
+    if (!sum) return;
+    paintStats(sum, null);
+    const costs = await window.lightsApi.getCosts();
+    paintStats(await window.lightsApi.getStats(rangeDays) || sum, costs);
+  }
+
+  function paintStats(sum, costs) {
+    const { days, projects, totals } = sum;
+    if (projectFilter && !projects.some((p) => p.name === projectFilter)) projectFilter = null;
+
+    // ── Today strip
+    setHero('today-working', S.fmt(sum.today.working.value), sum.today.working, S.fmt, true, 60000);
+    setHero('today-waiting', S.fmt(sum.today.waiting.value), sum.today.waiting, S.fmt, false, 60000);
+    setHero('today-cost', usd(sum.today.cost.value), sum.today.cost, usd, false, 0.005);
+
+    $('stats-range-title').textContent = `Last ${rangeDays} days`;
+    const note = $('filter-note');
+    note.hidden = !projectFilter;
+    if (projectFilter) note.innerHTML = `Bars filtered to ${escape(projectFilter)}<button type="button">clear</button>`;
+    const resp = totals.response;
+    $('stats-totals').textContent = [
+      `${S.fmt(totals.working)} working`,
+      `${S.fmt(totals.waiting)} waiting on you`,
+      `${S.fmt(totals.idle)} idle`,
+      resp.count ? `${resp.count} prompts, ${S.fmtShort(resp.median)} median reply` : 'no permission prompts',
+    ].join(' · ');
+
+    // ── Stacked bars
     const svg = $('chart');
     svg.querySelectorAll(':scope > :not(defs):not(title)').forEach((n) => n.remove());
     const W = 640, H = 200, padL = 8, padR = 8, padT = 22, padB = 22;
     const innerH = H - padT - padB;
     const colW = (W - padL - padR) / days.length;
-    const barW = Math.min(44, colW * 0.6);
-    const max = Math.max(60 * 60000, ...days.map((d) => d.working + d.waiting + d.idle));
-    const ns = 'http://www.w3.org/2000/svg';
-    const el = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+    const barW = Math.max(2, Math.min(44, colW * 0.62));
+    const series = projectFilter
+      ? [['working', '#2fae3e'], ['waiting', 'url(#hatch)']]
+      : [['working', '#2fae3e'], ['waiting', 'url(#hatch)'], ['idle', '#3c3846']];
+    const val = (d, k) => (projectFilter ? (d.projects[projectFilter] || {})[k] || 0 : d[k]);
+    const stack = (d) => series.reduce((a, [k]) => a + val(d, k), 0);
+    const max = Math.max(60 * 60000, ...days.map(stack));
     // recessive grid: baseline + one mid line
-    svg.appendChild(el('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH, y2: padT + innerH }));
-    svg.appendChild(el('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH / 2, y2: padT + innerH / 2, 'stroke-dasharray': '2 4' }));
-    svg.appendChild(el('text', { x: padL + 2, y: padT + innerH / 2 - 4 }, S.fmt(max / 2)));
+    svg.appendChild(svgEl('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH, y2: padT + innerH }));
+    svg.appendChild(svgEl('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH / 2, y2: padT + innerH / 2, 'stroke-dasharray': '2 4' }));
+    svg.appendChild(svgEl('text', { x: padL + 2, y: padT + innerH / 2 - 4 }, S.fmt(max / 2)));
     const tip = $('chart-tip');
+    const every = days.length > 30 ? 7 : days.length > 14 ? 3 : 1;
     days.forEach((d, i) => {
       const cx = padL + colW * i + colW / 2;
       let y = padT + innerH;
-      const total = d.working + d.waiting + d.idle;
+      const total = stack(d);
       // fixed order bottom→top: working, waiting, idle; 2px surface gap between fills
-      for (const [k, fill] of [['working', '#2fae3e'], ['waiting', 'url(#hatch)'], ['idle', '#3c3846']]) {
-        const h = (d[k] / max) * innerH;
+      for (const [k, fill] of series) {
+        const h = (val(d, k) / max) * innerH;
         if (h < 1) continue;
         const gap = y === padT + innerH ? 0 : 2;
-        const rect = el('rect', { class: 'seg', x: cx - barW / 2, y: y - h, width: barW, height: Math.max(1, h - gap), fill, rx: k === 'idle' || (d.waiting === 0 && d.idle === 0) ? 2 : 0 });
-        rect.addEventListener('mousemove', (e) => {
-          const box = $('chart').getBoundingClientRect();
-          tip.hidden = false;
-          tip.textContent = `${d.label} · ${k === 'waiting' ? 'Waiting on you' : k[0].toUpperCase() + k.slice(1)} ${S.fmt(d[k])}`;
-          tip.style.left = `${e.clientX - box.left}px`;
-          tip.style.top = `${e.clientY - box.top}px`;
-        });
-        rect.addEventListener('mouseleave', () => { tip.hidden = true; });
+        const rect = svgEl('rect', { class: 'seg', x: cx - barW / 2, y: y - h, width: barW, height: Math.max(1, h - gap), fill, rx: 2 });
+        attachTip(rect, $('chart'), tip, `${d.date} · ${k === 'waiting' ? 'Waiting on you' : k[0].toUpperCase() + k.slice(1)} ${S.fmt(val(d, k))}${projectFilter ? ` · ${projectFilter}` : ''}`);
         svg.appendChild(rect);
         y -= h;
       }
-      svg.appendChild(el('text', { x: cx, y: H - 6, 'text-anchor': 'middle' }, d.label));
-      if (total > 0) svg.appendChild(el('text', { class: 'total', x: cx, y: y - 6, 'text-anchor': 'middle' }, S.fmt(total)));
+      if ((days.length - 1 - i) % every === 0) svg.appendChild(svgEl('text', { x: cx, y: H - 6, 'text-anchor': 'middle' }, days.length > 14 ? d.date : d.label));
+      if (total > 0 && days.length <= 14) svg.appendChild(svgEl('text', { class: 'total', x: cx, y: y - 6, 'text-anchor': 'middle' }, S.fmt(total)));
     });
 
+    // ── Per-project cards
+    const costByProject = {};
+    for (const p of (costs && costs.available && costs.projects) || []) costByProject[p.name] = p;
+    const cards = $('project-cards');
+    cards.innerHTML = '';
+    if (!projects.length) cards.innerHTML = '<div class="stats-sub">No project time recorded yet — it accrues while sessions run.</div>';
+    for (const p of projects.slice(0, 12)) {
+      const c = costByProject[p.name] || { cost: 0, tokens: 0 };
+      const hours = p.working / 3600000;
+      const tph = hours > 0.02 && c.tokens ? `${compact(c.tokens / hours)}/h` : '—';
+      const spend = costs ? `${usd(c.cost)} · ` : '';
+      const tokens = costs ? `${compact(c.tokens)} tokens · ${tph}` : 'tokens loading…';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `card${projectFilter === p.name ? ' on' : ''}`;
+      btn.setAttribute('aria-pressed', String(projectFilter === p.name));
+      const tools = (p.tools || []).map((t) => `<span class="tool${t.failed ? ' bad' : ''}" title="${escape(t.tool)}: ${t.count} calls, ${t.failed} failed">${escape(t.tool)} ${t.count}</span>`).join('');
+      const recent = days.slice(-14);
+      const pMax = Math.max(1, ...recent.map((d) => (d.projects[p.name] || {}).working || 0));
+      const spark = recent.map((d) => {
+        const v = (d.projects[p.name] || {}).working || 0;
+        const h = v ? Math.max(2, Math.round((v / pMax) * 14)) : 1;
+        return `<i style="height:${h}px;background:${v ? '#2fae3e' : 'var(--line)'}"></i>`;
+      }).join('');
+      btn.innerHTML = `<span class="cname" title="${escape(p.name)}">${escape(p.name)}</span>`
+        + `<span class="cnums">${S.fmt(p.working)} · ${spend}${p.peak || 1} peak</span>`
+        + `<span class="cnums">${tokens}</span>`
+        + `<span class="spark">${spark}</span>`
+        + (tools ? `<span class="ctools">${tools}</span>` : '');
+      btn.addEventListener('click', () => { projectFilter = projectFilter === p.name ? null : p.name; renderStats(); });
+      cards.appendChild(btn);
+    }
+
+    // ── Response time: worst as a whisker, median as a mark on it
+    const rs = $('resp');
+    rs.innerHTML = '';
+    const RW = 320, RH = 92, rPadB = 16, rPadT = 8;
+    const rInner = RH - rPadT - rPadB;
+    const rCol = RW / days.length;
+    const rMax = Math.max(60000, ...days.map((d) => d.response.worst));
+    rs.appendChild(svgEl('line', { class: 'grid', x1: 0, x2: RW, y1: rPadT + rInner, y2: rPadT + rInner }));
+    if (totals.response.count) rs.appendChild(svgEl('text', { x: 2, y: rPadT + 9 }, S.fmtShort(rMax)));
+    const rtip = $('resp-tip');
+    days.forEach((d, i) => {
+      const cx = rCol * i + rCol / 2;
+      const yOf = (ms) => rPadT + rInner - (ms / rMax) * rInner;
+      if (d.response.count) {
+        const line = svgEl('line', { class: 'worst', x1: cx, x2: cx, y1: rPadT + rInner, y2: yOf(d.response.worst) });
+        rs.appendChild(line);
+        const dot = svgEl('circle', { class: 'med', cx, cy: yOf(d.response.median), r: Math.max(2, Math.min(3.5, rCol / 4)) });
+        rs.appendChild(dot);
+        const txt = `${d.date} · ${d.response.count} prompt${d.response.count === 1 ? '' : 's'} · median ${S.fmtShort(d.response.median)} · worst ${S.fmtShort(d.response.worst)}`;
+        attachTip(line, rs.parentElement, rtip, txt);
+        attachTip(dot, rs.parentElement, rtip, txt);
+      }
+      if ((days.length - 1 - i) % every === 0 && days.length <= 14) rs.appendChild(svgEl('text', { x: cx, y: RH - 4, 'text-anchor': 'middle' }, d.label));
+    });
+    if (!totals.response.count) rs.appendChild(svgEl('text', { x: RW / 2, y: RH / 2, 'text-anchor': 'middle' }, 'No permission prompts in this range'));
+
+    // ── Hourly heatmap, last 7 days
+    const heat = $('heat');
+    heat.innerHTML = '';
+    const htip = $('heat-tip');
+    const last7 = days.slice(-7);
+    const hMax = Math.max(1, ...last7.flatMap((d) => d.hours));
+    for (const d of last7) {
+      const lab = document.createElement('div');
+      lab.className = 'lab';
+      lab.textContent = d.label;
+      const row = document.createElement('div');
+      row.className = 'row';
+      d.hours.forEach((ms, h) => {
+        const cell = document.createElement('div');
+        cell.className = 'cellbox';
+        if (ms > 0) cell.style.background = `rgba(218, 119, 86, ${(0.18 + 0.82 * (ms / hMax)).toFixed(3)})`;
+        attachTip(cell, heat.parentElement, htip, `${d.date} ${String(h).padStart(2, '0')}:00 · ${S.fmt(ms)} working`);
+        row.appendChild(cell);
+      });
+      heat.appendChild(lab);
+      heat.appendChild(row);
+    }
+    const spacer = document.createElement('div');
+    const hours = document.createElement('div');
+    hours.className = 'hours';
+    for (let h = 0; h < 24; h += 1) hours.appendChild(Object.assign(document.createElement('span'), { textContent: String(h) }));
+    heat.appendChild(spacer);
+    heat.appendChild(hours);
+
+    // ── By project (ranked list) and the day table
     const ol = $('projects');
     ol.innerHTML = projects.length ? '' : '<li class="empty-small">No project time recorded yet — it accrues while sessions run.</li>';
     const top = projects.slice(0, 8);
@@ -1654,17 +1908,17 @@
       li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${S.fmt(p.ms)}</span><span class="bar"><i style="width:${Math.max(2, (p.ms / maxP) * 100)}%"></i></span>`;
       ol.appendChild(li);
     }
-    const costs = await window.lightsApi.getCosts();
-    const usd = (v) => `$${(v || 0).toFixed(2)}`;
     const tb = $('days-table').querySelector('tbody');
     tb.innerHTML = '';
-    for (const d of [...days].reverse()) {
+    for (const d of [...days].reverse().slice(0, 14)) {
       const tr = document.createElement('tr');
-      const c = costs && costs.available && costs.days[d.key] ? usd(costs.days[d.key].cost) : '—';
-      tr.innerHTML = `<td>${d.label}</td><td>${S.fmt(d.working)}</td><td>${S.fmt(d.waiting)}</td><td>${S.fmt(d.idle)}</td><td>${d.sessionsPeak}</td><td>${c}</td>`;
+      const cost = d.cost != null ? usd(d.cost) : (costs && costs.available && costs.days[d.key] ? usd(costs.days[d.key].cost) : '—');
+      tr.innerHTML = `<td title="${escape(d.key)}">${d.label}</td><td>${S.fmt(d.working)}</td><td>${S.fmt(d.waiting)}</td><td>${d.sessionsPeak}</td><td>${d.response.count ? S.fmtShort(d.response.median) : '—'}</td><td>${cost}</td>`;
       tb.appendChild(tr);
     }
-    if (!costs || !costs.available) {
+    if (!costs) {
+      // still loading — leave whatever the last pass showed
+    } else if (!costs.available) {
       $('cost-totals').textContent = 'ccusage not found — install it (npm i -g ccusage) to see spend here.';
       $('cost-projects').innerHTML = ''; $('cost-sessions').querySelector('tbody').innerHTML = '';
     } else {
@@ -1673,13 +1927,13 @@
       const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
       const models = [...new Set(Object.values(costs.days).flatMap((d) => d.models))].slice(0, 3).join(', ');
       $('cost-totals').textContent = `${usd(today)} today · ${usd(week)} this week${models ? ' · ' + models : ''}`;
-      const ol = $('cost-projects');
-      ol.innerHTML = costs.projects.length ? '' : '<li class="empty-small">No session costs in the last week.</li>';
+      const cl = $('cost-projects');
+      cl.innerHTML = costs.projects.length ? '' : '<li class="empty-small">No session costs in the last week.</li>';
       const maxC = costs.projects[0]?.cost || 1;
       for (const p of costs.projects.slice(0, 6)) {
         const li = document.createElement('li');
-        li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${usd(p.cost)}</span><span class="bar"><i style="width:${Math.max(2, (p.cost / maxC) * 100)}%;background:#f2a200"></i></span>`;
-        ol.appendChild(li);
+        li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${usd(p.cost)} · ${compact(p.tokens)}t</span><span class="bar"><i style="width:${Math.max(2, (p.cost / maxC) * 100)}%;background:#f2a200"></i></span>`;
+        cl.appendChild(li);
       }
       const st = $('cost-sessions').querySelector('tbody');
       st.innerHTML = '';
@@ -1701,7 +1955,7 @@
     if (q.get('mode') === 'live') previewMode = 'live';
     if (q.get('view') === 'stats') setView('stats');
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
-    if (q.get('scroll')) $('editor').scrollTop = Number(q.get('scroll'));
+    if (q.get('scroll')) setTimeout(() => { (q.get('view') === 'stats' ? $('stats') : $('editor')).scrollTop = Number(q.get('scroll')); }, 400);
     setDirty(false);
     renderList(); renderEditor(); renderStage();
     refreshLive();

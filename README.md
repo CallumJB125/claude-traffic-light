@@ -230,13 +230,33 @@ defaults: click jumps (or pokes when nothing is waiting), double-click pets,
 
 ## Stats
 
-The Stats tab in Lights shows the last seven days as stacked bars — working,
-waiting on you (hatched), idle — with totals, a per-project ranking and a
-day table. If [ccusage](https://github.com/ryoppippi/ccusage) is installed
-it also shows **spend**: today and this week, per project (sessions are
-mapped to folders through their transcripts), the costliest sessions, and a
-cost column per day. Time accrues in 4-second ticks while the app runs and is kept for
-60 days in `~/.claude-traffic-light/stats.json`.
+The Stats tab in Lights opens on a **today strip** — time working, time
+waiting on you, and cost today, each against its 7-day daily average — over
+stacked bars of working / waiting on you (hatched) / idle time. A **range
+picker** switches between 7, 30 and 60 days, and **Export JSON / CSV** writes
+the visible range wherever you point the save dialog.
+
+Below that:
+
+- **Project cards** — time, spend, peak concurrent sessions, tokens and
+  tokens-per-hour for each folder, with a two-week sparkline and its top six
+  tools (failed ones in red). Click a card to filter the bars to that
+  project; click again, or *clear*, to go back.
+- **How long prompts wait** — every permission ask (and usage limit) is
+  clocked from the moment it appears to the moment the session does anything
+  else. The chart shows each day's median as a dot on a whisker running to
+  that day's worst. Anything left unanswered for over two hours is treated as
+  abandoned rather than a slow reply.
+- **When you work** — a 7 × 24 heatmap of working time by hour of the day.
+- **Spend (ccusage)** — if [ccusage](https://github.com/ryoppippi/ccusage) is
+  installed: today and this week, per project with tokens (sessions are
+  mapped to folders through their transcripts), the costliest sessions, and a
+  cost column per day. Each day's cost is snapshotted into `stats.json` as it
+  is read, so the history outlives ccusage's own reporting window.
+
+Time accrues in 4-second ticks while the app runs and is kept for 60 days in
+`~/.claude-traffic-light/stats.json`. Stores written by older versions are
+migrated on read.
 
 ## Menu bar mode
 

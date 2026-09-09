@@ -235,7 +235,10 @@ test('stats: ticks accrue to the right bucket and project; big gaps are dropped'
   St.tick(st, [{ signal: 'tool-use', cwd: '/x/bondly' }], now + 3600000, 3600000, 60000);
   const d = st.days[St.dayKey(now)];
   assert.deepEqual([d.working, d.waiting, d.idle, d.done], [4000, 4000, 4000, 4000]);
-  assert.deepEqual(d.projects, { bondly: 8000, other: 4000 }, 'done sessions do not accrue project time');
+  assert.deepEqual(d.projects, {
+    bondly: { working: 4000, waiting: 4000, done: 4000, peak: 1 },
+    other: { working: 4000, waiting: 0, done: 0, peak: 1 },
+  }, 'project time splits by that session\'s own kind');
   assert.equal(d.sessionsPeak, 2);
 });
 
