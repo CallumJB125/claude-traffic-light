@@ -284,32 +284,10 @@ function readBounds() {
   }
 }
 
-let gardenWide = false;
-let preGardenBounds = null;
+let gardenRun = null;
 function saveBounds() {
-  if (!win || gardenWide) return;
+  if (!win || gardenRun || roamState.busy) return;
   fs.writeFileSync(BOUNDS_FILE, JSON.stringify(win.getBounds(), null, 2));
-}
-// Gardening needs three widths of room; grow the window around its centre
-// and put it back afterwards.
-function applyGardenSize(on) {
-  if (!win || on === gardenWide) return;
-  gardenWide = on;
-  if (on) {
-    preGardenBounds = win.getBounds();
-    const b = preGardenBounds;
-    const wa = screen.getDisplayMatching(b).workArea;
-    const width = b.width * 3;
-    const x = Math.max(wa.x, Math.min(wa.x + wa.width - width, Math.round(b.x - b.width)));
-    win.setAspectRatio(0);
-    win.setMaximumSize(MAX_WIDTH * 3, Math.round(MAX_WIDTH / WIDGET_ASPECT));
-    win.setBounds({ x, y: b.y, width, height: b.height });
-  } else {
-    win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT));
-    if (preGardenBounds) win.setBounds(preGardenBounds);
-    win.setAspectRatio(WIDGET_ASPECT);
-    preGardenBounds = null;
-  }
 }
 
 function readManualOverride() {
@@ -571,6 +549,11 @@ function createLightsWindow() {
           fs.writeFileSync(arg('--shot-widget'), (await win.webContents.capturePage()).toPNG());
           console.log('[shot] widget look', JSON.stringify(aggregateState().look));
         }
+        // Dev: `--shot-garden out.png` captures the overlay mid-garden plus the widget's position.
+        if (arg('--shot-garden')) {
+          if (overlayWin) fs.writeFileSync(arg('--shot-garden'), (await overlayWin.webContents.capturePage()).toPNG());
+          console.log('[shot] garden', JSON.stringify({ overlay: !!overlayWin, widget: win?.getBounds(), pots: gardenRun?.pots.length, act: travelLook?.gardenAct || null }));
+        }
         // Dev: `--shot-tray out.png` renders the menu-bar icon frame.
         if (arg('--shot-tray')) {
           ensureTrayRenderer();
@@ -725,7 +708,7 @@ async function pushScreenFx(fx) {
 
 function updateOverlay(look) {
   const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
-  const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : null;
+  const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : (look.effect === 'garden' || gardenRun ? 'garden' : null);
   const wants = (gun || fx) && win && win.isVisible() && !prefersReducedMotion();
   if (!wants) { stopOverlay(); overlayFx = 'none'; return; }
   const m = widgetMuzzle();
@@ -841,6 +824,146 @@ function applyWidgetVisibility() {
   if (loadConfig().showWidget) win.showInactive(); else win.hide();
 }
 
+// ── Garden on the real screen (Desktop-Goose style) ────────────────────────
+// The widget drops to the bottom of its display and walks along it: off the
+// screen edge for pots, back to place them, then plants, waters, eats and
+// rotates. The overlay draws the bed, pots and crops at screen scale; the
+// rig shows what he's carrying or doing via look.gardenAct.
+const GSPEED = Number(process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED || 1);
+const GT = { FETCH: 120000 / GSPEED, PLANT: 180000 / GSPEED, GROW: 120000 / GSPEED, EAT_EVERY: 20000 / GSPEED, ROTATE: 600000 / GSPEED, POTS: 5 };
+
+function gardenGeometry() {
+  const b = win.getBounds();
+  const display = screen.getDisplayMatching(b);
+  const wa = display.workArea;
+  const floorY = wa.y + wa.height - b.height;        // widget sits on the work-area floor (above the Dock)
+  const homeX = Math.round(wa.x + wa.width * 0.5 - b.width / 2);
+  const potXs = [0.14, 0.3, 0.62, 0.78, 0.9].map((f) => Math.round(wa.x + wa.width * f));
+  return { display, wa, floorY, homeX, potXs, width: b.width, height: b.height };
+}
+
+async function moveWidget(x, y, ms) {
+  const from = win.getBounds();
+  await tween({ x: from.x, y: from.y }, { x, y }, ms, (pt) => win?.setPosition(pt.x, pt.y));
+}
+
+function gardenAct(act, extra = {}) {
+  const base = gardenRun.base;
+  travelLook = { ...base, pose: 'none', effect: 'none', gardenAct: act, name: gardenRun.label, ...extra };
+  win?.webContents.send('status-changed');
+}
+
+function overlayGarden(payload) {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const ob = overlayWin.getBounds();
+  overlayWin.webContents.send('garden', { ...payload, ox: ob.x, oy: ob.y });
+}
+
+async function runGarden(base) {
+  const geo = gardenGeometry();
+  gardenRun = { base, home: win.getBounds(), pots: [], firstBite: null, lastBite: 0, rotations: 0, stop: false, label: 'Gardening', geo };
+  const run = gardenRun;
+  const alive = () => gardenRun === run && !run.stop;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const at = (x) => geo.floorY;
+  const feetY = geo.floorY + geo.height - 14;   // where the bed meets his feet
+  try {
+    // ensure the overlay exists for drawing (screenFx path opens it)
+    if (!overlayWin) { updateOverlay({ pose: 'none', screenFx: 'garden' }); await wait(700); }
+    overlayGarden({ op: 'start', bedY: feetY, wa: geo.wa });
+    gardenAct('walking', { facing: 'right' });
+    await moveWidget(geo.homeX, geo.floorY, 1800);
+    // ── fetch pots
+    const perFetch = GT.FETCH / GT.POTS;
+    for (let i = 0; i < GT.POTS && alive(); i += 1) {
+      const edgeX = i % 2 ? geo.wa.x - geo.width + 12 : geo.wa.x + geo.wa.width - 12;
+      const potX = geo.potXs[i];
+      gardenAct('walking', { facing: edgeX < geo.homeX ? 'left' : 'right' });
+      await moveWidget(edgeX, geo.floorY, perFetch * 0.4);
+      if (!alive()) break;
+      gardenAct('carrying', { facing: potX < edgeX ? 'left' : 'right' });
+      await moveWidget(potX - Math.round(geo.width * 0.7), geo.floorY, perFetch * 0.45);
+      if (!alive()) break;
+      run.pots.push({ x: potX, crop: null, planted: false, grownAt: null });
+      overlayGarden({ op: 'pot', x: potX });
+      gardenAct('walking', { facing: 'right' });
+      await wait(perFetch * 0.15);
+    }
+    // ── plant each pot
+    const perPlant = GT.PLANT / GT.POTS;
+    for (let i = 0; i < run.pots.length && alive(); i += 1) {
+      const pot = run.pots[i];
+      gardenAct('walking', { facing: pot.x < win.getBounds().x ? 'left' : 'right' });
+      await moveWidget(pot.x - Math.round(geo.width * 0.7), geo.floorY, perPlant * 0.15);
+      if (!alive()) break;
+      gardenAct('pouring', { facing: 'right' });
+      await wait(perPlant * 0.35);
+      overlayGarden({ op: 'dirt', i });
+      if (!alive()) break;
+      overlayGarden({ op: 'seed', i });
+      await wait(perPlant * 0.1);
+      gardenAct('watering', { facing: 'right' });
+      await wait(perPlant * 0.3);
+      overlayGarden({ op: 'water', i });
+      pot.planted = true;
+      await wait(perPlant * 0.1);
+    }
+    // ── grow, eat, rotate
+    const CROPS = ['carrot', 'tomato', 'berries', 'sunflower', 'apple', 'flowers'];
+    const sow = () => { const now = Date.now(); run.pots.forEach((pot, i) => { pot.crop = CROPS[Math.floor(Math.random() * CROPS.length)]; pot.grownAt = now + GT.GROW; overlayGarden({ op: 'sow', i, crop: pot.crop, growMs: GT.GROW }); }); };
+    sow();
+    gardenAct('walking', { facing: geo.homeX < win.getBounds().x ? 'left' : 'right' });
+    await moveWidget(geo.homeX, geo.floorY, 2500);
+    gardenAct(null);
+    while (alive()) {
+      await wait(1000);
+      if (!alive()) break;
+      const now = Date.now();
+      const ready = run.pots.filter((p) => p.crop && p.crop !== 'flowers' && now >= p.grownAt && (p.bites ?? 3) > 0);
+      if (ready.length && now - run.lastBite >= GT.EAT_EVERY) {
+        run.lastBite = now;
+        if (run.firstBite == null) run.firstBite = now;
+        const pot = ready[Math.floor(Math.random() * ready.length)];
+        const idx = run.pots.indexOf(pot);
+        const facing = pot.x < win.getBounds().x + geo.width / 2 ? 'left' : 'right';
+        gardenAct('walking', { facing });
+        await moveWidget(pot.x - (facing === 'left' ? Math.round(geo.width * 0.15) : Math.round(geo.width * 0.85)), geo.floorY, 1800);
+        if (!alive()) break;
+        gardenAct('eating', { facing });
+        overlayGarden({ op: 'bite', i: idx });
+        pot.bites = (pot.bites ?? 3) - 1;
+        await wait(1200);
+        gardenAct(null);
+      }
+      if (run.firstBite != null && now - run.firstBite >= GT.ROTATE * (run.rotations + 1)) {
+        run.rotations += 1;
+        overlayGarden({ op: 'pull' });
+        run.pots.forEach((p) => { p.bites = 3; });
+        await wait(1500);
+        sow();
+      }
+    }
+  } finally {
+    if (gardenRun === run) {
+      overlayGarden({ op: 'clear' });
+      travelLook = null;
+      const home = run.home;
+      await moveWidget(home.x, home.y, 1200).catch(() => {});
+      gardenRun = null;
+      broadcastStatus();
+    }
+  }
+}
+
+function updateGarden(st) {
+  const wants = st.look.effect === 'garden' && win && win.isVisible() && st.reason !== 'preview';
+  if (wants && !gardenRun && !roamState.busy) {
+    runGarden(st.look).catch((e) => console.log('[garden]', e.message));
+  } else if (!wants && gardenRun && !gardenRun.stop && st.reason !== 'travel') {
+    gardenRun.stop = true;
+  }
+}
+
 function broadcastStatus() {
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
@@ -848,7 +971,7 @@ function broadcastStatus() {
     const st = aggregateState();
     updateOverlay(st.look);
     applyStrip(!!(st.pending && st.pending.length) && !travelLook);
-    applyGardenSize(st.look.effect === 'garden' && st.reason !== 'travel');
+    updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
   } catch (e) { console.log('[status]', e.message); }
@@ -897,7 +1020,7 @@ function tween(from, to, ms, onStep) {
 
 async function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || !win || !win.isVisible() || roamState.busy || previewLook) return;
+  if (!IS_MAC || !config.roam || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -1105,6 +1228,66 @@ ipcMain.handle('save-config', (e, partial) => {
 });
 
 ipcMain.handle('get-stats', () => Stats.summary(stats));
+
+// ── Costs, from ccusage (the same source as the user's cost alerts) ────────
+let costCache = { at: 0, data: null };
+function runCcusage(args) {
+  return new Promise((resolve) => {
+    execFile('ccusage', [...args, '--json', '--offline'], { env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin` }, maxBuffer: 16 * 1024 * 1024 }, (err, out) => {
+      if (err) return resolve(null);
+      try { resolve(JSON.parse(out)); } catch { resolve(null); }
+    });
+  });
+}
+async function getCosts() {
+  if (Date.now() - costCache.at < 60000 && costCache.data) return costCache.data;
+  const since = new Date(Date.now() - 6 * 86400000);
+  const ymd = `${since.getFullYear()}${String(since.getMonth() + 1).padStart(2, '0')}${String(since.getDate()).padStart(2, '0')}`;
+  const [daily, session] = await Promise.all([runCcusage(['daily', '--since', ymd]), runCcusage(['session', '--since', ymd])]);
+  if (!daily && !session) { costCache = { at: Date.now(), data: { available: false } }; return costCache.data; }
+  const days = {};
+  for (const d of daily?.daily || []) days[d.period] = { cost: d.totalCost || 0, tokens: d.totalTokens || 0, models: (d.modelsUsed || []).map((m) => String(m).replace(/^claude-/, '')) };
+  // Map ccusage sessions (keyed by session id) to project folders through
+  // our own session files, which know each session's cwd.
+  const cwdById = {};
+  try {
+    for (const f of fs.readdirSync(SESSIONS_DIR)) {
+      try { const j = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8')); if (j.sessionId && j.cwd) cwdById[j.sessionId] = j.cwd; } catch { /* skip */ }
+    }
+  } catch { /* none */ }
+  // Finished sessions have no session file any more; their transcript
+  // (~/.claude/projects/<dir>/<id>.jsonl) records the cwd on its first lines.
+  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+  let transcriptDirs = [];
+  try { transcriptDirs = fs.readdirSync(projectsRoot).map((d) => path.join(projectsRoot, d)); } catch { /* none */ }
+  const cwdFromTranscript = (id) => {
+    if (cwdById[id]) return cwdById[id];
+    for (const dir of transcriptDirs) {
+      const f = path.join(dir, `${id}.jsonl`);
+      if (!fs.existsSync(f)) continue;
+      try {
+        const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(4096); const n = fs.readSync(fd, buf, 0, 4096, 0); fs.closeSync(fd);
+        const m = /"cwd":"([^"]+)"/.exec(buf.toString('utf8', 0, n));
+        cwdById[id] = m ? m[1] : null;
+        return cwdById[id];
+      } catch { return null; }
+    }
+    return null;
+  };
+  const projects = {};
+  const sessions = [];
+  for (const sname of session?.session || []) {
+    const id = sname.period;
+    const cwd = cwdFromTranscript(id) || (sname.metadata && (sname.metadata.projectPath || sname.metadata.cwd)) || null;
+    const project = cwd ? String(cwd).split('/').filter(Boolean).pop() : (sname.metadata?.project || 'other');
+    projects[project] = (projects[project] || 0) + (sname.totalCost || 0);
+    sessions.push({ id, project, cost: sname.totalCost || 0 });
+  }
+  const data = { available: true, days, totals: daily?.totals || null, projects: Object.entries(projects).sort((a, b) => b[1] - a[1]).map(([name, cost]) => ({ name, cost })), sessions: sessions.sort((a, b) => b.cost - a.cost).slice(0, 8) };
+  costCache = { at: Date.now(), data };
+  return data;
+}
+ipcMain.handle('get-costs', () => getCosts());
 
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;

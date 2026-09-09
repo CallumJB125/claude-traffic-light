@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('overlay', {
   onSnipe: (cb) => ipcRenderer.on('snipe', (e, m, t) => cb(m, t)),
   onTrack: (cb) => ipcRenderer.on('track', (e, t) => cb(t)),
   onFx: (cb) => ipcRenderer.on('fx', (e, p) => cb(p)),
+  onGarden: (cb) => ipcRenderer.on('garden', (e, p) => cb(p)),
 });

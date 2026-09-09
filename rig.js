@@ -122,11 +122,25 @@
     <!-- selfie: phone held out, flash burst -->
     <g class="selfie"><rect x="50" y="40" width="7" height="11" rx="1.5" fill="#1a1a1e" stroke="#9aa3ad" stroke-width="0.6" /><circle class="flashbulb" cx="53.5" cy="42.3" r="1.1" fill="#fff5d6" /></g>
     <!-- cigarette: held at the mouth, smoke drifts up -->
-    <g class="cig"><rect x="40" y="48.6" width="7" height="1.6" fill="#f2efe8" /><rect x="45.8" y="48.6" width="1.4" height="1.6" fill="#e2231a" /><circle class="puff p1" cx="48" cy="47" r="1.3" fill="#b8b8c0" /><circle class="puff p2" cx="48" cy="47" r="1.6" fill="#b8b8c0" /><circle class="puff p3" cx="48" cy="47" r="1.1" fill="#b8b8c0" /></g>
+    <g class="cig">
+      <g transform="rotate(-12 34 50)">
+        <rect x="34" y="49.2" width="10" height="1.7" rx="0.5" fill="#f2efe8" /><rect x="34" y="49.2" width="2.6" height="1.7" rx="0.5" fill="#d9a066" /><rect class="ember" x="43.2" y="49.1" width="1.4" height="1.9" rx="0.4" fill="#ff5a1f" />
+        <rect x="37" y="48.2" width="4.2" height="3.6" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+      </g>
+      <g class="wisps" fill="#c9c9d1"><circle class="wisp s1" cx="44.6" cy="47.5" r="0.7" /><circle class="wisp s2" cx="44.6" cy="47.5" r="0.9" /><circle class="wisp s3" cx="44.6" cy="47.5" r="0.6" /><circle class="wisp s4" cx="44.6" cy="47.5" r="1" /></g>
+      <g class="exhale" fill="#d7d7de"><circle class="ex e1" cx="33" cy="51" r="1.4" /><circle class="ex e2" cx="33" cy="51" r="1.9" /><circle class="ex e3" cx="33" cy="51" r="1.2" /></g>
+    </g>
     <!-- zyn tin + pouch -->
     <g class="zyn"><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g>
     <!-- table, rolled note, line -->
-    <g class="table"><rect x="6" y="61" width="52" height="2" fill="#8a5a2b" /><rect x="9" y="63" width="2" height="6" fill="#6b4420" /><rect x="53" y="63" width="2" height="6" fill="#6b4420" /><rect class="line" x="20" y="59.6" width="24" height="1" fill="#f2efe8" /><rect class="note" x="42" y="52" width="1.6" height="8" fill="#2fae3e" transform="rotate(25 42 52)" /></g>
+    <g class="table">
+      <rect x="4" y="62" width="56" height="2.2" fill="#8a5a2b" /><rect x="7" y="64" width="2" height="5" fill="#6b4420" /><rect x="55" y="64" width="2" height="5" fill="#6b4420" />
+      <rect x="47" y="59.4" width="8" height="2.4" rx="0.4" fill="#f2efe8" stroke="#9aa3ad" stroke-width="0.3" transform="rotate(-8 51 60)" />
+      <ellipse x="0" cx="14" cy="61.2" rx="3" ry="1.1" fill="#f7f7fb" />
+      <rect class="line" x="19" y="60.9" width="26" height="1.1" rx="0.5" fill="#f7f7fb" />
+      <g class="note"><rect x="0" y="0" width="1.8" height="9" rx="0.9" fill="#3fa34a" /><rect x="0" y="0" width="1.8" height="2" rx="0.9" fill="#2f8a3a" /></g>
+      <g class="sniff" stroke="#f2efe8" stroke-width="0.8" stroke-linecap="round"><path d="M26 41 l-3 -2 M38 41 l3 -2 M25 44 l-3 0 M39 44 l3 0" /></g>
+    </g>
     <!-- syringe -->
     <g class="needle"><rect x="50" y="43" width="8" height="3" rx="0.6" fill="#d7ded6" stroke="#211f1c" stroke-width="0.4" /><rect x="58" y="44" width="4" height="0.8" fill="#9aa3ad" /><rect class="plunger" x="47" y="43.8" width="4" height="1.4" fill="#e2231a" /></g>
     <!-- muscles: arm bulges that grow over time -->
@@ -472,7 +486,13 @@
       if (!current || current.pose !== pose) {
         for (const p of POSES) svg.classList.remove(`pose-${p}`);
         if (pose !== 'none') svg.classList.add(`pose-${pose}`);
+        scheduleFlips(pose === 'kickflip');
+        scheduleLines(pose === 'line');
       }
+      // Garden actions on the real screen are driven by the main process.
+      const act = look.gardenAct || null;
+      for (const a of ['walking', 'carrying', 'pouring', 'watering']) svg.classList.toggle(a, act === a);
+      if (act === 'eating') { svg.classList.add('eating', look.facing === 'left' ? 'eat-left' : 'eat-right'); } else if (!garden) svg.classList.remove('eating', 'eat-left', 'eat-right');
       svg.classList.toggle('grumpy', !!look.grumpy);
       // Gardening needs room: the view widens to three widths, Claude centred.
       const wide = effect === 'garden';
@@ -536,6 +556,7 @@
     ];
     const ns = 'http://www.w3.org/2000/svg';
     const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); return e; };
+    if (!svg.querySelector('.tools')) svg.querySelector('.mover').appendChild(drawTools());
     let garden = null;       // { t0, speed, pots:[{x, crop, planted, grown}], firstBite, lastBite, rotateAt, timer }
     const gardenEl = () => svg.querySelector('.garden');
 
@@ -562,7 +583,7 @@
       const g = gardenEl();
       g.innerHTML = '';
       g.appendChild(mk('rect', { class: 'bed', x: -60, y: 67.5, width: 184, height: 2, fill: '#3a2a1a' }));
-      const tools = drawTools(); svg.querySelector('.mover').appendChild(tools);
+      if (!svg.querySelector('.tools')) svg.querySelector('.mover').appendChild(drawTools());
       garden = { t0: performance.now(), speed, pots: [], firstBite: null, lastBite: 0, rotateAt: null, phase: 'fetch', step: -1 };
       svg.classList.add('gardening');
       clearInterval(garden.timer);
@@ -574,7 +595,6 @@
       clearInterval(garden.timer);
       garden = null;
       gardenEl().innerHTML = '';
-      svg.querySelector('.tools')?.remove();
       svg.classList.remove('gardening', 'walking', 'phase-fetch', 'phase-plant', 'phase-grow', 'eating', 'eat-left', 'eat-right', 'carrying', 'pouring', 'watering', 'face-left');
       svg.style.removeProperty('--walk');
     }
@@ -671,6 +691,26 @@
     function plantGarden() { startGarden(Number(svg.dataset.gardenSpeed) || 1); }
     function clearGarden() { stopGarden(); }
 
+    // Kickflip: stands on the board, tricks once every 30 s.
+    let flipTimer = null;
+    function scheduleFlips(on) {
+      clearInterval(flipTimer); flipTimer = null;
+      svg.classList.remove('flip');
+      if (!on) return;
+      const flip = () => { svg.classList.remove('flip'); void svg.getBoundingClientRect(); svg.classList.add('flip'); setTimeout(() => svg.classList.remove('flip'), 1700); };
+      flip();
+      flipTimer = setInterval(flip, 30000);
+    }
+    // Line: does one every 40 s while the pose holds.
+    let lineTimer = null;
+    function scheduleLines(on) {
+      clearInterval(lineTimer); lineTimer = null;
+      svg.classList.remove('rail');
+      if (!on) return;
+      const go = () => { svg.classList.remove('rail'); void svg.getBoundingClientRect(); svg.classList.add('rail'); setTimeout(() => svg.classList.remove('rail'), 5200); };
+      go();
+      lineTimer = setInterval(go, 40000);
+    }
     let flashTimer = null;
     // Sound-reactive: the lamps flicker for a beat when a sound fires.
     function flash(ms = 600) {

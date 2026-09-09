@@ -58,8 +58,9 @@ locked above everything else so a stray rule can't hide a real block.
 
 Poses: think, run, wave, thumbs, sleep, blink, nod, bounce, look, spin, party,
 tap, arms (crossed), bubble (a speech bubble with your text),
-guitar, ak47, sniper, kickflip, selfie (with a blinding flash), grin,
-smoke, zyn, line, juice (a jab, then the biceps grow until the state
+guitar, ak47, sniper, kickflip (a trick every 30 s), selfie (with a
+blinding flash), grin, smoke (wisps off the ember, a slow exhale), zyn, line
+(one every 40 s), juice (a jab, then the biceps grow until the state
 changes), dead, and banner, which drops a sign over the traffic light
 with your own text ("Banner says").
 
@@ -96,14 +97,17 @@ independently:
   shape in any colour (handy with **Only project**, so each project gets its
   own Claude).
 - **Effect** — rain cloud, sun, snow, sparkles, fire, a beard that grows the
-  longer you keep him waiting, or a **garden**. The garden is a real
-  routine: the widget widens to three times its width, Claude walks off-
-  screen and comes back with pots one at a time (two minutes for five), then
-  plants each — pours dirt, drops a seed, waters it (three minutes) — then
-  the crops grow (carrots, tomatoes, berries, sunflowers, apple trees,
-  flowers, chosen at random) and he eats the edible ones every twenty
-  seconds. Ten minutes after his first bite he pulls the crops and replants,
-  and again every ten minutes. The editor previews the whole cycle at 30×.
+  longer you keep him waiting, or a **garden**. The garden lives on your
+  actual screen, Desktop-Goose style: the widget drops to the bottom of the
+  display and walks along it, off the screen edge and back with a pot each
+  time (five pots, two minutes), then plants each one — pours dirt, drops a
+  seed, waters it (three minutes) — while the bed, pots and crops are drawn
+  along the bottom of the screen on the click-through overlay. Crops
+  (carrots, tomatoes, berries, sunflowers, apple trees, flowers, at random)
+  grow over two minutes; he then walks to an edible one every twenty seconds
+  and eats it. Ten minutes after his first bite he pulls the crops and
+  replants, and again every ten minutes. When the state changes he walks
+  home and the garden clears. The editor previews a compact version at 30×.
 - **Pet** — a duck, cat or blob at his feet.
 - **Sound** — the system beep, any macOS system sound, or an audio file.
 
@@ -212,7 +216,10 @@ defaults: click jumps (or pokes when nothing is waiting), double-click pets,
 
 The Stats tab in Lights shows the last seven days as stacked bars — working,
 waiting on you (hatched), idle — with totals, a per-project ranking and a
-day table. Time accrues in 4-second ticks while the app runs and is kept for
+day table. If [ccusage](https://github.com/ryoppippi/ccusage) is installed
+it also shows **spend**: today and this week, per project (sessions are
+mapped to folders through their transcripts), the costliest sessions, and a
+cost column per day. Time accrues in 4-second ticks while the app runs and is kept for
 60 days in `~/.claude-traffic-light/stats.json`.
 
 ## Menu bar mode

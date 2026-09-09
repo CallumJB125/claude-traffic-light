@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   resetRules: () => ipcRenderer.invoke('reset-rules'),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getStats: () => ipcRenderer.invoke('get-stats'),
+  getCosts: () => ipcRenderer.invoke('get-costs'),
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),

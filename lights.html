@@ -778,12 +778,23 @@
       </div>
       <div class="stats-cols">
         <div>
+          <div class="stats-title small">Spend (ccusage)</div>
+          <div class="stats-sub" id="cost-totals">Loading…</div>
+          <ol id="cost-projects" class="projects" style="margin-top:8px"></ol>
+        </div>
+        <div>
+          <div class="stats-title small">Costliest sessions</div>
+          <table class="days" id="cost-sessions"><thead><tr><th>Session</th><th>Project</th><th>Cost</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="stats-cols">
+        <div>
           <div class="stats-title small">By project</div>
           <ol id="projects" class="projects"></ol>
         </div>
         <div>
           <div class="stats-title small">Days</div>
-          <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Idle</th><th>Peak</th></tr></thead><tbody></tbody></table>
+          <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Idle</th><th>Peak</th><th>Cost</th></tr></thead><tbody></tbody></table>
         </div>
       </div>
     </section>
@@ -1581,12 +1592,40 @@
       li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${S.fmt(p.ms)}</span><span class="bar"><i style="width:${Math.max(2, (p.ms / maxP) * 100)}%"></i></span>`;
       ol.appendChild(li);
     }
+    const costs = await window.lightsApi.getCosts();
+    const usd = (v) => `$${(v || 0).toFixed(2)}`;
     const tb = $('days-table').querySelector('tbody');
     tb.innerHTML = '';
     for (const d of [...days].reverse()) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${d.label}</td><td>${S.fmt(d.working)}</td><td>${S.fmt(d.waiting)}</td><td>${S.fmt(d.idle)}</td><td>${d.sessionsPeak}</td>`;
+      const c = costs && costs.available && costs.days[d.key] ? usd(costs.days[d.key].cost) : '—';
+      tr.innerHTML = `<td>${d.label}</td><td>${S.fmt(d.working)}</td><td>${S.fmt(d.waiting)}</td><td>${S.fmt(d.idle)}</td><td>${d.sessionsPeak}</td><td>${c}</td>`;
       tb.appendChild(tr);
+    }
+    if (!costs || !costs.available) {
+      $('cost-totals').textContent = 'ccusage not found — install it (npm i -g ccusage) to see spend here.';
+      $('cost-projects').innerHTML = ''; $('cost-sessions').querySelector('tbody').innerHTML = '';
+    } else {
+      const todayKey = days[days.length - 1].key;
+      const today = costs.days[todayKey]?.cost || 0;
+      const week = Object.values(costs.days).reduce((a, d) => a + d.cost, 0);
+      const models = [...new Set(Object.values(costs.days).flatMap((d) => d.models))].slice(0, 3).join(', ');
+      $('cost-totals').textContent = `${usd(today)} today · ${usd(week)} this week${models ? ' · ' + models : ''}`;
+      const ol = $('cost-projects');
+      ol.innerHTML = costs.projects.length ? '' : '<li class="empty-small">No session costs in the last week.</li>';
+      const maxC = costs.projects[0]?.cost || 1;
+      for (const p of costs.projects.slice(0, 6)) {
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${usd(p.cost)}</span><span class="bar"><i style="width:${Math.max(2, (p.cost / maxC) * 100)}%;background:#f2a200"></i></span>`;
+        ol.appendChild(li);
+      }
+      const st = $('cost-sessions').querySelector('tbody');
+      st.innerHTML = '';
+      for (const x of costs.sessions) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td title="${escape(x.id)}">${escape(x.id.slice(0, 8))}</td><td>${escape(x.project)}</td><td>${usd(x.cost)}</td>`;
+        st.appendChild(tr);
+      }
     }
   }
 
