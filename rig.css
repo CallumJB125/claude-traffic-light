@@ -32,6 +32,35 @@
   50% { filter: drop-shadow(0 0 5px var(--lamp-glow)) brightness(1.2); }
 }
 
+/* Sign layouts: one shown at a time. Group lamp effects light blue/pink in
+   their own colours on the five-lamp sign. */
+.rig .sign { opacity: 0; }
+.rig.sign-h3 .sign-h3, .rig.sign-v3 .sign-v3, .rig.sign-h1 .sign-h1, .rig.sign-h5 .sign-h5 { opacity: 1; }
+.rig .lamp[data-slot="blue"].on, .rig .lamp[data-slot="pink"].on { fill: var(--slot-color); filter: drop-shadow(0 0 3px var(--slot-color)); }
+.rig.lampfx-all .lamp[data-slot="blue"], .rig.lampfx-all .lamp[data-slot="pink"] { fill: var(--slot-color); filter: drop-shadow(0 0 3px var(--slot-color)); }
+.rig .cracks { opacity: 0; }
+
+/* Sign effects (look.signFx) */
+.rig.signfx-wobble .sign-assembly { animation: rig-wobble 1.4s ease-in-out infinite; }
+@keyframes rig-wobble { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+.rig.signfx-spin .sign-assembly { animation: rig-spin 1.4s linear infinite; }
+.rig.signfx-rattle .sign-assembly { animation: rig-rattle 0.12s steps(2) infinite; }
+@keyframes rig-rattle { 0% { transform: translate(-0.8px, 0.4px) rotate(-1deg); } 50% { transform: translate(0.8px, -0.4px) rotate(1deg); } }
+.rig.signfx-cracked .cracks { opacity: 0.9; }
+.rig.signfx-cracked .lamp.on { filter: none; opacity: 0.75; }
+.rig.signfx-neon .lamp.on { stroke: var(--lamp-on); stroke-width: 1.2; filter: drop-shadow(0 0 2px var(--lamp-glow)) drop-shadow(0 0 6px var(--lamp-glow)); animation: rig-neon 4s steps(1) infinite; }
+.rig.signfx-neon .sign rect { stroke: #f2efe8; stroke-width: 0.4; filter: drop-shadow(0 0 2px rgba(242, 239, 232, 0.6)); }
+@keyframes rig-neon { 0%, 93%, 95%, 100% { opacity: 1; } 94%, 96.5% { opacity: 0.45; } }
+
+/* Number mode: the digit takes the lamps' place. */
+.rig .sign-number { font: 800 17px ui-monospace, Menlo, monospace; fill: var(--lamp-on, #f2efe8); opacity: 0; filter: drop-shadow(0 0 3px var(--lamp-glow)); }
+.rig.number-mode .sign-number { opacity: 1; }
+.rig.number-mode .lamp { opacity: 0.12; filter: none !important; animation: none !important; }
+
+/* Sound-reactive flash */
+.rig.sound-flash .lamp { animation: rig-soundflash 0.15s steps(1) infinite !important; }
+@keyframes rig-soundflash { 0% { fill: #fff5d6; filter: drop-shadow(0 0 6px #fff5d6); } 50% { fill: var(--lamp-off); filter: none; } }
+
 /* Lamp effects (look.lampFx). Group effects light lamps in their own colour
    regardless of which slot the rule chose. */
 .rig.lampfx-strobe .lamp.on { animation: rig-strobe 0.12s steps(1) infinite; }
@@ -396,7 +425,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
+  .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

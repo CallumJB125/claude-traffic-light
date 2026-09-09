@@ -8,11 +8,50 @@
 (function () {
   const SVG = `
 <svg class="rig" viewBox="0 0 64 82" overflow="visible" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- lamp shapes, referenced by href so a rule can swap them -->
+    <symbol id="lamp-square" viewBox="0 0 16 16"><rect x="0.5" y="0.5" width="15" height="15" rx="2.5" /></symbol>
+    <symbol id="lamp-round" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7.5" /></symbol>
+    <symbol id="lamp-heart" viewBox="0 0 16 16"><path d="M8 14.5 L2 8.5 A3.5 3.5 0 0 1 8 4 A3.5 3.5 0 0 1 14 8.5 Z" /></symbol>
+    <symbol id="lamp-star" viewBox="0 0 16 16"><polygon points="8,0.8 10.1,5.6 15.3,6.1 11.4,9.6 12.6,14.7 8,12 3.4,14.7 4.6,9.6 0.7,6.1 5.9,5.6" /></symbol>
+    <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
+  </defs>
   <g class="sign-assembly">
-    <rect x="4" y="24" width="56" height="5" fill="#726c62" />
-    <rect class="lamp" data-slot="red" x="7" y="7" width="15" height="15" rx="2.5" />
-    <rect class="lamp" data-slot="amber" x="24.5" y="7" width="15" height="15" rx="2.5" />
-    <rect class="lamp" data-slot="green" x="42" y="7" width="15" height="15" rx="2.5" />
+    <!-- horizontal, three lamps (default) -->
+    <g class="sign sign-h3">
+      <rect x="4" y="24" width="56" height="5" fill="#726c62" />
+      <use class="lamp" data-slot="red" href="#lamp-square" x="6.5" y="6.5" width="16" height="16" />
+      <use class="lamp" data-slot="amber" href="#lamp-square" x="24" y="6.5" width="16" height="16" />
+      <use class="lamp" data-slot="green" href="#lamp-square" x="41.5" y="6.5" width="16" height="16" />
+      <g class="cracks" fill="none" stroke="#f2efe8" stroke-width="0.7" stroke-linecap="round"><path d="M12 8l4 6-2 5M30 7l-3 7 4 4M48 8l-2 5 5 6M27 9l7 8" /></g>
+    </g>
+    <!-- horizontal, one big lamp -->
+    <g class="sign sign-h1">
+      <rect x="4" y="24" width="56" height="5" fill="#726c62" />
+      <use class="lamp" data-slot="any" href="#lamp-square" x="21" y="2" width="22" height="22" />
+      <g class="cracks" fill="none" stroke="#f2efe8" stroke-width="0.7" stroke-linecap="round"><path d="M27 5l5 8-3 7M33 6l4 6" /></g>
+    </g>
+    <!-- horizontal, five lamps -->
+    <g class="sign sign-h5">
+      <rect x="4" y="24" width="56" height="5" fill="#726c62" />
+      <use class="lamp" data-slot="red" href="#lamp-square" x="4" y="11" width="10" height="10" />
+      <use class="lamp" data-slot="amber" href="#lamp-square" x="15.5" y="11" width="10" height="10" />
+      <use class="lamp" data-slot="green" href="#lamp-square" x="27" y="11" width="10" height="10" />
+      <use class="lamp" data-slot="blue" href="#lamp-square" x="38.5" y="11" width="10" height="10" />
+      <use class="lamp" data-slot="pink" href="#lamp-square" x="50" y="11" width="10" height="10" />
+      <g class="cracks" fill="none" stroke="#f2efe8" stroke-width="0.7" stroke-linecap="round"><path d="M9 12l3 5M31 12l-2 6M54 12l2 6" /></g>
+    </g>
+    <!-- vertical, three lamps on a post -->
+    <g class="sign sign-v3">
+      <rect x="4" y="2" width="4" height="27" fill="#726c62" />
+      <rect x="4" y="24" width="12" height="5" fill="#726c62" />
+      <use class="lamp" data-slot="red" href="#lamp-square" x="9" y="0" width="9" height="9" />
+      <use class="lamp" data-slot="amber" href="#lamp-square" x="9" y="9.5" width="9" height="9" />
+      <use class="lamp" data-slot="green" href="#lamp-square" x="9" y="19" width="9" height="9" />
+      <g class="cracks" fill="none" stroke="#f2efe8" stroke-width="0.7" stroke-linecap="round"><path d="M11 2l4 5M12 12l3 4" /></g>
+    </g>
+    <!-- number mode: one big digit where the lamps were -->
+    <text class="sign-number" x="32" y="21" text-anchor="middle"></text>
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
@@ -332,7 +371,10 @@
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard'];
   const PETS = ['none', 'duck', 'cat', 'blob'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
-  const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e' };
+  const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e', blue: '#2f6bff', pink: '#f472b6' };
+  const SIGNS = ['h3', 'v3', 'h1', 'h5'];
+  const LAMP_SHAPES = ['square', 'round', 'heart', 'star', 'skull'];
+  const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
 
   function hexToRgba(hex, a) {
     const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
@@ -353,12 +395,29 @@
       const color = look.lampColor || (lit ? SLOT_COLORS[lit] : null);
       const fx = LAMP_FX.includes(look.lampFx) ? look.lampFx : 'none';
       const groupFx = fx === 'chase' || fx === 'police' || fx === 'all';
+      const sign = SIGNS.includes(look.sign) ? look.sign : 'h3';
+      for (const sg of SIGNS) svg.classList.toggle(`sign-${sg}`, sign === sg);
+      const shape = LAMP_SHAPES.includes(look.lampShape) ? look.lampShape : 'square';
       for (const el of lamps) {
-        const on = (lit && el.dataset.slot === lit) || groupFx;
+        // a single-lamp sign lights in whatever colour the state has
+        const on = (lit && (el.dataset.slot === lit || el.dataset.slot === 'any')) || groupFx;
         el.classList.toggle('on', !!on);
         // pulse is the original green behaviour unless a rule chose an effect
         el.classList.toggle('pulse', !!on && fx === 'none' && lit === 'green' && !look.lampColor);
+        const href = `#lamp-${shape}`;
+        if (el.getAttribute('href') !== href) el.setAttribute('href', href);
+        if (el.dataset.slot === 'blue' || el.dataset.slot === 'pink') el.style.setProperty('--slot-color', SLOT_COLORS[el.dataset.slot]);
       }
+      const signFx = SIGN_FX.includes(look.signFx) ? look.signFx : 'none';
+      if (!current || current.signFx !== signFx) {
+        for (const f of SIGN_FX) svg.classList.remove(`signfx-${f}`);
+        if (signFx !== 'none') svg.classList.add(`signfx-${signFx}`);
+      }
+      // number mode: a digit replaces the lamps
+      const num = svg.querySelector('.sign-number');
+      const numText = look.number == null ? '' : String(look.number);
+      if (num.textContent !== numText) num.textContent = numText;
+      svg.classList.toggle('number-mode', numText !== '');
       if (!current || current.lampFx !== fx) {
         for (const f of LAMP_FX) svg.classList.remove(`lampfx-${f}`);
         if (fx !== 'none') svg.classList.add(`lampfx-${fx}`);
@@ -408,7 +467,7 @@
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
-      current = { ...look, pose, costume, lampFx: fx };
+      current = { ...look, pose, costume, lampFx: fx, signFx };
     }
 
     let eventTimer = null;
@@ -430,6 +489,15 @@
       clearTimeout(reactTimer);
       reactTimer = setTimeout(() => { if (current) setLook({ ...current, ...base, aimAngle: current.aimAngle, facing: current.facing }); }, ms);
     }
+    let flashTimer = null;
+    // Sound-reactive: the lamps flicker for a beat when a sound fires.
+    function flash(ms = 600) {
+      svg.classList.remove('sound-flash');
+      void svg.getBoundingClientRect();
+      svg.classList.add('sound-flash');
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => svg.classList.remove('sound-flash'), ms);
+    }
     let burstTimer = null;
     function burst(ms = 1200) {
       svg.classList.add('firing');
@@ -445,7 +513,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, flash, get look() { return current; } };
   }
 
   window.mountRig = mountRig;
@@ -457,5 +525,8 @@
   window.RIG_EYE_MOODS = EYE_MOODS;
   window.RIG_EVENTS = EVENTS;
   window.RIG_LAMP_FX = LAMP_FX;
+  window.RIG_SIGNS = SIGNS;
+  window.RIG_LAMP_SHAPES = LAMP_SHAPES;
+  window.RIG_SIGN_FX = SIGN_FX;
   window.RIG_DEFAULT_TEXT = DEFAULT_TEXT;
 })();

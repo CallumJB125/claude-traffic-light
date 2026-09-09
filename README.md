@@ -71,6 +71,15 @@ changes and never runs under Reduce Motion.
 Beyond the lamp, each rule can set any of these channels, all layered
 independently:
 
+- **Sign** — three lamps, a vertical post, one big lamp, or five lamps
+  (red, amber, green, blue, pink); **lamp shape** — square, round, heart,
+  star, skull; **sign effect** — wobble, spin, rattle, cracked glass, neon
+  tube; **show a number** — sessions running, minutes waiting, or tasks
+  left, as a digit in the state's colour instead of the lamps.
+- **Screen** — whole-display effects on the click-through overlay: a red
+  vignette pulse, confetti every 10 seconds, or a spotlight beam from Claude
+  to your terminal's Dock icon. The lamps also flicker whenever a sound
+  plays.
 - **Lamp effect** — pulse, strobe, breathe, flicker (faulty neon), chase
   (lamps in sequence), police (red/blue), rainbow, all three lit, or SOS in
   morse.

@@ -117,7 +117,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, clicks: {} });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -196,6 +196,16 @@ test('lamp effect is an accent channel; green keeps its pulse only when none is 
   assert.equal(look([{ signal: 'tool-use', tool: 'Agent' }], rs).lampFx, 'strobe');
   assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).lampFx, 'none');
   assert.equal(R.normalizeRule({ then: { lampFx: 'disco' } }).then.lampFx, null);
+});
+
+test('sign, lamp shape, sign effect, number and screen effect are accent channels', () => {
+  const rs = [{ id: 's', name: 's', when: { signal: ['tool-use'], tool: 'Agent' }, then: { sign: 'h5', lampShape: 'heart', signFx: 'neon', number: 'tasks', screenFx: 'vignette' } }, ...rules()];
+  const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
+  assert.deepEqual([l.sign, l.lampShape, l.signFx, l.numberOf, l.screenFx], ['h5', 'heart', 'neon', 'tasks', 'vignette']);
+  const d = look([{ signal: 'tool-use', tool: 'Bash' }], rs);
+  assert.deepEqual([d.sign, d.lampShape, d.signFx, d.numberOf, d.screenFx], ['h3', 'square', 'none', null, 'none']);
+  assert.equal(R.normalizeRule({ then: { number: 'none' } }).then.number, null);
+  assert.equal(R.normalizeRule({ then: { lampShape: 'triangle' } }).then.lampShape, null);
 });
 
 test('clicks: per-gesture actions layer like accents and fall back to defaults', () => {

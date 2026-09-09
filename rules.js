@@ -64,6 +64,11 @@
 
   const LAMPS = ['off', 'red', 'amber', 'green'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
+  const SIGNS = ['h3', 'v3', 'h1', 'h5'];
+  const LAMP_SHAPES = ['square', 'round', 'heart', 'star', 'skull'];
+  const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
+  const NUMBERS = ['none', 'sessions', 'minutes', 'tasks'];
+  const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
@@ -189,6 +194,11 @@
         lamp: LAMPS.includes(r.then?.lamp) ? r.then.lamp : null,
         lampColor: /^#[0-9a-f]{6}$/i.test(r.then?.lampColor || '') ? r.then.lampColor : null,
         lampFx: LAMP_FX.includes(r.then?.lampFx) ? r.then.lampFx : null,
+        sign: SIGNS.includes(r.then?.sign) ? r.then.sign : null,
+        lampShape: LAMP_SHAPES.includes(r.then?.lampShape) ? r.then.lampShape : null,
+        signFx: SIGN_FX.includes(r.then?.signFx) ? r.then.signFx : null,
+        number: NUMBERS.includes(r.then?.number) && r.then.number !== 'none' ? r.then.number : null,
+        screenFx: SCREEN_FX.includes(r.then?.screenFx) ? r.then.screenFx : null,
         eyes: r.then?.eyes === 'closed' || EYE_MOODS.includes(r.then?.eyes) || /^#[0-9a-f]{6}$/i.test(r.then?.eyes || '') ? r.then.eyes : (r.then?.eyes === 'default' ? 'default' : null),
         pose: POSES.includes(r.then?.pose) ? r.then.pose : null,
         sound: SOUNDS.includes(r.then?.sound) || /^file:.+/.test(r.then?.sound || '') ? r.then.sound : null,
@@ -263,7 +273,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, lampFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
+    const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), clicks: {} };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -282,6 +292,11 @@
       if (t.celebrate && !owned.celebrate) { look.celebrate = true; owned.celebrate = rule.id; }
       if (!look.name) { look.name = rule.name; look.ruleId = rule.id; }
       if (!owned.lampFx && t.lampFx) { look.lampFx = t.lampFx; owned.lampFx = rule.id; }
+      if (!owned.sign && t.sign) { look.sign = t.sign; owned.sign = rule.id; }
+      if (!owned.lampShape && t.lampShape) { look.lampShape = t.lampShape; owned.lampShape = rule.id; }
+      if (!owned.signFx && t.signFx) { look.signFx = t.signFx; owned.signFx = rule.id; }
+      if (!owned.numberOf && t.number) { look.numberOf = t.number; owned.numberOf = rule.id; }
+      if (!owned.screenFx && t.screenFx) { look.screenFx = t.screenFx; owned.screenFx = rule.id; }
       if (t.lamp) { look.lamp = t.lamp; look.lampColor = t.lampColor; owned.lamp = rule.id; break; }
     }
     for (const g of GESTURES) if (!look.clicks[g]) look.clicks[g] = DEFAULT_CLICKS[g];
@@ -295,6 +310,12 @@
       lamp: r.then.lamp || 'off',
       lampColor: r.then.lampColor,
       lampFx: r.then.lampFx || 'none',
+      sign: r.then.sign || 'h3',
+      lampShape: r.then.lampShape || 'square',
+      signFx: r.then.signFx || 'none',
+      numberOf: r.then.number,
+      number: r.then.number ? 7 : null,
+      screenFx: r.then.screenFx || 'none',
       eyes: r.then.eyes || 'default',
       pose: r.then.pose || 'none',
       text: r.then.text,
@@ -309,5 +330,5 @@
     };
   }
 
-  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
 });

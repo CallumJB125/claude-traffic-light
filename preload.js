@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onBurst: (cb) => ipcRenderer.on('burst', (e, ms) => cb(ms)),
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
+  onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
   answerRequest: (id, decision) => ipcRenderer.invoke('answer-request', id, decision),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
 });

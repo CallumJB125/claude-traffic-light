@@ -323,12 +323,23 @@ function aggregateState() {
     const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]).look;
     return { look: { ...asked, tasks }, reason: 'session', sessions, fired: ['permission'], owned, pending, tasks };
   }
-  return { look: { ...look, tasks }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks };
+  return { look: { ...withNumber(look, sessions, tasks), tasks }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks };
+}
+
+// Number mode: the digit the sign shows instead of a colour.
+function withNumber(look, sessions, tasks) {
+  if (!look.numberOf) return look;
+  let n = null;
+  if (look.numberOf === 'sessions') n = sessions.length;
+  else if (look.numberOf === 'minutes') n = look.waitMinutes || 0;
+  else if (look.numberOf === 'tasks') n = tasks ? Math.max(0, tasks.created - tasks.done) : 0;
+  return { ...look, number: n == null ? null : Math.min(99, n) };
 }
 
 // ── Sounds ──────────────────────────────────────────────────────────────────
 function playSound(name) {
   if (!name) return;
+  win?.webContents.send('sound-flash');
   if (name === 'beep') { shell.beep(); return; }
   const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
   if (!fs.existsSync(file)) { shell.beep(); return; }
@@ -370,7 +381,11 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setAspectRatio(WIDGET_ASPECT);
   win.loadFile('index.html');
-  win.once('ready-to-show', () => { if (loadConfig().showWidget) win?.showInactive(); });
+  // ready-to-show is unreliable for transparent windows on macOS, so show on
+  // load, with a fallback in case that never fires either.
+  const reveal = () => { if (win && !win.isVisible() && loadConfig().showWidget) win.showInactive(); };
+  win.webContents.once('did-finish-load', reveal);
+  setTimeout(reveal, 1500);
 
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
@@ -402,8 +417,10 @@ function createSettingsWindow() {
   });
   settingsWin.setMenuBarVisibility(false);
   settingsWin.loadFile('settings.html');
+  if (process.platform === 'darwin') app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
+    if (process.platform === 'darwin' && !lightsWin) app.dock.hide();
   });
 }
 
@@ -442,7 +459,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -498,8 +515,10 @@ function createLightsWindow() {
       }, 2000);
     });
   }
+  if (process.platform === 'darwin') app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
+    if (process.platform === 'darwin' && !settingsWin) app.dock.hide();
   });
 }
 
@@ -587,6 +606,7 @@ function pushAim() {
 }
 
 function stopOverlay() {
+  overlayFx = 'none';
   clearInterval(burstTimer); burstTimer = null;
   clearInterval(snipeTimer); snipeTimer = null;
   clearInterval(aimTimer); aimTimer = null;
@@ -601,16 +621,38 @@ function stopOverlay() {
   }
 }
 
+let overlayFx = 'none';
+async function pushScreenFx(fx) {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const payload = { fx };
+  if (fx === 'spotlight') {
+    const app = await runningTerminal();
+    const icon = app ? await dockIconRect(app) : null;
+    if (icon && overlayWin && !overlayWin.isDestroyed()) {
+      const ob = overlayWin.getBounds();
+      const m = widgetMuzzle();
+      payload.target = { x: icon.x + icon.w / 2 - ob.x, y: icon.y + icon.h / 2 - ob.y };
+      payload.from = m ? { x: m.screenPoint.x - ob.x, y: m.screenPoint.y - ob.y } : null;
+    }
+  }
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('fx', payload);
+}
+
 function updateOverlay(look) {
   const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
-  const wants = gun && win && win.isVisible() && !prefersReducedMotion();
-  if (!wants) { stopOverlay(); return; }
+  const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : null;
+  const wants = (gun || fx) && win && win.isVisible() && !prefersReducedMotion();
+  if (!wants) { stopOverlay(); overlayFx = 'none'; return; }
   const m = widgetMuzzle();
   if (!m) return;
   if (overlayWin && (overlayDisplayId !== m.display.id || overlayPose !== gun)) stopOverlay();
-  if (overlayWin) return;
+  if (overlayWin) {
+    if (overlayFx !== (fx || 'none')) { overlayFx = fx || 'none'; pushScreenFx(overlayFx); }
+    return;
+  }
   overlayDisplayId = m.display.id;
   overlayPose = gun;
+  overlayFx = fx || 'none';
   overlayWin = new BrowserWindow({
     ...m.display.bounds,
     frame: false,
@@ -633,9 +675,10 @@ function updateOverlay(look) {
     if (!overlayWin) return;
     overlayWin.showInactive();
     overlayWin.setBounds(m.display.bounds);
-    aimTimer = setInterval(pushAim, 120);
+    if (gun) aimTimer = setInterval(pushAim, 120);
     if (gun === 'ak47') { fireBurst(); burstTimer = setInterval(fireBurst, BURST_EVERY_MS); }
-    else { fireSnipe(); snipeTimer = setInterval(fireSnipe, SNIPE_EVERY_MS); }
+    else if (gun === 'sniper') { fireSnipe(); snipeTimer = setInterval(fireSnipe, SNIPE_EVERY_MS); }
+    if (overlayFx !== 'none') pushScreenFx(overlayFx);
   });
   overlayWin.on('closed', () => { overlayWin = null; });
   win.setAlwaysOnTop(true, 'screen-saver', 2);
@@ -857,6 +900,8 @@ function createTray() {
 
   const menu = Menu.buildFromTemplate([
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
+    { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
+    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
     {
       label: 'Floating Widget',
       type: 'checkbox',
@@ -1167,6 +1212,8 @@ app.whenReady().then(() => {
     if (!areHooksInstalled()) installHooks();
   }, 10 * 60 * 1000);
 });
+
+app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
 
 app.on('window-all-closed', () => {
   // Keep running in the tray.

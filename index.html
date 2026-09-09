@@ -61,6 +61,12 @@
   }
   #app:hover #tooltip { opacity: 1; }
 
+  /* Hover gear → Lights, so the editor is discoverable from the widget. */
+  #gear { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20, 20, 22, 0.85); color: #ece8e2; display: grid; place-items: center; opacity: 0; transition: opacity 120ms ease; cursor: pointer; padding: 0; }
+  #gear svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
+  body:hover #gear { opacity: 1; }
+  #gear:hover { background: #da7756; color: #211f1c; }
+
   /* Allow / Deny strip, shown while a permission request waits. */
   #ask { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; padding: 0 6px 4px; gap: 4px; align-items: center; flex-wrap: wrap; align-content: flex-end; }
   body.asking #ask { display: flex; }
@@ -77,6 +83,7 @@
     <div class="housing" id="housing"></div>
     <div id="tooltip"></div>
   </div>
+  <button id="gear" title="Lights — program what Claude does (right-click the widget also works)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button>
   <div id="ask">
     <div id="ask-what"></div>
     <button class="allow" id="allow" title="Allow this tool call">Allow</button>
@@ -186,6 +193,7 @@
     document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'allow'); });
     document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'deny'); });
     window.trafficLight.onEvent((name) => rig.playEvent(name));
+    window.trafficLight.onSoundFlash(() => rig.flash(600));
 
     // Gestures are programmable per state (Lights → On click). The main
     // process resolves the action; we just show feedback and any reaction.
@@ -203,6 +211,9 @@
       if (clickTimer) return;
       clickTimer = setTimeout(() => { clickTimer = null; gesture('click'); }, 230);
     });
+
+    document.getElementById('gear').addEventListener('mousedown', (e) => e.stopPropagation());
+    document.getElementById('gear').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.openLights(); });
 
     // Right-click the widget → Lights editor.
     app.addEventListener('contextmenu', (e) => {

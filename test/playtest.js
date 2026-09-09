@@ -12,7 +12,7 @@
   const rowByName = (n) => rows().find((r) => r.querySelector('.name span:last-child').textContent === n);
   const fire = (el, type, init = {}) => el.dispatchEvent(new (type.startsWith('key') ? KeyboardEvent : Event)(type, { bubbles: true, cancelable: true, ...init }));
   const setInput = (el, v) => { el.value = v; fire(el, 'input'); fire(el, 'change'); };
-  const stageLook = () => { const s = document.querySelector('#stage-rig svg'); return { cls: s.className.baseVal, eye: s.style.getPropertyValue('--eye-color'), lampOn: Array.from(s.querySelectorAll('.lamp.on')).map((l) => l.dataset.slot).join(',') || 'off' }; };
+  const stageLook = () => { const s = document.querySelector('#stage-rig svg'); return { cls: s.className.baseVal, eye: s.style.getPropertyValue('--eye-color'), lampOn: Array.from(new Set(Array.from(s.querySelectorAll('.lamp.on')).map((l) => l.dataset.slot).filter((x) => x !== 'any'))).join(',') || 'off' }; };
 
   const original = await window.lightsApi.getConfig();
   try {
@@ -73,6 +73,11 @@
     costumeBtn('unicorn').click();
     ok(stageLook().cls.includes('costume-unicorn'), 'costume applies on the stage');
     const pick = (id, title) => Array.from($(id).querySelectorAll('.posebtn')).find((b) => b.title === title).click();
+    pick('signs', 'h5'); ok(stageLook().cls.includes('sign-h5'), 'sign layout applies on the stage');
+    pick('shapes', 'heart'); ok(document.querySelector('#stage-rig .sign-h5 .lamp').getAttribute('href') === '#lamp-heart', 'lamp shape swaps the symbol');
+    pick('signfx', 'neon'); ok(stageLook().cls.includes('signfx-neon'), 'sign effect applies');
+    setInput($('number'), 'tasks');
+    Array.from($('screenfx').querySelectorAll('button')).find((b) => b.textContent === 'confetti').click();
     pick('lampfx', 'strobe'); ok(stageLook().cls.includes('lampfx-strobe'), 'lamp effect applies on the stage');
     pick('bodies', 'robot'); ok(stageLook().cls.includes('body-robot'), 'body swap applies on the stage');
     pick('effects', 'rain'); ok(stageLook().cls.includes('effect-rain'), 'effect applies on the stage');
@@ -134,6 +139,7 @@
     ok(pt && pt.then.costume === 'unicorn', 'costume persists with the rule');
     ok(pt && pt.then.clicks.click.type === 'url' && pt.then.clicks.click.arg === 'https://example.com' && pt.then.clicks.double.type === 'snooze' && !pt.then.clicks.alt, 'programmed gestures persist');
     ok(pt && pt.then.lampFx === 'strobe', 'lamp effect persists');
+    ok(pt && pt.then.sign === 'h5' && pt.then.lampShape === 'heart' && pt.then.signFx === 'neon' && pt.then.number === 'tasks' && pt.then.screenFx === 'confetti', 'sign, shape, sign effect, number and screen effect persist');
     ok(pt && pt.then.body === 'robot' && pt.then.effect === 'rain' && pt.then.pet === 'duck' && pt.then.bodyColor === '#1155cc' && pt.then.sound === 'Glass' && pt.when.cwd === 'bondly*', 'body, effect, pet, body colour, sound and project scope persist');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 

@@ -631,6 +631,37 @@
         </div>
 
         <div class="row">
+          <div class="lbl">Sign</div>
+          <div class="field"><div class="poses" id="signs"></div></div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Lamp shape</div>
+          <div class="field"><div class="poses" id="shapes"></div></div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Sign effect</div>
+          <div class="field"><div class="poses" id="signfx"></div></div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Show a number</div>
+          <div class="field">
+            <select id="number" class="select" aria-label="Number shown on the sign"></select>
+            <div class="hint">Replaces the lamps with a digit in the state's colour.</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">Screen</div>
+          <div class="field">
+            <div class="lamps" id="screenfx"></div>
+            <div class="hint">Whole-display effects, drawn click-through over everything: a red vignette, confetti every 10 seconds, or a spotlight from Claude to your terminal's Dock icon.</div>
+          </div>
+        </div>
+
+        <div class="row">
           <div class="lbl">Eyes</div>
           <div class="field">
             <div class="lamps" id="eyes"></div>
@@ -1119,7 +1150,7 @@
         mini.className = 'mini';
         b.appendChild(mini);
         const lbl = document.createElement('span');
-        lbl.textContent = o === null ? 'keep' : o === 'claude' ? 'claude' : o;
+        lbl.textContent = o === null ? 'keep' : ({ h3: '3 lamps', v3: 'vertical', h1: '1 lamp', h5: '5 lamps' })[o] || o;
         b.appendChild(lbl);
         mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
         if (o === null) mini.style.opacity = '0.35';
@@ -1128,6 +1159,23 @@
       }
     };
     picker($('lampfx'), R.LAMP_FX, r.then.lampFx, (o) => ({ lamp: r.then.lamp && r.then.lamp !== 'off' ? r.then.lamp : 'green', lampColor: r.then.lampColor, lampFx: o || 'none' }), (o) => { r.then.lampFx = o; });
+    const litLamp = r.then.lamp && r.then.lamp !== 'off' ? r.then.lamp : 'green';
+    picker($('signs'), R.SIGNS, r.then.sign, (o) => ({ lamp: litLamp, sign: o || 'h3', lampShape: r.then.lampShape || 'square' }), (o) => { r.then.sign = o; });
+    picker($('shapes'), R.LAMP_SHAPES, r.then.lampShape, (o) => ({ lamp: litLamp, lampShape: o || 'square', sign: r.then.sign || 'h3' }), (o) => { r.then.lampShape = o; });
+    picker($('signfx'), R.SIGN_FX, r.then.signFx, (o) => ({ lamp: litLamp, signFx: o || 'none' }), (o) => { r.then.signFx = o; });
+    $('number').innerHTML = [['', 'Keep'], ['none', 'No number (lamps)'], ['sessions', 'Sessions running'], ['minutes', 'Minutes waiting on you'], ['tasks', 'Tasks left']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    $('number').value = r.then.number || '';
+    const sfx = $('screenfx');
+    sfx.innerHTML = '';
+    for (const [v, label] of [[null, 'keep'], ['none', 'none'], ['vignette', 'vignette'], ['confetti', 'confetti'], ['spotlight', 'spotlight']]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'signal' + (r.then.screenFx === v ? ' on' : '');
+      b.textContent = label;
+      b.title = v === null ? 'Leave to other rules' : label;
+      b.addEventListener('click', () => { r.then.screenFx = v; touch(); });
+      sfx.appendChild(b);
+    }
     picker($('costumes'), R.COSTUMES, r.then.costume, (o) => ({ costume: o || 'none' }), (o) => { r.then.costume = o; });
     picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
@@ -1209,6 +1257,7 @@
   $('eye-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.eyes = e.target.value; touch(); });
   $('text').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.text = e.target.value.trim().slice(0, 24) || null; setDirty(true); renderStage(); });
   $('sound').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.sound = e.target.value || null; setDirty(true); $('sound-play').disabled = !r.then.sound; renderList(); });
+  $('number').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.number = e.target.value || null; touch(); });
   $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
   $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
   $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
@@ -1489,7 +1538,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

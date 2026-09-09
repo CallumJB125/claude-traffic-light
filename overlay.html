@@ -42,16 +42,55 @@
   const kick = () => { if (!raf) loop(performance.now()); };
 
   window.overlay.onBurst((m, ms) => { muzzle = m; firingUntil = performance.now() + ms; lastShot = 0; kick(); });
-  window.overlay.onStop(() => { firingUntil = 0; scope = null; });
+  window.overlay.onStop(() => { firingUntil = 0; scope = null; fx = { fx: 'none' }; });
+  // Screen effects: persistent modes drawn every frame while set.
+  let fx = { fx: 'none' };
+  const confetti = [];
+  let lastConfetti = 0;
+  window.overlay.onFx((p) => { fx = p || { fx: 'none' }; lastConfetti = 0; kick(); });
+  function spawnConfetti() {
+    for (let i = 0; i < 90; i += 1) confetti.push({ x: W * 0.5 + (Math.random() - 0.5) * W * 0.4, y: -10, vx: (Math.random() - 0.5) * 6, vy: 2 + Math.random() * 4, r: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.3, c: ['#f2a200', '#2fae3e', '#e2231a', '#38bdf8', '#f472b6', '#f2efe8'][i % 6], life: 1 });
+  }
   window.overlay.onTrack((t) => { cursor = t; });
   window.overlay.onScope((t) => { scope = { x: t.x, y: t.y, until: performance.now() + 700 }; cursor = t; kick(); });
   window.overlay.onSnipe((m, t) => { scope = null; shots.push({ mx: m.x, my: m.y, tx: t.x, ty: t.y, t0: performance.now() }); holes.push({ x: t.x, y: t.y, t0: performance.now() }); kick(); });
 
   function loop(t) {
-    const busy = firing() || bullets.length || sparks.length || (scope && t < scope.until) || shots.length || holes.length;
+    const busy = firing() || bullets.length || sparks.length || (scope && t < scope.until) || shots.length || holes.length || fx.fx !== 'none' || confetti.length;
     if (!busy) { ctx.clearRect(0, 0, W, H); raf = null; return; }
     raf = requestAnimationFrame(loop);
     ctx.clearRect(0, 0, W, H);
+
+    // ── Screen effects
+    if (fx.fx === 'vignette') {
+      const a = 0.22 + 0.16 * Math.sin(t / 380);
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.42, W / 2, H / 2, Math.max(W, H) * 0.72);
+      g.addColorStop(0, 'rgba(226, 35, 26, 0)');
+      g.addColorStop(1, `rgba(226, 35, 26, ${a})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    if (fx.fx === 'confetti' && t - lastConfetti > 10000) { lastConfetti = t; spawnConfetti(); }
+    for (let i = confetti.length - 1; i >= 0; i -= 1) {
+      const c = confetti[i];
+      c.x += c.vx; c.y += c.vy; c.vy += 0.05; c.r += c.vr; c.vx *= 0.99;
+      if (c.y > H + 20) { confetti.splice(i, 1); continue; }
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.r); ctx.fillStyle = c.c; ctx.fillRect(-4, -2.5, 8, 5); ctx.restore();
+    }
+    if (fx.fx === 'spotlight' && fx.target) {
+      const pulse = 0.5 + 0.5 * Math.sin(t / 300);
+      const r = 46 + 10 * pulse;
+      const g = ctx.createRadialGradient(fx.target.x, fx.target.y, 4, fx.target.x, fx.target.y, r);
+      g.addColorStop(0, 'rgba(242, 162, 0, 0.55)'); g.addColorStop(1, 'rgba(242, 162, 0, 0)');
+      ctx.fillStyle = g; ctx.fillRect(fx.target.x - r, fx.target.y - r, r * 2, r * 2);
+      if (fx.from) {
+        const bg = ctx.createLinearGradient(fx.from.x, fx.from.y, fx.target.x, fx.target.y);
+        bg.addColorStop(0, 'rgba(242, 162, 0, 0.0)'); bg.addColorStop(0.15, 'rgba(242, 162, 0, 0.18)'); bg.addColorStop(1, 'rgba(242, 162, 0, 0.35)');
+        ctx.strokeStyle = bg; ctx.lineWidth = 26 + 8 * pulse; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(fx.from.x, fx.from.y); ctx.lineTo(fx.target.x, fx.target.y); ctx.stroke();
+      }
+      ctx.strokeStyle = `rgba(242, 162, 0, ${0.5 + 0.4 * pulse})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(fx.target.x, fx.target.y, r * 0.55, 0, Math.PI * 2); ctx.stroke();
+    }
 
     // ── AK burst: rounds along the aim vector with a little spread
     if (firing() && muzzle && t - lastShot > 90) {
