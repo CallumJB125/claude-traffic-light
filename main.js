@@ -354,6 +354,12 @@ function createLightsWindow() {
         fs.writeFileSync(process.argv[shotAt + 1], img.toPNG());
         // Dev: `--shot-overlay out.png` previews the ak47 pose on the widget
         // and captures the bullet overlay window.
+        // Dev: `--shot-widget out.png` captures the widget with its real look.
+        if (arg('--shot-widget') && win) {
+          await new Promise((r) => setTimeout(r, 800));
+          fs.writeFileSync(arg('--shot-widget'), (await win.webContents.capturePage()).toPNG());
+          console.log('[shot] widget look', JSON.stringify(aggregateState().look));
+        }
         const ov = arg('--shot-overlay');
         if (ov) {
           previewLook = { look: { lamp: 'amber', eyes: 'default', pose: 'ak47', name: 'shot' }, expiresAt: Date.now() + 8000 };
