@@ -187,6 +187,27 @@
 @keyframes rig-banner-in { 0% { transform: translateY(-24px); } 100% { transform: translateY(0); } }
 @keyframes rig-banner-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
 
+/* Costumes: independent of pose; shown by .costume-<name> on the rig. */
+.rig .costume { opacity: 0; transition: opacity 150ms ease; }
+.rig.costume-dog .costume-dog, .rig.costume-cat .costume-cat, .rig.costume-unicorn .costume-unicorn,
+.rig.costume-crown .costume-crown, .rig.costume-partyhat .costume-partyhat, .rig.costume-shades .costume-shades,
+.rig.costume-halo .costume-halo, .rig.costume-devil .costume-devil, .rig.costume-wizard .costume-wizard,
+.rig.costume-tophat .costume-tophat { opacity: 1; }
+.rig .dog-tail { transform-origin: 59px 53px; }
+.rig.costume-dog .dog-tail { animation: rig-wag 0.35s ease-in-out infinite alternate; }
+@keyframes rig-wag { from { transform: rotate(-25deg); } to { transform: rotate(25deg); } }
+.rig.costume-halo .halo { animation: rig-halo 2.6s ease-in-out infinite; }
+@keyframes rig-halo { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+.rig .sparkle { opacity: 0; }
+.rig.costume-unicorn .sparkle { animation: rig-sparkle 1.6s ease-in-out infinite; }
+.rig.costume-unicorn .sparkle.s2 { animation-delay: 0.8s; }
+@keyframes rig-sparkle { 0%, 100% { opacity: 0; transform: scale(0.5); } 50% { opacity: 1; transform: scale(1.3); } }
+.rig .devil-tail { transform-origin: 60px 54px; }
+.rig.costume-devil .devil-tail { animation: rig-devil-tail 1.2s ease-in-out infinite alternate; }
+@keyframes rig-devil-tail { from { transform: rotate(-8deg); } to { transform: rotate(8deg); } }
+/* Sunglasses sit over the eyes; the eyes' own colour is hidden underneath. */
+.rig.costume-shades .eye-open { opacity: 0; }
+
 /* Grumpy: a sleep pose that has dragged on. */
 .rig .grumpy-mouth { opacity: 0; fill: #211f1c; }
 .rig.grumpy .grumpy-mouth { opacity: 1; }
@@ -207,7 +228,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
-  .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner {
+  .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
+  .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }

@@ -64,6 +64,10 @@
   #titlebar .sub { color: var(--muted); }
   #titlebar .spacer { flex: 1; }
   #titlebar .tools { -webkit-app-region: no-drag; display: flex; gap: 6px; }
+  #titlebar .view-seg { -webkit-app-region: no-drag; margin-left: 6px; }
+  #main[data-view="stats"] #rules, #main[data-view="stats"] #right { display: none; }
+  #main:not([data-view="stats"]) #stats { display: none; }
+  #main[data-view="stats"] { grid-template-columns: 1fr; }
 
   #main {
     display: grid;
@@ -447,6 +451,40 @@
   .posebtn .mini .rig { --lamp-off: #3a3542; }
 
 
+  /* ── Stats view ──────────────────────────────────────────────────────── */
+  #stats { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .stats-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .stats-title { font-weight: 600; }
+  .stats-title.small { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .stats-sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 12px; color: var(--muted); font-size: 11px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .legend .sw.working { background: #2fae3e; }
+  .legend .sw.waiting { background: repeating-linear-gradient(45deg, #f2a200 0 2px, #1c1a1f 2px 3.5px); }
+  .legend .sw.idle { background: #3c3846; }
+  .chart-wrap { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 8px 6px; }
+  #chart { width: 100%; height: 200px; display: block; font: 11px -apple-system, system-ui, sans-serif; }
+  #chart .seg { transition: opacity var(--t); }
+  #chart .seg:hover { opacity: 0.85; }
+  #chart text { fill: var(--muted); font-variant-numeric: tabular-nums; }
+  #chart .total { fill: var(--text); font-weight: 600; }
+  #chart .grid { stroke: var(--line); stroke-width: 1; }
+  .tip { position: absolute; pointer-events: none; background: rgba(20, 20, 22, 0.94); color: var(--text); padding: 4px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; transform: translate(-50%, -110%); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+  .stats-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .projects { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .projects li { display: grid; grid-template-columns: 1fr auto; row-gap: 3px; column-gap: 8px; font-size: 12px; }
+  .projects .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .projects .ms { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .projects .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .projects .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .projects .empty-small { color: var(--faint); font-size: 11px; }
+  table.days { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  table.days th { text-align: right; font-weight: 500; color: var(--faint); font-size: 11px; padding: 0 0 4px; }
+  table.days th:first-child, table.days td:first-child { text-align: left; }
+  table.days td { text-align: right; padding: 3px 0; border-top: 1px solid var(--line); color: var(--muted); }
+  table.days td:first-child { color: var(--text); }
+
   /* Presets popover */
   #presets {
     position: fixed;
@@ -495,7 +533,10 @@
 <div id="frame">
   <div id="titlebar">
     <h1>Lights</h1>
-    <span class="sub">What each light, eye colour and pose means</span>
+    <div class="seg view-seg" role="tablist" aria-label="View">
+      <button id="view-rules" class="on" role="tab">Rules</button>
+      <button id="view-stats" role="tab">Stats</button>
+    </div>
     <span class="spacer"></span>
     <div class="tools">
       <button class="btn ghost" id="prefs-btn" title="Timing and sound preferences">Preferences…</button>
@@ -588,6 +629,11 @@
           <div class="field"><div class="poses" id="poses"></div></div>
         </div>
 
+        <div class="row">
+          <div class="lbl">Costume</div>
+          <div class="field"><div class="poses" id="costumes"></div></div>
+        </div>
+
         <div class="row" id="text-row" hidden>
           <div class="lbl">Banner says</div>
           <div class="field">
@@ -604,6 +650,42 @@
           </div>
         </div>
 
+      </div>
+    </section>
+
+    <section id="stats" aria-label="Stats">
+      <div class="stats-head">
+        <div>
+          <div class="stats-title">Last 7 days</div>
+          <div class="stats-sub" id="stats-totals"></div>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span><i class="sw working"></i>Working</span>
+          <span><i class="sw waiting"></i>Waiting on you</span>
+          <span><i class="sw idle"></i>Idle</span>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <svg id="chart" viewBox="0 0 640 200" preserveAspectRatio="none" role="img" aria-labelledby="chart-title">
+          <title id="chart-title">Time working, waiting and idle per day</title>
+          <defs>
+            <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="6" height="6" fill="#f2a200" />
+              <line x1="0" y1="0" x2="0" y2="6" stroke="#1c1a1f" stroke-width="2" />
+            </pattern>
+          </defs>
+        </svg>
+        <div id="chart-tip" class="tip" hidden></div>
+      </div>
+      <div class="stats-cols">
+        <div>
+          <div class="stats-title small">By project</div>
+          <ol id="projects" class="projects"></ol>
+        </div>
+        <div>
+          <div class="stats-title small">Days</div>
+          <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Idle</th><th>Peak</th></tr></thead><tbody></tbody></table>
+        </div>
       </div>
     </section>
   </div>
@@ -637,12 +719,14 @@
 
 <script src="rig.js"></script>
 <script src="rules.js"></script>
+<script src="stats.js"></script>
 <script>
   const R = window.TrafficLightRules;
   const $ = (id) => document.getElementById(id);
 
   const ICON = {
     lock: '<svg class="lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
+    costume: '<svg viewBox="0 0 16 16"><path d="M3 13h10l-1-6H4zM5 7l3-4 3 4"/></svg>',
     grip: '<svg viewBox="0 0 10 14"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="11" r="1.2"/><circle cx="7" cy="11" r="1.2"/></svg>',
     pose: {
       think: '<svg viewBox="0 0 16 16"><circle cx="4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12" cy="8" r="1"/></svg>',
@@ -723,7 +807,8 @@
         <span class="chips">
           ${t.lamp ? `<span class="chip" style="--chip:${lampC || '#3a3542'}" title="Lamp"></span>` : ''}
           ${eyeC ? `<span class="chip eye" style="--chip:${eyeC}" title="Eyes"></span>` : t.eyes === 'closed' ? '<span class="chip eye" style="--chip:#211f1c" title="Eyes closed"></span>' : ''}
-          ${t.pose && t.pose !== 'none' ? `<span class="chip pose" title="${t.pose}">${ICON.pose[t.pose]}</span>` : ''}
+          ${t.pose && t.pose !== 'none' ? `<span class="chip pose" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
+          ${t.costume && t.costume !== 'none' ? `<span class="chip pose" title="${t.costume}">${ICON.costume}</span>` : ''}
         </span>`;
       li.querySelector('input').addEventListener('change', (e) => {
         r.enabled = e.target.checked;
@@ -886,6 +971,24 @@
       poses.appendChild(b);
     }
 
+    const costumes = $('costumes');
+    costumes.innerHTML = '';
+    for (const c of [null, ...R.COSTUMES]) {
+      const b = document.createElement('button');
+      b.className = 'posebtn' + (r.then.costume === c ? ' on' : '');
+      b.title = c === null ? 'Leave to other rules' : c;
+      const mini = document.createElement('div');
+      mini.className = 'mini';
+      b.appendChild(mini);
+      const lbl = document.createElement('span');
+      lbl.textContent = c === null ? 'keep' : c;
+      b.appendChild(lbl);
+      mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', costume: c || 'none' });
+      if (c === null) mini.style.opacity = '0.35';
+      b.addEventListener('click', () => { r.then.costume = c; touch(); });
+      costumes.appendChild(b);
+    }
+
     $('sound').checked = r.then.sound === 'beep';
     $('celebrate').checked = !!r.then.celebrate;
     $('text-row').hidden = r.then.pose !== 'banner';
@@ -958,7 +1061,7 @@
     $('live-text').textContent = `Widget: ${live.look.name || '—'} · ${n} session${n === 1 ? '' : 's'}`;
     if (previewMode === 'live') renderStage();
   }
-  window.lightsApi.onStatusChanged(refreshLive);
+  window.lightsApi.onStatusChanged(() => { refreshLive(); if ($('main').dataset.view === 'stats') renderStats(); });
 
   // ── Save / revert / presets ────────────────────────────────────────────
   async function save() {
@@ -1062,6 +1165,82 @@
   });
   $('prefs-btn').addEventListener('click', () => window.lightsApi.openPreferences());
 
+  // ── Stats view ─────────────────────────────────────────────────────────
+  const S = window.TrafficLightStats;
+  function setView(v) {
+    $('main').dataset.view = v;
+    $('view-rules').classList.toggle('on', v === 'rules');
+    $('view-stats').classList.toggle('on', v === 'stats');
+    $('view-rules').setAttribute('aria-selected', v === 'rules');
+    $('view-stats').setAttribute('aria-selected', v === 'stats');
+    if (v === 'stats') renderStats();
+  }
+  $('view-rules').addEventListener('click', () => setView('rules'));
+  $('view-stats').addEventListener('click', () => setView('stats'));
+
+  async function renderStats() {
+    const sum = await window.lightsApi.getStats();
+    if (!sum) return;
+    const { days, projects, totals } = sum;
+    $('stats-totals').textContent = `${S.fmt(totals.working)} working · ${S.fmt(totals.waiting)} waiting on you · ${S.fmt(totals.idle)} idle`;
+
+    const svg = $('chart');
+    svg.querySelectorAll(':scope > :not(defs):not(title)').forEach((n) => n.remove());
+    const W = 640, H = 200, padL = 8, padR = 8, padT = 22, padB = 22;
+    const innerH = H - padT - padB;
+    const colW = (W - padL - padR) / days.length;
+    const barW = Math.min(44, colW * 0.6);
+    const max = Math.max(60 * 60000, ...days.map((d) => d.working + d.waiting + d.idle));
+    const ns = 'http://www.w3.org/2000/svg';
+    const el = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+    // recessive grid: baseline + one mid line
+    svg.appendChild(el('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH, y2: padT + innerH }));
+    svg.appendChild(el('line', { class: 'grid', x1: padL, x2: W - padR, y1: padT + innerH / 2, y2: padT + innerH / 2, 'stroke-dasharray': '2 4' }));
+    svg.appendChild(el('text', { x: padL + 2, y: padT + innerH / 2 - 4 }, S.fmt(max / 2)));
+    const tip = $('chart-tip');
+    days.forEach((d, i) => {
+      const cx = padL + colW * i + colW / 2;
+      let y = padT + innerH;
+      const total = d.working + d.waiting + d.idle;
+      // fixed order bottom→top: working, waiting, idle; 2px surface gap between fills
+      for (const [k, fill] of [['working', '#2fae3e'], ['waiting', 'url(#hatch)'], ['idle', '#3c3846']]) {
+        const h = (d[k] / max) * innerH;
+        if (h < 1) continue;
+        const gap = y === padT + innerH ? 0 : 2;
+        const rect = el('rect', { class: 'seg', x: cx - barW / 2, y: y - h, width: barW, height: Math.max(1, h - gap), fill, rx: k === 'idle' || (d.waiting === 0 && d.idle === 0) ? 2 : 0 });
+        rect.addEventListener('mousemove', (e) => {
+          const box = $('chart').getBoundingClientRect();
+          tip.hidden = false;
+          tip.textContent = `${d.label} · ${k === 'waiting' ? 'Waiting on you' : k[0].toUpperCase() + k.slice(1)} ${S.fmt(d[k])}`;
+          tip.style.left = `${e.clientX - box.left}px`;
+          tip.style.top = `${e.clientY - box.top}px`;
+        });
+        rect.addEventListener('mouseleave', () => { tip.hidden = true; });
+        svg.appendChild(rect);
+        y -= h;
+      }
+      svg.appendChild(el('text', { x: cx, y: H - 6, 'text-anchor': 'middle' }, d.label));
+      if (total > 0) svg.appendChild(el('text', { class: 'total', x: cx, y: y - 6, 'text-anchor': 'middle' }, S.fmt(total)));
+    });
+
+    const ol = $('projects');
+    ol.innerHTML = projects.length ? '' : '<li class="empty-small">No project time recorded yet — it accrues while sessions run.</li>';
+    const top = projects.slice(0, 8);
+    const maxP = top[0]?.ms || 1;
+    for (const p of top) {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="name" title="${escape(p.name)}">${escape(p.name)}</span><span class="ms">${S.fmt(p.ms)}</span><span class="bar"><i style="width:${Math.max(2, (p.ms / maxP) * 100)}%"></i></span>`;
+      ol.appendChild(li);
+    }
+    const tb = $('days-table').querySelector('tbody');
+    tb.innerHTML = '';
+    for (const d of [...days].reverse()) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${d.label}</td><td>${S.fmt(d.working)}</td><td>${S.fmt(d.waiting)}</td><td>${S.fmt(d.idle)}</td><td>${d.sessionsPeak}</td>`;
+      tb.appendChild(tr);
+    }
+  }
+
   // ── Boot ───────────────────────────────────────────────────────────────
   (async () => {
     $('tool-list').innerHTML = R.TOOL_SUGGESTIONS.map((t) => `<option value="${t}">`).join('');
@@ -1070,11 +1249,12 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
+    if (q.get('view') === 'stats') setView('stats');
     setDirty(false);
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: 'default', pose: q.get('pose'), text: q.get('text') || null }); stageFire(q.get('pose') === 'ak47'); $('caption').textContent = `pose: ${q.get('pose')}`; }
+    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none' }); stageFire(q.get('pose') === 'ak47'); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

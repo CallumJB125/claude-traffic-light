@@ -68,12 +68,16 @@
     poseBtn('ak47').click();
     ok(stageLook().cls.includes('pose-ak47'), 'ak47 pose applies');
     poseBtn('bounce').click();
+    const costumeBtn = (c) => Array.from($('costumes').querySelectorAll('.posebtn')).find((b) => b.title === c);
+    ok(Array.from($('costumes').querySelectorAll('.posebtn')).length === 12, 'all 11 costumes + keep are offered');
+    costumeBtn('unicorn').click();
+    ok(stageLook().cls.includes('costume-unicorn'), 'costume applies on the stage');
     setInput($('lamp-color'), '#00ffff');
     ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--lamp-on') === '#00ffff', 'custom lamp colour reaches the stage');
     $('celebrate').checked = true; fire($('celebrate'), 'change');
     $('sound').checked = true; fire($('sound'), 'change');
     const chipsInRow = rowByName('Playtest rule').querySelectorAll('.chip').length;
-    ok(chipsInRow === 3, `list row shows lamp, eyes and pose chips (${chipsInRow})`);
+    ok(chipsInRow === 4, `list row shows lamp, eyes, pose and costume chips (${chipsInRow})`);
 
     // ── keyboard reorder
     const me = rowByName('Playtest rule');
@@ -111,6 +115,7 @@
     const pt = saved.rules.find((r) => r.name === 'Playtest rule');
     ok(pt && pt.then.lamp === 'amber' && pt.then.lampColor === '#00ffff' && pt.then.eyes === '#ff00aa' && pt.then.pose === 'bounce' && pt.then.sound === 'beep' && pt.then.celebrate === true && pt.when.tool === 'mcp__*', 'saved rule carries every channel');
     ok(pt && pt.then.text === 'feed me tokens please no', 'banner text persists with the rule');
+    ok(pt && pt.then.costume === 'unicorn', 'costume persists with the rule');
     ok(pt && pt.when.signal.includes('many-sessions') && pt.when.signal.includes('stop') && !pt.when.signal.includes('tool-use'), 'saved rule carries the chosen signals');
 
     rowByName('Playtest rule').click();
@@ -166,6 +171,15 @@
     await sleep(150);
     const st = await window.lightsApi.getAggregateStatus();
     ok(st.reason === 'preview', 'Try on widget puts the widget into preview');
+
+    // ── stats view
+    $('view-stats').click();
+    await sleep(150);
+    ok($('main').dataset.view === 'stats' && $('rules').offsetParent === null, 'Stats view replaces the rules layout');
+    ok($('chart').querySelectorAll('text').length >= 7, 'chart draws a label per day');
+    ok(/working/.test($('stats-totals').textContent), 'totals line renders');
+    $('view-rules').click();
+    ok($('main').dataset.view === 'rules', 'back to rules');
 
     // ── empty state
     while (rows().some((r) => !r.classList.contains('locked'))) {

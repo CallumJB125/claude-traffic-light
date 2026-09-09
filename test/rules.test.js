@@ -117,7 +117,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null });
   assert.match(r.id, /^[a-z0-9]{6}$/);
 });
 
@@ -132,6 +132,52 @@ test('banner text rides with the pose owner and is capped at 24 chars', () => {
 test('previewLook shows only the rule\'s own channels', () => {
   const p = R.previewLook(rules().find((r) => r.id === 'subagent'));
   assert.deepEqual([p.lamp, p.eyes, p.pose], ['off', '#8b5cf6', 'none']);
+});
+
+test('costume is an accent channel: layers above the lamp owner, never leaks from below', () => {
+  const rs = [
+    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'wizard' } },
+    ...rules(),
+    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { costume: 'dog' } },
+  ];
+  assert.equal(look([{ signal: 'tool-use', tool: 'Agent' }], rs).costume, 'wizard');
+  assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).costume, 'none');
+  assert.equal(R.normalizeRule({ then: { costume: 'dragon' } }).then.costume, null);
+  assert.equal(R.previewLook({ then: { costume: 'halo' } }).costume, 'halo');
+});
+
+// ── stats.js ────────────────────────────────────────────────────────────────
+const St = require('../stats.js');
+
+test('stats: ticks accrue to the right bucket and project; big gaps are dropped', () => {
+  const st = { days: {} };
+  const now = Date.parse('2026-09-09T10:00:00');
+  St.tick(st, [{ signal: 'tool-use', cwd: '/x/bondly' }], now, 4000);
+  St.tick(st, [{ signal: 'permission-ask', cwd: '/x/bondly' }, { signal: 'tool-use', cwd: '/x/other' }], now + 4000, 4000);
+  St.tick(st, [], now + 8000, 4000);
+  St.tick(st, [{ signal: 'stop', cwd: '/x/bondly' }], now + 12000, 4000);
+  St.tick(st, [{ signal: 'tool-use', cwd: '/x/bondly' }], now + 3600000, 3600000, 60000);
+  const d = st.days[St.dayKey(now)];
+  assert.deepEqual([d.working, d.waiting, d.idle, d.done], [4000, 4000, 4000, 4000]);
+  assert.deepEqual(d.projects, { bondly: 8000, other: 4000 }, 'done sessions do not accrue project time');
+  assert.equal(d.sessionsPeak, 2);
+});
+
+test('stats: summary covers 7 days, ranks projects, formats durations', () => {
+  const st = { days: {} };
+  const now = Date.parse('2026-09-09T12:00:00');
+  St.tick(st, [{ signal: 'tool-use', cwd: '/a/p1' }], now - 86400000 * 3, 5000);
+  St.tick(st, [{ signal: 'tool-use', cwd: '/a/p2' }], now, 9000);
+  const sum = St.summary(st, now, 7);
+  assert.equal(sum.days.length, 7);
+  assert.equal(sum.days[6].key, St.dayKey(now));
+  assert.equal(sum.days[3].working, 5000);
+  assert.deepEqual(sum.projects.map((p) => p.name), ['p2', 'p1']);
+  assert.equal(sum.totals.working, 14000);
+  assert.equal(St.fmt(20000), '0m');
+  assert.equal(St.fmt(61 * 60000), '1h 01m');
+  St.prune(st, now, 1);
+  assert.equal(Object.keys(st.days).length, 1);
 });
 
 // ── hooks/set-status.js, for real, against a temp home ─────────────────────

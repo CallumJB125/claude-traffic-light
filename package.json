@@ -29,7 +29,10 @@
       "assets/**/*",
       "hooks/**/*",
       "overlay.html",
-      "overlay-preload.js"
+      "overlay-preload.js",
+      "stats.js",
+      "tray.html",
+      "tray-preload.js"
     ],
     "extraResources": [
       {

@@ -1,10 +1,11 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
+const Stats = require('./stats.js');
 
 const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
 const MIN_WIDTH = 80;
@@ -99,7 +100,10 @@ const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
   soundOnAmber: true,
+  showWidget: true,
+  menuBarMode: false,
 };
+const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
 function loadConfig() {
   let saved = {};
@@ -125,6 +129,30 @@ function saveConfig(partial) {
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   return next;
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+let stats = { days: {} };
+try {
+  stats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+  if (!stats || typeof stats !== 'object') stats = { days: {} };
+} catch {
+  // first run
+}
+let lastTick = Date.now();
+let statsDirty = false;
+function tickStats(sessions) {
+  const now = Date.now();
+  Stats.tick(stats, sessions, now, now - lastTick);
+  lastTick = now;
+  statsDirty = true;
+}
+function flushStats() {
+  if (!statsDirty) return;
+  Stats.prune(stats);
+  fs.mkdirSync(ROOT_DIR, { recursive: true });
+  fs.writeFileSync(STATS_FILE, JSON.stringify(stats));
+  statsDirty = false;
 }
 
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
@@ -266,7 +294,7 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setAspectRatio(WIDGET_ASPECT);
   win.loadFile('index.html');
-  win.once('ready-to-show', () => win?.showInactive());
+  win.once('ready-to-show', () => { if (loadConfig().showWidget) win?.showInactive(); });
 
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
@@ -285,7 +313,7 @@ function createSettingsWindow() {
   }
   settingsWin = new BrowserWindow({
     width: 360,
-    height: 420,
+    height: 560,
     useContentSize: true,
     resizable: false,
     minimizable: false,
@@ -337,6 +365,8 @@ function createLightsWindow() {
   if (arg('--select')) query.select = arg('--select');
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
+  if (arg('--view')) query.view = arg('--view');
+  if (arg('--costume')) query.costume = arg('--costume');
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -361,6 +391,17 @@ function createLightsWindow() {
           await new Promise((r) => setTimeout(r, 800));
           fs.writeFileSync(arg('--shot-widget'), (await win.webContents.capturePage()).toPNG());
           console.log('[shot] widget look', JSON.stringify(aggregateState().look));
+        }
+        // Dev: `--shot-tray out.png` renders the menu-bar icon frame.
+        if (arg('--shot-tray')) {
+          ensureTrayRenderer();
+          await new Promise((r) => setTimeout(r, 900));
+          const { look } = aggregateState();
+          trayRenderWin.webContents.send('look', { ...look, pose: 'think', costume: 'crown', facing: 'right' });
+          await new Promise((r) => setTimeout(r, 400));
+          const img = await trayRenderWin.webContents.capturePage();
+          fs.writeFileSync(arg('--shot-tray'), img.toPNG());
+          console.log('[shot] tray frame', JSON.stringify(img.getSize()));
         }
         const ov = arg('--shot-overlay');
         if (ov) {
@@ -492,6 +533,60 @@ function updateOverlay(look) {
   win.setAlwaysOnTop(true, 'screen-saver', 2);
 }
 
+// ── Menu-bar mode ───────────────────────────────────────────────────────────
+// An offscreen window renders the rig at menu-bar size; its frames become
+// the tray image. Off by default; the template icon is used otherwise.
+let trayRenderWin = null;
+let trayTimer = null;
+let trayLastKey = null;
+
+function ensureTrayRenderer() {
+  if (trayRenderWin) return;
+  trayRenderWin = new BrowserWindow({
+    width: 18,
+    height: 22,
+    show: false,
+    transparent: true,
+    frame: false,
+    webPreferences: { preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
+  });
+  trayRenderWin.webContents.setFrameRate(4);
+  trayRenderWin.loadFile('tray.html');
+  trayRenderWin.on('closed', () => { trayRenderWin = null; });
+}
+
+async function paintTray() {
+  if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
+  const { look } = aggregateState();
+  trayRenderWin.webContents.send('look', { ...look, facing: 'right' });
+  const img = await trayRenderWin.webContents.capturePage();
+  const size = img.getSize();
+  if (!size.width) return;
+  // capturePage returns device pixels; tell the tray the scale so it draws
+  // at 18x22 points.
+  const scale = size.width / 18;
+  const icon = nativeImage.createFromBuffer(img.toPNG(), { scaleFactor: scale });
+  tray.setImage(icon);
+}
+
+function updateTrayMode() {
+  const on = loadConfig().menuBarMode;
+  if (on) {
+    ensureTrayRenderer();
+    if (!trayTimer) trayTimer = setInterval(() => paintTray().catch(() => {}), 500);
+  } else {
+    clearInterval(trayTimer);
+    trayTimer = null;
+    if (trayRenderWin) { trayRenderWin.close(); trayRenderWin = null; }
+    tray?.setImage(path.join(__dirname, 'assets', 'trayTemplate.png'));
+  }
+}
+
+function applyWidgetVisibility() {
+  if (!win) return;
+  if (loadConfig().showWidget) win.showInactive(); else win.hide();
+}
+
 function broadcastStatus() {
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
@@ -526,7 +621,18 @@ function createTray() {
 
   const menu = Menu.buildFromTemplate([
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
-    { label: 'Show / Hide Widget', click: () => (win?.isVisible() ? win.hide() : win?.show()) },
+    {
+      label: 'Floating Widget',
+      type: 'checkbox',
+      checked: loadConfig().showWidget,
+      click: (item) => { saveConfig({ showWidget: item.checked }); applyWidgetVisibility(); broadcastStatus(); },
+    },
+    {
+      label: 'Claude in the Menu Bar',
+      type: 'checkbox',
+      checked: loadConfig().menuBarMode,
+      click: (item) => { saveConfig({ menuBarMode: item.checked }); updateTrayMode(); },
+    },
     { type: 'separator' },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
@@ -558,6 +664,7 @@ function createTray() {
   ]);
   tray.setToolTip('Claude Traffic Light');
   tray.setContextMenu(menu);
+  updateTrayMode();
 }
 
 ipcMain.handle('open-claude', () => {
@@ -625,9 +732,13 @@ ipcMain.handle('get-config', () => loadConfig());
 
 ipcMain.handle('save-config', (e, partial) => {
   const next = saveConfig(partial);
+  if ('showWidget' in partial) applyWidgetVisibility();
+  if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
   return next;
 });
+
+ipcMain.handle('get-stats', () => Stats.summary(stats));
 
 ipcMain.handle('reset-rules', () => {
   const next = saveConfig({ rules: Rules.defaultRules() });
@@ -702,7 +813,10 @@ app.whenReady().then(() => {
   setInterval(() => {
     broadcastStatus();
     maybePlayAlertSound();
+    tickStats(readSessions(loadConfig()));
   }, 4000);
+  setInterval(flushStats, 30000);
+  app.on('before-quit', flushStats);
 
   setInterval(() => {
     if (!areHooksInstalled()) installHooks();

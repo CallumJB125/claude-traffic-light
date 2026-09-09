@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   saveConfig: (partial) => ipcRenderer.invoke('save-config', partial),
   resetRules: () => ipcRenderer.invoke('reset-rules'),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
+  getStats: () => ipcRenderer.invoke('get-stats'),
   previewOnWidget: (look, ms) => ipcRenderer.invoke('preview-on-widget', look, ms),
   openPreferences: () => ipcRenderer.invoke('open-preferences'),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),

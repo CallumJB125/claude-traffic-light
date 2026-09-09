@@ -61,6 +61,9 @@ guitar, ak47 (tracer rounds stream across your whole screen from the widget —
 click-through, closes the moment the state changes) and banner, which drops a
 sign over the traffic light with your own text ("Banner says").
 
+Costumes are a channel of their own, layered like eye colour: dog, cat,
+unicorn, crown, party hat, shades, halo, devil, wizard, top hat.
+
 Presets: **Classic** (the original behaviour), **Minimal** (lamps only),
 **Tool-aware** (eye colours per tool) — plus your own: type a name at the
 bottom of the Presets menu to save the current rules, and pick or delete
@@ -77,6 +80,20 @@ prefix (`mcp__*`).
 Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
+
+## Stats
+
+The Stats tab in Lights shows the last seven days as stacked bars — working,
+waiting on you (hatched), idle — with totals, a per-project ranking and a
+day table. Time accrues in 4-second ticks while the app runs and is kept for
+60 days in `~/.claude-traffic-light/stats.json`.
+
+## Menu bar mode
+
+Tray → **Claude in the Menu Bar** animates the menu bar icon with the same
+lights, eyes, pose and costume as the widget; **Floating Widget** hides the
+desktop widget if you would rather live in the menu bar only. Both are also
+in Preferences.
 
 ## How multi-session monitoring works
 

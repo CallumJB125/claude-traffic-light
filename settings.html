@@ -107,6 +107,16 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="showWidget" /> Show the floating widget</label>
+    <div class="hint">Turn this off to live in the menu bar only.</div>
+  </div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="menuBarMode" /> Claude in the menu bar</label>
+    <div class="hint">Animates the menu bar icon with the same lights, eyes, pose and costume as the widget.</div>
+  </div>
+
+  <div class="field">
     <label>What the lights mean</label>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
@@ -127,6 +137,8 @@
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
       soundInput.checked = config.soundOnAmber;
+      document.getElementById('showWidget').checked = config.showWidget !== false;
+      document.getElementById('menuBarMode').checked = !!config.menuBarMode;
     }
 
     document.getElementById('save').addEventListener('click', async () => {
@@ -134,6 +146,8 @@
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
         soundOnAmber: soundInput.checked,
+        showWidget: document.getElementById('showWidget').checked,
+        menuBarMode: document.getElementById('menuBarMode').checked,
       });
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 1500);

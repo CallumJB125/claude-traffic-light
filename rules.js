@@ -45,6 +45,7 @@
 
   const LAMPS = ['off', 'red', 'amber', 'green'];
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'banner'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat'];
 
   // Legacy session files (pre-rules) wrote a colour instead of a signal.
   const LEGACY_STATE_TO_SIGNAL = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit', done: 'stop' };
@@ -116,6 +117,7 @@
         sound: r.then?.sound === 'beep' ? 'beep' : null,
         celebrate: !!r.then?.celebrate,
         text: typeof r.then?.text === 'string' && r.then.text.trim() ? r.then.text.trim().slice(0, 24) : null,
+        costume: COSTUMES.includes(r.then?.costume) ? r.then.costume : null,
       },
     };
   }
@@ -159,7 +161,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, eyes: 'default', pose: 'none', text: null, sound: null, celebrate: false, name: null, ruleId: null };
+    const look = { lamp: 'off', lampColor: null, eyes: 'default', pose: 'none', text: null, costume: 'none', sound: null, celebrate: false, name: null, ruleId: null };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -168,6 +170,7 @@
       const t = rule.then;
       if (!owned.eyes && t.eyes) { look.eyes = t.eyes; owned.eyes = rule.id; }
       if (!owned.pose && t.pose) { look.pose = t.pose; look.text = t.text; owned.pose = rule.id; }
+      if (!owned.costume && t.costume) { look.costume = t.costume; owned.costume = rule.id; }
       if (!owned.sound && t.sound) { look.sound = t.sound; owned.sound = rule.id; }
       if (t.celebrate && !owned.celebrate) { look.celebrate = true; owned.celebrate = rule.id; }
       if (!look.name) { look.name = rule.name; look.ruleId = rule.id; }
@@ -185,10 +188,11 @@
       eyes: r.then.eyes || 'default',
       pose: r.then.pose || 'none',
       text: r.then.text,
+      costume: r.then.costume || 'none',
       sound: r.then.sound,
       celebrate: r.then.celebrate,
     };
   }
 
-  return { SIGNALS, TOOL_SUGGESTIONS, LAMPS, POSES, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { SIGNALS, TOOL_SUGGESTIONS, LAMPS, POSES, COSTUMES, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
 });

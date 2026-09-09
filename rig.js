@@ -65,6 +65,66 @@
       <rect class="casing c3" x="52" y="46" width="1.6" height="2.6" rx="0.4" fill="#e0b040" />
     </g>
   </g>
+  <!-- costumes: worn on the head/face, independent of pose -->
+  <g class="costume costume-dog">
+    <rect x="12" y="37" width="6" height="12" rx="2" fill="#b85f3c" />
+    <rect x="46" y="37" width="6" height="12" rx="2" fill="#b85f3c" />
+    <rect x="27" y="47" width="10" height="4" rx="2" fill="#e8a37f" />
+    <rect x="30.5" y="46" width="3" height="2" rx="1" fill="#211f1c" />
+    <rect class="dog-tail" x="59" y="52" width="6" height="2" rx="1" fill="#b85f3c" />
+  </g>
+  <g class="costume costume-unicorn">
+    <polygon points="29,39 35,39 32,25" fill="#f2efe8" stroke="#211f1c" stroke-width="0.6" />
+    <polygon points="30,35 34,35 33.2,32 30.8,32" fill="#f472b6" />
+    <polygon points="30.8,31 33.2,31 32.6,28.5 31.4,28.5" fill="#38bdf8" />
+    <rect x="15" y="39" width="4" height="9" rx="2" fill="#f472b6" />
+    <rect x="14" y="43" width="4" height="7" rx="2" fill="#8b5cf6" />
+    <circle class="sparkle s1" cx="27" cy="27" r="1" fill="#fff" />
+    <circle class="sparkle s2" cx="37" cy="30" r="1" fill="#fff" />
+  </g>
+  <g class="costume costume-crown">
+    <polygon points="20,39 20,30 25,35 32,28 39,35 44,30 44,39" fill="#f2a200" stroke="#a86a00" stroke-width="0.6" />
+    <circle cx="25" cy="36.5" r="1" fill="#e2231a" /><circle cx="32" cy="35" r="1" fill="#38bdf8" /><circle cx="39" cy="36.5" r="1" fill="#2fae3e" />
+  </g>
+  <g class="costume costume-partyhat">
+    <polygon points="24,39 40,39 32,22" fill="#38bdf8" />
+    <polygon points="26.5,34 37.5,34 35.5,30 28.5,30" fill="#f2a200" />
+    <polygon points="29.5,28 34.5,28 33.2,25.5 30.8,25.5" fill="#f472b6" />
+    <circle cx="32" cy="22" r="2" fill="#f2efe8" />
+  </g>
+  <g class="costume costume-shades">
+    <rect x="19.5" y="42.5" width="9" height="5.5" rx="1.5" fill="#111" />
+    <rect x="35.5" y="42.5" width="9" height="5.5" rx="1.5" fill="#111" />
+    <rect x="28.5" y="44" width="7" height="1.4" fill="#111" />
+    <rect x="21" y="43.5" width="3" height="1" fill="#fff" opacity="0.5" /><rect x="37" y="43.5" width="3" height="1" fill="#fff" opacity="0.5" />
+  </g>
+  <g class="costume costume-halo">
+    <ellipse class="halo" cx="32" cy="32" rx="9" ry="2.4" fill="none" stroke="#f2d16b" stroke-width="1.6" />
+  </g>
+  <g class="costume costume-devil">
+    <polygon points="19,39 24,39 20,31" fill="#e2231a" />
+    <polygon points="40,39 45,39 44,31" fill="#e2231a" />
+    <path class="devil-tail" d="M60 54 q6 -2 5 5" fill="none" stroke="#e2231a" stroke-width="1.6" stroke-linecap="round" />
+    <polygon points="63,58 67,59 64,62" fill="#e2231a" />
+  </g>
+  <g class="costume costume-wizard">
+    <polygon points="20,39 44,39 34,16" fill="#5b3fb8" />
+    <rect x="15" y="38" width="34" height="2.5" rx="1" fill="#5b3fb8" />
+    <polygon points="31,30 32.5,26.5 34,30 37.5,30.5 35,33 35.5,36.5 32.5,34.8 29.5,36.5 30,33 27.5,30.5" fill="#f2d16b" transform="scale(0.55) translate(26 18)" />
+  </g>
+  <g class="costume costume-cat">
+    <polygon points="18,40 21,30 26,39" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
+    <polygon points="38,39 43,30 46,40" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
+    <polygon points="20,38 21.5,33 24,38" fill="#f4a7c0" />
+    <polygon points="40,38 42.5,33 44,38" fill="#f4a7c0" />
+    <rect x="16" y="47" width="6" height="0.7" fill="#211f1c" /><rect x="15.5" y="49" width="6" height="0.7" fill="#211f1c" />
+    <rect x="42" y="47" width="6" height="0.7" fill="#211f1c" /><rect x="42.5" y="49" width="6" height="0.7" fill="#211f1c" />
+  </g>
+  <g class="costume costume-tophat">
+    <rect x="22" y="24" width="20" height="15" fill="#1a1a1e" />
+    <rect x="17" y="38" width="30" height="2.5" rx="1" fill="#1a1a1e" />
+    <rect x="22" y="34" width="20" height="2.5" fill="#e2231a" />
+  </g>
   <!-- prop: banner, dropped over the sign, with the rule's own text -->
   <g class="prop prop-banner">
     <rect x="1" y="3" width="62" height="17" rx="2" fill="#f2efe8" stroke="#211f1c" stroke-width="1" />
@@ -87,6 +147,7 @@
 </svg>`;
 
   const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'banner'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e' };
 
@@ -128,10 +189,15 @@
       }
       svg.classList.toggle('grumpy', !!look.grumpy);
       svg.classList.toggle('face-left', look.facing === 'left');
+      const costume = COSTUMES.includes(look.costume) ? look.costume : 'none';
+      if (!current || current.costume !== costume) {
+        for (const c of COSTUMES) svg.classList.remove(`costume-${c}`);
+        if (costume !== 'none') svg.classList.add(`costume-${costume}`);
+      }
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);
       const t = svg.querySelector('.banner-text');
       if (t.textContent !== text) t.textContent = text;
-      current = { ...look, pose };
+      current = { ...look, pose, costume };
     }
 
     let burstTimer = null;
@@ -154,5 +220,6 @@
 
   window.mountRig = mountRig;
   window.RIG_POSES = POSES;
+  window.RIG_COSTUMES = COSTUMES;
   window.RIG_DEFAULT_TEXT = DEFAULT_TEXT;
 })();
