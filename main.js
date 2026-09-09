@@ -3,8 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
+const Rules = require('./rules.js');
+const Hooks = require('./hooks/install.js');
 
-const WIDGET_ASPECT = 64 / 82; // width / height — matches the robot+sign SVG viewBox
+const WIDGET_ASPECT = 64 / 82; // width / height — matches the rig SVG viewBox
 const MIN_WIDTH = 80;
 const MAX_WIDTH = 320;
 
@@ -13,8 +15,6 @@ function resizeBy(factor) {
   const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
   const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
   const newHeight = Math.round(newWidth / WIDGET_ASPECT);
-  // Anchor on the window's center so scrolling/clicking to resize doesn't
-  // walk the widget across the screen.
   const cx = x + w / 2;
   const cy = y + h / 2;
   win.setBounds({
@@ -26,21 +26,14 @@ function resizeBy(factor) {
 }
 
 // Best-effort: bring the terminal app most likely running the session that
-// needs attention to the front, and — best-effort again — try to raise the
-// specific window whose title mentions the target folder. There's no
-// portable way to ask a terminal "which window has session X" from outside
-// it, so this leans on window *titles* via the generic Accessibility API
-// (works for any app, scriptable or not — Ghostty included, which has very
-// little AppleScript support of its own). If no window title matches, it
-// still activates the app so you're at least looking at the right place.
+// needs attention to the front, and try to raise the window whose title
+// mentions the target folder via the Accessibility API.
 const TERMINAL_APPS = ['Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
 
 function escapeForAppleScript(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-// folderHint: last path segment of the target cwd, e.g. "bondly" for
-// "/Users/x/Desktop/bondly" — window titles very often show just that.
 function activateTerminalApp(folderHint) {
   return new Promise((resolve) => {
     const hint = escapeForAppleScript((folderHint || '').toLowerCase());
@@ -95,10 +88,6 @@ function activateTerminalApp(folderHint) {
   });
 }
 
-// Same override hooks/set-status.js supports — set this in the environment
-// (before the app reads it, e.g. launchctl setenv or a shell profile that
-// GUI-launched apps also inherit) to point sessions at a synced folder so
-// multiple machines' sessions merge into one widget. Local-only by default.
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
@@ -113,100 +102,53 @@ const DEFAULT_CONFIG = {
 };
 
 function loadConfig() {
+  let saved = {};
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
+    saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
   } catch {
-    return { ...DEFAULT_CONFIG };
+    // no config yet
   }
+  const config = { ...DEFAULT_CONFIG, ...saved };
+  // Rules are stored whole; a config from before rules existed gets the
+  // defaults, which reproduce the old fixed behaviour exactly.
+  config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
+  config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
+    .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
+    .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: p.rules.map(Rules.normalizeRule) }));
+  return config;
 }
 
 function saveConfig(partial) {
   const next = { ...loadConfig(), ...partial };
+  if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
+  if (partial.presets) next.presets = partial.presets;
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   return next;
 }
 
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
-// just the checked-out hooks/ dir next to main.js.
+// the checked-out hooks/ dir next to main.js.
 const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
 const SET_STATUS_SCRIPT = path.join(HOOKS_DIR, 'set-status.js');
 
-function hookCmd(state, reason) {
-  return `node "${SET_STATUS_SCRIPT}" ${state} ${reason}`;
+function readClaudeSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 function areHooksInstalled() {
-  try {
-    const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
-    const notif = settings.hooks?.Notification || [];
-    return notif.some((h) => h.hooks?.some((hh) => hh.command === hookCmd('amber', 'notification')));
-  } catch {
-    return false;
-  }
+  return Hooks.isInstalled(readClaudeSettings(), SET_STATUS_SCRIPT);
 }
 
-// Claude Code's Stop hook fires after every single response — including
-// completely routine ones with nothing blocking you — so it used to mark a
-// session amber just for having finished its last turn, which lit the
-// widget amber almost constantly. Only Notification (a real permission
-// prompt, or Claude Code's own "still waiting on you" idle nudge) is an
-// actual "your input is needed" signal, so only that sets amber now.
 function installHooks() {
-  let settings = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
-  } catch {
-    // no settings file yet, or unreadable — start fresh rather than clobber silently
-  }
-  settings.hooks = settings.hooks || {};
-
-  const addHook = (event, command) => {
-    settings.hooks[event] = settings.hooks[event] || [];
-    const already = settings.hooks[event].some((h) => h.hooks?.some((hh) => hh.command === command));
-    if (!already) settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command }] });
-  };
-
-  // Drop any old install's Stop→amber hook — it's what caused the "amber
-  // for no reason" noise. Matched by script name + trailing args rather
-  // than the full command, since the .app's own path can change (moved
-  // out of /Applications, rebuilt to a dev checkout, etc) between installs.
-  // Only ever strips our own set-status.js calls, never a Stop hook the
-  // user or another tool added.
-  const isOldStopCmd = (command) => /set-status\.js" amber stop$/.test(command || '');
-  if (settings.hooks.Stop) {
-    settings.hooks.Stop = settings.hooks.Stop
-      .map((h) => ({ ...h, hooks: (h.hooks || []).filter((hh) => !isOldStopCmd(hh.command)) }))
-      .filter((h) => h.hooks.length > 0);
-  }
-
-  addHook('UserPromptSubmit', hookCmd('green', 'prompt-submit'));
-  addHook('PreToolUse', hookCmd('green', 'tool-use'));
-  addHook('Notification', hookCmd('amber', 'notification'));
-  // Finished a task cleanly (not the same as the old amber-on-Stop this
-  // replaced) — eyes go green and Claude gives a thumbs up until the next
-  // prompt starts or something actually needs you.
-  addHook('Stop', hookCmd('done', 'stop'));
-  addHook('SessionEnd', hookCmd('amber', 'session-end'));
-
+  const settings = Hooks.install(readClaudeSettings(), SET_STATUS_SCRIPT);
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
   fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
-
-// A "green" (working) session that hasn't updated in this long is assumed
-// closed (terminal force-quit, crash, laptop slept without a graceful
-// SessionEnd) — green sessions fire PreToolUse constantly while genuinely
-// active, so persistent silence really does mean it's gone.
-//
-// A session waiting on you (amber/red) is different: Notification fires
-// once and then nothing updates that file again until you actually respond
-// (UserPromptSubmit -> green) or the session closes (SessionEnd -> removed)
-// — there is no heartbeat while it waits. Applying the same short cutoff to
-// it just means anything you don't get back to within a few minutes quietly
-// stops counting as "needing you," which is backwards. So amber/red get a
-// much longer leash — long enough to cover a legitimately long break,
-// short enough to eventually drop a session whose SessionEnd never fired.
-// Both are configurable (tray → Preferences) rather than hardcoded.
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -236,14 +178,18 @@ function readManualOverride() {
   }
 }
 
-function readSessions() {
+const WAITING_SIGNALS = new Set(Rules.SIGNALS.filter((s) => s.kind === 'waiting').map((s) => s.id));
+
+// A working session pings constantly, so silence really means it's gone. A
+// waiting session (permission ask, limit) gets one event and then nothing
+// until you respond, so it gets a much longer leash. Both configurable.
+function readSessions(config) {
   let files = [];
   try {
     files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
   } catch {
     return [];
   }
-  const config = loadConfig();
   const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
   const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
   const now = Date.now();
@@ -251,9 +197,11 @@ function readSessions() {
   for (const f of files) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
-      const staleAfter = data.state === 'green' || data.state === 'done' ? workingStaleMs : waitingStaleMs;
+      const signal = Rules.sessionSignal(data);
+      if (!signal) continue;
+      const staleAfter = WAITING_SIGNALS.has(signal) ? waitingStaleMs : workingStaleMs;
       if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
-      sessions.push(data);
+      sessions.push({ ...data, signal });
     } catch {
       // skip unreadable/partially-written file
     }
@@ -261,26 +209,26 @@ function readSessions() {
   return sessions;
 }
 
-// Priority: any session needing you (red) wins, then any session waiting on
-// you (amber) — even if everything else is still busy, since that's the
-// actionable state — and only if every session is green does the light show
-// green. A manual override from the tray menu always wins until it expires
-// or is cleared.
+// A tray override is a synthetic session carrying the signal that the
+// default rules map to that colour, so it flows through the user's rules.
+const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit' };
+
+let previewLook = null; // set by the Lights editor's "Try on widget"
+
 function aggregateState() {
+  const config = loadConfig();
+  const sessions = readSessions(config);
+  if (previewLook && Date.now() < previewLook.expiresAt) {
+    return { look: previewLook.look, reason: 'preview', sessions, fired: [] };
+  }
   const override = readManualOverride();
-  if (override) return { state: override.state, reason: 'manual', sessions: readSessions() };
-
-  const sessions = readSessions();
-  if (sessions.length === 0) return { state: 'amber', reason: 'idle', sessions: [] };
-
-  if (sessions.some((s) => s.state === 'red')) return { state: 'red', reason: 'session', sessions };
-  if (sessions.some((s) => s.state === 'amber')) return { state: 'amber', reason: 'session', sessions };
-  if (sessions.some((s) => s.state === 'green')) return { state: 'green', reason: 'session', sessions };
-  // Nothing red/amber/actively-working — if at least one session just
-  // finished a task cleanly, show that instead of plain green so finishing
-  // something actually reads as a small win, not silence.
-  if (sessions.some((s) => s.state === 'done')) return { state: 'done', reason: 'session', sessions };
-  return { state: 'green', reason: 'session', sessions };
+  if (override) {
+    const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
+    const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
+    return { look, reason: 'manual', sessions, fired, owned };
+  }
+  const { look, fired, owned } = Rules.resolve(config.rules, sessions);
+  return { look, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned };
 }
 
 function createWindow() {
@@ -309,6 +257,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -352,6 +301,187 @@ function createSettingsWindow() {
   });
 }
 
+let lightsWin = null;
+
+function createLightsWindow() {
+  if (lightsWin) {
+    lightsWin.show();
+    lightsWin.focus();
+    return;
+  }
+  lightsWin = new BrowserWindow({
+    width: 800,
+    height: 620,
+    minWidth: 720,
+    minHeight: 560,
+    useContentSize: true,
+    title: 'Lights',
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#1c1a1f',
+    webPreferences: {
+      preload: path.join(__dirname, 'lights-preload.js'),
+      contextIsolation: true,
+      // The live preview must keep animating when this window sits behind
+      // the terminal; macOS occlusion would otherwise freeze it.
+      backgroundThrottling: false,
+    },
+  });
+  lightsWin.setMenuBarVisibility(false);
+  // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
+  // captures the editor and quits.
+  const shotAt = process.argv.indexOf('--shot');
+  const arg = (flag) => { const i = process.argv.indexOf(flag); return i > 0 ? process.argv[i + 1] : null; };
+  const query = {};
+  if (arg('--select')) query.select = arg('--select');
+  if (arg('--mode')) query.mode = arg('--mode');
+  if (arg('--pose')) query.pose = arg('--pose');
+  if (arg('--text')) query.text = arg('--text');
+  lightsWin.loadFile('lights.html', { query });
+  if (shotAt > 0 && process.argv[shotAt + 1]) {
+    lightsWin.webContents.once('did-finish-load', () => {
+      lightsWin.show();
+      lightsWin.focus();
+      setTimeout(async () => {
+        // Dev: `--playtest` runs test/playtest.js inside the editor window and
+        // prints its report; exits non-zero on any failure.
+        if (process.argv.includes('--playtest')) {
+          const script = fs.readFileSync(path.join(__dirname, 'test', 'playtest.js'), 'utf8');
+          const report = await lightsWin.webContents.executeJavaScript(script);
+          console.log(report.log.join('\n'));
+          process.exitCode = report.failed ? 1 : 0;
+        }
+        const img = await lightsWin.webContents.capturePage();
+        fs.writeFileSync(process.argv[shotAt + 1], img.toPNG());
+        // Dev: `--shot-overlay out.png` previews the ak47 pose on the widget
+        // and captures the bullet overlay window.
+        const ov = arg('--shot-overlay');
+        if (ov) {
+          previewLook = { look: { lamp: 'amber', eyes: 'default', pose: 'ak47', name: 'shot' }, expiresAt: Date.now() + 8000 };
+          broadcastStatus();
+          await new Promise((r) => setTimeout(r, 900));
+          if (overlayWin) {
+            console.log('[shot] overlay bounds', JSON.stringify(overlayWin.getBounds()), 'aim', JSON.stringify(aimForOverlay()), 'screen', JSON.stringify(widgetMuzzle()?.screenPoint));
+            fs.writeFileSync(ov, (await overlayWin.webContents.capturePage()).toPNG());
+            if (win) fs.writeFileSync(ov.replace(/\.png$/, '-widget.png'), (await win.webContents.capturePage()).toPNG());
+            console.log('[shot] widget bounds', JSON.stringify(win?.getBounds()));
+          } else {
+            console.log('[shot] overlay window did not open');
+          }
+        }
+        app.quit();
+      }, 2000);
+    });
+  }
+  lightsWin.on('closed', () => {
+    lightsWin = null;
+  });
+}
+
+// ── Bullet overlay ──────────────────────────────────────────────────────────
+// A click-through, transparent window covering the widget's display, opened
+// only while the resolved pose is ak47 and closed the moment it isn't. The
+// muzzle sits at the rifle's tip on the widget; rounds fly toward the wider
+// side of the screen so they cross the most desktop.
+let overlayWin = null;
+let overlayDisplayId = null;
+let burstTimer = null;
+const BURST_MS = 1200;
+const BURST_EVERY_MS = 15000;
+
+function widgetMuzzle() {
+  if (!win) return null;
+  const b = win.getBounds();
+  const display = screen.getDisplayMatching(b);
+  const wa = display.workArea;
+  // Rig viewBox is 64x82 inside a 12px body padding; the rifle tip sits at
+  // x=67 (facing right) or x=-3 (mirrored, see rig.css .face-left), y=50.
+  const inner = { x: b.x + 12, y: b.y + 12, w: b.width - 24, h: b.height - 24 };
+  const sx = inner.w / 64;
+  const sy = inner.h / 82;
+  const dir = inner.x + inner.w / 2 - wa.x < wa.width / 2 ? 1 : -1;
+  const x = inner.x + (dir === 1 ? 67 : -3) * sx;
+  const y = inner.y + 50 * sy;
+  return { display, screenPoint: { x, y }, dir, facing: dir === 1 ? 'right' : 'left' };
+}
+
+// Aim is expressed in the overlay window's own coordinates, from its REAL
+// bounds — macOS may shift a window that starts at the display origin below
+// the menu bar, and an aim computed from display bounds would then land the
+// rounds below the barrel.
+function aimForOverlay() {
+  const m = widgetMuzzle();
+  if (!m || !overlayWin) return null;
+  const ob = overlayWin.getBounds();
+  return { x: m.screenPoint.x - ob.x, y: m.screenPoint.y - ob.y, dir: m.dir };
+}
+
+function fireBurst() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const aim = aimForOverlay();
+  if (!aim) return;
+  overlayWin.webContents.send('burst', aim, BURST_MS);
+  win?.webContents.send('burst', BURST_MS);
+}
+
+function stopOverlay() {
+  clearInterval(burstTimer);
+  burstTimer = null;
+  if (!overlayWin) return;
+  const w = overlayWin;
+  overlayWin = null;
+  if (!w.isDestroyed()) {
+    w.webContents.send('stop');
+    setTimeout(() => { if (!w.isDestroyed()) w.close(); }, 1500);
+  }
+}
+
+function updateOverlay(look) {
+  const wants = look.pose === 'ak47' && win && win.isVisible();
+  if (!wants) { stopOverlay(); return; }
+  const m = widgetMuzzle();
+  if (!m) return;
+  if (overlayWin && overlayDisplayId !== m.display.id) stopOverlay();
+  if (overlayWin) return;
+  overlayDisplayId = m.display.id;
+  overlayWin = new BrowserWindow({
+    ...m.display.bounds,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    fullscreenable: false,
+    show: false,
+    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
+  });
+  overlayWin.setIgnoreMouseEvents(true);
+  overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
+  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  overlayWin.loadFile('overlay.html');
+  overlayWin.once('ready-to-show', () => {
+    if (!overlayWin) return;
+    overlayWin.showInactive();
+    // Re-assert the display bounds now that the level allows covering the
+    // menu bar; the aim is computed from whatever bounds we actually got.
+    overlayWin.setBounds(m.display.bounds);
+    fireBurst();
+    clearInterval(burstTimer);
+    burstTimer = setInterval(fireBurst, BURST_EVERY_MS);
+  });
+  overlayWin.on('closed', () => { overlayWin = null; });
+  // The widget sits above the overlay so it is never painted over.
+  win.setAlwaysOnTop(true, 'screen-saver', 2);
+}
+
+function broadcastStatus() {
+  win?.webContents.send('status-changed');
+  lightsWin?.webContents.send('status-changed');
+  try { updateOverlay(aggregateState().look); } catch (e) { console.log('[overlay]', e.message); }
+}
+
 function createTray() {
   if (tray) {
     tray.destroy();
@@ -369,11 +499,11 @@ function createTray() {
       MANUAL_OVERRIDE_FILE,
       JSON.stringify({ state, expiresAt: Date.now() + 5 * 60 * 1000 }, null, 2)
     );
-    win?.webContents.send('status-changed');
+    broadcastStatus();
   }
 
   function clearManual() {
-    fs.rm(MANUAL_OVERRIDE_FILE, { force: true }, () => win?.webContents.send('status-changed'));
+    fs.rm(MANUAL_OVERRIDE_FILE, { force: true }, broadcastStatus);
   }
 
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
@@ -381,6 +511,9 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show / Hide Widget', click: () => (win?.isVisible() ? win.hide() : win?.show()) },
+    { type: 'separator' },
+    { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
+    { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
     { type: 'separator' },
     { label: 'Bigger', click: () => resizeBy(1.25) },
     { label: 'Smaller', click: () => resizeBy(0.8) },
@@ -398,7 +531,6 @@ function createTray() {
     { label: 'Override: Red (5 min)', click: () => setManual('red') },
     { label: 'Clear override', click: clearManual },
     { type: 'separator' },
-    { label: 'Preferences…', click: createSettingsWindow },
     {
       label: 'Open at Login',
       type: 'checkbox',
@@ -425,27 +557,25 @@ ipcMain.on('set-window-position', (e, x, y) => {
   win?.setPosition(Math.round(x), Math.round(y));
 });
 
-// Scroll-to-resize: far easier to hit than dragging the true window edge of
-// a small frameless widget. `factor` is a small multiplier per wheel tick
-// (e.g. 1.03 / 0.97), not an absolute size.
 ipcMain.on('resize-window-by', (e, factor) => {
   resizeBy(factor);
 });
 
-ipcMain.handle('get-aggregate-status', () => aggregateState());
+ipcMain.handle('get-aggregate-status', () => {
+  const state = aggregateState();
+  const facing = widgetMuzzle()?.facing || 'right';
+  return { ...state, look: { ...state.look, facing } };
+});
 
-// Click handler: jump to whichever session needs the user. We can't target
-// an exact terminal tab/pane from outside the terminal, so this activates
-// the terminal app and copies that session's folder to the clipboard. With
-// more than one session waiting, each click cycles to the next one (oldest
-// waiting first, so nothing gets stuck at the back of the queue forever);
-// a red (limit-hit) session always jumps the queue to be shown first.
+// Click handler: jump to whichever session needs the user — the ones whose
+// live signal is a waiting one. Cycles through them, oldest first; a limit
+// hit jumps the queue.
 let cycleIndex = 0;
 
 ipcMain.handle('go-to-needing-session', async () => {
   const { sessions } = aggregateState();
   const needing = sessions
-    .filter((s) => s.state === 'red' || s.state === 'amber')
+    .filter((s) => WAITING_SIGNALS.has(s.signal))
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 
   if (needing.length === 0) {
@@ -454,8 +584,8 @@ ipcMain.handle('go-to-needing-session', async () => {
     return { opened: 'claude.ai', total: 0 };
   }
 
-  const reds = needing.filter((s) => s.state === 'red');
-  const queue = reds.length > 0 ? reds : needing;
+  const limits = needing.filter((s) => s.signal === 'limit-hit');
+  const queue = limits.length > 0 ? limits : needing;
 
   cycleIndex = cycleIndex % queue.length;
   const target = queue[cycleIndex];
@@ -469,7 +599,7 @@ ipcMain.handle('go-to-needing-session', async () => {
     opened: activated?.app || 'none-found',
     exact: activated?.exact || false,
     cwd: target.cwd,
-    state: target.state,
+    signal: target.signal,
     index: shownIndex,
     total: queue.length,
   };
@@ -479,32 +609,47 @@ ipcMain.handle('get-config', () => loadConfig());
 
 ipcMain.handle('save-config', (e, partial) => {
   const next = saveConfig(partial);
-  win?.webContents.send('status-changed');
+  broadcastStatus();
   return next;
 });
 
-// A subtle system alert sound when the widget transitions INTO amber or red
-// — easy to miss a small corner light if you're not looking right at it.
-// Tracked here (not in the renderer) since this is the one place that
-// already polls aggregateState() on a timer regardless of whether the
-// window is visible.
-let lastSoundState = null;
+ipcMain.handle('reset-rules', () => {
+  const next = saveConfig({ rules: Rules.defaultRules() });
+  broadcastStatus();
+  return next;
+});
+
+// The Lights editor can push a look onto the real widget for a few seconds so
+// the user sees the rule in place, at size, in the corner it actually lives in.
+ipcMain.handle('preview-on-widget', (e, look, ms = 4000) => {
+  previewLook = { look, expiresAt: Date.now() + ms };
+  win?.show();
+  broadcastStatus();
+  setTimeout(() => {
+    if (previewLook && Date.now() >= previewLook.expiresAt) previewLook = null;
+    broadcastStatus();
+  }, ms + 50);
+});
+
+ipcMain.handle('open-lights', createLightsWindow);
+ipcMain.handle('open-preferences', createSettingsWindow);
+
+// A subtle system alert sound when the resolved look's sound channel turns on
+// (transition only, not every poll).
+let lastSoundKey = null;
 function maybePlayAlertSound() {
   const config = loadConfig();
-  if (!config.soundOnAmber) return;
-  const { state } = aggregateState();
-  const isAlert = state === 'amber' || state === 'red';
-  if (isAlert && lastSoundState !== state) shell.beep();
-  lastSoundState = isAlert ? state : null;
+  const { look, reason, owned } = aggregateState();
+  if (reason === 'preview') return;
+  const key = look.sound ? `${look.sound}:${owned.sound}` : null;
+  if (config.soundOnAmber && key && key !== lastSoundKey) shell.beep();
+  lastSoundKey = key;
 }
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
   if (!areHooksInstalled()) installHooks();
 
-  // Default to launching at login on first run only — respects the user
-  // turning it back off afterwards (checked via a marker file since
-  // Electron has no "was this ever set" query of its own).
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!fs.existsSync(autoLaunchMarker)) {
     app.setLoginItemSettings({ openAtLogin: true });
@@ -514,23 +659,18 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+  if (process.argv.includes('--lights')) createLightsWindow();
 
   fs.watch(SESSIONS_DIR, { persistent: true }, () => {
-    win?.webContents.send('status-changed');
+    broadcastStatus();
     maybePlayAlertSound();
   });
 
-  // Belt-and-braces poll: covers editors of manual-override.json and any
-  // watcher events the OS coalesces or drops.
   setInterval(() => {
-    win?.webContents.send('status-changed');
+    broadcastStatus();
     maybePlayAlertSound();
   }, 4000);
 
-  // Self-heal: something (a Claude Code update, hand-editing settings.json,
-  // etc) could wipe our hooks out from under us. Check occasionally and
-  // silently reinstall rather than requiring you to notice the widget's
-  // gone quiet and dig into the tray menu yourself.
   setInterval(() => {
     if (!areHooksInstalled()) installHooks();
   }, 10 * 60 * 1000);

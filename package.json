@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
-    "dist": "electron-builder --mac"
+    "dist": "electron-builder --mac",
+    "test": "node --test test/*.test.js"
   },
   "author": "",
   "license": "MIT",
@@ -19,8 +20,15 @@
       "index.html",
       "settings.html",
       "settings-preload.js",
+      "lights.html",
+      "lights-preload.js",
+      "rig.js",
+      "rig.css",
+      "rules.js",
       "assets/**/*",
-      "hooks/**/*"
+      "hooks/**/*",
+      "overlay.html",
+      "overlay-preload.js"
     ],
     "extraResources": [
       {
