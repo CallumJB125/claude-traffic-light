@@ -19,6 +19,9 @@ With more than one session waiting, each click cycles to the next. Drag it
 anywhere, resize by dragging its edge or scrolling on it, or use the tray
 menu's Bigger/Smaller.
 
+
+After a deal he walks off-screen for a hammock, strings it up, lights the joint and sleeps for ten minutes. The garden goes untended: crops swell, vines and grass creep around the pots, and rabbits, foxes, birds, snails and squirrels move in — until he wakes and they scatter.
+
 ## Install (double-clickable app)
 
 ```bash

@@ -849,7 +849,7 @@ const GSPEED = Number(process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED || 1);
 // Slower, bigger: twelve pots spread over the whole display in a jittered
 // grid, so the screen becomes the garden. One plant in thirty is weed — it
 // gets dried on a rack for ten minutes, then a buyer comes for it.
-const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, PROCESS: 90000 / GSPEED, SMASH_RUN: 7000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
+const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, PROCESS: 90000 / GSPEED, SMASH_RUN: 7000 / GSPEED, CHILL: 600000 / GSPEED, HAMMOCK_FETCH: 20000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
 
 function gardenGeometry() {
   const b = win.getBounds();
@@ -1002,6 +1002,24 @@ async function runGarden(base) {
         gardenAct(null);
         jarred.crop = null; jarred.state = 'empty';
         overlayGarden({ op: 'clearpot', i });
+        // ── paid: off to fetch a hammock, light the joint, and sleep on it.
+        // The garden goes untended meanwhile — overgrowth, then animals.
+        const edgeX = win.getBounds().x < geo.wa.x + geo.wa.width / 2 ? geo.wa.x - geo.width + 12 : geo.wa.x + geo.wa.width - 12;
+        gardenAct('walking', { facing: facingTo(edgeX) });
+        await moveWidget(edgeX, geo.floorY, GT.HAMMOCK_FETCH * 0.45);
+        if (!alive()) break;
+        const spot = { x: geo.homeX, y: geo.floorY };
+        gardenAct('carrying', { facing: facingTo(spot.x) });
+        await moveWidget(spot.x, spot.y, GT.HAMMOCK_FETCH * 0.55);
+        if (!alive()) break;
+        overlayGarden({ op: 'hammock', x: spot.x + Math.round(geo.width / 2), y: spot.y + geo.height - 8, w: Math.round(geo.width * 1.6) });
+        gardenAct('lounging', { facing: 'right' });
+        overlayGarden({ op: 'neglect', ms: GT.CHILL });
+        const chillEnd = Date.now() + GT.CHILL;
+        while (alive() && Date.now() < chillEnd) await wait(1000);
+        overlayGarden({ op: 'wake' });
+        gardenAct(null);
+        run.lastBite = Date.now();
         continue;
       }
       const ready = run.pots.filter((p) => p.crop && p.crop !== 'flowers' && p.crop !== 'weed' && now >= p.grownAt && p.bites > 0);

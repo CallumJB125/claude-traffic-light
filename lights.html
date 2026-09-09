@@ -821,6 +821,11 @@
   <button data-preset="tools"><span>Tool-aware</span><small>Eye colours for subagents, shell, edits and MCP</small></button>
   <button data-preset="loud"><span>Loud</span><small>Sounds, bullets and an escalating rage meter when ignored</small></button>
   <button data-preset="party"><span>Party</span><small>Running, pets, costumes, hearts and fire</small></button>
+  <button data-preset="zen"><span>Zen</span><small>Breathing lamps, blinks, a halo when done, snow at rest</small></button>
+  <button data-preset="chaos"><span>Chaos</span><small>Snipers, strobes, vignettes, fire, a dragon</small></button>
+  <button data-preset="gardener"><span>Gardener</span><small>The garden at rest, sun while working, a duck</small></button>
+  <button data-preset="office"><span>Office</span><small>Top hat, "BRB" bubbles, SIGN HERE banners</small></button>
+  <button data-preset="night"><span>Night</span><small>A purple ghost that dozes in the snow</small></button>
   <div class="menu-head" id="user-presets-head">Yours</div>
   <div id="user-presets"></div>
   <div class="menu-head">Share</div>
@@ -1446,6 +1451,63 @@
     set('permission', { pose: 'wave', costume: 'crown' });
     set('failed', { eyes: 'dizzy', effect: 'fire' });
     d.find((x) => x.id === 'failed').enabled = true;
+    return d;
+  };
+  PRESETS.zen = () => {
+    const d = R.defaultRules().filter((r) => !['subagent', 'failed', 'shell', 'ignored'].includes(r.id));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('working', { pose: 'blink', lampFx: 'breathe', pet: null });
+    set('done', { pose: 'none', eyes: 'happy', costume: 'halo', celebrate: false, lampFx: 'breathe' });
+    set('nudge', { pose: 'blink', lampFx: 'breathe' });
+    set('idle', { pose: 'sleep', eyes: 'closed', lampFx: 'breathe', effect: 'snow' });
+    set('permission', { pose: 'nod', sound: 'Glass', lampFx: 'breathe' });
+    set('limit', { pose: 'sleep', sound: 'Blow', lampFx: 'breathe' });
+    return d;
+  };
+  PRESETS.chaos = () => {
+    const d = R.defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Sosumi', screenFx: 'vignette', eyes: 'laser' });
+    set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Funk', body: 'robot', screenFx: 'vignette' });
+    set('working', { pose: 'run', lampFx: 'police', pet: 'dragon', effect: 'fire' });
+    set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Hero' });
+    set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
+    set('ignored', { pose: 'arms', effect: 'beard', signFx: 'cracked', lampFx: 'flicker' });
+    set('idle', { pose: 'kickflip', lampFx: 'chase', pet: 'duck' });
+    return d;
+  };
+  PRESETS.gardener = () => {
+    const d = R.defaultRules();
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('idle', { effect: 'garden', pose: 'none', costume: 'none' });
+    set('working', { pose: 'run', effect: 'sun', pet: 'duck', costume: 'none' });
+    set('done', { pose: 'thumbs', effect: 'sparkles', eyes: 'happy', pet: 'bunny' });
+    set('nudge', { pose: 'none', effect: 'sun', pet: 'snail' });
+    set('permission', { pose: 'wave', effect: 'rain' });
+    set('limit', { pose: 'sleep', body: 'frog', effect: 'rain' });
+    return d;
+  };
+  PRESETS.office = () => {
+    const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('working', { pose: 'nod', costume: 'tophat', eyes: 'suspicious', lampFx: 'none' });
+    set('done', { pose: 'thumbs', costume: 'tophat', eyes: 'happy', celebrate: false, sound: 'Glass' });
+    set('nudge', { pose: 'bubble', text: 'BRB', costume: 'tophat', eyes: 'roll' });
+    set('permission', { pose: 'banner', text: 'SIGN HERE', costume: 'tophat', sound: 'Ping' });
+    set('limit', { pose: 'dead', costume: 'tophat', lampFx: 'flicker' });
+    set('idle', { pose: 'selfie', costume: 'shades', eyes: 'money' });
+    set('subagent', { costume: 'shades', eyes: '#8b5cf6' });
+    return d;
+  };
+  PRESETS.night = () => {
+    const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green' });
+    set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', celebrate: false });
+    set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green' });
+    set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lampFx: 'breathe', lampColor: '#5b3fb8', lamp: 'amber' });
+    set('permission', { body: 'ghost', pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
+    set('limit', { body: 'ghost', pose: 'dead', lampFx: 'sos' });
     return d;
   };
   $('presets-btn').addEventListener('click', (e) => {

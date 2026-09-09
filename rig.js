@@ -515,7 +515,7 @@
       }
       // Garden actions on the real screen are driven by the main process.
       const act = look.gardenAct || null;
-      for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing', 'smashing']) svg.classList.toggle(a, act === a);
+      for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing', 'smashing', 'lounging']) svg.classList.toggle(a, act === a);
       if (act === 'eating') { svg.classList.add('eating', look.facing === 'left' ? 'eat-left' : 'eat-right'); } else if (!garden) svg.classList.remove('eating', 'eat-left', 'eat-right');
       svg.classList.toggle('grumpy', !!look.grumpy);
       // Gardening needs room: the view widens to three widths, Claude centred.

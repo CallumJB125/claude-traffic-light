@@ -58,7 +58,7 @@
   window.overlay.onSnipe((m, t) => { scope = null; shots.push({ mx: m.x, my: m.y, tx: t.x, ty: t.y, t0: performance.now() }); holes.push({ x: t.x, y: t.y, t0: performance.now() }); kick(); });
 
   // ── Garden across the screen: pots anywhere, drying rack, and the buyer
-  const garden = { on: false, pots: [], deal: null };
+  const garden = { on: false, pots: [], deal: null, hammock: null, neglect: null, animals: [], wakeAt: null };
   window.overlay.onGarden((p) => {
     const ox = p.ox || 0, oy = p.oy || 0;
     if (p.op === 'start') { garden.on = true; garden.pots = []; garden.deal = null; }
@@ -76,14 +76,77 @@
     if (p.op === 'deal' && pot) { pot.jar = false; garden.deal = { i: p.i, t0: performance.now(), ms: p.ms, claude: { x: p.claude.x - ox, y: p.claude.y - oy, w: p.claude.w, h: p.claude.h }, fromLeft: pot.x > W / 2, buyer: makeBuyer(p.seed || 1) }; }
     if (p.op === 'clearpot' && pot) { pot.crop = null; pot.rack = null; pot.table = null; pot.jar = false; pot.seed = false; garden.deal = null; }
     if (p.op === 'pull') garden.pots.forEach((q) => { q.crop = null; });
+    if (p.op === 'hammock') garden.hammock = { x: p.x - ox, y: p.y - oy, w: p.w };
+    if (p.op === 'neglect') { garden.neglect = { t0: performance.now(), ms: p.ms }; garden.animals = []; }
+    if (p.op === 'wake') { garden.wakeAt = performance.now(); garden.hammock = null; for (const a of (garden.animals || [])) a.flee = true; }
     if (p.op === 'smash' && pot) { pot.smashed = performance.now(); pot.crop = null; pot.rack = null; pot.table = null; pot.jar = false; }
-    if (p.op === 'clear') { garden.on = false; garden.pots = []; garden.deal = null; }
+    if (p.op === 'clear') { garden.on = false; garden.pots = []; garden.deal = null; garden.hammock = null; garden.neglect = null; garden.animals = []; }
     kick();
   });
+  // 0..1 how untended the garden is: rises while he sleeps, falls after he wakes
+  function overgrowth(t) {
+    if (!garden.neglect) return 0;
+    const up = Math.min(1, (t - garden.neglect.t0) / garden.neglect.ms);
+    if (garden.wakeAt) { const down = Math.min(1, (t - garden.wakeAt) / 6000); if (down >= 1) { garden.neglect = null; garden.wakeAt = null; garden.animals = []; return 0; } return up * (1 - down); }
+    return up;
+  }
+  function drawVines(x, y, g, t) {
+    if (g <= 0.05) return;
+    ctx.strokeStyle = '#3f8a2f'; ctx.lineWidth = 2;
+    for (let k = 0; k < 3; k += 1) {
+      const dir = k % 2 ? 1 : -1, len = 60 * g;
+      ctx.beginPath(); ctx.moveTo(x + dir * 12, y - 2);
+      for (let i = 1; i <= 6; i += 1) { const tt = i / 6; ctx.lineTo(x + dir * (12 + len * tt) + Math.sin(tt * 9 + k + t / 1500) * 6 * g, y - 2 - Math.sin(tt * 3.2) * 24 * g); }
+      ctx.stroke();
+      for (let i = 1; i <= 4; i += 1) { const tt = i / 4; leaf(x + dir * (12 + len * tt), y - 2 - Math.sin(tt * 3.2) * 24 * g, 5 * g, 3 * g, '#4f9a3a'); }
+    }
+    ctx.fillStyle = '#4f9a3a';
+    for (let i = 0; i < 7; i += 1) { const gx = x - 30 + i * 10 + (i % 2) * 3; ctx.beginPath(); ctx.moveTo(gx - 3, y + 2); ctx.lineTo(gx, y + 2 - 14 * g - (i % 3) * 3 * g); ctx.lineTo(gx + 3, y + 2); ctx.closePath(); ctx.fill(); }
+  }
+  // Animals move in while it's overgrown: rabbits hop pot to pot, a fox
+  // trots along, birds fly across, snails creep. They scatter when he wakes.
+  const ANIMALS = ['rabbit', 'rabbit', 'bird', 'fox', 'snail', 'bird', 'rabbit', 'squirrel'];
+  function updateAnimals(t, g) {
+    if (!garden.neglect || garden.wakeAt) { /* fleeing or none */ } else if (g > 0.35 && garden.animals.length < Math.floor(2 + g * 6) && Math.random() < 0.02) {
+      const kind = ANIMALS[garden.animals.length % ANIMALS.length];
+      const pot = garden.pots[Math.floor(Math.random() * garden.pots.length)];
+      garden.animals.push({ kind, x: pot ? pot.x + 40 : W / 2, y: kind === 'bird' ? (pot ? pot.y - 90 : 200) : (pot ? pot.y : H - 60), vx: (Math.random() < 0.5 ? -1 : 1) * (kind === 'snail' ? 0.15 : kind === 'bird' ? 2.2 : 0.8), t0: t, flee: false });
+    }
+    for (let i = garden.animals.length - 1; i >= 0; i -= 1) {
+      const a = garden.animals[i];
+      const speed = a.flee ? 6 : Math.abs(a.vx);
+      a.x += Math.sign(a.vx) * speed;
+      if (a.kind === 'bird') a.y += Math.sin(t / 300 + i) * 0.8;
+      if (!a.flee && (a.x < 40 || a.x > W - 40)) a.vx = -a.vx;
+      if (a.flee && (a.x < -60 || a.x > W + 60)) { garden.animals.splice(i, 1); continue; }
+      drawAnimal(a, t);
+    }
+  }
+  function drawAnimal(a, t) {
+    const dir = Math.sign(a.vx) || 1; const hop = a.kind === 'rabbit' ? Math.abs(Math.sin(t / 180)) * 10 : 0;
+    ctx.save(); ctx.translate(a.x, a.y - hop); ctx.scale(dir, 1);
+    const R = (px, py, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(px, py, w, h); };
+    if (a.kind === 'rabbit') { R(-8, -10, 16, 10, '#e9e4d8'); R(4, -16, 8, 8, '#e9e4d8'); R(6, -26, 3, 11, '#e9e4d8'); R(10, -26, 3, 11, '#e9e4d8'); R(9, -14, 1.5, 1.5, '#211f1c'); R(-10, -8, 3, 3, '#f2efe8'); }
+    else if (a.kind === 'fox') { R(-14, -10, 26, 9, '#d9692a'); R(10, -15, 9, 8, '#d9692a'); R(12, -20, 3, 5, '#d9692a'); R(16, -20, 3, 5, '#d9692a'); R(-24, -8, 11, 5, '#d9692a'); R(-24, -8, 4, 5, '#f2efe8'); R(16, -12, 1.5, 1.5, '#211f1c'); R(-10, -1, 3, 4, '#a84f1e'); R(0, -1, 3, 4, '#a84f1e'); R(8, -1, 3, 4, '#a84f1e'); }
+    else if (a.kind === 'bird') { const f = Math.sin(t / 90) * 5; R(-5, -3, 10, 6, '#38bdf8'); R(4, -6, 5, 5, '#38bdf8'); R(9, -4, 3, 2, '#f2a200'); R(-3, -6 - f, 7, 3, '#0aa3ff'); R(6, -5, 1.2, 1.2, '#211f1c'); }
+    else if (a.kind === 'snail') { ctx.fillStyle = '#f2a200'; ctx.beginPath(); ctx.arc(0, -6, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#a86a00'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(0, -6, 3.5, 0, Math.PI * 1.6); ctx.stroke(); R(-8, -4, 18, 4, '#c9c0a0'); R(8, -10, 1.2, 6, '#c9c0a0'); R(11, -10, 1.2, 6, '#c9c0a0'); }
+    else { R(-8, -9, 14, 9, '#8a5a2b'); R(4, -14, 7, 7, '#8a5a2b'); R(-16, -18, 8, 14, '#8a5a2b'); R(8, -12, 1.4, 1.4, '#211f1c'); R(-10, -2, 4, 2, '#8a5a2b'); }
+    ctx.restore();
+  }
+  function drawHammock(h, t) {
+    const sway = Math.sin(t / 900) * 4;
+    ctx.fillStyle = '#6b4420'; ctx.fillRect(h.x - h.w / 2 - 4, h.y - 70, 6, 70); ctx.fillRect(h.x + h.w / 2 - 2, h.y - 70, 6, 70);
+    ctx.strokeStyle = '#d9c9a8'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(h.x - h.w / 2, h.y - 62); ctx.quadraticCurveTo(h.x, h.y - 20 + sway, h.x + h.w / 2, h.y - 62); ctx.stroke();
+    ctx.strokeStyle = 'rgba(217,201,168,0.7)'; ctx.lineWidth = 1;
+    for (let i = 1; i < 6; i += 1) { const tt = i / 6; const px = h.x - h.w / 2 + h.w * tt; const py = h.y - 62 + (1 - Math.abs(tt - 0.5) * 2) * (42 + sway); ctx.beginPath(); ctx.moveTo(px, py - 6); ctx.lineTo(px, py + 6); ctx.stroke(); }
+  }
   function drawGarden(t) {
     if (!garden.on) return;
+    const g = overgrowth(t);
+    if (garden.hammock) drawHammock(garden.hammock, t);
     for (const pot of garden.pots) {
       const x = pot.x, y = pot.y;
+      if (!pot.smashed) drawVines(x, y, g, t);
       if (pot.smashed) {
         // blows apart: terracotta shards fly out on an arc, a dust puff fades; gone after 1.2s
         const age = (t - pot.smashed) / 1200;
@@ -104,7 +167,8 @@
       if (pot.crop) {
         const g = Math.min(1, (t - pot.sown) / pot.growMs);
         const sway = Math.sin(t / 900 + x) * 2 * g;
-        ctx.save(); ctx.translate(x + sway, y - 30); ctx.scale(g, g);
+        const big = 1 + 0.8 * overgrowth(t);
+        ctx.save(); ctx.translate(x + sway, y - 30); ctx.scale(g * big, g * big);
         drawCrop(pot.crop, pot.bites);
         ctx.restore();
       }
@@ -113,6 +177,7 @@
       if (pot.jar) drawJar(x + 60, y - 2, true);
     }
     if (garden.deal) drawDeal(t);
+    updateAnimals(t, g);
   }
   function drawRack(x, y, dry) {
     // a line between two posts; branches hang upside-down from it, buds browning as they dry

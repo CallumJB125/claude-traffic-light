@@ -544,6 +544,17 @@
 @keyframes rig-hammer { 0%, 100% { transform: rotate(-70deg); } 45% { transform: rotate(-70deg); } 60% { transform: rotate(25deg); } 75% { transform: rotate(20deg); } }
 @keyframes rig-lunge { 0%, 45%, 100% { transform: translate(0, 0) rotate(0); } 60% { transform: translate(3px, 1px) rotate(6deg); } }
 
+/* lounging: laid back in the hammock, joint lit, eyes shut, slow smoke */
+.rig.lounging .scene { transform: rotate(-70deg) translate(-8px, 6px); transform-origin: 32px 60px; transition: transform 900ms ease; }
+.rig.lounging .cig, .rig.lounging .wisps { opacity: 1; }
+.rig.lounging .eye-open { opacity: 0; }
+.rig.lounging .eye-closed { opacity: 1; }
+.rig.lounging .ember { animation: rig-ember 2.4s ease-in-out infinite; }
+.rig.lounging .wisp { animation: rig-wisp 4.5s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+.rig.lounging .wisp.s2 { animation-delay: 1.1s; } .rig.lounging .wisp.s3 { animation-delay: 2.2s; } .rig.lounging .wisp.s4 { animation-delay: 3.3s; }
+.rig.lounging .zzz { animation: rig-float-z 3.6s ease-in infinite; }
+.rig.lounging .zzz.z2 { animation-delay: 0.7s; } .rig.lounging .zzz.z3 { animation-delay: 1.4s; }
+
 /* garden lifecycle */
 .rig .mover { transition: transform 2.6s ease-in-out; transform: translateX(var(--walk, 0px)); }
 .rig .tools > * { opacity: 0; }
