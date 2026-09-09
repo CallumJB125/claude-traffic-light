@@ -15,12 +15,13 @@
     user-select: none;
   }
 
-  /* No padding — resizing is done by scroll-wheel and the tray menu's
-     Bigger/Smaller items, not by dragging the window's true edge, so there's
-     no need to leave dead space around the widget for that. */
+  /* The outer strip is left as plain (non-drag) window chrome so macOS can
+     grab the true window edge to resize by dragging — that turned out to be
+     the easiest way to resize (easier than scroll/tray, which stay as
+     alternatives). Generous so it's an easy target, not a hairline. */
   body {
     box-sizing: border-box;
-    padding: 0;
+    padding: 12px;
   }
 
   /* Deliberately NOT -webkit-app-region: drag — on macOS that region type
