@@ -1058,11 +1058,14 @@ async function runGarden(base) {
 }
 
 function updateGarden(st) {
-  const wants = st.look.effect === 'garden' && win && win.isVisible() && st.reason !== 'preview';
+  // Judge by the state underneath any travel override, or a state change
+  // during gardening would never be seen.
+  const real = gardenRun ? aggregateState({ ignoreTravel: true }) : st;
+  const wants = real.look.effect === 'garden' && win && win.isVisible() && real.reason !== 'preview';
   if (wants && !gardenRun && !roamState.busy) {
-    runGarden(st.look).catch((e) => console.log('[garden]', e.message));
-  } else if (!wants && gardenRun && !gardenRun.stop && st.reason !== 'travel') {
-    console.log('[garden] stopping: reason', st.reason, 'effect', st.look.effect, 'visible', win?.isVisible());
+    runGarden(real.look).catch((e) => console.log('[garden]', e.message));
+  } else if (!wants && gardenRun && !gardenRun.stop) {
+    console.log('[garden] stopping: reason', real.reason, 'effect', real.look.effect);
     gardenRun.stop = true;
   }
 }
