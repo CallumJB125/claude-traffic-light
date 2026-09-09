@@ -17,6 +17,8 @@
       "main.js",
       "preload.js",
       "index.html",
+      "settings.html",
+      "settings-preload.js",
       "assets/**/*",
       "hooks/**/*"
     ],

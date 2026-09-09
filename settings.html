@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Preferences</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #1c1a1f;
+    color: #ece8e2;
+    font: 13px -apple-system, system-ui, sans-serif;
+    overflow-y: auto;
+  }
+  body {
+    min-height: 100%;
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0;
+    font-weight: 600;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .field label {
+    font-weight: 500;
+  }
+  .field .hint {
+    font-size: 11px;
+    color: #9a9484;
+    line-height: 1.4;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  input[type="number"] {
+    width: 70px;
+    background: #2a2731;
+    border: 1px solid #3c3846;
+    border-radius: 6px;
+    color: inherit;
+    padding: 5px 8px;
+    font: inherit;
+  }
+  input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+  }
+  .actions {
+    margin-top: auto;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  button {
+    background: #da7756;
+    border: none;
+    color: #211f1c;
+    font: inherit;
+    font-weight: 600;
+    padding: 7px 16px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  button:active { transform: scale(0.97); }
+  #status {
+    font-size: 11px;
+    color: #9a9484;
+    height: 14px;
+  }
+</style>
+</head>
+<body>
+  <h1>Claude Traffic Light</h1>
+
+  <div class="field">
+    <label>Working session considered closed after</label>
+    <div class="row">
+      <input type="number" id="workingStaleMinutes" min="1" max="60" />
+      <span>minutes of silence</span>
+    </div>
+    <div class="hint">A green (actively working) session pings constantly, so silence this long really does mean it's gone.</div>
+  </div>
+
+  <div class="field">
+    <label>Waiting session considered closed after</label>
+    <div class="row">
+      <input type="number" id="waitingStaleHours" min="1" max="24" />
+      <span>hours of silence</span>
+    </div>
+    <div class="hint">A session waiting on you only ever gets one event, so this needs to be long enough to cover a real break.</div>
+  </div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="soundOnAmber" /> Play a sound when something needs you</label>
+    <div class="hint">A short system alert when the light turns amber or red — easy to miss a corner widget otherwise.</div>
+  </div>
+
+  <div class="actions">
+    <span id="status"></span>
+    <button id="save">Save</button>
+  </div>
+
+  <script>
+    const workingInput = document.getElementById('workingStaleMinutes');
+    const waitingInput = document.getElementById('waitingStaleHours');
+    const soundInput = document.getElementById('soundOnAmber');
+    const status = document.getElementById('status');
+
+    async function load() {
+      const config = await window.settingsApi.getConfig();
+      workingInput.value = config.workingStaleMinutes;
+      waitingInput.value = config.waitingStaleHours;
+      soundInput.checked = config.soundOnAmber;
+    }
+
+    document.getElementById('save').addEventListener('click', async () => {
+      await window.settingsApi.saveConfig({
+        workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
+        waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
+        soundOnAmber: soundInput.checked,
+      });
+      status.textContent = 'Saved';
+      setTimeout(() => (status.textContent = ''), 1500);
+    });
+
+    load();
+  </script>
+</body>
+</html>

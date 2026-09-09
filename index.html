@@ -168,8 +168,42 @@
     100% { opacity: 0; transform: translate(9px, -17px) scale(1.3); }
   }
 
+  /* One-shot confetti burst, fired from JS only on the transition INTO
+     'done' (not held/looping like the other state visuals) — a little
+     celebration for finishing, not a persistent decoration. */
+  .confetti {
+    opacity: 0;
+  }
+  .confetti.burst {
+    animation: confetti-burst 700ms ease-out forwards;
+  }
+  .confetti.c2.burst { animation-delay: 40ms; }
+  .confetti.c3.burst { animation-delay: 80ms; }
+  .confetti.c4.burst { animation-delay: 30ms; }
+  .confetti.c5.burst { animation-delay: 110ms; }
+  .confetti.c6.burst { animation-delay: 60ms; }
+  @keyframes confetti-burst {
+    0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
+    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.4) rotate(200deg); }
+  }
+
+  /* If red drags on a while, Claude gets visibly fed up rather than
+     sleeping peacefully forever — a straight, slightly annoyed mouth
+     appears after a few minutes of no response. */
+  .grumpy-mouth {
+    opacity: 0;
+    fill: #211f1c;
+  }
+  #rig.grumpy .grumpy-mouth {
+    opacity: 1;
+  }
+  #rig.grumpy .eye-closed {
+    transform: rotate(-8deg);
+    transform-origin: center;
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    #rig .sign-assembly, #rig .claude-body, #rig .zzz, #rig .think-dot, .lamp.green.on { animation: none !important; }
+    #rig .sign-assembly, #rig .claude-body, #rig .zzz, #rig .think-dot, #rig .confetti, .lamp.green.on { animation: none !important; }
     #rig.state-red .sign-assembly { transition: none; }
   }
 
@@ -227,12 +261,22 @@
             <rect x="50" y="48" width="8" height="7" rx="1" />
             <rect x="48" y="42" width="4" height="8" rx="1.5" />
           </g>
+          <rect class="grumpy-mouth" x="26" y="49" width="12" height="1.8" rx="0.9" />
         </g>
         <text class="zzz z1" x="46" y="37">z</text>
         <text class="zzz z2" x="50" y="32">z</text>
         <text class="zzz z3" x="54" y="27">z</text>
         <text class="zzz z4" x="58" y="22">z</text>
         <text class="zzz z5" x="48" y="24">z</text>
+
+        <g id="confetti-group">
+          <rect class="confetti c1" x="30" y="20" width="3" height="3" fill="#f2a200" style="--dx:-14px;--dy:-18px" />
+          <rect class="confetti c2" x="32" y="20" width="3" height="3" fill="#2fae3e" style="--dx:10px;--dy:-22px" />
+          <rect class="confetti c3" x="34" y="22" width="3" height="3" fill="#e2231a" style="--dx:20px;--dy:-8px" />
+          <rect class="confetti c4" x="30" y="22" width="3" height="3" fill="#f2efe8" style="--dx:-20px;--dy:-6px" />
+          <rect class="confetti c5" x="32" y="24" width="3" height="3" fill="#da7756" style="--dx:6px;--dy:-26px" />
+          <rect class="confetti c6" x="28" y="24" width="3" height="3" fill="#f2a200" style="--dx:-8px;--dy:-24px" />
+        </g>
       </svg>
     </div>
     <div id="tooltip"></div>
@@ -247,6 +291,17 @@
     const app = document.getElementById('app');
 
     let lastState = null;
+    let redSince = null;
+    const GRUMPY_AFTER_MS = 3 * 60 * 1000;
+
+    function burstConfetti() {
+      document.querySelectorAll('.confetti').forEach((el) => {
+        el.classList.remove('burst');
+        void el.getBoundingClientRect(); // force reflow so removing+re-adding restarts the animation
+        el.classList.add('burst');
+      });
+    }
+
     function applyState(state) {
       lampRed.classList.toggle('on', state === 'red');
       lampAmber.classList.toggle('on', state === 'amber');
@@ -258,8 +313,11 @@
       if (state !== lastState) {
         rig.classList.remove('state-red', 'state-amber', 'state-green', 'state-done');
         rig.classList.add(`state-${state}`);
+        if (state === 'done' && lastState !== 'done') burstConfetti();
+        redSince = state === 'red' ? (redSince ?? Date.now()) : null;
         lastState = state;
       }
+      rig.classList.toggle('grumpy', redSince !== null && Date.now() - redSince > GRUMPY_AFTER_MS);
     }
 
     async function refresh() {
@@ -341,7 +399,8 @@
       } else {
         const folder = result.cwd.split('/').filter(Boolean).pop() || result.cwd;
         const badge = result.total > 1 ? ` (${result.index}/${result.total})` : '';
-        showFeedback(`→ ${folder}${badge} · path copied`);
+        const precision = result.exact ? ' · tab found' : '';
+        showFeedback(`→ ${folder}${badge}${precision} · path copied`);
       }
     });
   </script>

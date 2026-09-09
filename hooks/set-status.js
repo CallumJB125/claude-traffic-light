@@ -6,8 +6,17 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const ROOT_DIR = path.join(os.homedir(), '.claude-traffic-light');
+// Override to point at a synced folder (iCloud Drive, a Tailscale share,
+// etc) if you want sessions from multiple machines merged into one widget —
+// set the same value in the environment on every machine before installing
+// hooks there. Defaults to a local, unsynced folder.
+const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
+
+// Distinguishes sessions from different machines sharing one ROOT_DIR so
+// their session_ids (which could theoretically collide across machines,
+// however unlikely) don't clobber each other.
+const HOST_TAG = os.hostname().split('.')[0];
 
 const [, , stateArg, reasonArg] = process.argv;
 const state = ['green', 'amber', 'red', 'done'].includes(stateArg) ? stateArg : 'amber';
@@ -36,9 +45,10 @@ if (payload) {
 
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
+const fileKey = `${HOST_TAG}-${sessionId}`;
 
 if (reason === 'session-end') {
-  const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
+  const file = path.join(SESSIONS_DIR, `${fileKey}.json`);
   fs.rm(file, { force: true }, () => {});
   process.exit(0);
 }
@@ -72,9 +82,9 @@ if (data && state === 'amber' && typeof data.message === 'string') {
 }
 
 fs.writeFileSync(
-  path.join(SESSIONS_DIR, `${sessionId}.json`),
+  path.join(SESSIONS_DIR, `${fileKey}.json`),
   JSON.stringify(
-    { sessionId, cwd, state: detectedState, updatedAt: new Date().toISOString(), reason },
+    { sessionId, host: HOST_TAG, cwd, state: detectedState, updatedAt: new Date().toISOString(), reason },
     null,
     2
   )
