@@ -59,7 +59,7 @@
     poseBtn('bounce').click();
     ok(stageLook().cls.includes('pose-bounce'), 'pose applies on the stage');
     ok(poseBtn('bounce').classList.contains('on'), 'pose button shows selected');
-    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 20, 'all 19 poses + keep are offered');
+    ok(Array.from($('poses').querySelectorAll('.posebtn')).length === 22, 'all 21 poses + keep are offered');
     ok($('text-row').hidden, 'banner text row hidden for a non-banner pose');
     poseBtn('banner').click();
     ok(!$('text-row').hidden, 'banner text row appears for the banner pose');
@@ -155,7 +155,8 @@
     ok(!$('preset-save').disabled, 'Save preset enabled once named');
     fire($('preset-form'), 'submit');
     await sleep(150);
-    ok(document.querySelector('#user-presets [data-user]')?.textContent.includes('Playtest set'), 'user preset appears in the menu');
+    const mine = () => Array.from(document.querySelectorAll('#user-presets [data-user]')).find((b) => /playtest set/i.test(b.textContent));
+    ok(!!mine(), 'user preset appears in the menu');
     let cfg = await window.lightsApi.getConfig();
     ok(cfg.presets.some((p) => p.name === 'Playtest set' && p.rules.length === rows().length), 'user preset persisted with its rules');
     // overwrite by same name keeps one entry
@@ -166,10 +167,10 @@
     ok(cfg.presets.filter((p) => p.name.toLowerCase() === 'playtest set').length === 1, 'saving the same name overwrites instead of duplicating');
     document.querySelector('#presets [data-preset="classic"]').click();
     $('presets-btn').click();
-    document.querySelector('#user-presets [data-user]').click();
+    mine().click();
     ok(rows().every((r) => !r.querySelector('.chip.pose-chip')), 'applying the user preset restores its rules');
     $('presets-btn').click();
-    document.querySelector('#user-presets [data-remove]').click();
+    mine().parentElement.querySelector('[data-remove]').click();
     await sleep(150);
     cfg = await window.lightsApi.getConfig();
     ok(!cfg.presets.some((p) => p.name.toLowerCase() === 'playtest set'), 'deleting a user preset persists');

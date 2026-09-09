@@ -122,6 +122,26 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
+    <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
+  </div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="showTasks" /> Show task progress on the sign</label>
+    <div class="hint">A tiny 3/7 on the crossbar while Claude works through a task list.</div>
+  </div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="roam" /> Run to the terminal and knock</label>
+    <div class="hint">When something needs you and the terminal isn't in front, Claude runs to its Dock icon, knocks, and runs home. Again every 10 minutes while ignored.</div>
+  </div>
+
+  <div class="field">
+    <label class="row"><input type="checkbox" id="randomEvents" /> Rare events</label>
+    <div class="hint">A UFO, a portal or a meteor, roughly once an hour while working, and on milestones.</div>
+  </div>
+
+  <div class="field">
     <label>What the lights mean</label>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
@@ -145,6 +165,10 @@
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
       document.getElementById('seasonal').checked = config.seasonal !== false;
+      document.getElementById('askFromWidget').checked = !!config.askFromWidget;
+      document.getElementById('showTasks').checked = config.showTasks !== false;
+      document.getElementById('roam').checked = config.roam !== false;
+      document.getElementById('randomEvents').checked = config.randomEvents !== false;
     }
 
     document.getElementById('save').addEventListener('click', async () => {
@@ -155,6 +179,10 @@
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
         seasonal: document.getElementById('seasonal').checked,
+        askFromWidget: document.getElementById('askFromWidget').checked,
+        showTasks: document.getElementById('showTasks').checked,
+        roam: document.getElementById('roam').checked,
+        randomEvents: document.getElementById('randomEvents').checked,
       });
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 1500);

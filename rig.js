@@ -14,6 +14,19 @@
     <rect class="lamp" data-slot="amber" x="24.5" y="7" width="15" height="15" rx="2.5" />
     <rect class="lamp" data-slot="green" x="42" y="7" width="15" height="15" rx="2.5" />
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
+    <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
+  </g>
+  <!-- rare events, drawn over everything -->
+  <g class="event event-ufo">
+    <ellipse cx="32" cy="8" rx="16" ry="4" fill="#9aa3ad" /><ellipse cx="32" cy="5.5" rx="8" ry="4.5" fill="#cfe9ff" opacity="0.9" />
+    <g class="ufo-lights" fill="#f2d16b"><circle cx="20" cy="9" r="1.2" /><circle cx="26" cy="10.5" r="1.2" /><circle cx="32" cy="11" r="1.2" /><circle cx="38" cy="10.5" r="1.2" /><circle cx="44" cy="9" r="1.2" /></g>
+    <polygon class="beam" points="26,11 38,11 48,82 16,82" fill="#7dd3fc" opacity="0.28" />
+  </g>
+  <g class="event event-portal">
+    <ellipse class="portal-ring" cx="62" cy="55" rx="4" ry="14" fill="#5b3fb8" stroke="#a78bfa" stroke-width="1.6" />
+  </g>
+  <g class="event event-meteor">
+    <g class="meteor"><circle cx="0" cy="0" r="3.5" fill="#f2a200" /><path d="M0 0 l-22 -9 l16 6 z" fill="#f28c28" opacity="0.8" /><path d="M0 0 l-30 -6 l20 2 z" fill="#f2d16b" opacity="0.5" /></g>
   </g>
   <g class="claude-body">
     <g class="body body-default">
@@ -57,6 +70,10 @@
     <g class="body body-ghost" fill="#eef0f5" opacity="0.92">
       <path d="M17 39 h30 v27 l-5 -4 l-5 4 l-5 -4 l-5 4 l-5 -4 l-5 4 z" />
     </g>
+    <!-- knock: a fist that raps forward; used when Claude walks to your terminal -->
+    <g class="knock-fist"><rect x="50" y="46" width="6" height="6" rx="1.5" fill="#da7756" stroke="#211f1c" stroke-width="0.5" /></g>
+    <!-- cookie: the token treat you feed him (⌥-click) -->
+    <g class="cookie"><circle cx="54" cy="46" r="3.6" fill="#c98a4b" /><circle cx="52.8" cy="45" r="0.8" fill="#5a3a1a" /><circle cx="55.4" cy="47.2" r="0.8" fill="#5a3a1a" /><circle cx="54.6" cy="44.4" r="0.6" fill="#5a3a1a" /></g>
     <g class="speed-lines" stroke="#f2efe8" stroke-width="1.2" stroke-linecap="round" opacity="0">
       <line x1="2" y1="56" x2="9" y2="56" /><line x1="0" y1="61" x2="8" y2="61" /><line x1="3" y1="66" x2="9" y2="66" />
     </g>
@@ -306,7 +323,8 @@
   </g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch'];
+  const EVENTS = ['ufo', 'portal', 'meteor'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
@@ -376,12 +394,34 @@
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);
       const t = svg.querySelector('.banner-text');
       if (t.textContent !== text) t.textContent = text;
+      const tl = svg.querySelector('.tasks-label');
+      const tasksText = look.tasks && look.tasks.created > 0 ? `${look.tasks.done}/${look.tasks.created}` : '';
+      if (tl.textContent !== tasksText) tl.textContent = tasksText;
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
       current = { ...look, pose, costume };
     }
 
+    let eventTimer = null;
+    // One-shot rare event: plays its animation once then clears.
+    function playEvent(name, ms = 4200) {
+      if (!EVENTS.includes(name)) return;
+      for (const e of EVENTS) svg.classList.remove(`event-${e}`);
+      void svg.getBoundingClientRect();
+      svg.classList.add(`event-${name}`);
+      clearTimeout(eventTimer);
+      eventTimer = setTimeout(() => svg.classList.remove(`event-${name}`), ms);
+    }
+    let reactTimer = null;
+    // Short reaction that temporarily overrides the look (poke, pet, feed).
+    function react(patch, ms = 1600) {
+      const base = current;
+      if (!base) return;
+      setLook({ ...base, ...patch });
+      clearTimeout(reactTimer);
+      reactTimer = setTimeout(() => { if (current) setLook({ ...current, ...base, aimAngle: current.aimAngle, facing: current.facing }); }, ms);
+    }
     let burstTimer = null;
     function burst(ms = 1200) {
       svg.classList.add('firing');
@@ -397,7 +437,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, get look() { return current; } };
   }
 
   window.mountRig = mountRig;
@@ -407,5 +447,6 @@
   window.RIG_EFFECTS = EFFECTS;
   window.RIG_PETS = PETS;
   window.RIG_EYE_MOODS = EYE_MOODS;
+  window.RIG_EVENTS = EVENTS;
   window.RIG_DEFAULT_TEXT = DEFAULT_TEXT;
 })();

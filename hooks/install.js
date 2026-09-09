@@ -12,6 +12,9 @@ const SET_STATUS_SCRIPT = path.join(__dirname, 'set-status.js');
 // One hook per Claude Code event, each passing the raw signal. The visual
 // meaning lives in the app's rules, so this list only changes when Claude
 // Code grows a new event.
+// PermissionRequest is opt-in (it changes how approvals reach you) and is
+// the only hook that blocks: it waits up to 60s for the widget's answer.
+const OPTIONAL_EVENTS = [['PermissionRequest', 'permission-request', 60]];
 const HOOK_EVENTS = [
   ['UserPromptSubmit', 'prompt-submit'],
   ['PreToolUse', 'tool-use'],
@@ -25,6 +28,8 @@ const HOOK_EVENTS = [
   ['Notification', 'notification'],
   ['SessionStart', 'session-start'],
   ['PreCompact', 'compact'],
+  ['TaskCreated', 'task-created'],
+  ['TaskCompleted', 'task-done'],
   ['SessionEnd', 'session-end'],
 ];
 
@@ -36,9 +41,10 @@ function isOurs(command) {
   return /set-status\.js" /.test(command || '');
 }
 
-function install(settings, scriptPath = SET_STATUS_SCRIPT) {
+function install(settings, scriptPath = SET_STATUS_SCRIPT, options = {}) {
   settings.hooks = settings.hooks || {};
   const command = (signal) => `node "${scriptPath}" ${signal}`;
+  const events = options.askFromWidget ? HOOK_EVENTS.concat(OPTIONAL_EVENTS) : HOOK_EVENTS;
   // Strip every previous install (old colour-style commands, moved .app
   // paths) so exactly one current set survives.
   for (const event of Object.keys(settings.hooks)) {
@@ -47,21 +53,23 @@ function install(settings, scriptPath = SET_STATUS_SCRIPT) {
       .filter((h) => h.hooks.length > 0);
     if (!settings.hooks[event].length) delete settings.hooks[event];
   }
-  for (const [event, signal] of HOOK_EVENTS) {
+  for (const [event, signal, timeout] of events) {
     settings.hooks[event] = settings.hooks[event] || [];
-    settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command: command(signal) }] });
+    const hook = { type: 'command', command: command(signal) };
+    if (timeout) hook.timeout = timeout;
+    settings.hooks[event].push({ matcher: '', hooks: [hook] });
   }
   return settings;
 }
 
-function isInstalled(settings, scriptPath = SET_STATUS_SCRIPT) {
+function isInstalled(settings, scriptPath = SET_STATUS_SCRIPT, options = {}) {
   const command = (signal) => `node "${scriptPath}" ${signal}`;
-  return HOOK_EVENTS.every(([event, signal]) =>
-    (settings.hooks?.[event] || []).some((h) => h.hooks?.some((hh) => hh.command === command(signal)))
-  );
+  const has = (event, signal) => (settings.hooks?.[event] || []).some((h) => h.hooks?.some((hh) => hh.command === command(signal)));
+  const wantAsk = !!options.askFromWidget;
+  return HOOK_EVENTS.every(([e, s]) => has(e, s)) && OPTIONAL_EVENTS.every(([e, s]) => has(e, s) === wantAsk);
 }
 
-module.exports = { HOOK_EVENTS, install, isInstalled, cmd };
+module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd };
 
 if (require.main === module) {
   let settings = {};

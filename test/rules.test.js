@@ -315,6 +315,56 @@ test('set-status: garbage stdin does not crash', () => {
   assert.equal(read(home).signal, 'stop');
 });
 
+test('set-status: permission-request blocks until answered, then prints the decision', () => {
+  const home = tmpHome();
+  const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '4000' };
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [SET_STATUS, 'permission-request'], { env });
+  child.stdin.end(JSON.stringify({ session_id: 'p1', cwd: '/x/proj', tool_name: 'Bash', tool_input: { command: 'git push origin main' } }));
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  const reqDir = path.join(home, 'requests');
+  const deadline = Date.now() + 2000;
+  let req = null;
+  while (Date.now() < deadline && !req) {
+    const f = fs.existsSync(reqDir) ? fs.readdirSync(reqDir).find((x) => x.endsWith('.json')) : null;
+    if (f) req = JSON.parse(fs.readFileSync(path.join(reqDir, f), 'utf8'));
+    else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+  }
+  assert.ok(req, 'request file appears while the hook waits');
+  assert.equal(req.tool, 'Bash');
+  assert.equal(req.summary, 'git push origin main');
+  fs.writeFileSync(path.join(reqDir, `${req.id}.answer`), 'allow');
+  return new Promise((resolve) => child.on('exit', (code) => {
+    assert.equal(code, 0);
+    const parsed = JSON.parse(out);
+    assert.deepEqual(parsed.hookSpecificOutput.decision, { behavior: 'allow' });
+    assert.equal(fs.readdirSync(reqDir).length, 0, 'request and answer files are cleaned up');
+    resolve();
+  }));
+});
+
+test('set-status: permission-request with no answer passes through silently', () => {
+  const home = tmpHome();
+  const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300' }, input: JSON.stringify({ session_id: 'p2', tool_name: 'Edit', tool_input: { file_path: '/a.js' } }) });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.toString(), '', 'no decision printed → Claude Code shows its own dialog');
+});
+
+test('set-status: task events count without changing the state', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 't' });
+  run(home, 'tool-use', { session_id: 't', tool_name: 'Bash' });
+  run(home, 'task-created', { session_id: 't' });
+  run(home, 'task-created', { session_id: 't' });
+  run(home, 'task-done', { session_id: 't' });
+  const d = read(home);
+  assert.deepEqual(d.tasks, { created: 2, done: 1 });
+  assert.equal(d.signal, 'tool-use', 'task bookkeeping keeps the last real signal');
+  run(home, 'prompt-submit', { session_id: 't' });
+  assert.deepEqual(read(home).tasks, { created: 0, done: 0 }, 'a new prompt resets the count');
+});
+
 // ── hooks/install.js ────────────────────────────────────────────────────────
 test('install is idempotent, strips old-style commands, keeps foreign hooks', () => {
   const foreign = { matcher: '', hooks: [{ type: 'command', command: 'echo hi' }] };
@@ -336,4 +386,17 @@ test('install is idempotent, strips old-style commands, keeps foreign hooks', ()
   assert.equal(H.isInstalled(once, '/new/set-status.js'), true);
   assert.equal(H.isInstalled(once, '/other/set-status.js'), false);
   assert.equal(H.isInstalled(settings, '/old/set-status.js'), false, 'old-style commands do not count as installed');
+});
+
+test('install: PermissionRequest hook is opt-in and carries a timeout', () => {
+  const off = H.install({}, '/x/set-status.js');
+  assert.equal(off.hooks.PermissionRequest, undefined);
+  assert.equal(H.isInstalled(off, '/x/set-status.js', { askFromWidget: true }), false, 'not installed for the opt-in when the hook is absent');
+  const on = H.install({}, '/x/set-status.js', { askFromWidget: true });
+  assert.equal(on.hooks.PermissionRequest[0].hooks[0].timeout, 60);
+  assert.equal(H.isInstalled(on, '/x/set-status.js', { askFromWidget: true }), true);
+  assert.equal(H.isInstalled(on, '/x/set-status.js', { askFromWidget: false }), false, 'turning it off means the hook must go');
+  const backOff = H.install(on, '/x/set-status.js');
+  assert.equal(backOff.hooks.PermissionRequest, undefined);
+  assert.ok(backOff.hooks.TaskCompleted, 'task hooks are always on');
 });

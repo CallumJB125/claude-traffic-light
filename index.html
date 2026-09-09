@@ -60,12 +60,27 @@
     transition: opacity 120ms ease;
   }
   #app:hover #tooltip { opacity: 1; }
+
+  /* Allow / Deny strip, shown while a permission request waits. */
+  #ask { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; padding: 0 6px 4px; gap: 4px; align-items: center; flex-wrap: wrap; align-content: flex-end; }
+  body.asking #ask { display: flex; }
+  body.asking #app { height: calc(100% - 46px); }
+  #ask button { flex: 1; height: 22px; border: none; border-radius: 6px; font: 600 10px -apple-system, system-ui, sans-serif; cursor: pointer; color: #fff; }
+  #ask .allow { background: #2fae3e; }
+  #ask .deny { background: #b8443a; }
+  #ask button:active { transform: scale(0.96); }
+  #ask-what { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 6px; border-radius: 5px; background: rgba(20,20,22,0.92); color: #fff; font: 500 9px ui-monospace, Menlo, monospace; text-align: center; }
 </style>
 </head>
 <body>
   <div id="app" title="">
     <div class="housing" id="housing"></div>
     <div id="tooltip"></div>
+  </div>
+  <div id="ask">
+    <div id="ask-what"></div>
+    <button class="allow" id="allow" title="Allow this tool call">Allow</button>
+    <button class="deny" id="deny" title="Deny this tool call">Deny</button>
   </div>
 
   <script src="rig.js"></script>
@@ -76,6 +91,7 @@
 
     let lastRuleId = null;
     let sleepSince = null;
+    let currentRequest = null;
     let confettiTimer = null;
     const GRUMPY_AFTER_MS = 3 * 60 * 1000;
 
@@ -86,6 +102,14 @@
       sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
       look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
       rig.setLook(look);
+      // Permission request strip
+      const req = data.pending && data.pending[0];
+      document.body.classList.toggle('asking', !!req && data.reason !== 'travel');
+      if (req) {
+        currentRequest = req;
+        document.getElementById('ask-what').textContent = `${req.tool}: ${req.summary || ''}`.slice(0, 80);
+        document.getElementById('ask-what').title = `${req.tool} ${req.summary || ''}`;
+      } else currentRequest = null;
       // Confetti fires on entering a celebrating state, then again every 10s
       // for as long as that state holds.
       if (look.celebrate && look.ruleId !== lastRuleId) {
@@ -159,20 +183,37 @@
       }, 3000);
     }
 
-    app.addEventListener('click', async () => {
-      if (didDrag) return;
-      const result = await window.trafficLight.goToNeedingSession();
-      if (!result) return;
-      if (result.total === 0) {
-        showFeedback('Nothing waiting — opened claude.ai');
-      } else {
-        const folder = result.cwd.split('/').filter(Boolean).pop() || result.cwd;
-        const badge = result.total > 1 ? ` (${result.index}/${result.total})` : '';
-        const precision = result.exact ? ' · tab found' : '';
-        showFeedback(`→ ${folder}${badge}${precision} · path copied`);
-      }
-    });
+    document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'allow'); });
+    document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'deny'); });
+    window.trafficLight.onEvent((name) => rig.playEvent(name));
 
+    // Reactions: click = jump to whoever needs you, or a poke; double-click =
+    // pet; ⌥-click = feed him a cookie.
+    let clickTimer = null;
+    app.addEventListener('dblclick', (e) => {
+      clearTimeout(clickTimer); clickTimer = null;
+      rig.react({ eyes: 'heart', pose: 'nod' }, 2000);
+      showFeedback('purr');
+    });
+    app.addEventListener('click', async (e) => {
+      if (didDrag) return;
+      if (e.altKey) { rig.react({ pose: 'munch', eyes: 'happy' }, 1800); showFeedback('nom'); return; }
+      if (clickTimer) return;
+      clickTimer = setTimeout(async () => {
+        clickTimer = null;
+        const result = await window.trafficLight.goToNeedingSession();
+        if (!result) return;
+        if (result.total === 0) {
+          rig.react({ eyes: 'surprised', pose: 'bounce' }, 1200);
+          showFeedback('boop');
+        } else {
+          const folder = result.cwd.split('/').filter(Boolean).pop() || result.cwd;
+          const badge = result.total > 1 ? ` (${result.index}/${result.total})` : '';
+          const precision = result.exact ? ' · tab found' : '';
+          showFeedback(`→ ${folder}${badge}${precision} · path copied`);
+        }
+      }, 230);
+    });
     // Right-click the widget → Lights editor.
     app.addEventListener('contextmenu', (e) => {
       e.preventDefault();

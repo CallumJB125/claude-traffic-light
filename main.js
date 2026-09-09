@@ -103,7 +103,12 @@ const DEFAULT_CONFIG = {
   showWidget: true,
   menuBarMode: false,
   seasonal: true,
+  askFromWidget: false,
+  showTasks: true,
+  roam: true,
+  randomEvents: true,
 };
+const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
 function loadConfig() {
@@ -177,17 +182,45 @@ function readClaudeSettings() {
   }
 }
 
+function hookOptions() {
+  return { askFromWidget: !!loadConfig().askFromWidget };
+}
+
 function areHooksInstalled() {
-  return Hooks.isInstalled(readClaudeSettings(), SET_STATUS_SCRIPT);
+  return Hooks.isInstalled(readClaudeSettings(), SET_STATUS_SCRIPT, hookOptions());
 }
 
 function installHooks() {
-  const settings = Hooks.install(readClaudeSettings(), SET_STATUS_SCRIPT);
+  const settings = Hooks.install(readClaudeSettings(), SET_STATUS_SCRIPT, hookOptions());
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
   fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+fs.mkdirSync(REQUESTS_DIR, { recursive: true });
+
+// ── Pending permission requests (from the PermissionRequest hook) ──────────
+function readRequests() {
+  let files = [];
+  try { files = fs.readdirSync(REQUESTS_DIR).filter((f) => f.endsWith('.json')); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(REQUESTS_DIR, f), 'utf8'));
+      if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
+      out.push(r);
+    } catch { /* partial write */ }
+  }
+  return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function answerRequest(id, decision) {
+  if (!/^[\w.-]+$/.test(id) || !['allow', 'deny'].includes(decision)) return false;
+  const req = path.join(REQUESTS_DIR, `${id}.json`);
+  if (!fs.existsSync(req)) return false;
+  fs.writeFileSync(path.join(REQUESTS_DIR, `${id}.answer`), decision);
+  return true;
+}
 
 let win;
 let tray;
@@ -254,25 +287,43 @@ function readSessions(config) {
 const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit' };
 
 let previewLook = null; // set by the Lights editor's "Try on widget"
+let travelLook = null;  // set while Claude is walking to your terminal
+
+function sumTasks(sessions) {
+  let created = 0, done = 0;
+  for (const s of sessions) if (s.tasks) { created += s.tasks.created || 0; done += s.tasks.done || 0; }
+  return { created, done };
+}
 
 function aggregateState() {
   const config = loadConfig();
   const sessions = readSessions(config);
+  const pending = config.askFromWidget ? readRequests() : [];
+  const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   if (previewLook && Date.now() < previewLook.expiresAt) {
-    return { look: previewLook.look, reason: 'preview', sessions, fired: [] };
+    return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
+  }
+  if (travelLook) {
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks };
   }
   const override = readManualOverride();
   if (override) {
     const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
-    return { look, reason: 'manual', sessions, fired, owned };
+    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, pending, tasks };
   }
   const { look, fired, owned } = Rules.resolve(config.rules, sessions);
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
-  return { look, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned };
+  // A pending permission request is the "Needs your input" state, whatever
+  // the session files say (the hook blocks before Notification fires).
+  if (pending.length) {
+    const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]).look;
+    return { look: { ...asked, tasks }, reason: 'session', sessions, fired: ['permission'], owned, pending, tasks };
+  }
+  return { look: { ...look, tasks }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks };
 }
 
 // ── Sounds ──────────────────────────────────────────────────────────────────
@@ -337,8 +388,8 @@ function createSettingsWindow() {
     return;
   }
   settingsWin = new BrowserWindow({
-    width: 360,
-    height: 640,
+    width: 380,
+    height: 820,
     useContentSize: true,
     resizable: false,
     minimizable: false,
@@ -391,7 +442,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -665,7 +716,117 @@ function applyWidgetVisibility() {
 function broadcastStatus() {
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
-  try { updateOverlay(aggregateState().look); } catch (e) { console.log('[overlay]', e.message); }
+  try {
+    const st = aggregateState();
+    updateOverlay(st.look);
+    applyStrip(!!(st.pending && st.pending.length) && !travelLook);
+    maybeRoam(st);
+    maybeRandomEvent(st);
+  } catch (e) { console.log('[status]', e.message); }
+}
+
+// ── Roaming: walk to the terminal's Dock icon and knock ────────────────────
+// When something needs you and the terminal isn't the front app, Claude runs
+// along the screen to that app's Dock icon, knocks, and runs home. Once per
+// waiting episode, then every 10 minutes while still ignored.
+let roamState = { lastKnock: 0, waitingSince: null, busy: false, home: null };
+
+function osa(script) {
+  return new Promise((resolve) => execFile('osascript', ['-e', script], (err, out) => resolve(err ? null : out.trim())));
+}
+
+async function frontmostApp() {
+  return osa('tell application "System Events" to get name of first application process whose frontmost is true');
+}
+
+async function dockIconRect(appName) {
+  const out = await osa(`tell application "System Events" to tell process "Dock" to get {position, size} of UI element "${appName}" of list 1`);
+  if (!out) return null;
+  const n = out.split(',').map((x) => Number(x.trim()));
+  if (n.length < 4 || n.some(Number.isNaN)) return null;
+  return { x: n[0], y: n[1], w: n[2], h: n[3] };
+}
+
+async function runningTerminal() {
+  const names = await osa('tell application "System Events" to get name of every process');
+  if (!names) return null;
+  const set = new Set(names.split(',').map((x) => x.trim()));
+  return TERMINAL_APPS.find((t) => set.has(t)) || null;
+}
+
+function tween(from, to, ms, onStep) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const id = setInterval(() => {
+      const p = Math.min(1, (Date.now() - t0) / ms);
+      const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      onStep({ x: Math.round(from.x + (to.x - from.x) * e), y: Math.round(from.y + (to.y - from.y) * e) });
+      if (p >= 1) { clearInterval(id); resolve(); }
+    }, 16);
+  });
+}
+
+async function maybeRoam(st) {
+  const config = loadConfig();
+  if (!config.roam || !win || !win.isVisible() || roamState.busy || previewLook) return;
+  const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
+  if (!waiting) { roamState.waitingSince = null; return; }
+  if (!roamState.waitingSince) roamState.waitingSince = Date.now();
+  const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
+  if (!due) return;
+  const app = await runningTerminal();
+  if (!app) return;
+  if ((await frontmostApp()) === app) return; // they're looking at it already
+  const icon = await dockIconRect(app);
+  if (!icon) return;
+  roamState.busy = true;
+  roamState.lastKnock = Date.now();
+  const home = win.getBounds();
+  roamState.home = home;
+  const base = st.look;
+  const target = { x: Math.round(icon.x + icon.w / 2 - home.width / 2), y: Math.round(icon.y - home.height + 6) };
+  const facing = target.x < home.x ? 'left' : 'right';
+  try {
+    travelLook = { ...base, pose: 'run', facing, aimAngle: 0, name: `Running to ${app}` };
+    broadcastStatus();
+    await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+    travelLook = { ...base, pose: 'knock', facing: 'right', text: 'KNOCK KNOCK', name: `Knocking on ${app}` };
+    broadcastStatus();
+    await new Promise((r) => setTimeout(r, 2400));
+    travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
+    broadcastStatus();
+    await tween(target, { x: home.x, y: home.y }, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+  } finally {
+    travelLook = null;
+    win?.setBounds(home);
+    roamState.busy = false;
+    broadcastStatus();
+  }
+}
+
+// ── Rare events ────────────────────────────────────────────────────────────
+// A UFO, a portal or a meteor: about once per 45 minutes of working time at
+// random, plus on milestones (10th, 50th, 100th, 500th session seen).
+const seenSessions = new Set();
+let lastEventAt = 0;
+function maybeRandomEvent(st) {
+  const config = loadConfig();
+  if (!config.randomEvents || !win || !win.isVisible() || previewLook || travelLook) return;
+  let milestone = false;
+  for (const s of st.sessions) {
+    if (!seenSessions.has(s.sessionId)) {
+      seenSessions.add(s.sessionId);
+      stats.sessionsSeen = (stats.sessionsSeen || 0) + 1;
+      statsDirty = true;
+      if ([10, 50, 100, 500, 1000].includes(stats.sessionsSeen)) milestone = true;
+    }
+  }
+  const working = st.look.lamp === 'green' && !['ak47', 'sniper'].includes(st.look.pose);
+  const chance = working ? 4 / (45 * 60) : 0;
+  if (!milestone && (Date.now() - lastEventAt < 5 * 60 * 1000 || Math.random() > chance)) return;
+  lastEventAt = Date.now();
+  const names = ['ufo', 'portal', 'meteor'];
+  win.webContents.send('event', milestone ? 'ufo' : names[Math.floor(Math.random() * names.length)]);
 }
 
 function createTray() {
@@ -777,9 +938,8 @@ ipcMain.handle('go-to-needing-session', async () => {
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 
   if (needing.length === 0) {
-    shell.openExternal('https://claude.ai');
     cycleIndex = 0;
-    return { opened: 'claude.ai', total: 0 };
+    return { opened: 'none', total: 0 };
   }
 
   const limits = needing.filter((s) => s.signal === 'limit-hit');
@@ -806,7 +966,9 @@ ipcMain.handle('go-to-needing-session', async () => {
 ipcMain.handle('get-config', () => loadConfig());
 
 ipcMain.handle('save-config', (e, partial) => {
+  const before = loadConfig().askFromWidget;
   const next = saveConfig(partial);
+  if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
@@ -814,6 +976,24 @@ ipcMain.handle('save-config', (e, partial) => {
 });
 
 ipcMain.handle('get-stats', () => Stats.summary(stats));
+
+ipcMain.handle('answer-request', (e, id, decision) => {
+  const ok = answerRequest(String(id), String(decision));
+  setTimeout(broadcastStatus, 250);
+  return ok;
+});
+
+// The widget grows a strip of Allow / Deny buttons while a request waits.
+const STRIP_PX = 46;
+let stripShown = false;
+function applyStrip(show) {
+  if (!win || show === stripShown) return;
+  stripShown = show;
+  const b = win.getBounds();
+  win.setAspectRatio(0);
+  win.setBounds({ ...b, height: b.height + (show ? STRIP_PX : -STRIP_PX) });
+  if (!show) win.setAspectRatio(WIDGET_ASPECT);
+}
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));
 

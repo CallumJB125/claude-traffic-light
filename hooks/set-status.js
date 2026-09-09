@@ -16,7 +16,8 @@ const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir()
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
 
-const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end'];
+const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end', 'task-created', 'task-done', 'permission-request'];
+const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
@@ -26,12 +27,28 @@ if (!signal) process.exit(0);
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
+// Read the whole payload from stdin. Claude Code pipes it and closes; a
+// non-blocking pipe can report EAGAIN before the data lands, so retry
+// briefly rather than treating that as "no payload".
 let data = null;
+let payload = '';
 if (!process.stdin.isTTY) {
-  try {
-    data = JSON.parse(fs.readFileSync(0, 'utf8'));
-  } catch {
-    // no / unparsable payload
+  const buf = Buffer.alloc(65536);
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 1500;
+  while (Date.now() < deadline) {
+    let n;
+    try {
+      n = fs.readSync(0, buf, 0, buf.length, null);
+    } catch (e) {
+      if (e.code === 'EAGAIN') { Atomics.wait(sleeper, 0, 0, 10); continue; }
+      break;
+    }
+    if (n === 0) break;
+    payload += buf.toString('utf8', 0, n);
+  }
+  if (payload) {
+    try { data = JSON.parse(payload); } catch { /* unparsable payload */ }
   }
 }
 
@@ -41,6 +58,41 @@ const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
 
 if (signal === 'session-end') {
   fs.rmSync(file, { force: true });
+  process.exit(0);
+}
+
+// ── PermissionRequest: a BLOCKING hook. Write the request where the widget
+// can see it, then wait for an answer file. Answer → print the decision for
+// Claude Code. No answer in time → exit silently, so the normal dialog shows.
+if (signal === 'permission-request') {
+  const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
+  fs.mkdirSync(REQUESTS_DIR, { recursive: true });
+  const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
+  const reqFile = path.join(REQUESTS_DIR, `${id}.json`);
+  const ansFile = path.join(REQUESTS_DIR, `${id}.answer`);
+  const input = data?.tool_input || {};
+  const summary = typeof input.command === 'string' ? input.command
+    : typeof input.file_path === 'string' ? input.file_path
+    : typeof input.url === 'string' ? input.url
+    : Object.keys(input).length ? JSON.stringify(input) : '';
+  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), createdAt: new Date().toISOString() }, null, 2));
+  const deadline = Date.now() + waitMs;
+  let decision = null;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline) {
+    try {
+      decision = fs.readFileSync(ansFile, 'utf8').trim();
+      break;
+    } catch {
+      Atomics.wait(sleeper, 0, 0, 150);
+    }
+  }
+  fs.rmSync(reqFile, { force: true });
+  fs.rmSync(ansFile, { force: true });
+  if (decision === 'allow' || decision === 'deny') {
+    const out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: decision === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: 'Denied from the Claude Traffic Light widget' } } };
+    process.stdout.write(JSON.stringify(out));
+  }
   process.exit(0);
 }
 
@@ -71,8 +123,14 @@ try {
 const now = new Date().toISOString();
 const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
 const workingSince = resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
+// Task progress for the current turn: created/done counts, reset per prompt.
+let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
+if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
+if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
+// Task events are bookkeeping, not a state change: keep the previous signal.
+const signalOut = resolved === 'task-created' || resolved === 'task-done' ? (prev?.signal || 'tool-use') : resolved;
 
 fs.writeFileSync(
   file,
-  JSON.stringify({ sessionId, host: HOST_TAG, cwd, signal: resolved, tool, workingSince, updatedAt: now }, null, 2)
+  JSON.stringify({ sessionId, host: HOST_TAG, cwd, signal: signalOut, tool: signalOut === resolved ? tool : (prev?.tool ?? null), workingSince, tasks, updatedAt: now }, null, 2)
 );

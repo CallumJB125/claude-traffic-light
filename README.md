@@ -110,6 +110,31 @@ Resolution: rules apply top to bottom; the first rule that lights a lamp is
 the state, and rules above it may layer accents (eyes, pose, sound) on top.
 A rule below the lamp owner never leaks into the look.
 
+## Answer permission prompts from the widget
+
+Preferences → **Answer permission prompts from the widget** (off by default)
+installs a `PermissionRequest` hook. When Claude asks to run a tool, the
+widget shows what it wants (`Bash: git push origin main`) with **Allow** /
+**Deny** buttons; your answer goes straight back to Claude Code. If you don't
+answer within a minute the hook steps aside and the normal terminal prompt
+appears, so nothing can get stuck. Restart open sessions after toggling it.
+
+## Running to your terminal
+
+When something needs you and the terminal isn't the front app, Claude runs
+across the screen to that app's Dock icon (Ghostty, iTerm, Terminal, Warp…),
+knocks, and runs home — once per waiting episode, then every 10 minutes while
+ignored. Preferences → **Run to the terminal and knock**.
+
+## Task progress, rare events, reactions
+
+- A tiny **3/7** on the sign's crossbar while Claude works through a task
+  list (Preferences → Show task progress).
+- **Rare events**: a UFO abduction, a portal, or a meteor — roughly once per
+  45 minutes of working time, and on your 10th/50th/100th/500th session.
+- **Reactions**: click Claude for a poke (or to jump to whoever needs you),
+  double-click to pet him, ⌥-click to feed him a cookie.
+
 ## Stats
 
 The Stats tab in Lights shows the last seven days as stacked bars — working,

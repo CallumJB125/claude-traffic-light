@@ -1434,6 +1434,7 @@
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
     if (q.get('view') === 'stats') setView('stats');
+    if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     setDirty(false);
     renderList(); renderEditor(); renderStage();
     refreshLive();
