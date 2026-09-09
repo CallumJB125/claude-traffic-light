@@ -16,6 +16,7 @@
     <symbol id="lamp-star" viewBox="0 0 16 16"><polygon points="8,0.8 10.1,5.6 15.3,6.1 11.4,9.6 12.6,14.7 8,12 3.4,14.7 4.6,9.6 0.7,6.1 5.9,5.6" /></symbol>
     <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
   </defs>
+  <g class="mover">
   <g class="sign-assembly">
     <!-- horizontal, three lamps (default) -->
     <g class="sign sign-h3">
@@ -55,7 +56,8 @@
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
-  <!-- procedural garden: filled by rig.js when effect === 'garden' -->
+  </g><!-- /mover -->
+  <!-- staged garden: pots, bed, plants and tools; driven by the garden machine below -->
   <g class="garden"></g>
   <!-- rare events, drawn over everything -->
   <g class="event event-ufo">
@@ -455,6 +457,7 @@
       svg.style.setProperty('--body-color', /^#[0-9a-f]{6}$/i.test(look.bodyColor || '') ? look.bodyColor : '#da7756');
       const effect = EFFECTS.includes(look.effect) ? look.effect : 'none';
       for (const e of EFFECTS) svg.classList.toggle(`effect-${e}`, effect === e);
+      svg.dataset.gardenSpeed = String(look.gardenSpeed || 1);
       if (effect === 'garden' && (!current || current.effect !== 'garden')) plantGarden();
       if (effect !== 'garden' && current && current.effect === 'garden') clearGarden();
       const pet = PETS.includes(look.pet) ? look.pet : 'none';
@@ -471,7 +474,11 @@
         if (pose !== 'none') svg.classList.add(`pose-${pose}`);
       }
       svg.classList.toggle('grumpy', !!look.grumpy);
-      svg.classList.toggle('face-left', look.facing === 'left');
+      // Gardening needs room: the view widens to three widths, Claude centred.
+      const wide = effect === 'garden';
+      const vb = wide ? '-64 0 192 82' : '0 0 64 82';
+      if (svg.getAttribute('viewBox') !== vb) svg.setAttribute('viewBox', vb);
+      if (!wide) svg.classList.toggle('face-left', look.facing === 'left');
       // Gun elevation toward the cursor, degrees, positive = downward.
       const aim = Math.max(-35, Math.min(35, Number(look.aimAngle) || 0));
       svg.style.setProperty('--aim', `${look.facing === 'left' ? -aim : aim}deg`);
@@ -511,52 +518,158 @@
       clearTimeout(reactTimer);
       reactTimer = setTimeout(() => { if (current) setLook({ ...current, ...base, aimAngle: current.aimAngle, facing: current.facing }); }, ms);
     }
-    // ── Garden: a random assortment planted around the feet; edible things
-    // get eaten every so often (Claude leans in, the item vanishes, munch).
-    let gardenTimer = null;
+    // ── Garden: a staged lifecycle. Times are real; `speed` multiplies the
+    // clock (the editor previews at 30x).
+    //   fetch (2 min): walk off-screen, come back with a pot, place it; ×5
+    //   plant (3 min): per pot — pour dirt, drop a seed, water it
+    //   grow: sprouts → full crop; then eat one edible piece every 20 s
+    //   rotate: 10 min after the first bite, pull the crops and replant
+    const G = { FETCH: 120000, PLANT: 180000, GROW: 120000, EAT_EVERY: 20000, ROTATE: 600000, POTS: 5 };
+    const POT_X = [-50, -26, 40, 66, 92];
+    const CROPS = [
+      { kind: 'carrot', edible: 3, color: '#f28c28', draw: (g, x, k) => { g.appendChild(mk('path', { d: `M${x - 2} 56 h4 l-2 6 z`, fill: '#f28c28', class: `crop edible bite bite-${k}` })); g.appendChild(mk('path', { d: `M${x} 56 l-2.5 -4 M${x} 56 l2.5 -4 M${x} 56 v-4.5`, stroke: '#2fae3e', 'stroke-width': 0.9, fill: 'none', class: 'crop' })); } },
+      { kind: 'tomato', edible: 3, color: '#e2231a', draw: (g, x, k) => { g.appendChild(mk('rect', { x: x - 0.5, y: 44, width: 1, height: 14, fill: '#2f8a3a', class: 'crop' })); [[-2.5, 48], [2.5, 51], [0, 45]].forEach(([dx, dy], i) => g.appendChild(mk('circle', { cx: x + dx, cy: dy, r: 1.6, fill: '#e2231a', class: `crop edible bite bite-${k}-${i}` }))); } },
+      { kind: 'berries', edible: 3, color: '#5b3fb8', draw: (g, x, k) => { g.appendChild(mk('ellipse', { cx: x, cy: 53, rx: 4, ry: 3.5, fill: '#2f8a3a', class: 'crop' })); [[-1.8, -1], [1.8, 0], [0, 1.4]].forEach(([dx, dy], i) => g.appendChild(mk('circle', { cx: x + dx, cy: 53 + dy, r: 1, fill: '#5b3fb8', class: `crop edible bite bite-${k}-${i}` }))); } },
+      { kind: 'sunflower', edible: 1, color: '#f2a200', draw: (g, x, k) => { g.appendChild(mk('rect', { x: x - 0.5, y: 42, width: 1, height: 16, fill: '#2fae3e', class: 'crop' })); for (let i = 0; i < 8; i += 1) { const a = (i / 8) * Math.PI * 2; g.appendChild(mk('ellipse', { cx: x + Math.cos(a) * 2.8, cy: 42 + Math.sin(a) * 2.8, rx: 1.3, ry: 0.8, fill: '#f2a200', transform: `rotate(${(a * 180) / Math.PI} ${x + Math.cos(a) * 2.8} ${42 + Math.sin(a) * 2.8})`, class: 'crop' })); } g.appendChild(mk('circle', { cx: x, cy: 42, r: 1.9, fill: '#5a3a1a', class: `crop edible bite bite-${k}` })); } },
+      { kind: 'apple', edible: 4, color: '#e2231a', draw: (g, x, k) => { g.appendChild(mk('rect', { x: x - 1, y: 46, width: 2, height: 12, fill: '#6b4420', class: 'crop' })); g.appendChild(mk('circle', { cx: x, cy: 44, r: 6, fill: '#2f8a3a', class: 'crop' })); [[-3, 42], [2.5, 41], [3, 46], [-1.5, 47]].forEach(([dx, dy], i) => g.appendChild(mk('circle', { cx: x + dx, cy: dy, r: 1.1, fill: '#e2231a', class: `crop edible bite bite-${k}-${i}` }))); } },
+      { kind: 'flowers', edible: 0, color: '#f472b6', draw: (g, x) => { const c = ['#f472b6', '#38bdf8', '#a78bfa'][Math.floor(Math.random() * 3)]; g.appendChild(mk('rect', { x: x - 0.5, y: 50, width: 1, height: 8, fill: '#2fae3e', class: 'crop' })); [[-2, -1], [2, -1], [0, -3], [0, 1]].forEach(([dx, dy]) => g.appendChild(mk('circle', { cx: x + dx, cy: 50 + dy, r: 1.5, fill: c, class: 'crop' }))); g.appendChild(mk('circle', { cx: x, cy: 50, r: 1.1, fill: '#f2d16b', class: 'crop' })); } },
+    ];
     const ns = 'http://www.w3.org/2000/svg';
     const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); return e; };
-    const PLANTS = [
-      { kind: 'flower', w: 5, edible: false, draw: (g, x, c) => { g.appendChild(mk('rect', { x: x - 0.5, y: 60, width: 1, height: 8, fill: '#2fae3e' })); for (const [dx, dy] of [[-2, -1], [2, -1], [0, -3], [0, 1]]) g.appendChild(mk('circle', { cx: x + dx, cy: 60 + dy, r: 1.5, fill: c })); g.appendChild(mk('circle', { cx: x, cy: 60, r: 1.1, fill: '#f2d16b' })); } },
-      { kind: 'tulip', w: 4, edible: false, draw: (g, x, c) => { g.appendChild(mk('rect', { x: x - 0.5, y: 61, width: 1, height: 7, fill: '#2fae3e' })); g.appendChild(mk('path', { d: `M${x - 2} 62 v-3 l2 -2 l2 2 v3 z`, fill: c })); } },
-      { kind: 'bush', w: 8, edible: false, draw: (g, x) => { g.appendChild(mk('ellipse', { cx: x, cy: 65, rx: 4, ry: 3, fill: '#2f8a3a' })); g.appendChild(mk('ellipse', { cx: x - 2, cy: 64, rx: 2.5, ry: 2, fill: '#3fa34a' })); } },
-      { kind: 'berries', w: 7, edible: true, draw: (g, x) => { g.appendChild(mk('ellipse', { cx: x, cy: 65, rx: 3.5, ry: 2.8, fill: '#2f8a3a' })); for (const [dx, dy] of [[-1.5, -1], [1.5, 0], [0, 1]]) g.appendChild(mk('circle', { class: 'edible', cx: x + dx, cy: 65 + dy, r: 0.9, fill: '#5b3fb8' })); } },
-      { kind: 'carrot', w: 4, edible: true, draw: (g, x) => { g.appendChild(mk('path', { class: 'edible', d: `M${x - 1.5} 63 h3 l-1.5 5 z`, fill: '#f28c28' })); g.appendChild(mk('path', { d: `M${x} 63 l-2 -3 M${x} 63 l2 -3 M${x} 63 v-3.5`, stroke: '#2fae3e', 'stroke-width': 0.8, fill: 'none' })); } },
-      { kind: 'tree', w: 12, edible: true, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 1.2, y: 56, width: 2.4, height: 12, fill: '#6b4420' })); g.appendChild(mk('circle', { cx: x, cy: 54, r: 6, fill: '#2f8a3a' })); g.appendChild(mk('circle', { cx: x - 3, cy: 56, r: 4, fill: '#3fa34a' })); for (const [dx, dy] of [[-3, 52], [2, 51], [3.5, 56], [-1, 57]]) g.appendChild(mk('circle', { class: 'edible', cx: x + dx, cy: dy, r: 1.1, fill: '#e2231a' })); } },
-      { kind: 'mushroom', w: 4, edible: false, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 0.8, y: 64, width: 1.6, height: 4, fill: '#f2efe8' })); g.appendChild(mk('path', { d: `M${x - 2.5} 64.5 a2.5 2.5 0 0 1 5 0 z`, fill: '#e2231a' })); g.appendChild(mk('circle', { cx: x - 0.8, cy: 63.2, r: 0.5, fill: '#f2efe8' })); } },
-      { kind: 'cactus', w: 4, edible: false, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 1.2, y: 60, width: 2.4, height: 8, rx: 1, fill: '#3fa34a' })); g.appendChild(mk('rect', { x: x - 3, y: 62, width: 1.8, height: 3, rx: 0.8, fill: '#3fa34a' })); } },
-      { kind: 'sunflower', w: 6, edible: true, draw: (g, x) => { g.appendChild(mk('rect', { x: x - 0.5, y: 56, width: 1, height: 12, fill: '#2fae3e' })); for (let k = 0; k < 8; k += 1) { const a = (k / 8) * Math.PI * 2; g.appendChild(mk('ellipse', { cx: x + Math.cos(a) * 2.6, cy: 56 + Math.sin(a) * 2.6, rx: 1.2, ry: 0.8, fill: '#f2a200', transform: `rotate(${(a * 180) / Math.PI} ${x + Math.cos(a) * 2.6} ${56 + Math.sin(a) * 2.6})` })); } g.appendChild(mk('circle', { class: 'edible', cx: x, cy: 56, r: 1.8, fill: '#5a3a1a' })); } },
-    ];
-    const PETALS = ['#f472b6', '#e2231a', '#f2a200', '#38bdf8', '#a78bfa', '#f2efe8'];
-    function plantGarden() {
-      const g = svg.querySelector('.garden');
+    let garden = null;       // { t0, speed, pots:[{x, crop, planted, grown}], firstBite, lastBite, rotateAt, timer }
+    const gardenEl = () => svg.querySelector('.garden');
+
+    function drawPot(x) {
+      const g = mk('g', { class: 'pot', style: `transform-origin:${x}px 68px` });
+      g.appendChild(mk('path', { d: `M${x - 6} 58 h12 l-1.5 10 h-9 z`, fill: '#b8683a' }));
+      g.appendChild(mk('rect', { x: x - 7, y: 57, width: 14, height: 2.4, rx: 0.8, fill: '#c9784a' }));
+      g.appendChild(mk('path', { class: 'dirt', d: `M${x - 5.2} 59.5 h10.4 l-0.6 3 h-9.2 z`, fill: '#4a3222' }));
+      g.appendChild(mk('circle', { class: 'seed', cx: x, cy: 60.5, r: 0.7, fill: '#f2d16b' }));
+      const sp = mk('g', { class: 'sprout' }); sp.style.setProperty('--ox', `${x}px`); g.appendChild(sp);
+      return g;
+    }
+    function drawTools() {
+      const t = mk('g', { class: 'tools' });
+      // carried pot (in hand), dirt bag, watering can — shown by phase classes
+      const carry = mk('g', { class: 'carry-pot' }); carry.appendChild(mk('path', { d: 'M48 46 h9 l-1.2 7 h-6.6 z', fill: '#b8683a' })); carry.appendChild(mk('rect', { x: 47.2, y: 45.2, width: 10.6, height: 1.8, rx: 0.6, fill: '#c9784a' })); t.appendChild(carry);
+      const bag = mk('g', { class: 'bag' }); bag.appendChild(mk('rect', { x: 47, y: 42, width: 9, height: 11, rx: 1.5, fill: '#8a5a2b' })); bag.appendChild(mk('rect', { x: 49, y: 45, width: 5, height: 2, fill: '#f2efe8' })); t.appendChild(bag);
+      const can = mk('g', { class: 'can' }); can.appendChild(mk('rect', { x: 47, y: 45, width: 8, height: 7, rx: 1, fill: '#38bdf8' })); can.appendChild(mk('path', { d: 'M55 47 l6 -3', stroke: '#38bdf8', 'stroke-width': 1.6, 'stroke-linecap': 'round', fill: 'none' })); can.appendChild(mk('rect', { x: 49, y: 42.5, width: 4, height: 2.5, rx: 1.2, fill: '#38bdf8' })); t.appendChild(can);
+      for (let i = 0; i < 3; i += 1) t.appendChild(mk('rect', { class: `waterdrop w${i}`, x: 61 + i * 1.6, y: 45, width: 1, height: 2.2, rx: 0.5, fill: '#7dd3fc' }));
+      for (let i = 0; i < 4; i += 1) t.appendChild(mk('circle', { class: `dirtbit d${i}`, cx: 58, cy: 52, r: 0.8, fill: '#4a3222' }));
+      return t;
+    }
+    function startGarden(speed = 1) {
+      const g = gardenEl();
       g.innerHTML = '';
-      // random spread on both sides and in front of the feet, avoiding the legs
-      const spots = [4, 10, 24, 38, 54, 60].sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 3));
-      spots.forEach((x, i) => {
-        const p = PLANTS[Math.floor(Math.random() * PLANTS.length)];
-        const wrap = mk('g', { class: `plant plant-${p.kind}`, style: `--grow-delay:${i * 0.35}s; transform-origin:${x}px 68px` });
-        p.draw(wrap, x, PETALS[Math.floor(Math.random() * PETALS.length)]);
-        g.appendChild(wrap);
+      g.appendChild(mk('rect', { class: 'bed', x: -60, y: 67.5, width: 184, height: 2, fill: '#3a2a1a' }));
+      const tools = drawTools(); svg.querySelector('.mover').appendChild(tools);
+      garden = { t0: performance.now(), speed, pots: [], firstBite: null, lastBite: 0, rotateAt: null, phase: 'fetch', step: -1 };
+      svg.classList.add('gardening');
+      clearInterval(garden.timer);
+      garden.timer = setInterval(gardenTick, 250);
+      gardenTick();
+    }
+    function stopGarden() {
+      if (!garden) return;
+      clearInterval(garden.timer);
+      garden = null;
+      gardenEl().innerHTML = '';
+      svg.querySelector('.tools')?.remove();
+      svg.classList.remove('gardening', 'walking', 'phase-fetch', 'phase-plant', 'phase-grow', 'eating', 'eat-left', 'eat-right', 'carrying', 'pouring', 'watering', 'face-left');
+      svg.style.removeProperty('--walk');
+    }
+    // Walk Claude to x (rig units, 32 = home). Legs run while moving.
+    function walkTo(x) {
+      const cur = Number(svg.style.getPropertyValue('--walk-target') || 0);
+      const dx = x - 32;
+      svg.style.setProperty('--walk', `${dx}px`);
+      svg.style.setProperty('--walk-target', String(dx));
+      svg.classList.toggle('face-left', dx < cur);
+      svg.classList.add('walking');
+      clearTimeout(garden.walkTimer);
+      garden.walkTimer = setTimeout(() => svg.classList.remove('walking'), Math.max(300, 2600 / garden.speed));
+    }
+    function gardenTick() {
+      if (!garden) return;
+      const el = (performance.now() - garden.t0) * garden.speed;
+      const g = gardenEl();
+      const potSlot = (i) => POT_X[i];
+      // ── fetch: 5 pots, each = walk out (edge), walk back, place
+      if (el < G.FETCH) {
+        setPhase('fetch');
+        const per = G.FETCH / G.POTS;
+        const i = Math.min(G.POTS - 1, Math.floor(el / per));
+        const sub = (el - i * per) / per;   // 0..1 within this pot's cycle
+        const edge = i % 2 ? -62 : 126;
+        if (sub < 0.4) { svg.classList.remove('carrying'); if (garden.step !== i * 3) { garden.step = i * 3; walkTo(edge); } }
+        else if (sub < 0.85) { svg.classList.add('carrying'); if (garden.step !== i * 3 + 1) { garden.step = i * 3 + 1; walkTo(potSlot(i) + (potSlot(i) < 32 ? 14 : -14)); } }
+        else if (garden.step !== i * 3 + 2) { garden.step = i * 3 + 2; svg.classList.remove('carrying'); g.appendChild(drawPot(potSlot(i))); garden.pots.push({ x: potSlot(i), crop: null, planted: false }); }
+        return;
+      }
+      // ── plant: per pot — walk over, pour dirt, seed, water
+      if (el < G.FETCH + G.PLANT) {
+        setPhase('plant');
+        while (garden.pots.length < G.POTS) { const x = potSlot(garden.pots.length); g.appendChild(drawPot(x)); garden.pots.push({ x, crop: null, planted: false }); }
+        const per = G.PLANT / G.POTS;
+        const t = el - G.FETCH;
+        const i = Math.min(G.POTS - 1, Math.floor(t / per));
+        const sub = (t - i * per) / per;
+        const pot = g.querySelectorAll('.pot')[i];
+        if (garden.step !== 100 + i) { garden.step = 100 + i; walkTo(potSlot(i) + (potSlot(i) < 32 ? 14 : -14)); svg.classList.remove('pouring', 'watering'); }
+        if (pot) {
+          pot.classList.toggle('has-dirt', sub > 0.2);
+          pot.classList.toggle('has-seed', sub > 0.55);
+          pot.classList.toggle('watered', sub > 0.8);
+        }
+        svg.classList.toggle('pouring', sub > 0.1 && sub < 0.5);
+        svg.classList.toggle('watering', sub > 0.6 && sub < 0.95);
+        if (sub > 0.8 && !garden.pots[i].planted) garden.pots[i].planted = true;
+        return;
+      }
+      // ── grow / eat / rotate
+      setPhase('grow');
+      svg.classList.remove('pouring', 'watering', 'carrying');
+      if (garden.step < 1000) { garden.step = 1000; walkTo(32); g.querySelectorAll('.pot').forEach((p) => p.classList.add('has-dirt', 'has-seed', 'watered')); }
+      const cycleStart = garden.rotateAt ?? (G.FETCH + G.PLANT);
+      const gt = el - cycleStart;
+      garden.pots.forEach((pot, i) => {
+        const potEl = g.querySelectorAll('.pot')[i];
+        if (!potEl) return;
+        if (!pot.crop) {
+          pot.crop = CROPS[Math.floor(Math.random() * CROPS.length)];
+          const sp = potEl.querySelector('.sprout'); sp.innerHTML = ''; pot.crop.draw(sp, pot.x, `${i}`);
+        }
+        const growth = Math.min(1, gt / G.GROW);
+        potEl.style.setProperty('--growth', String(growth));
+        potEl.classList.toggle('mature', growth >= 1);
       });
-      clearInterval(gardenTimer);
-      gardenTimer = setInterval(eatSomething, 9000);
+      if (gt >= G.GROW) {
+        const bites = Array.from(g.querySelectorAll('.pot.mature .bite:not(.eaten)'));
+        if (bites.length && el - garden.lastBite >= G.EAT_EVERY) {
+          garden.lastBite = el;
+          if (garden.firstBite == null) garden.firstBite = el;
+          const bite = bites[Math.floor(Math.random() * bites.length)];
+          const bx = Number(bite.getAttribute('cx') ?? (bite.getAttribute('d') || '').match(/M(-?[\d.]+)/)?.[1] ?? 32);
+          walkTo(bx + (bx < 32 ? 9 : -9));
+          setTimeout(() => { if (!garden) return; svg.classList.add('eating', bx < 32 ? 'eat-left' : 'eat-right'); bite.classList.add('eaten'); setTimeout(() => svg.classList.remove('eating', 'eat-left', 'eat-right'), Math.max(300, 900 / garden.speed)); }, Math.max(200, 1800 / garden.speed));
+        }
+        // rotate crops 10 min after the first bite (and every 10 min after)
+        if (garden.firstBite != null && el - garden.firstBite >= G.ROTATE * ((garden.rotations || 0) + 1)) {
+          garden.rotations = (garden.rotations || 0) + 1;
+          garden.rotateAt = el;
+          garden.pots.forEach((pot, i) => { pot.crop = null; const potEl = g.querySelectorAll('.pot')[i]; potEl.classList.remove('mature'); potEl.style.setProperty('--growth', '0'); });
+          walkTo(32);
+        }
+      }
     }
-    function clearGarden() {
-      clearInterval(gardenTimer);
-      gardenTimer = null;
-      const g = svg.querySelector('.garden');
-      if (g) g.innerHTML = '';
+    function setPhase(p) {
+      if (garden.phase === p && svg.classList.contains(`phase-${p}`)) return;
+      garden.phase = p;
+      for (const q of ['fetch', 'plant', 'grow']) svg.classList.toggle(`phase-${q}`, q === p);
     }
-    function eatSomething() {
-      const bites = Array.from(svg.querySelectorAll('.garden .edible'));
-      if (!bites.length) return;
-      const bite = bites[Math.floor(Math.random() * bites.length)];
-      const towards = Number(bite.getAttribute('cx') || 32) < 32 ? 'left' : 'right';
-      svg.classList.add('eating', `eat-${towards}`);
-      bite.classList.add('eaten');
-      setTimeout(() => { bite.remove(); svg.classList.remove('eating', 'eat-left', 'eat-right'); }, 900);
-    }
+    // legacy names used by setLook
+    function plantGarden() { startGarden(Number(svg.dataset.gardenSpeed) || 1); }
+    function clearGarden() { stopGarden(); }
 
     let flashTimer = null;
     // Sound-reactive: the lamps flicker for a beat when a sound fires.

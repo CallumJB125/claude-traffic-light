@@ -487,6 +487,33 @@
 @keyframes rig-die { 0% { transform: rotate(0); } 60% { transform: rotate(80deg) translateY(2px); } 75% { transform: rotate(92deg) translateY(4px); } 100% { transform: rotate(88deg) translateY(4px); } }
 @keyframes rig-drop-sign { 0% { transform: rotate(0); } 100% { transform: rotate(35deg) translate(10px, 6px); } }
 
+/* garden lifecycle */
+.rig .mover { transition: transform 2.6s ease-in-out; transform: translateX(var(--walk, 0px)); }
+.rig .tools > * { opacity: 0; }
+.rig.carrying .carry-pot { opacity: 1; }
+.rig.pouring .bag { opacity: 1; animation: rig-tilt 1s ease-in-out infinite alternate; transform-origin: 51px 53px; }
+.rig.pouring .dirtbit { opacity: 1; animation: rig-dirtfall 0.7s linear infinite; }
+.rig.pouring .dirtbit.d1 { animation-delay: 0.18s; } .rig.pouring .dirtbit.d2 { animation-delay: 0.36s; } .rig.pouring .dirtbit.d3 { animation-delay: 0.54s; }
+.rig.watering .can { opacity: 1; transform: rotate(-18deg); transform-origin: 51px 49px; }
+.rig.watering .waterdrop { opacity: 1; animation: rig-waterfall 0.6s linear infinite; }
+.rig.watering .waterdrop.w1 { animation-delay: 0.2s; } .rig.watering .waterdrop.w2 { animation-delay: 0.4s; }
+@keyframes rig-tilt { from { transform: rotate(-10deg); } to { transform: rotate(-35deg); } }
+@keyframes rig-dirtfall { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-2px, 12px); opacity: 0; } }
+@keyframes rig-waterfall { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-3px, 14px); opacity: 0; } }
+.rig.walking .body rect:nth-child(3), .rig.walking .body rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.walking .body rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.face-left.gardening .mover { transform: translateX(var(--walk, 0px)); }
+.rig.gardening.face-left .claude-body, .rig.gardening.face-left .sign-assembly { transform: scaleX(-1); transform-origin: 32px 41px; }
+.rig .pot { animation: rig-grow 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2) 1 backwards; }
+.rig .pot .dirt, .rig .pot .seed { opacity: 0; transition: opacity 400ms ease; }
+.rig .pot.has-dirt .dirt { opacity: 1; }
+.rig .pot.has-seed .seed { opacity: 1; }
+.rig .pot.watered .dirt { fill: #2f1f14; }
+.rig .pot .sprout { transform: scale(var(--growth, 0)); transform-origin: var(--ox, 32px) 58px; transition: transform 1.2s ease; }
+.rig .pot .sprout .crop { animation: rig-sway 3.5s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+.rig .bite { transition: opacity 400ms ease, transform 400ms ease; transform-box: fill-box; transform-origin: center; }
+.rig .bite.eaten { opacity: 0; transform: scale(0); }
+
 /* garden: plants grow in, sway; eating leans Claude toward the bite */
 .rig .plant { animation: rig-grow 1.2s cubic-bezier(0.2, 0.9, 0.3, 1.2) var(--grow-delay, 0s) 1 backwards, rig-sway 3.5s ease-in-out calc(var(--grow-delay, 0s) + 1.2s) infinite; }
 @keyframes rig-grow { from { transform: scale(0); } to { transform: scale(1); } }

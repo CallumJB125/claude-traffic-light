@@ -96,9 +96,14 @@ independently:
   shape in any colour (handy with **Only project**, so each project gets its
   own Claude).
 - **Effect** — rain cloud, sun, snow, sparkles, fire, a beard that grows the
-  longer you keep him waiting, or a **garden**: a random planting of flowers,
-  bushes, carrots, berries, fruit trees, sunflowers, mushrooms and cacti
-  around his feet, with the edible ones eaten one by one.
+  longer you keep him waiting, or a **garden**. The garden is a real
+  routine: the widget widens to three times its width, Claude walks off-
+  screen and comes back with pots one at a time (two minutes for five), then
+  plants each — pours dirt, drops a seed, waters it (three minutes) — then
+  the crops grow (carrots, tomatoes, berries, sunflowers, apple trees,
+  flowers, chosen at random) and he eats the edible ones every twenty
+  seconds. Ten minutes after his first bite he pulls the crops and replants,
+  and again every ten minutes. The editor previews the whole cycle at 30×.
 - **Pet** — a duck, cat or blob at his feet.
 - **Sound** — the system beep, any macOS system sound, or an audio file.
 
@@ -159,7 +164,8 @@ subagent-start, subagent-done.
 
 ## Windows
 
-`npm run dist:win` builds an installer and a portable exe. The widget,
+`npm run dist:win` builds an x64 installer and a portable exe (cross-built
+from macOS works). The widget,
 Lights, rules, overlay effects, sounds (system beep or a file), speech and
 the local endpoint all work; Dock-icon roaming, macOS Shortcuts and the
 menu-bar template icon are macOS-only.

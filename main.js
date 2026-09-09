@@ -284,9 +284,32 @@ function readBounds() {
   }
 }
 
+let gardenWide = false;
+let preGardenBounds = null;
 function saveBounds() {
-  if (!win) return;
+  if (!win || gardenWide) return;
   fs.writeFileSync(BOUNDS_FILE, JSON.stringify(win.getBounds(), null, 2));
+}
+// Gardening needs three widths of room; grow the window around its centre
+// and put it back afterwards.
+function applyGardenSize(on) {
+  if (!win || on === gardenWide) return;
+  gardenWide = on;
+  if (on) {
+    preGardenBounds = win.getBounds();
+    const b = preGardenBounds;
+    const wa = screen.getDisplayMatching(b).workArea;
+    const width = b.width * 3;
+    const x = Math.max(wa.x, Math.min(wa.x + wa.width - width, Math.round(b.x - b.width)));
+    win.setAspectRatio(0);
+    win.setMaximumSize(MAX_WIDTH * 3, Math.round(MAX_WIDTH / WIDGET_ASPECT));
+    win.setBounds({ x, y: b.y, width, height: b.height });
+  } else {
+    win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT));
+    if (preGardenBounds) win.setBounds(preGardenBounds);
+    win.setAspectRatio(WIDGET_ASPECT);
+    preGardenBounds = null;
+  }
 }
 
 function readManualOverride() {
@@ -520,7 +543,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number', 'speed']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -825,6 +848,7 @@ function broadcastStatus() {
     const st = aggregateState();
     updateOverlay(st.look);
     applyStrip(!!(st.pending && st.pending.length) && !travelLook);
+    applyGardenSize(st.look.effect === 'garden' && st.reason !== 'travel');
     maybeRoam(st);
     maybeRandomEvent(st);
   } catch (e) { console.log('[status]', e.message); }

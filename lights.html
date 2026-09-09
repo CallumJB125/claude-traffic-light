@@ -264,6 +264,7 @@
     overflow: hidden;
   }
   #stage-fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #stage .rig-wrap.wide { width: 330px; }
   #stage .rig-wrap {
     width: 124px;
     height: 159px;
@@ -1303,7 +1304,9 @@
       // widget" sends. The caption still says what the other rules would
       // contribute when this signal is live.
       const own = R.previewLook(r);
+      own.gardenSpeed = 30;
       stage.setLook(own);
+      document.querySelector('#stage .rig-wrap').classList.toggle('wide', own.effect === 'garden');
       stageCelebrate(!!own.celebrate);
       stageFire(own.pose);
       const sample = { signal: r.when.signal[0] || 'idle', tool: r.when.tool && !r.when.tool.endsWith('*') ? r.when.tool : (r.when.tool ? r.when.tool.slice(0, -1) + 'x' : null) };
@@ -1315,7 +1318,8 @@
       cap.innerHTML = `<b>${escape(r.name)}</b>${r.enabled ? '' : ' <span class="owner">(disabled)</span>'}` + (parts.length ? `<br><span class="owner">${parts.join(' · ')}</span>` : '');
     } else {
       if (!live) return;
-      stage.setLook(live.look);
+      stage.setLook({ ...live.look, gardenSpeed: 30 });
+      document.querySelector('#stage .rig-wrap').classList.toggle('wide', live.look.effect === 'garden');
       stageCelebrate(!!live.look.celebrate);
       stageFire(live.look.pose);
       const n = live.sessions.length;
@@ -1601,7 +1605,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { stage.setLook({ lamp: 'amber', eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
   })();
 </script>
 </body>

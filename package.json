@@ -9,7 +9,7 @@
     "dist": "electron-builder --mac",
     "test": "node --test test/*.test.js",
     "icons": "node scripts/build-icons.js",
-    "dist:win": "electron-builder --win",
+    "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac"
   },
   "author": "",
