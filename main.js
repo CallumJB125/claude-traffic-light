@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -254,6 +254,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -265,6 +266,7 @@ function createWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setAspectRatio(WIDGET_ASPECT);
   win.loadFile('index.html');
+  win.once('ready-to-show', () => win?.showInactive());
 
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
@@ -441,8 +443,16 @@ function stopOverlay() {
   }
 }
 
+function prefersReducedMotion() {
+  try {
+    return process.platform === 'darwin' && systemPreferences.getAnimationSettings().prefersReducedMotion;
+  } catch {
+    return false;
+  }
+}
+
 function updateOverlay(look) {
-  const wants = look.pose === 'ak47' && win && win.isVisible();
+  const wants = look.pose === 'ak47' && win && win.isVisible() && !prefersReducedMotion();
   if (!wants) { stopOverlay(); return; }
   const m = widgetMuzzle();
   if (!m) return;
@@ -650,6 +660,23 @@ function maybePlayAlertSound() {
   const key = look.sound ? `${look.sound}:${owned.sound}` : null;
   if (config.soundOnAmber && key && key !== lastSoundKey) shell.beep();
   lastSoundKey = key;
+}
+
+// Dev captures (--shot, --playtest) must run beside the installed app, so
+// they take their own userData (and therefore their own instance lock).
+if (process.argv.includes('--shot') || process.argv.includes('--playtest')) {
+  app.setPath('userData', path.join(os.tmpdir(), 'claude-traffic-light-dev'));
+}
+
+// One widget, one tray. A second launch (e.g. `open -a … --args --lights`)
+// hands its flags to the running instance instead of starting another.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (e, argv) => {
+    if (argv.includes('--lights')) createLightsWindow();
+    else win?.show();
+  });
 }
 
 app.whenReady().then(() => {

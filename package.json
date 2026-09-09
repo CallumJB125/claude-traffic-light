@@ -7,7 +7,8 @@
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
     "dist": "electron-builder --mac",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "icons": "node scripts/build-icons.js"
   },
   "author": "",
   "license": "MIT",
