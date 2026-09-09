@@ -52,6 +52,125 @@ if (!process.stdin.isTTY) {
   }
 }
 
+// ── Which app is this session running inside? ──────────────────────────────
+// The widget walks to that app's Dock icon and knocks, so it has to know the
+// real host, not just "some terminal is running". Bundle id and TERM_PROGRAM
+// are free and cover the common cases; if the session is inside tmux (which
+// overwrites TERM_PROGRAM) we walk up the process tree instead. The answer is
+// cached in the session file, so the walk happens once per session at most.
+const BUNDLE_APPS = {
+  'com.mitchellh.ghostty': 'Ghostty',
+  'com.googlecode.iterm2': 'iTerm2',
+  'com.apple.terminal': 'Terminal',
+  'dev.warp.warp': 'Warp',
+  'dev.warp.warp-stable': 'Warp',
+  'com.microsoft.vscode': 'Visual Studio Code',
+  'com.microsoft.vscodeinsiders': 'Visual Studio Code - Insiders',
+  'com.visualstudio.code.oss': 'Code - OSS',
+  'com.todesktop.230313mzl4w4u92': 'Cursor',
+  'com.exafunction.windsurf': 'Windsurf',
+  'net.kovidgoyal.kitty': 'kitty',
+  'com.github.wez.wezterm': 'WezTerm',
+  'org.alacritty': 'Alacritty',
+  'co.zeit.hyper': 'Hyper',
+  'com.jetbrains.intellij': 'IntelliJ IDEA',
+};
+const TERM_PROGRAM_APPS = {
+  ghostty: 'Ghostty',
+  'iterm.app': 'iTerm2',
+  apple_terminal: 'Terminal',
+  warpterminal: 'Warp',
+  warp: 'Warp',
+  vscode: 'Visual Studio Code',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  hyper: 'Hyper',
+  wezterm: 'WezTerm',
+  kitty: 'kitty',
+  alacritty: 'Alacritty',
+};
+// Process (executable) names as they appear in `ps -o comm=`, lowercased.
+const PROCESS_APPS = {
+  ghostty: 'Ghostty',
+  iterm2: 'iTerm2',
+  iterm: 'iTerm2',
+  terminal: 'Terminal',
+  warp: 'Warp',
+  stable: 'Warp',
+  code: 'Visual Studio Code',
+  'code helper': 'Visual Studio Code',
+  electron: 'Visual Studio Code',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  kitty: 'kitty',
+  'kitty-wrapper': 'kitty',
+  'wezterm-gui': 'WezTerm',
+  wezterm: 'WezTerm',
+  alacritty: 'Alacritty',
+  hyper: 'Hyper',
+};
+
+// Inside tmux the pane's own tree dead-ends at the tmux *server*, which is
+// reparented to launchd — it never reaches the terminal window. The tmux
+// *client* is the process that does live under the emulator, so that is where
+// the walk has to start.
+function tmuxClientPid() {
+  if (!process.env.TMUX) return null;
+  const { execFileSync } = require('child_process');
+  try {
+    const args = ['display-message', '-p'];
+    if (process.env.TMUX_PANE) args.push('-t', process.env.TMUX_PANE);
+    args.push('#{client_pid}');
+    const pid = Number(execFileSync('tmux', args, { encoding: 'utf8', timeout: 1500 }).trim());
+    return Number.isFinite(pid) && pid > 1 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function appFromProcessTree() {
+  if (process.platform !== 'darwin') return null;
+  const { execFileSync } = require('child_process');
+  let pid = tmuxClientPid() || process.ppid;
+  for (let depth = 0; depth < 16 && pid > 1; depth += 1) {
+    let line;
+    try {
+      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 1500 }).trim();
+    } catch {
+      return null;
+    }
+    if (!line) return null;
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (!m) return null;
+    const parent = Number(m[1]);
+    const exe = m[2];
+    // `/Applications/Ghostty.app/Contents/MacOS/ghostty` → both "Ghostty" (the
+    // bundle) and "ghostty" (the binary) are worth testing.
+    const bundle = /\/([^/]+)\.app\//.exec(exe);
+    if (bundle && Object.values(BUNDLE_APPS).includes(bundle[1])) return bundle[1];
+    const base = (exe.split('/').pop() || '').toLowerCase();
+    if (PROCESS_APPS[base]) return PROCESS_APPS[base];
+    if (bundle) {
+      const hit = Object.values(BUNDLE_APPS).find((n) => n.toLowerCase() === bundle[1].toLowerCase());
+      if (hit) return hit;
+    }
+    pid = parent;
+  }
+  return null;
+}
+
+function detectHostApp(cached) {
+  if (cached) return cached;
+  const bundle = (process.env.__CFBundleIdentifier || '').toLowerCase();
+  if (BUNDLE_APPS[bundle]) return BUNDLE_APPS[bundle];
+  const term = (process.env.TERM_PROGRAM || '').toLowerCase();
+  // tmux (and screen) replace TERM_PROGRAM with their own name, so the real
+  // host is only findable by walking up to the process that owns the window.
+  const multiplexed = term === 'tmux' || !!process.env.TMUX || !!process.env.STY;
+  if (!multiplexed && TERM_PROGRAM_APPS[term]) return TERM_PROGRAM_APPS[term];
+  return appFromProcessTree() || (TERM_PROGRAM_APPS[term] || null);
+}
+
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
@@ -130,7 +249,9 @@ if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, 
 // Task events are bookkeeping, not a state change: keep the previous signal.
 const signalOut = resolved === 'task-created' || resolved === 'task-done' ? (prev?.signal || 'tool-use') : resolved;
 
+const hostApp = detectHostApp(prev?.hostApp);
+
 fs.writeFileSync(
   file,
-  JSON.stringify({ sessionId, host: HOST_TAG, cwd, signal: signalOut, tool: signalOut === resolved ? tool : (prev?.tool ?? null), workingSince, tasks, updatedAt: now }, null, 2)
+  JSON.stringify({ sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut, tool: signalOut === resolved ? tool : (prev?.tool ?? null), workingSince, tasks, updatedAt: now }, null, 2)
 );
