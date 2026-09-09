@@ -15,6 +15,8 @@
   // widget's position across the screen while the ak47 pose is live. The main
   // process tells us where the muzzle is (display-relative) and which way to
   // fire; we stop drawing the moment it says stop, and the window is closed.
+  window.__errs = [];
+  window.addEventListener('error', (e) => window.__errs.push(`${e.message} @${e.lineno}:${e.colno}`));
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -55,33 +57,34 @@
   window.overlay.onScope((t) => { scope = { x: t.x, y: t.y, until: performance.now() + 700 }; cursor = t; kick(); });
   window.overlay.onSnipe((m, t) => { scope = null; shots.push({ mx: m.x, my: m.y, tx: t.x, ty: t.y, t0: performance.now() }); holes.push({ x: t.x, y: t.y, t0: performance.now() }); kick(); });
 
-  // ── Garden on the screen: pots along the bed line at the bottom of the display
-  const garden = { on: false, bedY: 0, pots: [] };
+  // ── Garden across the screen: pots anywhere, drying rack, and the buyer
+  const garden = { on: false, pots: [], deal: null };
   window.overlay.onGarden((p) => {
     const ox = p.ox || 0, oy = p.oy || 0;
-    if (p.op === 'start') { garden.on = true; garden.bedY = p.bedY - oy; garden.x0 = p.wa.x - ox; garden.x1 = p.wa.x + p.wa.width - ox; garden.pots = []; }
-    if (p.op === 'pot') garden.pots.push({ x: p.x - ox, dirt: false, seed: false, water: false, crop: null, sown: 0, growMs: 1, bites: [], pulled: false });
+    if (p.op === 'start') { garden.on = true; garden.pots = []; garden.deal = null; }
+    if (p.op === 'pot') garden.pots.push({ x: p.x - ox, y: p.y - oy, dirt: false, seed: false, water: false, crop: null, sown: 0, growMs: 1, bites: [], rack: null });
     const pot = garden.pots[p.i];
     if (p.op === 'dirt' && pot) pot.dirt = true;
     if (p.op === 'seed' && pot) pot.seed = true;
     if (p.op === 'water' && pot) pot.water = true;
-    if (p.op === 'sow' && pot) { pot.crop = p.crop; pot.sown = performance.now(); pot.growMs = p.growMs; pot.bites = [true, true, true, true]; pot.pulled = false; }
+    if (p.op === 'sow' && pot) { pot.crop = p.crop; pot.sown = performance.now(); pot.growMs = p.growMs; pot.bites = [true, true, true, true]; pot.rack = null; }
     if (p.op === 'bite' && pot) { const k = pot.bites.findIndex((b) => b); if (k >= 0) pot.bites[k] = false; }
-    if (p.op === 'pull') garden.pots.forEach((q) => { q.pulled = true; q.crop = null; });
-    if (p.op === 'clear') { garden.on = false; garden.pots = []; }
+    if (p.op === 'harvest' && pot) { pot.crop = null; pot.rack = { t0: performance.now(), dryMs: p.dryMs }; }
+    if (p.op === 'deal' && pot) { garden.deal = { i: p.i, t0: performance.now(), ms: p.ms, claude: { x: p.claude.x - ox, y: p.claude.y - oy, w: p.claude.w, h: p.claude.h }, fromLeft: pot.x > W / 2 }; }
+    if (p.op === 'clearpot' && pot) { pot.crop = null; pot.rack = null; pot.seed = false; garden.deal = null; }
+    if (p.op === 'pull') garden.pots.forEach((q) => { q.crop = null; });
+    if (p.op === 'clear') { garden.on = false; garden.pots = []; garden.deal = null; }
     kick();
   });
   function drawGarden(t) {
     if (!garden.on) return;
-    const y = garden.bedY;
-    ctx.fillStyle = '#3a2a1a'; ctx.fillRect(garden.x0, y, garden.x1 - garden.x0, 4);
     for (const pot of garden.pots) {
-      const x = pot.x;
-      // pot
+      const x = pot.x, y = pot.y;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x, y + 2, 26, 5, 0, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#b8683a'; ctx.beginPath(); ctx.moveTo(x - 22, y - 34); ctx.lineTo(x + 22, y - 34); ctx.lineTo(x + 17, y); ctx.lineTo(x - 17, y); ctx.closePath(); ctx.fill();
       ctx.fillStyle = '#c9784a'; ctx.fillRect(x - 25, y - 38, 50, 7);
       if (pot.dirt) { ctx.fillStyle = pot.water ? '#2f1f14' : '#4a3222'; ctx.fillRect(x - 19, y - 32, 38, 9); }
-      if (pot.seed && !pot.crop) { ctx.fillStyle = '#f2d16b'; ctx.beginPath(); ctx.arc(x, y - 27, 2.5, 0, Math.PI * 2); ctx.fill(); }
+      if (pot.seed && !pot.crop && !pot.rack) { ctx.fillStyle = '#f2d16b'; ctx.beginPath(); ctx.arc(x, y - 27, 2.5, 0, Math.PI * 2); ctx.fill(); }
       if (pot.crop) {
         const g = Math.min(1, (t - pot.sown) / pot.growMs);
         const sway = Math.sin(t / 900 + x) * 2 * g;
@@ -89,7 +92,49 @@
         drawCrop(pot.crop, pot.bites);
         ctx.restore();
       }
+      if (pot.rack) drawRack(x + 60, y, Math.min(1, (t - pot.rack.t0) / pot.rack.dryMs));
     }
+    if (garden.deal) drawDeal(t);
+  }
+  function drawRack(x, y, dry) {
+    // two posts, a bar, three bunches hanging; colour goes from green to brown as it dries
+    ctx.fillStyle = '#6b4420'; ctx.fillRect(x - 24, y - 60, 4, 60); ctx.fillRect(x + 20, y - 60, 4, 60); ctx.fillRect(x - 26, y - 62, 52, 4);
+    const c = `rgb(${Math.round(60 + 80 * dry)}, ${Math.round(140 - 60 * dry)}, ${Math.round(50 - 20 * dry)})`;
+    for (const dx of [-14, 0, 14]) { ctx.strokeStyle = '#d7ded6'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + dx, y - 58); ctx.lineTo(x + dx, y - 48); ctx.stroke(); leaf(x + dx, y - 40, 6, 9, c); leaf(x + dx - 4, y - 44, 4, 6, c); leaf(x + dx + 4, y - 44, 4, 6, c); }
+    ctx.fillStyle = 'rgba(242,239,232,0.7)'; ctx.font = '10px -apple-system, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(dry >= 1 ? 'dry' : `${Math.round(dry * 100)}%`, x, y + 14);
+  }
+  // A second pixel Claude in a hoodie walks in from the edge, swaps a jar for
+  // a few notes at Claude's feet, and walks off the same way.
+  function drawBuyer(x, y, s, walk) {
+    const bob = walk ? Math.sin(performance.now() / 90) * 1.5 : 0;
+    ctx.save(); ctx.translate(x, y + bob); ctx.scale(s, s);
+    ctx.fillStyle = '#3a3546'; ctx.fillRect(-15, -29, 30, 13); ctx.fillRect(-28, -16, 56, 7); // hoodie body + base
+    ctx.fillStyle = '#3a3546'; ctx.beginPath(); ctx.moveTo(-15, -29); ctx.lineTo(0, -38); ctx.lineTo(15, -29); ctx.closePath(); ctx.fill(); // hood
+    ctx.fillStyle = '#da7756'; ctx.fillRect(-10, -27, 20, 9);                                    // face
+    ctx.fillStyle = '#211f1c'; ctx.fillRect(-7, -25, 3, 3); ctx.fillRect(4, -25, 3, 3);
+    ctx.fillStyle = '#3a3546'; const l = walk ? Math.sin(performance.now() / 90) * 3 : 0; ctx.fillRect(-17, -9, 7, 9 + l); ctx.fillRect(-3.5, -9, 7, 9 - l); ctx.fillRect(10, -9, 7, 9 + l);
+    ctx.restore();
+  }
+  function drawJar(x, y) { ctx.fillStyle = 'rgba(200,230,255,0.85)'; ctx.fillRect(x - 6, y - 14, 12, 14); ctx.fillStyle = '#5a4636'; ctx.fillRect(x - 7, y - 17, 14, 4); ctx.fillStyle = '#4f8a3a'; ctx.fillRect(x - 4, y - 10, 8, 8); }
+  function drawNotes(x, y) { for (let i = 0; i < 3; i += 1) { ctx.fillStyle = '#3fa34a'; ctx.fillRect(x - 8 + i * 3, y - 6 - i * 2, 16, 8); ctx.fillStyle = '#2f8a3a'; ctx.fillRect(x - 3 + i * 3, y - 4 - i * 2, 6, 4); } }
+  function drawDeal(t) {
+    const d = garden.deal;
+    const p = Math.min(1, (t - d.t0) / d.ms);
+    const feetY = d.claude.y + d.claude.h - 12;
+    const scale = d.claude.h / 82 * 0.95;
+    const meetX = d.claude.x + (d.fromLeft ? -40 : d.claude.w + 40);
+    const edgeX = d.fromLeft ? -60 : W + 60;
+    let bx, walking = true;
+    if (p < 0.4) bx = edgeX + (meetX - edgeX) * (p / 0.4);
+    else if (p < 0.7) { bx = meetX; walking = false; }
+    else bx = meetX + (edgeX - meetX) * ((p - 0.7) / 0.3);
+    drawBuyer(bx, feetY, scale, walking);
+    if (p >= 0.4 && p < 0.7) {
+      const q = (p - 0.4) / 0.3;
+      const cx = d.claude.x + (d.fromLeft ? 6 : d.claude.w - 6);
+      drawJar(cx + (bx - cx) * Math.min(1, q * 1.4), feetY - 30 - Math.sin(Math.min(1, q * 1.4) * Math.PI) * 24);
+      if (q > 0.35) drawNotes(bx + (cx - bx) * Math.min(1, (q - 0.35) * 1.6), feetY - 26 - Math.sin(Math.min(1, (q - 0.35) * 1.6) * Math.PI) * 20);
+    } else if (p >= 0.7) drawNotes(d.claude.x + d.claude.w / 2, feetY - 6);
   }
   function leaf(x, y, w, h, c) { ctx.fillStyle = c; ctx.beginPath(); ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2); ctx.fill(); }
   function drawCrop(kind, bites) {
@@ -99,6 +144,7 @@
     if (kind === 'berries') { leaf(0, -16, 16, 13, green); [[-7, -18], [7, -14], [0, -8], [3, -22]].forEach(([dx, dy], i) => { if (bites[i]) { ctx.fillStyle = '#5b3fb8'; ctx.beginPath(); ctx.arc(dx, dy, 3.6, 0, Math.PI * 2); ctx.fill(); } }); return; }
     if (kind === 'sunflower') { ctx.fillStyle = stem; ctx.fillRect(-1.5, -56, 3, 56); for (let i = 0; i < 10; i += 1) { const a = (i / 10) * Math.PI * 2; leaf(Math.cos(a) * 11, -56 + Math.sin(a) * 11, 5, 3, '#f2a200'); } if (bites[0]) { ctx.fillStyle = '#5a3a1a'; ctx.beginPath(); ctx.arc(0, -56, 7, 0, Math.PI * 2); ctx.fill(); } return; }
     if (kind === 'apple') { ctx.fillStyle = '#6b4420'; ctx.fillRect(-3, -44, 6, 44); leaf(0, -52, 24, 20, green); leaf(-12, -44, 14, 11, '#3fa34a'); [[-12, -56], [10, -60], [12, -44], [-6, -40]].forEach(([dx, dy], i) => { if (bites[i]) { ctx.fillStyle = '#e2231a'; ctx.beginPath(); ctx.arc(dx, dy, 4.2, 0, Math.PI * 2); ctx.fill(); } }); return; }
+    if (kind === 'weed') { ctx.fillStyle = '#3d7a2e'; ctx.fillRect(-1.5, -44, 3, 44); for (const [dx, dy, r] of [[0, -44, 0], [-10, -34, -0.8], [10, -34, 0.8], [-8, -22, -0.6], [8, -22, 0.6]]) { ctx.save(); ctx.translate(dx, dy); ctx.rotate(r); for (let k = -2; k <= 2; k += 1) { ctx.save(); ctx.rotate(k * 0.45); leaf(0, -9, 2.2, 10, '#4f9a3a'); ctx.restore(); } ctx.restore(); } return; }
     // flowers: not edible
     ctx.fillStyle = stem; ctx.fillRect(-1.5, -30, 3, 30); const c = ['#f472b6', '#38bdf8', '#a78bfa'][Math.abs(Math.round(bites.length * 7)) % 3]; [[-7, -34], [7, -34], [0, -41], [0, -27]].forEach(([dx, dy]) => leaf(dx, dy, 5, 5, c)); ctx.fillStyle = '#f2d16b'; ctx.beginPath(); ctx.arc(0, -34, 4, 0, Math.PI * 2); ctx.fill();
   }

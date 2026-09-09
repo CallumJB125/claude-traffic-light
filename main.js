@@ -552,7 +552,8 @@ function createLightsWindow() {
         // Dev: `--shot-garden out.png` captures the overlay mid-garden plus the widget's position.
         if (arg('--shot-garden')) {
           if (overlayWin) fs.writeFileSync(arg('--shot-garden'), (await overlayWin.webContents.capturePage()).toPNG());
-          console.log('[shot] garden', JSON.stringify({ overlay: !!overlayWin, widget: win?.getBounds(), pots: gardenRun?.pots.length, act: travelLook?.gardenAct || null }));
+          console.log('[shot] garden', JSON.stringify({ overlay: !!overlayWin, widget: win?.getBounds(), pots: gardenRun?.pots.length, states: gardenRun?.pots.map((p) => p.state || (p.crop ? 'g' : '-')).join(''), act: travelLook?.gardenAct || null }));
+          if (overlayWin) console.log('[shot] overlay-state', await overlayWin.webContents.executeJavaScript('JSON.stringify({ on: garden.on, pots: garden.pots.length, racks: garden.pots.filter(p => p.rack).length, crops: garden.pots.filter(p => p.crop).length, deal: !!garden.deal, errs: window.__errs.slice(0, 3), raf: !!raf, W, H })'));
         }
         // Dev: `--shot-tray out.png` renders the menu-bar icon frame.
         if (arg('--shot-tray')) {
@@ -830,16 +831,27 @@ function applyWidgetVisibility() {
 // rotates. The overlay draws the bed, pots and crops at screen scale; the
 // rig shows what he's carrying or doing via look.gardenAct.
 const GSPEED = Number(process.env.CLAUDE_TRAFFIC_LIGHT_GARDEN_SPEED || 1);
-const GT = { FETCH: 120000 / GSPEED, PLANT: 180000 / GSPEED, GROW: 120000 / GSPEED, EAT_EVERY: 20000 / GSPEED, ROTATE: 600000 / GSPEED, POTS: 5 };
+// Slower, bigger: twelve pots spread over the whole display in a jittered
+// grid, so the screen becomes the garden. One plant in thirty is weed — it
+// gets dried on a rack for ten minutes, then a buyer comes for it.
+const GT = { FETCH: 240000 / GSPEED, PLANT: 360000 / GSPEED, GROW: 240000 / GSPEED, EAT_EVERY: 40000 / GSPEED, ROTATE: 900000 / GSPEED, DRY: 600000 / GSPEED, DEAL: Number(process.env.CLAUDE_TRAFFIC_LIGHT_DEAL_MS || 40000 / GSPEED), POTS: 12, WEED_ONE_IN: Number(process.env.CLAUDE_TRAFFIC_LIGHT_WEED_ONE_IN || 30) };
 
 function gardenGeometry() {
   const b = win.getBounds();
   const display = screen.getDisplayMatching(b);
   const wa = display.workArea;
-  const floorY = wa.y + wa.height - b.height;        // widget sits on the work-area floor (above the Dock)
+  const floorY = wa.y + wa.height - b.height;
   const homeX = Math.round(wa.x + wa.width * 0.5 - b.width / 2);
-  const potXs = [0.14, 0.3, 0.62, 0.78, 0.9].map((f) => Math.round(wa.x + wa.width * f));
-  return { display, wa, floorY, homeX, potXs, width: b.width, height: b.height };
+  // 3 rows × 4 columns, jittered, keeping clear of the very top (menu bar) and
+  // leaving each row enough height for the widget to stand at the pot.
+  const cols = 4, rows = 3;
+  const pots = [];
+  for (let r = 0; r < rows; r += 1) for (let c = 0; c < cols; c += 1) {
+    const x = Math.round(wa.x + wa.width * ((c + 0.5) / cols) + (Math.random() - 0.5) * wa.width * 0.12);
+    const y = Math.round(wa.y + b.height + 40 + (wa.height - b.height - 80) * ((r + 0.7) / rows) + (Math.random() - 0.5) * 40);
+    pots.push({ x, y });
+  }
+  return { display, wa, floorY, homeX, potPos: pots.sort(() => Math.random() - 0.5), width: b.width, height: b.height };
 }
 
 async function moveWidget(x, y, ms) {
@@ -849,7 +861,8 @@ async function moveWidget(x, y, ms) {
 
 function gardenAct(act, extra = {}) {
   const base = gardenRun.base;
-  travelLook = { ...base, pose: 'none', effect: 'none', gardenAct: act, name: gardenRun.label, ...extra };
+  const poseActs = new Set(['thumbs']);
+  travelLook = { ...base, pose: poseActs.has(act) ? act : 'none', effect: 'none', gardenAct: poseActs.has(act) ? null : act, name: gardenRun.label, ...extra };
   win?.webContents.send('status-changed');
 }
 
@@ -860,32 +873,31 @@ function overlayGarden(payload) {
 }
 
 async function runGarden(base) {
+  console.log('[garden] start');
   const geo = gardenGeometry();
-  gardenRun = { base, home: win.getBounds(), pots: [], firstBite: null, lastBite: 0, rotations: 0, stop: false, label: 'Gardening', geo };
+  gardenRun = { base, home: win.getBounds(), pots: [], firstBite: null, lastBite: 0, rotations: 0, stop: false, label: 'Gardening', geo, planted: 0 };
   const run = gardenRun;
   const alive = () => gardenRun === run && !run.stop;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const at = (x) => geo.floorY;
-  const feetY = geo.floorY + geo.height - 14;   // where the bed meets his feet
+  const standAt = (pot) => ({ x: pot.x - Math.round(geo.width * 0.75), y: pot.y - geo.height + 14 });   // stand left of the pot, feet at its base
+  const facingTo = (x) => (x < win.getBounds().x + geo.width / 2 ? 'left' : 'right');
   try {
-    // ensure the overlay exists for drawing (screenFx path opens it)
     if (!overlayWin) { updateOverlay({ pose: 'none', screenFx: 'garden' }); await wait(700); }
-    overlayGarden({ op: 'start', bedY: feetY, wa: geo.wa });
-    gardenAct('walking', { facing: 'right' });
-    await moveWidget(geo.homeX, geo.floorY, 1800);
-    // ── fetch pots
+    overlayGarden({ op: 'start', wa: geo.wa });
+    // ── fetch pots from the screen edges
     const perFetch = GT.FETCH / GT.POTS;
     for (let i = 0; i < GT.POTS && alive(); i += 1) {
-      const edgeX = i % 2 ? geo.wa.x - geo.width + 12 : geo.wa.x + geo.wa.width - 12;
-      const potX = geo.potXs[i];
-      gardenAct('walking', { facing: edgeX < geo.homeX ? 'left' : 'right' });
-      await moveWidget(edgeX, geo.floorY, perFetch * 0.4);
+      const pos = geo.potPos[i];
+      const edge = i % 2 ? { x: geo.wa.x - geo.width + 12, y: pos.y - geo.height + 14 } : { x: geo.wa.x + geo.wa.width - 12, y: pos.y - geo.height + 14 };
+      gardenAct('walking', { facing: facingTo(edge.x) });
+      await moveWidget(edge.x, edge.y, perFetch * 0.4);
       if (!alive()) break;
-      gardenAct('carrying', { facing: potX < edgeX ? 'left' : 'right' });
-      await moveWidget(potX - Math.round(geo.width * 0.7), geo.floorY, perFetch * 0.45);
+      const stand = standAt(pos);
+      gardenAct('carrying', { facing: facingTo(stand.x) });
+      await moveWidget(stand.x, stand.y, perFetch * 0.45);
       if (!alive()) break;
-      run.pots.push({ x: potX, crop: null, planted: false, grownAt: null });
-      overlayGarden({ op: 'pot', x: potX });
+      run.pots.push({ x: pos.x, y: pos.y, crop: null, grownAt: null, bites: 0 });
+      overlayGarden({ op: 'pot', x: pos.x, y: pos.y });
       gardenAct('walking', { facing: 'right' });
       await wait(perFetch * 0.15);
     }
@@ -893,62 +905,98 @@ async function runGarden(base) {
     const perPlant = GT.PLANT / GT.POTS;
     for (let i = 0; i < run.pots.length && alive(); i += 1) {
       const pot = run.pots[i];
-      gardenAct('walking', { facing: pot.x < win.getBounds().x ? 'left' : 'right' });
-      await moveWidget(pot.x - Math.round(geo.width * 0.7), geo.floorY, perPlant * 0.15);
+      const stand = standAt(pot);
+      gardenAct('walking', { facing: facingTo(stand.x) });
+      await moveWidget(stand.x, stand.y, perPlant * 0.15);
       if (!alive()) break;
       gardenAct('pouring', { facing: 'right' });
       await wait(perPlant * 0.35);
       overlayGarden({ op: 'dirt', i });
-      if (!alive()) break;
       overlayGarden({ op: 'seed', i });
       await wait(perPlant * 0.1);
       gardenAct('watering', { facing: 'right' });
       await wait(perPlant * 0.3);
       overlayGarden({ op: 'water', i });
-      pot.planted = true;
       await wait(perPlant * 0.1);
     }
-    // ── grow, eat, rotate
+    // ── grow, eat, dry & deal, rotate
     const CROPS = ['carrot', 'tomato', 'berries', 'sunflower', 'apple', 'flowers'];
-    const sow = () => { const now = Date.now(); run.pots.forEach((pot, i) => { pot.crop = CROPS[Math.floor(Math.random() * CROPS.length)]; pot.grownAt = now + GT.GROW; overlayGarden({ op: 'sow', i, crop: pot.crop, growMs: GT.GROW }); }); };
+    const pick = () => { run.planted += 1; return run.planted % GT.WEED_ONE_IN === 0 || Math.random() < 1 / GT.WEED_ONE_IN ? 'weed' : CROPS[Math.floor(Math.random() * CROPS.length)]; };
+    const sow = () => { const now = Date.now(); run.pots.forEach((pot, i) => { pot.crop = pick(); pot.grownAt = now + GT.GROW; pot.bites = 3; pot.state = 'growing'; overlayGarden({ op: 'sow', i, crop: pot.crop, growMs: GT.GROW }); }); };
     sow();
-    gardenAct('walking', { facing: geo.homeX < win.getBounds().x ? 'left' : 'right' });
-    await moveWidget(geo.homeX, geo.floorY, 2500);
+    gardenAct('walking', { facing: facingTo(geo.homeX) });
+    await moveWidget(geo.homeX, geo.floorY, 3000);
     gardenAct(null);
     while (alive()) {
       await wait(1000);
       if (!alive()) break;
       const now = Date.now();
-      const ready = run.pots.filter((p) => p.crop && p.crop !== 'flowers' && now >= p.grownAt && (p.bites ?? 3) > 0);
+      // weed: harvest → dry 10 min → a buyer comes
+      const weed = run.pots.find((p) => p.crop === 'weed' && now >= p.grownAt && p.state === 'growing');
+      if (weed) {
+        const i = run.pots.indexOf(weed);
+        const stand = standAt(weed);
+        gardenAct('walking', { facing: facingTo(stand.x) });
+        await moveWidget(stand.x, stand.y, 2500);
+        if (!alive()) break;
+        gardenAct('carrying', { facing: 'right' });
+        weed.state = 'drying'; weed.dryAt = Date.now() + GT.DRY;
+        overlayGarden({ op: 'harvest', i, dryMs: GT.DRY });
+        await wait(2500);
+        gardenAct(null);
+        continue;
+      }
+      const dried = run.pots.find((p) => p.state === 'drying' && now >= p.dryAt);
+      if (dried) {
+        const i = run.pots.indexOf(dried);
+        const stand = standAt(dried);
+        dried.state = 'dealing';
+        gardenAct('walking', { facing: facingTo(stand.x) });
+        await moveWidget(stand.x, stand.y, 2500);
+        if (!alive()) break;
+        gardenAct(null, { facing: 'right' });
+        overlayGarden({ op: 'deal', i, ms: GT.DEAL, claude: { x: win.getBounds().x, y: win.getBounds().y, w: geo.width, h: geo.height } });
+        await wait(GT.DEAL);
+        if (!alive()) break;
+        gardenAct('thumbs');
+        await wait(1500);
+        gardenAct(null);
+        dried.crop = null; dried.state = 'empty';
+        overlayGarden({ op: 'clearpot', i });
+        continue;
+      }
+      const ready = run.pots.filter((p) => p.crop && p.crop !== 'flowers' && p.crop !== 'weed' && now >= p.grownAt && p.bites > 0);
       if (ready.length && now - run.lastBite >= GT.EAT_EVERY) {
         run.lastBite = now;
         if (run.firstBite == null) run.firstBite = now;
         const pot = ready[Math.floor(Math.random() * ready.length)];
         const idx = run.pots.indexOf(pot);
-        const facing = pot.x < win.getBounds().x + geo.width / 2 ? 'left' : 'right';
-        gardenAct('walking', { facing });
-        await moveWidget(pot.x - (facing === 'left' ? Math.round(geo.width * 0.15) : Math.round(geo.width * 0.85)), geo.floorY, 1800);
+        const stand = standAt(pot);
+        gardenAct('walking', { facing: facingTo(stand.x) });
+        await moveWidget(stand.x, stand.y, 2500);
         if (!alive()) break;
-        gardenAct('eating', { facing });
+        gardenAct('eating', { facing: 'right' });
         overlayGarden({ op: 'bite', i: idx });
-        pot.bites = (pot.bites ?? 3) - 1;
-        await wait(1200);
+        pot.bites -= 1;
+        await wait(1400);
         gardenAct(null);
       }
       if (run.firstBite != null && now - run.firstBite >= GT.ROTATE * (run.rotations + 1)) {
         run.rotations += 1;
         overlayGarden({ op: 'pull' });
-        run.pots.forEach((p) => { p.bites = 3; });
         await wait(1500);
         sow();
       }
     }
+  } catch (e) {
+    console.log('[garden] error', e.stack || e.message);
   } finally {
+    console.log('[garden] end', JSON.stringify({ stop: run.stop, same: gardenRun === run }));
     if (gardenRun === run) {
       overlayGarden({ op: 'clear' });
       travelLook = null;
       const home = run.home;
-      await moveWidget(home.x, home.y, 1200).catch(() => {});
+      await moveWidget(home.x, home.y, 1500).catch(() => {});
       gardenRun = null;
       broadcastStatus();
     }
@@ -960,6 +1008,7 @@ function updateGarden(st) {
   if (wants && !gardenRun && !roamState.busy) {
     runGarden(st.look).catch((e) => console.log('[garden]', e.message));
   } else if (!wants && gardenRun && !gardenRun.stop && st.reason !== 'travel') {
+    console.log('[garden] stopping: reason', st.reason, 'effect', st.look.effect, 'visible', win?.isVisible());
     gardenRun.stop = true;
   }
 }

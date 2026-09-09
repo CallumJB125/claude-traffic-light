@@ -357,7 +357,30 @@
 
 /* Pets */
 .rig .pet { opacity: 0; transition: opacity 150ms ease; transform-origin: 60px 68px; }
-.rig.pet-duck .pet-duck, .rig.pet-cat .pet-cat, .rig.pet-blob .pet-blob { opacity: 1; animation: rig-pet-bob 1.1s ease-in-out infinite; }
+.rig.pet-duck .pet-duck, .rig.pet-cat .pet-cat, .rig.pet-blob .pet-blob, .rig.pet-dog .pet-dog, .rig.pet-bunny .pet-bunny, .rig.pet-parrot .pet-parrot,
+.rig.pet-frog .pet-frog, .rig.pet-snail .pet-snail, .rig.pet-dragon .pet-dragon { opacity: 1; animation: rig-pet-bob 1.1s ease-in-out infinite; }
+.rig .pet { cursor: pointer; }
+/* each pet's own idle */
+.rig.pet-dog .pet-tail { transform-origin: 55px 62px; animation: rig-wag 0.3s ease-in-out infinite alternate; }
+.rig.pet-bunny .pet-bunny { animation: rig-hop 1.6s ease-in-out infinite; }
+@keyframes rig-hop { 0%, 60%, 100% { transform: translateY(0); } 75% { transform: translateY(-5px); } 90% { transform: translateY(-1px); } }
+.rig.pet-parrot .pet-parrot { animation: rig-pet-bob 2.2s ease-in-out infinite; transform-origin: 52px 25px; }
+.rig.pet-frog .pet-frog { animation: rig-hop 2.4s ease-in-out infinite; }
+.rig.pet-frog .tongue { transform-origin: 63px 65.5px; animation: rig-tongue 2.4s steps(1) infinite; }
+@keyframes rig-tongue { 0%, 88%, 100% { transform: scaleX(1); } 90%, 96% { transform: scaleX(6); } }
+.rig.pet-snail .pet-snail { animation: rig-slide 6s ease-in-out infinite; }
+@keyframes rig-slide { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-6px); } }
+.rig.pet-dragon .wing { transform-origin: 56px 60px; animation: rig-flap 0.5s ease-in-out infinite alternate; }
+.rig .fire { opacity: 0; }
+.rig.pet-dragon .fire { animation: rig-breath 4s steps(1) infinite; }
+@keyframes rig-flap { from { transform: rotate(-14deg); } to { transform: rotate(14deg); } }
+@keyframes rig-breath { 0%, 78%, 100% { opacity: 0; } 80%, 95% { opacity: 1; } }
+/* poke reaction: the pet hops and shouts */
+.rig .pet-mark { opacity: 0; }
+.rig.pet-react .pet { animation: rig-pet-jump 0.5s ease-out 2 !important; }
+.rig.pet-react .pet-mark { animation: rig-mark 1.5s ease-out 1; }
+@keyframes rig-pet-jump { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-9px) rotate(-8deg); } }
+@keyframes rig-mark { 0% { opacity: 0; transform: translateY(4px); } 20% { opacity: 1; } 80% { opacity: 1; transform: translateY(-4px); } 100% { opacity: 0; } }
 @keyframes rig-pet-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.2px); } }
 
 /* Effects */
@@ -552,7 +575,7 @@
   .rig .sign-assembly, .rig .claude-body, .rig .zzz, .rig .think-dot, .rig .confetti, .rig .lamp.on.pulse, .rig .eye-open, .rig .eye-closed,
   .rig .strum-hand, .rig .note, .rig .ak-body, .rig .muzzle, .rig .casing, .rig .prop-banner,
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
-  .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
+  .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
   .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame {
     animation: none !important;
   }

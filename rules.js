@@ -74,7 +74,7 @@
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
-  const PETS = ['none', 'duck', 'cat', 'blob'];
+  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
   // What a gesture on the avatar can do. `arg` is free text where noted.
   const ACTIONS = [
     { id: 'jump', label: 'Jump to the session that needs you' },

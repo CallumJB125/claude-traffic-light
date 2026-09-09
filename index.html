@@ -207,6 +207,7 @@
     app.addEventListener('dblclick', () => { clearTimeout(clickTimer); clickTimer = null; gesture('double'); });
     app.addEventListener('click', (e) => {
       if (didDrag) return;
+      if (e.target.closest && e.target.closest('.pet')) { if (rig.pokePet()) { showFeedback('!'); return; } }
       if (e.altKey) { gesture('alt'); return; }
       if (clickTimer) return;
       clickTimer = setTimeout(() => { clickTimer = null; gesture('click'); }, 230);

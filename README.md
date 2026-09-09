@@ -97,18 +97,23 @@ independently:
   shape in any colour (handy with **Only project**, so each project gets its
   own Claude).
 - **Effect** — rain cloud, sun, snow, sparkles, fire, a beard that grows the
-  longer you keep him waiting, or a **garden**. The garden lives on your
-  actual screen, Desktop-Goose style: the widget drops to the bottom of the
-  display and walks along it, off the screen edge and back with a pot each
-  time (five pots, two minutes), then plants each one — pours dirt, drops a
-  seed, waters it (three minutes) — while the bed, pots and crops are drawn
-  along the bottom of the screen on the click-through overlay. Crops
-  (carrots, tomatoes, berries, sunflowers, apple trees, flowers, at random)
-  grow over two minutes; he then walks to an edible one every twenty seconds
-  and eats it. Ten minutes after his first bite he pulls the crops and
-  replants, and again every ten minutes. When the state changes he walks
-  home and the garden clears. The editor previews a compact version at 30×.
-- **Pet** — a duck, cat or blob at his feet.
+  longer you keep him waiting, or a **garden**. The garden turns your whole
+  screen into a garden, Desktop-Goose style: twelve pots go down in a
+  jittered grid across the display, and the widget walks the screen to
+  tend them — off the edge and back with each pot (four minutes), then dirt,
+  seed and water at every pot (six minutes) — while the click-through
+  overlay draws it all at screen scale. Crops (carrots, tomatoes, berries,
+  sunflowers, apple trees, flowers, at random) grow over four minutes; he
+  then walks to an edible one every forty seconds and eats it, and fifteen
+  minutes after his first bite he pulls everything and replants. One plant
+  in thirty is weed: instead of eating it he harvests it onto a drying rack
+  for ten minutes, after which a second Claude in a hoodie walks in from the
+  edge of the screen, swaps a jar for a few notes, and walks off. When the
+  state changes he walks home and the garden clears. The editor previews a
+  compact version at 30×.
+- **Pet** — a duck, cat, blob, dog, bunny, parrot (on the sign), frog,
+  snail or dragon at his feet, each with its own idle; click a pet and it
+  jumps. Pets walk with him.
 - **Sound** — the system beep, any macOS system sound, or an audio file.
 
 Rules can also be scoped to a project (folder name or `bondly*` prefix).

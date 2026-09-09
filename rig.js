@@ -350,6 +350,26 @@
   <g class="pet pet-blob">
     <path d="M55 68 q0 -8 5 -8 q5 0 5 8 z" fill="#2fae3e" /><rect x="58" y="63" width="1.2" height="1.2" fill="#211f1c" /><rect x="61" y="63" width="1.2" height="1.2" fill="#211f1c" />
   </g>
+  <g class="pet pet-dog">
+    <rect x="54" y="61" width="10" height="7" rx="2" fill="#b07a4a" /><rect x="60" y="57" width="6" height="6" rx="1.5" fill="#b07a4a" /><rect x="59" y="56" width="2" height="4" rx="1" fill="#7d5230" /><rect x="65" y="56" width="2" height="4" rx="1" fill="#7d5230" /><rect x="63" y="58.5" width="1" height="1" fill="#211f1c" /><rect x="66" y="60" width="1.6" height="1.2" fill="#211f1c" /><rect class="pet-tail" x="52" y="61" width="3" height="1.6" rx="0.8" fill="#7d5230" />
+  </g>
+  <g class="pet pet-bunny">
+    <rect x="55" y="61" width="9" height="7" rx="3" fill="#f2efe8" /><rect x="60" y="57" width="5" height="5" rx="2" fill="#f2efe8" /><rect x="60" y="51" width="1.8" height="7" rx="0.9" fill="#f2efe8" /><rect x="63" y="51" width="1.8" height="7" rx="0.9" fill="#f2efe8" /><rect x="60.5" y="52" width="0.8" height="5" fill="#f4a7c0" /><rect x="63.5" y="52" width="0.8" height="5" fill="#f4a7c0" /><rect x="62" y="58.5" width="1" height="1" fill="#211f1c" /><rect x="64" y="60" width="1" height="0.8" fill="#f4a7c0" />
+  </g>
+  <g class="pet pet-parrot">
+    <rect x="50" y="18" width="5" height="7" rx="2.5" fill="#2fae3e" /><rect x="51" y="15" width="4" height="4" rx="2" fill="#e2231a" /><rect x="54.5" y="16.5" width="2" height="1.4" rx="0.5" fill="#f2a200" /><rect x="52" y="16" width="0.9" height="0.9" fill="#211f1c" /><rect x="48" y="21" width="3" height="2" rx="1" fill="#38bdf8" /><rect x="51.5" y="25" width="1" height="1.5" fill="#f2a200" /><rect x="53" y="25" width="1" height="1.5" fill="#f2a200" />
+  </g>
+  <g class="pet pet-frog">
+    <rect x="55" y="63" width="9" height="5" rx="2.5" fill="#5fbf5a" /><circle cx="57.5" cy="62.5" r="1.4" fill="#5fbf5a" /><circle cx="61.5" cy="62.5" r="1.4" fill="#5fbf5a" /><rect x="57" y="62" width="1" height="1" fill="#211f1c" /><rect x="61" y="62" width="1" height="1" fill="#211f1c" /><rect class="tongue" x="63" y="65" width="0.8" height="1" fill="#f472b6" />
+  </g>
+  <g class="pet pet-snail">
+    <circle cx="60" cy="64.5" r="3.5" fill="#f2a200" /><circle cx="60" cy="64.5" r="2" fill="none" stroke="#a86a00" stroke-width="0.8" /><rect x="54" y="65" width="9" height="3" rx="1.5" fill="#c9c0a0" /><rect x="53.5" y="62.5" width="0.8" height="3" fill="#c9c0a0" /><rect x="55" y="62.5" width="0.8" height="3" fill="#c9c0a0" />
+  </g>
+  <g class="pet pet-dragon">
+    <rect x="53" y="60" width="11" height="7" rx="3" fill="#8b5cf6" /><rect x="60" y="56" width="6" height="5" rx="2" fill="#8b5cf6" /><polygon class="wing" points="55,60 51,53 58,58" fill="#a78bfa" /><rect x="63" y="57.5" width="1" height="1" fill="#f2d16b" /><rect x="50" y="62" width="4" height="2" rx="1" fill="#8b5cf6" /><polygon class="fire" points="66,58 71,56.5 69,59 72,60 67,60.5" fill="#f28c28" />
+  </g>
+  <!-- pet reaction bubble -->
+  <text class="pet-mark" x="62" y="54" text-anchor="middle" font-size="6" font-weight="700" fill="#f2efe8">!</text>
   <!-- effects: weather and growing things -->
   <g class="effect effect-rain">
     <path d="M22 4 a5 5 0 0 1 9 -2 a4 4 0 0 1 7 3 h-16 z" fill="#8f96a3" /><rect x="20" y="4" width="20" height="3" rx="1.5" fill="#8f96a3" />
@@ -405,7 +425,7 @@
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
-  const PETS = ['none', 'duck', 'cat', 'blob'];
+  const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e', blue: '#2f6bff', pink: '#f472b6' };
   const SIGNS = ['h3', 'v3', 'h1', 'h5'];
@@ -711,6 +731,14 @@
       go();
       lineTimer = setInterval(go, 40000);
     }
+    // Poke the pet: it reacts for a second and a half.
+    let petTimer = null;
+    function pokePet() {
+      if (!current || !current.pet || current.pet === 'none') return false;
+      svg.classList.remove('pet-react'); void svg.getBoundingClientRect(); svg.classList.add('pet-react');
+      clearTimeout(petTimer); petTimer = setTimeout(() => svg.classList.remove('pet-react'), 1500);
+      return true;
+    }
     let flashTimer = null;
     // Sound-reactive: the lamps flicker for a beat when a sound fires.
     function flash(ms = 600) {
@@ -735,7 +763,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, flash, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, get look() { return current; } };
   }
 
   window.mountRig = mountRig;
