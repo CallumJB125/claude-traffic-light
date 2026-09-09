@@ -121,12 +121,21 @@ function installHooks() {
   fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
 }
 
-// A session that hasn't updated in this long is assumed closed (terminal
-// force-quit, crash, laptop slept without a graceful SessionEnd) and is
-// dropped from the aggregate — "only open sessions" count. Tighter than
-// before (was 15 min) since that's the sole backstop now that Stop no
-// longer double-checks liveness on every turn.
-const STALE_MS = 6 * 60 * 1000;
+// A "green" (working) session that hasn't updated in this long is assumed
+// closed (terminal force-quit, crash, laptop slept without a graceful
+// SessionEnd) — green sessions fire PreToolUse constantly while genuinely
+// active, so persistent silence really does mean it's gone.
+//
+// A session waiting on you (amber/red) is different: Notification fires
+// once and then nothing updates that file again until you actually respond
+// (UserPromptSubmit -> green) or the session closes (SessionEnd -> removed)
+// — there is no heartbeat while it waits. Applying the same short cutoff to
+// it just means anything you don't get back to within a few minutes quietly
+// stops counting as "needing you," which is backwards. So amber/red get a
+// much longer leash — long enough to cover a legitimately long break,
+// short enough to eventually drop a session whose SessionEnd never fired.
+const WORKING_STALE_MS = 6 * 60 * 1000;
+const WAITING_STALE_MS = 4 * 60 * 60 * 1000;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -168,7 +177,8 @@ function readSessions() {
   for (const f of files) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
-      if (now - new Date(data.updatedAt).getTime() > STALE_MS) continue;
+      const staleAfter = data.state === 'green' ? WORKING_STALE_MS : WAITING_STALE_MS;
+      if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
       sessions.push(data);
     } catch {
       // skip unreadable/partially-written file
