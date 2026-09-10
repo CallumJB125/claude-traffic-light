@@ -193,6 +193,47 @@ test('set-status: turn-failed and permission-denied end the turn\'s working cloc
   }
 });
 
+test('set-status: a failed turn stays failed through the idle nudge, keeping why it failed', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'nf' });
+  run(home, 'turn-failed', { session_id: 'nf', hook_event_name: 'StopFailure', error: 'unknown', error_details: 'TypeError: fetch failed' });
+  const failed = read(home, 'nf');
+  assert.deepEqual([failed.signal, failed.failKind, failed.failReason], ['turn-failed', 'network', 'unknown: TypeError: fetch failed']);
+
+  run(home, 'notification', { session_id: 'nf', notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+  const nudged = read(home, 'nf');
+  assert.deepEqual([nudged.signal, nudged.failKind, nudged.failReason, nudged.via, nudged.signalSince], ['turn-failed', 'network', failed.failReason, 'turn-failed', failed.signalSince], 'the nudge is bookkeeping');
+  assert.ok(Date.parse(nudged.updatedAt) >= Date.parse(failed.updatedAt), 'but it does stamp updatedAt');
+
+  run(home, 'prompt-submit', { session_id: 'nf' });
+  const retried = read(home, 'nf');
+  assert.equal(retried.signal, 'prompt-submit', 'a retry is working again');
+  assert.deepEqual([retried.failKind, retried.failReason], [undefined, undefined]);
+});
+
+test('set-status: a StopFailure is classified network / limit / error; asks and limits still break through', () => {
+  const kind = (payload) => {
+    const home = tmpHome();
+    run(home, 'turn-failed', { session_id: 'k', ...payload });
+    const d = read(home, 'k');
+    return [d.failKind, d.failReason];
+  };
+  assert.deepEqual(kind({ error: 'rate_limit', error_details: '429 Too Many Requests', last_assistant_message: 'API Error: Rate limit reached' }), ['limit', 'rate_limit: 429 Too Many Requests']);
+  assert.deepEqual(kind({ error: 'server_error', last_assistant_message: 'API Error: 529 overloaded_error' }), ['limit', 'server_error: API Error: 529 overloaded_error']);
+  assert.deepEqual(kind({ error: 'unknown', error_details: 'Connection error.' }), ['network', 'unknown: Connection error.']);
+  assert.deepEqual(kind({ error: 'authentication_failed' }), ['error', 'authentication_failed']);
+  assert.deepEqual(kind({}), ['error', null]);
+  assert.equal(kind({ error_details: 'x'.repeat(300) })[1].length, 120);
+
+  const home = tmpHome();
+  run(home, 'turn-failed', { session_id: 'b', error: 'unknown' });
+  run(home, 'notification', { session_id: 'b', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+  assert.equal(read(home, 'b').signal, 'permission-ask');
+  run(home, 'turn-failed', { session_id: 'b', error: 'unknown' });
+  run(home, 'tool-use', { session_id: 'b', tool_name: 'Bash' });
+  assert.equal(read(home, 'b').signal, 'tool-use', 'a tool use clears it');
+});
+
 test('set-status: a PermissionRequest marks the session as asking, still passing through unanswered', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'pr', cwd: '/x/p' });

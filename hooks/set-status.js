@@ -349,6 +349,22 @@ const isTask = resolved === 'task-created' || resolved === 'task-done';
 // Task events are always bookkeeping. Once the turn is over, so is anything a
 // background agent does — it must not look like the turn restarted.
 const bookkeeping = isTask || (turnOver && (resolved === 'subagent-start' || resolved === 'subagent-done' || fromSubagent));
+// Claude Code's idle nudge fires ~60 s after any turn end, a failed one
+// included; it must not turn "the network dropped" into "waiting for you".
+// A permission ask or a limit still means something, so only the nudge is held.
+const keepFailed = prev?.signal === 'turn-failed' && resolved === 'idle-nudge';
+
+// StopFailure carries error (rate_limit, server_error, unknown, …),
+// error_details and last_assistant_message.
+function failureOf(payload) {
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const error = str(payload?.error);
+  const detail = str(payload?.error_details) || str(payload?.last_assistant_message);
+  const all = [error, str(payload?.error_details), str(payload?.last_assistant_message)].filter(Boolean).join(' ');
+  const failKind = /network|ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|connection|offline|socket/i.test(all) ? 'network'
+    : /rate[ _-]?limit|overloaded|\b529\b|\b429\b/i.test(all) ? 'limit' : 'error';
+  return { failReason: [error, detail].filter(Boolean).join(': ').slice(0, 120) || null, failKind };
+}
 
 function writeSession() {
   const now = new Date().toISOString();
@@ -358,12 +374,15 @@ function writeSession() {
   let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
   if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
   if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
-  const signalOut = bookkeeping ? (prev?.signal || 'tool-use') : resolved;
+  const signalOut = bookkeeping || keepFailed ? (prev?.signal || 'tool-use') : resolved;
+  const failure = signalOut !== 'turn-failed' ? { failReason: undefined, failKind: undefined }
+    : resolved === 'turn-failed' ? failureOf(data)
+    : { failReason: prev?.failReason ?? null, failKind: prev?.failKind || 'error' };
   const changed = signalOut !== (prev?.signal ?? null);
   // A permission notification after the turn ended has no tool call of the
   // main thread behind it (a background agent's, or a stale prompt) — tag it
   // so the app's log shows it.
-  const viaOut = bookkeeping ? (prev?.via ?? null)
+  const viaOut = bookkeeping || keepFailed ? (prev?.via ?? null)
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   const agents = updateAgents(prev?.agents, resolved, data, now);
   const hostApp = detectHostApp(prev?.hostApp);
@@ -378,8 +397,9 @@ function writeSession() {
       // has held — the app shows a young notification ask as prevSignal.
       prevSignal: changed ? (prev?.signal ?? null) : (prev?.prevSignal ?? null),
       signalSince: changed ? now : (prev?.signalSince || prev?.updatedAt || now),
-      askKind: bookkeeping ? (prev?.askKind ?? null) : askKind,
+      askKind: bookkeeping || keepFailed ? (prev?.askKind ?? null) : askKind,
       via: viaOut,
+      ...failure,
       workingSince, tasks, agents,
       // Execution mode and ralph iteration are owned by the app's OMC watcher;
       // carry them through so a hook write never erases them.

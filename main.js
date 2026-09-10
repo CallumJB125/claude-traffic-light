@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -276,6 +276,8 @@ function buildConfig() {
     const at = config.rules.findIndex((r) => r.when.signal.includes('idle'));
     config.rules.splice(at < 0 ? config.rules.length : at, 0, Rules.normalizeRule(nudge));
   }
+  if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0);
+  config.rulesVersion = Rules.RULES_VERSION;
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
     .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: p.rules.map(Rules.normalizeRule) }));
@@ -554,7 +556,8 @@ function logTransition(data, signal, source, now) {
   const entry = { signal, loggedAt: last ? last.loggedAt : 0, skipped: last ? last.skipped : 0 };
   if (now - entry.loggedAt >= TRANSITION_LOG_MS) {
     const tail = String(data.cwd || '').split('/').filter(Boolean).slice(-2).join('/');
-    console.log(`[state] ${sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
+    const why = signal === 'turn-failed' ? ` [${data.failKind || 'error'}]` : '';
+    console.log(`[state] ${sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal}${why} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
     entry.loggedAt = now;
     entry.skipped = 0;
   } else entry.skipped += 1;
@@ -662,6 +665,19 @@ function sumTasks(sessions) {
 // the overlay, the garden, the roamer, the alert sound). Resolving it once and
 // handing out the same object for 200 ms turns that back into one pass.
 let stateMemo = { at: 0, key: null, value: null };
+
+// A dropped network otherwise only shows up as a failed turn, and Claude
+// Code's idle nudge a minute later used to paper over even that.
+let online = true;
+function checkOnline() {
+  const now = net.isOnline();
+  if (now === online) return;
+  online = now;
+  console.log(online ? '[net] online again' : '[net] offline');
+  stateMemo = { at: 0, key: null, value: null };
+  broadcastStatus();
+}
+
 function aggregateState(opts = {}) {
   const key = `${!!opts.ignoreTravel}|${travelLook ? `${travelLook.name}:${travelLook.gardenAct}:${travelLook.pose}` : ''}|${previewLook ? previewLook.expiresAt : ''}`;
   if (stateMemo.value && stateMemo.key === key && Date.now() - stateMemo.at < 200) return stateMemo.value;
@@ -688,7 +704,7 @@ function computeState(opts = {}) {
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
     return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, tasks };
   }
-  const { look, fired, owned } = Rules.resolve(config.rules, sessions);
+  const { look, fired, owned } = Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
@@ -2687,6 +2703,9 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
+  checkOnline();
+  every(5000, checkOnline, 'net');
+  powerMonitor.on('resume', checkOnline);
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 

@@ -744,6 +744,43 @@ test('a finished turn waits on you: ignored-N and waitMinutes run from stop', ()
   assert.equal(l.ruleId, 'done', '"Task finished" still owns the look');
 });
 
+test('offline: a virtual signal on every live session, and on its own when nothing runs', () => {
+  const now = Date.now();
+  const sessions = [{ signal: 'tool-use', tool: 'Bash', cwd: '/a' }, { signal: 'stop', cwd: '/b' }];
+  assert.deepEqual(R.virtualSessions(sessions, now, { offline: true }).filter((v) => v.signal === 'offline').map((v) => v.cwd), ['/a', '/b']);
+  assert.ok(!R.virtualSessions(sessions, now).some((v) => v.signal === 'offline'), 'online by default');
+  assert.ok(R.SIGNALS.some((s) => s.id === 'offline' && s.kind === 'virtual'));
+
+  const busy = R.resolve(rules(), sessions, now, { offline: true }).look;
+  assert.deepEqual([busy.lamp, busy.eyes, busy.pose, busy.text, busy.effect, busy.sound, busy.ruleId], ['red', 'x', 'banner', 'OFFLINE', 'rain', null, 'offline']);
+  const idle = R.resolve(rules(), [], now, { offline: true }).look;
+  assert.deepEqual([idle.lamp, idle.ruleId], ['red', 'offline'], 'idle + offline still shows offline');
+  assert.equal(look([]).ruleId, 'idle');
+  assert.equal(R.resolve(rules(), [{ signal: 'permission-ask' }], now, { offline: true }).look.ruleId, 'permission', 'a locked rule still wins');
+});
+
+test('a failed turn has its own look; {fail} says why; it waits on you', () => {
+  const l = look([{ signal: 'turn-failed', failKind: 'network' }]);
+  assert.deepEqual([l.lamp, l.eyes, l.pose, l.text, l.celebrate, l.ruleId], ['amber', 'dizzy', 'banner', 'NO NETWORK', false, 'failed-turn']);
+  assert.equal(look([{ signal: 'turn-failed', failKind: 'limit' }]).text, 'RATE LIMITED');
+  assert.equal(look([{ signal: 'turn-failed' }]).text, 'FAILED');
+  assert.equal(R.fillText('{fail}!', { failKind: 'network' }), 'NO NETWORK!');
+  assert.equal(look([{ signal: 'turn-failed' }, { signal: 'tool-use' }]).ruleId, 'working', 'another session working still owns the lamp');
+  const now = Date.parse('2026-09-10T12:00:00Z');
+  assert.ok(R.WAITING_ON_YOU.has('turn-failed'));
+  assert.deepEqual(R.virtualSessions([{ signal: 'turn-failed', updatedAt: new Date(now - 12 * 60000).toISOString() }], now).map((v) => v.signal), ['ignored-10']);
+});
+
+test('migrateRules: a saved config gains offline and failed-turn once, in their default places', () => {
+  const saved = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn').map(R.normalizeRule);
+  const m = R.migrateRules(saved, 0);
+  assert.deepEqual(m.map((r) => r.id), rules().map((r) => r.id));
+  assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
+  assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
+  const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn']);
+});
+
 test('presentSignal: a young notification ask shows what came before it', () => {
   const now = Date.parse('2026-09-10T12:00:00Z');
   const at = (ms) => new Date(now - ms).toISOString();

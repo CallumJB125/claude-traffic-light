@@ -38,15 +38,17 @@
     { id: 'routed-cheap', label: 'Session routed to a cheaper model', hook: null, kind: 'virtual' },
     { id: 'escalated', label: 'You switched a routed session up a model', hook: null, kind: 'virtual' },
     { id: 'delegated-read', label: 'Buddy delegated a big read', hook: null, kind: 'virtual' },
+    { id: 'offline', label: 'No network connection', hook: null, kind: 'virtual' },
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
   // Signals that mean Claude is waiting on the person: a permission ask, a
-  // limit, a finished turn, or the idle nudge that follows it.
+  // limit, a finished turn, the idle nudge that follows it, or a failed turn
+  // (nothing happens until the person retries).
   const WAITING = new Set(['permission-ask', 'limit-hit']);
-  const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop']);
+  const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 'turn-failed']);
   // Signals that close a turn: the working-since clock stops on any of them.
   const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
   // A turn that has ended while its subagents are still working hasn't really
@@ -141,9 +143,12 @@
     return max;
   }
 
-  function virtualSessions(sessions, now = Date.now()) {
+  // env.offline comes from the app (Electron's net.isOnline); every session
+  // is cut off when the machine is, so each one carries it.
+  function virtualSessions(sessions, now = Date.now(), env = {}) {
     const out = [];
     if (sessions.length >= 3) out.push({ signal: 'many-sessions', virtual: true });
+    if (env.offline) for (const s of sessions) out.push({ signal: 'offline', cwd: s.cwd, virtual: true });
     let agentTotal = 0;
     // "Ignored" means you haven't touched *any* Claude, not just this one: a
     // session left waiting this morning must not nag while you're busy in a
@@ -258,6 +263,11 @@
         then: { lamp: 'amber', pose: 'wave', sound: 'beep' },
       },
       {
+        id: 'offline', name: 'No network', enabled: true,
+        when: { signal: ['offline'] },
+        then: { lamp: 'red', eyes: 'x', pose: 'banner', text: 'OFFLINE', effect: 'rain' },
+      },
+      {
         id: 'subagent', name: 'Subagent running', enabled: true,
         when: { signal: ['tool-use'], tool: 'Agent' },
         then: { eyes: '#8b5cf6' },
@@ -293,6 +303,11 @@
         then: { lamp: 'green', pose: 'think' },
       },
       {
+        id: 'failed-turn', name: 'Turn failed', enabled: true,
+        when: { signal: ['turn-failed'] },
+        then: { lamp: 'amber', eyes: 'dizzy', pose: 'banner', text: '{fail}' },
+      },
+      {
         id: 'done', name: 'Task finished', enabled: true,
         when: { signal: ['stop'] },
         then: { lamp: 'green', eyes: '#2fae3e', pose: 'thumbs', celebrate: true },
@@ -313,6 +328,24 @@
         then: { lamp: 'amber', pose: 'none' },
       },
     ];
+  }
+
+  // Rules added to the defaults after people already had saved configs. Each
+  // is slotted in once, keyed by the saved rulesVersion, so deleting one
+  // afterwards sticks.
+  const RULES_VERSION = 2;
+  function migrateRules(rules, version) {
+    if (version >= RULES_VERSION) return rules;
+    const out = rules.slice();
+    const defaults = defaultRules();
+    const add = (id, at) => {
+      if (out.some((r) => r.id === id)) return;
+      out.splice(at < 0 ? out.length : at, 0, normalizeRule(defaults.find((r) => r.id === id)));
+    };
+    add('offline', out.findIndex((r) => !r.locked));
+    const done = out.findIndex((r) => r.id === 'done');
+    add('failed-turn', done >= 0 ? done : out.findIndex((r) => r.when.signal.includes('idle')));
+    return out;
   }
 
   function normalizeRule(r) {
@@ -382,12 +415,15 @@
   }
 
   // Rule text can quote live numbers from the session that fired it:
-  // '{iteration}' (ralph loop count) and '{agents}' (agents on that session).
+  // '{iteration}' (ralph loop count), '{agents}' (agents on that session) and
+  // '{fail}' (why its turn failed).
+  const FAIL_TEXT = { network: 'NO NETWORK', limit: 'RATE LIMITED', error: 'FAILED' };
   function fillText(text, session) {
     if (!text || !session) return text || null;
     return text
       .replace(/\{iteration\}/g, String(Number(session.iteration) || 0))
       .replace(/\{agents\}/g, String(Number(session.agents) || 0))
+      .replace(/\{fail\}/g, FAIL_TEXT[session.failKind] || FAIL_TEXT.error)
       .slice(0, 24);
   }
 
@@ -415,10 +451,11 @@
   // leak its eyes or pose upward (a finished session must not paint green
   // eyes onto a session that is still working). Rules above the lamp owner
   // layer accents: eyes, pose, sound.
-  function resolve(rules, sessions, now = Date.now()) {
+  function resolve(rules, sessions, now = Date.now(), env = {}) {
     const list = orderedRules(rules.map(normalizeRule));
     const real = sessions.filter((s) => sessionSignal(s));
-    const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
+    const live = real.length ? real.concat(virtualSessions(real, now, env))
+      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : []);
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
@@ -491,5 +528,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, RULES_VERSION, migrateRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });
