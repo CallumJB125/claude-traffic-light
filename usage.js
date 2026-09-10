@@ -359,4 +359,70 @@ function sinceRouting(turns, { since, frozen, now = Date.now() } = {}) {
   return { since, to: now, turns: count, actual: r(actual), atBaseline: r(atBaseline), saved: { low: r(low), high: r(high) } };
 }
 
-module.exports = { PRICES, SLACK, modelKey, costOf, readTurns, summarise, spend, projectHistory, projectMix, sinceRouting };
+// ── Context diet ───────────────────────────────────────────────────────────
+// Tokens the delegate hook kept out of a session's context. Every token that
+// enters the context is written to the prompt cache once (low end) and then
+// re-read on every later turn until a compaction or /clear drops it (high
+// end adds that, at the session's median turns remaining).
+const promptSize = (t) => t.input + t.cacheRead + t.cacheWrite;
+
+// Main-thread turns after `ts` until the context resets: a prompt under half
+// the size of the one before it is a compaction or a /clear.
+function turnsRemaining(turns, ts) {
+  let n = 0;
+  let prev = null;
+  for (const t of turns) {
+    const size = promptSize(t);
+    if (t.ts <= ts) { prev = size; continue; }
+    if (prev != null && size < prev * 0.5) break;
+    n += 1;
+    prev = size;
+  }
+  return n;
+}
+
+function modelAt(turns, ts) {
+  let hit = null;
+  for (const t of turns) { if (t.ts > ts) break; hit = t.modelKey; }
+  return hit || (turns[0] && turns[0].modelKey) || null;
+}
+
+function contextDiet(events, turns, { days = 7, now = Date.now() } = {}) {
+  const from = now - days * DAY_MS;
+  const bySession = new Map();
+  const mix = {};
+  for (const t of turns) {
+    if (t.subagent || !t.sessionId || !PRICES[t.modelKey]) continue;
+    if (!bySession.has(t.sessionId)) bySession.set(t.sessionId, []);
+    bySession.get(t.sessionId).push(t);
+    if (t.ts >= from && t.ts <= now) mix[t.modelKey] = (mix[t.modelKey] || 0) + 1;
+  }
+  for (const list of bySession.values()) list.sort((a, b) => a.ts - b.ts);
+  const fallback = Object.entries(mix).sort((a, b) => b[1] - a[1])[0]?.[0] || 'opus';
+  const groups = new Map();
+  for (const e of events || []) {
+    const at = Date.parse(e && e.at);
+    const tokens = Number(e && e.tokensAvoided) || 0;
+    if (!at || at < from || at > now || tokens <= 0) continue;
+    const id = e.sessionId || 'unknown';
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push({ at, tokens });
+  }
+  let tokens = 0, low = 0, high = 0, count = 0;
+  for (const [id, evs] of groups) {
+    const list = bySession.get(id) || [];
+    const remaining = median(evs.map((e) => turnsRemaining(list, e.at)));
+    for (const e of evs) {
+      const p = PRICES[modelAt(list, e.at) || fallback];
+      const once = (e.tokens * p.cacheWrite) / 1e6;
+      low += once;
+      high += once + (e.tokens * p.cacheRead * remaining) / 1e6;
+      tokens += e.tokens;
+      count += 1;
+    }
+  }
+  const r = (n) => Math.round(n * 1e4) / 1e4;
+  return { days, from, to: now, events: count, sessions: groups.size, tokens, low: r(low), high: r(high) };
+}
+
+module.exports = { PRICES, SLACK, modelKey, costOf, readTurns, summarise, spend, projectHistory, projectMix, sinceRouting, contextDiet, turnsRemaining };

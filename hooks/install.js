@@ -69,6 +69,44 @@ function isInstalled(settings, scriptPath = SET_STATUS_SCRIPT, options = {}) {
   return HOOK_EVENTS.every(([e, s]) => has(e, s)) && OPTIONAL_EVENTS.every(([e, s]) => has(e, s) === wantAsk);
 }
 
+// ── Delegation (opt-in): hooks/delegate.js ──────────────────────────────────
+// Only present while delegation is switched on; install() above never
+// touches these entries, and these functions never touch set-status's.
+const DELEGATE_SCRIPT = path.join(__dirname, 'delegate.js');
+const DELEGATE_HOOKS = [
+  ['PreToolUse', 'Read|Bash'],
+  ['PostToolUse', 'Read|Grep|Glob|Bash'],
+  ['UserPromptSubmit', ''],
+];
+const DELEGATE_TIMEOUT = 2;
+const isDelegate = (command) => /delegate\.js"/.test(command || '');
+
+function uninstallDelegation(settings) {
+  if (!settings.hooks) return settings;
+  for (const event of Object.keys(settings.hooks)) {
+    settings.hooks[event] = settings.hooks[event]
+      .map((h) => ({ ...h, hooks: (h.hooks || []).filter((hh) => !isDelegate(hh.command)) }))
+      .filter((h) => h.hooks.length > 0);
+    if (!settings.hooks[event].length) delete settings.hooks[event];
+  }
+  return settings;
+}
+
+function installDelegation(settings, scriptPath = DELEGATE_SCRIPT) {
+  uninstallDelegation(settings);
+  settings.hooks = settings.hooks || {};
+  for (const [event, matcher] of DELEGATE_HOOKS) {
+    settings.hooks[event] = settings.hooks[event] || [];
+    settings.hooks[event].push({ matcher, hooks: [{ type: 'command', command: `node "${scriptPath}"`, timeout: DELEGATE_TIMEOUT }] });
+  }
+  return settings;
+}
+
+function isDelegationInstalled(settings, scriptPath = DELEGATE_SCRIPT) {
+  const command = `node "${scriptPath}"`;
+  return DELEGATE_HOOKS.every(([event, matcher]) => (settings.hooks?.[event] || []).some((h) => h.matcher === matcher && h.hooks?.some((hh) => hh.command === command)));
+}
+
 // ── Other agents ────────────────────────────────────────────────────────────
 const EMIT_SCRIPT = path.join(__dirname, 'emit.js');
 
@@ -108,7 +146,7 @@ function installGemini(settings, emitPath = EMIT_SCRIPT) {
   return out;
 }
 
-module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd, installCursor, installCodex, installGemini, EMIT_SCRIPT };
+module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd, installCursor, installCodex, installGemini, EMIT_SCRIPT, DELEGATE_SCRIPT, DELEGATE_HOOKS, installDelegation, uninstallDelegation, isDelegationInstalled };
 
 if (require.main === module) {
   let settings = {};

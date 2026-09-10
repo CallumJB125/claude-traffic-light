@@ -37,6 +37,7 @@
     { id: 'agents-many', label: '3+ agents at once', hook: null, kind: 'virtual' },
     { id: 'routed-cheap', label: 'Session routed to a cheaper model', hook: null, kind: 'virtual' },
     { id: 'escalated', label: 'You switched a routed session up a model', hook: null, kind: 'virtual' },
+    { id: 'delegated-read', label: 'Buddy delegated a big read', hook: null, kind: 'virtual' },
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
@@ -61,6 +62,9 @@
   const MODES = ['ralph', 'team', 'ultrawork'];
   // Router picks below Opus; a session carrying one fires 'routed-cheap'.
   const CHEAP_ROUTES = new Set(['sonnet', 'haiku']);
+  // 'delegated-read' holds this long after the delegate hook last narrowed,
+  // denied or trimmed something in a session (its `delegated.at`).
+  const DELEGATED_MS = 10 * 1000;
 
   function normalizeAgent(a, i = 0) {
     if (!a || typeof a !== 'object') return null;
@@ -160,6 +164,8 @@
       if (mode === 'ralph') out.push({ signal: 'ralph', cwd: s.cwd, virtual: true, agents: agents.length, iteration: Number(s.iteration) || 0 });
       if (s.escalated) out.push({ signal: 'escalated', cwd: s.cwd, virtual: true });
       else if (s.route && CHEAP_ROUTES.has(s.route.model)) out.push({ signal: 'routed-cheap', cwd: s.cwd, virtual: true });
+      const delegatedAt = s.delegated && Date.parse(s.delegated.at || '');
+      if (delegatedAt && now - delegatedAt < DELEGATED_MS) out.push({ signal: 'delegated-read', cwd: s.cwd, virtual: true });
     }
     if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
     return out;
@@ -485,5 +491,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });

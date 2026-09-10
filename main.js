@@ -9,6 +9,8 @@ const Stats = require('./stats.js');
 const Usage = require('./usage.js');
 const Router = require('./router.js');
 const RouterInstall = require('./router-install.js');
+const DelegationInstall = require('./delegation-install.js');
+const Delegate = require('./hooks/delegate.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
 const http = require('http');
@@ -229,6 +231,8 @@ const DEFAULT_CONFIG = {
   routerSubscriberView: !process.env.ANTHROPIC_API_KEY,
   routerPolicy: 'balanced',
   routerProjects: {},
+  // Mirrored to router/delegation.json, which is all hooks/delegate.js reads.
+  routerDelegation: { ...Delegate.DEFAULTS },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -256,6 +260,7 @@ function buildConfig() {
   }
   const config = { ...DEFAULT_CONFIG, ...saved };
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
+  config.routerDelegation = Delegate.normalize({ ...DEFAULT_CONFIG.routerDelegation, ...(saved.routerDelegation && typeof saved.routerDelegation === 'object' ? saved.routerDelegation : {}) });
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -1891,6 +1896,10 @@ ipcMain.handle('save-config', (e, partial) => {
   const before = loadConfig().askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
+  if ('routerDelegation' in partial) {
+    const d = loadConfig().routerDelegation;
+    try { DelegationInstall.writeFlag(delegationOpts(), d, d.enabled); } catch (err) { console.warn('[delegation] flag not written:', err.message); }
+  }
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
@@ -2138,6 +2147,42 @@ ipcMain.handle('router-overview', async () => {
   const frozen = RouterInstall.readFrozen(routerOpts());
   const since = config.routerEnabledAt ? Usage.sinceRouting(turns, { since: Date.parse(config.routerEnabledAt), frozen }) : null;
   return { status: routerStatus(), policy: config.routerPolicy, projects, sessions, decisions: Router.readDecisions(routerFile('decisions.jsonl'), 20), since };
+});
+
+// ── Router, phase 2: delegation ────────────────────────────────────────────
+// Subagents in ~/.claude/agents, delegate.js hooks in ~/.claude/settings.json
+// and the flag file. Dev runs install into the router's sandbox HOME, so they
+// never touch the real ~/.claude.
+function delegationOpts() {
+  return { home: ROUTER_HOME, root: ROUTER_ROOT, scriptPath: path.join(HOOKS_DIR, 'delegate.js'), config: loadConfig().routerDelegation };
+}
+
+function delegationStatus() {
+  return { ...DelegationInstall.status(delegationOpts()), sandbox: ROUTER_SANDBOXED ? ROUTER_HOME : null };
+}
+
+ipcMain.handle('delegation-set-enabled', (_e, on) => {
+  const opts = delegationOpts();
+  try {
+    const r = on ? DelegationInstall.install(opts) : DelegationInstall.uninstall(opts);
+    saveConfig({ routerDelegation: { ...loadConfig().routerDelegation, enabled: !!on } });
+    console.log(`[delegation] switched ${on ? 'on' : 'off'}`, JSON.stringify({ settings: r.settingsPath, agents: r.agentsDir, conflicts: r.conflicts || [] }));
+    return { ...delegationStatus(), conflicts: r.conflicts || [] };
+  } catch (err) {
+    console.warn('[delegation] switch failed:', err.message);
+    return { ...delegationStatus(), error: err.message };
+  }
+});
+
+// Status and log are instant; the diet waits on the transcripts, so it is
+// fetched on its own and the switch and knobs never sit behind a parse.
+ipcMain.handle('delegation-overview', () => ({ status: delegationStatus(), log: DelegationInstall.readLog(delegationOpts(), Date.now() - 30 * 86400000).slice(-20).reverse() }));
+
+ipcMain.handle('delegation-diet', async (_e, opts) => {
+  const days = Number(opts?.days) === 30 ? 30 : 7;
+  const turns = await getUsageTurns();
+  const diet = Usage.contextDiet(DelegationInstall.readLog(delegationOpts(), Date.now() - days * 86400000), turns, { days });
+  return { ...diet, actual: Usage.summarise(turns, { days }).total.cost };
 });
 
 // ── Gestures on the avatar → the action the current state programmed ──────
@@ -2409,6 +2454,11 @@ app.whenReady().then(() => {
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (!IS_DEV_RUN && !areHooksInstalled()) installHooks();
+  // A moved or updated .app changes delegate.js's path; reinstalling is a
+  // no-op when nothing moved.
+  if (!IS_DEV_RUN && loadConfig().routerDelegation.enabled) {
+    try { DelegationInstall.install(delegationOpts()); } catch (err) { console.warn('[delegation] not refreshed:', err.message); }
+  }
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {

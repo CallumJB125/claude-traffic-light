@@ -174,10 +174,23 @@ function detectHostApp(cached) {
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
+// delegate.js keeps {reads, trims, at} per session here (same file naming).
+const delegatedFile = path.join(ROOT_DIR, 'router', 'delegated', `${String(sessionId).replace(/[^\w.-]/g, '_').slice(0, 120)}.json`);
 
 if (signal === 'session-end') {
   fs.rmSync(file, { force: true });
+  fs.rmSync(delegatedFile, { force: true });
   process.exit(0);
+}
+
+function readDelegated(prevValue) {
+  try {
+    const c = JSON.parse(fs.readFileSync(delegatedFile, 'utf8'));
+    if (!c.reads && !c.trims) return prevValue;
+    return { reads: Number(c.reads) || 0, trims: Number(c.trims) || 0, at: c.at || null };
+  } catch {
+    return prevValue;
+  }
 }
 
 const tool = (data && (data.tool_name || data.toolName)) || null;
@@ -326,6 +339,8 @@ function writeSession() {
       // when the transcript shows you switched up from it.
       route: envRoute() || prev?.route || undefined,
       escalated: prev?.escalated || undefined,
+      // What delegate.js kept out of this session's context so far.
+      delegated: readDelegated(prev?.delegated || undefined),
       // updatedAt means "the session last moved" (ignored-N timers, last-touch
       // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
       updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,

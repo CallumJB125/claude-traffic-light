@@ -604,7 +604,7 @@
   .route-hint { display: block; margin-top: 6px; padding: 0; background: none; border: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; transition: color var(--t); }
   .route-hint b { color: #4fbe5c; font-weight: 600; }
   .route-hint:hover { color: var(--text); }
-  #router-install-line { max-width: 34ch; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
+  #router-install-line, #deleg-line { max-width: 34ch; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
   .linkish { background: none; border: none; padding: 0; color: var(--muted); font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
   .linkish:hover { color: var(--text); }
   .router-policy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -618,6 +618,15 @@
   .rsess { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
   .rsess b { color: var(--text); font-weight: 500; }
   .rsess .btn { height: 22px; font-size: 11px; flex: none; }
+  #delegation { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .deleg-knobs { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--muted); }
+  .deleg-knobs label { display: inline-flex; align-items: center; gap: 6px; }
+  .deleg-knobs input { height: 24px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-2); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
+  .deleg-knobs input[type="number"] { width: 72px; }
+  .deleg-knobs input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+  .deleg-knobs .allow { flex: 1 1 100%; }
+  .deleg-knobs .allow input { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  table.days td.what { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Presets popover */
   #presets {
@@ -1032,6 +1041,12 @@
             <div class="v small" id="since-big">—</div>
             <div class="d" id="since-line"></div>
           </div>
+          <div class="since" id="diet" hidden>
+            <div class="k">Context diet — kept out of Claude's context</div>
+            <div class="v small" id="diet-big">—</div>
+            <div class="d" id="diet-line"></div>
+            <div class="note">Estimate — low: those tokens written to the prompt cache once at the session's model price; high: also re-read on every later turn until the next compaction (that session's median turns left).</div>
+          </div>
         </div>
         <div>
           <div class="stats-title small">By model used</div>
@@ -1057,6 +1072,37 @@
           <div class="stats-title small">Decisions — last 20</div>
           <table class="days" id="router-decisions"><thead><tr><th>When</th><th class="l">Project</th><th class="l">Model</th><th class="l">Why</th></tr></thead><tbody></tbody></table>
           <div class="stats-sub" id="router-decisions-empty" hidden>No decisions yet — they appear as you start <code>claude</code> in a new terminal.</div>
+        </div>
+      </div>
+
+      <div id="delegation">
+        <div class="router-head">
+          <div>
+            <div class="stats-title">Delegation</div>
+            <div class="stats-sub">Keeps big files out of the expensive context. A whole-file read of a long file comes back as its first lines plus a pointer to <b>buddy-reader</b> (Haiku), which reads and summarises for Claude; oversized tool output is cut to its head. <b>buddy-worker</b> (Sonnet) takes mechanical writes. Hooks and subagents only — nothing leaves your machine.</div>
+          </div>
+          <div class="switch">
+            <label class="toggle"><input type="checkbox" id="deleg-enabled" /> Keep big files out of Claude's context</label>
+            <small id="deleg-line">Off</small>
+          </div>
+        </div>
+        <div class="router-policy">
+          <div class="seg" id="deleg-mode" role="tablist" aria-label="Mode">
+            <button data-mode="narrow" role="tab">Narrow</button>
+            <button data-mode="deny" role="tab">Deny</button>
+          </div>
+          <span class="stats-sub" id="deleg-mode-desc"></span>
+        </div>
+        <div class="deleg-knobs">
+          <label>A file is big over <input type="number" id="deleg-readLines" min="20" step="10" /> lines</label>
+          <label>show its first <input type="number" id="deleg-peekLines" min="10" step="10" /> lines</label>
+          <label>trim tool output over <input type="number" id="deleg-outputChars" min="1000" step="1000" /> chars</label>
+          <label class="allow">Always read fully <input type="text" id="deleg-allow" placeholder=".md, package.json, docs/**/*.txt" spellcheck="false" /></label>
+        </div>
+        <div>
+          <div class="stats-title small">Delegation log — last 20</div>
+          <table class="days" id="deleg-log"><thead><tr><th>When</th><th class="l">What</th></tr></thead><tbody></tbody></table>
+          <div class="stats-sub" id="deleg-log-empty" hidden>Nothing yet — events appear as Claude reads big files with delegation on (in sessions started after switching it on).</div>
         </div>
       </div>
     </section>
@@ -1836,12 +1882,15 @@
     set('done', { pose: 'thumbs', screenFx: 'confetti' });
     // An accent only: sits just above the lamp owner, so any agent rule's eyes win.
     d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } });
+    // He munches the big file Buddy kept out; a running agent's banner still wins.
+    d.splice(d.findIndex((x) => x.id === 'routed'), 0, { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { pose: 'munch' } });
     return d;
   };
   PRESETS.focus = () => {
     const d = R.defaultRules().filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
     d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#93c5fd' } });
+    d.splice(d.findIndex((x) => x.id === 'routed'), 0, { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { eyes: 'happy' } });
     set('limit', { pose: 'none', lampColor: '#ffffff' });
     set('permission', { pose: 'none', sound: null, lampColor: '#ffffff', lampFx: 'breathe' });
     set('working', { pose: 'none', lampColor: '#d4d4d4', lampFx: 'breathe' });
@@ -2327,8 +2376,110 @@
   $('router-picks').addEventListener('change', (e) => { const s = e.target.closest('select[data-project]'); if (s) setProjectPick(s.dataset.project, s.value); });
   $('router-sessions').addEventListener('click', (e) => { const b = e.target.closest('button[data-opus]'); if (b) setProjectPick(b.dataset.opus, 'opus'); });
 
+  // ── Router: delegation (keeps big files out of Claude's context) ──────
+  let delegOv = null;
+  let delegNote = null;
+  const DELEG_MODE_DESC = {
+    narrow: 'A whole-file read of a big file comes back as its first lines, with a note pointing Claude at buddy-reader.',
+    deny: 'A whole-file read of a big file is refused with that note instead, so Claude has to delegate or read a range.',
+  };
+  const shortPath = (p) => String(p || '').split('/').filter(Boolean).slice(-2).join('/') || '—';
+  const num = (v) => Number(v || 0).toLocaleString('en-US');
+  function delegWhat(e) {
+    const kept = e.tokensAvoided ? `, ≈ ${compact(e.tokensAvoided)} tokens kept out` : '';
+    if (e.kind === 'read-narrowed') return `Read ${shortPath(e.path)} — ${num(e.linesTotal)} lines, showed ${num(e.linesShown)}${kept}`;
+    if (e.kind === 'bash-narrowed') return `Shell read of ${shortPath(e.path)} — ${num(e.linesTotal)} lines, showed ${num(e.linesShown)}${kept}`;
+    if (e.kind === 'read-denied') return `Blocked ${e.tool === 'Bash' ? 'a shell read' : 'a read'} of ${shortPath(e.path)} — ${num(e.linesTotal)} lines${kept}`;
+    if (e.kind === 'output-trimmed') return `${e.tool || 'Tool'} output trimmed — ${num(e.charsTotal)} chars, kept ${num(e.charsShown)}${kept}`;
+    if (e.kind === 'policy-injected') return 'Told a new session about buddy-reader and buddy-worker';
+    return e.kind;
+  }
+  function delegLine(st) {
+    const where = st.sandbox ? ` (dev run: sandbox HOME ${st.sandbox})` : '';
+    if (delegNote) return `${delegNote}${where}`;
+    if (st.installed) return `On — buddy-reader and buddy-worker installed; applies to sessions started from now${where}`;
+    if (st.hooks || st.agents.some((a) => a.installed)) return `Partly installed — switch off and on again${where}`;
+    return `Off — Claude reads files whole${where}`;
+  }
+
+  let delegDiet = null;
+  async function renderDelegation() {
+    const days = routerDays;
+    const ov = await window.lightsApi.delegationOverview();
+    if (ov) { delegOv = ov; paintDelegation(ov); }
+    const diet = await window.lightsApi.delegationDiet({ days });
+    if (!diet || days !== routerDays) return;
+    delegDiet = diet;
+    paintDiet(diet);
+  }
+
+  function paintDelegation(ov) {
+    const st = ov.status;
+    const d = config.routerDelegation || {};
+    $('deleg-enabled').checked = !!st.installed;
+    $('deleg-line').textContent = delegLine(st);
+    const mode = d.mode === 'deny' ? 'deny' : 'narrow';
+    Array.from($('deleg-mode').children).forEach((b) => { b.classList.toggle('on', b.dataset.mode === mode); b.setAttribute('aria-selected', b.dataset.mode === mode); });
+    $('deleg-mode-desc').textContent = DELEG_MODE_DESC[mode];
+    for (const k of ['readLines', 'peekLines', 'outputChars']) if (document.activeElement !== $(`deleg-${k}`)) $(`deleg-${k}`).value = d[k];
+    if (document.activeElement !== $('deleg-allow')) $('deleg-allow').value = (d.allow || []).join(', ');
+    $('deleg-log-empty').hidden = ov.log.length > 0;
+    $('deleg-log').hidden = !ov.log.length;
+    $('deleg-log').querySelector('tbody').innerHTML = ov.log.map((e) => {
+      const t = new Date(e.at);
+      const when = t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      return `<tr title="${escape(e.path || '')}"><td class="name">${when}</td><td class="l what">${escape(delegWhat(e))}</td></tr>`;
+    }).join('');
+    if (delegDiet) paintDiet(delegDiet);
+  }
+
+  function paintDiet(diet) {
+    $('diet').hidden = !diet.events && !(delegOv && delegOv.status.installed);
+    if (!diet.events) {
+      $('diet-big').textContent = '—';
+      $('diet-line').textContent = `Nothing kept out in the last ${diet.days} days yet.`;
+    } else if (config.routerSubscriberView) {
+      // A first week of trims is often a sliver of the plan; "0%" would read as nothing.
+      $('diet-big').textContent = diet.actual && diet.high / diet.actual < 0.005 ? '<1%' : pctRange(diet.low, diet.high, diet.actual);
+      $('diet-line').textContent = `of your usage over the last ${diet.days} days · ${compact(diet.tokens)} tokens kept out by ${num(diet.events)} trims in ${num(diet.sessions)} session${diet.sessions === 1 ? '' : 's'} · ${moneyRange(diet.low, diet.high)} on the API`;
+    } else {
+      $('diet-big').textContent = `${compact(diet.tokens)} tokens`;
+      $('diet-line').textContent = `≈ ${moneyRange(diet.low, diet.high)} over the last ${diet.days} days (≈ ${pctRange(diet.low, diet.high, diet.actual)} of ${money(diet.actual)}) · ${num(diet.events)} trims in ${num(diet.sessions)} session${diet.sessions === 1 ? '' : 's'}`;
+    }
+  }
+
+  async function saveDelegation(patch) {
+    config = await window.lightsApi.saveConfig({ routerDelegation: { ...(config.routerDelegation || {}), ...patch } });
+    config = await window.lightsApi.getConfig();
+    if (delegOv) paintDelegation(delegOv);
+  }
+  $('deleg-enabled').addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    e.target.disabled = true;
+    $('deleg-line').textContent = on ? 'Switching on…' : 'Switching off…';
+    try {
+      const r = await window.lightsApi.delegationSetEnabled(on);
+      delegNote = r.error ? `Not switched on: ${r.error}`
+        : r.conflicts && r.conflicts.length ? `You already have your own ${r.conflicts.map((f) => f.split('/').pop()).join(', ')} in ~/.claude/agents — rename it and switch on again`
+        : null;
+      config = await window.lightsApi.getConfig();
+    } finally {
+      e.target.disabled = false;
+    }
+    renderDelegation();
+  });
+  $('deleg-mode').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (b) saveDelegation({ mode: b.dataset.mode });
+  });
+  for (const k of ['readLines', 'peekLines', 'outputChars']) {
+    $(`deleg-${k}`).addEventListener('change', (e) => { if (Number(e.target.value) > 0) saveDelegation({ [k]: Number(e.target.value) }); });
+  }
+  $('deleg-allow').addEventListener('change', (e) => saveDelegation({ allow: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) }));
+
   async function renderRouter() {
     renderRouting();
+    renderDelegation();
     const days = routerDays;
     const sum = await window.lightsApi.getUsageSummary({ days });
     if (days !== routerDays || !sum) return;
@@ -2391,6 +2542,7 @@
     config = await window.lightsApi.saveConfig({ routerSubscriberView: e.target.checked });
     if (routerSum) paintRouter(routerSum);
     if (routerOv) paintRouting(routerOv);
+    if (delegDiet) paintDiet(delegDiet);
   });
 
   // ── Boot ───────────────────────────────────────────────────────────────

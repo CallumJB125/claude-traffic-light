@@ -37,6 +37,8 @@
       "usage.js",
       "router.js",
       "router-install.js",
+      "delegation-install.js",
+      "agents/**/*",
       "bin/**/*",
       "agents.js",
       "tray.html",
