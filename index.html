@@ -170,6 +170,22 @@
       didDrag = false;
     });
 
+    // Only what is actually drawn should catch the mouse: over the empty
+    // corners of the transparent window, clicks fall through to whatever is
+    // behind. The hit test runs on every move; the IPC only fires on change.
+    let clickThrough = null;
+    const solidAt = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      if (!el) return false;
+      if (el.closest('#gear, #ask, .minion')) return true;
+      return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
+    };
+    window.addEventListener('mousemove', (e) => {
+      if (dragOrigin) return;
+      const ignore = !solidAt(e.clientX, e.clientY);
+      if (ignore !== clickThrough) { clickThrough = ignore; window.trafficLight.setClickThrough(ignore); }
+    });
+
     window.addEventListener('mousemove', (e) => {
       if (!dragOrigin || e.buttons !== 1) return;
       const dx = e.screenX - dragOrigin.mouseX;

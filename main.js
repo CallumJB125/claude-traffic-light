@@ -1905,6 +1905,12 @@ ipcMain.on('set-window-position', (e, x, y) => {
   win?.setPosition(Math.round(x), Math.round(y));
 });
 
+// The widget window is a transparent rectangle; the renderer reports whether
+// the cursor is over something drawn so clicks on empty space fall through.
+ipcMain.on('set-click-through', (e, ignore) => {
+  try { win?.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* window gone */ }
+});
+
 ipcMain.on('resize-window-by', (e, factor) => {
   resizeBy(factor);
 });
