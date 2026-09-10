@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   getStats: (days) => ipcRenderer.invoke('get-stats', days),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
   getCosts: () => ipcRenderer.invoke('get-costs'),
+  getUsageSummary: (opts) => ipcRenderer.invoke('get-usage-summary', opts),
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),

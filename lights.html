@@ -65,9 +65,11 @@
   #titlebar .spacer { flex: 1; }
   #titlebar .tools { -webkit-app-region: no-drag; display: flex; gap: 6px; }
   #titlebar .view-seg { -webkit-app-region: no-drag; margin-left: 6px; }
-  #main[data-view="stats"] #rules, #main[data-view="stats"] #right { display: none; }
+  #main[data-view="stats"] #rules, #main[data-view="stats"] #right,
+  #main[data-view="router"] #rules, #main[data-view="router"] #right { display: none; }
   #main:not([data-view="stats"]) #stats { display: none; }
-  #main[data-view="stats"] { grid-template-columns: 1fr; }
+  #main:not([data-view="router"]) #router { display: none; }
+  #main[data-view="stats"], #main[data-view="router"] { grid-template-columns: 1fr; }
 
   #main {
     display: grid;
@@ -583,6 +585,26 @@
   .legend .sw.med { background: var(--accent); }
   .legend .sw.worst { background: #f2a200; }
 
+  /* ── Router view ─────────────────────────────────────────────────────── */
+  #router { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #router > * { flex: none; }
+  #router-body { display: flex; flex-direction: column; gap: 14px; }
+  #router-body[hidden] { display: none; }
+  .router-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .router-head .stats-sub { max-width: 60ch; margin-top: 2px; line-height: 1.45; }
+  .router-head .switch { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding-top: 2px; }
+  .router-head .switch small { color: var(--faint); font-size: 11px; }
+  .saved { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .saved .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .saved .v { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.05; color: #4fbe5c; }
+  .saved .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .saved .d.sub { color: var(--faint); }
+  .saved .note { font-size: 11px; color: var(--faint); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+  table.days td.name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .route-hint { display: block; margin-top: 6px; padding: 0; background: none; border: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; transition: color var(--t); }
+  .route-hint b { color: #4fbe5c; font-weight: 600; }
+  .route-hint:hover { color: var(--text); }
+
   /* Presets popover */
   #presets {
     position: fixed;
@@ -637,6 +659,7 @@
     <div class="seg view-seg" role="tablist" aria-label="View">
       <button id="view-rules" class="on" role="tab">Rules</button>
       <button id="view-stats" role="tab">Stats</button>
+      <button id="view-router" role="tab">Router</button>
     </div>
     <span class="spacer"></span>
     <div class="tools">
@@ -927,8 +950,9 @@
 
       <div class="stats-cols">
         <div>
-          <div class="stats-title small">Spend (ccusage)</div>
+          <div class="stats-title small">Spend — from your Claude Code transcripts</div>
           <div class="stats-sub" id="cost-totals">Loading…</div>
+          <button type="button" class="route-hint" id="route-hint" hidden></button>
           <ol id="cost-projects" class="projects" style="margin-top:8px"></ol>
         </div>
         <div>
@@ -944,6 +968,49 @@
         <div>
           <div class="stats-title small">Days</div>
           <table class="days" id="days-table"><thead><tr><th>Day</th><th>Working</th><th>Waiting</th><th>Peak</th><th>Reply</th><th>Cost</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section id="router" aria-label="Router">
+      <div class="router-head">
+        <div>
+          <div class="stats-title">Router</div>
+          <div class="stats-sub">Routes each turn to the cheapest model that can do it and keeps big files out of the expensive context. Measuring first — routing arrives in the next update.</div>
+        </div>
+        <div class="switch">
+          <label class="toggle"><input type="checkbox" id="router-enabled" disabled /> Route my sessions</label>
+          <small>Arrives in the next update</small>
+        </div>
+      </div>
+
+      <div class="stats-bar">
+        <div class="seg" id="router-range" role="tablist" aria-label="Range">
+          <button data-days="7" class="on" role="tab">7d</button>
+          <button data-days="30" role="tab">30d</button>
+        </div>
+        <span class="spacer"></span>
+        <label class="toggle" title="Show savings as a share of your plan's usage instead of API dollars"><input type="checkbox" id="router-subscriber" /> Subscriber view</label>
+      </div>
+
+      <div class="stats-sub" id="router-loading">Reading transcripts…</div>
+      <div class="stats-sub" id="router-empty" hidden>No Claude Code transcripts in this range yet — the estimate appears once you've run a few sessions.</div>
+
+      <div id="router-body" hidden>
+        <div class="saved">
+          <div class="k">What routing would have saved</div>
+          <div class="v" id="saved-big">—</div>
+          <div class="d" id="saved-line"></div>
+          <div class="d sub" id="saved-haiku"></div>
+          <div class="note">Estimate — same token counts, cheaper prices; excludes quality effects. The range allows up to 35% more tokens and turns on the cheaper model.<span id="saved-unknown"></span></div>
+        </div>
+        <div>
+          <div class="stats-title small">By model used</div>
+          <table class="days" id="router-models"><thead><tr><th>Model</th><th>Turns</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th class="h-actual">Actual</th><th class="h-if">If Sonnet</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <div class="stats-title small">By project — top 8</div>
+          <table class="days" id="router-projects"><thead><tr><th>Project</th><th>Turns</th><th>Tokens</th><th class="h-actual">Actual</th><th class="h-if">If Sonnet</th></tr></thead><tbody></tbody></table>
         </div>
       </div>
     </section>
@@ -1827,15 +1894,17 @@
   const S = window.TrafficLightStats;
   function setView(v) {
     $('main').dataset.view = v;
-    $('view-rules').classList.toggle('on', v === 'rules');
-    $('view-stats').classList.toggle('on', v === 'stats');
-    $('view-rules').setAttribute('aria-selected', v === 'rules');
-    $('view-stats').setAttribute('aria-selected', v === 'stats');
+    for (const k of ['rules', 'stats', 'router']) {
+      $(`view-${k}`).classList.toggle('on', v === k);
+      $(`view-${k}`).setAttribute('aria-selected', v === k);
+    }
     if (v === 'stats') renderStats();
+    if (v === 'router') renderRouter();
   }
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
   $('view-stats').addEventListener('click', () => setView('stats'));
+  $('view-router').addEventListener('click', () => setView('router'));
 
   let rangeDays = 7;
   let projectFilter = null;
@@ -1878,12 +1947,13 @@
     d.innerHTML = `<span class="arrow">${up ? '▲' : '▼'}</span> ${escape(format(Math.abs(diff)))} vs ${escape(format(field.average))} avg`;
   }
 
-  // Time first so the page is never blocked on ccusage, then again once the
+  // Time first so the page is never blocked on reading costs, then again once the
   // costs are in — fetching them also snapshots each day's spend into stats.
   async function renderStats() {
     const sum = await window.lightsApi.getStats(rangeDays);
     if (!sum) return;
     paintStats(sum, null);
+    window.lightsApi.getUsageSummary({ days: rangeDays >= 30 ? 30 : 7 }).then(paintRouteHint);
     const costs = await window.lightsApi.getCosts();
     paintStats(await window.lightsApi.getStats(rangeDays) || sum, costs);
   }
@@ -2055,7 +2125,7 @@
     if (!costs) {
       // still loading — leave whatever the last pass showed
     } else if (!costs.available) {
-      $('cost-totals').textContent = 'ccusage not found — install it (npm i -g ccusage) to see spend here.';
+      $('cost-totals').textContent = 'No Claude Code transcripts found, and ccusage isn\'t installed (npm i -g ccusage) — spend shows up here once either is available.';
       $('cost-projects').innerHTML = ''; $('cost-sessions').querySelector('tbody').innerHTML = '';
     } else {
       const todayKey = days[days.length - 1].key;
@@ -2081,6 +2151,85 @@
     }
   }
 
+  // ── Router view ────────────────────────────────────────────────────────
+  let routerDays = 7;
+  let routerSum = null;
+  const money = (v) => (v >= 100 ? `$${Math.round(v).toLocaleString('en-US')}` : usd(v));
+  const moneyRange = (lo, hi) => (money(lo) === money(hi) ? money(hi) : `${money(lo)}–${money(hi)}`);
+  // Savings over actual spend is the share of usage kept: with prices as
+  // the weights, that's what a subscriber's plan limits roughly track.
+  const pctRange = (lo, hi, base) => {
+    if (!base) return '0%';
+    const a = Math.round((lo / base) * 100);
+    const b = Math.round((hi / base) * 100);
+    return a === b ? `${b}%` : `${a}–${b}%`;
+  };
+  const MODEL_NAMES = { fable: 'Fable', 'fable-5': 'Fable 5 (legacy)', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+
+  async function renderRouter() {
+    const days = routerDays;
+    const sum = await window.lightsApi.getUsageSummary({ days });
+    if (days !== routerDays || !sum) return;
+    routerSum = sum;
+    paintRouter(sum);
+  }
+
+  function paintRouter(sum) {
+    const sub = !!config.routerSubscriberView;
+    const t = sum.total;
+    $('router-subscriber').checked = sub;
+    $('router-loading').hidden = true;
+    $('router-empty').hidden = t.turns > 0;
+    $('router-body').hidden = !t.turns;
+    if (!t.turns) return;
+    const s = t.savings.sonnet;
+    const h = t.savings.haiku;
+    if (sub) {
+      $('saved-big').textContent = pctRange(s.low, s.high, t.cost);
+      $('saved-line').textContent = `of your usage over the last ${sum.days} days kept if every turn had run on Sonnet`;
+      $('saved-haiku').textContent = `All on Haiku: ${pctRange(h.low, h.high, t.cost)} · what this would cost on the API: ${moneyRange(s.low, s.high)} of ${money(t.cost)}`;
+    } else {
+      $('saved-big').textContent = moneyRange(s.low, s.high);
+      $('saved-line').textContent = `if every turn had run on Sonnet · ≈ ${pctRange(s.low, s.high, t.cost)} of ${money(t.cost)} actual over the last ${sum.days} days`;
+      $('saved-haiku').textContent = `All on Haiku: ${moneyRange(h.low, h.high)} (≈ ${pctRange(h.low, h.high, t.cost)})`;
+    }
+    const u = sum.unknown;
+    $('saved-unknown').textContent = u.turns ? ` ${u.turns} turn${u.turns === 1 ? '' : 's'} on unpriced models (${u.models.slice(0, 3).join(', ')}) left out.` : '';
+    document.querySelectorAll('#router .h-actual').forEach((th) => { th.textContent = sub ? 'Share' : 'Actual'; });
+    document.querySelectorAll('#router .h-if').forEach((th) => { th.textContent = sub ? 'Kept if Sonnet' : 'If Sonnet'; });
+    const actual = (r) => (sub ? pctRange(r.cost, r.cost, t.cost) : money(r.cost));
+    const ifSonnet = (r) => (sub ? pctRange(r.savings.sonnet.low, r.savings.sonnet.high, r.cost) : money(r.ifAll.sonnet));
+    const fill = (id, rows, cells) => {
+      $(id).querySelector('tbody').innerHTML = rows.map((r) => `<tr>${cells(r).map((c, i) => `<td${i ? '' : ' class="name"'}>${c}</td>`).join('')}</tr>`).join('');
+    };
+    fill('router-models', sum.byModel, (r) => [escape(MODEL_NAMES[r.name] || r.name), r.turns.toLocaleString('en-US'), compact(r.input), compact(r.output), compact(r.cacheRead), compact(r.cacheWrite), actual(r), ifSonnet(r)]);
+    fill('router-projects', sum.byProject.slice(0, 8), (r) => [`<span title="${escape(r.name)}">${escape(r.name)}</span>`, r.turns.toLocaleString('en-US'), compact(r.input + r.output + r.cacheRead + r.cacheWrite), actual(r), ifSonnet(r)]);
+  }
+
+  function paintRouteHint(sum) {
+    const hint = $('route-hint');
+    const t = sum && sum.total;
+    hint.hidden = !t || !t.turns;
+    if (hint.hidden) return;
+    const s = t.savings.sonnet;
+    hint.innerHTML = config.routerSubscriberView
+      ? `Routing could keep <b>${pctRange(s.low, s.high, t.cost)}</b> of your usage (last ${sum.days} days) →`
+      : `Routing could save <b>${moneyRange(s.low, s.high)}</b> over the last ${sum.days} days →`;
+  }
+
+  $('route-hint').addEventListener('click', () => setView('router'));
+  $('router-range').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-days]');
+    if (!b) return;
+    routerDays = Number(b.dataset.days);
+    Array.from($('router-range').children).forEach((x) => x.classList.toggle('on', x === b));
+    renderRouter();
+  });
+  $('router-subscriber').addEventListener('change', async (e) => {
+    config = await window.lightsApi.saveConfig({ routerSubscriberView: e.target.checked });
+    if (routerSum) paintRouter(routerSum);
+  });
+
   // ── Boot ───────────────────────────────────────────────────────────────
   (async () => {
     $('tool-list').innerHTML = R.TOOL_SUGGESTIONS.map((t) => `<option value="${t}">`).join('');
@@ -2089,7 +2238,7 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
-    if (q.get('view') === 'stats') setView('stats');
+    if (q.get('view') === 'stats' || q.get('view') === 'router') setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     if (q.get('scroll')) setTimeout(() => { (q.get('view') === 'stats' ? $('stats') : $('editor')).scrollTop = Number(q.get('scroll')); }, 400);
     setDirty(false);

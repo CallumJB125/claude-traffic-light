@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
+const Usage = require('./usage.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
 const http = require('http');
@@ -221,6 +222,9 @@ const DEFAULT_CONFIG = {
   agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
+  // Best guess at who pays per token: no API key in the environment usually
+  // means a subscription, where "% of your usage" reads better than dollars.
+  routerSubscriberView: !process.env.ANTHROPIC_API_KEY,
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -1755,6 +1759,7 @@ function createTray() {
     },
     { type: 'separator' },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
+    { label: 'Router…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'router')); lightsWin?.webContents.send('show-view', 'router'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
     { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
     { type: 'separator' },
@@ -1898,7 +1903,9 @@ function runCcusage(args) {
 // Never more than one ccusage pass at a time, and at most one per 5 minutes:
 // the Stats tab used to be able to fan out a spawn per repaint.
 function getCosts() {
-  if (Date.now() - costCache.at < COST_TTL_MS && costCache.data) return Promise.resolve(costCache.data);
+  // Transcript costs are recomputed from the usage memo every time so Spend
+  // never lags the Router; only a ccusage result is held for 5 minutes.
+  if (Date.now() - costCache.at < COST_TTL_MS && costCache.data && costCache.data.source !== 'transcripts') return Promise.resolve(costCache.data);
   if (costInFlight) return costInFlight;
   costInFlight = computeCosts().finally(() => { costInFlight = null; });
   return costInFlight;
@@ -1926,11 +1933,29 @@ function transcriptIndex() {
   return index;
 }
 
+let costSource = null;
+function noteCostSource(source) {
+  if (source !== costSource) console.log(`[costs] source: ${source}`);
+  costSource = source;
+}
+
 async function computeCosts() {
+  // The transcripts are the source of truth, so Spend always agrees with the
+  // Router; ccusage is only asked when there are no transcripts to read.
+  const turns = await getUsageTurns();
+  if (turns.length) {
+    noteCostSource('transcripts');
+    const data = Usage.spend(turns);
+    for (const [key, cost] of Object.entries(data.history)) Stats.recordCost(stats, key, cost);
+    statsDirty = true;
+    costCache = { at: Date.now(), data };
+    return data;
+  }
+  noteCostSource('ccusage');
   const since = new Date(Date.now() - 6 * 86400000);
   const ymd = `${since.getFullYear()}${String(since.getMonth() + 1).padStart(2, '0')}${String(since.getDate()).padStart(2, '0')}`;
   const [daily, session] = await Promise.all([runCcusage(['daily', '--since', ymd]), runCcusage(['session', '--since', ymd])]);
-  if (!daily && !session) { costCache = { at: Date.now(), data: { available: false } }; return costCache.data; }
+  if (!daily && !session) { costCache = { at: Date.now(), data: { available: false, source: 'ccusage' } }; return costCache.data; }
   const days = {};
   for (const d of daily?.daily || []) days[d.period] = { cost: d.totalCost || 0, tokens: d.totalTokens || 0, models: (d.modelsUsed || []).map((m) => String(m).replace(/^claude-/, '')) };
   // Map ccusage sessions (keyed by session id) to project folders through
@@ -1967,7 +1992,7 @@ async function computeCosts() {
     projects[project].tokens += tokens;
     sessions.push({ id, project, cost: sname.totalCost || 0, tokens });
   }
-  const data = { available: true, days, totals: daily?.totals || null, projects: Object.entries(projects).sort((a, b) => b[1].cost - a[1].cost).map(([name, v]) => ({ name, ...v })), sessions: sessions.sort((a, b) => b.cost - a.cost).slice(0, 8) };
+  const data = { available: true, source: 'ccusage', days, totals: daily?.totals || null, projects: Object.entries(projects).sort((a, b) => b[1].cost - a[1].cost).map(([name, v]) => ({ name, ...v })), sessions: sessions.sort((a, b) => b.cost - a.cost).slice(0, 8) };
   // Snapshot each day's spend into stats.json: ccusage only reports a rolling
   // window, but the Stats page can look back 60 days.
   for (const [key, d] of Object.entries(days)) Stats.recordCost(stats, key, d.cost);
@@ -1976,6 +2001,34 @@ async function computeCosts() {
   return data;
 }
 ipcMain.handle('get-costs', () => getCosts());
+
+// ── Router: per-turn usage read from the transcripts themselves ───────────
+const USAGE_TTL_MS = 60 * 1000;
+const ROUTER_BASELINE_FILE = path.join(ROOT_DIR, 'router-baseline.json');
+const usageFileCache = new Map();
+let usageMemo = { at: 0, turns: null };
+let usageInFlight = null;
+async function refreshUsage() {
+  const t0 = Date.now();
+  // 61 days covers the Stats page's 60-day lookback, which also spans the
+  // Router's ranges and the 14-day baseline.
+  const r = await Usage.readTurns({ since: Date.now() - 61 * 86400000, cache: usageFileCache });
+  console.log(`[usage] parsed ${r.parsed} files in ${Date.now() - t0} ms (${r.files} transcripts, ${r.turns.length} turns${r.skipped.length ? `, ${r.skipped.length} over the size cap` : ''})`);
+  usageMemo = { at: Date.now(), turns: r.turns };
+  // Nothing routes yet, so the baseline simply tracks the recent mix; once
+  // routing can be switched on it has to be frozen at that moment instead.
+  if (!IS_DEV_RUN) {
+    try { fs.writeFileSync(ROUTER_BASELINE_FILE, JSON.stringify(Usage.summarise(r.turns, { days: 1 }).baseline, null, 2)); } catch (err) { console.warn('[usage] baseline not saved:', err.message); }
+  }
+  return r.turns;
+}
+function getUsageTurns() {
+  if (usageMemo.turns && Date.now() - usageMemo.at < USAGE_TTL_MS) return Promise.resolve(usageMemo.turns);
+  if (usageInFlight) return usageInFlight;
+  usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
+  return usageInFlight;
+}
+ipcMain.handle('get-usage-summary', async (_e, opts) => Usage.summarise(await getUsageTurns(), { days: Number(opts?.days) === 30 ? 30 : 7 }));
 
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
