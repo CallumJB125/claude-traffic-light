@@ -132,8 +132,8 @@
       <g class="wisps" fill="#c9c9d1"><circle class="wisp s1" cx="44.6" cy="47.5" r="0.7" /><circle class="wisp s2" cx="44.6" cy="47.5" r="0.9" /><circle class="wisp s3" cx="44.6" cy="47.5" r="0.6" /><circle class="wisp s4" cx="44.6" cy="47.5" r="1" /></g>
       <g class="exhale" fill="#d7d7de"><circle class="ex e1" cx="33" cy="51" r="1.4" /><circle class="ex e2" cx="33" cy="51" r="1.9" /><circle class="ex e3" cx="33" cy="51" r="1.2" /></g>
     </g>
-    <!-- zyn tin + pouch -->
-    <g class="zyn"><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g>
+    <!-- zyn tin + pouch; the mouth opens for it and it ends up as a bump under the upper lip -->
+    <g class="zyn"><rect class="zyn-mouth" x="29" y="49.4" width="6" height="1.2" rx="0.6" fill="#211f1c" /><path class="lip-bump" d="M29.8 49.5 q2.2 -3 4.4 0 z" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.45" /><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g>
     <!-- table, rolled note, line -->
     <g class="table">
       <rect x="4" y="62" width="56" height="2.2" fill="#8a5a2b" /><rect x="7" y="64" width="2" height="5" fill="#6b4420" /><rect x="55" y="64" width="2" height="5" fill="#6b4420" />
@@ -144,7 +144,15 @@
       <g class="sniff" stroke="#f2efe8" stroke-width="0.8" stroke-linecap="round"><path d="M26 41 l-3 -2 M38 41 l3 -2 M25 44 l-3 0 M39 44 l3 0" /></g>
     </g>
     <!-- syringe -->
-    <g class="needle"><rect x="50" y="43" width="8" height="3" rx="0.6" fill="#d7ded6" stroke="#211f1c" stroke-width="0.4" /><rect x="58" y="44" width="4" height="0.8" fill="#9aa3ad" /><rect class="plunger" x="47" y="43.8" width="4" height="1.4" fill="#e2231a" /></g>
+    <!-- syringe: a fist on the plunger drives it into the right arm; the clip hides the needle under the skin -->
+    <clipPath id="rig-juice-skin"><rect x="36" y="16" width="34" height="36" /></clipPath>
+    <g class="needle" clip-path="url(#rig-juice-skin)"><g transform="rotate(15 55 52)"><g class="syringe">
+      <rect x="54.7" y="44" width="0.6" height="6" fill="#9aa3ad" />
+      <rect x="53.2" y="37" width="3.6" height="8.2" rx="0.5" fill="#d7ded6" stroke="#211f1c" stroke-width="0.4" />
+      <rect class="juice-fill" x="53.7" y="38.5" width="2.6" height="6.2" fill="#6fdc3a" />
+      <rect x="51.8" y="36.4" width="6.4" height="1" rx="0.3" fill="#9aa3ad" stroke="#211f1c" stroke-width="0.3" />
+      <g class="plunger"><rect x="54.5" y="32.2" width="1" height="5.6" fill="#9aa3ad" /><rect x="53.7" y="37.6" width="2.6" height="0.9" fill="#211f1c" /><rect x="53" y="31.2" width="4" height="1" fill="#e2231a" /><rect x="52.8" y="27.6" width="4.4" height="3.6" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.45" /></g>
+    </g></g></g>
     <!-- muscles: arm bulges that grow over time -->
     <g class="muscles" fill="var(--body-color, #da7756)"><ellipse class="bicep b1" cx="9" cy="54" rx="1" ry="1" /><ellipse class="bicep b2" cx="55" cy="54" rx="1" ry="1" /></g>
     <!-- hammer, for tearing the garden down -->
@@ -165,6 +173,8 @@
     <rect class="eye-open" x="37.5" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-closed" x="21" y="45.25" width="6.5" height="1.6" rx="0.8" />
     <rect class="eye-closed" x="36.5" y="45.25" width="6.5" height="1.6" rx="0.8" />
+    <!-- zyn: catchlights on the dilated pupils -->
+    <g class="zyn-glints" fill="#f2efe8"><rect x="21.3" y="42.7" width="1.6" height="1.6" /><rect x="36.8" y="42.7" width="1.6" height="1.6" /></g>
     <g class="eyefx eyefx-heart" fill="#f472b6">
       <path d="M24.2 49 l-3 -3 a1.7 1.7 0 0 1 3 -2 a1.7 1.7 0 0 1 3 2 z" /><path d="M39.7 49 l-3 -3 a1.7 1.7 0 0 1 3 -2 a1.7 1.7 0 0 1 3 2 z" />
     </g>

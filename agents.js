@@ -25,7 +25,18 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+//   ~/.claude/projects/<cwd with non-alphanumerics as '-'>/<sessionId>.jsonl
+//     a tmux teammate is its own Claude Code session; its first lines carry
+//     { teamName: 'session-<id8>', agentName: <member name>, cwd }
 const TEAMS_DIR = path.join(os.homedir(), '.claude', 'teams');
+const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+// Claude Code keeps isActive:true on a teammate that finished its task and
+// is idling in its pane until the lead shuts it down, so the member's own
+// transcript going quiet this long is what marks it waiting.
+const IDLE_AFTER_MS = 3 * 60 * 1000;
+const RESOLVE_RETRY_MS = 60 * 1000;
+const HEAD_BYTES = 64 * 1024;
+const transcripts = new Map();
 // A team config outlives the run that wrote it, so a member that joined this
 // long ago is treated as gone rather than shown forever.
 const TEAM_MEMBER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -48,6 +59,64 @@ function neverStarted(teamDir, name, now) {
     .map((msg) => Date.parse(msg.timestamp || ''))
     .filter(Number.isFinite);
   return unread.length > 0 && now - Math.min(...unread) > NEVER_STARTED_MS;
+}
+
+function readHead(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    return buf.toString('utf8', 0, fs.readSync(fd, buf, 0, HEAD_BYTES, 0));
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// Regex rather than JSON.parse: the head may cut a long first prompt in half,
+// and inside a string value the quotes are escaped so they cannot match.
+function headField(head, key) {
+  const m = head.match(new RegExp(`"${key}":"([^"]*)"`));
+  return m ? m[1] : null;
+}
+
+// Only files touched since the member joined can be its transcript, so a
+// long-lived project folder costs one stat per stale file and no reads.
+function findTranscript(dirs, teamName, agentName, since) {
+  for (const dir of dirs) {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      if (!n.endsWith('.jsonl')) continue;
+      const file = path.join(dir, n);
+      let st;
+      try { st = fs.statSync(file); } catch { continue; }
+      if (st.mtimeMs < since) continue;
+      const head = readHead(file);
+      if (headField(head, 'teamName') === teamName && headField(head, 'agentName') === agentName) return file;
+    }
+  }
+  return null;
+}
+
+// mtime of the member's transcript, or null when it cannot be found. The
+// path is resolved once per member; a miss is retried at most once a minute.
+function heartbeat(m, teamName, cwds, projectsDir, cache, now) {
+  const key = `${m.agentId || m.name}@${m.joinedAt || 0}`;
+  let hit = cache.get(key);
+  if (!hit || (!hit.file && now - hit.triedAt >= RESOLVE_RETRY_MS)) {
+    const dirs = [...new Set(cwds.filter(Boolean))].map((c) => path.join(projectsDir, c.replace(/[^a-zA-Z0-9]/g, '-')));
+    hit = { file: dirs.length ? findTranscript(dirs, teamName, String(m.name || ''), m.joinedAt || 0) : null, triedAt: now };
+    cache.set(key, hit);
+  }
+  if (!hit.file) return null;
+  try {
+    return fs.statSync(hit.file).mtimeMs;
+  } catch {
+    cache.delete(key);
+    return null;
+  }
 }
 
 // OMC and Claude Code use several vocabularies for the same three states.
@@ -119,24 +188,35 @@ function scanAgents(session, opts = {}) {
 
   // Claude Code's native agent teams: one tmux pane per member. A running
   // member carries isActive:true, a finished one isActive:false; one that
-  // never ran has no isActive at all.
+  // never ran has no isActive at all. A live member whose transcript has gone
+  // quiet is idling in its pane: waiting. No transcript found stays working.
+  // (tmux can't help here: #{window_activity} is per window, not per pane.)
   if (id) {
     const teamDir = path.join(teamsDir, `session-${id.slice(0, 8)}`);
     const cfg = readJson(path.join(teamDir, 'config.json'));
     const members = cfg && cfg.leadSessionId === id && Array.isArray(cfg.members) ? cfg.members : [];
+    const teamName = (cfg && cfg.name) || path.basename(teamDir);
+    const projectsDir = opts.projectsDir || PROJECTS_DIR;
+    const cache = opts.transcripts || transcripts;
     let live = 0;
     for (const m of members) {
       if (m.tmuxPaneId === 'leader' || m.agentType === 'team-lead') continue;
       if (m.joinedAt && now - m.joinedAt > TEAM_MEMBER_MAX_AGE_MS) continue;
       if (m.isActive !== true && m.isActive !== false && neverStarted(teamDir, m.name, now)) continue;
-      const status = m.isActive === false ? 'done' : 'working';
-      if (status === 'working') live += 1;
+      let status = 'done';
+      let beat = null;
+      if (m.isActive !== false) {
+        beat = heartbeat(m, teamName, [m.cwd, cwd], projectsDir, cache, now);
+        status = beat !== null && now - beat > IDLE_AFTER_MS ? 'waiting' : 'working';
+        live += 1;
+      }
       add({
         id: String(m.agentId || m.name || ''),
         name: String(m.name || 'agent'),
         kind: 'teammate',
         status,
         since: m.joinedAt ? new Date(m.joinedAt).toISOString() : null,
+        heartbeat: beat === null ? null : new Date(beat).toISOString(),
         parent: id,
       });
     }
@@ -154,4 +234,4 @@ function mergeAgents(existing, found) {
   return mine.concat(found);
 }
 
-module.exports = { scanAgents, mergeAgents, agentStatus, readJson, TEAMS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS };
+module.exports = { scanAgents, mergeAgents, agentStatus, readJson, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS };

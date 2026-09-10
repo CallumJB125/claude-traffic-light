@@ -52,6 +52,76 @@ test('teams: finished members alone do not make it team mode; the 6 h cap still 
   assert.deepEqual(old.agents, []);
 });
 
+// A teammate's own transcript is its heartbeat: fresh → working, quiet → waiting.
+const TEAM_CWD = '/work/proj';
+function teamFixture(members) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-beat-'));
+  const teamsDir = path.join(root, 'teams');
+  const projectsDir = path.join(root, 'projects');
+  const teamName = `session-${LEAD.slice(0, 8)}`;
+  fs.mkdirSync(path.join(teamsDir, teamName), { recursive: true });
+  fs.writeFileSync(path.join(teamsDir, teamName, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: LEAD, members }));
+  const proj = path.join(projectsDir, TEAM_CWD.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(proj, { recursive: true });
+  const transcript = (name, ageMs) => {
+    const file = path.join(proj, `${name}-sid.jsonl`);
+    const lines = [
+      { type: 'mode', sessionId: `${name}-sid` },
+      { type: 'user', sessionId: `${name}-sid`, teamName, agentName: name, cwd: TEAM_CWD, message: { content: 'x'.repeat(100000) } },
+    ];
+    fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    fs.utimesSync(file, (NOW - ageMs) / 1000, (NOW - ageMs) / 1000);
+  };
+  const scan = (opts = {}) => A.scanAgents({ sessionId: LEAD, cwd: TEAM_CWD }, { teamsDir, projectsDir, now: NOW, transcripts: new Map(), ...opts });
+  return { transcript, scan, proj };
+}
+
+test('teams: an active member whose transcript went quiet is waiting; fresh or missing is working', () => {
+  const f = teamFixture([
+    member('fresh', { isActive: true }),
+    member('idle', { isActive: true }),
+    member('lost', { isActive: true }),
+    member('finished', { isActive: false }),
+  ]);
+  f.transcript('fresh', 10000);
+  f.transcript('idle', 10 * 60 * 1000);
+  f.transcript('finished', 10 * 60 * 1000);
+  const by = Object.fromEntries(f.scan().agents.map((a) => [a.name, a]));
+  assert.equal(by.fresh.status, 'working');
+  assert.equal(by.fresh.heartbeat, new Date(NOW - 10000).toISOString());
+  assert.equal(by.idle.status, 'waiting');
+  assert.equal(by.idle.heartbeat, new Date(NOW - 10 * 60 * 1000).toISOString());
+  assert.equal(by.lost.status, 'working');
+  assert.equal(by.lost.heartbeat, null);
+  assert.equal(by.finished.status, 'done');
+  assert.ok(A.IDLE_AFTER_MS < 10 * 60 * 1000 && A.IDLE_AFTER_MS > 10000);
+});
+
+test('teams: a member that joined after its transcript last changed is not matched to it', () => {
+  const f = teamFixture([member('late', { isActive: true, joinedAt: NOW - 60000 })]);
+  f.transcript('late', 10 * 60 * 1000);
+  const [a] = f.scan().agents;
+  assert.equal(a.status, 'working');
+  assert.equal(a.heartbeat, null);
+});
+
+test('teams: transcript path is cached; an unresolved member is rescanned at most once a minute', (t) => {
+  const f = teamFixture([member('found', { isActive: true }), member('missing', { isActive: true })]);
+  f.transcript('found', 10000);
+  const transcripts = new Map();
+  const readdir = t.mock.method(fs, 'readdirSync');
+  const projCalls = () => readdir.mock.calls.filter((c) => String(c.arguments[0]) === f.proj).length;
+  f.scan({ transcripts });
+  const first = projCalls();
+  assert.ok(first >= 1);
+  f.scan({ transcripts, now: NOW + 2000 });
+  assert.equal(projCalls(), first, 'no rescan within a minute');
+  f.transcript('found', 0);
+  const again = f.scan({ transcripts, now: NOW + A.RESOLVE_RETRY_MS + 1 });
+  assert.equal(projCalls(), first + 1, 'only the unresolved member rescans after a minute');
+  assert.equal(again.agents.find((a) => a.name === 'found').heartbeat, new Date(NOW).toISOString());
+});
+
 // ── hooks/set-status.js ─────────────────────────────────────────────────────
 function tmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-state-'));
