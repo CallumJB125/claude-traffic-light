@@ -72,6 +72,13 @@
     ok(Array.from($('costumes').querySelectorAll('.posebtn')).length === 15, 'all 14 costumes + keep are offered');
     costumeBtn('unicorn').click();
     ok(stageLook().cls.includes('costume-unicorn'), 'costume applies on the stage');
+    const cameoBtn = (c) => Array.from($('cameos').querySelectorAll('.posebtn')).find((b) => b.title === c);
+    ok(Array.from($('cameos').querySelectorAll('.posebtn')).length === 8, 'all 7 cameos + keep are offered');
+    cameoBtn('neo').click();
+    ok(stageLook().cls.includes('cameo-neo') && stageLook().cls.includes('costume-unicorn'), 'cameo applies on the stage alongside the costume');
+    ok(stageLook().cls.includes('cameo-hides-eyes'), 'neo\'s shades hide the eyes');
+    cameoBtn('baker').click();
+    ok(stageLook().cls.includes('cameo-baker') && !stageLook().cls.includes('cameo-hides-eyes'), 'switching cameo swaps it and frees the eyes');
     const pick = (id, title) => Array.from($(id).querySelectorAll('.posebtn')).find((b) => b.title === title).click();
     pick('signs', 'h5'); ok(stageLook().cls.includes('sign-h5'), 'sign layout applies on the stage');
     pick('shapes', 'heart'); ok(document.querySelector('#stage-rig .sign-h5 .lamp').getAttribute('href') === '#lamp-heart', 'lamp shape swaps the symbol');
@@ -99,7 +106,7 @@
     ok(document.querySelector('#stage-rig svg').style.getPropertyValue('--lamp-on') === '#00ffff', 'custom lamp colour reaches the stage');
     $('celebrate').checked = true; fire($('celebrate'), 'change');
     const chipsInRow = rowByName('Playtest rule').querySelectorAll('.chip').length;
-    ok(chipsInRow === 8, `list row shows a chip per set channel (${chipsInRow})`);
+    ok(chipsInRow === 9, `list row shows a chip per set channel (${chipsInRow})`);
 
     // ── keyboard reorder
     const me = rowByName('Playtest rule');

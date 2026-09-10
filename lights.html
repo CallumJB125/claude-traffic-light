@@ -842,6 +842,11 @@
         </div>
 
         <div class="row">
+          <div class="lbl">Cameo</div>
+          <div class="field"><div class="poses" id="cameos"></div></div>
+        </div>
+
+        <div class="row">
           <div class="lbl">Body</div>
           <div class="field">
             <div class="poses" id="bodies"></div>
@@ -1183,6 +1188,7 @@
   const ICON = {
     lock: '<svg class="lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>',
     costume: '<svg viewBox="0 0 16 16"><path d="M3 13h10l-1-6H4zM5 7l3-4 3 4"/></svg>',
+    cameo: '<svg viewBox="0 0 16 16"><path d="M4 7c0-3 1.8-5 4-5s4 2 4 5M3 7h10M4.5 9.5h3v2h-3zM8.5 9.5h3v2h-3zM7.5 10.5h1M5 14c1.5 1 4.5 1 6 0"/></svg>',
     body: '<svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-3 2-5 5-5s5 2 5 5"/></svg>',
     effect: '<svg viewBox="0 0 16 16"><path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l2 2M10 10l2 2M12 4l-2 2M6 10l-2 2"/></svg>',
     pet: '<svg viewBox="0 0 16 16"><path d="M4 12a4 4 0 0 1 8 0zM5 8l-1-4 3 2M11 8l1-4-3 2"/></svg>',
@@ -1342,6 +1348,7 @@
           ${eyeC ? `<span class="chip eye" style="--chip:${eyeC}" title="Eyes"></span>` : t.eyes === 'closed' ? '<span class="chip eye" style="--chip:#211f1c" title="Eyes closed"></span>' : ''}
           ${t.pose && t.pose !== 'none' ? `<span class="chip pose pose-chip" title="${t.pose}">${ICON.pose[t.pose] || ICON.pose.think}</span>` : ''}
           ${t.costume && t.costume !== 'none' ? `<span class="chip pose" title="${t.costume}">${ICON.costume}</span>` : ''}
+          ${t.cameo && t.cameo !== 'none' ? `<span class="chip pose" title="cameo: ${t.cameo}">${ICON.cameo}</span>` : ''}
           ${t.body && t.body !== 'claude' ? `<span class="chip pose" title="body: ${t.body}">${ICON.body}</span>` : ''}
           ${t.effect && t.effect !== 'none' ? `<span class="chip pose" title="effect: ${t.effect}">${ICON.effect}</span>` : ''}
           ${t.pet && t.pet !== 'none' ? `<span class="chip pose" title="pet: ${t.pet}">${ICON.pet}</span>` : ''}
@@ -1417,7 +1424,7 @@
   // ── Now strip ──────────────────────────────────────────────────────────
   // Which rule the lamp belongs to, and which rule owns each accent channel,
   // so a look that mixes several rules can be traced back to them.
-  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['body', ['body', 'bodyColor']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
+  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['cameo', ['cameo']], ['body', ['body', 'bodyColor']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
   function renderNow() {
     const box = $('now');
     const head = box.querySelector('.head');
@@ -1580,6 +1587,7 @@
       sfx.appendChild(b);
     }
     picker($('costumes'), R.COSTUMES, r.then.costume, (o) => ({ costume: o || 'none' }), (o) => { r.then.costume = o; });
+    picker($('cameos'), R.CAMEOS, r.then.cameo, (o) => ({ cameo: o || 'none', costume: r.then.costume || 'none' }), (o) => { r.then.cameo = o; });
     picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
@@ -2667,7 +2675,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}`; }
+    if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', cameo: q.get('cameo') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}${q.get('cameo') ? ' · ' + q.get('cameo') : ''}`; }
   })();
 </script>
 </body>

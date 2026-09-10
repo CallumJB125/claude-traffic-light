@@ -946,7 +946,7 @@ function createLightsWindow() {
   if (arg('--mode')) query.mode = arg('--mode');
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
-  for (const k of ['costume', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number', 'speed']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  for (const k of ['costume', 'cameo', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number', 'speed']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -1250,7 +1250,7 @@ async function paintTray(force = false) {
   if (trayPainting) return;
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
-  const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.body, look.number]);
+  const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.cameo, look.body, look.number]);
   const animated = TRAY_ANIMATED.has(look.lampFx) || ['blink', 'nod', 'bounce', 'run', 'knock', 'spin', 'party'].includes(look.pose);
   if (!force && !animated && key === trayLookKey) return;
   trayLookKey = key;

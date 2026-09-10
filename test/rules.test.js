@@ -117,7 +117,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null, source: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, cameo: null, body: null, bodyColor: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -214,6 +214,31 @@ test('ignored-N is measured from your last touch of any session, not the oldest 
   assert.ok(!signals.some((s) => s.startsWith('ignored-')), `just answered elsewhere → nothing is ignored (${signals})`);
   const later = R.virtualSessions([stale, { ...fresh, updatedAt: ago(25) }], now).map((v) => v.signal);
   assert.deepEqual(later.filter((s) => s.startsWith('ignored-')).sort(), ['ignored-10', 'ignored-10', 'ignored-20', 'ignored-20'], '25 min since any touch → both waiting sessions count');
+});
+
+test('cameo is its own accent channel: layers above the lamp owner, never leaks from below, independent of costume', () => {
+  const rs = [
+    { id: 'face', name: 'face', when: { signal: ['tool-use'], tool: 'Agent' }, then: { cameo: 'neo' } },
+    { id: 'hat', name: 'hat', when: { signal: ['tool-use'], tool: 'Agent' }, then: { costume: 'crown', cameo: 'powell' } },
+    ...rules(),
+    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { cameo: 'baker' } },
+  ];
+  const l = look([{ signal: 'tool-use', tool: 'Agent' }], rs);
+  assert.deepEqual([l.cameo, l.costume], ['neo', 'crown']);
+  assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).cameo, 'none');
+  assert.equal(R.resolve(rs, [{ signal: 'tool-use', tool: 'Agent' }]).owned.cameo, 'face');
+  assert.equal(look([], rules()).cameo, 'none');
+});
+
+test('normalizeRule accepts only known cameos', () => {
+  for (const c of R.CAMEOS) assert.equal(R.normalizeRule({ then: { cameo: c } }).then.cameo, c);
+  for (const bad of ['keanu', 'Neo', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
+  assert.deepEqual(R.CAMEOS, ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker']);
+});
+
+test('previewLook shows a rule\'s cameo, none by default', () => {
+  assert.equal(R.previewLook({ then: { cameo: 'spagni', costume: 'wizard' } }).cameo, 'spagni');
+  assert.equal(R.previewLook({ then: { costume: 'wizard' } }).cameo, 'none');
 });
 
 test('seasonal costumes by date', () => {

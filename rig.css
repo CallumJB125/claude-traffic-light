@@ -439,6 +439,22 @@
 /* Sunglasses sit over the eyes; the eyes' own colour is hidden underneath. */
 .rig.costume-shades .eye-open { opacity: 0; }
 
+/* Cameos: a famous face over Claude's head, independent of costume. They
+   live inside .claude-body so they bob with every pose; hats (costumes) are
+   drawn after, so a crown sits on the hair. */
+.rig .cameo { opacity: 0; transition: opacity 150ms ease; }
+.rig.cameo-neo .cameo-neo, .rig.cameo-alfred .cameo-alfred, .rig.cameo-mcafee .cameo-mcafee,
+.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker { opacity: 1; }
+/* Opaque shades (neo) hide only plain eyes. Any other eye state — closed, a
+   mood, or a pose that works the eyes (zyn, line, juice, smoke, grin, dead) —
+   shows through lenses gone smoky, so no pose ever loses its eyes. */
+.rig .cameo-lens { transition: opacity 150ms ease; }
+.rig.cameo-hides-eyes:not(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .eye-open { opacity: 0; }
+.rig.cameo-hides-eyes:is(.eyes-closed, .eyes-heart, .eyes-happy, .eyes-angry, .eyes-sad, .eyes-surprised, .eyes-wink, .eyes-star, .eyes-money, .eyes-sleepy, .eyes-suspicious, .eyes-roll, .eyes-googly, .eyes-dizzy, .eyes-x, .eyes-tears, .eyes-laser, .pose-sleep, .pose-dead, .pose-zyn, .pose-line, .pose-juice, .pose-smoke, .pose-grin, .pose-selfie, .lounging, .grumpy) .cameo-lens { opacity: 0.4; }
+/* Mouth poses bring their own mouth: the cameo's lips step aside (moustaches
+   and beards stay; the cigarette, pouch or grin is drawn over them). */
+.rig:is(.pose-grin, .pose-selfie, .pose-smoke, .pose-zyn, .pose-munch, .eating, .grumpy, .eyes-surprised) .cameo-lips { opacity: 0; }
+
 /* Grumpy: a sleep pose that has dragged on. */
 .rig .grumpy-mouth { opacity: 0; fill: #211f1c; }
 .rig.grumpy .grumpy-mouth { opacity: 1; }
@@ -556,7 +572,7 @@
 .rig .juice-fill { transform-box: fill-box; transform-origin: bottom center; }
 .rig.pose-juice .juice-fill { transform: scaleY(0.14); animation: rig-juice-fill 2.2s ease-in-out both; }
 .rig.pose-juice .claude-body { transform: translate(0, 0) scale(1.15); transform-origin: 32px 68px; animation: rig-hulk 3.6s ease-in-out both, rig-hulk-off 2.5s ease-in-out 603.6s forwards; }
-.rig.pose-juice .body, .rig.pose-juice .muscles, .rig.pose-juice .sign-assembly > rect:last-of-type {
+.rig.pose-juice .body, .rig.pose-juice .muscles, .rig.pose-juice .sign-assembly > rect:last-of-type, .rig.pose-juice .cameo-skin {
   filter: sepia(1) hue-rotate(62deg) saturate(2.6) brightness(0.9);
   animation: rig-hulk-tint 0.45s ease-out 2.4s both, rig-hulk-tint-off 2.5s ease-in-out 603.6s forwards;
 }
@@ -690,7 +706,7 @@
   .rig .dog-tail, .rig .halo, .rig .sparkle, .rig .devil-tail, .rig .wag, .rig .antenna, .rig .cat-tail, .rig .eyefx, .rig .spiral,
   .rig .hammer, .rig .scene, .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
   .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame,
-  .rig .zyn-mouth, .rig .lip-bump, .rig .tin-text, .rig .zyn-glints, .rig .syringe, .rig .juice-fill, .rig .muscles, .rig .sign-assembly > rect {
+  .rig .zyn-mouth, .rig .lip-bump, .rig .tin-text, .rig .zyn-glints, .rig .syringe, .rig .juice-fill, .rig .muscles, .rig .cameo-skin, .rig .sign-assembly > rect {
     animation: none !important;
   }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }
