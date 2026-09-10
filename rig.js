@@ -15,35 +15,6 @@
     <symbol id="lamp-heart" viewBox="0 0 16 16"><path d="M8 14.5 L2 8.5 A3.5 3.5 0 0 1 8 4 A3.5 3.5 0 0 1 14 8.5 Z" /></symbol>
     <symbol id="lamp-star" viewBox="0 0 16 16"><polygon points="8,0.8 10.1,5.6 15.3,6.1 11.4,9.6 12.6,14.7 8,12 3.4,14.7 4.6,9.6 0.7,6.1 5.9,5.6" /></symbol>
     <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
-    <!-- photo cameos, drawn into the rig's style: five flat warm tones
-         (discrete steps are posterisation) and a #211f1c outline traced round
-         the photo's own silhouette. Nearly grey first, so R, G and B step
-         together: with more colour left they step apart and skin speckles.
-         The juice one posterises to the hulk green. -->
-    <filter id="cameo-toon" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
-      <feColorMatrix type="saturate" values="0.12" />
-      <feComponentTransfer result="tone">
-        <feFuncR type="discrete" tableValues="0.13 0.42 0.66 0.85 0.97" />
-        <feFuncG type="discrete" tableValues="0.12 0.24 0.42 0.64 0.85" />
-        <feFuncB type="discrete" tableValues="0.11 0.19 0.33 0.52 0.74" />
-      </feComponentTransfer>
-      <feMorphology in="SourceAlpha" operator="dilate" radius="0.7" result="grown" />
-      <feFlood flood-color="#211f1c" />
-      <feComposite in2="grown" operator="in" result="edge" />
-      <feMerge><feMergeNode in="edge" /><feMergeNode in="tone" /></feMerge>
-    </filter>
-    <filter id="cameo-toon-juice" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
-      <feColorMatrix type="saturate" values="0" />
-      <feComponentTransfer result="tone">
-        <feFuncR type="discrete" tableValues="0.07 0.16 0.27 0.4 0.58" />
-        <feFuncG type="discrete" tableValues="0.14 0.34 0.54 0.72 0.9" />
-        <feFuncB type="discrete" tableValues="0.06 0.13 0.2 0.3 0.42" />
-      </feComponentTransfer>
-      <feMorphology in="SourceAlpha" operator="dilate" radius="0.7" result="grown" />
-      <feFlood flood-color="#211f1c" />
-      <feComposite in2="grown" operator="in" result="edge" />
-      <feMerge><feMergeNode in="edge" /><feMergeNode in="tone" /></feMerge>
-    </filter>
     <filter id="cameo-seam" x="-50%" y="-100%" width="200%" height="300%"><feGaussianBlur stdDeviation="1" /></filter>
   </defs>
   <g class="scene">
@@ -210,7 +181,7 @@
       <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
     <!-- photo cameo: the user's own face (cameos.js), a real photo in the head
-         box (17,30)–(47,60), outlined and toned by #cameo-toon, with a soft
+         box (17,30)–(47,60), untouched but for its cut-out, with a soft
          shadow where the chin meets the body; mouth props and hats go on top -->
     <g class="cameo-photo">
       <ellipse class="cameo-photo-seam" cx="32" cy="58" rx="9" ry="1.8" fill="#211f1c" opacity="0.3" filter="url(#cameo-seam)" />

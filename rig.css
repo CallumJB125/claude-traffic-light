@@ -456,15 +456,13 @@
 .rig:is(.pose-grin, .pose-selfie, .pose-smoke, .pose-zyn, .pose-munch, .eating, .grumpy, .eyes-surprised) .cameo-lips { opacity: 0; }
 
 /* Photo cameos (the user's own, cameos.js): a real photo in the head box,
-   drawn into the rig's style (below). Claude's eyes, brows and lip bump step aside — the photo has
+   left as a photo. Claude's eyes, brows and lip bump step aside — the photo has
    its own. Overlays (X, spirals, tears, hearts, stars, $, lasers), mouth props
    and shades move onto the photo's recorded eyes and mouth (vars set by
    photoAnchors in rig.js); hats, the halo and thinking dots move up to its top. */
 .rig .cameo-photo { opacity: 0; transition: opacity 150ms ease; }
 .rig.has-photo .cameo-photo { opacity: 1; }
-/* The photo sits on the body's pixel grid, posterised, outlined along its own
-   silhouette (#cameo-toon, rig.js); the seam shadow drops to its chin. */
-.rig .cameo-photo-img { image-rendering: pixelated; filter: url(#cameo-toon); }
+/* The seam shadow drops to the photo's chin. */
 .rig .cameo-photo-seam { transform: translateY(var(--chin-dy, 0px)); }
 .rig.has-photo :is(.eye-open, .eye-closed, .zyn-glints, .lip-bump, .eyefx-happy, .eyefx-angry, .eyefx-sad, .eyefx-surprised, .eyefx-wink, .eyefx-sleepy, .eyefx-suspicious, .eyefx-roll, .eyefx-googly) { opacity: 0 !important; }
 .rig.has-photo .eye-anchor { transform: translate(var(--eye-dx, 0px), var(--eye-dy, 0px)) scale(var(--eye-s, 1)); transform-origin: 32px 45.75px; }
@@ -594,10 +592,10 @@
   filter: sepia(1) hue-rotate(62deg) saturate(2.6) brightness(0.9);
   animation: rig-hulk-tint 0.45s ease-out 2.4s both, rig-hulk-tint-off 2.5s ease-in-out 603.6s forwards;
 }
-/* A photo can't tween between filters, so it swaps to the green posterise as the tint lands. */
+/* The photo takes a light green wash, so it still reads as a photo. */
 .rig.pose-juice .cameo-photo-img {
-  filter: url(#cameo-toon-juice);
-  animation: rig-photo-juice 0.45s steps(1, end) 2.4s both, rig-photo-juice-off 2.5s steps(1, end) 603.6s forwards;
+  filter: sepia(0.45) hue-rotate(55deg) saturate(1.5);
+  animation: rig-photo-tint 0.45s ease-out 2.4s both, rig-photo-tint-off 2.5s ease-in-out 603.6s forwards;
 }
 .rig.pose-juice.body-ghost .body-ghost { animation: rig-hulk-tint 0.45s ease-out 2.4s both, rig-hulk-tint-off 2.5s ease-in-out 603.6s forwards, rig-float 2.4s ease-in-out infinite; }
 .rig.pose-juice .muscles { opacity: 1; }
@@ -631,8 +629,8 @@
 @keyframes rig-hulk-off { from { transform: translate(0, 0) scale(1.15); } to { transform: translate(0, 0) scale(1); } }
 @keyframes rig-hulk-tint { from { filter: sepia(0) hue-rotate(0deg) saturate(1) brightness(1); } to { filter: sepia(1) hue-rotate(62deg) saturate(2.6) brightness(0.9); } }
 @keyframes rig-hulk-tint-off { from { filter: sepia(1) hue-rotate(62deg) saturate(2.6) brightness(0.9); } to { filter: sepia(0) hue-rotate(0deg) saturate(1) brightness(1); } }
-@keyframes rig-photo-juice { from { filter: url(#cameo-toon); } to { filter: url(#cameo-toon-juice); } }
-@keyframes rig-photo-juice-off { from { filter: url(#cameo-toon-juice); } to { filter: url(#cameo-toon); } }
+@keyframes rig-photo-tint { from { filter: sepia(0) hue-rotate(0deg) saturate(1); } to { filter: sepia(0.45) hue-rotate(55deg) saturate(1.5); } }
+@keyframes rig-photo-tint-off { from { filter: sepia(0.45) hue-rotate(55deg) saturate(1.5); } to { filter: sepia(0) hue-rotate(0deg) saturate(1); } }
 @keyframes rig-bicep {
   0% { rx: 0px; ry: 0px; cy: 54px; }
   42% { rx: 7.2px; ry: 6.2px; cy: 52px; }

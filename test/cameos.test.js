@@ -76,8 +76,8 @@ test('listing: a user photo beats a shipped one; only user photos are removable'
   assert.deepEqual([by('dad').builtin, by('dad').user], [false, true]);
 });
 
-// 8-bit RGBA PNGs (what Pillow writes for the built faces), alpha only.
-function pngAlpha(buf) {
+// 8-bit RGBA PNGs (what Pillow writes for the built faces).
+function pngPixels(buf) {
   let pos = 8;
   let w; let h; let type;
   const idat = [];
@@ -105,38 +105,40 @@ function pngAlpha(buf) {
       px[y * stride + x] = (r + [0, a, b, (a + b) >> 1, paeth][f]) & 255;
     }
   }
-  return { width: w, height: h, alpha: (x, y) => px[(y * w + x) * 4 + 3] };
+  return { width: w, height: h, alpha: (x, y) => px[(y * w + x) * 4 + 3], rgb: (x, y) => px.readUIntBE((y * w + x) * 4, 3) };
 }
 
-test('the shipped built-in photos: seven 60×60 faces cut along the head, not an oval', () => {
+test('the shipped built-in photos: seven 256×256 faces cut along the head, colours untouched', () => {
   const dir = path.join(__dirname, '..', 'assets', 'cameos', 'built');
   const idx = C.loadIndex(dir);
   assert.deepEqual(Object.keys(idx).sort(), ['baker', 'ellison', 'mcafee', 'neo', 'powell', 'saylor', 'spagni']);
+  assert.equal(C.SIZE, 256);
   let beyondOval = 0;
   for (const [id, e] of Object.entries(idx)) {
     const png = fs.readFileSync(path.join(dir, `${id}.png`));
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', id);
-    const img = pngAlpha(png);
+    const img = pngPixels(png);
     assert.deepEqual([img.width, img.height], [C.SIZE, C.SIZE], id);
     assert.ok(e.mouth.y - e.eyes.y > 0.15 && e.eyes.y > 0.2 && e.mouth.y < 0.95, `${id} anchors`);
     assert.ok(C.BUILTINS.includes(id));
-    // the anchors still land on the face at 60px
     const at = (p) => img.alpha(Math.floor(p.x * C.SIZE), Math.floor(p.y * C.SIZE));
     assert.equal(at(e.eyes), 255, `${id} eyes on the face`);
     assert.equal(at(e.mouth), 255, `${id} mouth on the face`);
-    // above the neck fade the edge is hard: every pixel is in or out
-    const body = Math.floor(C.SIZE * 0.85);
-    const levels = new Set();
-    for (let y = 0; y < body; y += 1) for (let x = 0; x < C.SIZE; x += 1) {
+    let soft = 0;
+    const colours = new Set();
+    for (let y = 0; y < C.SIZE; y += 1) for (let x = 0; x < C.SIZE; x += 1) {
       const a = img.alpha(x, y);
-      levels.add(a);
+      if (a > 0 && a < 255) soft += 1;
+      if (a === 255) colours.add(img.rgb(x, y));
       if (a && C.coverage(x + 0.5, y + 0.5, C.SIZE, 'oval') === 0) beyondOval += 1;
     }
-    assert.deepEqual([...levels].sort((a, b) => a - b), [0, 255], `${id} edge levels`);
+    assert.ok(soft > 200, `${id} has an anti-aliased edge (${soft} soft pixels)`);
+    // a photo, not a posterised handful of tones
+    assert.ok(colours.size > 5000, `${id} has only ${colours.size} colours`);
     assert.ok(img.alpha(C.SIZE / 2, C.SIZE - 1) < 128, `${id} neck fades out`);
   }
   // hair and ears outside where the old oval would have cut them
-  assert.ok(beyondOval > 100, `only ${beyondOval} face pixels outside the oval`);
+  assert.ok(beyondOval > 2000, `only ${beyondOval} face pixels outside the oval`);
 });
 
 test('hasAlpha: a cut-out has see-through pixels, a photo or screenshot does not', () => {
@@ -151,7 +153,7 @@ test('hasAlpha: a cut-out has see-through pixels, a photo or screenshot does not
   assert.equal(C.hasAlpha(cut), true);
 });
 
-test('shapeAlpha pulls the edge in and never adds alpha; finishAlpha makes it hard and fades the neck', () => {
+test('shapeAlpha pulls the edge in and never adds alpha; finishAlpha drops strands, keeps soft edges, fades the neck', () => {
   const n = 20;
   const buf = Buffer.alloc(n * n * 4, 0);
   const put = (x, y, v) => buf.fill(v, (y * n + x) * 4, (y * n + x) * 4 + 4);
@@ -162,19 +164,28 @@ test('shapeAlpha pulls the edge in and never adds alpha; finishAlpha makes it ha
   assert.equal(a(buf, 10, 10), 200, 'the middle keeps its alpha');
   assert.equal(a(buf, 2, 2), 0, 'outside stays clear');
   assert.equal(buf[(10 * n + 10) * 4], 200, 'premultiplied colour follows the alpha');
-  const hard = C.finishAlpha(Buffer.from(buf), n, n, false);
-  assert.equal(a(hard, 10, 10), 255);
-  assert.equal(hard[(10 * n + 10) * 4], 255, 'colour scales up with it');
-  assert.deepEqual(new Set(Array.from({ length: n * n }, (_, i) => hard[i * 4 + 3])), new Set([0, 255]));
+  // a 1-px strand hanging off the block (a mic wire) is opened away; the block
+  // keeps its soft edge and its colour
+  const strand = Buffer.from(buf);
+  for (let y = 0; y < 5; y += 1) strand.fill(180, (y * n + 10) * 4, (y * n + 10) * 4 + 4);
+  const opened = C.finishAlpha(strand, n, n);
+  assert.equal(a(opened, 10, 1), 0, 'the strand is gone');
+  assert.equal(a(opened, 10, 10), 200, 'the middle is untouched');
+  assert.equal(opened[(10 * n + 10) * 4], 200, 'and so is its colour');
+  const edge = a(opened, 5, 10);
+  assert.ok(edge > 0 && edge < 200, `the soft edge survives (${edge})`);
   // under the mouth row the silhouette is trimmed to the oval (no collars)
   const jaw = C.shapeAlpha(Buffer.alloc(n * n * 4, 255), n, n, n / 2);
   assert.equal(a(jaw, 0, 0), 255, 'hair out at the top corner is kept');
   assert.equal(a(jaw, 0, n - 1), 0, 'a shoulder at the bottom corner is not');
   assert.equal(a(jaw, n / 2, n - 3), 255, 'the chin, inside the oval, is kept');
-  const full = Buffer.alloc(n * n * 4, 255);
-  C.finishAlpha(full, n, n, true);
-  assert.equal(a(full, 3, 0), 255);
-  assert.ok(a(full, 3, n - 1) < 80 && a(full, 3, n - 2) > a(full, 3, n - 1) && a(full, 3, n - 2) < 255, 'the bottom rows fade');
+  const m = 100;
+  const full = Buffer.alloc(m * m * 4, 255);
+  C.finishAlpha(full, m, m);
+  const af = (y) => full[(y * m + 3) * 4 + 3];
+  assert.equal(af(0), 255);
+  assert.equal(af(m - 6), 255, 'the fade is short: the chin is left alone');
+  assert.ok(af(m - 1) < 80 && af(m - 2) > af(m - 1) && af(m - 2) < 255, 'the last rows fade');
 });
 
 test('applyMask: oval clears the corners and sides, rounded keeps the edge middles', () => {
@@ -222,7 +233,7 @@ test('addPhoto refuses without an image or a usable name, before touching disk',
 let electronBin = null;
 try { electronBin = require('electron'); } catch { /* not installed */ }
 for (const mode of ['oval', 'rounded', 'cutout']) {
-  test(`addPhoto (${mode}) cuts a 400×300 image to a 60×60 PNG`, { skip: typeof electronBin !== 'string' && 'electron not installed', timeout: 60000 }, () => {
+  test(`addPhoto (${mode}) cuts a 400×300 image to a 256×256 PNG`, { skip: typeof electronBin !== 'string' && 'electron not installed', timeout: 60000 }, () => {
     const dir = tmp();
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
@@ -232,9 +243,9 @@ for (const mode of ['oval', 'rounded', 'cutout']) {
     const out = JSON.parse(line.slice(7));
     assert.equal(out.res.id, 'test-face');
     assert.equal(out.signature, '89504e470d0a1a0a');
-    assert.deepEqual([out.width, out.height], [60, 60]);
+    assert.deepEqual([out.width, out.height], [256, 256]);
     assert.equal(out.centre, 255);
-    assert.deepEqual(out.edgeLevels, [0, 255], 'a hard pixel edge');
+    assert.ok(out.edgeLevels.length > 2 && out.edgeLevels[0] === 0 && out.edgeLevels.at(-1) === 255, 'an anti-aliased edge, not a hard pixel one');
     if (mode === 'cutout') {
       // an opaque photo gets the oval; one with its own transparency is cut
       // along it: here square top corners, and clear below the shape

@@ -1,5 +1,5 @@
 // Photo cameos: the user's own faces, cut out in Lights and kept under
-// ~/.claude-traffic-light/cameos as <id>.png (60×60, transparent outside the
+// ~/.claude-traffic-light/cameos as <id>.png (256×256, transparent outside the
 // head) plus index.json { <id>: { name, eyes, mouth, shape, addedAt } }.
 // Anchors are fractions of the square (0..1). Built-in slots ship a photo in
 // assets/cameos/built (same layout; scripts/build-cameos.py) — alfred stays
@@ -9,10 +9,10 @@ const path = require('path');
 
 const BUILTINS = ['neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
 const ID_RE = /^[a-z0-9-]{1,32}$/;
-// Saved at 2 px per rig unit (the head box is 30 units), so the photo is no
-// denser than the pixel body; it's cut at WORK first, where edges have room.
-const SIZE = 60;
-const WORK = 256;
+// Saved with full photographic detail; it's cut at WORK first, where edges
+// have room.
+const SIZE = 256;
+const WORK = 512;
 const SHAPES = ['oval', 'rounded'];
 const DEFAULT_EYES = { x: 0.5, y: 0.4 };
 const DEFAULT_MOUTH = { x: 0.5, y: 0.75 };
@@ -156,7 +156,7 @@ function setAlpha(buf, i, a) {
 }
 
 // The silhouette at working size, as scripts/build-cameos.py does it: drop the
-// faint fringe, pull the edge in a pixel (the rig's outline covers it) and
+// faint fringe, pull the edge in a pixel (past any leftover backdrop) and
 // soften. Rows from `jawRow` down are trimmed to the oval, which clears
 // collars and shoulders but sits wider than any jaw. Never raises alpha, so
 // there's always colour under it.
@@ -184,30 +184,31 @@ function shapeAlpha(buf, w, h, jawRow) {
   return buf;
 }
 
-// At output size: a hard pixel edge like the rig's, and (for a silhouette) the
-// bottom rows fading out so the neck meets the body instead of stopping.
-const CUT = 110;
-const NECK_FADE = 0.12;
-function finishAlpha(buf, w, h, fadeNeck) {
-  // Opened (3×3 erode, then dilate): strands under 3 px, like a wire or a
-  // stray lock, would read as scratches. Opening only ever removes pixels.
-  let mask = Uint8Array.from({ length: w * h }, (_, i) => (buf[i * 4 + 3] > CUT ? 1 : 0));
-  for (const keep of [(n) => n === 9, (n) => n > 0]) {
-    const next = new Uint8Array(w * h);
+// At output size, for a silhouette: opened (erode, then dilate, over a 5×5
+// window) so strands under 5 px, like a mic wire or a stray lock, don't read
+// as scratches, with the soft edge kept; and the last few rows fade so a neck
+// cut by the crop doesn't end in a hard line. Resampling leaves the inside a
+// shade under opaque, so 250 and up counts as opaque.
+const OPEN_R = 2;
+const NECK_FADE = 0.04;
+function finishAlpha(buf, w, h) {
+  const at = (src, x, y) => src[clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)];
+  for (let i = 3; i < buf.length; i += 4) if (buf[i] >= 250) setAlpha(buf, i - 3, 255);
+  let a = Float32Array.from({ length: w * h }, (_, i) => buf[i * 4 + 3]);
+  for (const pick of [Math.min, Math.max]) {
+    const next = new Float32Array(w * h);
     for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
-      let n = 0;
-      for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) n += mask[clamp(y + dy, 0, h - 1) * w + clamp(x + dx, 0, w - 1)];
-      next[y * w + x] = keep(n) ? 1 : 0;
+      let m = a[y * w + x];
+      for (let dy = -OPEN_R; dy <= OPEN_R; dy += 1) for (let dx = -OPEN_R; dx <= OPEN_R; dx += 1) m = pick(m, at(a, x + dx, y + dy));
+      next[y * w + x] = m;
     }
-    mask = next;
+    a = next;
   }
   for (let y = 0; y < h; y += 1) {
-    const k = fadeNeck ? clamp((h - y - 0.5) / (NECK_FADE * h), 0, 1) : 1;
+    const k = clamp((h - y - 0.5) / (NECK_FADE * h), 0, 1);
     for (let x = 0; x < w; x += 1) {
       const i = (y * w + x) * 4;
-      if (!mask[y * w + x]) { setAlpha(buf, i, 0); continue; }
-      setAlpha(buf, i, 255);
-      if (k < 1) setAlpha(buf, i, Math.round(255 * k));
+      setAlpha(buf, i, Math.min(buf[i + 3], Math.round(a[y * w + x] * k)));
     }
   }
   return buf;
@@ -225,7 +226,7 @@ function cutOut(nativeImage, source, rect, shape, mouth = DEFAULT_MOUTH) {
   if (silhouette) shapeAlpha(bmp, WORK, WORK, Math.round(point(mouth, DEFAULT_MOUTH).y * WORK));
   else applyMask(bmp, WORK, WORK, SHAPES.includes(shape) ? shape : 'oval');
   const small = Buffer.from(nativeImage.createFromBitmap(bmp, { width: WORK, height: WORK }).resize({ width: SIZE, height: SIZE, quality: 'best' }).toBitmap());
-  finishAlpha(small, SIZE, SIZE, silhouette);
+  if (silhouette) finishAlpha(small, SIZE, SIZE);
   return nativeImage.createFromBitmap(small, { width: SIZE, height: SIZE }).toPNG();
 }
 
