@@ -266,6 +266,17 @@ function readPrev() {
   }
 }
 
+// The router shim exports CLAUDE_TRAFFIC_LIGHT_ROUTE="<model>|<reason>" before
+// it execs claude, and every hook process inherits claude's environment.
+function envRoute() {
+  const v = process.env.CLAUDE_TRAFFIC_LIGHT_ROUTE;
+  if (!v) return null;
+  const i = v.indexOf('|');
+  const model = (i < 0 ? v : v.slice(0, i)).trim();
+  if (!['opus', 'sonnet', 'haiku'].includes(model)) return null;
+  return { model, reason: i < 0 ? '' : v.slice(i + 1).slice(0, 200) };
+}
+
 const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
 const prev = readPrev();
 const turnOver = !!prev && TURN_END.has(prev.signal);
@@ -311,6 +322,10 @@ function writeSession() {
       // carry them through so a hook write never erases them.
       mode: prev?.mode ?? null,
       iteration: prev?.iteration ?? 0,
+      // The router's pick for this session; `escalated` is set by the app
+      // when the transcript shows you switched up from it.
+      route: envRoute() || prev?.route || undefined,
+      escalated: prev?.escalated || undefined,
       // updatedAt means "the session last moved" (ignored-N timers, last-touch
       // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
       updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,

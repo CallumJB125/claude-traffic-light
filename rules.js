@@ -35,6 +35,8 @@
     { id: 'team', label: 'Team mode is running', hook: null, kind: 'virtual' },
     { id: 'ralph', label: 'A ralph loop is running', hook: null, kind: 'virtual' },
     { id: 'agents-many', label: '3+ agents at once', hook: null, kind: 'virtual' },
+    { id: 'routed-cheap', label: 'Session routed to a cheaper model', hook: null, kind: 'virtual' },
+    { id: 'escalated', label: 'You switched a routed session up a model', hook: null, kind: 'virtual' },
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
@@ -57,6 +59,8 @@
   const AGENT_KINDS = ['subagent', 'teammate', 'ralph', 'ultrawork'];
   const AGENT_STATUSES = ['working', 'waiting', 'done'];
   const MODES = ['ralph', 'team', 'ultrawork'];
+  // Router picks below Opus; a session carrying one fires 'routed-cheap'.
+  const CHEAP_ROUTES = new Set(['sonnet', 'haiku']);
 
   function normalizeAgent(a, i = 0) {
     if (!a || typeof a !== 'object') return null;
@@ -154,6 +158,8 @@
       if (agents.some((a) => a.kind === 'subagent')) out.push({ signal: 'subagents', cwd: s.cwd, virtual: true, agents: agents.length });
       if (mode === 'team' || agents.some((a) => a.kind === 'teammate')) out.push({ signal: 'team', cwd: s.cwd, virtual: true, agents: agents.length });
       if (mode === 'ralph') out.push({ signal: 'ralph', cwd: s.cwd, virtual: true, agents: agents.length, iteration: Number(s.iteration) || 0 });
+      if (s.escalated) out.push({ signal: 'escalated', cwd: s.cwd, virtual: true });
+      else if (s.route && CHEAP_ROUTES.has(s.route.model)) out.push({ signal: 'routed-cheap', cwd: s.cwd, virtual: true });
     }
     if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
     return out;

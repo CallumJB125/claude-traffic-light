@@ -261,4 +261,102 @@ function spend(turns, { days = 7, historyDays = 60, now = Date.now() } = {}) {
   };
 }
 
-module.exports = { PRICES, SLACK, modelKey, costOf, readTurns, summarise, spend };
+// ── Router history ─────────────────────────────────────────────────────────
+// Cheapest first. A session whose main thread moves up this ladder is you
+// typing /model to a pricier model: the sign the cheap pick was wrong.
+const RANK = { haiku: 1, sonnet: 2, opus: 3, fable: 4, 'fable-5': 4 };
+const family = (k) => (k === 'fable-5' ? 'fable' : k);
+const median = (xs) => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// Per project over the last `days`: sessions, median main-thread turns per
+// session, subagent share of all turns and escalations; plus every escalated
+// session by id. This is what the router shim reads (as history.json).
+function projectHistory(turns, { days = 7, now = Date.now() } = {}) {
+  const from = now - days * DAY_MS;
+  const projects = {};
+  const sessions = new Map();
+  for (const t of turns) {
+    if (t.ts < from || t.ts > now) continue;
+    const p = projects[t.project] || (projects[t.project] = { sessions: 0, medianTurns: 0, turns: 0, subagentTurns: 0, subagentShare: 0, escalations: 0, lastEscalationAt: null });
+    p.turns += 1;
+    if (t.subagent) { p.subagentTurns += 1; continue; }
+    if (!t.sessionId) continue;
+    if (!sessions.has(t.sessionId)) sessions.set(t.sessionId, { project: t.project, turns: [] });
+    sessions.get(t.sessionId).turns.push(t);
+  }
+  const counts = {};
+  const escalated = {};
+  for (const [id, s] of sessions) {
+    (counts[s.project] || (counts[s.project] = [])).push(s.turns.length);
+    s.turns.sort((a, b) => a.ts - b.ts);
+    let prev = null;
+    for (const t of s.turns) {
+      if (!RANK[t.modelKey]) continue;
+      if (prev && RANK[t.modelKey] > RANK[prev]) { escalated[id] = { project: s.project, at: t.ts, from: family(prev), to: family(t.modelKey) }; break; }
+      prev = t.modelKey;
+    }
+  }
+  for (const [name, p] of Object.entries(projects)) {
+    p.sessions = (counts[name] || []).length;
+    p.medianTurns = median(counts[name] || []);
+    p.subagentShare = p.turns ? Math.round((p.subagentTurns / p.turns) * 1000) / 1000 : 0;
+  }
+  for (const e of Object.values(escalated)) {
+    const p = projects[e.project];
+    p.escalations += 1;
+    p.lastEscalationAt = Math.max(p.lastEscalationAt || 0, e.at);
+  }
+  return { at: now, days, projects, escalated };
+}
+
+// Each project's model mix (share of its turns per model) over the last
+// `days` — frozen when routing is switched on, so later spend can be priced
+// at the mix you had before.
+function projectMix(turns, { days = 14, now = Date.now() } = {}) {
+  const from = now - days * DAY_MS;
+  const out = {};
+  for (const t of turns) {
+    if (t.ts < from || t.ts > now || !PRICES[t.modelKey]) continue;
+    const p = out[t.project] || (out[t.project] = { turns: 0, mix: {} });
+    p.turns += 1;
+    p.mix[t.modelKey] = (p.mix[t.modelKey] || 0) + 1;
+  }
+  for (const p of Object.values(out)) for (const k of Object.keys(p.mix)) p.mix[k] = { turns: p.mix[k], share: p.mix[k] / p.turns };
+  return out;
+}
+
+function weightsOf(mix) {
+  if (!mix || typeof mix !== 'object') return null;
+  const w = Object.entries(mix).filter(([k, m]) => PRICES[k] && m && m.share > 0);
+  const sum = w.reduce((a, [, m]) => a + m.share, 0);
+  return sum ? w.map(([k, m]) => [k, m.share / sum]) : null;
+}
+
+// Spend since routing went on, against the same turns priced at the frozen
+// baseline mix (the project's own mix, else the overall one). A saving has
+// the Router's usual range: the baseline models might have needed up to
+// SLACK fewer tokens. A turn that cost more than its baseline counts in full.
+function sinceRouting(turns, { since, frozen, now = Date.now() } = {}) {
+  const global = weightsOf(frozen && frozen.mix);
+  let actual = 0, atBaseline = 0, low = 0, high = 0, count = 0;
+  for (const t of turns) {
+    if (t.ts < since || t.ts > now) continue;
+    const cost = costOf(t);
+    if (cost == null) continue;
+    const w = weightsOf(frozen && frozen.projects && frozen.projects[t.project] && frozen.projects[t.project].mix) || global;
+    const base = w ? w.reduce((a, [k, share]) => a + share * costOf(t, k), 0) : cost;
+    actual += cost;
+    atBaseline += base;
+    count += 1;
+    if (base > cost) { high += base - cost; low += Math.max(0, base / SLACK - cost); } else { high += base - cost; low += base - cost; }
+  }
+  const r = (n) => Math.round(n * 1e4) / 1e4;
+  return { since, to: now, turns: count, actual: r(actual), atBaseline: r(atBaseline), saved: { low: r(low), high: r(high) } };
+}
+
+module.exports = { PRICES, SLACK, modelKey, costOf, readTurns, summarise, spend, projectHistory, projectMix, sinceRouting };

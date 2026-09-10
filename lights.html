@@ -604,6 +604,20 @@
   .route-hint { display: block; margin-top: 6px; padding: 0; background: none; border: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; transition: color var(--t); }
   .route-hint b { color: #4fbe5c; font-weight: 600; }
   .route-hint:hover { color: var(--text); }
+  #router-install-line { max-width: 34ch; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
+  .linkish { background: none; border: none; padding: 0; color: var(--muted); font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
+  .linkish:hover { color: var(--text); }
+  .router-policy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .saved .since { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .saved .v.small { font-size: 24px; }
+  .saved .v.neg { color: #f2a200; }
+  #router-live { display: flex; flex-direction: column; gap: 14px; }
+  table.days th.l, table.days td.l { text-align: left; padding-left: 12px; }
+  table.days td.why { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.days .select { height: 22px; font-size: 12px; }
+  .rsess { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .rsess b { color: var(--text); font-weight: 500; }
+  .rsess .btn { height: 22px; font-size: 11px; flex: none; }
 
   /* Presets popover */
   #presets {
@@ -976,12 +990,22 @@
       <div class="router-head">
         <div>
           <div class="stats-title">Router</div>
-          <div class="stats-sub">Routes each turn to the cheapest model that can do it and keeps big files out of the expensive context. Measuring first — routing arrives in the next update.</div>
+          <div class="stats-sub">Picks the model once, as a session starts: Sonnet or Haiku where your history says that's enough, Opus where it isn't. Never mid-session, since each model keeps its own prompt cache. Pass <code>--model</code> yourself and it steps aside.</div>
         </div>
         <div class="switch">
-          <label class="toggle"><input type="checkbox" id="router-enabled" disabled /> Route my sessions</label>
-          <small>Arrives in the next update</small>
+          <label class="toggle"><input type="checkbox" id="router-enabled" /> Route my sessions</label>
+          <small id="router-install-line">Off</small>
+          <button class="linkish" id="router-show-shim" hidden>Show me the shim</button>
         </div>
+      </div>
+
+      <div class="router-policy">
+        <div class="seg" id="router-policy" role="tablist" aria-label="Policy">
+          <button data-policy="frugal" role="tab">Frugal</button>
+          <button data-policy="balanced" role="tab">Balanced</button>
+          <button data-policy="quality" role="tab">Quality-first</button>
+        </div>
+        <span class="stats-sub" id="router-policy-desc"></span>
       </div>
 
       <div class="stats-bar">
@@ -1003,6 +1027,11 @@
           <div class="d" id="saved-line"></div>
           <div class="d sub" id="saved-haiku"></div>
           <div class="note">Estimate — same token counts, cheaper prices; excludes quality effects. The range allows up to 35% more tokens and turns on the cheaper model.<span id="saved-unknown"></span></div>
+          <div class="since" id="saved-since" hidden>
+            <div class="k" id="since-k">Since you switched routing on</div>
+            <div class="v small" id="since-big">—</div>
+            <div class="d" id="since-line"></div>
+          </div>
         </div>
         <div>
           <div class="stats-title small">By model used</div>
@@ -1011,6 +1040,23 @@
         <div>
           <div class="stats-title small">By project — top 8</div>
           <table class="days" id="router-projects"><thead><tr><th>Project</th><th>Turns</th><th>Tokens</th><th class="h-actual">Actual</th><th class="h-if">If Sonnet</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+
+      <div id="router-live">
+        <div>
+          <div class="stats-title small">Projects — last 7 days</div>
+          <table class="days" id="router-picks"><thead><tr><th>Project</th><th>Sessions</th><th>Median turns</th><th>Escalations</th><th>Pick</th></tr></thead><tbody></tbody></table>
+          <div class="stats-sub" id="router-picks-empty" hidden>No Claude Code sessions in the last 7 days.</div>
+        </div>
+        <div>
+          <div class="stats-title small">Sessions now</div>
+          <div id="router-sessions"></div>
+        </div>
+        <div>
+          <div class="stats-title small">Decisions — last 20</div>
+          <table class="days" id="router-decisions"><thead><tr><th>When</th><th class="l">Project</th><th class="l">Model</th><th class="l">Why</th></tr></thead><tbody></tbody></table>
+          <div class="stats-sub" id="router-decisions-empty" hidden>No decisions yet — they appear as you start <code>claude</code> in a new terminal.</div>
         </div>
       </div>
     </section>
@@ -1788,11 +1834,14 @@
     set('permission', { pose: 'knock', lampFx: 'pulse' });
     set('limit', { body: 'robot', eyes: 'x', lampFx: 'sos' });
     set('done', { pose: 'thumbs', screenFx: 'confetti' });
+    // An accent only: sits just above the lamp owner, so any agent rule's eyes win.
+    d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } });
     return d;
   };
   PRESETS.focus = () => {
     const d = R.defaultRules().filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#93c5fd' } });
     set('limit', { pose: 'none', lampColor: '#ffffff' });
     set('permission', { pose: 'none', sound: null, lampColor: '#ffffff', lampFx: 'breathe' });
     set('working', { pose: 'none', lampColor: '#d4d4d4', lampFx: 'breathe' });
@@ -2166,7 +2215,120 @@
   };
   const MODEL_NAMES = { fable: 'Fable', 'fable-5': 'Fable 5 (legacy)', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 
+  // ── Router: the launcher (switch, policy, picks, live sessions, log) ──
+  let routerOv = null;
+  const ROUTE_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+  const POLICY_DESC = {
+    frugal: "Sonnet for every session, Haiku for short one-shot prompts; Opus only where you've switched up in the last 7 days.",
+    balanced: "Sonnet for light projects (short sessions, no switching up in 7 days); Opus for the rest.",
+    quality: 'Opus for every session; only short one-shot prompts (-p) go to Sonnet.',
+  };
+  const signedMoney = (v) => (v < 0 ? `−${money(-v)}` : money(v));
+  // "−$9.91–$109" reads as a subtraction; a range that crosses zero says "to".
+  const signedRange = (lo, hi) => (signedMoney(lo) === signedMoney(hi) ? signedMoney(hi) : `${signedMoney(lo)}${lo < 0 ? ' to ' : '–'}${signedMoney(hi)}`);
+
+  async function renderRouting() {
+    const ov = await window.lightsApi.routerOverview();
+    if (!ov) return;
+    routerOv = ov;
+    paintRouting(ov);
+  }
+
+  function installLine(st) {
+    const where = st.sandbox ? ` (dev run: sandbox HOME ${st.sandbox})` : '';
+    if (st.installed) return `Installed for ${st.shell} — open a new terminal for it to take effect${where}`;
+    if (st.shimExists && !st.shell) return `Shim written, but your shell isn't zsh, bash or fish — put ${st.binDir} first on your PATH${where}`;
+    if (st.shimExists) return `Shim written, but ${st.rcFile} has no PATH line — switch off and on again${where}`;
+    return `Off — claude starts on its usual model${where}`;
+  }
+
+  function paintRouting(ov) {
+    const st = ov.status;
+    const policy = config.routerPolicy || 'balanced';
+    $('router-enabled').checked = st.shimExists;
+    $('router-install-line').textContent = installLine(st);
+    $('router-show-shim').hidden = !st.shimExists;
+    Array.from($('router-policy').children).forEach((b) => { b.classList.toggle('on', b.dataset.policy === policy); b.setAttribute('aria-selected', b.dataset.policy === policy); });
+    $('router-policy-desc').textContent = POLICY_DESC[policy];
+
+    $('router-picks-empty').hidden = ov.projects.length > 0;
+    $('router-picks').hidden = !ov.projects.length;
+    $('router-picks').querySelector('tbody').innerHTML = ov.projects.slice(0, 12).map((p) => {
+      const auto = p.override === 'auto' ? p.pick.model : null;
+      const opt = (v, label) => `<option value="${v}"${p.override === v ? ' selected' : ''}>${label}</option>`;
+      return `<tr><td class="name"><span title="${escape(p.name)}">${escape(p.name)}</span></td><td>${p.sessions}</td><td>${Math.round(p.medianTurns)}</td><td>${p.escalations || '—'}</td>`
+        + `<td><select class="select" data-project="${escape(p.name)}" title="${escape(p.pick.reason)}">${opt('auto', `Auto${auto ? ` · ${ROUTE_NAMES[auto]}` : ''}`)}${opt('opus', 'Opus')}${opt('sonnet', 'Sonnet')}${opt('haiku', 'Haiku')}</select></td></tr>`;
+    }).join('');
+
+    const overrides = config.routerProjects || {};
+    $('router-sessions').innerHTML = ov.sessions.length ? ov.sessions.map((s) => {
+      const r = s.route;
+      const what = !r ? 'not routed — started before routing, or you picked the model'
+        : s.escalated ? `${ROUTE_NAMES[r.model]} · you switched up since`
+        : `${ROUTE_NAMES[r.model]} · ${r.reason || ''}`;
+      const offer = r && r.model !== 'opus' && overrides[s.project] !== 'opus';
+      return `<div class="rsess"><span><b>${escape(s.project || '—')}</b> · ${escape(what)}</span>${offer ? `<button class="btn ghost" data-opus="${escape(s.project)}">Use Opus next time</button>` : ''}</div>`;
+    }).join('') : '<div class="stats-sub">No sessions running.</div>';
+
+    $('router-decisions-empty').hidden = ov.decisions.length > 0;
+    $('router-decisions').hidden = !ov.decisions.length;
+    $('router-decisions').querySelector('tbody').innerHTML = ov.decisions.map((x) => {
+      const t = new Date(x.at);
+      const when = t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const proj = String(x.cwd || '').split('/').filter(Boolean).pop() || '—';
+      return `<tr title="${escape(x.args_summary || '')}"><td class="name">${when}</td><td class="l">${escape(proj)}</td><td class="l">${x.model ? ROUTE_NAMES[x.model] || escape(x.model) : '—'}</td><td class="l why">${escape(x.reason || '')}</td></tr>`;
+    }).join('');
+
+    const since = ov.since;
+    $('saved-since').hidden = !config.routerEnabledAt || !since;
+    if (since) {
+      const sub = !!config.routerSubscriberView;
+      const date = new Date(config.routerEnabledAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+      $('since-k').textContent = `Since you switched routing on (${date})`;
+      $('since-big').classList.toggle('neg', since.saved.high < 0);
+      if (!since.turns) {
+        $('since-big').textContent = '—';
+        $('since-line').textContent = 'No turns since then yet.';
+      } else if (sub) {
+        $('since-big').textContent = pctRange(since.saved.low, since.saved.high, since.atBaseline);
+        $('since-line').textContent = `of your usage kept vs your pre-routing model mix · ${since.turns.toLocaleString('en-US')} turns`;
+      } else {
+        $('since-big').textContent = signedRange(since.saved.low, since.saved.high);
+        $('since-line').textContent = `${money(since.actual)} actual vs ${money(since.atBaseline)} at your pre-routing model mix · ${since.turns.toLocaleString('en-US')} turns`;
+      }
+    }
+  }
+
+  $('router-enabled').addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    e.target.disabled = true;
+    $('router-install-line').textContent = on ? 'Switching on…' : 'Switching off…';
+    try {
+      await window.lightsApi.routerSetEnabled(on);
+      config = await window.lightsApi.getConfig();
+    } finally {
+      e.target.disabled = false;
+    }
+    renderRouting();
+  });
+  $('router-show-shim').addEventListener('click', () => window.lightsApi.routerRevealShim());
+  $('router-policy').addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-policy]');
+    if (!b) return;
+    config = await window.lightsApi.saveConfig({ routerPolicy: b.dataset.policy });
+    renderRouting();
+  });
+  async function setProjectPick(name, pick) {
+    const next = { ...(config.routerProjects || {}) };
+    if (pick === 'auto') delete next[name]; else next[name] = pick;
+    config = await window.lightsApi.saveConfig({ routerProjects: next });
+    renderRouting();
+  }
+  $('router-picks').addEventListener('change', (e) => { const s = e.target.closest('select[data-project]'); if (s) setProjectPick(s.dataset.project, s.value); });
+  $('router-sessions').addEventListener('click', (e) => { const b = e.target.closest('button[data-opus]'); if (b) setProjectPick(b.dataset.opus, 'opus'); });
+
   async function renderRouter() {
+    renderRouting();
     const days = routerDays;
     const sum = await window.lightsApi.getUsageSummary({ days });
     if (days !== routerDays || !sum) return;
@@ -2228,6 +2390,7 @@
   $('router-subscriber').addEventListener('change', async (e) => {
     config = await window.lightsApi.saveConfig({ routerSubscriberView: e.target.checked });
     if (routerSum) paintRouter(routerSum);
+    if (routerOv) paintRouting(routerOv);
   });
 
   // ── Boot ───────────────────────────────────────────────────────────────
@@ -2240,7 +2403,7 @@
     if (q.get('mode') === 'live') previewMode = 'live';
     if (q.get('view') === 'stats' || q.get('view') === 'router') setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
-    if (q.get('scroll')) setTimeout(() => { (q.get('view') === 'stats' ? $('stats') : $('editor')).scrollTop = Number(q.get('scroll')); }, 400);
+    if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), router: $('router') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'router' ? 3000 : 400);
     setDirty(false);
     renderList(); renderEditor(); renderStage();
     refreshLive();

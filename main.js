@@ -7,6 +7,8 @@ const Rules = require('./rules.js');
 const Hooks = require('./hooks/install.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
+const Router = require('./router.js');
+const RouterInstall = require('./router-install.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
 const http = require('http');
@@ -225,6 +227,8 @@ const DEFAULT_CONFIG = {
   // Best guess at who pays per token: no API key in the environment usually
   // means a subscription, where "% of your usage" reads better than dollars.
   routerSubscriberView: !process.env.ANTHROPIC_API_KEY,
+  routerPolicy: 'balanced',
+  routerProjects: {},
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -308,6 +312,26 @@ function flushStats() {
 const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
 const SET_STATUS_SCRIPT = path.join(HOOKS_DIR, 'set-status.js');
 const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
+// The shim runs router.js with plain node, which can't read inside app.asar,
+// so the packaged copy is an extraResource like hooks/.
+const ROUTER_SCRIPT = app.isPackaged ? path.join(process.resourcesPath, 'router.js') : path.join(__dirname, 'router.js');
+// Dev runs never touch the real shell rc: switching routing on from one
+// installs into a sandbox HOME instead.
+const ROUTER_HOME = process.env.CLAUDE_TRAFFIC_LIGHT_ROUTER_HOME || (IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-router-dev-home') : os.homedir());
+const ROUTER_SANDBOXED = ROUTER_HOME !== os.homedir();
+const ROUTER_ROOT = ROUTER_SANDBOXED ? path.join(ROUTER_HOME, '.claude-traffic-light') : ROOT_DIR;
+function routerOpts() {
+  return {
+    home: ROUTER_HOME,
+    root: ROUTER_ROOT,
+    // A Finder-launched app may have no $SHELL; the passwd entry always does.
+    shellPath: process.env.SHELL || os.userInfo().shell,
+    env: ROUTER_SANDBOXED ? {} : process.env,
+    routerScript: ROUTER_SCRIPT,
+    electron: process.execPath,
+    configPath: CONFIG_FILE,
+  };
+}
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
@@ -668,7 +692,17 @@ function computeState(opts = {}) {
     return { look: { ...asked.look, tasks }, reason: 'session', sessions, fired: ['permission'], owned, firedNames: Rules.firedNames(config.rules, asked.fired, asked.owned), agentCount, pending, tasks };
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), routed: routedModel(sessions), agentCount, pending, tasks, minions };
+}
+
+// The cheap model the most recently active routed session started on.
+function routedModel(sessions) {
+  let best = null;
+  for (const s of sessions) {
+    if (!s.route || s.escalated || (s.route.model !== 'sonnet' && s.route.model !== 'haiku')) continue;
+    if (!best || (Date.parse(s.updatedAt || '') || 0) > (Date.parse(best.updatedAt || '') || 0)) best = s;
+  }
+  return best ? (best.route.model === 'sonnet' ? 'Sonnet' : 'Haiku') : null;
 }
 
 // The tool of the most recently updated session that is using one.
@@ -2030,6 +2064,82 @@ function getUsageTurns() {
 }
 ipcMain.handle('get-usage-summary', async (_e, opts) => Usage.summarise(await getUsageTurns(), { days: Number(opts?.days) === 30 ? 30 : 7 }));
 
+// ── Router, phase 1: the launcher shim ─────────────────────────────────────
+// The shim reads history.json rather than the transcripts, so it has to be
+// kept fresh from here.
+const ROUTER_HISTORY_MS = 5 * 60 * 1000;
+const routerFile = (name) => path.join(ROUTER_ROOT, 'router', name);
+
+async function refreshRouterHistory() {
+  const history = Usage.projectHistory(await getUsageTurns());
+  fs.mkdirSync(path.join(ROUTER_ROOT, 'router'), { recursive: true });
+  writeJsonAtomic(routerFile('history.json'), { at: history.at, days: history.days, projects: history.projects });
+  markEscalations(history.escalated);
+  return history;
+}
+
+// A session the router started cheap, whose transcript then moved up a
+// model, gets `escalated` in its file — that is what the rules' 'escalated'
+// signal reads. set-status.js carries the flag through its own writes.
+function markEscalations(escalated) {
+  let files = [];
+  try { files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
+  for (const f of files) {
+    const file = path.join(SESSIONS_DIR, f);
+    let readAt;
+    try { readAt = fs.statSync(file).mtimeMs; } catch { continue; }
+    const s = Agents.readJson(file);
+    if (!s || s.escalated || !s.route || !escalated[s.sessionId] || !['sonnet', 'haiku'].includes(s.route.model)) continue;
+    try { writeJsonAtomic(file, { ...s, escalated: true }, readAt); } catch { /* the session ended mid-poll */ }
+  }
+}
+
+function routerStatus() {
+  return { ...RouterInstall.status(routerOpts()), sandbox: ROUTER_SANDBOXED ? ROUTER_HOME : null, enabledAt: loadConfig().routerEnabledAt || null };
+}
+
+ipcMain.handle('router-set-enabled', async (_e, on) => {
+  const opts = routerOpts();
+  if (!on) {
+    RouterInstall.uninstall(opts);
+    saveConfig({ routerEnabled: false });
+    console.log('[router] switched off');
+    return routerStatus();
+  }
+  const turns = await getUsageTurns();
+  // Frozen once, on the first switch-on: the pre-routing mix every later
+  // "since you switched on" saving is priced against.
+  const baseline = { ...Usage.summarise(turns, { days: 1 }).baseline, projects: Usage.projectMix(turns) };
+  const st = RouterInstall.install({ ...opts, baseline });
+  saveConfig({ routerEnabled: true, routerEnabledAt: loadConfig().routerEnabledAt || new Date().toISOString() });
+  console.log('[router] switched on', JSON.stringify({ shell: st.shell, rc: st.rcFile, shim: st.shim }));
+  await refreshRouterHistory();
+  return routerStatus();
+});
+
+ipcMain.handle('router-reveal-shim', () => {
+  const st = RouterInstall.status(routerOpts());
+  if (!st.shimExists) return false;
+  shell.showItemInFolder(st.shim);
+  return true;
+});
+
+ipcMain.handle('router-overview', async () => {
+  const config = loadConfig();
+  const turns = await getUsageTurns();
+  const history = Usage.projectHistory(turns);
+  const projects = Object.entries(history.projects)
+    .filter(([, p]) => p.sessions)
+    .map(([name, p]) => ({ name, ...p, override: config.routerProjects?.[name] || 'auto', pick: Router.decide({ cwd: name, history, config }) }))
+    .sort((a, b) => b.sessions - a.sessions || b.turns - a.turns);
+  const sessions = aggregateState({ ignoreTravel: true }).sessions
+    .filter((s) => !s.source || s.source === 'claude')
+    .map((s) => ({ sessionId: s.sessionId, project: Router.projectKey(s.cwd), route: s.route || null, escalated: !!s.escalated, signal: s.signal }));
+  const frozen = RouterInstall.readFrozen(routerOpts());
+  const since = config.routerEnabledAt ? Usage.sinceRouting(turns, { since: Date.parse(config.routerEnabledAt), frozen }) : null;
+  return { status: routerStatus(), policy: config.routerPolicy, projects, sessions, decisions: Router.readDecisions(routerFile('decisions.jsonl'), 20), since };
+});
+
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
 let cycleIndex = 0;
@@ -2343,6 +2453,12 @@ app.whenReady().then(() => {
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 
   if (!IS_DEV_RUN) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
+  // Only while the shim exists: nothing reads history.json otherwise.
+  const routerTick = () => {
+    if (!RouterInstall.status(routerOpts()).shimExists) return;
+    refreshRouterHistory().catch((err) => console.warn('[router] history not refreshed:', err.message));
+  };
+  if (!DEMO) { setTimeout(routerTick, 15000); every(ROUTER_HISTORY_MS, routerTick, 'router-history'); }
 
   if (DIAG) startDiag();
   if (DEMO === 'knock') {

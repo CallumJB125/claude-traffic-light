@@ -35,6 +35,9 @@
       "overlay-preload.js",
       "stats.js",
       "usage.js",
+      "router.js",
+      "router-install.js",
+      "bin/**/*",
       "agents.js",
       "tray.html",
       "tray-preload.js"
@@ -43,6 +46,10 @@
       {
         "from": "hooks",
         "to": "hooks"
+      },
+      {
+        "from": "router.js",
+        "to": "router.js"
       }
     ],
     "mac": {

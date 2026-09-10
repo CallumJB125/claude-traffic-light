@@ -146,7 +146,7 @@
       // Lamp owner first (the real state), then the tool, then the accents
       // layered on top — dropped with '…' once the line gets too long.
       const names = data.firedNames?.length ? data.firedNames : [look.name || 'Claude Traffic Light'];
-      let text = names[0] + (data.tool ? ` · ${data.tool}` : '');
+      let text = names[0] + (data.tool ? ` · ${data.tool}` : '') + (data.routed ? ` · routed ${data.routed}` : '');
       for (const n of names.slice(1)) {
         if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }
         text += ` · ${n}`;
