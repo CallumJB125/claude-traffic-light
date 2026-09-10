@@ -1557,7 +1557,7 @@ function broadcastStatus() {
   try {
     const st = aggregateState();
     updateOverlay(st.look);
-    applyStrip(!!((st.pending && st.pending.length) || st.advice) && !travelLook);
+    applyStrip(!!(st.pending && st.pending.length) && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);

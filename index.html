@@ -75,15 +75,6 @@
   #ask .allow { background: #2fae3e; }
   #ask .deny { background: #b8443a; }
   #ask button:active { transform: scale(0.96); }
-  /* Router advice strip: where the Allow / Deny strip goes, never with it. */
-  #advise { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; padding: 0 6px 4px; gap: 4px; align-items: center; flex-wrap: wrap; align-content: flex-end; }
-  body.advising #advise { display: flex; }
-  body.advising #app { height: calc(100% - 46px); }
-  #advise button { flex: 1; height: 22px; border: none; border-radius: 6px; font: 600 10px -apple-system, system-ui, sans-serif; cursor: pointer; color: #fff; }
-  #advise .copy { background: #2d8f86; }
-  #advise .keep { background: #55505c; }
-  #advise button:active { transform: scale(0.96); }
-  #advise-what, #ask-what { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 6px; border-radius: 5px; background: rgba(20,20,22,0.92); color: #fff; font: 500 9px ui-monospace, Menlo, monospace; text-align: center; }
 </style>
 </head>
 <body>
@@ -96,11 +87,6 @@
     <div id="ask-what"></div>
     <button class="allow" id="allow" title="Allow this tool call">Allow</button>
     <button class="deny" id="deny" title="Deny this tool call">Deny</button>
-  </div>
-  <div id="advise">
-    <div id="advise-what"></div>
-    <button class="copy" id="advise-copy" title="Copies the /model command and brings that terminal forward — you paste it">Copy /model</button>
-    <button class="keep" id="advise-keep" title="Keep this session on its model">Keep</button>
   </div>
 
   <script src="rig.js"></script>
@@ -116,7 +102,6 @@
     app.addEventListener('mouseleave', () => { hovering = false; if (rig.look) rig.setLook({ ...rig.look, showRoster: false }); });
     let sleepSince = null;
     let currentRequest = null;
-    let currentAdvice = null;
     let confettiTimer = null;
     const GRUMPY_AFTER_MS = 3 * 60 * 1000;
     const TOOLTIP_MAX = 90;
@@ -136,15 +121,6 @@
         document.getElementById('ask-what').textContent = `${req.tool}: ${req.summary || ''}`.slice(0, 80);
         document.getElementById('ask-what').title = `${req.tool} ${req.summary || ''}`;
       } else currentRequest = null;
-      // Router advice strip — only when no permission request needs the room.
-      const adv = !req && data.reason !== 'travel' ? data.advice : null;
-      document.body.classList.toggle('advising', !!adv);
-      currentAdvice = adv || null;
-      if (adv) {
-        const name = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' }[adv.model] || adv.model;
-        document.getElementById('advise-what').textContent = `Router: this session would do fine on ${name}`;
-        document.getElementById('advise-what').title = `${adv.project || 'session'}: ${adv.reason || ''}`;
-      }
       // Confetti fires on entering a celebrating state, then again every 10s
       // for as long as that state holds.
       if (look.celebrate && look.ruleId !== lastRuleId) {
@@ -169,7 +145,7 @@
       // Lamp owner first (the real state), then the tool, then the accents
       // layered on top — dropped with '…' once the line gets too long.
       const names = data.firedNames?.length ? data.firedNames : [look.name || 'Claude Traffic Light'];
-      let text = names[0] + (data.tool ? ` · ${data.tool}` : '') + (data.routed ? ` · routed ${data.routed}` : '') + (data.saved ? ` · ${data.saved}` : '');
+      let text = names[0] + (data.tool ? ` · ${data.tool}` : '');
       for (const n of names.slice(1)) {
         if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }
         text += ` · ${n}`;
@@ -229,13 +205,6 @@
 
     document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'allow'); });
     document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'deny'); });
-    document.getElementById('advise-copy').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!currentAdvice) return;
-      const r = await window.trafficLight.adviceCopy(currentAdvice.sessionId);
-      if (r && r.feedback) showFeedback(r.feedback);
-    });
-    document.getElementById('advise-keep').addEventListener('click', (e) => { e.stopPropagation(); if (currentAdvice) window.trafficLight.adviceKeep(currentAdvice.sessionId); });
     window.trafficLight.onEvent((name) => rig.playEvent(name));
     window.trafficLight.onSoundFlash(() => rig.flash(600));
 
