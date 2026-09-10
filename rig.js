@@ -179,25 +179,32 @@
       <g fill="#c9c2b8" opacity="0.8"><rect x="22" y="49.2" width="1" height="1" /><rect x="26" y="49.9" width="1" height="1" /><rect x="30" y="49.8" width="1" height="1" /><rect x="34" y="49.9" width="1" height="1" /><rect x="38" y="49.9" width="1" height="1" /><rect x="42" y="49.2" width="1" height="1" /></g>
       <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
+    <!-- photo cameo: the user's own face (cameos.js), a real photo in the head
+         box (17,30)–(47,60) with a dark edge; mouth props and hats go on top -->
+    <g class="cameo-photo">
+      <ellipse class="cameo-photo-edge oval" cx="32" cy="45" rx="13.6" ry="16" fill="#211f1c" />
+      <rect class="cameo-photo-edge rounded" x="16" y="29" width="32" height="32" rx="6.4" fill="#211f1c" />
+      <image class="cameo-photo-img" x="17" y="30" width="30" height="30" preserveAspectRatio="xMidYMid slice" />
+    </g>
     <!-- knock: a fist that raps forward; used when Claude walks to your terminal -->
     <g class="knock-fist"><rect x="50" y="46" width="6" height="6" rx="1.5" fill="#da7756" stroke="#211f1c" stroke-width="0.5" /></g>
     <!-- cookie: the token treat you feed him (⌥-click) -->
     <g class="cookie"><circle cx="54" cy="46" r="3.6" fill="#c98a4b" /><circle cx="52.8" cy="45" r="0.8" fill="#5a3a1a" /><circle cx="55.4" cy="47.2" r="0.8" fill="#5a3a1a" /><circle cx="54.6" cy="44.4" r="0.6" fill="#5a3a1a" /></g>
     <!-- big toothy grin -->
-    <g class="grin"><rect x="23" y="48.5" width="18" height="3.6" rx="1.8" fill="#211f1c" /><rect x="24.5" y="49.2" width="15" height="1.6" fill="#f2efe8" /><rect x="28" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="31.5" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="35" y="49.2" width="0.6" height="1.6" fill="#211f1c" /></g>
+    <g class="mouth-anchor"><g class="grin"><rect x="23" y="48.5" width="18" height="3.6" rx="1.8" fill="#211f1c" /><rect x="24.5" y="49.2" width="15" height="1.6" fill="#f2efe8" /><rect x="28" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="31.5" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="35" y="49.2" width="0.6" height="1.6" fill="#211f1c" /></g></g>
     <!-- selfie: phone held out, flash burst -->
     <g class="selfie"><rect x="50" y="40" width="7" height="11" rx="1.5" fill="#1a1a1e" stroke="#9aa3ad" stroke-width="0.6" /><circle class="flashbulb" cx="53.5" cy="42.3" r="1.1" fill="#fff5d6" /></g>
     <!-- cigarette: held at the mouth, smoke drifts up -->
-    <g class="cig">
+    <g class="mouth-anchor"><g class="cig">
       <g transform="rotate(-12 34 50)">
         <rect x="34" y="49.2" width="10" height="1.7" rx="0.5" fill="#f2efe8" /><rect x="34" y="49.2" width="2.6" height="1.7" rx="0.5" fill="#d9a066" /><rect class="ember" x="43.2" y="49.1" width="1.4" height="1.9" rx="0.4" fill="#ff5a1f" />
         <rect x="37" y="48.2" width="4.2" height="3.6" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
       </g>
       <g class="wisps" fill="#c9c9d1"><circle class="wisp s1" cx="44.6" cy="47.5" r="0.7" /><circle class="wisp s2" cx="44.6" cy="47.5" r="0.9" /><circle class="wisp s3" cx="44.6" cy="47.5" r="0.6" /><circle class="wisp s4" cx="44.6" cy="47.5" r="1" /></g>
       <g class="exhale" fill="#d7d7de"><circle class="ex e1" cx="33" cy="51" r="1.4" /><circle class="ex e2" cx="33" cy="51" r="1.9" /><circle class="ex e3" cx="33" cy="51" r="1.2" /></g>
-    </g>
+    </g></g>
     <!-- zyn tin + pouch; the mouth opens for it and it ends up as a bump under the upper lip -->
-    <g class="zyn"><rect class="zyn-mouth" x="29" y="49.4" width="6" height="1.2" rx="0.6" fill="#211f1c" /><path class="lip-bump" d="M29.8 49.5 q2.2 -3 4.4 0 z" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.45" /><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g>
+    <g class="mouth-anchor"><g class="zyn"><rect class="zyn-mouth" x="29" y="49.4" width="6" height="1.2" rx="0.6" fill="#211f1c" /><path class="lip-bump" d="M29.8 49.5 q2.2 -3 4.4 0 z" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.45" /><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g></g>
     <!-- table, rolled note, line -->
     <g class="table">
       <rect x="4" y="62" width="56" height="2.2" fill="#8a5a2b" /><rect x="7" y="64" width="2" height="5" fill="#6b4420" /><rect x="55" y="64" width="2" height="5" fill="#6b4420" />
@@ -233,6 +240,8 @@
       <rect x="14" y="52" width="22" height="4" rx="1.5" transform="rotate(-14 25 54)" />
       <rect x="28" y="52" width="22" height="4" rx="1.5" transform="rotate(14 39 54)" />
     </g>
+    <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
+    <g class="eye-anchor">
     <rect class="eye-open" x="22" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-open" x="37.5" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-closed" x="21" y="45.25" width="6.5" height="1.6" rx="0.8" />
@@ -291,6 +300,7 @@
     <g class="eyefx eyefx-laser">
       <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
     </g>
+    </g><!-- /eye-anchor -->
     <!-- cameos (front layer): eyewear, over the eyes -->
     <g class="cameo cameo-neo">
       <rect x="18" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="42.8" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="27.2" y="44.6" width="9.6" height="0.8" fill="#0a0a0d" />
@@ -309,7 +319,7 @@
       <rect x="50" y="48" width="8" height="7" rx="1" />
       <rect x="48" y="42" width="4" height="8" rx="1.5" />
     </g>
-    <rect class="grumpy-mouth" x="26" y="49" width="12" height="1.8" rx="0.9" />
+    <g class="mouth-anchor"><rect class="grumpy-mouth" x="26" y="49" width="12" height="1.8" rx="0.9" /></g>
     <!-- prop: guitar, slung across the front, strummed by a small hand -->
     <g class="prop prop-guitar">
       <rect x="24" y="48" width="20" height="11" rx="4" fill="#8a5a2b" />
@@ -385,12 +395,12 @@
     <polygon points="29.5,28 34.5,28 33.2,25.5 30.8,25.5" fill="#f472b6" />
     <circle cx="32" cy="22" r="2" fill="#f2efe8" />
   </g>
-  <g class="costume costume-shades">
+  <g class="eye-anchor"><g class="costume costume-shades">
     <rect x="19.5" y="42.5" width="9" height="5.5" rx="1.5" fill="#111" />
     <rect x="35.5" y="42.5" width="9" height="5.5" rx="1.5" fill="#111" />
     <rect x="28.5" y="44" width="7" height="1.4" fill="#111" />
     <rect x="21" y="43.5" width="3" height="1" fill="#fff" opacity="0.5" /><rect x="37" y="43.5" width="3" height="1" fill="#fff" opacity="0.5" />
-  </g>
+  </g></g>
   <g class="costume costume-halo">
     <ellipse class="halo" cx="32" cy="32" rx="9" ry="2.4" fill="none" stroke="#f2d16b" stroke-width="1.6" />
   </g>
@@ -515,9 +525,43 @@
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker'];
+  // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
+  // user photo); the drawings below are the fallback, and alfred's the face.
+  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
   // cameos whose eyewear is opaque: the eyes underneath are hidden, like the shades costume
   const CAMEOS_HIDE_EYES = new Set(['neo']);
+  // Photo cameos: any id the user added (cameos.js). A built-in id with a
+  // photo shows the photo instead of its drawing.
+  const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
+  const PHOTO_BOX = { x: 17, y: 30, size: 30 };
+  // Photos this window knows about: the Lights editor registers them all; the
+  // widget and tray get the active one on the look (look.cameoPhoto).
+  const PHOTOS = new Map();
+  function setCameoPhotos(list) {
+    PHOTOS.clear();
+    for (const p of list || []) if (p && p.src && CAMEO_ID.test(p.id)) PHOTOS.set(p.id, { id: p.id, rev: p.rev ?? p.addedAt ?? 0, src: p.src, eyes: p.eyes, mouth: p.mouth, shape: p.shape });
+  }
+  // Claude's eyes centre on (32, 45.75), 15.5 apart; his mouth is at (32, 50);
+  // hats sit on y 39. A photo's anchors (fractions of its square) map into the
+  // head box; the face's scale comes from the eye-to-mouth gap, which on a real
+  // face is close to the distance between the pupils.
+  function photoAnchors(photo) {
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const at = (p, dx, dy) => ({
+      x: PHOTO_BOX.x + clamp(Number.isFinite(p && p.x) ? p.x : dx, 0, 1) * PHOTO_BOX.size,
+      y: PHOTO_BOX.y + clamp(Number.isFinite(p && p.y) ? p.y : dy, 0, 1) * PHOTO_BOX.size,
+    });
+    const eyes = at(photo.eyes, 0.5, 0.4);
+    const mouth = at(photo.mouth, 0.5, 0.75);
+    const gap = Math.max(2, mouth.y - eyes.y);
+    const s = clamp((gap * 0.95) / 15.5, 0.4, 1);
+    const top = clamp(eyes.y - gap * 1.3, PHOTO_BOX.y + 1, eyes.y - 3);
+    return {
+      '--eye-dx': `${(eyes.x - 32).toFixed(2)}px`, '--eye-dy': `${(eyes.y - 45.75).toFixed(2)}px`, '--eye-s': s.toFixed(3),
+      '--mouth-dx': `${(mouth.x - 32).toFixed(2)}px`, '--mouth-dy': `${(mouth.y - 50).toFixed(2)}px`, '--mouth-s': clamp(s * 1.25, 0.55, 1).toFixed(3),
+      '--hat-dy': `${(top - 39).toFixed(2)}px`,
+    };
+  }
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
@@ -623,11 +667,17 @@
         for (const c of COSTUMES) svg.classList.remove(`costume-${c}`);
         if (costume !== 'none') svg.classList.add(`costume-${costume}`);
       }
-      const cameo = CAMEOS.includes(look.cameo) ? look.cameo : 'none';
-      if (!current || current.cameo !== cameo) {
+      // A photo when one exists for the id (the look's own, else the registry),
+      // else the drawing for a built-in, else nothing (a removed photo).
+      const cameoId = typeof look.cameo === 'string' && CAMEO_ID.test(look.cameo) ? look.cameo : 'none';
+      const photo = cameoId === 'none' ? null : (look.cameoPhoto && look.cameoPhoto.id === cameoId && look.cameoPhoto.src ? look.cameoPhoto : PHOTOS.get(cameoId)) || null;
+      const cameo = photo || CAMEOS.includes(cameoId) ? cameoId : 'none';
+      const photoKey = photo ? `${photo.id}:${photo.rev}:${photo.src.length}` : '';
+      if (!current || current.cameo !== cameo || current.photoKey !== photoKey) {
         for (const c of CAMEOS) svg.classList.remove(`cameo-${c}`);
-        if (cameo !== 'none') svg.classList.add(`cameo-${cameo}`);
-        svg.classList.toggle('cameo-hides-eyes', CAMEOS_HIDE_EYES.has(cameo));
+        if (!photo && cameo !== 'none') svg.classList.add(`cameo-${cameo}`);
+        svg.classList.toggle('cameo-hides-eyes', !photo && CAMEOS_HIDE_EYES.has(cameo));
+        wearPhoto(photo);
       }
       const text = (look.text || DEFAULT_TEXT).toUpperCase().slice(0, 24);
       const t = svg.querySelector('.banner-text');
@@ -641,7 +691,16 @@
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
-      current = { ...look, pose, costume, cameo, lampFx: fx, signFx };
+      current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx };
+    }
+
+    function wearPhoto(photo) {
+      svg.classList.toggle('has-photo', !!photo);
+      const img = svg.querySelector('.cameo-photo-img');
+      if (!photo) { img.removeAttribute('href'); return; }
+      img.setAttribute('href', photo.src);
+      svg.classList.toggle('photo-rounded', photo.shape === 'rounded');
+      for (const [k, v] of Object.entries(photoAnchors(photo))) svg.style.setProperty(k, v);
     }
 
     let eventTimer = null;
@@ -1015,6 +1074,8 @@
   window.RIG_POSES = POSES;
   window.RIG_COSTUMES = COSTUMES;
   window.RIG_CAMEOS = CAMEOS;
+  window.RIG_CAMEO_ID = CAMEO_ID;
+  window.rigSetCameoPhotos = setCameoPhotos;
   window.RIG_BODIES = BODIES;
   window.RIG_EFFECTS = EFFECTS;
   window.RIG_PETS = PETS;

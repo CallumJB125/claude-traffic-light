@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('lightsApi', {
   signalEndpoint: () => ipcRenderer.invoke('signal-endpoint'),
   previewOnWidget: (look, ms) => ipcRenderer.invoke('preview-on-widget', look, ms),
   openPreferences: () => ipcRenderer.invoke('open-preferences'),
+  cameos: {
+    list: () => ipcRenderer.invoke('cameos-list'),
+    chooseFile: () => ipcRenderer.invoke('cameos-choose-file'),
+    add: (payload) => ipcRenderer.invoke('cameos-add', payload),
+    remove: (id) => ipcRenderer.invoke('cameos-remove', id),
+  },
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   onShowView: (cb) => ipcRenderer.on('show-view', (e, v) => cb(v)),
 });

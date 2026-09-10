@@ -677,6 +677,115 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+  /* ── Photo cameos: row tiles + the add-a-face modal ─────────────────── */
+  .posebtn > span { max-width: 36px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .posecell { position: relative; display: inline-flex; }
+  .addface {
+    width: 40px; height: 46px; padding: 0;
+    border-radius: 6px; border: 1px dashed var(--line-strong); background: transparent;
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    color: var(--muted); font-size: 10px;
+    transition: border-color var(--t), color var(--t), background var(--t);
+  }
+  .addface svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .addface:hover { border-color: var(--accent); border-style: solid; color: var(--text); background: var(--accent-soft); }
+  .face-x {
+    position: absolute; top: -6px; right: -6px; z-index: 1;
+    height: 16px; min-width: 16px; padding: 0;
+    border-radius: 8px; border: 1px solid var(--line-strong); background: var(--panel);
+    color: var(--muted); font-size: 10px; line-height: 1;
+    display: none; align-items: center; justify-content: center;
+  }
+  .posecell:hover .face-x, .face-x:focus-visible, .face-x.armed { display: inline-flex; }
+  .face-x svg { width: 8px; height: 8px; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+  .face-x:hover { color: #ff8a80; border-color: #b8443a; }
+  .face-x.armed { padding: 0 6px; background: #b8443a; border-color: #b8443a; color: #fff; }
+
+  #face-modal {
+    position: fixed; inset: 0; z-index: 50;
+    display: grid; place-items: center;
+    background: rgba(12, 11, 14, 0.66);
+    animation: face-fade 140ms ease-out;
+  }
+  #face-modal[hidden] { display: none; }
+  #face-modal .sheet {
+    width: min(660px, calc(100vw - 40px)); max-height: calc(100vh - 40px);
+    display: grid; grid-template-rows: auto 1fr auto;
+    background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    animation: face-rise 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  #face-modal header { display: flex; align-items: center; gap: 10px; padding: 12px 10px 10px 16px; }
+  #face-modal h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  #face-modal header .sub { color: var(--muted); font-size: 12px; flex: 1; }
+  .face-body { display: grid; grid-template-columns: 1fr 188px; gap: 16px; padding: 0 16px 14px; min-height: 0; }
+  .face-pane {
+    position: relative; min-height: 300px;
+    display: grid; place-items: center; overflow: hidden;
+    border-radius: 8px; border: 1px solid var(--line);
+    background: repeating-conic-gradient(#25222a 0 25%, #1f1c23 0 50%) 0 0 / 14px 14px;
+    transition: border-color var(--t), box-shadow var(--t);
+  }
+  .face-pane.dragging { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 40px var(--accent-soft); }
+  .face-empty[hidden], .face-frame[hidden] { display: none; }
+  .face-empty { display: grid; justify-items: center; gap: 12px; padding: 24px; color: var(--muted); text-align: center; }
+  .face-empty svg { width: 36px; height: 36px; stroke: var(--faint); fill: none; stroke-width: 1.2; stroke-linejoin: round; }
+  .face-empty kbd { font: inherit; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text); }
+  .face-frame { position: relative; line-height: 0; user-select: none; touch-action: none; }
+  .face-frame img { display: block; max-width: 400px; max-height: 296px; pointer-events: none; }
+  .face-crop {
+    position: absolute; cursor: move;
+    box-shadow: 0 0 0 9999px rgba(12, 11, 14, 0.62);
+    outline: 1px solid rgba(236, 232, 226, 0.75);
+  }
+  .face-crop:focus-visible { outline: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(12, 11, 14, 0.62); }
+  .face-shape { position: absolute; inset: 0 8%; border: 1.5px dashed var(--accent); border-radius: 50%; pointer-events: none; }
+  .face-crop.rounded .face-shape { inset: 0; border-radius: 18%; }
+  .face-line { position: absolute; left: 0; right: 0; border-top: 1px solid rgba(56, 189, 248, 0.9); pointer-events: none; }
+  .face-dot {
+    position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; padding: 0;
+    border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+    cursor: grab;
+  }
+  .face-dot.grabbing { cursor: grabbing; }
+  .face-dot.eyes { background: #38bdf8; }
+  .face-dot.mouth { background: var(--accent); }
+  .face-dot::after {
+    content: attr(data-label);
+    position: absolute; left: 15px; top: -2px;
+    padding: 0 5px; border-radius: 4px;
+    background: rgba(12, 11, 14, 0.82); color: #fff;
+    font-size: 10px; line-height: 14px; white-space: nowrap; pointer-events: none;
+  }
+  .face-handle {
+    position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px;
+    border-radius: 3px; background: var(--text); border: 2px solid var(--bg);
+    cursor: nwse-resize;
+  }
+  .face-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .face-preview {
+    height: 150px; display: grid; place-items: center;
+    border-radius: 8px; border: 1px solid var(--line);
+    background: radial-gradient(circle at 50% 60%, #2c2833 0, var(--bg) 70%);
+  }
+  #face-preview { width: 104px; height: 133px; }
+  #face-preview .rig { --lamp-off: #3a3542; }
+  .face-try, .face-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+  .face-field { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+  .face-field input {
+    width: 100%; height: 28px; padding: 0 8px;
+    border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--bg);
+    color: var(--text); font-size: 13px;
+  }
+  .face-field input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+  .face-side .select { width: 100%; }
+  .face-err { margin: 0; min-height: 2.6em; color: #ff8a80; font-size: 11px; }
+  #face-modal footer { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  #face-modal footer .spacer { flex: 1; }
+  @keyframes face-fade { from { opacity: 0; } }
+  @keyframes face-rise { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
+  @media (prefers-reduced-motion: reduce) { #face-modal, #face-modal .sheet { animation: none; } }
 </style>
 </head>
 <body>
@@ -1179,6 +1288,49 @@
 
 <script>window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno));</script>
 <script src="rig.js"></script>
+<div id="face-modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="face-title">
+    <header>
+      <h2 id="face-title">Add a face</h2>
+      <span class="sub">Crop it, mark the eyes and mouth — Claude wears it.</span>
+      <button type="button" class="btn ghost" id="face-close" aria-label="Close"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </header>
+    <div class="face-body">
+      <div class="face-pane" id="face-pane">
+        <div class="face-empty" id="face-empty">
+          <svg viewBox="0 0 32 32"><path d="M4 10h5l2-3h10l2 3h5v16H4z"/><circle cx="16" cy="17.5" r="5"/></svg>
+          <div>Drop a photo here, or paste one with <kbd>⌘V</kbd></div>
+          <button type="button" class="btn" id="face-choose">Choose file…</button>
+        </div>
+        <div class="face-frame" id="face-frame" hidden>
+          <img id="face-img" alt="" draggable="false" />
+          <div class="face-crop" id="face-crop" tabindex="0" role="group" aria-label="Crop: drag to move, arrow keys nudge, + and − resize">
+            <div class="face-shape"></div>
+            <div class="face-line" id="face-line"></div>
+            <button type="button" class="face-dot eyes" id="face-eyes" data-label="eyes" aria-label="Eyes line: drag, or use the arrow keys"></button>
+            <button type="button" class="face-dot mouth" id="face-mouth" data-label="mouth" aria-label="Mouth: drag, or use the arrow keys"></button>
+            <div class="face-handle" id="face-handle" title="Drag to resize"></div>
+          </div>
+        </div>
+      </div>
+      <div class="face-side">
+        <div class="face-preview"><div id="face-preview"></div></div>
+        <div class="face-try" id="face-try" aria-label="Try it with"></div>
+        <div class="face-seg" id="face-shape"><button type="button" class="signal on" data-shape="oval" aria-pressed="true">oval</button><button type="button" class="signal" data-shape="rounded" aria-pressed="false">rounded</button></div>
+        <label class="face-field">Name<input type="text" id="face-name" maxlength="40" placeholder="Name, e.g. Dad" spellcheck="false" autocomplete="off" /></label>
+        <select id="face-replace" class="select" aria-label="Or replace a built-in face"></select>
+        <p class="face-err" id="face-err" role="alert"></p>
+      </div>
+    </div>
+    <footer>
+      <button type="button" class="btn ghost" id="face-again" hidden>Choose another…</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="face-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="face-save" disabled>Save face</button>
+    </footer>
+  </div>
+</div>
+
 <script src="rules.js"></script>
 <script src="stats.js"></script>
 <script>
@@ -1549,7 +1701,9 @@
     }
 
     // Mini-rig pickers for every sprite channel: keep (null) + each option.
-    const picker = (container, options, current, lookFor, onPick, noneLabel = 'none') => {
+    // opts.label(o) overrides the caption; opts.extra(o) returns a control to
+    // pin on the tile's corner (the cameo row's "remove photo").
+    const picker = (container, options, current, lookFor, onPick, opts = {}) => {
       container.innerHTML = '';
       for (const o of [null, ...options]) {
         const b = document.createElement('button');
@@ -1560,12 +1714,18 @@
         mini.className = 'mini';
         b.appendChild(mini);
         const lbl = document.createElement('span');
-        lbl.textContent = o === null ? 'keep' : ({ h3: '3 lamps', v3: 'vertical', h1: '1 lamp', h5: '5 lamps' })[o] || o;
+        lbl.textContent = o === null ? 'keep' : (opts.label && opts.label(o)) || ({ h3: '3 lamps', v3: 'vertical', h1: '1 lamp', h5: '5 lamps' })[o] || o;
         b.appendChild(lbl);
         mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
         if (o === null) mini.style.opacity = '0.35';
         b.addEventListener('click', () => { onPick(o); touch(); });
-        container.appendChild(b);
+        const extra = o !== null && opts.extra && opts.extra(o);
+        if (extra) {
+          const cell = document.createElement('span');
+          cell.className = 'posecell';
+          cell.append(b, extra);
+          container.appendChild(cell);
+        } else container.appendChild(b);
       }
     };
     picker($('lampfx'), R.LAMP_FX, r.then.lampFx, (o) => ({ lamp: r.then.lamp && r.then.lamp !== 'off' ? r.then.lamp : 'green', lampColor: r.then.lampColor, lampFx: o || 'none' }), (o) => { r.then.lampFx = o; });
@@ -1587,7 +1747,12 @@
       sfx.appendChild(b);
     }
     picker($('costumes'), R.COSTUMES, r.then.costume, (o) => ({ costume: o || 'none' }), (o) => { r.then.costume = o; });
-    picker($('cameos'), R.CAMEOS, r.then.cameo, (o) => ({ cameo: o || 'none', costume: r.then.costume || 'none' }), (o) => { r.then.cameo = o; });
+    const userFaces = cameoList.filter((c) => !c.builtin).map((c) => c.id);
+    picker($('cameos'), [...R.CAMEOS, ...userFaces], r.then.cameo, (o) => ({ cameo: o || 'none', costume: r.then.costume || 'none' }), (o) => { r.then.cameo = o; }, {
+      label: (o) => (userFaces.includes(o) ? cameoById(o).name : null),
+      extra: (o) => (cameoById(o)?.user ? faceRemoveBtn(cameoById(o)) : null),
+    });
+    $('cameos').appendChild(faceAddBtn());
     picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
@@ -1684,6 +1849,286 @@
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
+
+  // ── Photo cameos ───────────────────────────────────────────────────────
+  // The user's own faces (cameos.js, via main). All are registered with the
+  // rig so every mini and the stage can wear them; the Cameo row lists them
+  // after the six built-ins, and "+ photo" opens the crop modal below.
+  let cameoList = [];
+  const cameoById = (id) => cameoList.find((c) => c.id === id);
+  async function loadCameos(list) {
+    cameoList = list || await window.lightsApi.cameos.list();
+    window.rigSetCameoPhotos(cameoList);
+  }
+  const X_ICON = '<svg viewBox="0 0 10 10"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5"/></svg>';
+  // Two clicks to remove: the first arms it (it turns red and says so).
+  function faceRemoveBtn(c) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'face-x';
+    const label = c.builtin ? `Remove your photo (back to the built-in ${c.id})` : `Remove ${c.name}`;
+    x.title = label;
+    x.setAttribute('aria-label', label);
+    x.innerHTML = X_ICON;
+    let armed = null;
+    x.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!armed) {
+        x.classList.add('armed');
+        x.textContent = 'remove?';
+        x.title = 'Click again to remove';
+        armed = setTimeout(() => { armed = null; x.classList.remove('armed'); x.innerHTML = X_ICON; x.title = label; }, 2500);
+        return;
+      }
+      clearTimeout(armed);
+      await loadCameos(await window.lightsApi.cameos.remove(c.id));
+      renderEditor();
+      renderStage();
+    });
+    return x;
+  }
+  function faceAddBtn() {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'addface';
+    b.title = 'Add from photo';
+    b.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2 5.5h2.4l1.2-1.8h4.8l1.2 1.8H14v7H2z"/><circle cx="8" cy="9" r="2.1"/></svg><span>+ photo</span>';
+    b.addEventListener('click', openFace);
+    return b;
+  }
+
+  const FACE_TRY = [['plain', {}], ['smoke', { pose: 'smoke' }], ['zyn', { pose: 'zyn' }], ['grin', { pose: 'grin' }], ['crown', { costume: 'crown' }]];
+  const face = { img: null, w: 0, h: 0, crop: null, shape: 'oval', eyes: null, mouth: null, rev: 0, tryOn: 'plain', raf: 0 };
+  const facePreview = mountRig($('face-preview'));
+  const faceCanvas = document.createElement('canvas');
+  faceCanvas.width = faceCanvas.height = 256;
+  const faceClamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const facePoint = (p) => ({ x: faceClamp(p.x, 0, 1), y: faceClamp(p.y, 0, 1) });
+  const faceScale = () => $('face-img').getBoundingClientRect().width / face.w || 1;
+  const faceError = (msg) => { $('face-err').textContent = msg || ''; };
+  const faceOpen = () => !$('face-modal').hidden;
+  const pickIn = (group, b) => { for (const x of group.children) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); } };
+  $('face-try').innerHTML = FACE_TRY.map(([k]) => `<button type="button" class="signal" data-try="${k}" aria-pressed="false">${k}</button>`).join('');
+
+  function openFace() {
+    face.img = null;
+    face.shape = 'oval';
+    face.tryOn = 'plain';
+    pickIn($('face-shape'), $('face-shape').children[0]);
+    pickIn($('face-try'), $('face-try').children[0]);
+    $('face-img').removeAttribute('src');
+    $('face-empty').hidden = false;
+    $('face-frame').hidden = true;
+    $('face-again').hidden = true;
+    $('face-save').disabled = true;
+    $('face-name').value = '';
+    $('face-name').placeholder = 'Name, e.g. Dad';
+    const title = (id) => id.charAt(0).toUpperCase() + id.slice(1);
+    $('face-replace').innerHTML = '<option value="">— or replace a built-in —</option>' + cameoList.filter((c) => c.builtin).map((c) => `<option value="${c.id}">Replace ${title(c.id)}${c.user ? ' (your photo)' : ''}</option>`).join('');
+    faceError('');
+    $('face-modal').hidden = false;
+    facePreview.setLook({ lamp: 'green', eyes: 'default', pose: 'none' });
+    $('face-choose').focus();
+  }
+  function closeFace() {
+    $('face-modal').hidden = true;
+    face.img = null;
+    $('face-img').removeAttribute('src');
+    $('cameos').querySelector('.addface')?.focus();
+  }
+
+  function faceLoad(url, name) {
+    const img = new Image();
+    img.onload = () => {
+      face.img = img;
+      face.w = img.naturalWidth;
+      face.h = img.naturalHeight;
+      const side = Math.round(Math.min(face.w, face.h) * 0.6);
+      face.crop = { x: (face.w - side) / 2, y: (face.h - side) / 2, size: side };
+      face.eyes = { x: 0.5, y: 0.4 };
+      face.mouth = { x: 0.5, y: 0.75 };
+      $('face-img').src = url;
+      $('face-empty').hidden = true;
+      $('face-frame').hidden = false;
+      $('face-again').hidden = false;
+      $('face-save').disabled = false;
+      // Camera and clipboard names (IMG_1234, image.png) make poor names.
+      if (!$('face-name').value && name && !/^(img|dsc|dscn|pxl|image|photo|screenshot|pasted)[\s_-]?\d*|^[\d\s_-]+$/i.test(name)) $('face-name').value = name.slice(0, 40);
+      faceError('');
+      $('face-img').decode().catch(() => {}).then(() => { faceUpdate(); $('face-crop').focus(); });
+    };
+    img.onerror = () => faceError('That image could not be opened here — Choose file… also reads HEIC.');
+    img.src = url;
+  }
+  function faceFromFile(file) {
+    if (!file || !/^image\//.test(file.type)) { faceError('That is not an image.'); return; }
+    const r = new FileReader();
+    r.onload = () => faceLoad(r.result, file.name.replace(/\.[^.]+$/, ''));
+    r.readAsDataURL(file);
+  }
+  async function faceChoose() {
+    const r = await window.lightsApi.cameos.chooseFile();
+    if (!r) return;
+    if (r.error) faceError(r.error);
+    else faceLoad(r.dataUrl, r.name);
+  }
+
+  function facePaint() {
+    if (!face.img) return;
+    const k = faceScale();
+    const box = $('face-crop');
+    box.style.left = `${face.crop.x * k}px`;
+    box.style.top = `${face.crop.y * k}px`;
+    box.style.width = box.style.height = `${face.crop.size * k}px`;
+    box.classList.toggle('rounded', face.shape === 'rounded');
+    $('face-line').style.top = `${face.eyes.y * 100}%`;
+    for (const [id, p] of [['face-eyes', face.eyes], ['face-mouth', face.mouth]]) {
+      $(id).style.left = `${p.x * 100}%`;
+      $(id).style.top = `${p.y * 100}%`;
+    }
+  }
+  // The preview wears the crop exactly as main will cut it (same mask), one
+  // frame at a time however fast the drag.
+  function faceUpdate() {
+    facePaint();
+    if (!face.img || face.raf) return;
+    face.raf = requestAnimationFrame(() => {
+      face.raf = 0;
+      if (!face.img) return;
+      const g = faceCanvas.getContext('2d');
+      g.clearRect(0, 0, 256, 256);
+      g.save();
+      g.beginPath();
+      if (face.shape === 'rounded') g.roundRect(0, 0, 256, 256, 256 * 0.18);
+      else g.ellipse(128, 128, 256 * 0.42, 128, 0, 0, Math.PI * 2);
+      g.clip();
+      g.drawImage(face.img, face.crop.x, face.crop.y, face.crop.size, face.crop.size, 0, 0, 256, 256);
+      g.restore();
+      face.rev += 1;
+      const tryOn = FACE_TRY.find(([k]) => k === face.tryOn)[1];
+      facePreview.setLook({ lamp: 'green', eyes: 'default', pose: 'none', costume: 'none', ...tryOn, cameo: 'face-draft', cameoPhoto: { id: 'face-draft', rev: face.rev, src: faceCanvas.toDataURL('image/png'), eyes: face.eyes, mouth: face.mouth, shape: face.shape } });
+    });
+  }
+  function faceSetCrop(c) {
+    const max = Math.min(face.w, face.h);
+    const size = faceClamp(c.size, Math.min(32, max), max);
+    face.crop = { size, x: faceClamp(c.x, 0, face.w - size), y: faceClamp(c.y, 0, face.h - size) };
+    faceUpdate();
+  }
+  // Pointer drags in image pixels; the handlers get the delta and the state
+  // at pointerdown.
+  function faceDrag(el, onMove) {
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || !face.img) return;
+      e.preventDefault();
+      e.stopPropagation();
+      el.focus();
+      el.setPointerCapture(e.pointerId);
+      const start = { x: e.clientX, y: e.clientY, k: faceScale(), crop: { ...face.crop }, eyes: { ...face.eyes }, mouth: { ...face.mouth } };
+      el.classList.add('grabbing');
+      const move = (ev) => onMove((ev.clientX - start.x) / start.k, (ev.clientY - start.y) / start.k, start);
+      const up = () => {
+        el.classList.remove('grabbing');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
+  }
+  faceDrag($('face-crop'), (dx, dy, s) => faceSetCrop({ ...s.crop, x: s.crop.x + dx, y: s.crop.y + dy }));
+  faceDrag($('face-handle'), (dx, dy, s) => faceSetCrop({ ...s.crop, size: Math.min(s.crop.size + Math.max(dx, dy), face.w - s.crop.x, face.h - s.crop.y) }));
+  faceDrag($('face-eyes'), (dx, dy, s) => { face.eyes = facePoint({ x: s.eyes.x + dx / s.crop.size, y: s.eyes.y + dy / s.crop.size }); faceUpdate(); });
+  faceDrag($('face-mouth'), (dx, dy, s) => { face.mouth = facePoint({ x: s.mouth.x + dx / s.crop.size, y: s.mouth.y + dy / s.crop.size }); faceUpdate(); });
+  const ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  $('face-crop').addEventListener('keydown', (e) => {
+    if (!face.img || e.target !== $('face-crop')) return;
+    const step = Math.max(1, Math.min(face.w, face.h) * (e.shiftKey ? 0.05 : 0.01));
+    if (ARROWS[e.key]) {
+      e.preventDefault();
+      const [ax, ay] = ARROWS[e.key];
+      faceSetCrop({ ...face.crop, x: face.crop.x + ax * step, y: face.crop.y + ay * step });
+    } else if (e.key === '+' || e.key === '=' || e.key === '-') {
+      e.preventDefault();
+      const d = (e.key === '-' ? -2 : 2) * step;
+      faceSetCrop({ x: face.crop.x - d / 2, y: face.crop.y - d / 2, size: face.crop.size + d });
+    }
+  });
+  for (const [id, key] of [['face-eyes', 'eyes'], ['face-mouth', 'mouth']]) {
+    $(id).addEventListener('keydown', (e) => {
+      if (!ARROWS[e.key]) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 0.05 : 0.01;
+      const [ax, ay] = ARROWS[e.key];
+      face[key] = facePoint({ x: face[key].x + ax * step, y: face[key].y + ay * step });
+      faceUpdate();
+    });
+  }
+  $('face-try').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-try]');
+    if (!b) return;
+    face.tryOn = b.dataset.try;
+    pickIn($('face-try'), b);
+    faceUpdate();
+  });
+  $('face-shape').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-shape]');
+    if (!b) return;
+    face.shape = b.dataset.shape;
+    pickIn($('face-shape'), b);
+    faceUpdate();
+  });
+
+  async function faceSave() {
+    if (!face.img) return;
+    const replace = $('face-replace').value;
+    const name = $('face-name').value.trim();
+    if (!replace && !name) { faceError('Give the face a name, or pick a built-in to replace.'); $('face-name').focus(); return; }
+    $('face-save').disabled = true;
+    faceError('');
+    // Main gets a PNG with any EXIF rotation already applied, at most 1600px.
+    const k = Math.min(1, 1600 / Math.max(face.w, face.h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(face.w * k);
+    c.height = Math.round(face.h * k);
+    c.getContext('2d').drawImage(face.img, 0, 0, c.width, c.height);
+    const res = await window.lightsApi.cameos.add({
+      source: c.toDataURL('image/png'),
+      rect: { x: face.crop.x * k, y: face.crop.y * k, size: face.crop.size * k },
+      shape: face.shape, name, replace: replace || null, eyes: face.eyes, mouth: face.mouth,
+    });
+    $('face-save').disabled = false;
+    if (res.error) { faceError(res.error); return; }
+    await loadCameos(res.list);
+    closeFace();
+    // The new face goes straight onto the rule being edited.
+    const r = selected();
+    if (r) { r.then.cameo = res.id; touch(); } else { renderEditor(); renderStage(); }
+  }
+
+  $('face-choose').addEventListener('click', faceChoose);
+  $('face-again').addEventListener('click', faceChoose);
+  $('face-cancel').addEventListener('click', closeFace);
+  $('face-close').addEventListener('click', closeFace);
+  $('face-save').addEventListener('click', faceSave);
+  $('face-name').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !$('face-save').disabled) faceSave(); });
+  $('face-replace').addEventListener('change', () => { $('face-name').placeholder = $('face-replace').value ? 'Name (optional)' : 'Name, e.g. Dad'; faceError(''); });
+  $('face-modal').addEventListener('pointerdown', (e) => { if (e.target === $('face-modal')) closeFace(); });
+  // Dropping anywhere on the modal loads the image (and never navigates the window to it).
+  $('face-modal').addEventListener('dragover', (e) => { e.preventDefault(); $('face-pane').classList.add('dragging'); });
+  $('face-modal').addEventListener('dragleave', (e) => { if (!$('face-modal').contains(e.relatedTarget)) $('face-pane').classList.remove('dragging'); });
+  $('face-modal').addEventListener('drop', (e) => { e.preventDefault(); $('face-pane').classList.remove('dragging'); faceFromFile(e.dataTransfer.files[0]); });
+  document.addEventListener('paste', (e) => {
+    if (!faceOpen()) return;
+    const item = Array.from(e.clipboardData?.items || []).find((i) => i.type.startsWith('image/'));
+    if (!item) return;
+    e.preventDefault();
+    faceFromFile(item.getAsFile());
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && faceOpen()) { e.preventDefault(); e.stopPropagation(); closeFace(); } }, true);
+  window.addEventListener('resize', () => { if (faceOpen()) facePaint(); });
 
   // ── Stage ──────────────────────────────────────────────────────────────
   function renderStage() {
@@ -2672,6 +3117,7 @@
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), router: $('router') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'router' ? 3000 : 400);
     setDirty(false);
+    await loadCameos();
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.

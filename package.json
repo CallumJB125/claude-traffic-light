@@ -9,6 +9,7 @@
     "dist": "electron-builder --mac",
     "test": "node --test test/*.test.js",
     "icons": "node scripts/build-icons.js",
+    "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac"
   },
@@ -28,8 +29,10 @@
       "rig.js",
       "rig.css",
       "rules.js",
+      "cameos.js",
       "hostapp.js",
       "assets/**/*",
+      "!assets/cameos/src/**",
       "hooks/**/*",
       "overlay.html",
       "overlay-preload.js",

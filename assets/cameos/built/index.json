@@ -1,0 +1,93 @@
+{
+  "neo": {
+    "name": "Neo",
+    "eyes": {
+      "x": 0.5,
+      "y": 0.5125
+    },
+    "mouth": {
+      "x": 0.45,
+      "y": 0.7562
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "mcafee": {
+    "name": "McAfee",
+    "eyes": {
+      "x": 0.3712,
+      "y": 0.4673
+    },
+    "mouth": {
+      "x": 0.3791,
+      "y": 0.7516
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "spagni": {
+    "name": "Spagni",
+    "eyes": {
+      "x": 0.3706,
+      "y": 0.5059
+    },
+    "mouth": {
+      "x": 0.3529,
+      "y": 0.7765
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "powell": {
+    "name": "Powell",
+    "eyes": {
+      "x": 0.5319,
+      "y": 0.5277
+    },
+    "mouth": {
+      "x": 0.539,
+      "y": 0.7844
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "baker": {
+    "name": "Baker",
+    "eyes": {
+      "x": 0.6456,
+      "y": 0.5013
+    },
+    "mouth": {
+      "x": 0.6646,
+      "y": 0.7949
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "ellison": {
+    "name": "Ellison",
+    "eyes": {
+      "x": 0.3217,
+      "y": 0.4646
+    },
+    "mouth": {
+      "x": 0.309,
+      "y": 0.7693
+    },
+    "shape": "oval",
+    "addedAt": 0
+  },
+  "saylor": {
+    "name": "Saylor",
+    "eyes": {
+      "x": 0.4392,
+      "y": 0.5169
+    },
+    "mouth": {
+      "x": 0.4275,
+      "y": 0.7961
+    },
+    "shape": "oval",
+    "addedAt": 0
+  }
+}

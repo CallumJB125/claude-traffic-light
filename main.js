@@ -15,6 +15,7 @@ const DelegationInstall = require('./delegation-install.js');
 const Delegate = require('./hooks/delegate.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
+const Cameos = require('./cameos.js');
 const http = require('http');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -682,8 +683,39 @@ function aggregateState(opts = {}) {
   const key = `${!!opts.ignoreTravel}|${travelLook ? `${travelLook.name}:${travelLook.gardenAct}:${travelLook.pose}` : ''}|${previewLook ? previewLook.expiresAt : ''}`;
   if (stateMemo.value && stateMemo.key === key && Date.now() - stateMemo.at < 200) return stateMemo.value;
   const value = computeState(opts);
+  // The active cameo's photo rides along with the look, so the widget, the
+  // tray and the editor's live view render it without a file:// load.
+  const photo = value.look && cameoPhotos()[value.look.cameo];
+  if (photo) value.look = { ...value.look, cameoPhoto: photo };
   stateMemo = { at: Date.now(), key, value };
   return value;
+}
+
+// ── Photo cameos (cameos.js) ────────────────────────────────────────────────
+const CAMEO_DIR = path.join(ROOT_DIR, 'cameos');
+// The shipped built-in photos (scripts/build-cameos.py); the user's override them.
+const CAMEO_BUILT_DIR = path.join(__dirname, 'assets', 'cameos', 'built');
+// id → { id, rev, name, shape, eyes, mouth, src (data: URL) }, read once per change.
+let cameoCache = null;
+function cameoPhotos() {
+  if (cameoCache) return cameoCache;
+  cameoCache = {};
+  for (const dir of [CAMEO_BUILT_DIR, CAMEO_DIR]) {
+    for (const [id, e] of Object.entries(Cameos.loadIndex(dir))) {
+      try { cameoCache[id] = { id, rev: e.addedAt, name: e.name, shape: e.shape, eyes: e.eyes, mouth: e.mouth, src: Cameos.photoDataUrl(dir, id) }; } catch { /* unreadable: the next source, the drawing, or none */ }
+    }
+  }
+  return cameoCache;
+}
+function cameoListing() {
+  const photos = cameoPhotos();
+  return Cameos.listing(Cameos.loadIndex(CAMEO_DIR), Cameos.loadIndex(CAMEO_BUILT_DIR)).map((c) => ({ ...c, src: photos[c.id]?.src || null }));
+}
+function cameosChanged() {
+  cameoCache = null;
+  stateMemo = { at: 0, key: null, value: null };
+  broadcastStatus();
+  return cameoListing();
 }
 
 function computeState(opts = {}) {
@@ -958,7 +990,7 @@ function createLightsWindow() {
         // Dev: `--playtest` runs test/playtest.js inside the editor window and
         // prints its report; exits non-zero on any failure.
         if (process.argv.includes('--playtest')) {
-          const script = fs.readFileSync(path.join(__dirname, 'test', 'playtest.js'), 'utf8');
+          const script = fs.readFileSync(arg('--playtest-script') || path.join(__dirname, 'test', 'playtest.js'), 'utf8');
           const report = await lightsWin.webContents.executeJavaScript(script);
           console.log(report.log.join('\n'));
           process.exitCode = report.failed ? 1 : 0;
@@ -1250,7 +1282,7 @@ async function paintTray(force = false) {
   if (trayPainting) return;
   if (!tray || !trayRenderWin || trayRenderWin.isDestroyed() || trayRenderWin.webContents.isLoading()) return;
   const { look } = aggregateState();
-  const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.cameo, look.body, look.number]);
+  const key = JSON.stringify([look.lamp, look.lampColor, look.lampFx, look.eyes, look.pose, look.costume, look.cameo, look.cameoPhoto?.rev, look.body, look.number]);
   const animated = TRAY_ANIMATED.has(look.lampFx) || ['blink', 'nod', 'bounce', 'run', 'knock', 'spin', 'party'].includes(look.pose);
   if (!force && !animated && key === trayLookKey) return;
   trayLookKey = key;
@@ -2543,6 +2575,26 @@ ipcMain.handle('choose-sound-file', async () => {
     filters: [{ name: 'Audio', extensions: ['aiff', 'aif', 'wav', 'mp3', 'm4a', 'caf'] }],
   });
   return r.canceled || !r.filePaths[0] ? null : `file:${r.filePaths[0]}`;
+});
+
+ipcMain.handle('cameos-list', () => cameoListing());
+ipcMain.handle('cameos-choose-file', async () => {
+  const r = await dialog.showOpenDialog(lightsWin || undefined, {
+    title: 'Choose a photo',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'heic', 'heif'] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  try { return Cameos.readSource(nativeImage, r.filePaths[0]); } catch (err) { return { error: err.message }; }
+});
+ipcMain.handle('cameos-add', (_e, p) => {
+  const res = Cameos.addPhoto({ dir: CAMEO_DIR, nativeImage, source: p?.source, rect: p?.rect, shape: p?.shape, name: p?.name, replace: p?.replace, eyes: p?.eyes, mouth: p?.mouth });
+  if (res.error) return { error: res.error };
+  return { id: res.id, list: cameosChanged() };
+});
+ipcMain.handle('cameos-remove', (_e, id) => {
+  Cameos.removePhoto(CAMEO_DIR, String(id));
+  return cameosChanged();
 });
 
 ipcMain.handle('reset-rules', () => {

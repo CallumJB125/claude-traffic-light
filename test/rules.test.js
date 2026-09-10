@@ -230,10 +230,11 @@ test('cameo is its own accent channel: layers above the lamp owner, never leaks 
   assert.equal(look([], rules()).cameo, 'none');
 });
 
-test('normalizeRule accepts only known cameos', () => {
+test('normalizeRule accepts built-in cameos and photo-cameo ids, nothing else', () => {
   for (const c of R.CAMEOS) assert.equal(R.normalizeRule({ then: { cameo: c } }).then.cameo, c);
-  for (const bad of ['keanu', 'Neo', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
-  assert.deepEqual(R.CAMEOS, ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker']);
+  for (const id of ['keanu', 'dad-2', 'x'.repeat(32)]) assert.equal(R.normalizeRule({ then: { cameo: id } }).then.cameo, id);
+  for (const bad of ['Neo', 'has space', 'x'.repeat(33), '../etc', '', 7, null, undefined]) assert.equal(R.normalizeRule({ then: { cameo: bad } }).then.cameo, null);
+  assert.deepEqual(R.CAMEOS, ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor']);
 });
 
 test('previewLook shows a rule\'s cameo, none by default', () => {
