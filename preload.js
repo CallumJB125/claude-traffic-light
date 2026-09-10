@@ -14,5 +14,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
   answerRequest: (id, decision) => ipcRenderer.invoke('answer-request', id, decision),
+  adviceCopy: (sessionId) => ipcRenderer.invoke('router-switch-session', sessionId),
+  adviceKeep: (sessionId) => ipcRenderer.invoke('advice-keep', sessionId),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
 });

@@ -69,19 +69,15 @@ function isInstalled(settings, scriptPath = SET_STATUS_SCRIPT, options = {}) {
   return HOOK_EVENTS.every(([e, s]) => has(e, s)) && OPTIONAL_EVENTS.every(([e, s]) => has(e, s) === wantAsk);
 }
 
-// ── Delegation (opt-in): hooks/delegate.js ──────────────────────────────────
-// Only present while delegation is switched on; install() above never
-// touches these entries, and these functions never touch set-status's.
+// ── Delegation: rides on set-status.js ──────────────────────────────────────
+// set-status.js calls hooks/delegate.js itself, so delegation has no hook
+// entries of its own. Earlier versions registered delegate.js separately;
+// migrateDelegation strips those (left in, every call would delegate twice).
 const DELEGATE_SCRIPT = path.join(__dirname, 'delegate.js');
-const DELEGATE_HOOKS = [
-  ['PreToolUse', 'Read|Bash'],
-  ['PostToolUse', 'Read|Grep|Glob|Bash'],
-  ['UserPromptSubmit', ''],
-];
-const DELEGATE_TIMEOUT = 2;
+const DELEGATE_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit'];
 const isDelegate = (command) => /delegate\.js"/.test(command || '');
 
-function uninstallDelegation(settings) {
+function migrateDelegation(settings) {
   if (!settings.hooks) return settings;
   for (const event of Object.keys(settings.hooks)) {
     settings.hooks[event] = settings.hooks[event]
@@ -92,19 +88,11 @@ function uninstallDelegation(settings) {
   return settings;
 }
 
-function installDelegation(settings, scriptPath = DELEGATE_SCRIPT) {
-  uninstallDelegation(settings);
-  settings.hooks = settings.hooks || {};
-  for (const [event, matcher] of DELEGATE_HOOKS) {
-    settings.hooks[event] = settings.hooks[event] || [];
-    settings.hooks[event].push({ matcher, hooks: [{ type: 'command', command: `node "${scriptPath}"`, timeout: DELEGATE_TIMEOUT }] });
-  }
-  return settings;
-}
+const hasLegacyDelegation = (settings) => Object.values(settings.hooks || {}).some((list) => (list || []).some((h) => (h.hooks || []).some((hh) => isDelegate(hh.command))));
 
-function isDelegationInstalled(settings, scriptPath = DELEGATE_SCRIPT) {
-  const command = `node "${scriptPath}"`;
-  return DELEGATE_HOOKS.every(([event, matcher]) => (settings.hooks?.[event] || []).some((h) => h.matcher === matcher && h.hooks?.some((hh) => hh.command === command)));
+// Delegation runs wherever set-status.js hears these events.
+function isDelegationInstalled(settings) {
+  return DELEGATE_EVENTS.every((event) => (settings.hooks?.[event] || []).some((h) => h.hooks?.some((hh) => isOurs(hh.command))));
 }
 
 // ── Other agents ────────────────────────────────────────────────────────────
@@ -146,7 +134,7 @@ function installGemini(settings, emitPath = EMIT_SCRIPT) {
   return out;
 }
 
-module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd, installCursor, installCodex, installGemini, EMIT_SCRIPT, DELEGATE_SCRIPT, DELEGATE_HOOKS, installDelegation, uninstallDelegation, isDelegationInstalled };
+module.exports = { HOOK_EVENTS, OPTIONAL_EVENTS, install, isInstalled, cmd, installCursor, installCodex, installGemini, EMIT_SCRIPT, DELEGATE_SCRIPT, DELEGATE_EVENTS, migrateDelegation, hasLegacyDelegation, isDelegationInstalled };
 
 if (require.main === module) {
   let settings = {};

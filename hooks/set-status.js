@@ -183,6 +183,56 @@ if (signal === 'session-end') {
   process.exit(0);
 }
 
+// ── Delegation rides on this hook ──────────────────────────────────────────
+// Every session runs this script for every event, so calling delegate.js from
+// here reaches sessions that were already open when delegation went on.
+const Delegate = require('./delegate.js');
+const DELEGATE_EVENTS = { 'tool-use': 'PreToolUse', 'tool-done': 'PostToolUse', 'prompt-submit': 'UserPromptSubmit' };
+const flags = Delegate.readFlag();
+const delegationOn = !!flags && flags.enabled === true;
+let hookOutput = null;
+if (delegationOn && DELEGATE_EVENTS[signal] && data) {
+  try {
+    const hso = Delegate.delegate(data.hook_event_name || DELEGATE_EVENTS[signal], data, flags);
+    if (hso) hookOutput = { hookSpecificOutput: hso };
+  } catch (e) {
+    process.stderr.write(`set-status: delegation skipped: ${e.message}\n`);
+  }
+}
+
+// Claude Code reads one JSON object from a hook's stdout, so this hook's own
+// reply (PermissionRequest) and delegation's are merged into one.
+function mergeOutput(a, b) {
+  if (!a || !b) return a || b;
+  const x = a.hookSpecificOutput || {};
+  const y = b.hookSpecificOutput || {};
+  const ctx = [x.additionalContext, y.additionalContext].filter(Boolean).join('\n');
+  return { ...a, ...b, hookSpecificOutput: { ...x, ...y, ...(ctx ? { additionalContext: ctx } : {}) } };
+}
+
+// fs.writeSync rather than process.stdout.write: stdout is a pipe, which is
+// asynchronous on macOS, and process.exit would cut a large reply short.
+function finish() {
+  if (hookOutput) {
+    const buf = Buffer.from(JSON.stringify(hookOutput));
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    for (let off = 0; off < buf.length;) {
+      try { off += fs.writeSync(1, buf, off); } catch (e) {
+        if (e.code !== 'EAGAIN') break;
+        Atomics.wait(sleeper, 0, 0, 5);
+      }
+    }
+  }
+  process.exit(0);
+}
+
+// SessionStart carries the model; a string, or {id, display_name}.
+function modelOf(payload) {
+  const m = payload && payload.model;
+  const id = typeof m === 'string' ? m : m && typeof m === 'object' && typeof m.id === 'string' ? m.id : null;
+  return id ? id.slice(0, 80) : null;
+}
+
 function readDelegated(prevValue) {
   try {
     const c = JSON.parse(fs.readFileSync(delegatedFile, 'utf8'));
@@ -339,8 +389,15 @@ function writeSession() {
       // when the transcript shows you switched up from it.
       route: envRoute() || prev?.route || undefined,
       escalated: prev?.escalated || undefined,
-      // What delegate.js kept out of this session's context so far.
+      // What delegate.js kept out of this session's context so far, and
+      // whether delegation was on when this session's hook last ran.
       delegated: readDelegated(prev?.delegated || undefined),
+      delegating: delegationOn || undefined,
+      // Claude Code's own word on the model (the app prefers the transcript,
+      // which follows /model), and the app's advice for this open session.
+      model: modelOf(data) || prev?.model || undefined,
+      routerAdvice: prev?.routerAdvice || undefined,
+      adviceKept: prev?.adviceKept || undefined,
       // updatedAt means "the session last moved" (ignored-N timers, last-touch
       // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
       updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,
@@ -381,9 +438,9 @@ if (signal === 'permission-request') {
   fs.rmSync(ansFile, { force: true });
   if (decision === 'allow' || decision === 'deny') {
     const out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: decision === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: 'Denied from the Claude Traffic Light widget' } } };
-    process.stdout.write(JSON.stringify(out));
+    hookOutput = mergeOutput(hookOutput, out);
   }
-  process.exit(0);
+  finish();
 }
 
 // PreToolUse fires many times a second during a busy turn. Skip the write if
@@ -394,6 +451,7 @@ if (signal === 'permission-request') {
 if (prev && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
   const agentChurn = bookkeeping && fromSubagent;
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
-  if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) process.exit(0);
+  if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }
 writeSession();
+finish();

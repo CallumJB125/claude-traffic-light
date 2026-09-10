@@ -332,3 +332,67 @@ test('set-status: stores the route from CLAUDE_TRAFFIC_LIGHT_ROUTE and carries i
   assert.equal(r.status, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(home2, 'sessions', `${HOST}-r2.json`), 'utf8')).route, undefined, 'only real models');
 });
+
+// ── Open sessions: advice, switches, the status line ───────────────────────
+test('advise: a session on a pricier model than the pick gets advice; cheaper, unknown, escalated or moved-up ones do not', () => {
+  const a = (over) => Router.advise({ current: 'claude-opus-4-6', cwd: '/Users/x/work/bondly', history: light, config: {}, now: NOW, ...over });
+  assert.deepEqual(a({}), { model: 'sonnet', reason: 'light project (median 12 turns over 5 sessions), no escalations in 7d' });
+  assert.equal(a({ current: 'claude-sonnet-4-5-20250929' }), null, 'already on the pick');
+  assert.equal(a({ current: 'claude-haiku-4-5' }), null, 'already cheaper');
+  assert.equal(a({ current: null }), null);
+  assert.equal(a({ current: '<synthetic>' }), null);
+  assert.equal(a({ history: heavy }), null, 'heavy project: the pick is Opus');
+  assert.equal(a({ history: escalated(DAY) }), null, 'recently escalated project');
+  assert.equal(a({ escalated: true }), null);
+  assert.equal(a({ route: { model: 'sonnet' } }), null, 'you moved it up from the pick');
+  assert.equal(a({ config: { routerPolicy: 'quality' } }), null);
+  assert.equal(a({ config: { routerProjects: { bondly: 'opus' } } }), null);
+  assert.equal(a({ current: 'claude-fable-5', history: heavy }).model, 'opus');
+  assert.equal(a({ current: 'claude-sonnet-4-5', config: { routerProjects: { bondly: 'haiku' } } }).model, 'haiku');
+});
+
+test('switchedDown: only a move to a cheaper family counts', () => {
+  assert.equal(Router.switchedDown('claude-opus-4-6', 'claude-sonnet-4-5'), true);
+  assert.equal(Router.switchedDown('claude-sonnet-4-5', 'claude-haiku-4-5'), true);
+  assert.equal(Router.switchedDown('claude-sonnet-4-5', 'claude-opus-4-6'), false);
+  assert.equal(Router.switchedDown('claude-opus-4-5', 'claude-opus-4-6'), false);
+  assert.equal(Router.switchedDown(null, 'claude-sonnet-4-5'), false);
+});
+
+test('summaryLine: open sessions delegating now and advised, then what new sessions do', () => {
+  const three = [{ delegating: true }, { delegating: true }, { delegating: true, advice: { model: 'sonnet' } }];
+  assert.equal(Router.summaryLine({ launcher: true, delegation: true, sessions: three }), 'On · 3 open sessions: 3 delegating now, 1 advised to switch to Sonnet · new sessions pick their model automatically');
+  assert.equal(Router.summaryLine({ launcher: true, delegation: true, sessions: [{ delegating: true }, { delegating: false }] }), 'On · 2 open sessions: 1 delegating now, 1 from its next tool call · new sessions pick their model automatically');
+  assert.equal(Router.summaryLine({ launcher: false, delegation: true, sessions: [] }), 'On · no open sessions · new sessions start on their usual model');
+  assert.equal(Router.summaryLine({ launcher: true, delegation: false, sessions: [{ delegating: true, advice: { model: 'haiku' } }] }), 'On · 1 open session: 1 advised to switch to Haiku · new sessions pick their model automatically');
+  assert.match(Router.summaryLine({}), /^Off/);
+});
+
+test('latestModels: each session’s model as of its latest main-thread turn; subagents and unpriced models ignored', () => {
+  const t = (ts, sessionId, model, extra = {}) => ({ ts, sessionId, model, modelKey: U.modelKey(model), subagent: false, ...extra });
+  const m = U.latestModels([t(1, 'a', 'claude-opus-4-6'), t(3, 'a', 'claude-sonnet-4-5'), t(4, 'a', 'claude-haiku-4-5', { subagent: true }), t(5, 'a', '<synthetic>'), t(2, 'b', 'claude-opus-4-6')]);
+  assert.equal(m.get('a').model, 'claude-sonnet-4-5');
+  assert.equal(m.get('b').modelKey, 'opus');
+});
+
+test('savings: today and 7 days add routing since switch-on to the context diet; off; measuring right after switch-on', () => {
+  const turn = (ago) => ({ ts: NOW - ago, sessionId: 's', project: 'bondly', model: 'claude-sonnet-4-5', modelKey: 'sonnet', subagent: false, input: 0, output: 0, cacheRead: 1e6, cacheWrite: 0 });
+  const frozen = { mix: { opus: { share: 1 } } };
+  const turns = [turn(10 * DAY), turn(2 * DAY), turn(3600e3)];
+  // Each Sonnet turn: $0.20 actual vs $0.50 at the all-Opus baseline.
+  const events = [{ at: new Date(NOW - 1800e3).toISOString(), sessionId: 's', tokensAvoided: 1e6 }];
+  const s = U.savings(turns, { events, routing: true, delegation: true, enabledAt: NOW - 5 * DAY, switchedOnAt: NOW - 5 * DAY, frozen, now: NOW });
+  assert.equal(s.on, true);
+  assert.equal(s.measuring, false);
+  assert.deepEqual(s.today.routing, { low: 0.1704, high: 0.3, turns: 1 });
+  assert.deepEqual(s.today.diet, { low: 2.5, high: 2.5, events: 1 }, '1M tokens × $2.50 cache write, no turns after it');
+  assert.deepEqual([s.today.low, s.today.high, s.today.actual], [2.6704, 2.8, 0.2]);
+  assert.equal(s.week.routing.turns, 2, 'the 10-day-old turn is before switch-on and outside the week');
+  assert.deepEqual([s.week.low, s.week.high], [2.8407, 3.1]);
+
+  const off = U.savings(turns, { now: NOW });
+  assert.deepEqual([off.on, off.measuring, off.today.routing, off.today.low], [false, false, null, 0]);
+  const fresh = U.savings([], { routing: true, enabledAt: NOW - 60e3, switchedOnAt: NOW - 60e3, frozen, now: NOW });
+  assert.equal(fresh.measuring, true);
+  assert.equal(U.savings([], { routing: true, enabledAt: NOW - 60e3, switchedOnAt: NOW - U.MEASURING_MS - 1, frozen, now: NOW }).measuring, false);
+});

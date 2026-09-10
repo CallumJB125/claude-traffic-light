@@ -387,8 +387,7 @@ function modelAt(turns, ts) {
   return hit || (turns[0] && turns[0].modelKey) || null;
 }
 
-function contextDiet(events, turns, { days = 7, now = Date.now() } = {}) {
-  const from = now - days * DAY_MS;
+function contextDiet(events, turns, { days = 7, now = Date.now(), from = now - days * DAY_MS } = {}) {
   const bySession = new Map();
   const mix = {};
   for (const t of turns) {
@@ -425,4 +424,51 @@ function contextDiet(events, turns, { days = 7, now = Date.now() } = {}) {
   return { days, from, to: now, events: count, sessions: groups.size, tokens, low: r(low), high: r(high) };
 }
 
-module.exports = { PRICES, SLACK, modelKey, costOf, readTurns, summarise, spend, projectHistory, projectMix, sinceRouting, contextDiet, turnsRemaining };
+// ── Open sessions and live savings ─────────────────────────────────────────
+// Each session's model as of its latest main-thread turn: what /model last
+// set it to, once a turn has run on it.
+function latestModels(turns) {
+  const out = new Map();
+  for (const t of turns) {
+    if (t.subagent || !t.sessionId || !t.modelKey) continue;
+    const cur = out.get(t.sessionId);
+    if (!cur || t.ts >= cur.ts) out.set(t.sessionId, { model: t.model, modelKey: t.modelKey, ts: t.ts });
+  }
+  return out;
+}
+
+const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// Right after switch-on there is nothing to measure yet; say so rather than $0.
+const MEASURING_MS = 5 * 60 * 1000;
+
+// Today and the last 7 local days: routing (spend since `enabledAt` against
+// the frozen baseline mix) plus the context diet, each a {low, high} range,
+// with `actual` spend in the window for the subscriber view's share.
+function savings(turns, { events = [], routing = false, delegation = false, enabledAt = null, switchedOnAt = null, frozen = null, now = Date.now() } = {}) {
+  const r4 = (n) => Math.round(n * 1e4) / 1e4;
+  const windowFrom = (from) => {
+    const rt = routing && enabledAt ? sinceRouting(turns, { since: Math.max(from, enabledAt), frozen, now }) : null;
+    const diet = contextDiet(events, turns, { from, now });
+    let actual = 0;
+    for (const t of turns) {
+      if (t.ts < from || t.ts > now) continue;
+      const c = costOf(t);
+      if (c != null) actual += c;
+    }
+    return {
+      from,
+      low: r4((rt ? rt.saved.low : 0) + diet.low),
+      high: r4((rt ? rt.saved.high : 0) + diet.high),
+      actual: r4(actual),
+      routing: rt ? { low: rt.saved.low, high: rt.saved.high, turns: rt.turns } : null,
+      diet: { low: diet.low, high: diet.high, events: diet.events },
+    };
+  };
+  const today = windowFrom(startOfDay(now));
+  const week = windowFrom(startOfDay(now - 6 * DAY_MS));
+  const on = routing || delegation;
+  const measuring = on && switchedOnAt != null && now - switchedOnAt < MEASURING_MS && !(today.routing && today.routing.turns) && !today.diet.events;
+  return { on, routing, delegation, measuring, today, week };
+}
+
+module.exports = { PRICES, SLACK, MEASURING_MS, modelKey, costOf, readTurns, summarise, spend, projectHistory, projectMix, sinceRouting, contextDiet, turnsRemaining, latestModels, savings };

@@ -189,28 +189,123 @@ test('set-status: copies the delegate counter onto the session file; session-end
   assert.equal(fs.existsSync(path.join(h, 'router', 'delegated', 'sd.json')), false);
 });
 
+// ── set-status.js carries delegation itself: open sessions follow the flag ──
+const ssRun = (h, signal, payload) => {
+  const r = spawnSync(process.execPath, [SET_STATUS, signal], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: h, CLAUDE_TRAFFIC_LIGHT_ROUTE: '' }, input: JSON.stringify(payload) });
+  assert.equal(r.status, 0, r.stderr.toString());
+  const out = r.stdout.toString();
+  return out ? JSON.parse(out) : null;
+};
+const sessionOf = (h, sid) => JSON.parse(fs.readFileSync(path.join(h, 'sessions', `${HOST}-${sid}.json`), 'utf8'));
+
+test('set-status: PreToolUse Read of a >350-line file is narrowed with the flag on; off, no output — the session file is written either way', () => {
+  const on = home({ enabled: true });
+  const f = makeFile(on, 1000);
+  const out = ssRun(on, 'tool-use', readCall(f, {}, 'live'));
+  assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.deepEqual(out.hookSpecificOutput.updatedInput, { file_path: f, offset: 1, limit: 120 });
+  assert.match(out.hookSpecificOutput.additionalContext, /first 120 lines \(file has 1,000\)/);
+  const s = sessionOf(on, 'live');
+  assert.deepEqual([s.signal, s.tool, s.delegated.reads, s.delegating], ['tool-use', 'Read', 1, true]);
+  assert.equal(logOf(on)[0].kind, 'read-narrowed');
+
+  for (const off of [home(null), home({ enabled: false })]) {
+    assert.equal(ssRun(off, 'tool-use', readCall(f, {}, 'live')), null);
+    const s2 = sessionOf(off, 'live');
+    assert.deepEqual([s2.signal, s2.tool, s2.delegated, s2.delegating], ['tool-use', 'Read', undefined, undefined]);
+    assert.deepEqual(logOf(off), []);
+  }
+});
+
+test('set-status: PostToolUse output over the limit comes back trimmed through the status hook', () => {
+  const h = home({ enabled: true });
+  const out = ssRun(h, 'tool-done', { session_id: 'big', cwd: h, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'yes | head' }, tool_response: { stdout: 'y\n'.repeat(15000), stderr: '', interrupted: false } });
+  const hso = out.hookSpecificOutput;
+  assert.equal(hso.hookEventName, 'PostToolUse');
+  assert.ok(hso.updatedToolOutput.stdout.length < 24500, 'cut to ~outputChars');
+  assert.match(hso.updatedToolOutput.stdout, /Buddy trimmed 6,000 of 30,000 chars/);
+  assert.equal(sessionOf(h, 'big').delegated.trims, 1);
+});
+
+test('set-status: a session open before the flag existed gets the policy on its next prompt, once; advice fields ride along', () => {
+  const h = home(null);
+  assert.equal(ssRun(h, 'session-start', { session_id: 'old', cwd: h, hook_event_name: 'SessionStart', source: 'startup', model: 'claude-opus-4-6' }), null);
+  assert.equal(sessionOf(h, 'old').model, 'claude-opus-4-6');
+  fs.mkdirSync(path.join(h, 'router'), { recursive: true });
+  fs.writeFileSync(path.join(h, 'router', 'delegation.json'), JSON.stringify({ enabled: true }));
+  const prompt = { session_id: 'old', cwd: h, hook_event_name: 'UserPromptSubmit', prompt: 'hi' };
+  const first = ssRun(h, 'prompt-submit', prompt);
+  assert.equal(first.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(first.hookSpecificOutput.additionalContext, /buddy-reader \(haiku\)/);
+  assert.equal(ssRun(h, 'prompt-submit', prompt), null, 'once per session');
+  const s = sessionOf(h, 'old');
+  assert.equal(s.delegating, true);
+  fs.writeFileSync(path.join(h, 'sessions', `${HOST}-old.json`), JSON.stringify({ ...s, routerAdvice: { model: 'sonnet', reason: 'light project' }, adviceKept: true }));
+  ssRun(h, 'tool-use', { session_id: 'old', cwd: h, hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' } });
+  const later = sessionOf(h, 'old');
+  assert.deepEqual([later.model, later.routerAdvice.model, later.adviceKept], ['claude-opus-4-6', 'sonnet', true]);
+});
+
+test('set-status: mid-session toggle — on narrows, off passes the very next PreToolUse through, on narrows again; policy re-told after each OFF→ON', () => {
+  const h = home(null);
+  const f = makeFile(h, 1000);
+  const flag = (on) => DI.writeFlag({ root: h }, {}, on);
+  const read = () => ssRun(h, 'tool-use', readCall(f, {}, 'tg'));
+  const prompt = () => ssRun(h, 'prompt-submit', { session_id: 'tg', cwd: h, hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+  const narrowed = (out) => !!(out && out.hookSpecificOutput.updatedInput && out.hookSpecificOutput.updatedInput.limit === 120);
+  const told = (out) => !!(out && /buddy-reader/.test(out.hookSpecificOutput.additionalContext));
+
+  flag(true);
+  assert.ok(told(prompt()), 'first ON: told');
+  assert.equal(prompt(), null, 'once per ON');
+  assert.ok(narrowed(read()));
+  flag(false);
+  assert.equal(read(), null, 'OFF: the very next PreToolUse passes through unchanged');
+  assert.equal(prompt(), null, 'OFF: nothing injected');
+  flag(true);
+  assert.ok(narrowed(read()), 'ON again: narrowed again');
+  assert.ok(told(prompt()), 'ON again: told again');
+  assert.equal(prompt(), null);
+  flag(true);
+  assert.equal(prompt(), null, 'staying on (e.g. a knob change) does not re-tell');
+  const s = sessionOf(h, 'tg');
+  assert.equal(s.delegated.reads, 2);
+});
+
+test('presets: Light / Balanced / Aggressive set the knobs; any edit reads back as Custom; policy and trimming follow', () => {
+  for (const [name, p] of Object.entries(D.PRESETS)) assert.equal(D.normalize(p).preset, name);
+  assert.equal(D.normalize(D.DEFAULTS).preset, 'balanced');
+  assert.equal(D.normalize({ ...D.PRESETS.light, readLines: 900 }).preset, 'custom');
+  const light = D.normalize(D.PRESETS.light);
+  assert.equal(light.outputChars, 0, '0 = never trim');
+  assert.equal(D.onOutput({ tool_name: 'Bash', tool_response: { stdout: 'x'.repeat(100000) } }, light), null);
+  assert.ok(!/buddy-worker/.test(D.policy(light)), 'Light never mentions buddy-worker');
+  assert.equal(D.policy(D.normalize(D.DEFAULTS)), 'You have buddy-reader (haiku) for bulk reads/summaries and buddy-worker (sonnet) for boilerplate. Delegate reads over ~350 lines and mechanical writes; keep reasoning, edits and anything safety-critical yourself; escalate to your own model when a summary is not enough.');
+  const aggressive = D.normalize(D.PRESETS.aggressive);
+  assert.equal(aggressive.mode, 'deny');
+  assert.match(D.policy(aggressive), /Always delegate reads over 200 lines to buddy-reader/);
+  // Mirrored to the flag file the hook reads.
+  const h = home(null);
+  DI.writeFlag({ root: h }, D.PRESETS.aggressive, true);
+  assert.deepEqual([DI.readFlag({ root: h }).preset, DI.readFlag({ root: h }).readLines], ['aggressive', 200]);
+});
+
 // ── hooks/install.js ────────────────────────────────────────────────────────
-test('installDelegation: idempotent, right matchers and timeout, keeps set-status and foreign hooks', () => {
+test('migrateDelegation: strips delegate.js entries an earlier version registered; set-status and foreign hooks stay', () => {
   const foreign = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo guard' }] };
   const base = H.install({ hooks: { PreToolUse: [foreign] }, model: 'opus' }, '/app/hooks/set-status.js');
-  const once = H.installDelegation(JSON.parse(JSON.stringify(base)), '/app/hooks/delegate.js');
-  const twice = H.installDelegation(JSON.parse(JSON.stringify(once)), '/app/hooks/delegate.js');
-  assert.deepEqual(once, twice);
-  const ours = (ev) => once.hooks[ev].filter((x) => x.hooks.some((hh) => /delegate\.js/.test(hh.command)));
-  assert.deepEqual(ours('PreToolUse'), [{ matcher: 'Read|Bash', hooks: [{ type: 'command', command: 'node "/app/hooks/delegate.js"', timeout: 2 }] }]);
-  assert.equal(ours('PostToolUse')[0].matcher, 'Read|Grep|Glob|Bash');
-  assert.equal(ours('UserPromptSubmit').length, 1);
-  assert.equal(H.isDelegationInstalled(once, '/app/hooks/delegate.js'), true);
-  assert.equal(H.isDelegationInstalled(base, '/app/hooks/delegate.js'), false);
-  assert.equal(H.isInstalled(once, '/app/hooks/set-status.js'), true, 'set-status untouched');
-  // Re-installing set-status (the app does it every 10 min) keeps delegation.
-  assert.equal(H.isDelegationInstalled(H.install(JSON.parse(JSON.stringify(once)), '/app/hooks/set-status.js'), '/app/hooks/delegate.js'), true);
-  // A moved app replaces the old path rather than adding a second entry.
-  const moved = H.installDelegation(JSON.parse(JSON.stringify(once)), '/new/hooks/delegate.js');
-  assert.equal(moved.hooks.PreToolUse.filter((x) => x.hooks.some((hh) => /delegate\.js/.test(hh.command))).length, 1);
-  const off = H.uninstallDelegation(JSON.parse(JSON.stringify(once)));
-  assert.deepEqual(off, base);
-  assert.deepEqual(H.uninstallDelegation(JSON.parse(JSON.stringify(off))), base);
+  const legacy = JSON.parse(JSON.stringify(base));
+  const entry = (matcher) => ({ matcher, hooks: [{ type: 'command', command: 'node "/app/hooks/delegate.js"', timeout: 2 }] });
+  legacy.hooks.PreToolUse.push(entry('Read|Bash'));
+  legacy.hooks.PostToolUse.push(entry('Read|Grep|Glob|Bash'));
+  legacy.hooks.UserPromptSubmit.push(entry(''));
+  assert.equal(H.hasLegacyDelegation(legacy), true);
+  const migrated = H.migrateDelegation(JSON.parse(JSON.stringify(legacy)));
+  assert.deepEqual(migrated, base);
+  assert.equal(H.hasLegacyDelegation(migrated), false);
+  assert.deepEqual(H.migrateDelegation(JSON.parse(JSON.stringify(migrated))), base, 'idempotent');
+  assert.equal(H.isDelegationInstalled(base), true, 'delegation runs wherever set-status hears the three events');
+  assert.equal(H.isDelegationInstalled({ hooks: { PreToolUse: [foreign] } }), false);
 });
 
 // ── delegation-install.js against a temp HOME ───────────────────────────────
@@ -229,9 +324,9 @@ test('agent templates use the real subagent frontmatter fields and carry the mar
   for (const x of [reader, worker]) { assert.ok(x.fm.description.length > 40); assert.ok(x.text.includes(DI.MARKER)); }
 });
 
-test('delegation install/uninstall: agents + hooks + flag, idempotent both ways, foreign files kept', () => {
+test('delegation install/uninstall: flag + agents and no hook entries of its own, idempotent both ways, foreign files kept', () => {
   const h = tmp('ctl-deleg-home-');
-  const opts = { home: h, scriptPath: '/app/hooks/delegate.js', config: { mode: 'deny', readLines: 500, peekLines: 80, outputChars: 9000, allow: ['.md'] } };
+  const opts = { home: h, config: { mode: 'deny', readLines: 500, peekLines: 80, outputChars: 9000, allow: ['.md'] } };
   const settingsFile = path.join(h, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   const foreign = { permissions: { allow: ['Bash(ls)'] }, hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'say done' }] }] } };
@@ -243,13 +338,12 @@ test('delegation install/uninstall: agents + hooks + flag, idempotent both ways,
   const on = DI.install(opts);
   assert.equal(on.installed, true);
   assert.deepEqual(on.conflicts, []);
-  assert.equal(on.settingsChanged, true);
-  assert.deepEqual(on.flag, { enabled: true, mode: 'deny', readLines: 500, peekLines: 80, outputChars: 9000, allow: ['.md'] });
+  assert.equal(on.settingsChanged, false, 'nothing to register: set-status.js carries delegation');
+  assert.equal(on.legacyHooks, false);
+  assert.deepEqual(on.flag, { enabled: true, preset: 'custom', mode: 'deny', readLines: 500, peekLines: 80, outputChars: 9000, worker: true, allow: ['.md'] });
   const reader = path.join(h, '.claude', 'agents', 'buddy-reader.md');
   assert.equal(fs.readFileSync(reader, 'utf8'), DI.templates()[0].text);
-  const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  assert.deepEqual(s.permissions, foreign.permissions);
-  assert.equal(H.isDelegationInstalled(s, '/app/hooks/delegate.js'), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), foreign);
 
   const mtime = fs.statSync(reader).mtimeMs;
   const again = DI.install(opts);
@@ -258,13 +352,27 @@ test('delegation install/uninstall: agents + hooks + flag, idempotent both ways,
 
   const off = DI.uninstall(opts);
   assert.equal(off.installed, false);
-  assert.equal(off.settingsChanged, true);
+  assert.equal(off.settingsChanged, false);
   assert.equal(fs.existsSync(reader), false);
   assert.equal(fs.readFileSync(mine, 'utf8'), '---\nname: my-agent\n---\nmine', "the user's own agent survives");
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), foreign);
   assert.equal(DI.readFlag(opts).enabled, false);
   assert.equal(DI.readFlag(opts).readLines, 500, 'thresholds are kept for next time');
   assert.equal(DI.uninstall(opts).settingsChanged, false, 'second uninstall changes nothing');
+});
+
+test('delegation install: migrates away delegate.js hook entries an earlier version registered', () => {
+  const h = tmp('ctl-deleg-home-');
+  const settingsFile = path.join(h, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const foreign = { permissions: { allow: ['Bash(ls)'] }, hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'say done' }] }] } };
+  const legacy = { ...foreign, hooks: { ...foreign.hooks, PreToolUse: [{ matcher: 'Read|Bash', hooks: [{ type: 'command', command: 'node "/old/hooks/delegate.js"', timeout: 2 }] }] } };
+  fs.writeFileSync(settingsFile, JSON.stringify(legacy, null, 2));
+  assert.equal(DI.status({ home: h }).legacyHooks, true);
+  const on = DI.install({ home: h });
+  assert.equal(on.settingsChanged, true);
+  assert.equal(on.legacyHooks, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), foreign);
 });
 
 test('delegation install: never overwrites a same-named agent of yours, never rewrites unparsable settings', () => {

@@ -103,6 +103,54 @@ function decide({ cwd = '', args = [], env = {}, history = null, config = {}, no
   return res('opus', `heavy project (median ${Math.round(h.medianTurns)} turns)`);
 }
 
+// ── Sessions that are already open ─────────────────────────────────────────
+// Cheapest first. The router never switches a running session itself; it
+// only says when the pick for it now is cheaper than what it runs on.
+const RANK = { haiku: 1, sonnet: 2, opus: 3, fable: 4 };
+
+// 'claude-sonnet-4-5-20250929' → 'sonnet'; anything else → null.
+function family(model) {
+  const m = String(model || '').toLowerCase();
+  return Object.keys(RANK).find((k) => m.includes(k)) || null;
+}
+
+// → { model, reason } when decide() would start this session on a cheaper
+// model than `current`, else null.
+function advise({ current, cwd = '', route = null, escalated = false, history = null, config = {}, now = Date.now() } = {}) {
+  const cur = family(current);
+  if (!cur || escalated) return null;
+  // You moved this session up from the router's pick: that choice stands.
+  if (route && RANK[route.model] && RANK[cur] > RANK[route.model]) return null;
+  const pick = decide({ cwd, args: [], env: {}, history, config, now });
+  if (!pick.model || RANK[pick.model] >= RANK[cur]) return null;
+  return { model: pick.model, reason: pick.reason };
+}
+
+// The session's model moved down: you took the advice (or /model'd anyway).
+function switchedDown(prev, next) {
+  const a = family(prev);
+  const b = family(next);
+  return !!a && !!b && RANK[b] < RANK[a];
+}
+
+// The Router's status line. `sessions`: the open Claude Code sessions, each
+// { delegating, advice: { model } | null }.
+function summaryLine({ launcher = false, delegation = false, sessions = [] } = {}) {
+  if (!launcher && !delegation) return 'Off — claude starts on its usual model and reads files whole';
+  const n = sessions.length;
+  const parts = [];
+  if (delegation) {
+    const d = sessions.filter((s) => s.delegating).length;
+    if (d) parts.push(`${d} delegating now`);
+    if (n - d) parts.push(`${n - d} from ${n - d === 1 ? 'its' : 'their'} next tool call`);
+  }
+  const advised = {};
+  for (const s of sessions) if (s.advice && NAMES[s.advice.model]) advised[s.advice.model] = (advised[s.advice.model] || 0) + 1;
+  for (const [m, c] of Object.entries(advised)) parts.push(`${c} advised to switch to ${NAMES[m]}`);
+  const open = n ? `${n} open session${n === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` : 'no open sessions';
+  return ['On', open, launcher ? 'new sessions pick their model automatically' : 'new sessions start on their usual model'].join(' · ');
+}
+
 // What decisions.jsonl keeps of the command line: every flag, but at most
 // 80 characters of anything that could be prompt text.
 function summariseArgs(args = []) {
@@ -170,6 +218,6 @@ function cli(argv) {
   return 0;
 }
 
-module.exports = { MODELS, POLICIES, LEARN_MS, LIGHT_TURNS, SHORT_PROMPT, projectKey, parseArgs, decide, summariseArgs, appendDecision, readDecisions, cli };
+module.exports = { MODELS, POLICIES, LEARN_MS, LIGHT_TURNS, SHORT_PROMPT, RANK, projectKey, parseArgs, decide, family, advise, switchedDown, summaryLine, summariseArgs, appendDecision, readDecisions, cli };
 
 if (require.main === module) process.exitCode = cli(process.argv.slice(2));

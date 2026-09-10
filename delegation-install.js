@@ -1,6 +1,8 @@
-// Switches delegation on and off: the buddy-reader/buddy-worker subagents in
-// ~/.claude/agents, the delegate.js hooks in ~/.claude/settings.json and the
-// flag file the hook reads. Like router-install.js every path is injectable,
+// Switches delegation on and off: the flag file set-status.js reads on every
+// hook (so open sessions follow it on their next tool call) and the
+// buddy-reader/buddy-worker subagents in ~/.claude/agents. It registers no
+// hooks; it only strips delegate.js entries an earlier version added to
+// ~/.claude/settings.json. Like router-install.js every path is injectable,
 // so tests run against a temp HOME, and it only ever touches its own files
 // and entries.
 const fs = require('fs');
@@ -57,16 +59,22 @@ function readFlag(opts = {}) {
 function writeFlag(opts, config, enabled) {
   const p = paths(opts);
   fs.mkdirSync(path.dirname(p.flag), { recursive: true });
+  // Each OFF→ON stamps a new enabledAt; the hook then re-tells every open
+  // session about the buddies on its next prompt. Staying on keeps it.
+  const prev = readFlag(opts);
+  const enabledAt = enabled ? (prev && prev.enabled === true && prev.enabledAt) || new Date().toISOString() : undefined;
   const tmp = `${p.flag}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ ...Delegate.normalize(config), enabled: !!enabled }, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify({ ...Delegate.normalize(config), enabled: !!enabled, enabledAt }, null, 2));
   fs.renameSync(tmp, p.flag);
 }
 
-// opts: { home, root, scriptPath, templatesDir, config }.
+// opts: { home, root, templatesDir, config }. Flag first: that is what the
+// open sessions act on.
 function install(opts = {}) {
   const p = paths(opts);
   const settings = readSettings(p.settings);
   const before = JSON.stringify(settings, null, 2);
+  writeFlag(opts, opts.config, true);
   const conflicts = [];
   fs.mkdirSync(p.agentsDir, { recursive: true });
   for (const t of templates(opts.templatesDir)) {
@@ -75,9 +83,8 @@ function install(opts = {}) {
     if (cur != null && !cur.includes(MARKER)) { conflicts.push(dest); continue; }
     if (cur !== t.text) fs.writeFileSync(dest, t.text);
   }
-  Hooks.installDelegation(settings, opts.scriptPath || Hooks.DELEGATE_SCRIPT);
+  Hooks.migrateDelegation(settings);
   const settingsChanged = writeSettings(p.settings, before, settings);
-  writeFlag(opts, opts.config, true);
   return { ...status(opts), conflicts, settingsChanged };
 }
 
@@ -90,20 +97,21 @@ function uninstall(opts = {}) {
     const dest = path.join(p.agentsDir, t.name);
     if ((readText(dest) || '').includes(MARKER)) fs.rmSync(dest, { force: true });
   }
-  Hooks.uninstallDelegation(settings);
+  Hooks.migrateDelegation(settings);
   const settingsChanged = writeSettings(p.settings, before, settings);
   writeFlag(opts, readFlag(opts) || opts.config, false);
   return { ...status(opts), settingsChanged };
 }
 
+// `hooks`: set-status.js is registered for the events delegation acts on;
+// `legacyHooks`: a delegate.js entry from an earlier version is still there.
 function status(opts = {}) {
   const p = paths(opts);
   let settings = {};
   try { settings = readSettings(p.settings); } catch { /* unparsable: not ours to judge */ }
   const agents = templates(opts.templatesDir).map((t) => ({ name: t.name.replace(/\.md$/, ''), installed: (readText(path.join(p.agentsDir, t.name)) || '').includes(MARKER) }));
-  const hooks = Hooks.isDelegationInstalled(settings, opts.scriptPath || Hooks.DELEGATE_SCRIPT);
   const flag = readFlag(opts);
-  return { installed: hooks && agents.every((a) => a.installed) && !!flag && flag.enabled === true, hooks, agents, flag: flag ? Delegate.normalize(flag) : null, settingsPath: p.settings, agentsDir: p.agentsDir };
+  return { installed: agents.every((a) => a.installed) && !!flag && flag.enabled === true, hooks: Hooks.isDelegationInstalled(settings), legacyHooks: Hooks.hasLegacyDelegation(settings), agents, flag: flag ? Delegate.normalize(flag) : null, settingsPath: p.settings, agentsDir: p.agentsDir };
 }
 
 // Every logged event, oldest first; `since` (ms) drops older ones.

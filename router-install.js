@@ -114,8 +114,17 @@ function install(opts = {}) {
       rcChanged = true;
     }
   }
-  if (opts.baseline && !fs.existsSync(p.frozen)) fs.writeFileSync(p.frozen, JSON.stringify({ frozenAt: new Date(opts.now || Date.now()).toISOString(), ...opts.baseline }, null, 2));
+  freezeBaseline(opts, opts.baseline);
   return { ...status(opts), rcChanged };
+}
+
+// Once ever: the first switch-on's mix stays the yardstick. → true if written.
+function freezeBaseline(opts, baseline) {
+  const p = paths(opts);
+  if (!baseline || fs.existsSync(p.frozen)) return false;
+  fs.mkdirSync(p.root, { recursive: true });
+  fs.writeFileSync(p.frozen, JSON.stringify({ frozenAt: new Date(opts.now || Date.now()).toISOString(), ...baseline }, null, 2));
+  return true;
 }
 
 // Leaves the frozen baseline, decisions and history behind for the stats.
@@ -145,4 +154,4 @@ function readFrozen(opts = {}) {
   try { return JSON.parse(readText(paths(opts).frozen)); } catch { return null; }
 }
 
-module.exports = { BEGIN, END, TEMPLATE, detectShell, rcFile, rcBlock, stripBlock, addBlock, hasBlock, paths, renderShim, install, uninstall, status, readFrozen, shQuote };
+module.exports = { BEGIN, END, TEMPLATE, detectShell, rcFile, rcBlock, stripBlock, addBlock, hasBlock, paths, renderShim, install, freezeBaseline, uninstall, status, readFrozen, shQuote };
