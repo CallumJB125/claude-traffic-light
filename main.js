@@ -1703,7 +1703,23 @@ ipcMain.handle('save-config', (e, partial) => {
   return next;
 });
 
-ipcMain.handle('get-stats', () => Stats.summary(stats));
+ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
+
+// Export the whole visible range as JSON or CSV, wherever the user points.
+ipcMain.handle('export-stats', async (_e, format, days) => {
+  const n = Math.min(60, Math.max(1, Number(days) || 7));
+  const sum = Stats.summary(stats, Date.now(), n);
+  const csv = format === 'csv';
+  const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
+  const r = await dialog.showSaveDialog(lightsWin || undefined, {
+    title: 'Export stats',
+    defaultPath: path.join(app.getPath('documents'), name),
+    filters: [csv ? { name: 'CSV', extensions: ['csv'] } : { name: 'JSON', extensions: ['json'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false };
+  fs.writeFileSync(r.filePath, csv ? Stats.toCsv(sum) : JSON.stringify(sum, null, 2));
+  return { ok: true, path: r.filePath };
+});
 
 // ── Costs, from ccusage (the same source as the user's cost alerts) ────────
 let costCache = { at: 0, data: null };
@@ -1790,10 +1806,17 @@ async function computeCosts() {
     const id = sname.period;
     const cwd = cwdFromTranscript(id) || (sname.metadata && (sname.metadata.projectPath || sname.metadata.cwd)) || null;
     const project = cwd ? String(cwd).split('/').filter(Boolean).pop() : (sname.metadata?.project || 'other');
-    projects[project] = (projects[project] || 0) + (sname.totalCost || 0);
-    sessions.push({ id, project, cost: sname.totalCost || 0 });
+    const tokens = sname.totalTokens || ((sname.inputTokens || 0) + (sname.outputTokens || 0) + (sname.cacheCreationTokens || 0) + (sname.cacheReadTokens || 0));
+    if (!projects[project]) projects[project] = { cost: 0, tokens: 0 };
+    projects[project].cost += sname.totalCost || 0;
+    projects[project].tokens += tokens;
+    sessions.push({ id, project, cost: sname.totalCost || 0, tokens });
   }
-  const data = { available: true, days, totals: daily?.totals || null, projects: Object.entries(projects).sort((a, b) => b[1] - a[1]).map(([name, cost]) => ({ name, cost })), sessions: sessions.sort((a, b) => b.cost - a.cost).slice(0, 8) };
+  const data = { available: true, days, totals: daily?.totals || null, projects: Object.entries(projects).sort((a, b) => b[1].cost - a[1].cost).map(([name, v]) => ({ name, ...v })), sessions: sessions.sort((a, b) => b.cost - a.cost).slice(0, 8) };
+  // Snapshot each day's spend into stats.json: ccusage only reports a rolling
+  // window, but the Stats page can look back 60 days.
+  for (const [key, d] of Object.entries(days)) Stats.recordCost(stats, key, d.cost);
+  statsDirty = true;
   costCache = { at: Date.now(), data };
   return data;
 }
