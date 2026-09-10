@@ -1,6 +1,6 @@
 // Photo cameos: the user's own faces, cut out in Lights and kept under
-// ~/.claude-traffic-light/cameos as <id>.png (256×256, transparent outside the
-// mask) plus index.json { <id>: { name, eyes, mouth, shape, addedAt } }.
+// ~/.claude-traffic-light/cameos as <id>.png (60×60, transparent outside the
+// head) plus index.json { <id>: { name, eyes, mouth, shape, addedAt } }.
 // Anchors are fractions of the square (0..1). Built-in slots ship a photo in
 // assets/cameos/built (same layout; scripts/build-cameos.py) — alfred stays
 // drawn — and a user photo saved under a built-in id replaces it.
@@ -9,7 +9,10 @@ const path = require('path');
 
 const BUILTINS = ['neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
 const ID_RE = /^[a-z0-9-]{1,32}$/;
-const SIZE = 256;
+// Saved at 2 px per rig unit (the head box is 30 units), so the photo is no
+// denser than the pixel body; it's cut at WORK first, where edges have room.
+const SIZE = 60;
+const WORK = 256;
 const SHAPES = ['oval', 'rounded'];
 const DEFAULT_EYES = { x: 0.5, y: 0.4 };
 const DEFAULT_MOUTH = { x: 0.5, y: 0.75 };
@@ -136,16 +139,94 @@ function squareRect(rect, w, h) {
   };
 }
 
-// source (a data: URL) → cropped, resized, masked 256×256 PNG buffer.
-function cutOut(nativeImage, source, rect, shape) {
+// A cut-out (a PNG with its backdrop removed) is cut along its own silhouette;
+// a camera photo or screenshot is opaque everywhere and gets the oval. One
+// pass over the crop: under 1% see-through pixels means there's no cut-out.
+function hasAlpha(buf) {
+  let clear = 0;
+  for (let i = 3; i < buf.length; i += 4) if (buf[i] < 250) clear += 1;
+  return clear >= (buf.length / 4) * 0.01;
+}
+
+// Every channel of a premultiplied pixel scaled to a new alpha.
+function setAlpha(buf, i, a) {
+  const k = buf[i + 3] ? a / buf[i + 3] : 0;
+  for (let c = 0; c < 3; c += 1) buf[i + c] = Math.min(255, Math.round(buf[i + c] * k));
+  buf[i + 3] = a;
+}
+
+// The silhouette at working size, as scripts/build-cameos.py does it: drop the
+// faint fringe, pull the edge in a pixel (the rig's outline covers it) and
+// soften. Rows from `jawRow` down are trimmed to the oval, which clears
+// collars and shoulders but sits wider than any jaw. Never raises alpha, so
+// there's always colour under it.
+function shapeAlpha(buf, w, h, jawRow) {
+  const a = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i += 1) a[i] = buf[i * 4 + 3] < 48 ? 0 : buf[i * 4 + 3];
+  const at = (src, x, y) => src[clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)];
+  const eroded = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+    let m = 255;
+    for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) m = Math.min(m, at(a, x + dx, y + dy));
+    eroded[y * w + x] = m;
+  }
+  // gaussian, sigma 0.6, as a separable 3-tap kernel
+  const side = Math.exp(-1 / (2 * 0.6 * 0.6));
+  const wk = [side / (1 + 2 * side), 1 / (1 + 2 * side)];
+  const across = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) across[y * w + x] = wk[1] * at(eroded, x, y) + wk[0] * (at(eroded, x - 1, y) + at(eroded, x + 1, y));
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+    const v = wk[1] * at(across, x, y) + wk[0] * (at(across, x, y - 1) + at(across, x, y + 1));
+    const jaw = y >= jawRow ? coverage(x + 0.5, y + 0.5, w, 'oval') : 1;
+    const i = (y * w + x) * 4;
+    setAlpha(buf, i, Math.min(buf[i + 3], Math.round(v * jaw)));
+  }
+  return buf;
+}
+
+// At output size: a hard pixel edge like the rig's, and (for a silhouette) the
+// bottom rows fading out so the neck meets the body instead of stopping.
+const CUT = 110;
+const NECK_FADE = 0.12;
+function finishAlpha(buf, w, h, fadeNeck) {
+  // Opened (3×3 erode, then dilate): strands under 3 px, like a wire or a
+  // stray lock, would read as scratches. Opening only ever removes pixels.
+  let mask = Uint8Array.from({ length: w * h }, (_, i) => (buf[i * 4 + 3] > CUT ? 1 : 0));
+  for (const keep of [(n) => n === 9, (n) => n > 0]) {
+    const next = new Uint8Array(w * h);
+    for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) n += mask[clamp(y + dy, 0, h - 1) * w + clamp(x + dx, 0, w - 1)];
+      next[y * w + x] = keep(n) ? 1 : 0;
+    }
+    mask = next;
+  }
+  for (let y = 0; y < h; y += 1) {
+    const k = fadeNeck ? clamp((h - y - 0.5) / (NECK_FADE * h), 0, 1) : 1;
+    for (let x = 0; x < w; x += 1) {
+      const i = (y * w + x) * 4;
+      if (!mask[y * w + x]) { setAlpha(buf, i, 0); continue; }
+      setAlpha(buf, i, 255);
+      if (k < 1) setAlpha(buf, i, Math.round(255 * k));
+    }
+  }
+  return buf;
+}
+
+// source (a data: URL) → cropped, cut out and shrunk SIZE×SIZE PNG buffer.
+function cutOut(nativeImage, source, rect, shape, mouth = DEFAULT_MOUTH) {
   const src = nativeImage.createFromDataURL(source);
   if (src.isEmpty()) throw new Error('That image could not be read.');
   const { width, height } = src.getSize();
-  const img = src.crop(squareRect(rect, width, height)).resize({ width: SIZE, height: SIZE, quality: 'best' });
+  const img = src.crop(squareRect(rect, width, height)).resize({ width: WORK, height: WORK, quality: 'best' });
   const bmp = Buffer.from(img.toBitmap());
-  if (bmp.length !== SIZE * SIZE * 4) throw new Error('The crop came out the wrong size.');
-  applyMask(bmp, SIZE, SIZE, SHAPES.includes(shape) ? shape : 'oval');
-  return nativeImage.createFromBitmap(bmp, { width: SIZE, height: SIZE }).toPNG();
+  if (bmp.length !== WORK * WORK * 4) throw new Error('The crop came out the wrong size.');
+  const silhouette = hasAlpha(bmp);
+  if (silhouette) shapeAlpha(bmp, WORK, WORK, Math.round(point(mouth, DEFAULT_MOUTH).y * WORK));
+  else applyMask(bmp, WORK, WORK, SHAPES.includes(shape) ? shape : 'oval');
+  const small = Buffer.from(nativeImage.createFromBitmap(bmp, { width: WORK, height: WORK }).resize({ width: SIZE, height: SIZE, quality: 'best' }).toBitmap());
+  finishAlpha(small, SIZE, SIZE, silhouette);
+  return nativeImage.createFromBitmap(small, { width: SIZE, height: SIZE }).toPNG();
 }
 
 // ── Files ──────────────────────────────────────────────────────────────────
@@ -174,7 +255,7 @@ function addPhoto({ dir, nativeImage, source, rect, shape, name, replace, eyes, 
   const at = resolveId(index, { name, replace });
   if (at.error) return at;
   let png;
-  try { png = cutOut(nativeImage, source, rect, shape); } catch (err) { return { error: err.message }; }
+  try { png = cutOut(nativeImage, source, rect, shape, mouth); } catch (err) { return { error: err.message }; }
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(pngPath(dir, at.id), png);
   const entry = { name: (name || '').trim() || titleCase(at.id), eyes, mouth, shape, addedAt: now };
@@ -210,5 +291,5 @@ function readSource(nativeImage, file) {
 module.exports = {
   BUILTINS, ID_RE, SIZE, SHAPES, DEFAULT_EYES, DEFAULT_MOUTH, OVAL_RX, ROUND_R,
   slugify, normalizeEntry, parseIndex, resolveId, withEntry, without, listing,
-  coverage, applyMask, squareRect, cutOut, loadIndex, writeIndex, addPhoto, removePhoto, photoDataUrl, readSource,
+  coverage, applyMask, hasAlpha, shapeAlpha, finishAlpha, squareRect, cutOut, loadIndex, writeIndex, addPhoto, removePhoto, photoDataUrl, readSource,
 };

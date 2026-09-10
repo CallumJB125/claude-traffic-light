@@ -2,7 +2,8 @@
 """Builds the built-in photo cameos.
 
 assets/cameos/src/<id>.png   the supplied cut-out photos (transparent backdrop)
-  -> assets/cameos/built/<id>.png   256x256, tight head crop, oval mask
+  -> assets/cameos/built/<id>.png   60x60, tight head crop, cut along the
+                                    head's own silhouette (hair, ears, jaw)
   -> assets/cameos/built/index.json eyes/mouth anchors, same shape as the
                                     user index (~/.claude-traffic-light/cameos)
 
@@ -18,9 +19,26 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 SRC = os.path.join(ROOT, 'assets', 'cameos', 'src')
 OUT = os.path.join(ROOT, 'assets', 'cameos', 'built')
-SIZE = 256
+# 2 px per rig unit: the head box is 30 units of a 64-wide body, so a photo
+# any denser than this out-details the pixel art it sits on.
+SIZE = 60
 WORK = 512
-OVAL_RX = 0.42  # of the square, as in cameos.js; the oval is the full height
+CUT = 110       # output alpha above this is solid, below is gone: a crisp edge
+NECK_FADE = 0.12  # the bottom of the crop fades out, so the neck meets the body
+OVAL_RX = 0.42  # as in cameos.js; below the mouth the cut stays inside it
+
+
+def jaw_mask(n, row, ss=4):
+    """Everything above `row`; under it, the oval (full height, OVAL_RX wide).
+    The oval sits wider than a jaw, so it only trims collars, shoulders and
+    props, while the hair and ears above keep their own edge."""
+    big = Image.new('L', (n * ss, n * ss), 0)
+    c = n * ss / 2
+    rx = n * ss * OVAL_RX
+    d = ImageDraw.Draw(big)
+    d.ellipse((c - rx, 0, c + rx, n * ss - 1), fill=255)
+    d.rectangle((0, 0, n * ss, row * ss), fill=255)
+    return big.resize((n, n), Image.LANCZOS)
 
 # Per face, in source pixels: the square head crop (x, y, side) from the top
 # of the hair to under the chin, ear to ear (it may run past the image edge),
@@ -37,12 +55,21 @@ FACES = {
 }
 
 
-def oval_mask(n, ss=4):
-    big = Image.new('L', (n * ss, n * ss), 0)
-    c = n * ss / 2
-    rx = n * ss * OVAL_RX
-    ImageDraw.Draw(big).ellipse((c - rx, 0, c + rx, n * ss - 1), fill=255)
-    return big.resize((n, n), Image.LANCZOS)
+def finish_alpha(a):
+    """Threshold to a hard pixel edge, open it (strands under 3 px, like a
+    wire or a stray lock, would read as scratches), then fade the bottom
+    rows out."""
+    a = a.point(lambda v: 255 if v > CUT else 0)
+    a = a.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
+    n = a.height
+    fade = Image.new('L', a.size, 255)
+    d = ImageDraw.Draw(fade)
+    rows = NECK_FADE * n
+    for y in range(n):
+        k = (n - y - 0.5) / rows
+        if k < 1:
+            d.line((0, y, a.width, y), fill=round(255 * max(0, k)))
+    return ImageChops.multiply(a, fade)
 
 
 def cut(fid, face):
@@ -67,9 +94,13 @@ def cut(fid, face):
     # the cut-outs carry, then soften what is left.
     backdrop = reached.filter(ImageFilter.MaxFilter(5))
     alpha = ImageChops.darker(alpha, ImageChops.invert(backdrop)).filter(ImageFilter.GaussianBlur(0.8))
+    mouth_row = round((face['mouth'][1] - y) / s * WORK)
+    alpha = ImageChops.multiply(alpha, jaw_mask(WORK, mouth_row))
+    # Pull the edge in a touch so the rig's drawn outline covers the fringe.
+    alpha = alpha.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(0.6))
     work.putalpha(alpha)
-    out = work.resize((SIZE, SIZE), Image.LANCZOS)
-    out.putalpha(ImageChops.multiply(out.getchannel('A'), oval_mask(SIZE)))
+    out = work.convert('RGBa').resize((SIZE, SIZE), Image.BOX).convert('RGBA')
+    out.putalpha(finish_alpha(out.getchannel('A')))
     frac = lambda p: {'x': round((p[0] - x) / s, 4), 'y': round((p[1] - y) / s, 4)}
     entry = {'name': face['name'], 'eyes': frac(face['eyes']), 'mouth': frac(face['mouth']), 'shape': 'oval', 'addedAt': 0}
     return src, out, entry
@@ -86,29 +117,31 @@ def checker(n, a=(58, 54, 64), b=(40, 37, 45), k=16):
 
 
 def sheet(results, path):
+    P = 256  # preview size; the 60px faces are scaled up pixelated
     n = len(results)
-    im = Image.new('RGB', (n * (SIZE + 16) + 16, 2 * SIZE + 48), (28, 26, 31))
+    im = Image.new('RGB', (n * (P + 16) + 16, 2 * P + 48), (28, 26, 31))
     d = ImageDraw.Draw(im)
     for i, (fid, face, src, out, entry) in enumerate(results):
-        ox = 16 + i * (SIZE + 16)
-        # source, scaled into a SIZE box, with its crop square
-        k = SIZE / max(src.size)
-        thumb = Image.new('RGBA', (SIZE, SIZE), (90, 90, 90, 255))
+        ox = 16 + i * (P + 16)
+        # source, scaled into a P box, with its crop square
+        k = P / max(src.size)
+        thumb = Image.new('RGBA', (P, P), (90, 90, 90, 255))
         small = src.resize((max(1, int(src.width * k)), max(1, int(src.height * k))), Image.LANCZOS)
         thumb.alpha_composite(small)
         td = ImageDraw.Draw(thumb)
         x, y, s = face['crop']
         td.rectangle((x * k, y * k, (x + s) * k, (y + s) * k), outline=(255, 200, 0), width=2)
         im.paste(thumb.convert('RGB'), (ox, 16))
-        bg = checker(SIZE)
-        bg.paste(out, (0, 0), out)
+        bg = checker(P)
+        big = out.resize((P, P), Image.NEAREST)
+        bg.paste(big, (0, 0), big)
         bd = ImageDraw.Draw(bg)
         for key, col in (('eyes', (56, 189, 248)), ('mouth', (218, 119, 86))):
-            px, py = entry[key]['x'] * SIZE, entry[key]['y'] * SIZE
+            px, py = entry[key]['x'] * P, entry[key]['y'] * P
             bd.ellipse((px - 5, py - 5, px + 5, py + 5), fill=col, outline=(255, 255, 255))
-        bd.line((0, entry['eyes']['y'] * SIZE, SIZE, entry['eyes']['y'] * SIZE), fill=(56, 189, 248))
-        im.paste(bg, (ox, SIZE + 32))
-        d.text((ox, SIZE + 18), fid, fill=(236, 232, 226))
+        bd.line((0, entry['eyes']['y'] * P, P, entry['eyes']['y'] * P), fill=(56, 189, 248))
+        im.paste(bg, (ox, P + 32))
+        d.text((ox, P + 18), fid, fill=(236, 232, 226))
     im.save(path)
 
 
