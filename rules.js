@@ -95,11 +95,15 @@
     const out = [];
     if (sessions.length >= 3) out.push({ signal: 'many-sessions', virtual: true });
     let agentTotal = 0;
+    // "Ignored" means you haven't touched *any* Claude, not just this one: a
+    // session left waiting this morning must not nag while you're busy in a
+    // newer terminal.
+    const lastTouch = Math.max(0, ...sessions.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)));
     for (const s of sessions) {
       const since = s.workingSince ? new Date(s.workingSince).getTime() : null;
       if (since && now - since > LONG_RUNNING_MS && !WAITING.has(s.signal)) out.push({ signal: 'long-running', cwd: s.cwd, virtual: true });
       if (WAITING_ON_YOU.has(s.signal) && s.updatedAt) {
-        const mins = (now - new Date(s.updatedAt).getTime()) / 60000;
+        const mins = (now - Math.max(new Date(s.updatedAt).getTime(), lastTouch)) / 60000;
         for (const m of [10, 20, 30]) if (mins >= m) out.push({ signal: `ignored-${m}`, cwd: s.cwd, virtual: true });
       }
       const agents = liveAgents([s]);

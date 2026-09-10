@@ -338,6 +338,7 @@
 .rig .minion-more { font: 700 4.6px ui-monospace, Menlo, monospace; fill: #b9b3a9; }
 .rig .agent-line { font: 700 3.4px ui-monospace, Menlo, monospace; fill: #f2efe8; letter-spacing: 0.02em; }
 .rig .agent-line.agent-more { fill: #b9b3a9; }
+.rig .agent-line.agent-time { fill: #8f887d; font-weight: 500; }
 /* The bob lives on an inner group: a CSS transform on .minion itself would
    override the translate that positions the chip. */
 .rig .minion-working .minion-in { animation: rig-minion-bob 1.4s ease-in-out infinite; }

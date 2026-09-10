@@ -185,6 +185,27 @@ const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
+// Errors otherwise vanish: a packaged app has no visible terminal, so a
+// crash left zero evidence. Tee console output to a small rotating file
+// instead — capped so a busy session can't grow it unbounded.
+if (!IS_DEV_RUN) {
+  const LOG_FILE = path.join(ROOT_DIR, 'app.log');
+  const LOG_MAX_BYTES = 512 * 1024;
+  try { fs.mkdirSync(ROOT_DIR, { recursive: true }); } catch { /* already there */ }
+  for (const method of ['log', 'warn', 'error']) {
+    const orig = console[method].bind(console);
+    console[method] = (...args) => {
+      orig(...args);
+      try {
+        const stat = fs.existsSync(LOG_FILE) ? fs.statSync(LOG_FILE) : null;
+        if (stat && stat.size > LOG_MAX_BYTES) fs.renameSync(LOG_FILE, `${LOG_FILE}.old`);
+        const line = `${new Date().toISOString()} [${method}] ${args.map((a) => (a instanceof Error ? a.stack : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
+        fs.appendFileSync(LOG_FILE, line);
+      } catch { /* logging must never be why the app breaks */ }
+    };
+  }
+}
+
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
@@ -367,11 +388,25 @@ let win;
 let tray;
 
 function readBounds() {
+  let saved;
   try {
-    return JSON.parse(fs.readFileSync(BOUNDS_FILE, 'utf8'));
+    saved = JSON.parse(fs.readFileSync(BOUNDS_FILE, 'utf8'));
   } catch {
     return null;
   }
+  // Bounds saved while a different (e.g. larger external) display was
+  // connected can sit entirely outside every current display's work area,
+  // making the widget invisible with no way to reach it. Clamp back on.
+  const margin = 20;
+  const onAnyDisplay = screen.getAllDisplays().some(({ workArea: wa }) => (
+    saved.x + saved.width > wa.x + margin &&
+    saved.x < wa.x + wa.width - margin &&
+    saved.y + saved.height > wa.y + margin &&
+    saved.y < wa.y + wa.height - margin
+  ));
+  if (onAnyDisplay) return saved;
+  const wa = screen.getPrimaryDisplay().workArea;
+  return { ...saved, x: wa.x + wa.width - saved.width - 40, y: wa.y + 80 };
 }
 
 let gardenRun = null;
@@ -2041,10 +2076,35 @@ if (DEV_PROFILE) {
   } catch { /* nothing to sweep */ }
 }
 
+// A prior run killed abnormally (force-quit, a crash, macOS reclaiming
+// memory) can leave the Singleton* files behind even though the process
+// they name is long dead. Electron doesn't always notice on macOS, so the
+// next launch fails requestSingleInstanceLock() and silently app.quit()s —
+// no window, no dock icon, no error: it just looks like the app "won't
+// open". Clear the lock ourselves first when the pid it names isn't alive.
+function clearStaleSingletonLock() {
+  const userData = app.getPath('userData');
+  let target;
+  try {
+    target = fs.readlinkSync(path.join(userData, 'SingletonLock'));
+  } catch {
+    return; // no lock file, or it's not a symlink — nothing to clear
+  }
+  const pid = Number(target.slice(target.lastIndexOf('-') + 1));
+  if (pid) {
+    try { process.kill(pid, 0); return; } catch { /* that pid is gone: stale */ }
+  }
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try { fs.rmSync(path.join(userData, f), { force: true }); } catch { /* already gone */ }
+  }
+  console.error('[startup] cleared a stale singleton lock left by pid', pid || target);
+}
+clearStaleSingletonLock();
+
 // One widget, one tray. A second launch (e.g. `open -a … --args --lights`)
 // hands its flags to the running instance instead of starting another.
 const gotLock = app.requestSingleInstanceLock();
-if (DEMO || DIAG) console.error('[startup]', JSON.stringify({ demo: DEMO, gotLock, userData: app.getPath('userData') }));
+console.error('[startup]', JSON.stringify({ demo: DEMO, gotLock, userData: app.getPath('userData') }));
 if (!gotLock) {
   app.quit();
 } else {

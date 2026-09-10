@@ -174,6 +174,17 @@ test('rage meter: ignored-N signals from waiting age; waitMinutes reported', () 
   assert.deepEqual(R.virtualSessions([{ signal: 'permission-ask', updatedAt: ago(35) }], now).map((v) => v.signal), ['ignored-10', 'ignored-20', 'ignored-30']);
 });
 
+test('ignored-N is measured from your last touch of any session, not the oldest one', () => {
+  const now = Date.parse('2026-09-09T12:00:00Z');
+  const ago = (m) => new Date(now - m * 60000).toISOString();
+  const stale = { signal: 'idle-nudge', updatedAt: ago(240), cwd: '/old' };
+  const fresh = { signal: 'idle-nudge', updatedAt: ago(3), cwd: '/new' };
+  const signals = R.virtualSessions([stale, fresh], now).map((v) => v.signal);
+  assert.ok(!signals.some((s) => s.startsWith('ignored-')), `just answered elsewhere → nothing is ignored (${signals})`);
+  const later = R.virtualSessions([stale, { ...fresh, updatedAt: ago(25) }], now).map((v) => v.signal);
+  assert.deepEqual(later.filter((s) => s.startsWith('ignored-')).sort(), ['ignored-10', 'ignored-10', 'ignored-20', 'ignored-20'], '25 min since any touch → both waiting sessions count');
+});
+
 test('seasonal costumes by date', () => {
   assert.equal(R.seasonalCostume(Date.parse('2026-12-20T12:00:00')), 'santa');
   assert.equal(R.seasonalEffect(Date.parse('2026-12-20T12:00:00')), 'snow');

@@ -594,12 +594,27 @@
     // collapse into a "+N". Each chip carries its name so the widget can show
     // a bubble on click.
     const MINION_FILL = { working: '#2fae3e', waiting: '#f2a200', done: '#726c62' };
-    const MINION_MAX = 8;
-    const ROSTER_MAX = 4;
+    const MINION_MAX = 5;
+    const ROSTER_MAX = 5;
+    const MINION_SCALE = 1.35;
+    // "3m", "48s", "1h12m" — short enough for the roster's fixed-width column.
+    function elapsed(since, now) {
+      if (!since) return '';
+      const ms = Math.max(0, now - new Date(since).getTime());
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m`;
+      return `${Math.floor(m / 60)}h${m % 60}m`;
+    }
     let minionKey = null;
     function drawMinions(list, showRoster) {
+      const now = Date.now();
       const arr = (Array.isArray(list) ? list : []).slice(0, 32);
-      const key = `${showRoster ? 1 : 0}|${arr.map((a) => `${a.name}:${a.status}`).join(',')}`;
+      // Elapsed time is bucketed to the minute (seconds while under a minute)
+      // so the roster's "since" column keeps ticking without redrawing the
+      // whole row on every 2s poll.
+      const key = `${showRoster ? 1 : 0}|${arr.map((a) => `${a.name}:${a.status}:${elapsed(a.since, now)}`).join(',')}`;
       if (key === minionKey) return;
       minionKey = key;
       const g = svg.querySelector('.minions');
@@ -609,12 +624,22 @@
       if (!arr.length) return;
       const shown = arr.slice(0, MINION_MAX);
       const extra = arr.length - shown.length;
-      const pitch = 7;
-      const width = shown.length * pitch - 0.1 + (extra > 0 ? 7 : 0);
+      const pitch = 6.9 * MINION_SCALE + 1.6;
+      const width = shown.length * pitch - 1.6 + (extra > 0 ? pitch : 0);
       const x0 = 32 - width / 2;
+      // A translucent backdrop so the row reads clearly over any desktop
+      // background instead of blending into it.
+      g.appendChild(mk('rect', {
+        x: x0 - 2.5, y: 69.2, width: width + 5, height: 6.9 * MINION_SCALE + 3.6, rx: 2.4,
+        fill: '#151517', 'fill-opacity': 0.55,
+      }));
       shown.forEach((a, i) => {
         const fill = MINION_FILL[a.status] || MINION_FILL.working;
-        const chip = mk('g', { class: `minion minion-${a.status}`, transform: `translate(${x0 + i * pitch} 71)`, 'data-name': a.name, 'data-status': a.status, style: 'pointer-events:auto;cursor:pointer' });
+        const chip = mk('g', {
+          class: `minion minion-${a.status}`,
+          transform: `translate(${x0 + i * pitch} 71) scale(${MINION_SCALE})`,
+          'data-name': a.name, 'data-status': a.status, style: 'pointer-events:auto;cursor:pointer',
+        });
         const inner = mk('g', { class: 'minion-in' });
         inner.appendChild(mk('rect', { x: 0.7, y: 0, width: 5.5, height: 4, rx: 1, fill }));
         inner.appendChild(mk('rect', { x: 2, y: 1.3, width: 1.1, height: 1.5, fill: '#211f1c' }));
@@ -624,24 +649,28 @@
         inner.appendChild(mk('rect', { x: 4.3, y: 6.1, width: 1.4, height: 1.4, fill }));
         chip.appendChild(inner);
         const title = mk('title', {});
-        title.textContent = `${a.name} — ${a.status}`;
+        title.textContent = `${a.name} — ${a.status}${a.since ? ` (${elapsed(a.since, now)})` : ''}`;
         chip.appendChild(title);
         g.appendChild(chip);
       });
       if (extra > 0) {
-        const more = mk('text', { class: 'minion-more', x: x0 + shown.length * pitch + 3.4, y: 77.2, 'text-anchor': 'middle' });
+        const more = mk('text', { class: 'minion-more', x: x0 + shown.length * pitch + 2.4, y: 75.6, 'text-anchor': 'middle' });
         more.textContent = `+${extra}`;
         g.appendChild(more);
       }
       if (!showRoster) return;
-      // The roster: who is doing what, capped at four lines, over the torso.
+      // The roster: who is doing what and for how long, capped at five lines,
+      // over the torso.
       const lines = arr.slice(0, ROSTER_MAX);
       const rows = lines.length + (arr.length > ROSTER_MAX ? 1 : 0);
       r.appendChild(mk('rect', { x: 5, y: 39.5, width: 54, height: rows * 4.6 + 1.8, rx: 1.5, fill: '#151517', 'fill-opacity': 0.82 }));
       lines.forEach((a, i) => {
         const t = mk('text', { class: 'agent-line', x: 7.5, y: 44.2 + i * 4.6 });
-        t.textContent = `${a.name}`.slice(0, 13).toUpperCase();
+        t.textContent = `${a.name}`.slice(0, 11).toUpperCase();
         r.appendChild(t);
+        const time = mk('text', { class: 'agent-line agent-time', x: 51.5, y: 44.2 + i * 4.6, 'text-anchor': 'end' });
+        time.textContent = elapsed(a.since, now);
+        r.appendChild(time);
         r.appendChild(mk('rect', { x: 54.5, y: 41.2 + i * 4.6, width: 2.6, height: 2.6, rx: 0.7, fill: MINION_FILL[a.status] || MINION_FILL.working }));
       });
       if (arr.length > ROSTER_MAX) {
