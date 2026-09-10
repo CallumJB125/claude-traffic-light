@@ -1,7 +1,7 @@
 {
   "name": "claude-buddy",
   "version": "1.0.0",
-  "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
+  "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini…) session — lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -62,7 +62,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^32.0.0",
+    "electron": "^44.3.0",
     "electron-builder": "^25.1.8"
   }
 }

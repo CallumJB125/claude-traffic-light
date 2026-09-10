@@ -1329,6 +1329,15 @@ function broadcastStatus() {
     travelLook = null;
     stateMemo = { at: 0, key: null, value: null };
   }
+  // A renderer that died without firing render-process-gone (seen with a
+  // Chromium font-stack fatal) leaves the widget blank forever; recreate it
+  // here, since this loop is the one thing guaranteed to keep running.
+  if (win && !win.isDestroyed() && win.webContents.isCrashed()) {
+    console.log('[watchdog] widget renderer is dead — recreating');
+    try { win.destroy(); } catch { /* already gone */ }
+    win = null;
+    createWindow();
+  }
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   try {
