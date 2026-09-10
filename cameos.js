@@ -273,6 +273,25 @@ function removePhoto(dir, id) {
   return true;
 }
 
+// A saved cut-out from another machine (a setup import): only a SIZE×SIZE PNG
+// is taken as-is; anything else would need cutting, which addPhoto does.
+const PNG_SIG = '89504e470d0a1a0a';
+function isCameoPng(buf) {
+  return Buffer.isBuffer(buf) && buf.length >= 24 && buf.subarray(0, 8).toString('hex') === PNG_SIG
+    && buf.toString('ascii', 12, 16) === 'IHDR' && buf.readUInt32BE(16) === SIZE && buf.readUInt32BE(20) === SIZE;
+}
+
+function importPhoto(dir, { id, entry, png }) {
+  if (!ID_RE.test(id) || id === 'none') return { error: `"${id}" is not a usable face id.` };
+  if (!isCameoPng(png)) return { error: `The photo for "${id}" is not a ${SIZE}×${SIZE} PNG.` };
+  const index = loadIndex(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(pngPath(dir, id), png);
+  const next = withEntry(index, id, entry);
+  writeIndex(dir, next);
+  return { id, entry: next[id] };
+}
+
 const photoDataUrl = (dir, id) => `data:image/png;base64,${fs.readFileSync(pngPath(dir, id)).toString('base64')}`;
 
 // A chosen file, as a data: URL the Lights window can decode. Formats Chromium
@@ -292,5 +311,5 @@ function readSource(nativeImage, file) {
 module.exports = {
   BUILTINS, ID_RE, SIZE, SHAPES, DEFAULT_EYES, DEFAULT_MOUTH, OVAL_RX, ROUND_R,
   slugify, normalizeEntry, parseIndex, resolveId, withEntry, without, listing,
-  coverage, applyMask, hasAlpha, shapeAlpha, finishAlpha, squareRect, cutOut, loadIndex, writeIndex, addPhoto, removePhoto, photoDataUrl, readSource,
+  coverage, applyMask, hasAlpha, shapeAlpha, finishAlpha, squareRect, cutOut, loadIndex, writeIndex, addPhoto, removePhoto, isCameoPng, importPhoto, photoDataUrl, readSource,
 };

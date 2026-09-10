@@ -25,6 +25,63 @@ const LIGHT_TURNS = 40;
 const SHORT_PROMPT = 400;
 const NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 
+// ── Learning: what each project's switch-ups say about it ─────────────────
+// history.json carries, per project, the last LEARN_DAYS of main-thread
+// sessions and, for each one you switched up in, how far in that happened.
+// Turns are assistant messages, so every tool round-trip counts: turn 5 is
+// still roughly your first prompt or two.
+const LEARN_DAYS = 14;
+const LEARN_EARLY_TURN = 5;
+const LEARN_LATE_TURN = 20;
+// The share of sessions that must switch up before the project is treated
+// as quality-first. The earlier the switch-up, the less of the session the
+// cheap model handled, so the fewer it takes: a switch-up at turn 2 is a
+// cheap start wasted, one at turn 30 is a cheap session that needed one
+// hard turn — cheaper than Opus throughout until half of them do it.
+const LEARN_RATE_EARLY = 0.15;
+const LEARN_RATE = 0.30;
+const LEARN_RATE_LATE = 0.50;
+// This many sessions without a single switch-up earns Haiku for short -p
+// prompts even under balanced.
+const LEARN_CLEAN_SESSIONS = 20;
+
+function medianOf(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// `learn`: { sessions, escalations: [{ turn, minutes }] } over LEARN_DAYS,
+// counting only sessions that started on Sonnet or Haiku (cheap-start).
+// → { tier: 'quality'|'cheap'|'neutral', label, rate, sessions, escalations,
+// medianTurn, medianMinutes, timing }. `label` (null when there's nothing to
+// say) is what decide() puts in its reason and the Projects table shows.
+function learnProjectTier(learn) {
+  const sessions = Math.max(0, Number(learn && learn.sessions) || 0);
+  const escs = Array.isArray(learn && learn.escalations) ? learn.escalations.filter((e) => e && Number(e.turn) > 0) : [];
+  const n = Math.min(escs.length, sessions);
+  const out = { tier: 'neutral', label: null, rate: 0, sessions, escalations: n, medianTurn: null, medianMinutes: null, timing: null };
+  if (!sessions) return out;
+  if (!n) {
+    if (sessions >= LEARN_CLEAN_SESSIONS) return { ...out, tier: 'cheap', label: `learned: cheap (no switch-ups in ${plural(sessions, 'cheap-start session')})` };
+    return out;
+  }
+  const rate = n / sessions;
+  const medianTurn = medianOf(escs.map((e) => Number(e.turn)));
+  const mins = escs.map((e) => Number(e.minutes)).filter((m) => Number.isFinite(m) && m >= 0);
+  const timing = medianTurn <= LEARN_EARLY_TURN ? 'early' : medianTurn >= LEARN_LATE_TURN ? 'late' : 'mid';
+  const threshold = { early: LEARN_RATE_EARLY, mid: LEARN_RATE, late: LEARN_RATE_LATE }[timing];
+  const pct = `${Math.round(rate * 100)}%`;
+  const when = `usually by turn ${Math.round(medianTurn)}${mins.length ? `, ~${Math.round(medianOf(mins))} min in` : ''}`;
+  const base = { ...out, rate, medianTurn, medianMinutes: mins.length ? medianOf(mins) : null, timing };
+  if (rate >= threshold) return { ...base, tier: 'quality', label: `learned: quality (${pct} escalation rate, ${plural(sessions, 'cheap-start session')}; ${when})` };
+  const how = timing === 'late' ? 'late — the cheap model did most of the work' : timing === 'early' ? 'rarely' : 'occasionally';
+  return { ...base, label: `learned: cheap is fine (${n} of ${plural(sessions, 'cheap-start session')} switched up, ${how}; ${when})` };
+}
+
 // Folder name, the same convention as the rules' project scope.
 function projectKey(cwd) {
   return String(cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
@@ -88,19 +145,30 @@ function decide({ cwd = '', args = [], env = {}, history = null, config = {}, no
   const override = lookup(config.routerProjects, key);
   if (MODELS.includes(override)) return res(override, `${key} is set to ${NAMES[override]}`);
 
+  const h = lookup(history && history.projects, key) || null;
+  // A history.json from before learning has no `learn`: the old rule — any
+  // switch-up in the last 7 days means Opus — still applies to it.
+  const learned = h && h.learn ? learnProjectTier(h.learn) : null;
+  const tier = learned ? learned.tier : 'neutral';
+  const why = (reason) => (learned && learned.label ? `${reason}; ${learned.label}` : reason);
+
   if (a.print && isShort(a.prompt)) {
-    return policy === 'frugal' ? res('haiku', 'short one-shot prompt (-p)') : res('sonnet', 'short one-shot prompt (-p)');
+    const short = 'short one-shot prompt (-p)';
+    if (policy === 'quality' || tier === 'quality') return res('sonnet', policy === 'quality' ? short : why(short));
+    if (policy === 'frugal') return res('haiku', short);
+    return tier === 'cheap' ? res('haiku', why(short)) : res('sonnet', short);
   }
 
-  const h = lookup(history && history.projects, key) || null;
-  const escalatedAt = h && h.lastEscalationAt && now - h.lastEscalationAt < LEARN_MS ? h.lastEscalationAt : null;
+  const escalatedAt = !learned && h && h.lastEscalationAt && now - h.lastEscalationAt < LEARN_MS ? h.lastEscalationAt : null;
   if (policy === 'quality') return res('opus', 'quality-first policy');
+  if (tier === 'quality') return res('opus', learned.label);
   if (escalatedAt) return res('opus', `you switched up to a pricier model in ${key} on ${dateOf(escalatedAt)}`);
-  if (policy === 'frugal') return res('sonnet', 'frugal policy');
+  if (policy === 'frugal') return res('sonnet', why('frugal policy'));
   const n = Number(config.routerLightTurns) > 0 ? Number(config.routerLightTurns) : LIGHT_TURNS;
-  if (!h || !h.sessions) return res('opus', `no history for ${key || 'this folder'} in 7d`);
-  if (h.medianTurns < n) return res('sonnet', `light project (median ${Math.round(h.medianTurns)} turns over ${h.sessions} session${h.sessions === 1 ? '' : 's'}), no escalations in 7d`);
-  return res('opus', `heavy project (median ${Math.round(h.medianTurns)} turns)`);
+  if (!h || !h.sessions) return res('opus', why(`no history for ${key || 'this folder'} in 7d`));
+  const light = `light project (median ${Math.round(h.medianTurns)} turns over ${plural(h.sessions, 'session')})`;
+  if (h.medianTurns < n) return res('sonnet', learned && learned.label ? why(light) : `${light}, no escalations in ${learned ? LEARN_DAYS : 7}d`);
+  return res('opus', why(`heavy project (median ${Math.round(h.medianTurns)} turns)`));
 }
 
 // ── Sessions that are already open ─────────────────────────────────────────
@@ -218,6 +286,6 @@ function cli(argv) {
   return 0;
 }
 
-module.exports = { MODELS, POLICIES, LEARN_MS, LIGHT_TURNS, SHORT_PROMPT, RANK, projectKey, parseArgs, decide, family, advise, switchedDown, summaryLine, summariseArgs, appendDecision, readDecisions, cli };
+module.exports = { MODELS, POLICIES, LEARN_MS, LIGHT_TURNS, SHORT_PROMPT, RANK, LEARN_DAYS, LEARN_EARLY_TURN, LEARN_LATE_TURN, LEARN_RATE_EARLY, LEARN_RATE, LEARN_RATE_LATE, LEARN_CLEAN_SESSIONS, learnProjectTier, projectKey, parseArgs, decide, family, advise, switchedDown, summaryLine, summariseArgs, appendDecision, readDecisions, cli };
 
 if (require.main === module) process.exitCode = cli(process.argv.slice(2));

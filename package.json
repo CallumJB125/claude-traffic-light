@@ -8,6 +8,7 @@
     "install-hooks": "node hooks/install.js",
     "dist": "electron-builder --mac",
     "test": "node --test test/*.test.js",
+    "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder --win --x64",
@@ -29,7 +30,11 @@
       "rig.js",
       "rig.css",
       "rules.js",
+      "help.js",
+      "help.html",
+      "help-preload.js",
       "cameos.js",
+      "setup.js",
       "hostapp.js",
       "assets/**/*",
       "!assets/cameos/src/**",
@@ -40,6 +45,8 @@
       "usage.js",
       "router.js",
       "router-install.js",
+      "mcp-server.js",
+      "mcp-install.js",
       "delegation-install.js",
       "agents/**/*",
       "bin/**/*",
@@ -76,6 +83,11 @@
   },
   "devDependencies": {
     "electron": "^44.3.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "jsdom": "^30.0.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.6.2"
   }
 }

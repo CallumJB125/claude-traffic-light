@@ -106,6 +106,23 @@ test('readTurns re-parses only files whose mtime or size changed, and resumes ap
   assert.deepEqual(r.turns.map((t) => t.output).sort(), [1, 2, 3]);
 });
 
+test('readTurns drops cache entries for transcripts deleted or aged out of `since`', async () => {
+  const root = fixture({
+    'p/a.jsonl': [line({ usage: { output_tokens: 1 } })],
+    'p/b.jsonl': [line({ id: 'msg_b', requestId: 'r_b', usage: { output_tokens: 2 } })],
+    'p/c.jsonl': [line({ id: 'msg_c', requestId: 'r_c', usage: { output_tokens: 3 } })],
+  });
+  const cache = new Map();
+  await U.readTurns({ root, cache });
+  assert.equal(cache.size, 3);
+  fs.rmSync(path.join(root, 'p/b.jsonl'));
+  const old = new Date(T0 - 40 * 86400000);
+  fs.utimesSync(path.join(root, 'p/c.jsonl'), old, old);
+  const r = await U.readTurns({ root, cache, since: T0 - 30 * 86400000 });
+  assert.deepEqual([...cache.keys()], [path.join(root, 'p/a.jsonl')]);
+  assert.equal(r.parsed, 0, 'the surviving entry is still reused');
+});
+
 test('readTurns skips files over the size cap and files untouched since `since`', async () => {
   const root = fixture({ 'p/a.jsonl': [line({ usage: { output_tokens: 1 } })], 'p/old.jsonl': [line({ id: 'o', requestId: 'o', usage: { output_tokens: 1 } })] });
   const old = new Date(T0 - 40 * 86400000);

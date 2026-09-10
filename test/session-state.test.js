@@ -342,3 +342,27 @@ test('set-status: a permission denial in a turn that carries on goes back to wor
   assert.deepEqual([d.signal, d.tool], ['tool-use', 'Read']);
   assert.ok(d.workingSince);
 });
+
+// ── agents.js: sweeping session files no stale window can show ──────────────
+test('sweepStaleFiles deletes only .json/.tmp files older than maxAge, by mtime alone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-sweep-'));
+  const now = Date.now();
+  const put = (name, ageMs, body = '{}') => {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, body);
+    const t = new Date(now - ageMs);
+    fs.utimesSync(f, t, t);
+  };
+  const DAY = 86400000;
+  put('old.json', 2 * DAY);
+  put('old-unparsable.json', 2 * DAY, '{"half');
+  put('host-abc.json.1234.tmp', 2 * DAY);
+  put('young.json', DAY / 2);
+  put('young-unparsable.json', 60000, '{"half');
+  put('young.json.99.tmp', 1000);
+  put('old-notes.txt', 2 * DAY);
+  const removed = A.sweepStaleFiles(dir, DAY, now).sort();
+  assert.deepEqual(removed, ['host-abc.json.1234.tmp', 'old-unparsable.json', 'old.json']);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['old-notes.txt', 'young-unparsable.json', 'young.json', 'young.json.99.tmp']);
+  assert.deepEqual(A.sweepStaleFiles(path.join(dir, 'missing'), DAY, now), []);
+});

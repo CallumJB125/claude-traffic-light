@@ -53,8 +53,9 @@
   const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
   // A turn that has ended while its subagents are still working hasn't really
   // ended; only a finished/idle turn is promoted — a permission ask or a limit
-  // still needs the person whatever the agents are doing.
-  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge']);
+  // still needs the person whatever the agents are doing. A denial has had
+  // its answer, so it doesn't.
+  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge', 'permission-denied']);
   // ── Other agents ──────────────────────────────────────────────────────────
   // A session file may carry `agents` (every subagent / teammate / ralph or
   // ultrawork worker it knows about) and `mode` (the OMC execution mode).
@@ -302,7 +303,7 @@
       },
       {
         id: 'working', name: 'Claude is working', enabled: true,
-        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'subagent-done', 'session-start', 'compact'] },
+        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'session-start', 'compact'] },
         then: { lamp: 'green', pose: 'think' },
       },
       {
@@ -336,7 +337,7 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 2;
+  const RULES_VERSION = 3;
   function migrateRules(rules, version) {
     if (version >= RULES_VERSION) return rules;
     const out = rules.slice();
@@ -348,6 +349,13 @@
     add('offline', out.findIndex((r) => !r.locked));
     const done = out.findIndex((r) => r.id === 'done');
     add('failed-turn', done >= 0 ? done : out.findIndex((r) => r.when.signal.includes('idle')));
+    // v3: a failed tool or a starting subagent is still mid-turn; without them
+    // a second, finished session read as "Task finished" over this one.
+    const w = out.findIndex((r) => r.id === 'working');
+    if (version < 3 && w >= 0) {
+      const missing = ['tool-failed', 'subagent-start'].filter((s) => !out[w].when.signal.includes(s));
+      if (missing.length) out[w] = { ...out[w], when: { ...out[w].when, signal: out[w].when.signal.concat(missing) } };
+    }
     return out;
   }
 
@@ -536,5 +544,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, RULES_VERSION, migrateRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, RULES_VERSION, migrateRules, normalizeRule, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });

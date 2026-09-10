@@ -847,3 +847,32 @@ test('firedNames puts the lamp owner first, then the accents in order', () => {
   assert.deepEqual(R.firedNames(rs, ['subagent'], {}), ['Subagent running'], 'no lamp owner → fired order');
   assert.deepEqual(R.firedNames(rs, ['gone'], { lamp: 'gone' }), [], 'unknown ids are dropped');
 });
+
+// Found by test/state-fuzzer.test.js: a session mid-turn on a signal the
+// working rule didn't list, next to a finished one, read as "Task finished".
+const agentWorking = [{ id: 'ag-1', name: 'executor', kind: 'subagent', status: 'working', since: new Date().toISOString() }];
+for (const signal of ['subagent-start', 'tool-failed']) {
+  test(`resolve: a session on ${signal} is working, and outranks another session's "Task finished"`, () => {
+    assert.equal(R.resolve(rules(), [{ signal, tool: 'Bash', cwd: '/a' }]).owned.lamp, 'working');
+    const two = R.resolve(rules(), [{ signal, tool: 'Agent', cwd: '/a', agents: agentWorking }, { signal: 'stop', cwd: '/b' }]);
+    assert.equal(two.owned.lamp, 'working');
+  });
+}
+
+test('effectiveSignal: a denied permission with a subagent still working reads as that agent working', () => {
+  assert.deepEqual(R.effectiveSignal({ signal: 'permission-denied', agents: agentWorking }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'permission-denied' });
+  assert.equal(R.effectiveSignal({ signal: 'permission-denied', agents: [] }).signal, 'permission-denied');
+  const two = R.resolve(rules(), [{ ...R.effectiveSignal({ signal: 'permission-denied', agents: agentWorking }), cwd: '/a', agents: agentWorking }, { signal: 'stop', cwd: '/b' }]);
+  assert.notEqual(two.owned.lamp, 'done');
+});
+
+test('migrateRules: a v2 config’s working rule gains subagent-start and tool-failed once; a deleted one stays deleted', () => {
+  const v2 = rules().map((r) => (r.id === 'working' ? { ...r, when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'subagent-done', 'session-start', 'compact'] } } : r)).map(R.normalizeRule);
+  const m = R.migrateRules(v2, 2);
+  const working = m.find((r) => r.id === 'working');
+  assert.ok(working.when.signal.includes('subagent-start') && working.when.signal.includes('tool-failed'));
+  assert.deepEqual(R.migrateRules(m, 2), m, 'never duplicated');
+  assert.equal(v2.find((r) => r.id === 'working').when.signal.length, 6, 'the saved rules are not mutated');
+  const noWorking = v2.filter((r) => r.id !== 'working');
+  assert.deepEqual(R.migrateRules(noWorking, 2).map((r) => r.id), noWorking.map((r) => r.id));
+});

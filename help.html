@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>What is Claude doing?</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #1c1a1f; color: #ece8e2; font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  main { flex: 1; overflow-y: auto; padding: 16px 18px 12px; display: flex; flex-direction: column; gap: 12px; }
+  .now { display: flex; gap: 10px; align-items: flex-start; }
+  .lamp { flex: none; width: 14px; height: 14px; margin-top: 3px; border-radius: 4px; background: #3a3640; box-shadow: 0 0 0 2px #2a2731; }
+  .lamp.green { background: #2fae3e; } .lamp.amber { background: #f2a200; } .lamp.red { background: #e2231a; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .sub { color: #9a9484; font-size: 11px; }
+  p { margin: 4px 0 0; }
+  h2 { font-size: 11px; margin: 0 0 4px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #da7756; }
+  ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+  li b { font-weight: 500; }
+  .rule { color: #9a9484; }
+  .chip { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .chip.working { background: #2fae3e; } .chip.waiting { background: #f2a200; } .chip.done { background: #726c62; }
+  details { color: #c9c3b8; }
+  summary { cursor: pointer; color: #ece8e2; font-weight: 500; }
+  details p { margin: 6px 0 0; }
+  .actions { padding: 10px 18px 12px; border-top: 1px solid #2a2731; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .actions .note { margin-right: auto; font-size: 11px; color: #9a9484; }
+  button { background: #2a2731; border: 1px solid #3c3846; color: inherit; font: inherit; padding: 5px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; flex: none; }
+  button.primary { background: #da7756; border-color: #da7756; color: #211f1c; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <main>
+  <div class="now">
+    <div class="lamp" id="lamp"></div>
+    <div>
+      <h1 id="headline">…</h1>
+      <div class="sub" id="lampText"></div>
+      <p id="meaning"></p>
+    </div>
+  </div>
+
+  <section id="activity-box" hidden><h2>What he's up to</h2><p id="activity"></p></section>
+
+  <section id="why-box" hidden>
+    <h2>What you're seeing</h2>
+    <ul id="why"></ul>
+  </section>
+
+  <section id="agents-box" hidden>
+    <h2>The little chips</h2>
+    <p id="agents"></p>
+    <ul id="agent-list" style="margin-top:4px"></ul>
+  </section>
+
+  <details>
+    <summary>“Needs your input” vs “Waiting for you”</summary>
+    <p><b>Needs your input</b> (amber, waving): Claude is stuck mid-task on a permission prompt or a question. Nothing moves until you answer in the terminal.</p>
+    <p><b>Waiting for you</b>: Claude finished its turn. It's simply your turn to type — nothing is stuck.</p>
+  </details>
+  <details>
+    <summary>What the colours usually mean</summary>
+    <p><b>Green</b>: working, or just finished. <b>Amber</b>: needs you, a failed turn, or nothing running. <b>Red</b>: out of tokens or offline. Every colour is programmable in Lights, so yours may differ.</p>
+  </details>
+  </main>
+
+  <div class="actions">
+    <span class="note">Reopen from the <b>?</b> on Claude.</span>
+    <button id="lights" title="Change what Claude does for each state">Open Lights</button>
+    <button class="primary" id="close">Got it</button>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const li = (html) => { const el = document.createElement('li'); el.innerHTML = html; return el; };
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+    async function render() {
+      const h = await window.helpApi.getHelp();
+      if (!h) return;
+      $('lamp').className = `lamp ${h.lamp}`;
+      $('headline').textContent = h.headline;
+      $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}` : ''}`;
+      $('meaning').textContent = h.meaning || '';
+      $('activity-box').hidden = !h.activity;
+      $('activity').textContent = h.activity || '';
+      const why = $('why');
+      why.replaceChildren(...h.why.map((w) => li(`<b>${esc(w.label)}:</b> ${esc(w.value)}${w.rule ? ` <span class="rule">— from “${esc(w.rule)}”</span>` : ''}`)));
+      if (h.also.length) why.append(li(`<span class="rule">Also active: ${h.also.map(esc).join(', ')}</span>`));
+      $('why-box').hidden = !why.children.length;
+      $('agents-box').hidden = !h.agents;
+      if (h.agents) {
+        $('agents').textContent = h.agents.text;
+        $('agent-list').replaceChildren(...h.agents.list.map((a) => li(`<span class="chip ${esc(a.status)}"></span>${esc(a.name)} <span class="rule">${esc(a.kind)} · ${esc(a.status)}</span>`)));
+        if (h.agents.more) $('agent-list').append(li(`<span class="rule">+${h.agents.more} more</span>`));
+      }
+    }
+
+    $('lights').addEventListener('click', () => window.helpApi.openLights());
+    $('close').addEventListener('click', () => window.close());
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+    window.helpApi.onStatusChanged(render);
+    render();
+  </script>
+</body>
+</html>

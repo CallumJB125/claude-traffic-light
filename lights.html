@@ -611,6 +611,15 @@
   .saved .since { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
   .saved .v.small { font-size: 24px; }
   .saved .v.neg { color: #f2a200; }
+  .saved .review { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .saved .review .k { margin-bottom: 2px; }
+  .saved .review .row { display: flex; justify-content: space-between; gap: 12px; }
+  .saved .review .row b { font-weight: 500; color: var(--text); white-space: nowrap; }
+  .saved .review .row b.neg { color: #f2a200; }
+  .saved .review .verdict { margin-top: 4px; color: var(--text); }
+  table.days .learned { display: block; font-size: 10px; color: var(--faint); white-space: nowrap; }
+  table.days .learned.quality { color: #f2a200; }
+  table.days .learned.cheap { color: #4fbe5c; }
   #router-live { display: flex; flex-direction: column; gap: 14px; }
   .router-head .switch .toggle.sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .rsess { flex-wrap: wrap; }
@@ -671,6 +680,13 @@
   #presets .menu-form input { min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
   #presets .menu-form input:focus { border-color: var(--accent); box-shadow: var(--focus); }
   #presets .menu-form .btn { height: 26px; }
+  #presets .menu-choice { display: flex; flex-direction: column; gap: 6px; padding: 8px 4px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+  #presets .menu-choice[hidden] { display: none; }
+  #presets .menu-choice .btn { height: 26px; flex-direction: row; align-items: center; justify-content: center; text-align: center; }
+  #presets .menu-choice .btn.primary { background: var(--accent); color: var(--accent-ink); }
+  #presets .menu-choice .btn.primary:hover { background: #e5866a; }
+  #setup-summary { font-size: 12px; line-height: 1.4; }
+  #setup-summary code { display: block; font-size: 11px; color: #ffb4a8; white-space: pre-wrap; word-break: break-all; }
   #presets .menu-form .btn:disabled { opacity: 0.4; }
   #presets .empty-small { padding: 4px 8px 6px; color: var(--faint); font-size: 11px; }
 
@@ -1161,6 +1177,13 @@
             <div class="k" id="since-k">Since you switched routing on</div>
             <div class="v small" id="since-big">—</div>
             <div class="d" id="since-line"></div>
+            <div class="review" id="since-review" hidden>
+              <div class="k">Since you turned it on — measured, not estimated</div>
+              <div class="row"><span>Routing — cheaper models picked</span><b id="rv-routing">—</b></div>
+              <div class="row"><span>Context diet — big files kept out</span><b id="rv-diet">—</b></div>
+              <div class="row" title="Sessions that switched up to a pricier model: from the switch on, what they cost beyond your old model mix, including rebuilding the prompt cache"><span>Escalations — what learning cost</span><b id="rv-esc">—</b></div>
+              <div class="verdict" id="rv-verdict"></div>
+            </div>
           </div>
           <div class="since" id="diet" hidden>
             <div class="k">Context diet — kept out of Claude's context</div>
@@ -1275,6 +1298,17 @@
     <button type="button" id="share-paste"><span>Paste a share code…</span><small>Loads someone's rules (you can still Save or Revert)</small></button>
     <button type="button" id="share-export"><span>Export to file…</span><small>JSON you can commit or send</small></button>
     <button type="button" id="share-import"><span>Import from file…</span><small></small></button>
+  </div>
+  <div class="menu-head">Whole setup</div>
+  <div class="menu-share">
+    <button type="button" id="setup-export"><span>Export setup…</span><small>Rules, presets, router, agents and your faces in one file</small></button>
+    <button type="button" id="setup-import"><span>Import setup…</span><small>Replace yours or merge in its presets and faces</small></button>
+  </div>
+  <div id="setup-choice" class="menu-choice" hidden>
+    <div id="setup-summary"></div>
+    <button type="button" class="btn primary" data-setup="merge">Merge presets &amp; faces, keep my rules</button>
+    <button type="button" class="btn ghost" data-setup="replace">Replace everything</button>
+    <button type="button" class="btn ghost" data-setup="cancel">Cancel</button>
   </div>
   <form id="share-form" class="menu-form" hidden>
     <input type="text" id="share-code" placeholder="ctl1:…" autocomplete="off" spellcheck="false" />
@@ -2391,7 +2425,7 @@
     e.stopPropagation();
     const open = $('presets').hidden;
     $('presets').hidden = !open;
-    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; }
+    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; $('setup-choice').hidden = true; }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#presets')) $('presets').hidden = true; });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('presets').hidden = true; });
@@ -2443,6 +2477,40 @@
   });
   $('share-export').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.exportRules(rules.map(R.normalizeRule)); if (r) flash(`Exported to ${r.split('/').pop()}`); });
   $('share-import').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.importRules(); if (r && Array.isArray(r.rules)) { applyRules(r.rules); flash('Imported — Save to keep them'); } else if (r && r.error) flash(r.error); });
+  // Whole setup: export writes what's saved; import shows what the file holds
+  // (and any commands its clicks run) before the user picks merge or replace.
+  $('setup-export').addEventListener('click', async (e) => {
+    e.stopPropagation(); $('presets').hidden = true;
+    const r = await window.lightsApi.exportSetup();
+    if (r) flash(`Setup exported to ${r.file.split(/[\\/]/).pop()}${dirty ? ' — unsaved rule edits not included' : ''}`);
+  });
+  $('setup-import').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const s = await window.lightsApi.importSetupPick();
+    if (!s) return;
+    if (s.error) { $('presets').hidden = true; flash(s.error); return; }
+    const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+    const parts = [s.rules != null && n(s.rules, 'rule'), s.presets != null && n(s.presets, 'preset'), s.cameos && n(s.cameos, 'face'), s.settings.length && 'router & agent settings'].filter(Boolean);
+    $('setup-summary').innerHTML = `<b>${escape(parts.join(', ') || 'Nothing usable in that file')}</b>`
+      + (s.old ? '<br>From an older version — updated as it loads.' : '')
+      + (s.dropped ? `<br>${n(s.dropped, 'face')} skipped (not a valid photo).` : '')
+      + (s.commands.length ? `<br>Clicks in this setup run:${s.commands.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');
+    $('setup-choice').hidden = false;
+  });
+  $('setup-choice').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('button[data-setup]');
+    if (!b) return;
+    $('setup-choice').hidden = true; $('presets').hidden = true;
+    if (b.dataset.setup === 'cancel') return;
+    const r = await window.lightsApi.importSetupApply(b.dataset.setup);
+    if (r.error) { flash(r.error); return; }
+    config = r.config;
+    if (b.dataset.setup === 'replace') { rules = config.rules.map(R.normalizeRule); selectedId = rules[0]?.id || null; setDirty(false); }
+    await loadCameos(r.cameos);
+    renderList(); renderEditor(); renderStage();
+    flash(r.failed.length ? r.failed[0] : b.dataset.setup === 'replace' ? 'Setup imported' : 'Presets and faces merged in');
+  });
   $('share-code').addEventListener('click', (e) => e.stopPropagation());
   $('share-form').addEventListener('click', (e) => e.stopPropagation());
 
@@ -2744,8 +2812,8 @@
   let routerOv = null;
   const ROUTE_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
   const POLICY_DESC = {
-    frugal: "Sonnet for every session, Haiku for short one-shot prompts; Opus only where you've switched up in the last 7 days.",
-    balanced: "Sonnet for light projects (short sessions, no switching up in 7 days); Opus for the rest.",
+    frugal: 'Sonnet for every session, Haiku for short one-shot prompts; Opus only for projects where you often switch up, early on (learned over 14 days).',
+    balanced: 'Sonnet for light projects, Opus for the rest. Projects where you often switch up get Opus; ones that never do get Haiku for short one-shot prompts.',
     quality: 'Opus for every session; only short one-shot prompts (-p) go to Sonnet.',
   };
   const signedMoney = (v) => (v < 0 ? `−${money(-v)}` : money(v));
@@ -2786,7 +2854,7 @@
     $('router-picks').querySelector('tbody').innerHTML = ov.projects.slice(0, 12).map((p) => {
       const auto = p.override === 'auto' ? p.pick.model : null;
       const opt = (v, label) => `<option value="${v}"${p.override === v ? ' selected' : ''}>${label}</option>`;
-      return `<tr><td class="name"><span title="${escape(p.name)}">${escape(p.name)}</span></td><td>${p.sessions}</td><td>${Math.round(p.medianTurns)}</td><td>${p.escalations || '—'}</td>`
+      return `<tr><td class="name"><span title="${escape(p.name)}">${escape(p.name)}</span></td><td>${p.sessions}</td><td>${Math.round(p.medianTurns)}</td><td title="${escape(p.learned && p.learned.label ? p.learned.label : '')}">${p.escalations || '—'}${p.learned && p.learned.label ? `<span class="learned ${p.learned.tier}">${p.learned.tier === 'quality' ? `learned: quality · ${Math.round(p.learned.rate * 100)}% of ${p.learned.sessions}` : p.learned.tier === 'cheap' ? `learned: cheap · ${p.learned.sessions} clean` : `learned: fine · ${p.learned.escalations}/${p.learned.sessions}${p.learned.timing === 'late' ? ', late' : ''}`}</span>` : ''}</td>`
         + `<td><select class="select" data-project="${escape(p.name)}" title="${escape(p.pick.reason)}">${opt('auto', `Auto${auto ? ` · ${ROUTE_NAMES[auto]}` : ''}`)}${opt('opus', 'Opus')}${opt('sonnet', 'Sonnet')}${opt('haiku', 'Haiku')}</select></td></tr>`;
     }).join('');
 
@@ -2832,6 +2900,18 @@
         $('since-big').textContent = signedRange(since.saved.low, since.saved.high);
         $('since-line').textContent = `${money(since.actual)} actual vs ${money(since.atBaseline)} at your pre-routing model mix · ${since.turns.toLocaleString('en-US')} turns`;
       }
+    }
+
+    const rv = ov.review;
+    $('since-review').hidden = !rv || !since;
+    if (rv) {
+      const sub = !!config.routerSubscriberView;
+      const amount = (lo, hi) => (!sub ? signedRange(lo, hi) : hi < 0 ? `−${pctRange(-hi, -lo, rv.atBaseline)}` : pctRange(lo, hi, rv.atBaseline));
+      const paint = (id, lo, hi, tail) => { $(id).textContent = `${amount(lo, hi)}${tail ? ` · ${tail}` : ''}`; $(id).classList.toggle('neg', hi < 0); };
+      paint('rv-routing', rv.routing.low, rv.routing.high, `${num(rv.sessions)} session${rv.sessions === 1 ? '' : 's'}`);
+      paint('rv-diet', rv.diet.low, rv.diet.high, rv.diet.events ? `${num(rv.diet.events)} trim${rv.diet.events === 1 ? '' : 's'}` : 'off or none yet');
+      paint('rv-esc', -rv.escalations.cost, -rv.escalations.cost, rv.escalations.sessions ? `${num(rv.escalations.sessions)} session${rv.escalations.sessions === 1 ? '' : 's'} switched up` : 'none');
+      $('rv-verdict').textContent = rv.verdict.text;
     }
   }
 
@@ -3121,7 +3201,7 @@
     renderList(); renderEditor(); renderStage();
     refreshLive();
     // Dev: ?pose=<p> forces the stage into a pose for screenshots.
-    if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', cameo: q.get('cameo') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25 }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}${q.get('cameo') ? ' · ' + q.get('cameo') : ''}`; }
+    if (q.get('pose')) { document.querySelector('#stage .rig-wrap').classList.toggle('wide', q.get('effect') === 'garden'); stage.setLook({ lamp: 'amber', gardenSpeed: Number(q.get('speed') || 30), eyes: q.get('eyes') || 'default', pose: q.get('pose'), text: q.get('text') || null, costume: q.get('costume') || 'none', cameo: q.get('cameo') || 'none', lampFx: q.get('lampfx') || 'none', sign: q.get('sign') || 'h3', lampShape: q.get('shape') || 'square', signFx: q.get('signfx') || 'none', number: q.get('number') ? Number(q.get('number')) : null, body: q.get('body') || 'claude', effect: q.get('effect') || 'none', pet: q.get('pet') || 'none', waitMinutes: 25, smokeCycleMs: Number(q.get('fastSmoke')) || undefined }); stageFire(q.get('pose')); $('caption').textContent = `pose: ${q.get('pose')}${q.get('costume') ? ' · ' + q.get('costume') : ''}${q.get('cameo') ? ' · ' + q.get('cameo') : ''}`; }
   })();
 </script>
 </body>

@@ -15,6 +15,8 @@
     <symbol id="lamp-heart" viewBox="0 0 16 16"><path d="M8 14.5 L2 8.5 A3.5 3.5 0 0 1 8 4 A3.5 3.5 0 0 1 14 8.5 Z" /></symbol>
     <symbol id="lamp-star" viewBox="0 0 16 16"><polygon points="8,0.8 10.1,5.6 15.3,6.1 11.4,9.6 12.6,14.7 8,12 3.4,14.7 4.6,9.6 0.7,6.1 5.9,5.6" /></symbol>
     <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
+    <filter id="cig-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="0.7" /></filter>
+    <linearGradient id="cig-wisp-fade" gradientUnits="userSpaceOnUse" x1="0" y1="46.6" x2="0" y2="34"><stop offset="0" stop-color="#e4e4ea" stop-opacity="0.85" /><stop offset="1" stop-color="#e4e4ea" stop-opacity="0" /></linearGradient>
     <filter id="cameo-seam" x="-50%" y="-100%" width="200%" height="300%"><feGaussianBlur stdDeviation="1" /></filter>
   </defs>
   <g class="scene">
@@ -195,15 +197,37 @@
     <g class="mouth-anchor"><g class="grin"><rect x="23" y="48.5" width="18" height="3.6" rx="1.8" fill="#211f1c" /><rect x="24.5" y="49.2" width="15" height="1.6" fill="#f2efe8" /><rect x="28" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="31.5" y="49.2" width="0.6" height="1.6" fill="#211f1c" /><rect x="35" y="49.2" width="0.6" height="1.6" fill="#211f1c" /></g></g>
     <!-- selfie: phone held out, flash burst -->
     <g class="selfie"><rect x="50" y="40" width="7" height="11" rx="1.5" fill="#1a1a1e" stroke="#9aa3ad" stroke-width="0.6" /><circle class="flashbulb" cx="53.5" cy="42.3" r="1.1" fill="#fff5d6" /></g>
-    <!-- cigarette: held at the mouth, smoke drifts up -->
+    <!-- cigarette: held at the mouth, smoke drifts up. It burns down over a
+         real SMOKE_CYCLE_MS (the tip slides back as the paper shortens), then
+         gets flicked, stomped (.cig-butt, on the ground) and replaced from the
+         pack at the hip (.cig-pack) -->
     <g class="mouth-anchor"><g class="cig">
-      <g transform="rotate(-12 34 50)">
-        <rect x="34" y="49.2" width="10" height="1.7" rx="0.5" fill="#f2efe8" /><rect x="34" y="49.2" width="2.6" height="1.7" rx="0.5" fill="#d9a066" /><rect class="ember" x="43.2" y="49.1" width="1.4" height="1.9" rx="0.4" fill="#ff5a1f" />
-        <rect x="37" y="48.2" width="4.2" height="3.6" rx="1.2" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+      <g class="cig-held"><g transform="translate(0 0.8) rotate(-10 33 50)">
+        <rect class="cig-paper" x="36.8" y="48.7" width="10.8" height="2.6" fill="#f7f5ef" stroke="#211f1c" stroke-width="0.4" />
+        <g class="cig-tip">
+          <rect x="47.3" y="48.7" width="1.3" height="2.6" fill="#a39d94" stroke="#211f1c" stroke-width="0.4" />
+          <circle class="cig-glow" cx="49.2" cy="50" r="2.4" fill="#ff7a2f" filter="url(#cig-glow)" />
+          <rect class="ember" x="48.4" y="48.7" width="1.5" height="2.6" rx="0.5" fill="#ff5a1f" stroke="#211f1c" stroke-width="0.4" />
+          <path class="cig-flame" d="M51.4 51.4 q-1.9 -1.6 0 -4.9 q1.9 3.3 0 4.9 z" fill="#ffb02e" /><path class="cig-flame" d="M51.4 51 q-0.9 -0.9 0 -2.6 q0.9 1.7 0 2.6 z" fill="#fff3b0" />
+        </g>
+        <rect x="32.4" y="48.7" width="4.8" height="2.6" rx="0.6" fill="#d9a066" stroke="#211f1c" stroke-width="0.4" />
+        <g fill="#b37a3e"><rect x="33.4" y="49.3" width="0.5" height="0.5" /><rect x="34.8" y="50.2" width="0.5" height="0.5" /><rect x="35.9" y="49.4" width="0.5" height="0.5" /></g>
+        <rect x="36.7" y="48.9" width="0.5" height="2.2" fill="#e8c77a" />
+        <rect x="37.6" y="48" width="3.8" height="4" rx="1.3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+      </g></g>
+      <g class="cig-smoke wisps">
+        <path class="wisp-line" d="M48.9 46.6 c-1.3 -1.5 1.3 -3 0 -4.5 s1.3 -3 0 -4.5 s1 -2.4 0 -3.6" fill="none" stroke="url(#cig-wisp-fade)" stroke-width="0.5" stroke-linecap="round" />
+        <g fill="#c9c9d1"><circle class="wisp s1" cx="48.9" cy="46.4" r="0.7" /><circle class="wisp s2" cx="48.9" cy="46.4" r="0.9" /><circle class="wisp s3" cx="48.9" cy="46.4" r="0.6" /><circle class="wisp s4" cx="48.9" cy="46.4" r="1" /></g>
       </g>
-      <g class="wisps" fill="#c9c9d1"><circle class="wisp s1" cx="44.6" cy="47.5" r="0.7" /><circle class="wisp s2" cx="44.6" cy="47.5" r="0.9" /><circle class="wisp s3" cx="44.6" cy="47.5" r="0.6" /><circle class="wisp s4" cx="44.6" cy="47.5" r="1" /></g>
       <g class="exhale" fill="#d7d7de"><circle class="ex e1" cx="33" cy="51" r="1.4" /><circle class="ex e2" cx="33" cy="51" r="1.9" /><circle class="ex e3" cx="33" cy="51" r="1.2" /></g>
     </g></g>
+    <!-- the pack a fresh cigarette comes out of, at the hip -->
+    <g class="cig-pack">
+      <g class="cig-pack-stick"><rect x="52.7" y="42.4" width="1.5" height="4.6" fill="#f7f5ef" stroke="#211f1c" stroke-width="0.35" /><rect x="52.7" y="42.4" width="1.5" height="1.6" fill="#d9a066" stroke="#211f1c" stroke-width="0.35" /></g>
+      <rect x="50.4" y="44.6" width="6.2" height="8.4" rx="0.6" fill="#f7f5ef" stroke="#211f1c" stroke-width="0.45" />
+      <rect x="50.4" y="44.6" width="6.2" height="3" fill="#c8202a" stroke="#211f1c" stroke-width="0.45" />
+      <rect x="51.4" y="49.2" width="4.2" height="0.8" fill="#e8c77a" />
+    </g>
     <!-- zyn tin + pouch; the mouth opens for it and it ends up as a bump under the upper lip -->
     <g class="mouth-anchor"><g class="zyn"><rect class="zyn-mouth" x="29" y="49.4" width="6" height="1.2" rx="0.6" fill="#211f1c" /><path class="lip-bump" d="M29.8 49.5 q2.2 -3 4.4 0 z" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.45" /><rect class="tin" x="49" y="46" width="8" height="8" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><text class="tin-text" x="53" y="51.2" text-anchor="middle" font-size="3" font-weight="700" font-family="-apple-system, system-ui, sans-serif" fill="#211f1c">ZYN</text><rect class="pouch" x="53" y="49" width="3" height="1.6" rx="0.8" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" /></g></g>
     <!-- table, rolled note, line -->
@@ -440,6 +464,17 @@
     <rect x="21" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="22.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
     <rect x="38" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="39.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
   </g>
+  <!-- the finished cigarette: flicked from the mouth, lands on the ground, gets
+       stomped flat; one element, reused every cycle -->
+  <g class="cig-butt">
+    <ellipse class="cig-scuff" cx="52.3" cy="68.1" rx="3.8" ry="0.7" fill="#211f1c" />
+    <g class="cig-butt-fly"><g class="cig-butt-body">
+      <rect x="49.6" y="66.5" width="2.9" height="1.7" rx="0.4" fill="#d9a066" stroke="#211f1c" stroke-width="0.35" />
+      <rect x="52.4" y="66.5" width="2.2" height="1.7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.35" />
+      <rect x="54.5" y="66.5" width="0.7" height="1.7" fill="#6b625c" stroke="#211f1c" stroke-width="0.35" />
+    </g></g>
+    <g class="cig-dust" fill="#b9b2a6"><circle class="dust d1" cx="48.6" cy="67.4" r="0.9" /><circle class="dust d2" cx="56" cy="67.4" r="0.9" /><circle class="dust d3" cx="52.3" cy="66.4" r="0.7" /></g>
+  </g>
   <!-- pets: a small companion beside the feet -->
   <g class="pet pet-duck">
     <rect x="55" y="61" width="8" height="7" rx="3" fill="#f2d16b" /><rect x="60" y="58" width="5" height="5" rx="2" fill="#f2d16b" /><rect x="64.5" y="60" width="3" height="1.6" fill="#f28c28" /><rect x="62" y="59.5" width="1" height="1" fill="#211f1c" />
@@ -566,6 +601,11 @@
       '--hat-dy': `${(top - 39).toFixed(2)}px`,
     };
   }
+  // Each cigarette lasts this long while the smoke pose holds; the last few
+  // seconds are the flick, the stomp and drawing a fresh one from the pack.
+  const SMOKE_CYCLE_MS = 5 * 60 * 1000;
+  const SMOKE_STEPS = [['flick', 1200], ['stomp', 1300], ['draw', 1800]];
+  const SMOKE_MIN_CYCLE_MS = 8000;
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
@@ -653,6 +693,11 @@
         scheduleFlips(pose === 'kickflip');
         scheduleLines(pose === 'line');
       }
+      // The cigarette clock runs from look.smokeSince (the widget stamps it when
+      // smoke starts), so a brief reaction that swaps the pose resumes the same
+      // cigarette; without one (editor previews) it starts at the pose change.
+      const smokeKey = pose === 'smoke' ? `${Number(look.smokeSince) || ''}:${Number(look.smokeCycleMs) || ''}` : '';
+      if (!current || current.smokeKey !== smokeKey) scheduleSmoke(pose === 'smoke', Number(look.smokeSince), Number(look.smokeCycleMs));
       // Garden actions on the real screen are driven by the main process.
       const act = look.gardenAct || null;
       for (const a of ['walking', 'carrying', 'pouring', 'watering', 'processing', 'smashing', 'lounging']) svg.classList.toggle(a, act === a);
@@ -695,7 +740,7 @@
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
-      current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx };
+      current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
     }
 
     function wearPhoto(photo) {
@@ -948,6 +993,9 @@
         const i = Math.min(G.POTS - 1, Math.floor(el / per));
         const sub = (el - i * per) / per;   // 0..1 within this pot's cycle
         const edge = i % 2 ? -62 : 126;
+        // At preview speeds a trip's drop can fall between two ticks; its pot
+        // still has to be down before the next trip.
+        while (garden.pots.length < i) { const x = potSlot(garden.pots.length); g.appendChild(drawPot(x)); garden.pots.push({ x, crop: null, planted: false }); }
         if (sub < 0.4) { svg.classList.remove('carrying'); if (garden.step !== i * 3) { garden.step = i * 3; walkTo(edge); } }
         else if (sub < 0.85) { svg.classList.add('carrying'); if (garden.step !== i * 3 + 1) { garden.step = i * 3 + 1; walkTo(potSlot(i) + (potSlot(i) < 32 ? 14 : -14)); } }
         else if (garden.step !== i * 3 + 2) { garden.step = i * 3 + 2; svg.classList.remove('carrying'); g.appendChild(drawPot(potSlot(i))); garden.pots.push({ x: potSlot(i), crop: null, planted: false }); }
@@ -1037,6 +1085,51 @@
       const go = () => { svg.classList.remove('rail'); void svg.getBoundingClientRect(); svg.classList.add('rail'); setTimeout(() => svg.classList.remove('rail'), 5200); };
       go();
       lineTimer = setInterval(go, 40000);
+    }
+    // Smoke: every cigarette lasts SMOKE_CYCLE_MS of real time. It burns down
+    // for most of it; the tail end is flicked away, stomped out, and a new one
+    // comes out of the pack and gets lit, all as classes CSS animates. Stages
+    // are derived from the clock on every tick, so nothing drifts or piles up.
+    let smoke = null;        // { since, cycle, key, timer }
+    function scheduleSmoke(on, since, cycleMs) {
+      if (smoke) clearTimeout(smoke.timer);
+      smoke = null;
+      svg.classList.remove('cig-lit', ...SMOKE_STEPS.map(([name]) => `smoke-${name}`));
+      if (!on) return;
+      const now = Date.now();
+      smoke = {
+        since: since > 0 && since <= now ? since : now,
+        cycle: cycleMs > 0 ? Math.max(SMOKE_MIN_CYCLE_MS, cycleMs) : SMOKE_CYCLE_MS,
+        key: null, timer: null,
+      };
+      smokeTick();
+    }
+    function smokeTick() {
+      if (!smoke) return;
+      // Reduced motion: no flick or stomp, the cigarette just renews in place.
+      const steps = matchMedia('(prefers-reduced-motion: reduce)').matches ? [] : SMOKE_STEPS;
+      const lit = smoke.cycle - steps.reduce((n, [, ms]) => n + ms, 0);
+      const elapsed = Math.max(0, Date.now() - smoke.since);
+      const t = elapsed % smoke.cycle;
+      let stage = 'lit', end = lit;
+      if (t >= lit) {
+        let at = lit;
+        for (const [name, ms] of steps) { if (t < at + ms) { stage = name; end = at + ms; break; } at += ms; }
+      }
+      const key = `${Math.floor(elapsed / smoke.cycle)}:${stage}`;
+      if (smoke.key !== key) {
+        smoke.key = key;
+        for (const [name] of SMOKE_STEPS) svg.classList.toggle(`smoke-${name}`, stage === name);
+        svg.style.setProperty('--cig-burn', `${lit}ms`);
+        if (stage === 'lit' || (stage === 'flick' && !svg.classList.contains('cig-lit'))) {
+          // restart the burn-down, part-way through if we joined late
+          svg.classList.remove('cig-lit'); void svg.getBoundingClientRect();
+          svg.style.setProperty('--cig-at', `${-Math.min(t, lit)}ms`);
+          svg.classList.add('cig-lit');
+        } else if (stage !== 'flick') svg.classList.remove('cig-lit');
+      }
+      // a rig thrown away mid-smoke (editor thumbnails re-render) stops here
+      smoke.timer = setTimeout(() => { if (svg.isConnected) smokeTick(); else smoke = null; }, end - t + 20);
     }
     // Poke the pet: it reacts for a second and a half.
     let petTimer = null;

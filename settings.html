@@ -120,6 +120,16 @@
   </div>
 
   <div class="field">
+    <label class="row"><input type="checkbox" id="notifyOnStates" /> Send a notification when something needs you</label>
+    <div class="hint">A macOS notification once each time a state starts, so you hear about it even when the widget is hidden. Click it to jump to that terminal.</div>
+    <div id="notify-kinds" style="display:flex;flex-direction:column;gap:3px;padding-left:23px">
+      <label class="row"><input type="checkbox" id="notify-permission-ask" /> Needs your input</label>
+      <label class="row"><input type="checkbox" id="notify-turn-failed" /> Turn failed</label>
+      <label class="row"><input type="checkbox" id="notify-offline" /> No network</label>
+    </div>
+  </div>
+
+  <div class="field">
     <label class="row"><input type="checkbox" id="showWidget" /> Show the floating widget</label>
     <div class="hint">Turn this off to live in the menu bar only.</div>
   </div>
@@ -189,6 +199,12 @@
     <div class="hint" id="connect-hint">Writes each tool's hook config so its sessions light the widget too. Anything else can POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> or run <code id="emit-path">emit.js</code>.</div>
   </div>
 
+  <h2>Claude integration</h2>
+  <div class="field">
+    <div class="row"><button type="button" id="mcp-toggle">Enable Claude integration</button></div>
+    <div class="hint" id="mcp-hint">Adds Buddy as an MCP server for every Claude Code session, so you can ask Claude "why is my buddy amber?" or have it answer a waiting permission prompt. Writes one entry (<code>claude-buddy</code>) to <code>~/.claude.json</code>; restart open sessions to pick it up.</div>
+  </div>
+
   <div class="field">
     <label>What the lights mean</label>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
@@ -204,12 +220,18 @@
     const waitingInput = document.getElementById('waitingStaleHours');
     const soundInput = document.getElementById('soundOnAmber');
     const status = document.getElementById('status');
+    const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
+    const syncNotifyKinds = () => { document.getElementById('notify-kinds').style.opacity = document.getElementById('notifyOnStates').checked ? '' : '0.45'; };
+    document.getElementById('notifyOnStates').addEventListener('change', syncNotifyKinds);
 
     async function load() {
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
       waitingInput.value = config.waitingStaleHours;
       soundInput.checked = config.soundOnAmber;
+      document.getElementById('notifyOnStates').checked = config.notifyOnStates !== false;
+      for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).checked = (config.notifyStates || {})[k] !== false;
+      syncNotifyKinds();
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
       document.getElementById('seasonal').checked = config.seasonal !== false;
@@ -231,6 +253,8 @@
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
         soundOnAmber: soundInput.checked,
+        notifyOnStates: document.getElementById('notifyOnStates').checked,
+        notifyStates: Object.fromEntries(NOTIFY_KINDS.map((k) => [k, document.getElementById(`notify-${k}`).checked])),
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
         seasonal: document.getElementById('seasonal').checked,
@@ -256,6 +280,15 @@
       const r = await window.settingsApi.connectAgent(b.dataset.agent);
       document.getElementById('connect-hint').textContent = r && r.ok ? `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.` : 'Could not connect.';
     }));
+    const mcpToggle = document.getElementById('mcp-toggle');
+    const showMcp = (st) => {
+      mcpToggle.dataset.on = st.installed ? '1' : '';
+      mcpToggle.textContent = st.installed ? 'Disable Claude integration' : 'Enable Claude integration';
+      if (st.error) document.getElementById('mcp-hint').textContent = `Could not update ${st.path}: ${st.error}`;
+      else if (st.installed && !st.current) document.getElementById('mcp-hint').textContent = 'Registered, but pointing at an older copy of Buddy. Disable and enable again to update it.';
+    };
+    mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
+    window.settingsApi.mcpStatus().then(showMcp);
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; });
     load();
   </script>

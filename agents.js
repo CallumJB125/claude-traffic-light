@@ -234,4 +234,26 @@ function mergeAgents(existing, found) {
   return mine.concat(found);
 }
 
-module.exports = { scanAgents, mergeAgents, agentStatus, readJson, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS };
+// Only a SessionEnd hook removes a session file, so a session that was killed
+// (closed terminal, crash, tmux kill) leaves its file behind for good, and
+// every poll keeps stat-ing and parsing it. Delete files untouched for longer
+// than `maxAgeMs` — judged by mtime alone, so a young file is kept even if it
+// doesn't parse. Temp files from a writer killed between write and rename go
+// the same way. → the names removed.
+function sweepStaleFiles(dir, maxAgeMs, now = Date.now()) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const removed = [];
+  for (const name of names) {
+    if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue;
+    const file = path.join(dir, name);
+    try {
+      if (now - fs.statSync(file).mtimeMs <= maxAgeMs) continue;
+      fs.rmSync(file, { force: true });
+      removed.push(name);
+    } catch { /* removed under us */ }
+  }
+  return removed;
+}
+
+module.exports = { scanAgents, mergeAgents, agentStatus, readJson, sweepStaleFiles, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS };

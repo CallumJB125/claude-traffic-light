@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -16,6 +16,9 @@ const Delegate = require('./hooks/delegate.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
 const Cameos = require('./cameos.js');
+const McpInstall = require('./mcp-install.js');
+const Setup = require('./setup.js');
+const Help = require('./help.js');
 const http = require('http');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -72,7 +75,7 @@ if (DEMO === 'knock') {
 const DIAG = process.argv.includes('--diag');
 // Dev runs (shots, playtests, demos) must never touch the real install: no
 // hook writes, no login item, no stale lock left behind.
-const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--playtest') || process.argv.includes('--lights');
+const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights');
 
 // Every interval/timeout the app owns goes through these so --diag can count
 // them and so nothing can leak a live timer on shutdown.
@@ -220,6 +223,9 @@ const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
   soundOnAmber: true,
+  // macOS notifications for the states that matter when the widget is out of sight.
+  notifyOnStates: true,
+  notifyStates: { ...Help.NOTIFY_DEFAULTS },
   showWidget: true,
   menuBarMode: false,
   seasonal: true,
@@ -265,6 +271,7 @@ function buildConfig() {
   }
   const config = { ...DEFAULT_CONFIG, ...saved };
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
+  config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
   config.routerDelegation = Delegate.normalize({ ...DEFAULT_CONFIG.routerDelegation, ...(saved.routerDelegation && typeof saved.routerDelegation === 'object' ? saved.routerDelegation : {}) });
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
@@ -544,6 +551,17 @@ function workingAgentsStale(data, now, workingStaleMs) {
     if (since && now - since < AGENT_KEEPALIVE_MS) young = true;
   });
   return !young && now - last > workingStaleMs;
+}
+
+// readSessions only hides stale files; this deletes them once no stale window
+// could show them any more (a file's mtime is never older than the times it
+// holds), with half a day's margin on top.
+const SESSION_SWEEP_MARGIN_MS = 12 * 60 * 60 * 1000;
+function sweepSessionFiles() {
+  const c = loadConfig();
+  const maxAge = Math.max(c.waitingStaleHours * 3600000 || 0, c.workingStaleMinutes * 60000 || 0, AGENT_KEEPALIVE_MS) + SESSION_SWEEP_MARGIN_MS;
+  const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
+  if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
 }
 
 // Every change in what a session presents is logged, so a flicker report can
@@ -979,6 +997,9 @@ function createLightsWindow() {
   if (arg('--pose')) query.pose = arg('--pose');
   if (arg('--view')) query.view = arg('--view');
   for (const k of ['costume', 'cameo', 'body', 'effect', 'pet', 'eyes', 'event', 'scroll', 'lampfx', 'sign', 'shape', 'signfx', 'number', 'speed']) if (arg(`--${k}`)) query[k] = arg(`--${k}`);
+  // `--fast-smoke <ms>` (with --pose smoke) shortens each cigarette from 5 min
+  // to <ms> so the flick/stomp/relight can be captured; dev captures only.
+  if (arg('--fast-smoke')) query.fastSmoke = arg('--fast-smoke');
   if (arg('--text')) query.text = arg('--text');
   lightsWin.loadFile('lights.html', { query });
   if (shotAt > 0 && process.argv[shotAt + 1]) {
@@ -1046,6 +1067,96 @@ function createLightsWindow() {
     lightsWin = null;
     if (process.platform === 'darwin' && !settingsWin) app.dock.hide();
   });
+}
+
+// ── Help: "what am I looking at?" ──────────────────────────────────────────
+// A small panel beside the widget that explains the current state in plain
+// words. Opened from the widget's "?" and the tray; once on first run.
+let helpWin = null;
+
+function createHelpWindow() {
+  if (helpWin) {
+    helpWin.show();
+    helpWin.focus();
+    return;
+  }
+  const W = 340, H = 520;
+  const wb = win?.getBounds();
+  const wa = screen.getDisplayMatching(wb || { x: 0, y: 0, width: 1, height: 1 }).workArea;
+  // Beside the widget, on whichever side has room.
+  const x = wb ? (wb.x - W - 12 >= wa.x ? wb.x - W - 12 : Math.min(wb.x + wb.width + 12, wa.x + wa.width - W)) : wa.x + wa.width - W - 40;
+  const y = wb ? Math.max(wa.y, Math.min(wb.y, wa.y + wa.height - H)) : wa.y + 80;
+  helpWin = new BrowserWindow({
+    width: W,
+    height: H,
+    x: Math.round(x),
+    y: Math.round(y),
+    useContentSize: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'What is Claude doing?',
+    backgroundColor: '#1c1a1f',
+    webPreferences: {
+      preload: path.join(__dirname, 'help-preload.js'),
+      contextIsolation: true,
+    },
+  });
+  helpWin.setMenuBarVisibility(false);
+  helpWin.loadFile('help.html');
+  // Dev: `--shot-help out.png` captures the panel and quits.
+  const shotAt = process.argv.indexOf('--shot-help');
+  if (shotAt > 0 && process.argv[shotAt + 1]) {
+    helpWin.webContents.once('did-finish-load', () => setTimeout(async () => {
+      fs.writeFileSync(process.argv[shotAt + 1], (await helpWin.webContents.capturePage()).toPNG());
+      console.log('[shot] help', JSON.stringify(helpState()));
+      app.quit();
+    }, 1500));
+  }
+  helpWin.on('closed', () => { helpWin = null; });
+}
+
+function helpState() {
+  const real = aggregateState({ ignoreTravel: true });
+  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null });
+}
+
+ipcMain.handle('open-help', createHelpWindow);
+ipcMain.handle('get-help', () => helpState());
+
+function maybeAutoShowHelp() {
+  const marker = path.join(ROOT_DIR, Help.MARKER);
+  if (!Help.shouldAutoShow({ markerExists: fs.existsSync(marker), devRun: IS_DEV_RUN })) return;
+  try {
+    fs.mkdirSync(ROOT_DIR, { recursive: true });
+    fs.writeFileSync(marker, new Date().toISOString());
+  } catch (e) { console.warn('[help] could not write the first-run marker:', e.message); }
+  createHelpWindow();
+}
+
+// ── Notifications for states that need you ─────────────────────────────────
+// Help.notifications decides (once per state entry); this only shows them.
+let notifyKeys = null;
+const liveNotifications = new Set(); // held so a click still reaches its handler after GC
+function maybeNotify(st) {
+  // A preview empties the pending list; skipping it keeps that from reading as a new ask.
+  if (st.reason === 'preview') return;
+  const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online }, loadConfig());
+  notifyKeys = keys;
+  for (const n of fire) {
+    console.log(`[notify] ${n.key} — ${n.title}`);
+    if (IS_DEV_RUN || !Notification.isSupported()) continue;
+    // Silent: the widget's own sound channel already speaks for these states.
+    const note = new Notification({ title: n.title, body: n.body, silent: true });
+    liveNotifications.add(note);
+    note.on('click', () => {
+      liveNotifications.delete(note);
+      if (n.hostApp) activateTerminalApp(String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
+    });
+    note.on('close', () => liveNotifications.delete(note));
+    note.show();
+  }
 }
 
 // ── Bullet overlay ──────────────────────────────────────────────────────────
@@ -1213,10 +1324,14 @@ function updateOverlay(look) {
   overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWin.loadFile('overlay.html');
-  overlayWin.once('ready-to-show', () => {
-    if (!overlayWin) return;
-    overlayWin.showInactive();
-    overlayWin.setBounds(m.display.bounds);
+  // A replaced overlay lingers ~2.5 s while it fades; its events must not act
+  // on its successor (a stale 'closed' orphaned the new window, a stale
+  // 'ready-to-show' started a second set of timers on it).
+  const w = overlayWin;
+  w.once('ready-to-show', () => {
+    if (overlayWin !== w) return;
+    w.showInactive();
+    w.setBounds(m.display.bounds);
     if (gun) aimTimer = every(120, pushAim, 'aim');
     if (gun === 'ak47') { fireBurst(); burstTimer = every(BURST_EVERY_MS, fireBurst, 'burst'); }
     else if (gun === 'sniper') { fireSnipe(); snipeTimer = every(SNIPE_EVERY_MS, fireSnipe, 'snipe'); }
@@ -1224,8 +1339,8 @@ function updateOverlay(look) {
   });
   // If the overlay's renderer dies, tear the whole thing down rather than
   // leaving a transparent always-on-top window with a dead canvas on screen.
-  guardRenderer(overlayWin, 'overlay', () => stopOverlay());
-  overlayWin.on('closed', () => { overlayWin = null; });
+  guardRenderer(w, 'overlay', () => { if (overlayWin === w) stopOverlay(); });
+  w.on('closed', () => { if (overlayWin === w) overlayWin = null; });
   win.setAlwaysOnTop(true, 'screen-saver', 2);
 }
 
@@ -1602,8 +1717,10 @@ function broadcastStatus() {
   }
   win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
+  helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    maybeNotify(st);
     updateOverlay(st.look);
     applyStrip(!!(st.pending && st.pending.length) && !travelLook);
     updateGarden(st);
@@ -1905,6 +2022,7 @@ function createTray() {
       click: (item) => { saveConfig({ menuBarMode: item.checked }); updateTrayMode(); },
     },
     { type: 'separator' },
+    { label: 'What does this mean?…', click: createHelpWindow },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Router…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'router')); lightsWin?.webContents.send('show-view', 'router'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
@@ -2006,7 +2124,9 @@ ipcMain.handle('go-to-needing-session', async () => {
 
 ipcMain.handle('get-config', () => loadConfig());
 
-ipcMain.handle('save-config', (e, partial) => {
+ipcMain.handle('save-config', (e, partial) => commitConfig(partial));
+// saveConfig plus everything a changed setting has to reach outside config.json.
+function commitConfig(partial) {
   const before = loadConfig().askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
@@ -2018,7 +2138,7 @@ ipcMain.handle('save-config', (e, partial) => {
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
   return next;
-});
+}
 
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
@@ -2367,7 +2487,7 @@ ipcMain.handle('router-overview', async () => {
   const history = Usage.projectHistory(turns);
   const projects = Object.entries(history.projects)
     .filter(([, p]) => p.sessions)
-    .map(([name, p]) => ({ name, ...p, override: config.routerProjects?.[name] || 'auto', pick: Router.decide({ cwd: name, history, config }) }))
+    .map(([name, p]) => ({ name, ...p, override: config.routerProjects?.[name] || 'auto', pick: Router.decide({ cwd: name, history, config }), learned: Router.learnProjectTier(p.learn) }))
     .sort((a, b) => b.sessions - a.sessions || b.turns - a.turns);
   const sessions = aggregateState({ ignoreTravel: true }).sessions
     .filter((s) => !s.source || s.source === 'claude')
@@ -2376,11 +2496,15 @@ ipcMain.handle('router-overview', async () => {
       return { sessionId: s.sessionId, project: Router.projectKey(s.cwd), route: s.route || null, escalated: !!s.escalated, signal: s.signal, model: Router.family(a.model), advice: a.advice || null, kept: !!a.kept, delegating: !!s.delegating };
     });
   const frozen = RouterInstall.readFrozen(routerOpts());
-  const since = config.routerEnabledAt ? Usage.sinceRouting(turns, { since: Date.parse(config.routerEnabledAt), frozen }) : null;
+  const enabledAt = Date.parse(config.routerEnabledAt || '') || null;
+  const since = enabledAt ? Usage.sinceRouting(turns, { since: enabledAt, frozen }) : null;
+  let events = [];
+  if (enabledAt) try { events = DelegationInstall.readLog(delegationOpts(), enabledAt); } catch { /* no log yet */ }
+  const review = enabledAt ? Usage.review(turns, { since: enabledAt, frozen, events }) : null;
   const status = routerStatus();
   const flag = DelegationInstall.readFlag(delegationOpts());
   const summary = Router.summaryLine({ launcher: status.shimExists, delegation: !!(flag && flag.enabled), sessions });
-  return { status, policy: config.routerPolicy, projects, sessions, decisions: Router.readDecisions(routerFile('decisions.jsonl'), 20), since, summary, delegationOn: !!(flag && flag.enabled) };
+  return { status, policy: config.routerPolicy, projects, sessions, decisions: Router.readDecisions(routerFile('decisions.jsonl'), 20), since, review, summary, delegationOn: !!(flag && flag.enabled) };
 });
 
 // ── Router, phase 2: delegation ────────────────────────────────────────────
@@ -2541,6 +2665,26 @@ ipcMain.handle('import-rules', async () => {
   } catch (err) { return { error: `Could not read: ${err.message}` }; }
 });
 
+// Claude integration: registers mcp-server.js in ~/.claude.json (user scope).
+// Dev runs register into a sandbox HOME, like the router.
+function mcpOpts() {
+  return {
+    home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
+    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: process.execPath, appPath: app.getAppPath(), dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
+  };
+}
+ipcMain.handle('mcp-status', () => McpInstall.status(mcpOpts()));
+ipcMain.handle('mcp-set-enabled', (_e, on) => {
+  try {
+    const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
+    console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
+    return McpInstall.status(mcpOpts());
+  } catch (err) {
+    console.warn('[mcp] registration failed:', err.message);
+    return { ...McpInstall.status(mcpOpts()), error: err.message };
+  }
+});
+
 // Connect other agents: writes their hook config files.
 ipcMain.handle('connect-agent', (e, which) => {
   const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return {}; } };
@@ -2595,6 +2739,40 @@ ipcMain.handle('cameos-add', (_e, p) => {
 ipcMain.handle('cameos-remove', (_e, id) => {
   Cameos.removePhoto(CAMEO_DIR, String(id));
   return cameosChanged();
+});
+
+// The whole setup (setup.js) as one file. Import is two steps so the user sees
+// what's in the file before choosing replace or merge; the parsed file waits
+// here in between.
+const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
+let pendingSetup = null;
+ipcMain.handle('setup-export', async () => {
+  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+  if (r.canceled || !r.filePath) return null;
+  const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
+  fs.writeFileSync(r.filePath, JSON.stringify(bundle, null, 2));
+  return { file: r.filePath, cameos: bundle.cameos.length };
+});
+ipcMain.handle('setup-import-pick', async () => {
+  const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import setup', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  try {
+    if (fs.statSync(r.filePaths[0]).size > Setup.MAX_BYTES) return { error: 'That file is over 32 MB — too big to be a setup.' };
+    const parsed = Setup.readSetup(fs.readFileSync(r.filePaths[0], 'utf8'));
+    if (parsed.error) return parsed;
+    pendingSetup = parsed;
+    return Setup.summarize(parsed);
+  } catch (err) { return { error: `Could not read: ${err.message}` }; }
+});
+ipcMain.handle('setup-import-apply', (_e, mode) => {
+  if (!pendingSetup) return { error: 'Choose a setup file first.' };
+  const plan = Setup.planImport(pendingSetup, { config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng }, mode === 'replace' ? 'replace' : 'merge');
+  pendingSetup = null;
+  // Faces first, so rules that wear them resolve on the first broadcast.
+  for (const id of plan.remove) Cameos.removePhoto(CAMEO_DIR, id);
+  const failed = plan.add.map((c) => Cameos.importPhoto(CAMEO_DIR, c)).filter((x) => x.error).map((x) => x.error);
+  const cameos = cameosChanged();
+  return { config: commitConfig(plan.partial), cameos, failed };
 });
 
 ipcMain.handle('reset-rules', () => {
@@ -2735,6 +2913,9 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
+  // After the widget has had time to appear, so the panel can sit beside it.
+  if (process.argv.includes('--help-window') || process.argv.includes('--shot-help')) setTimeout(createHelpWindow, 1200);
+  else setTimeout(maybeAutoShowHelp, 2500);
 
   // A busy turn writes its session file many times a second and every write
   // fires this watcher — coalesce them into at most one refresh per 200 ms.
@@ -2755,6 +2936,8 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
+  sweepSessionFiles();
+  every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
   every(5000, checkOnline, 'net');
   powerMonitor.on('resume', checkOnline);
