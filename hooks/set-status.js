@@ -180,20 +180,42 @@ if (signal === 'session-end') {
   process.exit(0);
 }
 
+const tool = (data && (data.tool_name || data.toolName)) || null;
+
+// Claude Code tags each Notification with notification_type. Types not listed
+// here (auth_success, elicitation_complete, …) are bookkeeping and leave the
+// session's signal alone.
+const NOTIFICATION_TYPES = {
+  permission_prompt: 'permission-ask',
+  elicitation_dialog: 'permission-ask',
+  elicitation_url_dialog: 'permission-ask',
+  idle_prompt: 'idle-nudge',
+};
 let resolved = signal;
+// How this write came about — main.js quotes it in its transition log.
+let via = signal;
+// What kind of ask a permission-ask is: 'request' (the blocking
+// PermissionRequest hook), 'question' (AskUserQuestion) or 'notification'.
+// Only a notification ask can be a transient one the widget should sit out.
+let askKind = null;
 if (signal === 'notification') {
-  // Notification fires for a real permission ask, a usage-limit message, and
-  // a routine "still waiting on you" idle nudge. Each becomes its own signal
-  // so rules can treat them differently (the default rules ignore the nudge).
+  // A usage limit is spotted by its text whatever the type; older Claude Code
+  // sends no type at all, so the message text is the fallback there.
   const text = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
+  const type = typeof data?.notification_type === 'string' ? data.notification_type : null;
+  via = `notification/${type || 'regex'}`;
   if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) resolved = 'limit-hit';
+  else if (type) resolved = NOTIFICATION_TYPES[type] || null;
   else if (/permission|approve|allow|confirm/.test(text)) resolved = 'permission-ask';
   else resolved = 'idle-nudge';
+  if (!resolved) process.exit(0);
+  if (resolved === 'permission-ask') askKind = 'notification';
 }
 // The widget shows a PermissionRequest the same way as a Notification ask.
-if (signal === 'permission-request') resolved = 'permission-ask';
-
-const tool = (data && (data.tool_name || data.toolName)) || null;
+if (signal === 'permission-request') { resolved = 'permission-ask'; askKind = 'request'; }
+// AskUserQuestion blocks on the person until its PostToolUse, so it is an ask,
+// not work.
+if (signal === 'tool-use' && tool === 'AskUserQuestion') { resolved = 'permission-ask'; askKind = 'question'; via = 'tool-use/AskUserQuestion'; }
 
 // ── Other agents ────────────────────────────────────────────────────────────
 // SubagentStart/Stop carry the agent's id and type; every one Claude spawns
@@ -263,6 +285,12 @@ function writeSession() {
   if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
   if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
   const signalOut = bookkeeping ? (prev?.signal || 'tool-use') : resolved;
+  const changed = signalOut !== (prev?.signal ?? null);
+  // A permission notification after the turn ended has no tool call of the
+  // main thread behind it (a background agent's, or a stale prompt) — tag it
+  // so the app's log shows it.
+  const viaOut = bookkeeping ? (prev?.via ?? null)
+    : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   const agents = updateAgents(prev?.agents, resolved, data, now);
   const hostApp = detectHostApp(prev?.hostApp);
   // Write-then-rename so the app's poller never reads a half-written file.
@@ -272,6 +300,12 @@ function writeSession() {
     JSON.stringify({
       sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
       tool: signalOut === resolved ? tool : (prev?.tool ?? null),
+      // What the session showed before this signal, and since when this one
+      // has held — the app shows a young notification ask as prevSignal.
+      prevSignal: changed ? (prev?.signal ?? null) : (prev?.prevSignal ?? null),
+      signalSince: changed ? now : (prev?.signalSince || prev?.updatedAt || now),
+      askKind: bookkeeping ? (prev?.askKind ?? null) : askKind,
+      via: viaOut,
       workingSince, tasks, agents,
       // Execution mode and ralph iteration are owned by the app's OMC watcher;
       // carry them through so a hook write never erases them.

@@ -506,7 +506,36 @@ function workingAgentsStale(data, now, workingStaleMs) {
   return !young && now - last > workingStaleMs;
 }
 
-function readSessions(config) {
+// Every change in what a session presents is logged, so a flicker report can
+// be read off app.log. At most one line per session per TRANSITION_LOG_MS.
+const TRANSITION_LOG_MS = 250;
+const lastPresented = new Map(); // sessionId -> { signal, loggedAt, skipped }
+function logTransition(data, signal, source, now) {
+  const sid = String(data.sessionId || '?');
+  const last = lastPresented.get(sid);
+  if (last && last.signal === signal) return;
+  const entry = { signal, loggedAt: last ? last.loggedAt : 0, skipped: last ? last.skipped : 0 };
+  if (now - entry.loggedAt >= TRANSITION_LOG_MS) {
+    const tail = String(data.cwd || '').split('/').filter(Boolean).slice(-2).join('/');
+    console.log(`[state] ${sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
+    entry.loggedAt = now;
+    entry.skipped = 0;
+  } else entry.skipped += 1;
+  lastPresented.set(sid, entry);
+}
+
+// A held ask has to appear when its hold runs out even if nothing else
+// happens; the regular poll is too slow for that.
+let heldAskTimer = null;
+function wakeWhenHoldEnds(data, now) {
+  if (heldAskTimer) return;
+  const since = Date.parse(data.signalSince || data.updatedAt || '') || now;
+  // Past the 200 ms state memo, or the wake-up would just read the memo back.
+  const ms = Math.max(250, Rules.TRANSIENT_ASK_MS - (now - since) + 50);
+  heldAskTimer = setTimeout(() => { heldAskTimer = null; broadcastStatus(); }, ms);
+}
+
+function readSessions(config, pendingIds = []) {
   let files = [];
   try {
     files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
@@ -527,15 +556,21 @@ function readSessions(config) {
       if (!data) continue;
       const signal = Rules.sessionSignal(data);
       if (!signal) continue;
-      const eff = Rules.effectiveSignal(data);
+      const presented = Rules.presentSignal(data, now, pendingIds);
+      const held = presented !== signal;
+      if (held) wakeWhenHoldEnds(data, now);
+      const eff = Rules.effectiveSignal({ ...data, signal: presented });
+      const source = held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
       if (eff.turnSignal) {
         if (workingAgentsStale(data, now, workingStaleMs)) continue;
+        logTransition(data, eff.signal, source, now);
         sessions.push({ ...data, ...eff });
         continue;
       }
       const staleAfter = WAITING_SIGNALS.has(signal) ? waitingStaleMs : workingStaleMs;
       if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
-      sessions.push({ ...data, signal });
+      logTransition(data, presented, source, now);
+      sessions.push({ ...data, signal: presented });
     } catch {
       // skip unreadable/partially-written file
     }
@@ -600,8 +635,9 @@ function aggregateState(opts = {}) {
 
 function computeState(opts = {}) {
   const config = loadConfig();
-  const sessions = readSessions(config);
-  const pending = config.askFromWidget ? readRequests() : [];
+  const requests = readRequests();
+  const sessions = readSessions(config, requests.map((r) => r.sessionId));
+  const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
@@ -633,6 +669,7 @@ function computeState(opts = {}) {
 
 // The tool of the most recently updated session that is using one.
 function currentTool(sessions) {
+  if (sessions.some((s) => s.signal === 'permission-ask' && s.askKind === 'question')) return 'asking you a question';
   let best = null;
   for (const s of sessions) {
     if ((s.signal !== 'tool-use' && s.signal !== 'tool-done') || !s.tool) continue;

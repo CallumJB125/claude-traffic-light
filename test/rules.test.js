@@ -744,6 +744,35 @@ test('a finished turn waits on you: ignored-N and waitMinutes run from stop', ()
   assert.equal(l.ruleId, 'done', '"Task finished" still owns the look');
 });
 
+test('presentSignal: a young notification ask shows what came before it', () => {
+  const now = Date.parse('2026-09-10T12:00:00Z');
+  const at = (ms) => new Date(now - ms).toISOString();
+  const ask = { sessionId: 's1', signal: 'permission-ask', askKind: 'notification', prevSignal: 'tool-use', signalSince: at(300), updatedAt: at(300) };
+  assert.equal(R.presentSignal(ask, now), 'tool-use');
+  assert.equal(R.presentSignal({ ...ask, prevSignal: 'stop' }, now), 'stop');
+  assert.equal(R.presentSignal({ ...ask, prevSignal: null }, now), 'tool-use', 'nothing before it → working');
+  assert.equal(R.presentSignal({ sessionId: 'old', signal: 'permission-ask', updatedAt: at(300) }, now), 'tool-use', 'a file from an older hook is held too');
+  assert.equal(R.presentSignal({ ...ask, signalSince: at(R.TRANSIENT_ASK_MS) }, now), 'permission-ask', 'held long enough → shown');
+  assert.equal(R.presentSignal({ ...ask, signalSince: at(5000) }, now), 'permission-ask', 'a repeat notification does not restart the hold');
+});
+
+test('presentSignal: real waits show at once; other signals are untouched', () => {
+  const now = Date.parse('2026-09-10T12:00:00Z');
+  const young = new Date(now - 100).toISOString();
+  const ask = { sessionId: 's1', signal: 'permission-ask', prevSignal: 'tool-use', signalSince: young, updatedAt: young };
+  assert.equal(R.presentSignal({ ...ask, askKind: 'question' }, now), 'permission-ask', 'AskUserQuestion');
+  assert.equal(R.presentSignal({ ...ask, askKind: 'request' }, now), 'permission-ask', 'blocking PermissionRequest');
+  assert.equal(R.presentSignal(ask, now, ['s1']), 'permission-ask', 'pending request');
+  assert.equal(R.presentSignal(ask, now, new Set(['s1'])), 'permission-ask');
+  assert.equal(R.presentSignal(ask, now, ['s2']), 'tool-use', 'someone else\'s pending request');
+  assert.equal(R.presentSignal({ ...ask, signal: 'limit-hit' }, now), 'limit-hit', 'limits are never held');
+  assert.equal(R.presentSignal({ signal: 'stop', updatedAt: young }, now), 'stop');
+});
+
+test('an AskUserQuestion ask resolves through the locked "Needs your input" rule', () => {
+  assert.equal(look([{ signal: 'permission-ask', tool: 'AskUserQuestion', askKind: 'question' }]).ruleId, 'permission');
+});
+
 test('firedNames puts the lamp owner first, then the accents in order', () => {
   const agents = ['a', 'b', 'c'].map((id) => ({ id, kind: 'subagent', status: 'working' }));
   const rs = rules();

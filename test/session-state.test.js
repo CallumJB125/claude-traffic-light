@@ -177,3 +177,57 @@ test('set-status: a file that stays unreadable is logged and replaced', () => {
   assert.match(r.stderr.toString(), /unreadable/);
   assert.equal(read(home, 'bad').signal, 'tool-use');
 });
+
+test('set-status: a Notification is mapped by notification_type, not by its text', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'nt' });
+  run(home, 'tool-use', { session_id: 'nt', tool_name: 'Bash' });
+  run(home, 'notification', { session_id: 'nt', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+  const ask = read(home, 'nt');
+  assert.deepEqual([ask.signal, ask.askKind, ask.prevSignal, ask.via], ['permission-ask', 'notification', 'tool-use', 'notification/permission_prompt']);
+  assert.equal(ask.signalSince, ask.updatedAt);
+
+  run(home, 'notification', { session_id: 'nt', notification_type: 'auth_success', message: 'Please confirm you are signed in' });
+  assert.deepEqual(read(home, 'nt'), ask, 'auth_success is bookkeeping: no write, whatever the text says');
+
+  run(home, 'stop', { session_id: 'nt' });
+  run(home, 'notification', { session_id: 'nt', notification_type: 'idle_prompt', message: 'Claude is waiting for your permission' });
+  assert.equal(read(home, 'nt').signal, 'idle-nudge', 'the type wins over permission-ish text');
+
+  run(home, 'notification', { session_id: 'nt', notification_type: 'elicitation_dialog', message: 'An MCP server wants input' });
+  const el = read(home, 'nt');
+  assert.deepEqual([el.signal, el.askKind, el.prevSignal], ['permission-ask', 'notification', 'idle-nudge']);
+  assert.equal(el.via, 'notification/elicitation_dialog after-stop', 'an ask after the turn ended is tagged for the log');
+});
+
+test('set-status: with no notification_type the message text decides; a limit is a limit either way', () => {
+  const home = tmpHome();
+  run(home, 'notification', { session_id: 'rx', message: 'Claude needs your permission to use Bash' });
+  assert.deepEqual([read(home, 'rx').signal, read(home, 'rx').via], ['permission-ask', 'notification/regex']);
+  run(home, 'notification', { session_id: 'rx', message: 'Claude is waiting for your input' });
+  assert.equal(read(home, 'rx').signal, 'idle-nudge');
+  run(home, 'notification', { session_id: 'rx', notification_type: 'idle_prompt', message: "You've reached your usage limit" });
+  assert.equal(read(home, 'rx').signal, 'limit-hit');
+});
+
+test('set-status: AskUserQuestion is an ask until its PostToolUse', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'q' });
+  run(home, 'tool-use', { session_id: 'q', tool_name: 'AskUserQuestion' });
+  const q = read(home, 'q');
+  assert.deepEqual([q.signal, q.tool, q.askKind, q.via], ['permission-ask', 'AskUserQuestion', 'question', 'tool-use/AskUserQuestion']);
+  run(home, 'tool-done', { session_id: 'q', tool_name: 'AskUserQuestion' });
+  const d = read(home, 'q');
+  assert.deepEqual([d.signal, d.askKind, d.prevSignal], ['tool-done', null, 'permission-ask']);
+  assert.ok(d.workingSince, 'the turn is working again');
+});
+
+test('set-status: a permission denial in a turn that carries on goes back to working', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'dn' });
+  run(home, 'permission-denied', { session_id: 'dn', tool_name: 'Bash' });
+  run(home, 'tool-use', { session_id: 'dn', tool_name: 'Read' });
+  const d = read(home, 'dn');
+  assert.deepEqual([d.signal, d.tool], ['tool-use', 'Read']);
+  assert.ok(d.workingSince);
+});

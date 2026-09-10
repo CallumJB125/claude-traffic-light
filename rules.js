@@ -98,6 +98,23 @@
     return { signal, tool, turnSignal: null };
   }
 
+  // A permission ask that only came from a Notification can be resolved by
+  // auto mode's classifier within a second, so the widget sits it out for
+  // this long first. A blocking PermissionRequest (askKind 'request' or still
+  // in the pending list) and an AskUserQuestion are real waits and show at once.
+  const TRANSIENT_ASK_MS = 1200;
+
+  // The signal the widget should show for a session right now.
+  function presentSignal(session, now = Date.now(), pendingIds = []) {
+    const signal = sessionSignal(session);
+    if (signal !== 'permission-ask') return signal;
+    if (session.askKind === 'question' || session.askKind === 'request') return signal;
+    if ([...pendingIds].includes(session.sessionId)) return signal;
+    const since = Date.parse(session.signalSince || session.updatedAt || '');
+    if (!since || now - since >= TRANSIENT_ASK_MS) return signal;
+    return session.prevSignal && session.prevSignal !== 'permission-ask' ? session.prevSignal : 'tool-use';
+  }
+
   // Keeps the agents whose kind is switched on; a kind missing from `kinds`
   // counts as on, so configs saved before this filter existed show everything.
   function filterAgentKinds(agents, kinds) {
@@ -462,5 +479,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });
