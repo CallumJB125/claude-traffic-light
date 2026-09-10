@@ -18,7 +18,9 @@
 //   .omc/state/sessions/<sessionId>/team-state.json
 //     { active, session_id, team_name, stage }
 //   ~/.claude/teams/session-<first 8 of sessionId>/config.json
-//     { name, leadSessionId, members: [{ agentId, name, agentType, tmuxPaneId, joinedAt }] }
+//     { name, leadSessionId, members: [{ agentId, name, agentType, tmuxPaneId, joinedAt, isActive? }] }
+//   ~/.claude/teams/session-<first 8 of sessionId>/inboxes/<member name>.json
+//     [{ from, text, timestamp, read }]
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -27,6 +29,9 @@ const TEAMS_DIR = path.join(os.homedir(), '.claude', 'teams');
 // A team config outlives the run that wrote it, so a member that joined this
 // long ago is treated as gone rather than shown forever.
 const TEAM_MEMBER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+// A member with no isActive whose oldest unread message has sat this long
+// never picked up its first message: it was spawned but never ran.
+const NEVER_STARTED_MS = 5 * 60 * 1000;
 
 function readJson(file) {
   try {
@@ -34,6 +39,15 @@ function readJson(file) {
   } catch {
     return null;
   }
+}
+
+function neverStarted(teamDir, name, now) {
+  const inbox = readJson(path.join(teamDir, 'inboxes', `${path.basename(String(name || ''))}.json`));
+  const unread = (Array.isArray(inbox) ? inbox : [])
+    .filter((msg) => msg && !msg.read)
+    .map((msg) => Date.parse(msg.timestamp || ''))
+    .filter(Number.isFinite);
+  return unread.length > 0 && now - Math.min(...unread) > NEVER_STARTED_MS;
 }
 
 // OMC and Claude Code use several vocabularies for the same three states.
@@ -103,20 +117,25 @@ function scanAgents(session, opts = {}) {
     }
   }
 
-  // Claude Code's native agent teams: one tmux pane per member.
+  // Claude Code's native agent teams: one tmux pane per member. A running
+  // member carries isActive:true, a finished one isActive:false; one that
+  // never ran has no isActive at all.
   if (id) {
-    const cfg = readJson(path.join(teamsDir, `session-${id.slice(0, 8)}`, 'config.json'));
+    const teamDir = path.join(teamsDir, `session-${id.slice(0, 8)}`);
+    const cfg = readJson(path.join(teamDir, 'config.json'));
     const members = cfg && cfg.leadSessionId === id && Array.isArray(cfg.members) ? cfg.members : [];
     let live = 0;
     for (const m of members) {
       if (m.tmuxPaneId === 'leader' || m.agentType === 'team-lead') continue;
       if (m.joinedAt && now - m.joinedAt > TEAM_MEMBER_MAX_AGE_MS) continue;
-      live += 1;
+      if (m.isActive !== true && m.isActive !== false && neverStarted(teamDir, m.name, now)) continue;
+      const status = m.isActive === false ? 'done' : 'working';
+      if (status === 'working') live += 1;
       add({
         id: String(m.agentId || m.name || ''),
         name: String(m.name || 'agent'),
         kind: 'teammate',
-        status: 'working',
+        status,
         since: m.joinedAt ? new Date(m.joinedAt).toISOString() : null,
         parent: id,
       });
@@ -135,4 +154,4 @@ function mergeAgents(existing, found) {
   return mine.concat(found);
 }
 
-module.exports = { scanAgents, mergeAgents, agentStatus, readJson, TEAMS_DIR, TEAM_MEMBER_MAX_AGE_MS };
+module.exports = { scanAgents, mergeAgents, agentStatus, readJson, TEAMS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS };

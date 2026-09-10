@@ -543,7 +543,7 @@
       if (tl.textContent !== tasksText) tl.textContent = tasksText;
       // Chips for every other agent; the roster only while you're hovering,
       // so it never sits on top of Claude.
-      drawMinions(look.minions, !!look.showRoster);
+      drawMinions(look.minions, !!look.showRoster, look.agentChipSize, look.agents, look.agentsColor);
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
@@ -594,9 +594,9 @@
     // collapse into a "+N". Each chip carries its name so the widget can show
     // a bubble on click.
     const MINION_FILL = { working: '#2fae3e', waiting: '#f2a200', done: '#726c62' };
-    const MINION_MAX = 5;
     const ROSTER_MAX = 5;
-    const MINION_SCALE = 1.35;
+    // Scale and most chips shown per size; normal is the original look.
+    const MINION_SIZES = { small: { scale: 1.0, max: 7 }, normal: { scale: 1.35, max: 5 }, large: { scale: 1.7, max: 4 } };
     // "3m", "48s", "1h12m" — short enough for the roster's fixed-width column.
     function elapsed(since, now) {
       if (!since) return '';
@@ -607,14 +607,59 @@
       if (m < 60) return `${m}m`;
       return `${Math.floor(m / 60)}h${m % 60}m`;
     }
+    // Chip sprites, all inside the robot's 6.9×7.5 footprint so the row
+    // spacing and backdrop hold for every style.
+    const EYE = '#211f1c';
+    const STAR = Array.from({ length: 10 }, (_, i) => {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? 1.45 : 3.6;
+      return `${(3.45 + Math.cos(a) * rr).toFixed(2)} ${(4.1 + Math.sin(a) * rr).toFixed(2)}`;
+    }).join(' L');
+    const MINION_SPRITES = {
+      robot: (fill) => [
+        ['rect', { x: 0.7, y: 0, width: 5.5, height: 4, rx: 1, fill }],
+        ['rect', { x: 2, y: 1.3, width: 1.1, height: 1.5, fill: EYE }],
+        ['rect', { x: 3.8, y: 1.3, width: 1.1, height: 1.5, fill: EYE }],
+        ['rect', { x: 0, y: 4.5, width: 6.9, height: 1.6, fill }],
+        ['rect', { x: 1.2, y: 6.1, width: 1.4, height: 1.4, fill }],
+        ['rect', { x: 4.3, y: 6.1, width: 1.4, height: 1.4, fill }],
+      ],
+      duck: (fill) => [
+        ['ellipse', { cx: 3.1, cy: 5.2, rx: 3.1, ry: 2.3, fill }],
+        ['circle', { cx: 4.4, cy: 2.5, r: 1.9, fill }],
+        ['path', { d: 'M6.1 2.1 l0.8 0.55 l-0.8 0.55 z', fill: '#f28c28' }],
+        ['circle', { cx: 4.8, cy: 2.1, r: 0.5, fill: EYE }],
+      ],
+      blob: (fill) => [
+        ['path', { d: 'M0.4 7.5 Q0.4 1 3.45 1 Q6.5 1 6.5 7.5 Z', fill }],
+        ['rect', { x: 2.2, y: 3.6, width: 0.9, height: 1.2, fill: EYE }],
+        ['rect', { x: 3.8, y: 3.6, width: 0.9, height: 1.2, fill: EYE }],
+      ],
+      ghost: (fill) => [
+        ['path', { d: 'M0.6 7.5 V3.4 A2.85 2.85 0 0 1 6.3 3.4 V7.5 l-0.95 -0.9 l-0.95 0.9 l-0.95 -0.9 l-0.95 0.9 l-0.95 -0.9 z', fill }],
+        ['rect', { x: 2, y: 2.8, width: 1, height: 1.4, fill: EYE }],
+        ['rect', { x: 3.9, y: 2.8, width: 1, height: 1.4, fill: EYE }],
+      ],
+      cat: (fill) => [
+        ['path', { d: 'M0.7 3.6 L1 0.6 L2.9 2.4 Z', fill }],
+        ['path', { d: 'M6.2 3.6 L5.9 0.6 L4 2.4 Z', fill }],
+        ['ellipse', { cx: 3.45, cy: 4.9, rx: 3.1, ry: 2.6, fill }],
+        ['rect', { x: 2, y: 4, width: 0.9, height: 1.2, fill: EYE }],
+        ['rect', { x: 4, y: 4, width: 0.9, height: 1.2, fill: EYE }],
+      ],
+      star: (fill) => [['path', { d: `M${STAR} Z`, fill }]],
+      dot: (fill) => [['circle', { cx: 3.45, cy: 4.2, r: 3, fill }]],
+    };
     let minionKey = null;
-    function drawMinions(list, showRoster) {
+    function drawMinions(list, showRoster, size, style, color) {
+      const { scale, max } = MINION_SIZES[size] || MINION_SIZES.normal;
+      const sprite = MINION_SPRITES[style] || MINION_SPRITES.robot;
+      const custom = /^#[0-9a-f]{6}$/i.test(color || '') ? color : null;
       const now = Date.now();
       const arr = (Array.isArray(list) ? list : []).slice(0, 32);
       // Elapsed time is bucketed to the minute (seconds while under a minute)
       // so the roster's "since" column keeps ticking without redrawing the
       // whole row on every 2s poll.
-      const key = `${showRoster ? 1 : 0}|${arr.map((a) => `${a.name}:${a.status}:${elapsed(a.since, now)}`).join(',')}`;
+      const key = `${showRoster ? 1 : 0}|${scale}|${style}|${custom}|${arr.map((a) => `${a.name}:${a.status}:${elapsed(a.since, now)}`).join(',')}`;
       if (key === minionKey) return;
       minionKey = key;
       const g = svg.querySelector('.minions');
@@ -622,31 +667,33 @@
       while (g.firstChild) g.removeChild(g.firstChild);
       while (r.firstChild) r.removeChild(r.firstChild);
       if (!arr.length) return;
-      const shown = arr.slice(0, MINION_MAX);
+      const pitch = 6.9 * scale + 1.6;
+      // Slots that fit inside the 64-wide viewBox with the backdrop's 2.5
+      // padding each side; the "+N" takes one of them.
+      const fit = Math.min(max, Math.floor((64 - 5 + 1.6) / pitch));
+      const shown = arr.length > fit ? arr.slice(0, fit - 1) : arr;
       const extra = arr.length - shown.length;
-      const pitch = 6.9 * MINION_SCALE + 1.6;
       const width = shown.length * pitch - 1.6 + (extra > 0 ? pitch : 0);
       const x0 = 32 - width / 2;
+      // Chips grow upwards from a fixed baseline so large ones stay inside
+      // the 82-tall viewBox.
+      const y0 = 81.1 - 7.5 * scale;
       // A translucent backdrop so the row reads clearly over any desktop
       // background instead of blending into it.
       g.appendChild(mk('rect', {
-        x: x0 - 2.5, y: 69.2, width: width + 5, height: 6.9 * MINION_SCALE + 3.6, rx: 2.4,
+        x: x0 - 2.5, y: y0 - 1.8, width: width + 5, height: 6.9 * scale + 3.6, rx: 2.4,
         fill: '#151517', 'fill-opacity': 0.55,
       }));
       shown.forEach((a, i) => {
-        const fill = MINION_FILL[a.status] || MINION_FILL.working;
+        const st = MINION_FILL[a.status] ? a.status : 'working';
+        const fill = st === 'working' && custom ? custom : MINION_FILL[st];
         const chip = mk('g', {
           class: `minion minion-${a.status}`,
-          transform: `translate(${x0 + i * pitch} 71) scale(${MINION_SCALE})`,
+          transform: `translate(${x0 + i * pitch} ${y0}) scale(${scale})`,
           'data-name': a.name, 'data-status': a.status, style: 'pointer-events:auto;cursor:pointer',
         });
         const inner = mk('g', { class: 'minion-in' });
-        inner.appendChild(mk('rect', { x: 0.7, y: 0, width: 5.5, height: 4, rx: 1, fill }));
-        inner.appendChild(mk('rect', { x: 2, y: 1.3, width: 1.1, height: 1.5, fill: '#211f1c' }));
-        inner.appendChild(mk('rect', { x: 3.8, y: 1.3, width: 1.1, height: 1.5, fill: '#211f1c' }));
-        inner.appendChild(mk('rect', { x: 0, y: 4.5, width: 6.9, height: 1.6, fill }));
-        inner.appendChild(mk('rect', { x: 1.2, y: 6.1, width: 1.4, height: 1.4, fill }));
-        inner.appendChild(mk('rect', { x: 4.3, y: 6.1, width: 1.4, height: 1.4, fill }));
+        for (const [tag, attrs] of sprite(fill)) inner.appendChild(mk(tag, attrs));
         chip.appendChild(inner);
         const title = mk('title', {});
         title.textContent = `${a.name} — ${a.status}${a.since ? ` (${elapsed(a.since, now)})` : ''}`;
@@ -654,7 +701,7 @@
         g.appendChild(chip);
       });
       if (extra > 0) {
-        const more = mk('text', { class: 'minion-more', x: x0 + shown.length * pitch + 2.4, y: 75.6, 'text-anchor': 'middle' });
+        const more = mk('text', { class: 'minion-more', x: x0 + shown.length * pitch + 2.4, y: y0 + 3.4 * scale + 0.2, 'text-anchor': 'middle' });
         more.textContent = `+${extra}`;
         g.appendChild(more);
       }

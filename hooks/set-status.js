@@ -180,10 +180,117 @@ if (signal === 'session-end') {
   process.exit(0);
 }
 
+let resolved = signal;
+if (signal === 'notification') {
+  // Notification fires for a real permission ask, a usage-limit message, and
+  // a routine "still waiting on you" idle nudge. Each becomes its own signal
+  // so rules can treat them differently (the default rules ignore the nudge).
+  const text = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
+  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) resolved = 'limit-hit';
+  else if (/permission|approve|allow|confirm/.test(text)) resolved = 'permission-ask';
+  else resolved = 'idle-nudge';
+}
+// The widget shows a PermissionRequest the same way as a Notification ask.
+if (signal === 'permission-request') resolved = 'permission-ask';
+
+const tool = (data && (data.tool_name || data.toolName)) || null;
+
+// ── Other agents ────────────────────────────────────────────────────────────
+// SubagentStart/Stop carry the agent's id and type; every one Claude spawns
+// becomes an entry in the session file's `agents` list so the widget can show
+// a chip per agent. Teammate/ralph/ultrawork entries come from the app's OMC
+// watcher instead and are preserved here untouched.
+const DONE_KEEP_MS = 120000;   // a finished agent lingers this long
+const AGENT_MAX_MS = 3600000;  // …and a "working" one can never outlive this
+function updateAgents(prevAgents, signal, payload, nowIso) {
+  const now = Date.parse(nowIso);
+  let agents = (Array.isArray(prevAgents) ? prevAgents : []).filter((a) => {
+    if (!a || typeof a !== 'object') return false;
+    const t = Date.parse(a.since || '') || now;
+    if (a.kind && a.kind !== 'subagent') return true; // owned by the watcher
+    return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
+  });
+  // Not on `stop`: a foreground Agent call blocks the turn, so a turn can only
+  // end while *background* agents are still running. They end via SubagentStop.
+  if (signal === 'session-start') {
+    return agents.map((a) => (a.kind === 'subagent' && a.status !== 'done' ? { ...a, status: 'done' } : a));
+  }
+  if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
+  const p = payload || {};
+  const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
+  // 'oh-my-claudecode:executor' is 'executor' on a 12px chip.
+  const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
+  const status = signal === 'subagent-done' ? 'done' : 'working';
+  const existing = agents.find((a) => a.id === id);
+  if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since } : a));
+  else agents = agents.concat([{ id, name, kind: 'subagent', status, since: nowIso, parent: sessionId }]);
+  return agents.slice(-32);
+}
+
+// main.js may be mid-write of this same file; a half-written read would
+// otherwise wipe agents, workingSince, tasks and mode. Retry once.
+function readPrev() {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.CLAUDE_TRAFFIC_LIGHT_READ_RETRY_MS || 20));
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    process.stderr.write(`set-status: ${file} unreadable, starting fresh: ${e.message}\n`);
+    return null;
+  }
+}
+
+const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
+const prev = readPrev();
+const turnOver = !!prev && TURN_END.has(prev.signal);
+// A background subagent's own tool hooks carry its agent_id.
+const fromSubagent = /^tool-/.test(resolved) && !!(data && data.agent_id);
+const isTask = resolved === 'task-created' || resolved === 'task-done';
+// Task events are always bookkeeping. Once the turn is over, so is anything a
+// background agent does — it must not look like the turn restarted.
+const bookkeeping = isTask || (turnOver && (resolved === 'subagent-start' || resolved === 'subagent-done' || fromSubagent));
+
+function writeSession() {
+  const now = new Date().toISOString();
+  const workingSince = turnOver && bookkeeping ? (prev.workingSince ?? null)
+    : resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
+  // Task progress for the current turn: created/done counts, reset per prompt.
+  let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
+  if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
+  if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
+  const signalOut = bookkeeping ? (prev?.signal || 'tool-use') : resolved;
+  const agents = updateAgents(prev?.agents, resolved, data, now);
+  const hostApp = detectHostApp(prev?.hostApp);
+  // Write-then-rename so the app's poller never reads a half-written file.
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify({
+      sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
+      tool: signalOut === resolved ? tool : (prev?.tool ?? null),
+      workingSince, tasks, agents,
+      // Execution mode and ralph iteration are owned by the app's OMC watcher;
+      // carry them through so a hook write never erases them.
+      mode: prev?.mode ?? null,
+      iteration: prev?.iteration ?? 0,
+      // updatedAt means "the session last moved" (ignored-N timers, last-touch
+      // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
+      updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,
+      agentsAt: bookkeeping ? now : (prev?.agentsAt ?? null),
+    }, null, 2)
+  );
+  fs.renameSync(tmp, file);
+}
+
 // ── PermissionRequest: a BLOCKING hook. Write the request where the widget
 // can see it, then wait for an answer file. Answer → print the decision for
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
+  writeSession();
   const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
@@ -215,86 +322,14 @@ if (signal === 'permission-request') {
   process.exit(0);
 }
 
-let resolved = signal;
-if (signal === 'notification') {
-  // Notification fires for a real permission ask, a usage-limit message, and
-  // a routine "still waiting on you" idle nudge. Each becomes its own signal
-  // so rules can treat them differently (the default rules ignore the nudge).
-  const text = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
-  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) resolved = 'limit-hit';
-  else if (/permission|approve|allow|confirm/.test(text)) resolved = 'permission-ask';
-  else resolved = 'idle-nudge';
-}
-
-const tool = (data && (data.tool_name || data.toolName)) || null;
-
-// ── Other agents ────────────────────────────────────────────────────────────
-// SubagentStart/Stop carry the agent's id and type; every one Claude spawns
-// becomes an entry in the session file's `agents` list so the widget can show
-// a chip per agent. Teammate/ralph/ultrawork entries come from the app's OMC
-// watcher instead and are preserved here untouched.
-const DONE_KEEP_MS = 120000;   // a finished agent lingers this long
-const AGENT_MAX_MS = 3600000;  // …and a "working" one can never outlive this
-function updateAgents(prevAgents, signal, payload, nowIso) {
-  const now = Date.parse(nowIso);
-  let agents = (Array.isArray(prevAgents) ? prevAgents : []).filter((a) => {
-    if (!a || typeof a !== 'object') return false;
-    const t = Date.parse(a.since || '') || now;
-    if (a.kind && a.kind !== 'subagent') return true; // owned by the watcher
-    return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
-  });
-  // A finished turn means every subagent it spawned is finished too.
-  if (signal === 'stop' || signal === 'session-start') {
-    return agents.map((a) => (a.kind === 'subagent' && a.status !== 'done' ? { ...a, status: 'done' } : a));
-  }
-  if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
-  const p = payload || {};
-  const id = String(p.agent_id || p.agentId || p.subagent_id || p.task_id || `agent-${now}`);
-  // 'oh-my-claudecode:executor' is 'executor' on a 12px chip.
-  const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
-  const status = signal === 'subagent-done' ? 'done' : 'working';
-  const existing = agents.find((a) => a.id === id);
-  if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since } : a));
-  else agents = agents.concat([{ id, name, kind: 'subagent', status, since: nowIso, parent: sessionId }]);
-  return agents.slice(-32);
-}
-
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps
-// the fs.watch storm down. `workingSince` marks when the current turn began
-// (for the "working over N minutes" signal) and resets on each new prompt.
-let prev = null;
-try {
-  prev = JSON.parse(fs.readFileSync(file, 'utf8'));
-  // Subagent events carry bookkeeping the throttle must never drop.
-  const SUBAGENT = resolved === 'subagent-start' || resolved === 'subagent-done';
-  if (!SUBAGENT && prev.signal === resolved && prev.tool === tool && Date.now() - new Date(prev.updatedAt).getTime() < 1000) process.exit(0);
-} catch {
-  // first write
+// the fs.watch storm down. Subagent events carry bookkeeping it must never drop.
+// `workingSince` marks when the current turn began (for the "working over N
+// minutes" signal) and resets on each new prompt.
+if (prev && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
+  const agentChurn = bookkeeping && fromSubagent;
+  const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
+  if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) process.exit(0);
 }
-const now = new Date().toISOString();
-const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
-const workingSince = resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
-// Task progress for the current turn: created/done counts, reset per prompt.
-let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
-if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
-if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
-// Task events are bookkeeping, not a state change: keep the previous signal.
-const signalOut = resolved === 'task-created' || resolved === 'task-done' ? (prev?.signal || 'tool-use') : resolved;
-
-const agents = updateAgents(prev?.agents, resolved, data, now);
-const hostApp = detectHostApp(prev?.hostApp);
-
-fs.writeFileSync(
-  file,
-  JSON.stringify({
-    sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
-    tool: signalOut === resolved ? tool : (prev?.tool ?? null),
-    workingSince, tasks, agents,
-    // Execution mode and ralph iteration are owned by the app's OMC watcher;
-    // carry them through so a hook write never erases them.
-    mode: prev?.mode ?? null,
-    iteration: prev?.iteration ?? 0,
-    updatedAt: now,
-  }, null, 2)
-);
+writeSession();

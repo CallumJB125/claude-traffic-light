@@ -32,10 +32,10 @@ if (DEMO === 'agents') {
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
   fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
   fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
-  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'config.json'), JSON.stringify({ rules: Rules.defaultRules(), roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: true }));
+  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'config.json'), JSON.stringify({ rules: Rules.defaultRules(), roam: false, randomEvents: false, seasonal: false, showTasks: false, showAgents: true, agentRoster: true, agentKinds: { subagent: true, teammate: true, ralph: true, ultrawork: true }, agentChipSize: 'normal' }));
   const since = new Date().toISOString();
   const agent = (id, name, kind, status) => ({ id, name, kind, status, since, parent: 'demo' });
-  fs.writeFileSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions', 'demo-agents.json'), JSON.stringify({
+  writeJsonAtomic(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions', 'demo-agents.json'), {
     sessionId: 'demo', host: 'demo', cwd: '/demo/claude-buddy', signal: 'tool-use', tool: 'Agent',
     workingSince: since, tasks: { created: 0, done: 0 }, mode: 'ralph', iteration: 7,
     agents: [
@@ -46,7 +46,7 @@ if (DEMO === 'agents') {
       agent('a5', 'verifier', 'ralph', 'done'),
     ],
     updatedAt: since,
-  }, null, 2));
+  });
 }
 
 // `--demo knock`: walk to the terminal's Dock icon and knock, once, then quit.
@@ -216,6 +216,9 @@ const DEFAULT_CONFIG = {
   askFromWidget: false,
   showTasks: true,
   showAgents: true,
+  agentRoster: true,
+  agentKinds: { subagent: true, teammate: true, ralph: true, ultrawork: true },
+  agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
 };
@@ -244,6 +247,7 @@ function buildConfig() {
     // no config yet
   }
   const config = { ...DEFAULT_CONFIG, ...saved };
+  config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -350,9 +354,20 @@ function startSignalServer() {
       if (d.signal === 'session-end') { fs.rmSync(file, { force: true }); broadcastStatus(); return done(200, { ok: true }); }
       let prev = null; try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
       const now = new Date().toISOString();
-      const turnEnd = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
-      const workingSince = d.signal === 'prompt-submit' ? now : turnEnd.has(d.signal) ? null : (prev?.workingSince || now);
-      fs.writeFileSync(file, JSON.stringify({ sessionId: session, host: os.hostname().split('.')[0], source, cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', signal: d.signal, tool: typeof d.tool === 'string' ? d.tool.slice(0, 80) : null, workingSince, tasks: prev?.tasks || { created: 0, done: 0 }, updatedAt: now }, null, 2));
+      const workingSince = d.signal === 'prompt-submit' ? now : Rules.TURN_END.has(d.signal) ? null : (prev?.workingSince || now);
+      // A bare signal must not wipe what the agent poller and hooks stored.
+      const keep = (key, ok) => (d[key] !== undefined && ok(d[key]) ? d[key] : prev?.[key]);
+      writeJsonAtomic(file, {
+        sessionId: session, host: os.hostname().split('.')[0], source,
+        hostApp: keep('hostApp', (v) => typeof v === 'string'),
+        cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', signal: d.signal, tool: typeof d.tool === 'string' ? d.tool.slice(0, 80) : null, workingSince,
+        tasks: keep('tasks', (v) => !!v && typeof v === 'object') || { created: 0, done: 0 },
+        agents: keep('agents', Array.isArray),
+        mode: keep('mode', (v) => typeof v === 'string'),
+        iteration: keep('iteration', Number.isFinite),
+        agentsAt: prev?.agentsAt,
+        updatedAt: now,
+      });
       broadcastStatus();
       done(200, { ok: true });
     });
@@ -451,6 +466,46 @@ function readSessionFile(name) {
   return data;
 }
 
+// Session files are rewritten by hooks and by the app at once; writing a temp
+// file and renaming it over means no reader ever sees half a file. With
+// `unchangedSince` (an mtimeMs), the rename is skipped if someone else wrote
+// the file after we read it — their write is newer than our merge. The temp
+// name carries the pid so it can't collide with a hook's own temp file.
+function writeJsonAtomic(file, obj, unchangedSince = null) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    if (unchangedSince != null && fs.statSync(file).mtimeMs !== unchangedSince) {
+      fs.rmSync(tmp, { force: true });
+      return false;
+    }
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* already gone */ }
+    throw e;
+  }
+}
+
+// A finished turn whose subagents are still working stays live for as long as
+// they plausibly are: a long agent can go quiet for well over the working
+// window without having died.
+const AGENT_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
+// Agent bookkeeping writes stamp `agentsAt`, not `updatedAt`, so it counts
+// as activity here.
+function workingAgentsStale(data, now, workingStaleMs) {
+  let last = Math.max(Date.parse(data.updatedAt || '') || 0, Date.parse(data.agentsAt || '') || 0);
+  let young = false;
+  (Array.isArray(data.agents) ? data.agents : []).forEach((a, i) => {
+    const n = Rules.normalizeAgent(a, i);
+    if (!n || n.status !== 'working') return;
+    const since = Date.parse(n.since || '') || 0;
+    last = Math.max(last, since);
+    if (since && now - since < AGENT_KEEPALIVE_MS) young = true;
+  });
+  return !young && now - last > workingStaleMs;
+}
+
 function readSessions(config) {
   let files = [];
   try {
@@ -472,6 +527,12 @@ function readSessions(config) {
       if (!data) continue;
       const signal = Rules.sessionSignal(data);
       if (!signal) continue;
+      const eff = Rules.effectiveSignal(data);
+      if (eff.turnSignal) {
+        if (workingAgentsStale(data, now, workingStaleMs)) continue;
+        sessions.push({ ...data, ...eff });
+        continue;
+      }
       const staleAfter = WAITING_SIGNALS.has(signal) ? waitingStaleMs : workingStaleMs;
       if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
       sessions.push({ ...data, signal });
@@ -497,15 +558,17 @@ function syncAgents() {
   }
   for (const f of files) {
     const file = path.join(SESSIONS_DIR, f);
+    let readAt;
+    try { readAt = fs.statSync(file).mtimeMs; } catch { continue; }
     const s = Agents.readJson(file);
     if (!s || !s.sessionId) continue;
     const found = Agents.scanAgents(s);
     const next = { ...s, agents: Agents.mergeAgents(s.agents, found.agents), mode: found.mode, iteration: found.iteration };
     if (JSON.stringify(next) === JSON.stringify(s)) continue;
     try {
-      fs.writeFileSync(file, JSON.stringify(next, null, 2));
+      writeJsonAtomic(file, next, readAt);
     } catch {
-      // a hook is mid-write; the next poll picks it up
+      // the session ended (file removed) mid-poll; the next poll picks it up
     }
   }
 }
@@ -550,9 +613,10 @@ function computeState(opts = {}) {
   if (override) {
     const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
-    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, pending, tasks };
+    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, tasks };
   }
   const { look, fired, owned } = Rules.resolve(config.rules, sessions);
+  const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
@@ -560,11 +624,21 @@ function computeState(opts = {}) {
   // A pending permission request is the "Needs your input" state, whatever
   // the session files say (the hook blocks before Notification fires).
   if (pending.length) {
-    const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]).look;
-    return { look: { ...asked, tasks }, reason: 'session', sessions, fired: ['permission'], owned, pending, tasks };
+    const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]);
+    return { look: { ...asked.look, tasks }, reason: 'session', sessions, fired: ['permission'], owned, firedNames: Rules.firedNames(config.rules, asked.fired, asked.owned), agentCount, pending, tasks };
   }
-  const minions = config.showAgents ? Rules.liveAgents(sessions).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, pending, tasks, minions };
+  const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions };
+}
+
+// The tool of the most recently updated session that is using one.
+function currentTool(sessions) {
+  let best = null;
+  for (const s of sessions) {
+    if ((s.signal !== 'tool-use' && s.signal !== 'tool-done') || !s.tool) continue;
+    if (!best || (Date.parse(s.updatedAt || '') || 0) > (Date.parse(best.updatedAt || '') || 0)) best = s;
+  }
+  return best ? best.tool : null;
 }
 
 // Number mode: the digit the sign shows instead of a colour.
@@ -2150,7 +2224,7 @@ app.whenReady().then(() => {
     // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
     // at 6½ min a fake session appears so the state changes and the hammer teardown plays.
     setTimeout(() => {
-      fs.writeFileSync(path.join(SESSIONS_DIR, 'demo-session.json'), JSON.stringify({ sessionId: 'demo', host: 'demo', cwd: '/demo', signal: 'tool-use', tool: 'Bash', updatedAt: new Date().toISOString() }));
+      writeJsonAtomic(path.join(SESSIONS_DIR, 'demo-session.json'), { sessionId: 'demo', host: 'demo', cwd: '/demo', signal: 'tool-use', tool: 'Bash', updatedAt: new Date().toISOString() });
       broadcastStatus();
     }, 6.5 * 60 * 1000);
     setTimeout(() => app.quit(), 9 * 60 * 1000);
@@ -2184,10 +2258,10 @@ app.whenReady().then(() => {
   if (DEMO === 'knock') {
     // A session that is waiting on you, running in whatever terminal launched
     // the demo — exactly the situation the roamer exists for.
-    fs.writeFileSync(path.join(SESSIONS_DIR, 'demo-knock.json'), JSON.stringify({
+    writeJsonAtomic(path.join(SESSIONS_DIR, 'demo-knock.json'), {
       sessionId: 'demo-knock', host: 'demo', hostApp: process.env.CLAUDE_BUDDY_DEMO_APP || null,
       cwd: process.cwd(), signal: 'permission-ask', tool: 'Bash', updatedAt: new Date().toISOString(),
-    }));
+    });
     setTimeout(async () => {
       const report = { sessions: [], terminal: null, result: null };
       try {

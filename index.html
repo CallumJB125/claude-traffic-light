@@ -99,17 +99,18 @@
     let lastRuleId = null;
     // The agents roster is a hover reveal, so it never covers Claude at rest.
     let hovering = false;
-    app.addEventListener('mouseenter', () => { hovering = true; if (rig.look) rig.setLook({ ...rig.look, showRoster: true }); });
+    app.addEventListener('mouseenter', () => { hovering = true; if (rig.look) rig.setLook({ ...rig.look, showRoster: rig.look.agentRoster !== false }); });
     app.addEventListener('mouseleave', () => { hovering = false; if (rig.look) rig.setLook({ ...rig.look, showRoster: false }); });
     let sleepSince = null;
     let currentRequest = null;
     let confettiTimer = null;
     const GRUMPY_AFTER_MS = 3 * 60 * 1000;
+    const TOOLTIP_MAX = 90;
 
     async function refresh() {
       const data = await window.trafficLight.getAggregateStatus();
       if (!data) return;
-      const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}), showRoster: hovering };
+      const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}), showRoster: hovering && data.look.agentRoster !== false };
       sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
       look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
       rig.setLook(look);
@@ -134,14 +135,23 @@
       lastRuleId = look.ruleId;
 
       const count = data.sessions?.length || 0;
+      const agents = data.agentCount || 0;
       const suffix = data.reason === 'manual'
         ? ' (manual override)'
         : data.reason === 'preview'
           ? ' (preview)'
           : count
-            ? ` — ${count} session${count === 1 ? '' : 's'}`
+            ? ` — ${count} session${count === 1 ? '' : 's'}${agents ? ` · ${agents} agent${agents === 1 ? '' : 's'}` : ''}`
             : ' (no active sessions)';
-      tooltip.textContent = (look.name || 'Claude Traffic Light') + suffix;
+      // Lamp owner first (the real state), then the tool, then the accents
+      // layered on top — dropped with '…' once the line gets too long.
+      const names = data.firedNames?.length ? data.firedNames : [look.name || 'Claude Traffic Light'];
+      let text = names[0] + (data.tool ? ` · ${data.tool}` : '');
+      for (const n of names.slice(1)) {
+        if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }
+        text += ` · ${n}`;
+      }
+      tooltip.textContent = text + suffix;
     }
 
     refresh();

@@ -137,6 +137,43 @@
     color: var(--muted);
   }
   #rules header span.count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+  /* What the widget is showing right now, and which rule owns each channel. */
+  #now {
+    margin: 0 6px 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg);
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Only the tool name gives way, so the counts always stay readable. */
+  #now .head { display: flex; white-space: nowrap; min-width: 0; }
+  #now .head > span { overflow: hidden; text-overflow: ellipsis; }
+  #now .head .who { flex: none; max-width: 60%; }
+  #now .head .tool { flex: 0 1 auto; min-width: 0; }
+  #now .head .count { flex: none; }
+  #now .head b { color: var(--text); font-weight: 600; }
+  #now .owners { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  #now .owners:empty { display: none; }
+  #now .own {
+    height: 18px;
+    max-width: 100%;
+    padding: 0 7px;
+    border-radius: 9px;
+    border: 1px solid var(--line-strong);
+    background: transparent;
+    color: var(--muted);
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background var(--t), color var(--t), border-color var(--t);
+  }
+  #now .own:hover { color: var(--text); border-color: #544f5e; }
+  #now .own.on { background: var(--accent-soft); border-color: rgba(218, 119, 86, 0.5); color: var(--text); }
+  #now .own i { font-style: normal; color: var(--faint); }
   #rule-list {
     flex: 1;
     overflow-y: auto;
@@ -614,6 +651,7 @@
   <div id="main">
     <aside id="rules">
       <header><span>Rules</span><span class="count" id="rule-count"></span></header>
+      <div id="now" aria-live="polite"><div class="head">Now: …</div><div class="owners"></div></div>
       <ul id="rule-list" role="listbox" aria-label="Rules, highest priority first"></ul>
       <footer>
         <button class="btn" id="add-btn">
@@ -773,6 +811,16 @@
           <div class="field"><div class="poses" id="pets"></div></div>
         </div>
 
+        <div class="row">
+          <div class="lbl">Agents</div>
+          <div class="field">
+            <div class="poses" id="agents"></div>
+            <label class="swatch custom" id="agents-color-swatch" title="Colour of working agents (waiting stays amber, done stays grey)">
+              <input type="color" id="agents-color" />
+            </label>
+          </div>
+        </div>
+
         <div class="row" id="text-row" hidden>
           <div class="lbl">Banner says</div>
           <div class="field">
@@ -918,8 +966,8 @@
 <div id="presets" hidden role="menu">
   <div class="menu-head">Built in</div>
   <button data-preset="classic"><span>Classic</span><small>The original three lights and poses</small></button>
-  <button data-preset="minimal"><span>Minimal</span><small>Lamps only — no poses, eyes or sounds</small></button>
-  <button data-preset="tools"><span>Tool-aware</span><small>Eye colours for subagents, shell, edits and MCP</small></button>
+  <button data-preset="minimal"><span>Minimal</span><small>Lamps only — no poses or eyes, a beep when it needs you</small></button>
+  <button data-preset="tools"><span>Tool-aware</span><small>Eye colours for subagents, shell, edits, web, MCP and failures</small></button>
   <button data-preset="loud"><span>Loud</span><small>Sounds, bullets and an escalating rage meter when ignored</small></button>
   <button data-preset="party"><span>Party</span><small>Running, pets, costumes, hearts and fire</small></button>
   <button data-preset="zen"><span>Zen</span><small>Breathing lamps, blinks, a halo when done, snow at rest</small></button>
@@ -927,6 +975,9 @@
   <button data-preset="gardener"><span>Gardener</span><small>The garden at rest, sun while working, a duck</small></button>
   <button data-preset="office"><span>Office</span><small>Top hat, "BRB" bubbles, SIGN HERE banners</small></button>
   <button data-preset="night"><span>Night</span><small>A purple ghost that dozes in the snow</small></button>
+  <button data-preset="swarm"><span>Swarm</span><small>Robot body, agent count and banners while agents run</small></button>
+  <button data-preset="focus"><span>Focus</span><small>Grey lamps that only breathe; a beep only when out of tokens</small></button>
+  <button data-preset="retro"><span>Retro</span><small>Arcade robot, chase lights, beeps, GAME OVER on limit</small></button>
   <div class="menu-head" id="user-presets-head">Yours</div>
   <div id="user-presets"></div>
   <div class="menu-head">Share</div>
@@ -980,6 +1031,8 @@
     },
   };
   const LAMP_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e' };
+  // Stand-in agents so the Agents picker and stage show the chosen chips.
+  const SAMPLE_MINIONS = [{ name: 'agent-1', status: 'working' }, { name: 'agent-2', status: 'waiting' }, { name: 'agent-3', status: 'done' }];
 
   // ── State ──────────────────────────────────────────────────────────────
   let config = null;      // saved
@@ -1183,6 +1236,39 @@
     renderList();
     renderEditor();
     renderStage();
+    renderNow();
+  }
+
+  // ── Now strip ──────────────────────────────────────────────────────────
+  // Which rule the lamp belongs to, and which rule owns each accent channel,
+  // so a look that mixes several rules can be traced back to them.
+  const NOW_CHANNELS = [['lamp', ['lamp']], ['eyes', ['eyes']], ['pose', ['pose']], ['costume', ['costume']], ['body', ['body', 'bodyColor']], ['effect', ['effect']], ['pet', ['pet']], ['agents', ['agents', 'agentsColor']], ['sign/number', ['numberOf', 'sign']]];
+  function renderNow() {
+    const box = $('now');
+    const head = box.querySelector('.head');
+    const owners = box.querySelector('.owners');
+    owners.innerHTML = '';
+    if (!live) { head.textContent = 'Now: …'; return; }
+    const ruleName = (id) => (rules.find((x) => x.id === id) || config?.rules?.find((x) => x.id === id))?.name || id;
+    const n = live.sessions.length;
+    if (!n && live.reason !== 'manual' && live.reason !== 'preview') { head.innerHTML = 'Now: <b>Nothing running</b>'; return; }
+    const owned = live.owned || {};
+    const name = owned.lamp ? ruleName(owned.lamp) : (live.firedNames?.[0] || live.look.name || '—');
+    const agents = live.agentCount || 0;
+    head.innerHTML = `<span class="who">Now: <b>${escape(name)}</b></span>${live.tool ? `<span class="tool">&nbsp;· ${escape(live.tool)}</span>` : ''}<span class="count">&nbsp;· ${n} session${n === 1 ? '' : 's'} · ${agents} agent${agents === 1 ? '' : 's'}</span>`;
+    head.title = head.textContent;
+    for (const [label, keys] of NOW_CHANNELS) {
+      const id = keys.map((k) => owned[k]).find(Boolean);
+      if (!id) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'own' + (id === selectedId ? ' on' : '');
+      b.innerHTML = `<i>${label}:</i> ${escape(ruleName(id))}`;
+      b.title = `${label} comes from “${ruleName(id)}” — click to edit it`;
+      if (rules.some((x) => x.id === id)) b.addEventListener('click', () => { select(id); focusRow(id); });
+      else b.disabled = true;
+      owners.appendChild(b);
+    }
   }
 
   function remove(id) {
@@ -1322,6 +1408,12 @@
     picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
+    picker($('agents'), R.AGENT_STYLES, r.then.agents, (o) => ({ agents: o || 'robot', agentsColor: r.then.agentsColor, minions: SAMPLE_MINIONS }), (o) => { r.then.agents = o; });
+    const agentsSw = $('agents-color-swatch');
+    agentsSw.classList.toggle('has', !!r.then.agentsColor);
+    agentsSw.classList.toggle('on', !!r.then.agentsColor);
+    agentsSw.style.setProperty('--c', r.then.agentsColor || '');
+    $('agents-color').value = r.then.agentsColor || '#2fae3e';
     // mood eyes ride in the eyes row (no keep button — the eye buttons have one)
     const moods = $('moods');
     moods.innerHTML = '';
@@ -1404,6 +1496,7 @@
   $('sound-play').addEventListener('click', () => { const r = selected(); if (r?.then.sound) window.lightsApi.previewSound(r.then.sound); });
   $('sound-file').addEventListener('click', async () => { const r = selected(); if (!r) return; const f = await window.lightsApi.chooseSoundFile(); if (!f) return; r.then.sound = f; touch(); });
   $('body-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.bodyColor = e.target.value; touch(); });
+  $('agents-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.agentsColor = e.target.value; touch(); });
   $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
@@ -1422,6 +1515,7 @@
       // contribute when this signal is live.
       const own = R.previewLook(r);
       own.gardenSpeed = 30;
+      if (r.then.agents || r.then.agentsColor) own.minions = SAMPLE_MINIONS;
       stage.setLook(own);
       document.querySelector('#stage .rig-wrap').classList.toggle('wide', own.effect === 'garden');
       stageCelebrate(!!own.celebrate);
@@ -1459,6 +1553,7 @@
     $('live-dot').style.setProperty('--live-color', c || '');
     const n = live.sessions.length;
     $('live-text').textContent = `Widget: ${live.look.name || '—'} · ${n} session${n === 1 ? '' : 's'}`;
+    renderNow();
     if (previewMode === 'live') renderStage();
   }
   window.lightsApi.onStatusChanged(() => { refreshLive(); if ($('main').dataset.view === 'stats') renderStats(); });
@@ -1491,10 +1586,10 @@
   const PRESETS = {
     classic: () => R.defaultRules(),
     minimal: () => R.defaultRules()
-      .filter((r) => !['subagent', 'shell', 'failed', 'ignored'].includes(r.id))
-      .map((r) => ({ ...r, then: { lamp: r.then.lamp, eyes: r.id === 'limit' ? 'closed' : null, pose: 'none', sound: r.locked ? 'beep' : null, celebrate: false } })),
+      .filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id))
+      .map((r) => ({ ...r, then: { lamp: r.then.lamp, pose: 'none', sound: r.locked ? 'beep' : null, celebrate: false } })),
     tools: () => {
-      const d = R.defaultRules().map((r) => (r.id === 'shell' ? { ...r, enabled: true } : r));
+      const d = R.defaultRules().map((r) => (r.id === 'shell' || r.id === 'failed' ? { ...r, enabled: true } : r));
       const at = d.findIndex((r) => r.id === 'working');
       d.splice(at, 0,
         { id: 'edits', name: 'Editing files', enabled: true, when: { signal: ['tool-use'], tool: 'Edit' }, then: { eyes: '#f2a200' } },
@@ -1535,19 +1630,19 @@
     set('permission', { sound: 'Hero', pose: 'ak47', lampFx: 'strobe' });
     set('nudge', { pose: 'bubble', text: 'YOUR TURN', sound: 'Glass' });
     const i = d.findIndex((x) => x.id === 'ignored');
+    // ignored-10 and -20 still fire at 30 minutes, so the longest wait must sit on top to win.
     d.splice(i, 1,
-      { id: 'ig10', name: 'Ignored 10 min', enabled: true, when: { signal: ['ignored-10'] }, then: { pose: 'tap' } },
-      { id: 'ig20', name: 'Ignored 20 min', enabled: true, when: { signal: ['ignored-20'] }, then: { pose: 'arms', effect: 'beard' } },
       { id: 'ig30', name: 'Ignored 30 min', enabled: true, when: { signal: ['ignored-30'] }, then: { pose: 'banner', text: 'HELLO??', eyes: 'laser', sound: 'Funk' } },
+      { id: 'ig20', name: 'Ignored 20 min', enabled: true, when: { signal: ['ignored-20'] }, then: { pose: 'arms', effect: 'beard' } },
+      { id: 'ig10', name: 'Ignored 10 min', enabled: true, when: { signal: ['ignored-10'] }, then: { pose: 'tap' } },
     );
     return d;
   };
   PRESETS.party = () => {
     const d = R.defaultRules();
     const set = (id, then) => { const r = d.find((x) => x.id === id); Object.assign(r.then, then); };
-    set('working', { pose: 'run', pet: 'duck' });
     set('done', { pose: 'party', costume: 'partyhat', effect: 'sparkles', eyes: 'heart', lampFx: 'chase' });
-    set('working', { pose: 'run', pet: 'duck', lampFx: 'breathe' });
+    set('working', { pose: 'run', pet: 'duck', lampFx: 'breathe', agents: 'duck' });
     set('limit', { body: 'ghost', effect: 'rain', eyes: 'x' });
     set('permission', { pose: 'wave', costume: 'crown' });
     set('failed', { eyes: 'dizzy', effect: 'fire' });
@@ -1563,6 +1658,7 @@
     set('idle', { pose: 'sleep', eyes: 'closed', lampFx: 'breathe', effect: 'snow' });
     set('permission', { pose: 'nod', sound: 'Glass', lampFx: 'breathe' });
     set('limit', { pose: 'sleep', sound: 'Blow', lampFx: 'breathe' });
+    set('ralph', { pose: 'blink' });
     return d;
   };
   PRESETS.chaos = () => {
@@ -1603,12 +1699,52 @@
   PRESETS.night = () => {
     const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green' });
+    set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
     set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', celebrate: false });
     set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green' });
     set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lampFx: 'breathe', lampColor: '#5b3fb8', lamp: 'amber' });
     set('permission', { body: 'ghost', pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
     set('limit', { body: 'ghost', pose: 'dead', lampFx: 'sos' });
+    return d;
+  };
+  PRESETS.swarm = () => {
+    const d = R.defaultRules();
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    // Team eyes sit above the subagent and swarm eye accents so team mode always reads as distinct.
+    d.splice(2, 0, d.splice(d.findIndex((x) => x.id === 'team'), 1)[0]);
+    d.splice(d.findIndex((x) => x.id === 'swarm') + 1, 0,
+      { id: 'subagents', name: 'Subagents running', enabled: true, when: { signal: ['subagents'] }, then: { body: 'robot', pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'robot' } },
+    );
+    set('team', { eyes: 'star', costume: 'crown', pet: null });
+    set('ralph', { pose: 'banner', text: 'LOOP {iteration}', number: 'ralph', lampFx: 'chase' });
+    set('swarm', { number: 'agents', eyes: '#f2a200', body: 'robot', signFx: 'neon' });
+    set('permission', { pose: 'knock', lampFx: 'pulse' });
+    set('limit', { body: 'robot', eyes: 'x', lampFx: 'sos' });
+    set('done', { pose: 'thumbs', screenFx: 'confetti' });
+    return d;
+  };
+  PRESETS.focus = () => {
+    const d = R.defaultRules().filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('limit', { pose: 'none', lampColor: '#ffffff' });
+    set('permission', { pose: 'none', sound: null, lampColor: '#ffffff', lampFx: 'breathe' });
+    set('working', { pose: 'none', lampColor: '#d4d4d4', lampFx: 'breathe' });
+    set('done', { pose: 'none', eyes: null, lampColor: '#ffffff', celebrate: false });
+    set('nudge', { lampColor: '#a3a3a3' });
+    set('idle', { lampColor: '#525252' });
+    return d;
+  };
+  PRESETS.retro = () => {
+    const d = R.defaultRules().map((r) => (r.id === 'failed' ? { ...r, enabled: true } : r));
+    const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
+    set('limit', { body: 'robot', pose: 'banner', text: 'GAME OVER', eyes: 'x', lampFx: 'sos' });
+    set('permission', { body: 'robot', pose: 'knock', eyes: 'surprised', lampFx: 'strobe' });
+    set('ralph', { pose: 'banner', text: 'LEVEL {iteration}' });
+    set('failed', { eyes: 'dizzy', signFx: 'rattle' });
+    set('working', { body: 'robot', pose: 'run', lampFx: 'chase', signFx: 'neon' });
+    set('done', { body: 'robot', pose: 'party', eyes: 'star', lampFx: 'rainbow', screenFx: 'confetti', sound: 'beep' });
+    set('nudge', { body: 'robot', pose: 'bubble', text: 'PLAYER 1?' });
+    set('idle', { body: 'robot', pose: 'banner', text: 'INSERT COIN', lampFx: 'chase' });
     return d;
   };
   $('presets-btn').addEventListener('click', (e) => {

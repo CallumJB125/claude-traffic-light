@@ -117,7 +117,7 @@ test('normalizeRule sanitises junk', () => {
   const r = R.normalizeRule({ name: '', when: { signal: 'stop', tool: '  ' }, then: { lamp: 'purple', lampColor: 'red', eyes: 'blue', pose: 'dab', sound: 'loud', celebrate: 'yes' } });
   assert.equal(r.name, 'Untitled rule');
   assert.deepEqual(r.when, { signal: ['stop'], tool: null, cwd: null, source: null });
-  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, clicks: {} });
+  assert.deepEqual(r.then, { lamp: null, lampColor: null, lampFx: null, sign: null, lampShape: null, signFx: null, number: null, screenFx: null, eyes: null, pose: null, sound: null, celebrate: true, text: null, costume: null, body: null, bodyColor: null, effect: null, pet: null, agents: null, agentsColor: null, clicks: {} });
   assert.equal(R.normalizeRule({ then: { sound: 'Glass' } }).then.sound, 'Glass');
   assert.equal(R.normalizeRule({ then: { sound: 'file:/x/y.wav' } }).then.sound, 'file:/x/y.wav');
   assert.equal(R.normalizeRule({ then: { sound: 'airhorn' } }).then.sound, null);
@@ -148,6 +148,37 @@ test('costume is an accent channel: layers above the lamp owner, never leaks fro
   assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).costume, 'none');
   assert.equal(R.normalizeRule({ then: { costume: 'dragon' } }).then.costume, null);
   assert.equal(R.previewLook({ then: { costume: 'halo' } }).costume, 'halo');
+});
+
+test('agents style is an accent channel: layers above the lamp owner, never leaks from below', () => {
+  const rs = [
+    { id: 'ducks', name: 'ducks', when: { signal: ['tool-use'], tool: 'Agent' }, then: { agents: 'duck', agentsColor: '#38bdf8' } },
+    ...rules(),
+    { id: 'below', name: 'below', when: { signal: ['tool-use'] }, then: { agents: 'ghost', agentsColor: '#ff0000' } },
+  ];
+  const hit = R.resolve(rs, [{ signal: 'tool-use', tool: 'Agent' }]);
+  assert.equal(hit.look.agents, 'duck');
+  assert.equal(hit.look.agentsColor, '#38bdf8');
+  assert.equal(hit.owned.agents, 'ducks');
+  const miss = look([{ signal: 'tool-use', tool: 'Bash' }], rs);
+  assert.equal(miss.agents, 'robot');
+  assert.equal(miss.agentsColor, null);
+});
+
+test('normalizeRule accepts agent styles and colours, rejects junk', () => {
+  assert.equal(R.normalizeRule({ then: { agents: 'cat' } }).then.agents, 'cat');
+  assert.equal(R.normalizeRule({ then: { agents: 'dragon' } }).then.agents, null);
+  assert.equal(R.normalizeRule({ then: { agentsColor: '#AbCdEf' } }).then.agentsColor, '#AbCdEf');
+  assert.equal(R.normalizeRule({ then: { agentsColor: 'blue' } }).then.agentsColor, null);
+  assert.equal(R.normalizeRule({ then: { agentsColor: '#fff' } }).then.agentsColor, null);
+  assert.ok(R.AGENT_STYLES.includes('robot'));
+});
+
+test('previewLook: agents default to robots with the status colour', () => {
+  const p = R.previewLook({ then: {} });
+  assert.equal(p.agents, 'robot');
+  assert.equal(p.agentsColor, null);
+  assert.equal(R.previewLook({ then: { agents: 'star' } }).agents, 'star');
 });
 
 test('project scope: folder name or prefix glob', () => {
@@ -543,7 +574,7 @@ test('agent scope: a rule can target one agent; sessions default to claude', () 
   assert.equal(look([{ signal: 'tool-use', source: 'Codex' }], rs).pet, 'none');
 });
 
-test('set-status: SubagentStart/Stop build the agents list; a finished turn ends them all', () => {
+test('set-status: SubagentStart/Stop build the agents list; a new session ends them all', () => {
   const home = tmpHome();
   const start = (id, type) => run(home, 'subagent-start', { session_id: 's1', cwd: '/tmp/p', agent_id: id, agent_type: type });
   start('ag-1', 'oh-my-claudecode:executor');
@@ -566,9 +597,9 @@ test('set-status: SubagentStart/Stop build the agents list; a finished turn ends
   d = read(home);
   assert.deepEqual([d.mode, d.iteration], ['ralph', 4], 'a hook write never erases the mode');
   assert.ok(d.agents.some((a) => a.id === 't1'), 'nor the watcher-owned agents');
-  run(home, 'stop', { session_id: 's1', cwd: '/tmp/p' });
+  run(home, 'session-start', { session_id: 's1', cwd: '/tmp/p' });
   d = read(home);
-  assert.deepEqual(d.agents.filter((a) => a.kind === 'subagent').map((a) => a.status), ['done', 'done'], 'a finished turn finishes its subagents');
+  assert.deepEqual(d.agents.filter((a) => a.kind === 'subagent').map((a) => a.status), ['done', 'done'], 'a new session finishes its subagents');
   assert.equal(d.agents.find((a) => a.id === 't1').status, 'working', 'a teammate is not the turn\'s to finish');
 });
 
@@ -658,4 +689,69 @@ test('install: PermissionRequest hook is opt-in and carries a timeout', () => {
   const backOff = H.install(on, '/x/set-status.js');
   assert.equal(backOff.hooks.PermissionRequest, undefined);
   assert.ok(backOff.hooks.TaskCompleted, 'task hooks are always on');
+});
+
+test('filterAgentKinds hides switched-off kinds and treats missing kinds as on', () => {
+  const agents = [
+    { name: 'exec', kind: 'subagent' },
+    { name: 'mate', kind: 'teammate' },
+    { name: 'loop', kind: 'ralph' },
+    { name: 'ulw', kind: 'ultrawork' },
+  ];
+  const names = (kinds) => R.filterAgentKinds(agents, kinds).map((a) => a.name);
+  assert.deepEqual(names({ subagent: true, teammate: false, ralph: true, ultrawork: true }), ['exec', 'loop', 'ulw']);
+  assert.deepEqual(names({ ralph: false, ultrawork: false }), ['exec', 'mate']);
+  assert.deepEqual(names(undefined), ['exec', 'mate', 'loop', 'ulw']);
+});
+
+test('filterAgentKinds composes with liveAgents without touching the unfiltered count', () => {
+  const sessions = [{ cwd: '/p', agents: [
+    { id: '1', name: 'a', kind: 'subagent', status: 'working' },
+    { id: '2', name: 'b', kind: 'teammate', status: 'waiting' },
+    { id: '3', name: 'c', kind: 'teammate', status: 'done' },
+  ] }];
+  const live = R.liveAgents(sessions);
+  assert.equal(live.length, 2);
+  assert.deepEqual(R.filterAgentKinds(live, { teammate: false }).map((a) => a.name), ['a']);
+  assert.equal(live.length, 2);
+});
+
+test('effectiveSignal: a finished turn with a working subagent reads as that agent\'s tool use', () => {
+  const working = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'working' }];
+  const done = [{ id: 'a', name: 'executor', kind: 'subagent', status: 'done' }];
+  assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: working }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'stop' });
+  assert.deepEqual(R.effectiveSignal({ signal: 'idle-nudge', agents: [{ id: 'b' }] }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'idle-nudge' }, 'no status counts as working');
+  assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: done }), { signal: 'stop', tool: null, turnSignal: null });
+  assert.deepEqual(R.effectiveSignal({ signal: 'stop', agents: [{ id: 'c', status: 'waiting' }] }).signal, 'stop', 'a waiting agent is not working');
+  assert.deepEqual(R.effectiveSignal({ signal: 'permission-ask', tool: 'Bash', agents: working }), { signal: 'permission-ask', tool: 'Bash', turnSignal: null });
+  assert.equal(R.effectiveSignal({ signal: 'limit-hit', agents: working }).signal, 'limit-hit');
+  const s = { signal: 'stop', agents: working };
+  const l = look([{ ...s, ...R.effectiveSignal(s) }]);
+  assert.deepEqual([l.lamp, l.pose, l.eyes, l.celebrate], ['green', 'think', '#8b5cf6', false], 'working + subagent eyes, not "Task finished"');
+});
+
+test('TURN_END is the one list of turn-closing signals', () => {
+  assert.deepEqual([...R.TURN_END].sort(), ['idle-nudge', 'limit-hit', 'permission-ask', 'permission-denied', 'session-start', 'stop', 'turn-failed']);
+});
+
+test('a finished turn waits on you: ignored-N and waitMinutes run from stop', () => {
+  const now = Date.parse('2026-09-09T12:00:00Z');
+  const ago = (m) => new Date(now - m * 60000).toISOString();
+  assert.ok(R.WAITING_ON_YOU.has('stop'));
+  assert.deepEqual(R.virtualSessions([{ signal: 'stop', updatedAt: ago(25) }], now).map((v) => v.signal), ['ignored-10', 'ignored-20']);
+  const l = look([{ signal: 'stop', updatedAt: ago(12) }], rules(), now);
+  assert.equal(l.waitMinutes, 12);
+  assert.equal(l.ruleId, 'done', '"Task finished" still owns the look');
+});
+
+test('firedNames puts the lamp owner first, then the accents in order', () => {
+  const agents = ['a', 'b', 'c'].map((id) => ({ id, kind: 'subagent', status: 'working' }));
+  const rs = rules();
+  const r = R.resolve(rs, [{ signal: 'tool-use', tool: 'Agent', agents }]);
+  assert.equal(r.look.name, 'Subagent running', 'look.name is only the top accent');
+  const names = R.firedNames(rs, r.fired, r.owned);
+  assert.equal(names[0], 'Claude is working');
+  assert.deepEqual(names.slice(1), ['Subagent running', 'Swarm']);
+  assert.deepEqual(R.firedNames(rs, ['subagent'], {}), ['Subagent running'], 'no lamp owner → fired order');
+  assert.deepEqual(R.firedNames(rs, ['gone'], { lamp: 'gone' }), [], 'unknown ids are dropped');
 });

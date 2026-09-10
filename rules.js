@@ -41,9 +41,15 @@
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
   // Signals that mean Claude is waiting on the person: a permission ask, a
-  // limit, or the idle nudge after a finished turn.
+  // limit, a finished turn, or the idle nudge that follows it.
   const WAITING = new Set(['permission-ask', 'limit-hit']);
-  const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge']);
+  const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop']);
+  // Signals that close a turn: the working-since clock stops on any of them.
+  const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
+  // A turn that has ended while its subagents are still working hasn't really
+  // ended; only a finished/idle turn is promoted — a permission ask or a limit
+  // still needs the person whatever the agents are doing.
+  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge']);
   // ── Other agents ──────────────────────────────────────────────────────────
   // A session file may carry `agents` (every subagent / teammate / ralph or
   // ultrawork worker it knows about) and `mode` (the OMC execution mode).
@@ -78,6 +84,25 @@
       });
     }
     return out;
+  }
+
+  // The signal a session should be read as: a finished turn with a subagent
+  // still working is presented as that agent's tool use, so the working rules
+  // (and "Subagent running") keep firing instead of "Task finished".
+  function effectiveSignal(session) {
+    const signal = sessionSignal(session);
+    const tool = session.tool || null;
+    if (PROMOTABLE_TURN_END.has(signal) && liveAgents([session]).some((a) => a.status === 'working')) {
+      return { signal: 'tool-use', tool: 'Agent', turnSignal: signal };
+    }
+    return { signal, tool, turnSignal: null };
+  }
+
+  // Keeps the agents whose kind is switched on; a kind missing from `kinds`
+  // counts as on, so configs saved before this filter existed show everything.
+  function filterAgentKinds(agents, kinds) {
+    if (!kinds || typeof kinds !== 'object') return agents;
+    return agents.filter((a) => kinds[a.kind] !== false);
   }
 
   function sessionMode(s) {
@@ -138,6 +163,7 @@
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
+  const AGENT_STYLES = ['robot', 'duck', 'blob', 'ghost', 'cat', 'star', 'dot'];
   // What a gesture on the avatar can do. `arg` is free text where noted.
   const ACTIONS = [
     { id: 'jump', label: 'Jump to the session that needs you' },
@@ -287,6 +313,8 @@
         bodyColor: /^#[0-9a-f]{6}$/i.test(r.then?.bodyColor || '') ? r.then.bodyColor : null,
         effect: EFFECTS.includes(r.then?.effect) ? r.then.effect : null,
         pet: PETS.includes(r.then?.pet) ? r.then.pet : null,
+        agents: AGENT_STYLES.includes(r.then?.agents) ? r.then.agents : null,
+        agentsColor: /^#[0-9a-f]{6}$/i.test(r.then?.agentsColor || '') ? r.then.agentsColor : null,
         clicks: normalizeClicks(r.then?.clicks),
       },
     };
@@ -363,7 +391,7 @@
     const real = sessions.filter((s) => sessionSignal(s));
     const live = real.length ? real.concat(virtualSessions(real, now)) : [{ signal: 'idle' }];
     const fired = [];
-    const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
+    const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
     for (const rule of list) {
       const matching = live.filter((s) => ruleMatches(rule, s));
@@ -377,6 +405,8 @@
       if (!owned.bodyColor && t.bodyColor) { look.bodyColor = t.bodyColor; owned.bodyColor = rule.id; }
       if (!owned.effect && t.effect) { look.effect = t.effect; owned.effect = rule.id; }
       if (!owned.pet && t.pet) { look.pet = t.pet; owned.pet = rule.id; }
+      if (!owned.agents && t.agents) { look.agents = t.agents; owned.agents = rule.id; }
+      if (!owned.agentsColor && t.agentsColor) { look.agentsColor = t.agentsColor; owned.agentsColor = rule.id; }
       for (const g of GESTURES) if (!look.clicks[g] && t.clicks[g]) look.clicks[g] = t.clicks[g];
       if (!owned.sound && t.sound) { look.sound = t.sound; owned.sound = rule.id; }
       if (t.celebrate && !owned.celebrate) { look.celebrate = true; owned.celebrate = rule.id; }
@@ -391,6 +421,16 @@
     }
     for (const g of GESTURES) if (!look.clicks[g]) look.clicks[g] = DEFAULT_CLICKS[g];
     return { look, fired, owned };
+  }
+
+  // Names of the rules that fired, the lamp owner first: look.name is only
+  // the top-most rule, which is usually an accent (e.g. "Swarm"), not the
+  // state the lamp is actually showing.
+  function firedNames(rules, fired, owned) {
+    const byId = new Map(rules.map((r) => [r.id, r.name]));
+    const lamp = owned && owned.lamp;
+    const ids = lamp ? [lamp, ...fired.filter((id) => id !== lamp)] : fired;
+    return ids.map((id) => byId.get(id)).filter(Boolean);
   }
 
   // The look a single rule would produce on its own — for the editor preview.
@@ -414,11 +454,13 @@
       bodyColor: r.then.bodyColor,
       effect: r.then.effect || 'none',
       pet: r.then.pet || 'none',
+      agents: r.then.agents || 'robot',
+      agentsColor: r.then.agentsColor,
       waitMinutes: r.then.effect === 'beard' ? 20 : 0,
       sound: r.then.sound,
       celebrate: r.then.celebrate,
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, SOUNDS, WAITING_ON_YOU, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, LONG_RUNNING_MS, defaultRules, normalizeRule, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });

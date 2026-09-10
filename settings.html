@@ -20,7 +20,7 @@
     flex-direction: column;
     gap: 18px;
   }
-  h1 {
+  h1, h2 {
     font-size: 15px;
     margin: 0;
     font-weight: 600;
@@ -50,6 +50,19 @@
     border-radius: 6px;
     color: inherit;
     padding: 5px 8px;
+    font: inherit;
+  }
+  h2 {
+    font-size: 13px;
+    margin: 4px 0 -8px;
+    color: #da7756;
+  }
+  select {
+    background: #2a2731;
+    border: 1px solid #3c3846;
+    border-radius: 6px;
+    color: inherit;
+    padding: 4px 6px;
     font: inherit;
   }
   input[type="checkbox"] {
@@ -128,8 +141,32 @@
 
   <div class="field">
     <label class="row"><input type="checkbox" id="showTasks" /> Show task progress on the sign</label>
-    <label class="row"><input type="checkbox" id="showAgents" /> Show agents (a chip per subagent, teammate or ralph worker)</label>
     <div class="hint">A tiny 3/7 on the crossbar while Claude works through a task list.</div>
+  </div>
+
+  <h2>Agents</h2>
+  <div class="field">
+    <div class="hint">Chips appear only while another agent is running. Hover Claude to see who's doing what.</div>
+    <label class="row"><input type="checkbox" id="showAgents" /> Show agent chips under Claude</label>
+    <label class="row"><input type="checkbox" id="agentRoster" /> Show the roster when hovering</label>
+  </div>
+
+  <div class="field">
+    <label>Which agents</label>
+    <label class="row"><input type="checkbox" id="kind-subagent" /> Subagents</label>
+    <label class="row"><input type="checkbox" id="kind-teammate" /> Teammates</label>
+    <label class="row"><input type="checkbox" id="kind-ralph" /> Ralph &amp; ultrawork workers</label>
+  </div>
+
+  <div class="field">
+    <label for="agentChipSize">Chip size</label>
+    <div class="row">
+      <select id="agentChipSize">
+        <option value="small">Small (up to 7)</option>
+        <option value="normal">Normal (up to 5)</option>
+        <option value="large">Large (up to 4)</option>
+      </select>
+    </div>
   </div>
 
   <div class="field">
@@ -179,6 +216,12 @@
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
       document.getElementById('showTasks').checked = config.showTasks !== false;
       document.getElementById('showAgents').checked = config.showAgents !== false;
+      document.getElementById('agentRoster').checked = config.agentRoster !== false;
+      const kinds = config.agentKinds || {};
+      document.getElementById('kind-subagent').checked = kinds.subagent !== false;
+      document.getElementById('kind-teammate').checked = kinds.teammate !== false;
+      document.getElementById('kind-ralph').checked = kinds.ralph !== false || kinds.ultrawork !== false;
+      document.getElementById('agentChipSize').value = ['small', 'normal', 'large'].includes(config.agentChipSize) ? config.agentChipSize : 'normal';
       document.getElementById('roam').checked = config.roam !== false;
       document.getElementById('randomEvents').checked = config.randomEvents !== false;
     }
@@ -194,6 +237,14 @@
         askFromWidget: document.getElementById('askFromWidget').checked,
         showTasks: document.getElementById('showTasks').checked,
         showAgents: document.getElementById('showAgents').checked,
+        agentRoster: document.getElementById('agentRoster').checked,
+        agentKinds: {
+          subagent: document.getElementById('kind-subagent').checked,
+          teammate: document.getElementById('kind-teammate').checked,
+          ralph: document.getElementById('kind-ralph').checked,
+          ultrawork: document.getElementById('kind-ralph').checked,
+        },
+        agentChipSize: document.getElementById('agentChipSize').value,
         roam: document.getElementById('roam').checked,
         randomEvents: document.getElementById('randomEvents').checked,
       });
