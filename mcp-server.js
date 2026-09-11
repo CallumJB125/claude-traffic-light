@@ -400,8 +400,14 @@ function routerRoot(root) {
   return { root, home: os.homedir() };
 }
 
+// router.js is excluded from app.asar because it is also an extraResource
+// (the shim runs it under plain node); fall back to the copy beside the asar.
+function requireRouter() {
+  return require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
+}
+
 function buddyRouterStatus({ root, limit = 20 } = {}) {
-  const Router = require('./router.js');
+  const Router = requireRouter();
   const RouterInstall = require('./router-install.js');
   const DelegationInstall = require('./delegation-install.js');
   const config = loadConfig(root);

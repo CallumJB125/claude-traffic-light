@@ -6,7 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { dayKey } = require('./stats.js');
-const { LEARN_DAYS } = require('./router.js');
+// electron-builder drops a file from app.asar when it is also an
+// extraResource (router.js is, so the shim can run it under plain node);
+// fall back to the copy next to the asar when the in-asar one is missing.
+const { LEARN_DAYS } = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
 
 // USD per million tokens.
 const PRICES = {

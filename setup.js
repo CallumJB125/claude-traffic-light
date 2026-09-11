@@ -3,10 +3,14 @@
 // never the shipped built-ins). Pure: main.js does the dialogs and hands the
 // plan to saveConfig and Cameos.importPhoto/removePhoto, which keep their own
 // invariants.
+const fs = require('fs');
+const path = require('path');
 const Rules = require('./rules.js');
 const Cameos = require('./cameos.js');
 const Delegate = require('./hooks/delegate.js');
-const Router = require('./router.js');
+// router.js is excluded from app.asar because it is also an extraResource
+// (the shim runs it under plain node); fall back to the copy beside the asar.
+const Router = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
 
 const KIND = 'claude-buddy-setup';
 // Bump with an entry in UPGRADES when the bundle's shape changes. Rules carry
