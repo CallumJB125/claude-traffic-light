@@ -360,8 +360,11 @@ const A = require('../agents.js');
 const FIX = path.join(__dirname, 'fixtures', 'omc');
 const scan = (session, extra = {}) => A.scanAgents(session, { stateDir: path.join(FIX, 'state'), teamsDir: path.join(FIX, 'teams'), now: 1788871500000, ...extra });
 
+// What sess-1's own SubagentStart hooks recorded.
+const SESS1_AGENTS = [{ id: 'a1b2c3', kind: 'subagent', status: 'working' }, { id: 'd4e5f6', kind: 'subagent', status: 'working' }];
+
 test('omc state: ralph iteration, team mode and every agent it can see', () => {
-  const r = scan({ sessionId: 'sess-1', cwd: '/tmp/proj' });
+  const r = scan({ sessionId: 'sess-1', cwd: '/tmp/proj', agents: SESS1_AGENTS });
   assert.equal(r.mode, 'team', 'team-state wins over the ralph and ultrawork loops');
   assert.equal(r.iteration, 7, 'the ralph iteration still comes through');
   const by = Object.fromEntries(r.agents.map((a) => [a.name, a]));
@@ -385,10 +388,23 @@ test('omc state: a stale team config and a foreign session contribute nothing', 
   assert.deepEqual(nothing, { mode: null, iteration: 0, agents: [] });
 });
 
+test('omc state: project-wide tracking never leaks into another session in the same folder', () => {
+  const other = scan({ sessionId: 'sess-9', cwd: '/tmp/proj', agents: [{ id: 'mine', kind: 'subagent', status: 'working' }] });
+  assert.deepEqual(other.agents, [], 'sess-1\'s tracked agents and mission workers are not sess-9\'s');
+  const hookSaw = [{ id: 'a1b2c3', kind: 'subagent', status: 'done', source: 'hook' }];
+  const merged = A.mergeAgents(hookSaw, scan({ sessionId: 'sess-1', cwd: '/tmp/proj', agents: hookSaw }).agents);
+  const a = merged.find((x) => x.id === 'a1b2c3');
+  assert.deepEqual([a.status, a.kind], ['done', 'ralph'], 'the hook saw it stop, so OMC\'s stale "running" loses; the scan still names the mode');
+  const leaked = [{ id: 'a1b2c3', kind: 'subagent', status: 'working', source: 'scan' }];
+  assert.deepEqual(scan({ sessionId: 'sess-9', cwd: '/tmp/proj', agents: leaked }).agents, [], 'an entry the scan wrote cannot vouch for itself');
+});
+
 test('mergeAgents keeps hook-owned subagents and never double-counts', () => {
-  const found = [{ id: 'a1', name: 'executor', kind: 'ralph', status: 'working' }];
-  const merged = A.mergeAgents([{ id: 'a1', kind: 'subagent' }, { id: 'z9', kind: 'subagent' }, { id: 'old', kind: 'teammate' }], found);
-  assert.deepEqual(merged.map((a) => a.id), ['z9', 'a1'], 'a stale teammate is dropped; the scan wins on a1');
+  const found = [{ id: 'a1', name: 'executor', kind: 'ralph', status: 'working', source: 'scan' }, { id: 'mate', kind: 'teammate', status: 'working', source: 'scan' }];
+  const merged = A.mergeAgents([{ id: 'a1', kind: 'subagent', status: 'done', source: 'hook' }, { id: 'z9', kind: 'subagent' }, { id: 'old', kind: 'teammate' }, { id: 'gone', kind: 'teammate', source: 'scan' }], found);
+  assert.deepEqual(merged.map((a) => a.id), ['a1', 'z9', 'mate'], 'stale scan-owned teammates are dropped; nothing is counted twice');
+  assert.deepEqual([merged[0].status, merged[0].kind], ['done', 'ralph'], 'on a1 the hook keeps the status, the scan adds the kind');
+  assert.deepEqual(A.mergeAgents(merged, found), merged, 'stable across polls: a relabelled hook entry stays the hook\'s');
 });
 
 test('agentStatus folds every vocabulary into three states', () => {

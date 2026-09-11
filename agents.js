@@ -135,7 +135,7 @@ function kindOf(parentMode) {
   return 'subagent';
 }
 
-// session: { sessionId, cwd }. opts.stateDir / opts.teamsDir exist so the
+// session: { sessionId, cwd, agents }. opts.stateDir / opts.teamsDir exist so the
 // tests can point at fixtures.
 function scanAgents(session, opts = {}) {
   const cwd = (session && session.cwd) || '';
@@ -147,32 +147,6 @@ function scanAgents(session, opts = {}) {
   const add = (a) => { if (a.id && !out.agents.some((x) => x.id === a.id)) out.agents.push(a); };
 
   if (stateDir) {
-    const tracked = readJson(path.join(stateDir, 'subagent-tracking.json'));
-    for (const a of (tracked && Array.isArray(tracked.agents) ? tracked.agents : [])) {
-      add({
-        id: String(a.agent_id || a.agentId || ''),
-        name: String(a.agent_type || 'agent').split(':').pop(),
-        kind: kindOf(a.parent_mode),
-        status: agentStatus(a.status),
-        since: a.started_at || null,
-        parent: id || null,
-      });
-    }
-    // Mission state names the team's workers and what each one is doing.
-    const mission = readJson(path.join(stateDir, 'mission-state.json'));
-    for (const m of (mission && Array.isArray(mission.missions) ? mission.missions : [])) {
-      if (agentStatus(m.status) === 'done') continue;
-      for (const a of Array.isArray(m.agents) ? m.agents : []) {
-        add({
-          id: `mission:${m.id}:${a.name}`,
-          name: String(a.name || a.role || 'agent'),
-          kind: 'teammate',
-          status: agentStatus(a.status),
-          since: a.updatedAt || null,
-          parent: id || null,
-        });
-      }
-    }
     if (id) {
       const dir = path.join(stateDir, 'sessions', id);
       const ralph = readJson(path.join(dir, 'ralph-state.json'));
@@ -183,6 +157,44 @@ function scanAgents(session, opts = {}) {
       else if (ralph && ralph.active) out.mode = 'ralph';
       else if (ultra && ultra.active) out.mode = 'ultrawork';
       if (ralph && ralph.active) out.iteration = Number(ralph.iteration) || 0;
+    }
+    // subagent-tracking.json is per project and names no session, so every
+    // session in the folder would claim every agent in it — and OMC leaves an
+    // agent that stalled or was killed "running" for good, which kept dead
+    // sessions "working" for hours. An entry only counts for the session whose
+    // own SubagentStart hook recorded that id; it adds the kind (the mode that
+    // spawned it); mergeAgents keeps the hook's word on whether it is done.
+    const own = new Set((Array.isArray(session && session.agents) ? session.agents : []).filter(hookOwned).map((a) => String(a.id)));
+    const tracked = readJson(path.join(stateDir, 'subagent-tracking.json'));
+    for (const a of (tracked && Array.isArray(tracked.agents) ? tracked.agents : [])) {
+      const aid = String(a.agent_id || a.agentId || '');
+      if (!own.has(aid)) continue;
+      add({
+        id: aid,
+        name: String(a.agent_type || 'agent').split(':').pop(),
+        kind: kindOf(a.parent_mode),
+        status: agentStatus(a.status),
+        since: a.started_at || null,
+        parent: id || null,
+        source: 'scan',
+      });
+    }
+    // Mission state names the team's workers and what each one is doing. It
+    // is per project too, so it belongs only to a session running team mode.
+    const mission = out.mode === 'team' ? readJson(path.join(stateDir, 'mission-state.json')) : null;
+    for (const m of (mission && Array.isArray(mission.missions) ? mission.missions : [])) {
+      if (agentStatus(m.status) === 'done') continue;
+      for (const a of Array.isArray(m.agents) ? m.agents : []) {
+        add({
+          id: `mission:${m.id}:${a.name}`,
+          name: String(a.name || a.role || 'agent'),
+          kind: 'teammate',
+          status: agentStatus(a.status),
+          since: a.updatedAt || null,
+          parent: id || null,
+          source: 'scan',
+        });
+      }
     }
   }
 
@@ -218,6 +230,7 @@ function scanAgents(session, opts = {}) {
         since: m.joinedAt ? new Date(m.joinedAt).toISOString() : null,
         heartbeat: beat === null ? null : new Date(beat).toISOString(),
         parent: id,
+        source: 'scan',
       });
     }
     if (live && !out.mode) out.mode = 'team';
@@ -227,11 +240,23 @@ function scanAgents(session, opts = {}) {
   return out;
 }
 
-// The session file's own subagent entries (owned by the hooks) plus everything
-// the scan found, without duplicating an agent both of them know about.
+// An entry the hooks wrote: SubagentStart/Stop saw that agent start and stop.
+// Entries from before `source` existed count when they are plain subagents.
+function hookOwned(a) {
+  return !!a && !!a.id && (a.source === 'hook' || (!a.source && a.kind === 'subagent'));
+}
+
+// The session file's hook-owned entries plus everything the scan found. On an
+// agent both know, the hook's entry stands — only it saw the agent stop, and
+// OMC leaves a killed agent "running" — and the scan adds just the kind (the
+// mode that spawned it). Scan-only agents (teammates, mission workers) are
+// replaced wholesale each poll.
 function mergeAgents(existing, found) {
-  const mine = (Array.isArray(existing) ? existing : []).filter((a) => a && a.kind === 'subagent' && !found.some((x) => x.id === a.id));
-  return mine.concat(found);
+  const scanned = new Map(found.map((a) => [a.id, a]));
+  const mine = (Array.isArray(existing) ? existing : []).filter(hookOwned)
+    .map((a) => (scanned.has(a.id) ? { ...a, kind: scanned.get(a.id).kind, source: 'hook' } : a));
+  const ids = new Set(mine.map((a) => a.id));
+  return mine.concat(found.filter((a) => !ids.has(a.id)));
 }
 
 // Only a SessionEnd hook removes a session file, so a session that was killed

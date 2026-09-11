@@ -323,13 +323,16 @@ function updateAgents(prevAgents, signal, payload, nowIso) {
   let agents = (Array.isArray(prevAgents) ? prevAgents : []).filter((a) => {
     if (!a || typeof a !== 'object') return false;
     const t = Date.parse(a.since || '') || now;
-    if (a.kind && a.kind !== 'subagent') return true; // owned by the watcher
+    // The app's scan owns teammates and mission workers (and, before `source`
+    // existed, anything not a plain subagent); the hooks own their own entries
+    // whatever kind the scan has since labelled them.
+    if (a.source === 'scan' || (a.source !== 'hook' && a.kind && a.kind !== 'subagent')) return true;
     return a.status === 'done' ? now - t < DONE_KEEP_MS : now - t < AGENT_MAX_MS;
   });
   // Not on `stop`: a foreground Agent call blocks the turn, so a turn can only
   // end while *background* agents are still running. They end via SubagentStop.
   if (signal === 'session-start') {
-    return agents.map((a) => (a.kind === 'subagent' && a.status !== 'done' ? { ...a, status: 'done' } : a));
+    return agents.map((a) => ((a.source === 'hook' || (!a.source && a.kind === 'subagent')) && a.status !== 'done' ? { ...a, status: 'done' } : a));
   }
   if (signal !== 'subagent-start' && signal !== 'subagent-done') return agents;
   const p = payload || {};
@@ -338,8 +341,8 @@ function updateAgents(prevAgents, signal, payload, nowIso) {
   const name = String(p.agent_type || p.subagent_type || p.agentType || p.agent_name || p.description || 'agent').split(':').pop().slice(0, 40);
   const status = signal === 'subagent-done' ? 'done' : 'working';
   const existing = agents.find((a) => a.id === id);
-  if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since } : a));
-  else agents = agents.concat([{ id, name, kind: 'subagent', status, since: nowIso, parent: sessionId }]);
+  if (existing) agents = agents.map((a) => (a.id === id ? { ...a, name: a.name || name, status, since: status === 'done' ? nowIso : a.since, source: 'hook' } : a));
+  else agents = agents.concat([{ id, name, kind: 'subagent', status, since: nowIso, parent: sessionId, source: 'hook' }]);
   return agents.slice(-32);
 }
 
