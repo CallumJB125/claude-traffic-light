@@ -4,18 +4,21 @@
 //   node emit.js <signal> [--source cursor] [--session id] [--cwd path] [--tool name]
 //
 // signals: prompt-submit | tool-use | tool-done | tool-failed | stop |
-//          permission-ask | limit-hit | idle-nudge | session-start | session-end
+//          turn-failed | permission-ask | permission-denied | limit-hit |
+//          idle-nudge | session-start | session-end | subagent-start |
+//          subagent-done | compact
 //
 // Also understands Cursor and Codex payloads: pass --cursor <event> and the
 // hook JSON on stdin, or --codex with Codex's notify JSON as the last arg.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const SessionState = require('./session-state.js');
 
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
-const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'stop', 'permission-ask', 'limit-hit', 'idle-nudge', 'session-start', 'session-end', 'subagent-start', 'subagent-done'];
+const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'stop', 'turn-failed', 'permission-ask', 'permission-denied', 'limit-hit', 'idle-nudge', 'session-start', 'session-end', 'subagent-start', 'subagent-done', 'compact'];
 
 const argv = process.argv.slice(2);
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : null; };
@@ -64,8 +67,10 @@ fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 const sessionId = session || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
 if (signal === 'session-end') { fs.rmSync(file, { force: true }); process.exit(0); }
-let prev = null; try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
-const now = new Date().toISOString();
-const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start']);
-const workingSince = signal === 'prompt-submit' ? now : TURN_END.has(signal) ? null : (prev?.workingSince || now);
-fs.writeFileSync(file, JSON.stringify({ sessionId, host: HOST_TAG, source, cwd: cwd || process.cwd(), signal, tool, workingSince, tasks: prev?.tasks || { created: 0, done: 0 }, updatedAt: now }, null, 2));
+// Same lock and state step as the Claude Code hook and the app's /signal
+// endpoint, so what the app and the pollers stored on the file survives.
+SessionState.withLock(file, () => {
+  const prev = SessionState.readJson(file);
+  const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd: cwd || prev?.cwd || process.cwd(), signal, tool });
+  SessionState.writeJsonAtomic(file, next);
+});

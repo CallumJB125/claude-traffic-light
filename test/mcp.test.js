@@ -59,7 +59,7 @@ test('buddy_status: a pending permission request forces the ask when answering f
   const root = fixture({ config: { ...base, askFromWidget: true }, sessions: { a: session('a') }, requests: [req] });
   const st = await M.buddyStatus({ root, now: NOW, online: true, live: null });
   assert.equal(st.reason, 'pending-permission');
-  assert.equal(st.look.lamp, 'amber');
+  assert.equal(st.look.lamp, 'red');
   assert.equal(st.pendingRequests, 1);
 });
 

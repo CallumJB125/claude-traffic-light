@@ -88,7 +88,7 @@ function extractFn(name) {
   }
   throw new Error(`unbalanced ${name}`);
 }
-const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SESSIONS_DIR', 'Date', 'process', `
+const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SessionState', 'SESSIONS_DIR', 'Date', 'process', `
   const sessionFileCache = new Map();
   const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
   ${/const AGENT_KEEPALIVE_MS = [^;]+;/.exec(MAIN_SRC)[0]}
@@ -141,7 +141,7 @@ function runSequence(seed) {
   const FDate = fakeDate(clock);
   const transcripts = new Map();
   const agentsShim = { ...Agents, scanAgents: (s) => Agents.scanAgents(s, { teamsDir, projectsDir, stateDir, now: clock.now, transcripts }) };
-  const main = MAIN_PIPELINE(fs, path, Rules, agentsShim, sessionsDir, FDate, process);
+  const main = MAIN_PIPELINE(fs, path, Rules, agentsShim, require('../hooks/session-state.js'), sessionsDir, FDate, process);
   const rules = Rules.defaultRules();
 
   const sessions = Array.from({ length: between(1, 4) }, (_, k) => ({

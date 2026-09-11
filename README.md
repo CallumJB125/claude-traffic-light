@@ -4,13 +4,13 @@ Formerly *Claude Traffic Light*. A tiny pixel-Claude widget that floats on
 top of every app on your Mac and holds up a traffic-light sign showing what Claude Code is doing **across
 every live session at once**:
 
-- 🟢 **Green** — at least one session is working
-- 🟡 **Amber** — something's genuinely waiting on you (a permission prompt,
-  not just "finished and idle") — Claude swings the sign overhead-to-side
-- 🔴 **Red** — a session hit a usage/rate limit — Claude falls asleep, and
-  gets visibly grumpy if it drags on past a few minutes
-- Between tasks, when nothing's working or waiting, a session that just
-  finished shows **eyes-green + thumbs up** with a little confetti burst
+- 🟢 **Green** — at least one session is working; leave it be
+- 🟡 **Amber** — your turn: a session finished (eyes-green, thumbs up, a
+  little confetti), is idling for your next prompt, or had a turn fail
+- 🔴 **Red** — blocked until you act: a permission prompt (Claude swings the
+  sign overhead-to-side), a usage/rate limit (Claude falls asleep), or no
+  network
+- ⚫ **Off** — no sessions running
 
 Click the widget to jump to whichever session needs you — it copies that
 session's folder to your clipboard and brings the terminal app forward (and,

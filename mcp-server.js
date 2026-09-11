@@ -29,7 +29,7 @@ const DEFAULTS = {
 };
 // main.js drops a request this old: the hook has long since timed out.
 const REQUEST_MAX_AGE_MS = 90000;
-const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit' };
+const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'idle-nudge', red: 'limit-hit' };
 const AGENT_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
 const CHANNELS = ['lamp', 'lampFx', 'sign', 'lampShape', 'signFx', 'numberOf', 'screenFx', 'eyes', 'pose', 'costume', 'cameo', 'body', 'bodyColor', 'effect', 'pet', 'agents', 'agentsColor', 'sound', 'celebrate'];
 // A rule's `then` key → the look channel it fills (only `number` differs).
@@ -176,14 +176,13 @@ function computeState({ root, now = Date.now(), online = guessOnline() }) {
     return { ...base, look, fired, owned, reason: 'manual', override };
   }
   const { look, fired, owned } = Rules.resolve(config.rules, sessions, now, env);
+  const asked = pending.length ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]) : null;
+  const shown = asked ? asked.look : look;
   if (config.seasonal) {
-    if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
-    if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
+    if (shown.costume === 'none') shown.costume = Rules.seasonalCostume() || 'none';
+    if (shown.effect === 'none') shown.effect = Rules.seasonalEffect() || 'none';
   }
-  if (pending.length) {
-    const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]);
-    return { ...base, look: asked.look, fired: asked.fired, owned: asked.owned, reason: 'pending-permission', sessionResolution: { fired, owned } };
-  }
+  if (asked) return { ...base, look: shown, fired: asked.fired, owned: asked.owned, reason: 'pending-permission', sessionResolution: { fired, owned } };
   return { ...base, look, fired, owned, reason: sessions.length ? 'session' : 'idle' };
 }
 

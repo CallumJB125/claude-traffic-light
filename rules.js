@@ -151,17 +151,12 @@
     if (sessions.length >= 3) out.push({ signal: 'many-sessions', virtual: true });
     if (env.offline) for (const s of sessions) out.push({ signal: 'offline', cwd: s.cwd, virtual: true });
     let agentTotal = 0;
-    // "Ignored" means you haven't touched *any* Claude, not just this one: a
-    // session left waiting this morning must not nag while you're busy in a
-    // newer terminal.
-    const lastTouch = Math.max(0, ...sessions.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)));
+    const lastTouch = lastTouchOf(sessions);
     for (const s of sessions) {
       const since = s.workingSince ? new Date(s.workingSince).getTime() : null;
       if (since && now - since > LONG_RUNNING_MS && !WAITING.has(s.signal)) out.push({ signal: 'long-running', cwd: s.cwd, virtual: true });
-      if (WAITING_ON_YOU.has(s.signal) && s.updatedAt) {
-        const mins = (now - Math.max(new Date(s.updatedAt).getTime(), lastTouch)) / 60000;
-        for (const m of [10, 20, 30]) if (mins >= m) out.push({ signal: `ignored-${m}`, cwd: s.cwd, virtual: true });
-      }
+      const mins = ignoredMinutes(s, lastTouch, now);
+      if (mins !== null) for (const m of [10, 20, 30]) if (mins >= m) out.push({ signal: `ignored-${m}`, cwd: s.cwd, virtual: true });
       const agents = liveAgents([s]);
       agentTotal += agents.length;
       const mode = sessionMode(s);
@@ -176,10 +171,33 @@
     if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
     return out;
   }
-  // Longest anyone has been kept waiting, in minutes (0 when nobody is).
+  // "Ignored" means you haven't touched *any* Claude, not just this one: a
+  // session left waiting this morning must not nag while you're busy in a
+  // newer terminal. A touch is you acting (the hooks stamp touchedAt), never
+  // Claude moving: a ralph loop working away in another terminal says nothing
+  // about whether you're at the desk. Files from before touchedAt fall back to
+  // a waiting session's updatedAt, roughly when you last left it.
+  function touchedAt(s) {
+    const t = Date.parse(s.touchedAt || '');
+    if (t) return t;
+    return WAITING_ON_YOU.has(s.signal) && s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+  }
+  function lastTouchOf(sessions) {
+    return Math.max(0, ...sessions.map(touchedAt));
+  }
+  // How long a waiting session has gone unanswered, in minutes: since it
+  // started waiting or since your last touch anywhere, whichever is later.
+  // null for a session that isn't waiting on you.
+  function ignoredMinutes(s, lastTouch, now) {
+    if (!WAITING_ON_YOU.has(s.signal) || !s.updatedAt) return null;
+    return (now - Math.max(Date.parse(s.updatedAt) || 0, lastTouch)) / 60000;
+  }
+  // Longest anyone has been ignored, in minutes (0 when nobody is) — the same
+  // clock as ignored-N, so the beard and the rules agree.
   function waitMinutes(sessions, now = Date.now()) {
+    const lastTouch = lastTouchOf(sessions);
     let max = 0;
-    for (const s of sessions) if (WAITING_ON_YOU.has(s.signal) && s.updatedAt) max = Math.max(max, (now - new Date(s.updatedAt).getTime()) / 60000);
+    for (const s of sessions) max = Math.max(max, ignoredMinutes(s, lastTouch, now) || 0);
     return Math.round(max);
   }
 
@@ -252,8 +270,10 @@
     return Math.random().toString(36).slice(2, 8);
   }
 
-  // Reproduces the pre-rules behaviour exactly, plus one showcase rule for the
-  // eyes channel so a new user can see what the extra channel is for.
+  // The lamp answers one question — do I need to look? Green: working, leave
+  // it. Amber: your turn (finished, waiting, or a failed turn to retry). Red:
+  // blocked until you act (a permission ask, a limit, no network). Off:
+  // nothing running.
   function defaultRules() {
     return [
       {
@@ -264,7 +284,7 @@
       {
         id: 'permission', name: 'Needs your input', locked: true, enabled: true,
         when: { signal: ['permission-ask'] },
-        then: { lamp: 'amber', pose: 'wave', sound: 'beep' },
+        then: { lamp: 'red', pose: 'wave', sound: 'beep' },
       },
       {
         id: 'offline', name: 'No network', enabled: true,
@@ -314,7 +334,7 @@
       {
         id: 'done', name: 'Task finished', enabled: true,
         when: { signal: ['stop'] },
-        then: { lamp: 'green', eyes: '#2fae3e', pose: 'thumbs', celebrate: true },
+        then: { lamp: 'amber', eyes: '#2fae3e', pose: 'thumbs', celebrate: true },
       },
       {
         id: 'ignored', name: 'Ignored for 20 minutes', enabled: true,
@@ -324,12 +344,12 @@
       {
         id: 'nudge', name: 'Waiting for you', enabled: true,
         when: { signal: ['idle-nudge'] },
-        then: { lamp: 'green', pose: 'none' },
+        then: { lamp: 'amber', pose: 'none' },
       },
       {
         id: 'idle', name: 'Nothing running', enabled: true,
         when: { signal: ['idle'] },
-        then: { lamp: 'amber', pose: 'none' },
+        then: { lamp: 'off', pose: 'none' },
       },
     ];
   }
@@ -337,7 +357,10 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 3;
+  const RULES_VERSION = 4;
+  // v4 recoloured four default lamps (see defaultRules). A saved rule that
+  // still has the old default colour, and no custom lampColor, follows.
+  const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
   function migrateRules(rules, version) {
     if (version >= RULES_VERSION) return rules;
     const out = rules.slice();
@@ -355,6 +378,12 @@
     if (version < 3 && w >= 0) {
       const missing = ['tool-failed', 'subagent-start'].filter((s) => !out[w].when.signal.includes(s));
       if (missing.length) out[w] = { ...out[w], when: { ...out[w].when, signal: out[w].when.signal.concat(missing) } };
+    }
+    if (version < 4) {
+      for (let i = 0; i < out.length; i += 1) {
+        const lamps = V4_LAMPS[out[i].id];
+        if (lamps && out[i].then && out[i].then.lamp === lamps[0] && !out[i].then.lampColor) out[i] = { ...out[i], then: { ...out[i].then, lamp: lamps[1] } };
+      }
     }
     return out;
   }

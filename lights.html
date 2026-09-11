@@ -2366,9 +2366,9 @@
     const d = R.defaultRules().filter((r) => !['shell', 'failed'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
     set('working', { body: 'ghost', pose: 'blink', effect: 'snow', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', agents: 'ghost' });
-    set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green', celebrate: false });
-    set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'green' });
-    set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lampFx: 'breathe', lampColor: '#5b3fb8', lamp: 'amber' });
+    set('done', { body: 'ghost', pose: 'nod', eyes: 'sleepy', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber', celebrate: false });
+    set('nudge', { body: 'ghost', pose: 'sleep', eyes: 'closed', lampFx: 'breathe', lampColor: '#8b5cf6', lamp: 'amber' });
+    set('idle', { body: 'ghost', pose: 'sleep', eyes: 'closed', effect: 'snow', lamp: 'off' });
     set('permission', { body: 'ghost', pose: 'wave', costume: 'halo', sound: 'Purr', lampFx: 'breathe' });
     set('limit', { body: 'ghost', pose: 'dead', lampFx: 'sos' });
     return d;

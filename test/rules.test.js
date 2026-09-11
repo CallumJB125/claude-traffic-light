@@ -14,7 +14,7 @@ const look = (sessions, rs = rules(), now) => R.resolve(rs, sessions, now).look;
 
 test('idle: no sessions resolves the idle rule', () => {
   const l = look([]);
-  assert.equal(l.lamp, 'amber');
+  assert.equal(l.lamp, 'off');
   assert.equal(l.pose, 'none');
   assert.equal(l.eyes, 'default');
   assert.equal(l.ruleId, 'idle');
@@ -35,7 +35,7 @@ test('a finished session never leaks its eyes onto a working one', () => {
 
 test('finished on its own shows thumbs, green eyes and confetti', () => {
   const l = look([{ signal: 'stop' }]);
-  assert.deepEqual([l.lamp, l.pose, l.eyes, l.celebrate], ['green', 'thumbs', '#2fae3e', true]);
+  assert.deepEqual([l.lamp, l.pose, l.eyes, l.celebrate], ['amber', 'thumbs', '#2fae3e', true], 'finished is your turn: amber');
 });
 
 test('an accent rule above the lamp owner layers on: subagent eyes over working lamp', () => {
@@ -45,7 +45,7 @@ test('an accent rule above the lamp owner layers on: subagent eyes over working 
 
 test('permission beats working and beeps; an accent below it does not layer', () => {
   const l = look([{ signal: 'tool-use', tool: 'Agent' }, { signal: 'permission-ask' }]);
-  assert.deepEqual([l.lamp, l.pose, l.eyes, l.sound], ['amber', 'wave', 'default', 'beep']);
+  assert.deepEqual([l.lamp, l.pose, l.eyes, l.sound], ['red', 'wave', 'default', 'beep'], 'a permission ask blocks: red');
 });
 
 test('an accent dragged above a locked rule still cannot outrank it, but does layer', () => {
@@ -54,7 +54,7 @@ test('an accent dragged above a locked rule still cannot outrank it, but does la
   const [sub] = rs.splice(i, 1);
   rs.unshift(sub);
   const l = look([{ signal: 'tool-use', tool: 'Agent' }, { signal: 'permission-ask' }], rs);
-  assert.equal(l.lamp, 'amber', 'locked rule still owns the lamp');
+  assert.equal(l.lamp, 'red', 'locked rule still owns the lamp');
   assert.equal(l.eyes, 'default', 'locked rules sort above everything, so the accent stays below');
 });
 
@@ -88,7 +88,7 @@ test('tool matching: exact is case-insensitive, prefix glob works, no tool never
 
 test('legacy colour-state session files still resolve', () => {
   assert.equal(look([{ state: 'green' }]).lamp, 'green');
-  assert.equal(look([{ state: 'amber' }]).lamp, 'amber');
+  assert.equal(look([{ state: 'amber' }]).lamp, 'red', 'legacy amber was a permission ask, which is red now');
   assert.equal(look([{ state: 'red' }]).lamp, 'red');
   assert.equal(look([{ state: 'done' }]).pose, 'thumbs');
   assert.equal(look([{ state: 'bogus' }]).ruleId, 'idle', 'unreadable state counts as no session');
@@ -199,7 +199,7 @@ test('rage meter: ignored-N signals from waiting age; waitMinutes reported', () 
   const l20 = look([{ signal: 'idle-nudge', updatedAt: ago(21) }], rules(), now);
   assert.equal(l20.pose, 'arms');
   assert.equal(l20.effect, 'beard');
-  assert.equal(l20.lamp, 'green', 'lamp still from the waiting rule below');
+  assert.equal(l20.lamp, 'amber', 'lamp still from the waiting rule below');
   const busy = look([{ signal: 'tool-use', updatedAt: ago(40) }], rules(), now);
   assert.equal(busy.waitMinutes, 0, 'a working session is not waiting');
   assert.deepEqual(R.virtualSessions([{ signal: 'permission-ask', updatedAt: ago(35) }], now).map((v) => v.signal), ['ignored-10', 'ignored-20', 'ignored-30']);
@@ -875,4 +875,39 @@ test('migrateRules: a v2 config’s working rule gains subagent-start and tool-f
   assert.equal(v2.find((r) => r.id === 'working').when.signal.length, 6, 'the saved rules are not mutated');
   const noWorking = v2.filter((r) => r.id !== 'working');
   assert.deepEqual(R.migrateRules(noWorking, 2).map((r) => r.id), noWorking.map((r) => r.id));
+});
+
+test('ignored-N counts from your last touch: a session working on its own does not reset it', () => {
+  const now = Date.parse('2026-09-11T12:00:00Z');
+  const ago = (m) => new Date(now - m * 60000).toISOString();
+  const waiting = { signal: 'idle-nudge', updatedAt: ago(40), touchedAt: ago(45), cwd: '/a' };
+  const ralph = { signal: 'tool-use', updatedAt: ago(0), touchedAt: ago(35), cwd: '/b' };
+  const ignored = (ss) => R.virtualSessions(ss, now).filter((v) => v.signal.startsWith('ignored-')).map((v) => v.signal);
+  assert.deepEqual(ignored([waiting, ralph]), ['ignored-10', 'ignored-20', 'ignored-30'], 'the loop ticking away is not you');
+  assert.deepEqual(ignored([waiting, { ...ralph, touchedAt: ago(2) }]), [], 'you prompted the other session two minutes ago');
+  assert.equal(R.resolve(rules(), [waiting, ralph], now).look.waitMinutes, 35, 'the beard runs on the same clock');
+  assert.equal(R.resolve(rules(), [waiting, { ...ralph, touchedAt: ago(2) }], now).look.waitMinutes, 2);
+});
+
+test('lamps: green working, amber your turn, red blocked, off idle', () => {
+  const lamp = (ss) => look(ss).lamp;
+  assert.equal(lamp([{ signal: 'tool-use', tool: 'Bash' }]), 'green');
+  for (const signal of ['stop', 'idle-nudge', 'turn-failed']) assert.equal(lamp([{ signal }]), 'amber', signal);
+  for (const signal of ['permission-ask', 'limit-hit']) assert.equal(lamp([{ signal }]), 'red', signal);
+  assert.equal(R.resolve(rules(), [{ signal: 'stop' }], Date.now(), { offline: true }).look.lamp, 'red', 'offline');
+  assert.equal(lamp([]), 'off');
+  assert.equal(lamp([{ signal: 'stop' }, { signal: 'tool-use' }]), 'green', 'one session working still owns the lamp');
+});
+
+test('migrateRules v4: old default lamp colours follow, customised ones stay', () => {
+  const old = { permission: 'amber', done: 'green', nudge: 'green', idle: 'amber' };
+  const v3 = rules().map((r) => (old[r.id] ? { ...r, then: { ...r.then, lamp: old[r.id] } } : r)).map(R.normalizeRule);
+  const m = R.migrateRules(v3, 3);
+  assert.deepEqual(Object.keys(old).map((id) => m.find((r) => r.id === id).then.lamp), ['red', 'amber', 'amber', 'off']);
+  assert.deepEqual(m, rules().map(R.normalizeRule), 'a v3 default config becomes today\'s defaults');
+  const custom = v3.map((r) => (r.id === 'done' ? { ...r, then: { ...r.then, lamp: 'red' } } : r.id === 'nudge' ? { ...r, then: { ...r.then, lampColor: '#123456' } } : r));
+  const mc = R.migrateRules(custom, 3);
+  assert.equal(mc.find((r) => r.id === 'done').then.lamp, 'red', 'a colour you chose stays');
+  assert.equal(mc.find((r) => r.id === 'nudge').then.lamp, 'green', 'a custom lampColor means the slot was chosen too');
+  assert.equal(R.migrateRules(v3, 4), v3, 'already on v4: untouched, so switching back sticks');
 });

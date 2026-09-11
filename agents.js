@@ -239,13 +239,14 @@ function mergeAgents(existing, found) {
 // every poll keeps stat-ing and parsing it. Delete files untouched for longer
 // than `maxAgeMs` — judged by mtime alone, so a young file is kept even if it
 // doesn't parse. Temp files from a writer killed between write and rename go
-// the same way. → the names removed.
+// the same way, and so do locks left by a writer that died holding one. →
+// the names removed.
 function sweepStaleFiles(dir, maxAgeMs, now = Date.now()) {
   let names;
   try { names = fs.readdirSync(dir); } catch { return []; }
   const removed = [];
   for (const name of names) {
-    if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue;
+    if (!name.endsWith('.json') && !name.endsWith('.tmp') && !name.endsWith('.lock')) continue;
     const file = path.join(dir, name);
     try {
       if (now - fs.statSync(file).mtimeMs <= maxAgeMs) continue;

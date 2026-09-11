@@ -13,6 +13,7 @@ const Router = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './rou
 const RouterInstall = require('./router-install.js');
 const DelegationInstall = require('./delegation-install.js');
 const Delegate = require('./hooks/delegate.js');
+const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
 const Cameos = require('./cameos.js');
@@ -399,22 +400,19 @@ function startSignalServer() {
       const session = String(d.session || 'default').replace(/[^\w.-]/g, '').slice(0, 80) || 'default';
       const file = path.join(SESSIONS_DIR, `${os.hostname().split('.')[0]}-${source}-${session}.json`);
       if (d.signal === 'session-end') { fs.rmSync(file, { force: true }); broadcastStatus(); return done(200, { ok: true }); }
-      let prev = null; try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
-      const now = new Date().toISOString();
-      const workingSince = d.signal === 'prompt-submit' ? now : Rules.TURN_END.has(d.signal) ? null : (prev?.workingSince || now);
-      // A bare signal must not wipe what the agent poller and hooks stored.
-      const keep = (key, ok) => (d[key] !== undefined && ok(d[key]) ? d[key] : prev?.[key]);
-      writeJsonAtomic(file, {
-        sessionId: session, host: os.hostname().split('.')[0], source,
-        hostApp: keep('hostApp', (v) => typeof v === 'string'),
-        cwd: typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '', signal: d.signal, tool: typeof d.tool === 'string' ? d.tool.slice(0, 80) : null, workingSince,
-        tasks: keep('tasks', (v) => !!v && typeof v === 'object') || { created: 0, done: 0 },
-        agents: keep('agents', Array.isArray),
-        mode: keep('mode', (v) => typeof v === 'string'),
-        iteration: keep('iteration', Number.isFinite),
-        agentsAt: prev?.agentsAt,
-        updatedAt: now,
-      });
+      const hostApp = typeof d.hostApp === 'string' ? d.hostApp : undefined;
+      const cwd = typeof d.cwd === 'string' ? d.cwd.slice(0, 500) : '';
+      const tool = typeof d.tool === 'string' ? d.tool.slice(0, 80) : null;
+      // Waits briefly rather than skipping: a dropped signal is a wrong light.
+      SessionState.withLock(file, () => {
+        const next = SessionState.applyBareSignal(SessionState.readJson(file), { sessionId: session, host: os.hostname().split('.')[0], source, cwd, signal: d.signal, tool, hostApp });
+        // A caller may also report its own agents, mode, iteration or tasks.
+        if (d.tasks && typeof d.tasks === 'object') next.tasks = d.tasks;
+        if (Array.isArray(d.agents)) next.agents = d.agents;
+        if (typeof d.mode === 'string') next.mode = d.mode;
+        if (Number.isFinite(d.iteration)) next.iteration = d.iteration;
+        SessionState.writeJsonAtomic(file, next);
+      }, 250);
       broadcastStatus();
       done(200, { ok: true });
     });
@@ -515,23 +513,21 @@ function readSessionFile(name) {
 
 // Session files are rewritten by hooks and by the app at once; writing a temp
 // file and renaming it over means no reader ever sees half a file. With
-// `unchangedSince` (an mtimeMs), the rename is skipped if someone else wrote
-// the file after we read it — their write is newer than our merge. The temp
-// name carries the pid so it can't collide with a hook's own temp file.
+// `unchangedSince` (an mtimeMs), the write is a merge onto what was read: it
+// happens under the session lock the hooks take, and is skipped if someone
+// else wrote the file after we read it (their write is newer than our merge)
+// or holds the lock right now. Either way the next poll merges again.
 function writeJsonAtomic(file, obj, unchangedSince = null) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-    if (unchangedSince != null && fs.statSync(file).mtimeMs !== unchangedSince) {
-      fs.rmSync(tmp, { force: true });
-      return false;
-    }
-    fs.renameSync(tmp, file);
+  if (unchangedSince == null) {
+    SessionState.writeJsonAtomic(file, obj);
     return true;
-  } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* already gone */ }
-    throw e;
   }
+  const wrote = SessionState.withLockOrSkip(file, () => {
+    if (fs.statSync(file).mtimeMs !== unchangedSince) return false;
+    SessionState.writeJsonAtomic(file, obj);
+    return true;
+  });
+  return wrote === true;
 }
 
 // A finished turn whose subagents are still working stays live for as long as
@@ -669,7 +665,7 @@ function syncAgents() {
 
 // A tray override is a synthetic session carrying the signal that the
 // default rules map to that colour, so it flows through the user's rules.
-const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit' };
+const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'idle-nudge', red: 'limit-hit' };
 
 let previewLook = null; // set by the Lights editor's "Try on widget"
 let travelLook = null;  // set while Claude is walking to your terminal
@@ -754,17 +750,16 @@ function computeState(opts = {}) {
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
     return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, tasks };
   }
-  const { look, fired, owned } = Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
+  // A pending permission request is the "Needs your input" state, whatever
+  // the session files say (the hook blocks before Notification fires). It
+  // replaces the look only; the chips, number and season still apply.
+  const { look, fired, owned } = pending.length
+    ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
+    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
-  }
-  // A pending permission request is the "Needs your input" state, whatever
-  // the session files say (the hook blocks before Notification fires).
-  if (pending.length) {
-    const asked = Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }]);
-    return { look: { ...asked.look, tasks }, reason: 'session', sessions, fired: ['permission'], owned, firedNames: Rules.firedNames(config.rules, asked.fired, asked.owned), agentCount, pending, tasks };
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), routed: routedModel(sessions), saved: savedToday(config), advice: pickAdvice(sessions), agentCount, pending, tasks, minions };

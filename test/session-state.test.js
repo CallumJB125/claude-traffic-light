@@ -366,3 +366,127 @@ test('sweepStaleFiles deletes only .json/.tmp files older than maxAge, by mtime 
   assert.deepEqual(fs.readdirSync(dir).sort(), ['old-notes.txt', 'young-unparsable.json', 'young.json', 'young.json.99.tmp']);
   assert.deepEqual(A.sweepStaleFiles(path.join(dir, 'missing'), DAY, now), []);
 });
+
+// ── Concurrent writers (hooks/session-state.js) ─────────────────────────────
+const SessionState = require('../hooks/session-state.js');
+const Rules = require('../rules.js');
+const EMIT = path.join(__dirname, '..', 'hooks', 'emit.js');
+
+function runAsync(home, signal, payload) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SET_STATUS, signal], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home } });
+    let err = '';
+    child.stderr.on('data', (c) => { err += c; });
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(err))));
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+test('set-status: parallel SubagentStart/Stop hooks lose no agent (the lock)', async () => {
+  const home = tmpHome();
+  const ids = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
+  run(home, 'prompt-submit', { session_id: 'par', cwd: '/w' });
+  await Promise.all(ids.map((id) => runAsync(home, 'subagent-start', { session_id: 'par', cwd: '/w', agent_id: id, agent_type: 'executor' })));
+  assert.deepEqual(read(home, 'par').agents.map((a) => a.id).sort(), ids, 'every parallel start recorded');
+  await Promise.all(ids.map((id) => runAsync(home, 'subagent-done', { session_id: 'par', cwd: '/w', agent_id: id })));
+  run(home, 'stop', { session_id: 'par', cwd: '/w' });
+  const d = read(home, 'par');
+  assert.deepEqual(d.agents.filter((a) => a.status === 'working').map((a) => a.id), [], 'no stop lost, so no phantom working agent');
+  assert.equal(Rules.effectiveSignal(d).signal, 'stop', 'the finished turn reads as finished');
+  assert.deepEqual(fs.readdirSync(path.join(home, 'sessions')), [`${HOST}-par.json`], 'no lock or temp file left behind');
+});
+
+test('withLock: waits for a live lock, breaks a stale one, and never hangs', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock-'));
+  const file = path.join(dir, 's.json');
+  const lock = `${file}.lock`;
+  fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - SessionState.STALE_LOCK_MS - 1000);
+  fs.utimesSync(lock, old, old);
+  assert.equal(SessionState.withLock(file, () => fs.existsSync(lock)), true, 'stale lock broken and taken');
+  assert.ok(!fs.existsSync(lock), 'released after');
+
+  fs.writeFileSync(lock, '');
+  const t0 = Date.now();
+  assert.equal(SessionState.withLock(file, () => 'ran', 100), 'ran', 'a held lock times out into running anyway');
+  assert.ok(Date.now() - t0 >= 100);
+  assert.ok(fs.existsSync(lock), 'someone else\'s lock is not removed by a writer that never held it');
+  assert.equal(SessionState.withLockOrSkip(file, () => 'ran'), undefined, 'the app skips instead of waiting');
+  fs.rmSync(lock);
+  assert.equal(SessionState.withLockOrSkip(file, () => 'ran'), 'ran');
+});
+
+test('TURN_END: the hooks and the rules engine share one list', () => {
+  assert.deepEqual([...SessionState.TURN_END].sort(), [...Rules.TURN_END].sort());
+});
+
+test('emit.js: a bare signal keeps agents, mode and cwd, and a failed turn ends the turn', () => {
+  const home = tmpHome();
+  const emit = (...args) => {
+    const r = spawnSync(process.execPath, [EMIT, ...args], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+    assert.equal(r.status, 0, r.stderr.toString());
+  };
+  emit('prompt-submit', '--source', 'cursor', '--session', 'c1', '--cwd', '/w/proj');
+  const file = path.join(home, 'sessions', `${HOST}-cursor-c1.json`);
+  const d0 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(d0.touchedAt, 'a prompt is a touch');
+  fs.writeFileSync(file, JSON.stringify({ ...d0, agents: [{ id: 't', kind: 'teammate', status: 'working' }], mode: 'team', iteration: 3 }));
+  emit('turn-failed', '--source', 'cursor', '--session', 'c1');
+  const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual([d.signal, d.workingSince, d.mode, d.iteration, d.agents.length, d.cwd, d.touchedAt], ['turn-failed', null, 'team', 3, 1, '/w/proj', d0.touchedAt]);
+});
+
+test('set-status: touchedAt moves when you act, not when Claude does', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'tc', cwd: '/w' });
+  const t0 = read(home, 'tc').touchedAt;
+  assert.ok(t0);
+  run(home, 'tool-use', { session_id: 'tc', tool_name: 'Bash' });
+  run(home, 'stop', { session_id: 'tc' });
+  run(home, 'idle-nudge', { session_id: 'tc' });
+  assert.equal(read(home, 'tc').touchedAt, t0, 'working, finishing and the idle nudge are Claude, not you');
+  run(home, 'tool-use', { session_id: 'tc', tool_name: 'AskUserQuestion' });
+  run(home, 'tool-done', { session_id: 'tc', tool_name: 'AskUserQuestion' });
+  assert.notEqual(read(home, 'tc').touchedAt, t0, 'answering a question is a touch');
+  const t1 = read(home, 'tc').touchedAt;
+  run(home, 'session-start', { session_id: 'tc', source: 'compact' });
+  assert.equal(read(home, 'tc').touchedAt, t1, 'an auto-compact is not you');
+});
+
+test('userTouched: a notification ask counts only once it outlived the classifier', () => {
+  const now = Date.parse('2026-09-11T12:00:00Z');
+  const ask = (ms, askKind = 'notification') => ({ signal: 'permission-ask', askKind, signalSince: new Date(now - ms).toISOString() });
+  assert.equal(SessionState.userTouched(ask(300), 'tool-use', { now }), false, 'auto mode settled it in 300 ms');
+  assert.equal(SessionState.userTouched(ask(5000), 'tool-use', { now }), true);
+  assert.equal(SessionState.userTouched(ask(10, 'request'), 'tool-use', { now }), true, 'a blocking request is always you');
+  assert.equal(SessionState.userTouched(ask(5000), 'stop', { now }), false, 'a turn end is not an answer');
+  assert.equal(SessionState.userTouched(null, 'prompt-submit', { bookkeeping: true, now }), false);
+});
+
+test('withLock: breaking a stale lock never deletes a live one, and release only frees your own', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock2-'));
+  const file = path.join(dir, 's.json');
+  const lock = `${file}.lock`;
+  // A waiter judged the old lock stale, but by the time it acts a fresh lock
+  // holds the name: simulated by a fresh lock whose stat the breaker sees as old.
+  fs.writeFileSync(lock, 'someone-else');
+  const realStat = fs.statSync;
+  let calls = 0;
+  fs.statSync = (p, ...rest) => {
+    const st = realStat(p, ...rest);
+    if (p === lock && calls++ === 0) return { ...st, mtimeMs: Date.now() - SessionState.STALE_LOCK_MS - 1000, ino: -1 };
+    return st;
+  };
+  try {
+    assert.equal(SessionState.withLockOrSkip(file, () => 'ran'), undefined, 'did not take the live lock');
+  } finally {
+    fs.statSync = realStat;
+  }
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'someone-else', 'the live lock was put back, not deleted');
+  assert.deepEqual(fs.readdirSync(dir), ['s.json.lock'], 'nothing left aside');
+  // A holder whose lock was taken over (it slept past STALE_LOCK_MS) must not
+  // free the new holder's lock on its way out.
+  fs.rmSync(lock);
+  SessionState.withLock(file, () => fs.writeFileSync(lock, 'new-holder'));
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'new-holder');
+});

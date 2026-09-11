@@ -18,6 +18,7 @@ const HOST_TAG = os.hostname().split('.')[0];
 
 const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end', 'task-created', 'task-done', 'permission-request'];
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
+const { TURN_END, withLock, writeJsonAtomic, userTouched } = require('./session-state.js');
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
@@ -340,19 +341,22 @@ function envRoute() {
   return { model, reason: i < 0 ? '' : v.slice(i + 1).slice(0, 200) };
 }
 
-const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
-const prev = readPrev();
-const turnOver = !!prev && TURN_END.has(prev.signal);
+const prevOnEntry = readPrev();
 // A background subagent's own tool hooks carry its agent_id.
 const fromSubagent = /^tool-/.test(resolved) && !!(data && data.agent_id);
 const isTask = resolved === 'task-created' || resolved === 'task-done';
-// Task events are always bookkeeping. Once the turn is over, so is anything a
-// background agent does — it must not look like the turn restarted.
-const bookkeeping = isTask || (turnOver && (resolved === 'subagent-start' || resolved === 'subagent-done' || fromSubagent));
-// Claude Code's idle nudge fires ~60 s after any turn end, a failed one
-// included; it must not turn "the network dropped" into "waiting for you".
-// A permission ask or a limit still means something, so only the nudge is held.
-const keepFailed = prev?.signal === 'turn-failed' && resolved === 'idle-nudge';
+
+function derive(prev) {
+  const turnOver = !!prev && TURN_END.has(prev.signal);
+  // Task events are always bookkeeping. Once the turn is over, so is anything a
+  // background agent does — it must not look like the turn restarted.
+  const bookkeeping = isTask || (turnOver && (resolved === 'subagent-start' || resolved === 'subagent-done' || fromSubagent));
+  // Claude Code's idle nudge fires ~60 s after any turn end, a failed one
+  // included; it must not turn "the network dropped" into "waiting for you".
+  // A permission ask or a limit still means something, so only the nudge is held.
+  const keepFailed = prev?.signal === 'turn-failed' && resolved === 'idle-nudge';
+  return { turnOver, bookkeeping, keepFailed };
+}
 
 // StopFailure carries error (rate_limit, server_error, unknown, …),
 // error_details and last_assistant_message.
@@ -366,8 +370,9 @@ function failureOf(payload) {
   return { failReason: [error, detail].filter(Boolean).join(': ').slice(0, 120) || null, failKind };
 }
 
-function writeSession() {
+function nextSession(prev, hostApp) {
   const now = new Date().toISOString();
+  const { turnOver, bookkeeping, keepFailed } = derive(prev);
   const workingSince = turnOver && bookkeeping ? (prev.workingSince ?? null)
     : resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
   // Task progress for the current turn: created/done counts, reset per prompt.
@@ -385,53 +390,54 @@ function writeSession() {
   const viaOut = bookkeeping || keepFailed ? (prev?.via ?? null)
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   const agents = updateAgents(prev?.agents, resolved, data, now);
-  const hostApp = detectHostApp(prev?.hostApp);
-  // Write-then-rename so the app's poller never reads a half-written file.
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(
-    tmp,
-    JSON.stringify({
-      sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
-      tool: signalOut === resolved ? tool : (prev?.tool ?? null),
-      // What the session showed before this signal, and since when this one
-      // has held — the app shows a young notification ask as prevSignal.
-      prevSignal: changed ? (prev?.signal ?? null) : (prev?.prevSignal ?? null),
-      signalSince: changed ? now : (prev?.signalSince || prev?.updatedAt || now),
-      askKind: bookkeeping || keepFailed ? (prev?.askKind ?? null) : askKind,
-      via: viaOut,
-      ...failure,
-      workingSince, tasks, agents,
-      // Execution mode and ralph iteration are owned by the app's OMC watcher;
-      // carry them through so a hook write never erases them.
-      mode: prev?.mode ?? null,
-      iteration: prev?.iteration ?? 0,
-      // The router's pick for this session; `escalated` is set by the app
-      // when the transcript shows you switched up from it.
-      route: envRoute() || prev?.route || undefined,
-      escalated: prev?.escalated || undefined,
-      // What delegate.js kept out of this session's context so far, and
-      // whether delegation was on when this session's hook last ran.
-      delegated: readDelegated(prev?.delegated || undefined),
-      delegating: delegationOn || undefined,
-      // Claude Code's own word on the model (the app prefers the transcript,
-      // which follows /model), and the app's advice for this open session.
-      model: modelOf(data) || prev?.model || undefined,
-      routerAdvice: prev?.routerAdvice || undefined,
-      adviceKept: prev?.adviceKept || undefined,
-      // updatedAt means "the session last moved" (ignored-N timers, last-touch
-      // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
-      updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,
-      agentsAt: bookkeeping ? now : (prev?.agentsAt ?? null),
-    }, null, 2)
-  );
-  fs.renameSync(tmp, file);
+  return {
+    sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
+    tool: signalOut === resolved ? tool : (prev?.tool ?? null),
+    // What the session showed before this signal, and since when this one
+    // has held — the app shows a young notification ask as prevSignal.
+    prevSignal: changed ? (prev?.signal ?? null) : (prev?.prevSignal ?? null),
+    signalSince: changed ? now : (prev?.signalSince || prev?.updatedAt || now),
+    askKind: bookkeeping || keepFailed ? (prev?.askKind ?? null) : askKind,
+    via: viaOut,
+    ...failure,
+    workingSince, tasks, agents,
+    // Execution mode and ralph iteration are owned by the app's OMC watcher;
+    // carry them through so a hook write never erases them.
+    mode: prev?.mode ?? null,
+    iteration: prev?.iteration ?? 0,
+    // The router's pick for this session; `escalated` is set by the app
+    // when the transcript shows you switched up from it.
+    route: envRoute() || prev?.route || undefined,
+    escalated: prev?.escalated || undefined,
+    // What delegate.js kept out of this session's context so far, and
+    // whether delegation was on when this session's hook last ran.
+    delegated: readDelegated(prev?.delegated || undefined),
+    delegating: delegationOn || undefined,
+    // Claude Code's own word on the model (the app prefers the transcript,
+    // which follows /model), and the app's advice for this open session.
+    model: modelOf(data) || prev?.model || undefined,
+    routerAdvice: prev?.routerAdvice || undefined,
+    adviceKept: prev?.adviceKept || undefined,
+    // updatedAt means "the session last moved" (ignored-N timers, last-touch
+    // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
+    updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,
+    agentsAt: bookkeeping ? now : (prev?.agentsAt ?? null),
+    // When you last acted on this session; ignored-N counts from here.
+    touchedAt: userTouched(prev, resolved, { sessionSource: data?.source, bookkeeping: bookkeeping || keepFailed, now: Date.parse(now) }) ? now : (prev?.touchedAt ?? null),
+  };
+}
+
+// The read has to happen under the lock too, or a hook running alongside
+// this one writes in between and this write throws its change away.
+function writeSession(hostApp) {
+  withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), hostApp)));
 }
 
 // ── PermissionRequest: a BLOCKING hook. Write the request where the widget
 // can see it, then wait for an answer file. Answer → print the decision for
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
-  writeSession();
+  writeSession(detectHostApp(prevOnEntry?.hostApp));
   const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
@@ -468,10 +474,13 @@ if (signal === 'permission-request') {
 // the fs.watch storm down. Subagent events carry bookkeeping it must never drop.
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
-if (prev && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
-  const agentChurn = bookkeeping && fromSubagent;
+// Judged on the unlocked read: skipping is only ever safe, never a lost write.
+if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
+  const prev = prevOnEntry;
+  const agentChurn = derive(prev).bookkeeping && fromSubagent;
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
   if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }
-writeSession();
+// Outside the lock: the host-app walk can shell out to ps several times.
+writeSession(detectHostApp(prevOnEntry?.hostApp));
 finish();

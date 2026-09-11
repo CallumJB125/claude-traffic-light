@@ -106,7 +106,7 @@ const stateFor = (sessions, env = {}) => {
 test('explains a permission ask by the rule that owns the lamp, with its pose', () => {
   const h = Help.explain(stateFor([ask('a')]), rules);
   assert.equal(h.headline, 'Needs your input');
-  assert.equal(h.lamp, 'amber');
+  assert.equal(h.lamp, 'red');
   assert.match(h.meaning, /answer in the terminal/);
   assert.deepEqual(h.why.find((w) => w.label === 'Pose'), { label: 'Pose', value: 'waving at you', rule: 'Needs your input' });
   assert.equal(h.agents, null);
