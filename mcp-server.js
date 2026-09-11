@@ -15,6 +15,7 @@ const path = require('path');
 const os = require('os');
 const http = require('http');
 const Rules = require('./rules.js');
+const SessionState = require('./hooks/session-state.js');
 
 const DEFAULTS = {
   workingStaleMinutes: 6,
@@ -97,6 +98,7 @@ function readManualOverride(root, now = Date.now()) {
 function classifySession(data, config, now, pendingIds = []) {
   const signal = Rules.sessionSignal(data);
   if (!signal) return { live: false, dropped: 'no signal', signal: null };
+  if (SessionState.processGone(data, os.hostname().split('.')[0])) return { live: false, dropped: `process ${data.claudePid} exited without a SessionEnd`, signal };
   const presented = Rules.presentSignal(data, now, pendingIds);
   const held = presented !== signal;
   const eff = Rules.effectiveSignal({ ...data, signal: presented });

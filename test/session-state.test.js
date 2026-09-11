@@ -490,3 +490,41 @@ test('withLock: breaking a stale lock never deletes a live one, and release only
   SessionState.withLock(file, () => fs.writeFileSync(lock, 'new-holder'));
   assert.equal(fs.readFileSync(lock, 'utf8'), 'new-holder');
 });
+
+// ── Sessions whose Claude process is gone ───────────────────────────────────
+function deadPid() {
+  const r = spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' });
+  return Number(r.stdout.trim());
+}
+
+test('processGone: only a recorded, local, exited pid counts as gone', () => {
+  const dead = deadPid();
+  assert.equal(SessionState.processGone({ claudePid: process.pid, host: HOST }, HOST), false, 'alive');
+  assert.equal(SessionState.processGone({ claudePid: dead, host: HOST }, HOST), true, 'exited');
+  assert.equal(SessionState.processGone({ claudePid: dead, host: 'other-mac' }, HOST), false, 'another machine\'s pid means nothing here');
+  assert.equal(SessionState.processGone({ host: HOST }, HOST), false, 'no pid recorded (older hook, other agent)');
+});
+
+test('set-status: records the Claude process, looking past a shell in between', { skip: process.platform === 'win32' }, () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'pid1', cwd: '/w' });
+  assert.equal(read(home, 'pid1').claudePid, process.pid, 'a hook run directly: its parent');
+  // `; true` stops sh from exec-ing node in its place, so sh stays the parent.
+  const r = spawnSync('/bin/sh', ['-c', `"${process.execPath}" "${SET_STATUS}" prompt-submit; true`], {
+    env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home },
+    input: JSON.stringify({ session_id: 'pid2', cwd: '/w' }),
+  });
+  assert.equal(r.status, 0, r.stderr.toString());
+  assert.equal(read(home, 'pid2').claudePid, process.pid, 'the shell\'s parent, not the shell');
+});
+
+test('a session killed mid-question is dropped, not shown as "Needs your input"', () => {
+  const M = require('../mcp-server.js');
+  const now = Date.now();
+  const ask = { sessionId: 'k', host: HOST, cwd: '/w', signal: 'permission-ask', askKind: 'question', updatedAt: new Date(now - 60000).toISOString() };
+  const config = { workingStaleMinutes: 10, waitingStaleHours: 2 };
+  assert.equal(M.classifySession({ ...ask, claudePid: process.pid }, config, now).live, true, 'still running: the ask stands');
+  const gone = M.classifySession({ ...ask, claudePid: deadPid() }, config, now);
+  assert.equal(gone.live, false);
+  assert.match(gone.dropped, /exited without a SessionEnd/);
+});

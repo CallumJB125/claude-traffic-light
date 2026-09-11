@@ -92,6 +92,7 @@ const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SessionStat
   const sessionFileCache = new Map();
   const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
   ${/const AGENT_KEEPALIVE_MS = [^;]+;/.exec(MAIN_SRC)[0]}
+  const LOCAL_HOST = ${JSON.stringify(HOST)};
   function logTransition() {}
   function wakeWhenHoldEnds() {}
   ${['readSessionFile', 'writeJsonAtomic', 'workingAgentsStale', 'readSessions', 'syncAgents'].map(extractFn).join('\n')}

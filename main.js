@@ -498,6 +498,7 @@ const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
 // what made the app crawl with a few sessions open. Parsed files are cached by
 // mtime+size, so a poll over unchanged files costs one stat each.
 const sessionFileCache = new Map(); // name -> { key, data }
+const LOCAL_HOST = os.hostname().split('.')[0];
 function readSessionFile(name) {
   const full = path.join(SESSIONS_DIR, name);
   let stat;
@@ -611,6 +612,7 @@ function readSessions(config, pendingIds = []) {
       if (!data) continue;
       const signal = Rules.sessionSignal(data);
       if (!signal) continue;
+      if (SessionState.processGone(data, LOCAL_HOST)) { logTransition(data, 'gone', 'process exited', now); continue; }
       const presented = Rules.presentSignal(data, now, pendingIds);
       const held = presented !== signal;
       if (held) wakeWhenHoldEnds(data, now);

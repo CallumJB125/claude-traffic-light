@@ -161,4 +161,18 @@ function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = nu
   };
 }
 
-module.exports = { TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
+// A session whose Claude process has exited without a SessionEnd (killed
+// terminal, crash) is over, whatever its file last said. Only a pid recorded
+// on this machine can be checked; EPERM means it exists under another user.
+function processGone(session, host) {
+  const pid = Number(session && session.claudePid);
+  if (!pid || pid <= 1 || session.host !== host) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return e.code === 'ESRCH';
+  }
+}
+
+module.exports = { processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };

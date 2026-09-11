@@ -172,6 +172,36 @@ function detectHostApp(cached) {
   return appFromProcessTree() || (TERM_PROGRAM_APPS[term] || null);
 }
 
+// ── Which process is this session? ─────────────────────────────────────────
+// A session killed without SessionEnd (closed terminal, crash, kill) leaves
+// its file saying whatever it said last — a question it asked shows as "Needs
+// your input" for hours. Recording Claude's pid lets the app drop a session
+// whose process is gone. Claude Code runs a hook as its direct child; if a
+// shell ever sits in between, recording that short-lived shell would hide a
+// live session, so the parent is checked once per session with ps.
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
+function claudePid(cached) {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return null;
+  const ppid = process.ppid;
+  if (!ppid || ppid <= 1) return null;
+  if (cached === ppid) return ppid;
+  const { execFileSync } = require('child_process');
+  let pid = ppid;
+  for (let depth = 0; depth < 3 && pid > 1; depth += 1) {
+    let line;
+    try {
+      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 1500 }).trim();
+    } catch {
+      return null;
+    }
+    const m = /^(\d+)\s+(.*)$/.exec(line);
+    if (!m) return null;
+    if (!SHELLS.has((m[2].split('/').pop() || '').replace(/^-/, ''))) return pid;
+    pid = Number(m[1]);
+  }
+  return null;
+}
+
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
@@ -370,7 +400,7 @@ function failureOf(payload) {
   return { failReason: [error, detail].filter(Boolean).join(': ').slice(0, 120) || null, failKind };
 }
 
-function nextSession(prev, hostApp) {
+function nextSession(prev, { hostApp, pid }) {
   const now = new Date().toISOString();
   const { turnOver, bookkeeping, keepFailed } = derive(prev);
   const workingSince = turnOver && bookkeeping ? (prev.workingSince ?? null)
@@ -391,7 +421,7 @@ function nextSession(prev, hostApp) {
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   const agents = updateAgents(prev?.agents, resolved, data, now);
   return {
-    sessionId, host: HOST_TAG, hostApp, cwd, signal: signalOut,
+    sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),
     // What the session showed before this signal, and since when this one
     // has held — the app shows a young notification ask as prevSignal.
@@ -429,15 +459,15 @@ function nextSession(prev, hostApp) {
 
 // The read has to happen under the lock too, or a hook running alongside
 // this one writes in between and this write throws its change away.
-function writeSession(hostApp) {
-  withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), hostApp)));
+function writeSession(proc) {
+  withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), proc)));
 }
 
 // ── PermissionRequest: a BLOCKING hook. Write the request where the widget
 // can see it, then wait for an answer file. Answer → print the decision for
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
-  writeSession(detectHostApp(prevOnEntry?.hostApp));
+  writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
@@ -481,6 +511,6 @@ if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done'
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
   if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }
-// Outside the lock: the host-app walk can shell out to ps several times.
-writeSession(detectHostApp(prevOnEntry?.hostApp));
+// Outside the lock: the host-app and pid lookups can shell out to ps.
+writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
 finish();
