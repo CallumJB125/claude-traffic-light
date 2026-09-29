@@ -16,6 +16,7 @@ const Delegate = require('./hooks/delegate.js');
 const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
+const Motion = require('./motion.js');
 const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
 const Setup = require('./setup.js');
@@ -1810,9 +1811,22 @@ async function runningTerminal() {
   return terminalForSessions(aggregateState().sessions);
 }
 
-function tween(from, to, ms, onStep) {
+// The renderer reports prefers-reduced-motion; while it holds, travel snaps
+// to its destination (keeping the pacing) and nothing roams, hops or glides.
+let reducedMotion = false;
+
+const easeInOutQuad = (p) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
+
+// `at(p)` overrides the path (default: eased straight line from → to).
+function tween(from, to, ms, onStep, at = null) {
   const nums = [from?.x, from?.y, to?.x, to?.y, ms];
   if (!nums.every(Number.isFinite)) { console.log('[tween] skipped, non-finite input', JSON.stringify({ from, to, ms })); return Promise.resolve(); }
+  stopGlide();
+  const pointAt = at || ((p) => { const e = easeInOutQuad(p); return { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e }; });
+  if (reducedMotion) {
+    try { onStep({ x: Math.round(to.x), y: Math.round(to.y) }); } catch (err) { console.log('[tween] step failed:', err.message); }
+    return wait(ms);
+  }
   return new Promise((resolve) => {
     const t0 = Date.now();
     // A tween that outlives its window (quit, crash, reload) must not keep a
@@ -1820,9 +1834,9 @@ function tween(from, to, ms, onStep) {
     const id = every(16, () => {
       if (!win || win.isDestroyed()) { stopTimer(id); resolve(); return; }
       const p = Math.min(1, (Date.now() - t0) / ms);
-      const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
       try {
-        onStep({ x: Math.round(from.x + (to.x - from.x) * e), y: Math.round(from.y + (to.y - from.y) * e) });
+        const pt = pointAt(p);
+        onStep({ x: Math.round(pt.x), y: Math.round(pt.y) });
       } catch (err) {
         console.log('[tween] step failed:', err.message);
         stopTimer(id); resolve(); return;
@@ -1852,9 +1866,12 @@ async function performKnock(appName, target, base) {
     broadcastStatus();
     if (knockSound) playSound(knockSound);
     bounceOwnDock();
-    // hop up off the icon and land back on it
-    await tween(target, { x: target.x, y: target.y - 16 }, 130, (pt) => win?.setPosition(pt.x, pt.y));
-    await tween({ x: target.x, y: target.y - 16 }, target, 130, (pt) => win?.setPosition(pt.x, pt.y));
+    // hop up off the icon and land back on it: one gravity arc, then a squash
+    if (reducedMotion) await wait(280);
+    else {
+      await tween(target, target, 280, (pt) => win?.setPosition(pt.x, pt.y), (p) => ({ x: target.x, y: target.y - Motion.hopHeight(p, 16) }));
+      win?.webContents.send('land', 0.6);
+    }
     await wait(220);
   }
   travelLook = { ...base, pose: 'bubble', facing: 'right', aimAngle: 0, text: `HEY! ${appName}`, name: `${appName} needs you` };
@@ -1930,7 +1947,7 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -2065,7 +2082,64 @@ ipcMain.handle('get-window-position', () => {
 });
 
 ipcMain.on('set-window-position', (e, x, y) => {
+  stopGlide();
   win?.setPosition(Math.round(x), Math.round(y));
+});
+
+// ── Drag release: coast on the flick's momentum, then land ─────────────────
+// A spring per axis from the release point, seeded with the pointer's
+// velocity, toward where that flick would coast — kept on the display.
+let glideTimer = null;
+function stopGlide() { glideTimer = stopTimer(glideTimer); }
+const GLIDE_MIN_SPEED = 150; // px/s; slower than this is a placement, not a throw
+const GLIDE_MAX_SPEED = 4000;
+const GLIDE_SPRING = Motion.springParams(0.45, 0.85);
+
+function glideFrom(vx, vy) {
+  stopGlide();
+  if (!win || win.isDestroyed() || gardenRun || roamState.busy) return false;
+  const speed = Math.hypot(vx, vy);
+  if (reducedMotion || !Number.isFinite(speed) || speed < GLIDE_MIN_SPEED) return false;
+  const k = Math.min(1, GLIDE_MAX_SPEED / speed);
+  const v = { x: vx * k, y: vy * k };
+  const b = win.getBounds();
+  const proj = { x: b.x + Motion.project(v.x), y: b.y + Motion.project(v.y) };
+  const fit = HostApp.clampRectToDisplays({ x: proj.x, y: proj.y, w: b.width, h: b.height }, screen.getAllDisplays());
+  const wa = fit.display ? fit.display.workArea : null;
+  const target = wa ? {
+    x: Math.round(Motion.glideTarget(b.x, proj.x, wa.x, wa.x + wa.width - b.width)),
+    y: Math.round(Motion.glideTarget(b.y, proj.y, wa.y, wa.y + wa.height - b.height)),
+  } : { x: Math.round(proj.x), y: Math.round(proj.y) };
+  let sx = { x: b.x, v: v.x };
+  let sy = { x: b.y, v: v.y };
+  let last = Date.now();
+  glideTimer = every(16, () => {
+    if (!win || win.isDestroyed()) { stopGlide(); return; }
+    const now = Date.now();
+    const dt = (now - last) / 1000;
+    last = now;
+    sx = Motion.springStep(sx, target.x, dt, GLIDE_SPRING);
+    sy = Motion.springStep(sy, target.y, dt, GLIDE_SPRING);
+    const done = Motion.springSettled(sx, target.x) && Motion.springSettled(sy, target.y);
+    try { win.setPosition(done ? target.x : Math.round(sx.x), done ? target.y : Math.round(sy.x)); } catch { stopGlide(); return; }
+    if (done) {
+      stopGlide();
+      saveBounds();
+      win.webContents.send('land', Math.min(1, Math.max(0.35, speed / 2000)));
+    }
+  }, 'glide');
+  return true;
+}
+
+ipcMain.on('drag-start', () => stopGlide());
+ipcMain.on('drag-end', (e, vx, vy) => {
+  if (glideFrom(Number(vx), Number(vy))) return;
+  saveBounds();
+  if (!reducedMotion) win?.webContents.send('land', 0.3);
+});
+ipcMain.on('reduced-motion', (e, on) => {
+  reducedMotion = !!on;
+  if (reducedMotion) stopGlide();
 });
 
 // The widget window is a transparent rectangle; the renderer reports whether

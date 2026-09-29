@@ -628,6 +628,33 @@
     const svg = container.querySelector('.rig');
     const lamps = Array.from(svg.querySelectorAll('.lamp'));
     let current = null;
+    const reduceMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const canAnimate = (el) => typeof el.animate === 'function' && typeof el.getAnimations === 'function' && !reduceMotion();
+
+    // Pose changes: dropping a pose-* class ends its keyframes wherever they
+    // were, which snapped the sign/body home mid-swing. Capture the on-screen
+    // transform before the swap and ease from it to the new resting one —
+    // unless the new pose brings its own animation or transition.
+    const SETTLE_PARTS = ['.sign-assembly', '.claude-body'].map((q) => svg.querySelector(q));
+    const settles = new Map();
+    function captureSettle() {
+      if (!SETTLE_PARTS.every(canAnimate)) return null;
+      return SETTLE_PARTS.map((el) => {
+        const cs = getComputedStyle(el);
+        const from = { transform: cs.transform, transformOrigin: cs.transformOrigin };
+        if (settles.has(el)) { settles.get(el).cancel(); settles.delete(el); }
+        return { el, from };
+      });
+    }
+    function runSettle(captured) {
+      for (const { el, from } of captured) {
+        const cs = getComputedStyle(el);
+        if (el.getAnimations().length || cs.transform === from.transform) continue;
+        const anim = el.animate([from, { transform: cs.transform, transformOrigin: cs.transformOrigin }], { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1.2)' });
+        settles.set(el, anim);
+        anim.onfinish = () => { if (settles.get(el) === anim) settles.delete(el); };
+      }
+    }
 
     function setLook(look) {
       const lamp = look.lamp || 'off';
@@ -688,8 +715,10 @@
       // Only touch pose classes on a real change so a poll doesn't restart
       // an infinite animation mid-swing (visible stutter).
       if (!current || current.pose !== pose) {
+        const settle = current ? captureSettle() : null;
         for (const p of POSES) svg.classList.remove(`pose-${p}`);
         if (pose !== 'none') svg.classList.add(`pose-${pose}`);
+        if (settle) runSettle(settle);
         scheduleFlips(pose === 'kickflip');
         scheduleLines(pose === 'line');
       }
@@ -760,6 +789,26 @@
       svg.classList.add(`event-${name}`);
       clearTimeout(eventTimer);
       eventTimer = setTimeout(() => svg.classList.remove(`event-${name}`), ms);
+    }
+    // Squash-and-stretch from the feet: a press, or landing after a hop or a
+    // throw (strength 0..1). A new one starts from wherever the last one is,
+    // so rapid clicks re-squash instead of restarting from rest.
+    let squashAnim = null;
+    function squash(strength = 1) {
+      if (!canAnimate(svg)) return;
+      const k = Math.max(0, Math.min(1, Number(strength) || 0));
+      const from = squashAnim ? getComputedStyle(svg).transform : 'none';
+      if (squashAnim) squashAnim.cancel();
+      svg.style.transformOrigin = '50% 83%'; // the feet (y 68 of 82)
+      const sc = (x, y) => `scale(${(1 + x * k).toFixed(3)}, ${(1 + y * k).toFixed(3)})`;
+      squashAnim = svg.animate([
+        { transform: from === 'none' ? 'scale(1, 1)' : from, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+        { transform: sc(0.08, -0.1), offset: 0.28, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' },
+        { transform: sc(-0.03, 0.04), offset: 0.64, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' },
+        { transform: 'scale(1, 1)' },
+      ], { duration: 350 });
+      const anim = squashAnim;
+      anim.onfinish = () => { if (squashAnim === anim) squashAnim = null; };
     }
     let reactTimer = null;
     // Short reaction that temporarily overrides the look (poke, pet, feed).
@@ -968,13 +1017,45 @@
       garden = null;
       gardenEl().innerHTML = '';
       svg.classList.remove('gardening', 'walking', 'phase-fetch', 'phase-plant', 'phase-grow', 'eating', 'eat-left', 'eat-right', 'carrying', 'pouring', 'watering', 'face-left');
-      svg.style.removeProperty('--walk');
+      svg.style.removeProperty('--walk-target');
+      moveTo(0, 1);
+    }
+    // The mover's x rides a spring on rAF, so a new target mid-walk bends the
+    // path instead of restarting the ease from a standstill. Whole rig units
+    // only, so the pixel art never sits between pixels; the loop stops once
+    // settled.
+    const mover = svg.querySelector('.mover');
+    const walk = { x: 0, v: 0, target: 0, speed: 1, raf: 0, last: 0 };
+    const placeMover = (x) => { mover.style.transform = x ? `translateX(${x}px)` : ''; };
+    function walkFrame(now) {
+      const M = window.BuddyMotion;
+      const s = M.springStep(walk, walk.target, (now - walk.last) / 1000, M.springParams(2.2 / walk.speed, 1));
+      walk.last = now;
+      walk.x = s.x; walk.v = s.v;
+      if (M.springSettled(walk, walk.target, 0.3, 1)) {
+        walk.x = walk.target; walk.v = 0; walk.raf = 0;
+        placeMover(walk.target);
+        return;
+      }
+      placeMover(Math.round(walk.x));
+      walk.raf = requestAnimationFrame(walkFrame);
+    }
+    function moveTo(dx, speed) {
+      walk.target = dx;
+      walk.speed = Math.max(0.01, Number(speed) || 1);
+      if (!window.BuddyMotion || typeof requestAnimationFrame !== 'function' || reduceMotion()) {
+        if (walk.raf) cancelAnimationFrame(walk.raf);
+        walk.raf = 0; walk.x = dx; walk.v = 0;
+        placeMover(dx);
+        return;
+      }
+      if (!walk.raf) { walk.last = performance.now(); walk.raf = requestAnimationFrame(walkFrame); }
     }
     // Walk Claude to x (rig units, 32 = home). Legs run while moving.
     function walkTo(x) {
       const cur = Number(svg.style.getPropertyValue('--walk-target') || 0);
       const dx = x - 32;
-      svg.style.setProperty('--walk', `${dx}px`);
+      moveTo(dx, garden.speed);
       svg.style.setProperty('--walk-target', String(dx));
       svg.classList.toggle('face-left', dx < cur);
       svg.classList.add('walking');
@@ -1163,7 +1244,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

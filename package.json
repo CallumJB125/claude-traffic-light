@@ -30,6 +30,7 @@
       "rig.js",
       "rig.css",
       "tokens.css",
+      "motion.js",
       "rules.js",
       "help.js",
       "help.html",
