@@ -1915,7 +1915,9 @@
         return;
       }
       clearTimeout(armed);
-      await loadCameos(await window.lightsApi.cameos.remove(c.id));
+      const left = await window.lightsApi.cameos.remove(c.id);
+      if (left && left.error) { flash(`Could not remove the face — ${left.error}`); return; }
+      await loadCameos(left);
       renderEditor();
       renderStage();
     });
@@ -2227,13 +2229,19 @@
   // ── Save / revert / presets ────────────────────────────────────────────
   async function save() {
     if (!dirty) return;
-    config = await window.lightsApi.saveConfig({ rules });
+    try { config = await window.lightsApi.saveConfig({ rules }); } catch (err) {
+      // stay dirty: nothing was stored, and the edits are still only here
+      flash(`Save failed — ${err.message}`);
+      return;
+    }
     rules = config.rules.map(R.normalizeRule);
     setDirty(false);
     $('save-state').textContent = 'Saved';
     setTimeout(() => { if (!dirty) $('save-state').textContent = ''; }, 1500);
     renderList(); renderEditor(); renderStage();
   }
+  // Any other saveConfig rejection (toggles, router knobs) still gets a visible message.
+  window.addEventListener('unhandledrejection', (e) => { flash(e.reason?.message || 'Something went wrong'); });
   $('save-btn').addEventListener('click', save);
   $('revert-btn').addEventListener('click', () => { rules = config.rules.map(R.normalizeRule); setDirty(false); if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
   window.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
@@ -2482,7 +2490,8 @@
   $('setup-export').addEventListener('click', async (e) => {
     e.stopPropagation(); $('presets').hidden = true;
     const r = await window.lightsApi.exportSetup();
-    if (r) flash(`Setup exported to ${r.file.split(/[\\/]/).pop()}${dirty ? ' — unsaved rule edits not included' : ''}`);
+    if (r && r.error) flash(r.error);
+    else if (r) flash(`Setup exported to ${r.file.split(/[\\/]/).pop()}${dirty ? ' — unsaved rule edits not included' : ''}`);
   });
   $('setup-import').addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -3009,7 +3018,7 @@
   async function renderDelegation() {
     const days = routerDays;
     const ov = await window.lightsApi.delegationOverview();
-    if (ov) { delegOv = ov; paintDelegation(ov); }
+    if (ov && !ov.error) { delegOv = ov; paintDelegation(ov); }
     const diet = await window.lightsApi.delegationDiet({ days });
     if (!diet || days !== routerDays) return;
     delegDiet = diet;

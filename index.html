@@ -109,13 +109,27 @@
     // when the current cigarette run started; the rig counts its 5-minute cigarettes from it
     let smokeSince = null;
     let currentRequest = null;
+    const answerBtns = ['allow', 'deny'].map((id) => document.getElementById(id));
     let confettiTimer = null;
     const GRUMPY_AFTER_MS = 3 * 60 * 1000;
     const TOOLTIP_MAX = 90;
 
+    // Status pushes can overlap; only the newest fetch may paint, and one bad
+    // frame must not leave the widget frozen on a stale pose.
+    let refreshSeq = 0;
     async function refresh() {
-      const data = await window.trafficLight.getAggregateStatus();
-      if (!data) return;
+      const seq = ++refreshSeq;
+      try {
+        const data = await window.trafficLight.getAggregateStatus();
+        if (seq !== refreshSeq || !data) return;
+        applyStatus(data);
+      } catch (err) {
+        console.error('[refresh]', err);
+        if (seq !== refreshSeq) return;
+        try { rig.setLook({ ...(rig.look || {}), lamp: 'off', pose: 'none' }); } catch (e2) { console.error('[refresh] safe look failed', e2); }
+      }
+    }
+    function applyStatus(data) {
       const look = { ...data.look, ...(data.look.pose === 'ak47' || data.look.pose === 'sniper' ? aim : {}), showRoster: hovering && data.look.agentRoster !== false };
       sleepSince = look.pose === 'sleep' ? (sleepSince ?? Date.now()) : null;
       look.grumpy = sleepSince !== null && Date.now() - sleepSince > GRUMPY_AFTER_MS;
@@ -126,6 +140,7 @@
       const req = data.pending && data.pending[0];
       document.body.classList.toggle('asking', !!req && data.reason !== 'travel');
       if (req) {
+        if (!currentRequest || currentRequest.id !== req.id) answerBtns.forEach((b) => { b.disabled = false; });
         currentRequest = req;
         document.getElementById('ask-what').textContent = `${req.tool}: ${req.summary || ''}`.slice(0, 80);
         document.getElementById('ask-what').title = `${req.tool} ${req.summary || ''}`;
@@ -228,8 +243,17 @@
       }, 3000);
     }
 
-    document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'allow'); });
-    document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); if (currentRequest) window.trafficLight.answerRequest(currentRequest.id, 'deny'); });
+    // One answer per ask: a double click must not answer the next request too.
+    function answer(decision) {
+      if (!currentRequest || answerBtns[0].disabled) return;
+      answerBtns.forEach((b) => { b.disabled = true; });
+      Promise.resolve(window.trafficLight.answerRequest(currentRequest.id, decision)).catch((err) => {
+        console.error('[answer]', err);
+        answerBtns.forEach((b) => { b.disabled = false; });
+      });
+    }
+    document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); answer('allow'); });
+    document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); answer('deny'); });
     window.trafficLight.onEvent((name) => rig.playEvent(name));
     window.trafficLight.onSoundFlash(() => rig.flash(600));
 

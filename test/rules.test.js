@@ -559,9 +559,16 @@ test('set-status: garbage stdin does not crash', () => {
   assert.equal(read(home).signal, 'stop');
 });
 
-test('set-status: permission-request blocks until answered, then prints the decision', () => {
+// Stands in for the app's signal server, which the hook probes before it waits.
+function fakeApp() {
+  const srv = require('http').createServer((q, r) => r.end());
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ port: srv.address().port, close: () => srv.close() })));
+}
+
+test('set-status: permission-request blocks until answered, then prints the decision', async () => {
   const home = tmpHome();
-  const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '4000' };
+  const app = await fakeApp();
+  const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '4000', CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port) };
   const { spawn } = require('child_process');
   const child = spawn(process.execPath, [SET_STATUS, 'permission-request'], { env });
   child.stdin.end(JSON.stringify({ session_id: 'p1', cwd: '/x/proj', tool_name: 'Bash', tool_input: { command: 'git push origin main' } }));
@@ -584,15 +591,41 @@ test('set-status: permission-request blocks until answered, then prints the deci
     const parsed = JSON.parse(out);
     assert.deepEqual(parsed.hookSpecificOutput.decision, { behavior: 'allow' });
     assert.equal(fs.readdirSync(reqDir).length, 0, 'request and answer files are cleaned up');
+    app.close();
     resolve();
   }));
 });
 
-test('set-status: permission-request with no answer passes through silently', () => {
+test('set-status: permission-request exits at once, writing no request, when the app is down', async () => {
   const home = tmpHome();
-  const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300' }, input: JSON.stringify({ session_id: 'p2', tool_name: 'Edit', tool_input: { file_path: '/a.js' } }) });
+  const app = await fakeApp();
+  const port = app.port;
+  app.close();
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '30000', CLAUDE_TRAFFIC_LIGHT_PORT: String(port) }, input: JSON.stringify({ session_id: 'p3', tool_name: 'Bash', tool_input: { command: 'ls' } }) });
+  assert.equal(r.status, 0);
+  assert.ok(Date.now() - t0 < 5000, 'did not sit out the wait');
+  assert.equal(r.stdout.toString(), '');
+  const reqDir = path.join(home, 'requests');
+  assert.equal(fs.existsSync(reqDir) ? fs.readdirSync(reqDir).length : 0, 0);
+});
+
+test('hooks never fail the session: an unwritable state dir still exits 0 silently', () => {
+  const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: '/dev/null/nope' };
+  for (const [script, args] of [[SET_STATUS, ['tool-use']], [path.join(__dirname, '..', 'hooks', 'emit.js'), ['tool-use', '--session', 'x']]]) {
+    const r = spawnSync(process.execPath, [script, ...args], { env, input: JSON.stringify({ session_id: 'x' }) });
+    assert.equal(r.status, 0, path.basename(script));
+    assert.equal(r.stderr.toString(), '');
+  }
+});
+
+test('set-status: permission-request with no answer passes through silently', async () => {
+  const home = tmpHome();
+  const app = await fakeApp();
+  const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port) }, input: JSON.stringify({ session_id: 'p2', tool_name: 'Edit', tool_input: { file_path: '/a.js' } }) });
   assert.equal(r.status, 0);
   assert.equal(r.stdout.toString(), '', 'no decision printed → Claude Code shows its own dialog');
+  app.close();
 });
 
 test('set-status: task events count without changing the state', () => {

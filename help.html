@@ -77,8 +77,9 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
     async function render() {
-      const h = await window.helpApi.getHelp();
-      if (!h) return;
+      let h;
+      try { h = await window.helpApi.getHelp(); } catch (err) { console.error('[help]', err); }
+      if (!h) { $('headline').textContent = 'Could not load the status — try reopening this window.'; return; }
       $('lamp').className = `lamp ${h.lamp}`;
       $('headline').textContent = h.headline;
       $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}` : ''}`;

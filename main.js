@@ -2121,7 +2121,12 @@ ipcMain.handle('go-to-needing-session', async () => {
 
 ipcMain.handle('get-config', () => loadConfig());
 
-ipcMain.handle('save-config', (e, partial) => commitConfig(partial));
+ipcMain.handle('save-config', (e, partial) => {
+  try { return commitConfig(partial); } catch (err) {
+    console.warn('[save-config]', err.message);
+    return { error: `Could not save: ${err.message}` };
+  }
+});
 // saveConfig plus everything a changed setting has to reach outside config.json.
 function commitConfig(partial) {
   const before = loadConfig().askFromWidget;
@@ -2532,7 +2537,12 @@ ipcMain.handle('delegation-set-enabled', (_e, on) => {
 
 // Status and log are instant; the diet waits on the transcripts, so it is
 // fetched on its own and the switch and knobs never sit behind a parse.
-ipcMain.handle('delegation-overview', () => ({ status: delegationStatus(), presets: Delegate.PRESETS, log: DelegationInstall.readLog(delegationOpts(), Date.now() - 30 * 86400000).slice(-20).reverse() }));
+ipcMain.handle('delegation-overview', () => {
+  try { return { status: delegationStatus(), presets: Delegate.PRESETS, log: DelegationInstall.readLog(delegationOpts(), Date.now() - 30 * 86400000).slice(-20).reverse() }; } catch (err) {
+    console.warn('[delegation] overview failed:', err.message);
+    return { error: err.message };
+  }
+});
 
 ipcMain.handle('delegation-diet', async (_e, opts) => {
   const days = Number(opts?.days) === 30 ? 30 : 7;
@@ -2734,8 +2744,10 @@ ipcMain.handle('cameos-add', (_e, p) => {
   return { id: res.id, list: cameosChanged() };
 });
 ipcMain.handle('cameos-remove', (_e, id) => {
-  Cameos.removePhoto(CAMEO_DIR, String(id));
-  return cameosChanged();
+  try {
+    Cameos.removePhoto(CAMEO_DIR, String(id));
+    return cameosChanged();
+  } catch (err) { return { error: err.message }; }
 });
 
 // The whole setup (setup.js) as one file. Import is two steps so the user sees
@@ -2746,9 +2758,11 @@ let pendingSetup = null;
 ipcMain.handle('setup-export', async () => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
-  const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
-  fs.writeFileSync(r.filePath, JSON.stringify(bundle, null, 2));
-  return { file: r.filePath, cameos: bundle.cameos.length };
+  try {
+    const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
+    fs.writeFileSync(r.filePath, JSON.stringify(bundle, null, 2));
+    return { file: r.filePath, cameos: bundle.cameos.length };
+  } catch (err) { return { error: `Could not export: ${err.message}` }; }
 });
 ipcMain.handle('setup-import-pick', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import setup', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });

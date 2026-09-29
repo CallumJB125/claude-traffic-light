@@ -8,6 +8,9 @@
 //
 // signal: prompt-submit | tool-use | tool-done | subagent-done | stop |
 //         session-start | compact | notification | session-end
+// A hook must never break a Claude Code session: whatever goes wrong, exit 0
+// quietly. (The in-process fuzzer passes a process stand-in without .on.)
+if (typeof process.on === 'function') process.on('uncaughtException', () => process.exit(0));
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -466,12 +469,24 @@ function writeSession(proc) {
   withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), proc)));
 }
 
+// The app's signal server is the liveness signal (no pid file exists). A
+// synchronous connect probe in a child keeps this script's flow linear.
+function appIsUp() {
+  try {
+    const port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+    const probe = `require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))`;
+    return require('child_process').spawnSync(process.execPath, ['-e', probe], { timeout: 1000, stdio: 'ignore' }).status === 0;
+  } catch { return true; }
+}
+
 // ── PermissionRequest: a BLOCKING hook. Write the request where the widget
 // can see it, then wait for an answer file. Answer → print the decision for
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
-  writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
+  // Nobody is listening for a request if the app is down: skip the 55s wait.
+  if (waitMs > 0 && !appIsUp()) finish();
+  writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
   const reqFile = path.join(REQUESTS_DIR, `${id}.json`);

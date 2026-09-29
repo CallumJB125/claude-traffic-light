@@ -10,6 +10,8 @@
 //
 // Also understands Cursor and Codex payloads: pass --cursor <event> and the
 // hook JSON on stdin, or --codex with Codex's notify JSON as the last arg.
+// Never break the calling agent: any failure exits 0 quietly.
+process.on('uncaughtException', () => process.exit(0));
 const fs = require('fs');
 const path = require('path');
 const os = require('os');

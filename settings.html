@@ -249,6 +249,7 @@
     }
 
     document.getElementById('save').addEventListener('click', async () => {
+      try {
       await window.settingsApi.saveConfig({
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
@@ -274,6 +275,10 @@
       });
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 1500);
+      } catch (err) {
+        status.textContent = `Save failed — ${err.message}`;
+        setTimeout(() => (status.textContent = ''), 4000);
+      }
     });
 
     document.querySelectorAll('[data-agent]').forEach((b) => b.addEventListener('click', async () => {
