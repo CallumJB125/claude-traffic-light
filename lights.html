@@ -3,32 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <title>Lights</title>
+<link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
 <style>
-  :root {
-    --bg: #1c1a1f;
-    --panel: #221f27;
-    --panel-2: #2a2731;
-    --line: #35313d;
-    --line-strong: #46414f;
-    --text: #ece8e2;
-    --muted: #9a9484;
-    --faint: #6e6960;
-    --accent: #da7756;
-    --accent-ink: #211f1c;
-    --accent-soft: rgba(218, 119, 86, 0.14);
-    --focus: 0 0 0 2px rgba(218, 119, 86, 0.55);
-    --radius: 7px;
-    --t: 160ms ease;
-  }
-
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
     height: 100%;
     background: var(--bg);
     color: var(--text);
-    font: 13px/1.4 -apple-system, system-ui, sans-serif;
+    font: var(--text-base)/1.4 var(--font);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
     caret-color: var(--accent);
@@ -39,7 +23,6 @@
   ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
   button, input, select { font: inherit; color: inherit; }
   button { cursor: pointer; }
-  :focus-visible { outline: none; box-shadow: var(--focus); }
 
   /* ── Frame ──────────────────────────────────────────────────────────── */
   #frame {
@@ -104,7 +87,7 @@
     gap: 6px;
     height: 26px;
     padding: 0 10px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid var(--line-strong);
     background: var(--panel-2);
     transition: background var(--t), border-color var(--t), transform 80ms ease;
@@ -116,7 +99,7 @@
   .btn.primary:hover { background: #e5866a; border-color: #e5866a; }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
   .btn.ghost:hover { background: var(--panel-2); color: var(--text); }
-  .btn.danger:hover { border-color: #b8443a; color: #ff8a80; }
+  .btn.danger:hover { border-color: var(--danger); color: var(--danger-text); }
   .btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
   /* ── Rules list ──────────────────────────────────────────────────────── */
@@ -157,7 +140,9 @@
   #now .head .tool { flex: 0 1 auto; min-width: 0; }
   #now .head .count { flex: none; }
   #now .head b { color: var(--text); font-weight: 600; }
-  #now .owners { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  #now .owners { display: flex; flex-wrap: nowrap; gap: 4px; margin-top: 5px; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); }
+  #now .owners::-webkit-scrollbar { display: none; }
+  #now .own { flex: none; }
   #now .owners:empty { display: none; }
   #now .own {
     height: 18px;
@@ -262,7 +247,7 @@
     background: var(--chip, var(--line-strong));
   }
   .chip.eye {
-    width: 12px; height: 8px; border-radius: 6px / 4px;
+    width: 12px; height: 8px; border-radius: var(--radius) / 4px;
   }
   .chip.pose {
     width: 14px; height: 14px; border: none; background: none; color: var(--muted);
@@ -391,7 +376,7 @@
     height: 26px;
     padding: 0 8px;
     border: 1px solid var(--line-strong);
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: var(--panel-2);
     min-width: 0;
     transition: border-color var(--t);
@@ -402,7 +387,7 @@
   #name { width: 240px; }
   #tool { width: 150px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 
-  .select { height: 26px; padding: 0 26px 0 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-2); appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 11px, calc(100% - 10px) 11px; background-size: 4px 4px; background-repeat: no-repeat; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .select { height: 26px; padding: 0 26px 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 11px, calc(100% - 10px) 11px; background-size: 4px 4px; background-repeat: no-repeat; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
   .select:focus { border-color: var(--accent); box-shadow: var(--focus); }
   .toggle {
     display: inline-flex; align-items: center; gap: 6px;
@@ -430,14 +415,14 @@
   .signal.on { background: var(--accent-soft); border-color: rgba(218, 119, 86, 0.5); color: var(--text); }
   .signal .k { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
   .signal.on .k { background: var(--accent); }
-  .signal.waiting .k { background: #f2a200; }
+  .signal.waiting .k { background: var(--amber); }
   .signal.virtual .k { background: transparent; border: 1px solid var(--faint); }
 
   .lamps { display: inline-flex; gap: 4px; vertical-align: middle; }
   .swatch { display: inline-block; }
   .lampbtn {
     width: 26px; height: 26px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid var(--line-strong);
     background: var(--panel-2);
     display: grid; place-items: center;
@@ -457,7 +442,7 @@
   .swatch {
     position: relative;
     width: 26px; height: 26px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid var(--line-strong);
     background: var(--c, var(--panel-2));
     overflow: hidden;
@@ -480,7 +465,7 @@
   .posebtn {
     width: 40px; height: 46px;
     padding: 3px 3px 0;
-    border-radius: 6px;
+    border-radius: var(--radius);
     border: 1px solid var(--line-strong);
     background: var(--panel-2);
     display: flex; flex-direction: column; align-items: center; justify-content: space-between;
@@ -504,7 +489,7 @@
   .legend { display: flex; gap: 12px; color: var(--muted); font-size: 11px; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .legend .sw.working { background: #2fae3e; }
+  .legend .sw.working { background: var(--green); }
   .legend .sw.waiting { background: repeating-linear-gradient(45deg, #f2a200 0 2px, #1c1a1f 2px 3.5px); }
   .legend .sw.idle { background: #3c3846; }
   .chart-wrap { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 8px 6px; }
@@ -514,7 +499,7 @@
   #chart text { fill: var(--muted); font-variant-numeric: tabular-nums; }
   #chart .total { fill: var(--text); font-weight: 600; }
   #chart .grid { stroke: var(--line); stroke-width: 1; }
-  .tip { position: absolute; pointer-events: none; background: rgba(20, 20, 22, 0.94); color: var(--text); padding: 4px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; transform: translate(-50%, -110%); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+  .tip { position: absolute; pointer-events: none; background: rgba(20, 20, 22, 0.94); color: var(--text); padding: 4px 8px; border-radius: var(--radius); font-size: 11px; white-space: nowrap; transform: translate(-50%, -110%); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
   .stats-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   .projects { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .projects li { display: grid; grid-template-columns: 1fr auto; row-gap: 3px; column-gap: 8px; font-size: 12px; }
@@ -580,10 +565,10 @@
   #resp { width: 100%; height: 92px; display: block; font: 11px -apple-system, system-ui, sans-serif; }
   #resp text { fill: var(--muted); font-variant-numeric: tabular-nums; }
   #resp .grid { stroke: var(--line); stroke-width: 1; }
-  #resp .worst { stroke: #f2a200; stroke-width: 2; stroke-linecap: round; }
+  #resp .worst { stroke: var(--amber); stroke-width: 2; stroke-linecap: round; }
   #resp .med { fill: var(--accent); }
   .legend .sw.med { background: var(--accent); }
-  .legend .sw.worst { background: #f2a200; }
+  .legend .sw.worst { background: var(--amber); }
 
   /* ── Router view ─────────────────────────────────────────────────────── */
   #router { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
@@ -610,15 +595,15 @@
   .router-policy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .saved .since { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
   .saved .v.small { font-size: 24px; }
-  .saved .v.neg { color: #f2a200; }
+  .saved .v.neg { color: var(--amber); }
   .saved .review { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .saved .review .k { margin-bottom: 2px; }
   .saved .review .row { display: flex; justify-content: space-between; gap: 12px; }
   .saved .review .row b { font-weight: 500; color: var(--text); white-space: nowrap; }
-  .saved .review .row b.neg { color: #f2a200; }
+  .saved .review .row b.neg { color: var(--amber); }
   .saved .review .verdict { margin-top: 4px; color: var(--text); }
   table.days .learned { display: block; font-size: 10px; color: var(--faint); white-space: nowrap; }
-  table.days .learned.quality { color: #f2a200; }
+  table.days .learned.quality { color: var(--amber); }
   table.days .learned.cheap { color: #4fbe5c; }
   #router-live { display: flex; flex-direction: column; gap: 14px; }
   .router-head .switch .toggle.sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
@@ -634,7 +619,7 @@
   #delegation { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
   .deleg-knobs { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--muted); }
   .deleg-knobs label { display: inline-flex; align-items: center; gap: 6px; }
-  .deleg-knobs input { height: 24px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel-2); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
+  .deleg-knobs input { height: 24px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
   .deleg-knobs input[type="number"] { width: 72px; }
   .deleg-knobs input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
   .deleg-knobs .allow { flex: 1 1 100%; }
@@ -677,7 +662,7 @@
   #presets .menu-share button { width: 100%; text-align: left; padding: 6px 8px; border: none; border-radius: 5px; background: transparent; display: flex; flex-direction: column; gap: 1px; }
   #presets .menu-share button:hover { background: var(--accent-soft); }
   #presets .menu-form { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
-  #presets .menu-form input { min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
+  #presets .menu-form input { min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); }
   #presets .menu-form input:focus { border-color: var(--accent); box-shadow: var(--focus); }
   #presets .menu-form .btn { height: 26px; }
   #presets .menu-choice { display: flex; flex-direction: column; gap: 6px; padding: 8px 4px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
@@ -698,7 +683,7 @@
   .posecell { position: relative; display: inline-flex; }
   .addface {
     width: 40px; height: 46px; padding: 0;
-    border-radius: 6px; border: 1px dashed var(--line-strong); background: transparent;
+    border-radius: var(--radius); border: 1px dashed var(--line-strong); background: transparent;
     display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
     color: var(--muted); font-size: 10px;
     transition: border-color var(--t), color var(--t), background var(--t);
@@ -714,8 +699,8 @@
   }
   .posecell:hover .face-x, .face-x:focus-visible, .face-x.armed { display: inline-flex; }
   .face-x svg { width: 8px; height: 8px; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
-  .face-x:hover { color: #ff8a80; border-color: #b8443a; }
-  .face-x.armed { padding: 0 6px; background: #b8443a; border-color: #b8443a; color: #fff; }
+  .face-x:hover { color: var(--danger-text); border-color: var(--danger); }
+  .face-x.armed { padding: 0 6px; background: var(--danger); border-color: var(--danger); color: #fff; }
 
   #face-modal {
     position: fixed; inset: 0; z-index: 50;
@@ -1625,14 +1610,19 @@
     const agents = live.agentCount || 0;
     head.innerHTML = `<span class="who">Now: <b>${escape(name)}</b></span>${live.tool ? `<span class="tool">&nbsp;· ${escape(live.tool)}</span>` : ''}<span class="count">&nbsp;· ${n} session${n === 1 ? '' : 's'} · ${agents} agent${agents === 1 ? '' : 's'}</span>`;
     head.title = head.textContent;
+    const groups = new Map();
     for (const [label, keys] of NOW_CHANNELS) {
       const id = keys.map((k) => owned[k]).find(Boolean);
       if (!id) continue;
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id).push(label);
+    }
+    for (const [id, labels] of groups) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'own' + (id === selectedId ? ' on' : '');
-      b.innerHTML = `<i>${label}:</i> ${escape(ruleName(id))}`;
-      b.title = `${label} comes from “${ruleName(id)}” — click to edit it`;
+      b.innerHTML = `<i>${labels.join(' · ')}</i> — ${escape(ruleName(id))}`;
+      b.title = `${labels.join(', ')} come${labels.length === 1 ? 's' : ''} from “${ruleName(id)}” — click to edit it`;
       if (rules.some((x) => x.id === id)) b.addEventListener('click', () => { select(id); focusRow(id); });
       else b.disabled = true;
       owners.appendChild(b);

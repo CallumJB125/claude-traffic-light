@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8" />
 <title>Preferences</title>
+<link rel="stylesheet" href="tokens.css" />
 <style>
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
     height: 100%;
-    background: #1c1a1f;
-    color: #ece8e2;
-    font: 13px -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font: var(--text-base)/1.4 var(--font);
+    -webkit-font-smoothing: antialiased;
     overflow-y: auto;
   }
   body {
     min-height: 100%;
-    padding: 20px 22px;
+    padding: var(--space-5) 22px;
     display: flex;
     flex-direction: column;
     gap: 18px;
   }
   h1, h2 {
-    font-size: 15px;
+    font-size: var(--text-lg);
     margin: 0;
     font-weight: 600;
   }
@@ -34,33 +36,33 @@
     font-weight: 500;
   }
   .field .hint {
-    font-size: 11px;
-    color: #9a9484;
+    font-size: var(--text-xs);
+    color: var(--muted);
     line-height: 1.4;
   }
   .row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
   }
   input[type="number"] {
     width: 70px;
-    background: #2a2731;
-    border: 1px solid #3c3846;
-    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
     color: inherit;
-    padding: 5px 8px;
+    padding: 5px var(--space-2);
     font: inherit;
   }
   h2 {
-    font-size: 13px;
-    margin: 4px 0 -8px;
-    color: #da7756;
+    font-size: var(--text-base);
+    margin: var(--space-1) 0 -8px;
+    color: var(--accent);
   }
   select {
-    background: #2a2731;
-    border: 1px solid #3c3846;
-    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
     color: inherit;
     padding: 4px 6px;
     font: inherit;
@@ -68,6 +70,7 @@
   input[type="checkbox"] {
     width: 15px;
     height: 15px;
+    accent-color: var(--accent);
   }
   .actions {
     margin-top: auto;
@@ -76,19 +79,21 @@
     gap: 8px;
   }
   button {
-    background: #da7756;
+    background: var(--accent);
     border: none;
-    color: #211f1c;
+    color: var(--accent-ink);
     font: inherit;
     font-weight: 600;
     padding: 7px 16px;
-    border-radius: 7px;
+    border-radius: var(--radius);
     cursor: pointer;
+    transition: filter var(--t);
   }
+  button:hover { filter: brightness(1.08); }
   button:active { transform: scale(0.97); }
   #status {
-    font-size: 11px;
-    color: #9a9484;
+    font-size: var(--text-xs);
+    color: var(--muted);
     height: 14px;
   }
 </style>
