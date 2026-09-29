@@ -234,14 +234,41 @@ test('set-status: a StopFailure is classified network / limit / error; asks and 
   assert.equal(read(home, 'b').signal, 'tool-use', 'a tool use clears it');
 });
 
-test('set-status: a PermissionRequest marks the session as asking, still passing through unanswered', () => {
+const listening = () => new Promise((res) => { const s = require('net').createServer(); s.listen(0, '127.0.0.1', () => res(s)); });
+
+test('set-status: a PermissionRequest marks the session as asking, still passing through unanswered', async () => {
   const home = tmpHome();
-  run(home, 'prompt-submit', { session_id: 'pr', cwd: '/x/p' });
-  const r = run(home, 'permission-request', { session_id: 'pr', cwd: '/x/p', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '200' });
-  assert.equal(r.stdout.toString(), '', 'no decision → Claude Code shows its own dialog');
-  const d = read(home, 'pr');
-  assert.deepEqual([d.signal, d.tool, d.workingSince], ['permission-ask', 'Bash', null]);
-  assert.deepEqual(fs.readdirSync(path.join(home, 'requests')), [], 'request cleaned up');
+  const srv = await listening();
+  const port = String(srv.address().port);
+  try {
+    run(home, 'prompt-submit', { session_id: 'pr', cwd: '/x/p' });
+    const r = run(home, 'permission-request', { session_id: 'pr', cwd: '/x/p', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '200', CLAUDE_TRAFFIC_LIGHT_PORT: port });
+    assert.equal(r.stdout.toString(), '', 'no decision → Claude Code shows its own dialog');
+    const d = read(home, 'pr');
+    assert.deepEqual([d.signal, d.tool, d.workingSince], ['permission-ask', 'Bash', null]);
+    assert.deepEqual(fs.readdirSync(path.join(home, 'requests')), [], 'request cleaned up');
+  } finally { srv.close(); }
+});
+
+test('set-status: a PermissionRequest with the app down still marks asking, but writes no request', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'pd', cwd: '/x/p' });
+  const t0 = Date.now();
+  const r = run(home, 'permission-request', { session_id: 'pd', cwd: '/x/p', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_PORT: '1' });
+  assert.ok(Date.now() - t0 < 10000, 'does not wait out the ask window');
+  assert.equal(r.stdout.toString(), '');
+  assert.equal(read(home, 'pd').signal, 'permission-ask');
+  assert.equal(fs.existsSync(path.join(home, 'requests')), false, 'no request file');
+});
+
+test('set-status: the app\'s port file wins over the env port when probing', async () => {
+  const home = tmpHome();
+  const srv = await listening();
+  try {
+    fs.writeFileSync(path.join(home, 'port'), String(srv.address().port));
+    run(home, 'permission-request', { session_id: 'pf', tool_name: 'Bash' }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: '1' });
+    assert.ok(fs.existsSync(path.join(home, 'requests')), 'probe reached the port from the file, so the request was written');
+  } finally { srv.close(); }
 });
 
 test('set-status: writes are atomic — no temp files are left behind', () => {

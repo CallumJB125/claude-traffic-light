@@ -473,7 +473,12 @@ function writeSession(proc) {
 // synchronous connect probe in a child keeps this script's flow linear.
 function appIsUp() {
   try {
-    const port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+    // The app records the port it actually bound (demo modes use others).
+    let port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+    try {
+      const filePort = Number(fs.readFileSync(path.join(ROOT_DIR, 'port'), 'utf8'));
+      if (Number.isInteger(filePort) && filePort > 0 && filePort < 65536) port = filePort;
+    } catch {}
     const probe = `require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))`;
     return require('child_process').spawnSync(process.execPath, ['-e', probe], { timeout: 1000, stdio: 'ignore' }).status === 0;
   } catch { return true; }
@@ -484,9 +489,9 @@ function appIsUp() {
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
   const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
+  writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   // Nobody is listening for a request if the app is down: skip the 55s wait.
   if (waitMs > 0 && !appIsUp()) finish();
-  writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
   const reqFile = path.join(REQUESTS_DIR, `${id}.json`);

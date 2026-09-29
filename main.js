@@ -419,6 +419,9 @@ function startSignalServer() {
     });
   });
   server.on('error', (e) => console.log('[signal server]', e.message));
+  const portFile = path.join(ROOT_DIR, 'port');
+  server.on('listening', () => { try { fs.writeFileSync(portFile, String(server.address().port)); } catch {} });
+  app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); } catch {} });
   server.listen(SIGNAL_PORT, '127.0.0.1');
 }
 
@@ -923,7 +926,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
   win.on('resize', saveBounds);
-  win.on('move', saveBounds);
+  win.on('move', () => { if (!glideTimer) saveBounds(); });
   win.on('closed', () => {
     win = null;
   });
@@ -1870,7 +1873,7 @@ async function performKnock(appName, target, base) {
     if (reducedMotion) await wait(280);
     else {
       await tween(target, target, 280, (pt) => win?.setPosition(pt.x, pt.y), (p) => ({ x: target.x, y: target.y - Motion.hopHeight(p, 16) }));
-      win?.webContents.send('land', 0.6);
+      if (win && !win.isDestroyed()) win.webContents.send('land', 0.6);
     }
     await wait(220);
   }
@@ -2076,6 +2079,12 @@ ipcMain.handle('open-claude', () => {
   shell.openExternal('https://claude.ai');
 });
 
+ipcMain.handle('cursor-in-window', () => {
+  if (!win || win.isDestroyed()) return null;
+  const c = screen.getCursorScreenPoint();
+  const b = win.getBounds();
+  return { x: c.x - b.x, y: c.y - b.y };
+});
 ipcMain.handle('get-window-position', () => {
   const [x, y] = win?.getPosition() || [0, 0];
   return { x, y };
@@ -2125,7 +2134,7 @@ function glideFrom(vx, vy) {
     if (done) {
       stopGlide();
       saveBounds();
-      win.webContents.send('land', Math.min(1, Math.max(0.35, speed / 2000)));
+      if (!win.isDestroyed()) win.webContents.send('land', Math.min(1, Math.max(0.35, speed / 2000)));
     }
   }, 'glide');
   return true;
@@ -2135,7 +2144,7 @@ ipcMain.on('drag-start', () => stopGlide());
 ipcMain.on('drag-end', (e, vx, vy) => {
   if (glideFrom(Number(vx), Number(vy))) return;
   saveBounds();
-  if (!reducedMotion) win?.webContents.send('land', 0.3);
+  if (!reducedMotion && win && !win.isDestroyed()) win.webContents.send('land', 0.3);
 });
 ipcMain.on('reduced-motion', (e, on) => {
   reducedMotion = !!on;

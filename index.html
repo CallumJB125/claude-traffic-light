@@ -103,7 +103,7 @@
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     window.trafficLight.setReducedMotion(reducedMotion.matches);
     reducedMotion.addEventListener('change', (e) => window.trafficLight.setReducedMotion(e.matches));
-    window.trafficLight.onLand((strength) => rig.squash(strength));
+    window.trafficLight.onLand((strength) => { rig.squash(strength); retestUnderCursor().catch(() => {}); });
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
@@ -223,11 +223,20 @@
       if (el.closest('#gear, #help, #ask, .minion')) return true;
       return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
     };
+    const hitTest = (x, y) => {
+      const ignore = !solidAt(x, y);
+      if (ignore !== clickThrough) { clickThrough = ignore; window.trafficLight.setClickThrough(ignore); }
+    };
     window.addEventListener('mousemove', (e) => {
       if (drag) return;
-      const ignore = !solidAt(e.clientX, e.clientY);
-      if (ignore !== clickThrough) { clickThrough = ignore; window.trafficLight.setClickThrough(ignore); }
+      hitTest(e.clientX, e.clientY);
     });
+    // A glide can land under a cursor that never moves, so no mousemove comes.
+    const retestUnderCursor = async () => {
+      if (drag) return;
+      const pt = await window.trafficLight.cursorInWindow();
+      if (pt) hitTest(pt.x, pt.y);
+    };
 
     window.addEventListener('mousemove', (e) => {
       if (!drag) return;
@@ -282,7 +291,9 @@
     function answer(decision) {
       if (!currentRequest || answerBtns[0].disabled) return;
       answerBtns.forEach((b) => { b.disabled = true; });
-      Promise.resolve(window.trafficLight.answerRequest(currentRequest.id, decision)).catch((err) => {
+      Promise.resolve(window.trafficLight.answerRequest(currentRequest.id, decision)).then((ok) => {
+        if (ok === false) answerBtns.forEach((b) => { b.disabled = false; });
+      }).catch((err) => {
         console.error('[answer]', err);
         answerBtns.forEach((b) => { b.disabled = false; });
       });
