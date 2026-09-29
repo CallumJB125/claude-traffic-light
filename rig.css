@@ -124,6 +124,18 @@
 }
 .rig.pose-thumbs .thumbs-up { opacity: 1; transform: scale(1); }
 
+/* Idle: with no pose, the widget's Claude breathes — a half-unit, two-frame bob
+   every 4 s, stepped so it never tweens between the two frames. Only on
+   the desk widget (index.html adds .breathes), never under a pose or a
+   garden action, so it can't stack with their own body animations. */
+.rig.breathes:not([class*=" pose-"]):not(.gardening):not(.walking):not(.eating):not(.lounging):not(.smashing):not(.processing) .claude-body {
+  animation: rig-idle-bob 4s steps(1, end) infinite;
+}
+@keyframes rig-idle-bob {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-0.5px); }
+}
+
 /* Pose: sleep — sign droops, breathing bob, Zs drift up. Eyes are a separate
    channel; the default sleep rule closes them, a custom one need not. */
 .rig.pose-sleep .sign-assembly { transform: rotate(10deg); transition: transform 400ms ease; }
@@ -776,7 +788,7 @@
 .rig.lounging .zzz.z2 { animation-delay: 0.7s; } .rig.lounging .zzz.z3 { animation-delay: 1.4s; }
 
 /* garden lifecycle */
-.rig .mover { transition: transform 2.6s ease-in-out; transform: translateX(var(--walk, 0px)); }
+/* .mover's x is a spring driven from rig.js (walkTo), not a CSS transition */
 .rig .tools > * { opacity: 0; }
 .rig.carrying .carry-pot { opacity: 1; }
 .rig.pouring .bag { opacity: 1; animation: rig-tilt 1s ease-in-out infinite alternate; transform-origin: 51px 53px; }
@@ -790,7 +802,6 @@
 @keyframes rig-waterfall { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-3px, 14px); opacity: 0; } }
 .rig.walking .body rect:nth-child(3), .rig.walking .body rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
 .rig.walking .body rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
-.rig.face-left.gardening .mover { transform: translateX(var(--walk, 0px)); }
 .rig.gardening.face-left .claude-body, .rig.gardening.face-left .sign-assembly { transform: scaleX(-1); transform-origin: 32px 41px; }
 .rig .pot { animation: rig-grow 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2) 1 backwards; }
 .rig .pot .dirt, .rig .pot .seed { opacity: 0; transition: opacity 400ms ease; }
@@ -828,4 +839,7 @@
   .rig .body rect, .rig .grumpy-mouth, .rig .minion-in, .rig.pose-selfie, .rig .pot, .rig .crop, .rig .bag, .rig .dirtbit, .rig .waterdrop, .rig .cig-smoke { animation: none !important; }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }
   .rig.pose-sleep .sign-assembly { transition: none; }
+  /* The idle bob dies with .claude-body above; the walk spring, pose settle
+     and squash check this same query in rig.js, and the widget tells main to
+     stop roaming, hopping and gliding. */
 }

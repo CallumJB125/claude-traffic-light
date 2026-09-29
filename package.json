@@ -29,6 +29,7 @@
       "lights-preload.js",
       "rig.js",
       "rig.css",
+      "motion.js",
       "rules.js",
       "help.js",
       "help.html",

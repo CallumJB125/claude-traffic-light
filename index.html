@@ -40,9 +40,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 120ms ease;
   }
-  .housing:active { transform: scale(0.96); }
 
   #tooltip {
     position: fixed;
@@ -94,9 +92,17 @@
     <button class="deny" id="deny" title="Deny this tool call">Deny</button>
   </div>
 
+  <script src="motion.js"></script>
   <script src="rig.js"></script>
   <script>
     const rig = mountRig(document.getElementById('housing'));
+    rig.svg.classList.add('breathes');
+    // Main does the window travel (roam, knock hops, garden, drag glide), so
+    // it has to hear about reduced motion from here, now and on every change.
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    window.trafficLight.setReducedMotion(reducedMotion.matches);
+    reducedMotion.addEventListener('change', (e) => window.trafficLight.setReducedMotion(e.matches));
+    window.trafficLight.onLand((strength) => rig.squash(strength));
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
@@ -170,13 +176,25 @@
     let aim = { facing: 'right', aimAngle: 0 };
     window.trafficLight.onAim((a) => { aim = a; if (rig.look) rig.setLook({ ...rig.look, ...aim }); });
 
-    let dragOrigin = null;
+    // Dragging: the window's top-left is always the cursor minus where it
+    // grabbed (clientX/Y), so nothing waits on IPC and the first move lands.
+    // Moves coalesce to one IPC per frame; the release velocity hands off to
+    // a momentum glide in main.
+    let drag = null;
     let didDrag = false;
+    let dragFrame = 0;
+    let dragTo = null;
+    const flushDrag = () => {
+      dragFrame = 0;
+      if (dragTo) { window.trafficLight.setWindowPosition(dragTo.x, dragTo.y); dragTo = null; }
+    };
 
-    app.addEventListener('mousedown', async (e) => {
-      const winPos = await window.trafficLight.getWindowPosition();
-      dragOrigin = { mouseX: e.screenX, mouseY: e.screenY, winX: winPos.x, winY: winPos.y };
+    app.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      drag = { grabX: e.clientX, grabY: e.clientY, startX: e.screenX, startY: e.screenY, samples: [{ x: e.screenX, y: e.screenY, t: e.timeStamp }] };
       didDrag = false;
+      window.trafficLight.dragStart();
+      rig.squash(0.6);
     });
 
     // Only what is actually drawn should catch the mouse: over the empty
@@ -190,22 +208,38 @@
       return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
     };
     window.addEventListener('mousemove', (e) => {
-      if (dragOrigin) return;
+      if (drag) return;
       const ignore = !solidAt(e.clientX, e.clientY);
       if (ignore !== clickThrough) { clickThrough = ignore; window.trafficLight.setClickThrough(ignore); }
     });
 
     window.addEventListener('mousemove', (e) => {
-      if (!dragOrigin || e.buttons !== 1) return;
-      const dx = e.screenX - dragOrigin.mouseX;
-      const dy = e.screenY - dragOrigin.mouseY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
-      if (didDrag) window.trafficLight.setWindowPosition(dragOrigin.winX + dx, dragOrigin.winY + dy);
+      if (!drag) return;
+      if (e.buttons !== 1) { endDrag(e, false); return; }
+      if (Math.abs(e.screenX - drag.startX) > 3 || Math.abs(e.screenY - drag.startY) > 3) didDrag = true;
+      if (!didDrag) return;
+      drag.samples.push({ x: e.screenX, y: e.screenY, t: e.timeStamp });
+      if (drag.samples.length > 12) drag.samples.shift();
+      dragTo = { x: e.screenX - drag.grabX, y: e.screenY - drag.grabY };
+      if (!dragFrame) dragFrame = requestAnimationFrame(flushDrag);
     });
 
-    window.addEventListener('mouseup', () => {
-      dragOrigin = null;
-    });
+    // A click (no drag) never glides; a drag throws with whatever velocity
+    // the pointer still had when it let go.
+    function endDrag(e, released) {
+      const d = drag;
+      drag = null;
+      if (!d || !didDrag) return;
+      if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
+      if (released) d.samples.push({ x: e.screenX, y: e.screenY, t: e.timeStamp });
+      const x = e.screenX - d.grabX;
+      const y = e.screenY - d.grabY;
+      window.trafficLight.setWindowPosition(x, y);
+      dragTo = null;
+      const v = window.BuddyMotion.releaseVelocity(d.samples, e.timeStamp);
+      window.trafficLight.dragEnd(released ? v.vx : 0, released ? v.vy : 0);
+    }
+    window.addEventListener('mouseup', (e) => endDrag(e, true));
 
     let wheelAccum = 0;
     app.addEventListener('wheel', (e) => {
