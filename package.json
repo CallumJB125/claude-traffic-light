@@ -12,7 +12,9 @@
     "icons": "node scripts/build-icons.js",
     "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots"
   },
   "author": "",
   "license": "MIT",
@@ -84,6 +86,7 @@
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "electron": "^44.3.0",
     "electron-builder": "^25.1.8",
     "jsdom": "^30.0.1"

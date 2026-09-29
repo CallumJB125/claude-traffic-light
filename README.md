@@ -369,6 +369,14 @@ Right-click the tray icon (top menu bar) for:
   state for testing, or if a session dies without firing `SessionEnd`
 - **Open at Login** toggle
 
+## Visual regression tests
+
+`npm run test:visual` drives the real Electron app with Playwright (`test-visual/`) and compares screenshots of the widget in each lamp state (idle/off, working/green, your-turn/amber, blocked/red), the widget under reduced motion, and the Lights, Settings and Help windows. `npm run test:visual:update` regenerates the baselines. `npm test` (node --test) does not touch these.
+
+Each run is hermetic: a temp `CLAUDE_TRAFFIC_LIGHT_HOME`, a free signal port and a temp Electron userData (via `--demo visual`, a dev-run flag), so it never reads the real `~/.claude-traffic-light` and coexists with an installed, running Claude Buddy.
+
+Baselines in `test-visual/__screenshots__/` are macOS-rendered and carry a `-darwin` suffix; other platforms have no baselines and need their own `test:visual:update`. Regenerate them on the same display scale you compare on.
+
 ## Dev mode
 
 ```bash
