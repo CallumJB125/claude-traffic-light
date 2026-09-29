@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Claude Buddy</title>
+<link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
 <style>
   html, body {
@@ -51,7 +52,7 @@
     transform: translateX(-50%);
     white-space: nowrap;
     padding: 3px 8px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: rgba(20, 20, 22, 0.92);
     font: 500 10px -apple-system, system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.9);
@@ -62,22 +63,22 @@
   #app:hover #tooltip { opacity: 1; }
 
   /* Hover gear → Lights, so the editor is discoverable from the widget. */
-  #gear { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20, 20, 22, 0.85); color: #ece8e2; display: grid; place-items: center; opacity: 0; transition: opacity 120ms ease; cursor: pointer; padding: 0; }
+  #gear { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20, 20, 22, 0.85); color: var(--text); display: grid; place-items: center; opacity: 0; transition: opacity 120ms ease; cursor: pointer; padding: 0; }
   #gear svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; }
-  body:hover #gear { opacity: 1; }
-  #gear:hover { background: #da7756; color: #211f1c; }
+  body:hover #gear, #gear:focus-visible { opacity: 1; }
+  #gear:hover { background: var(--accent); color: var(--accent-ink); }
   /* Hover ? → what everything on screen means right now. */
-  #help { position: absolute; top: 2px; right: 22px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20, 20, 22, 0.85); color: #ece8e2; font: 700 11px -apple-system, system-ui, sans-serif; line-height: 18px; text-align: center; opacity: 0; transition: opacity 120ms ease; cursor: pointer; padding: 0; }
-  body:hover #help { opacity: 1; }
-  #help:hover { background: #da7756; color: #211f1c; }
+  #help { position: absolute; top: 2px; right: 22px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20, 20, 22, 0.85); color: var(--text); font: 700 11px -apple-system, system-ui, sans-serif; line-height: 18px; text-align: center; opacity: 0; transition: opacity 120ms ease; cursor: pointer; padding: 0; }
+  body:hover #help, #help:focus-visible { opacity: 1; }
+  #help:hover { background: var(--accent); color: var(--accent-ink); }
 
   /* Allow / Deny strip, shown while a permission request waits. */
   #ask { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; padding: 0 6px 4px; gap: 4px; align-items: center; flex-wrap: wrap; align-content: flex-end; }
   body.asking #ask { display: flex; }
   body.asking #app { height: calc(100% - 46px); }
-  #ask button { flex: 1; height: 22px; border: none; border-radius: 6px; font: 600 10px -apple-system, system-ui, sans-serif; cursor: pointer; color: #fff; }
-  #ask .allow { background: #2fae3e; }
-  #ask .deny { background: #b8443a; }
+  #ask button { flex: 1; height: 22px; border: none; border-radius: var(--radius); font: 600 10px -apple-system, system-ui, sans-serif; cursor: pointer; color: #fff; }
+  #ask .allow { background: var(--green); }
+  #ask .deny { background: var(--danger); }
   #ask button:active { transform: scale(0.96); }
 </style>
 </head>

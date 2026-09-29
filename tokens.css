@@ -1,0 +1,48 @@
+/* Shared design tokens for every Claude Buddy window. */
+:root {
+  color-scheme: dark;
+
+  --bg: #1c1a1f;
+  --panel: #221f27;
+  --panel-2: #2a2731;
+  --line: #35313d;
+  --line-strong: #46414f;
+  --text: #ece8e2;
+  --muted: #9a9484;
+  --faint: #857f72;
+  --accent: #da7756;
+  --accent-ink: #211f1c;
+  --accent-soft: rgba(218, 119, 86, 0.14);
+
+  --green: #2fae3e;
+  --amber: #f2a200;
+  --red: #e2231a;
+  --danger: #b8443a;
+  --danger-text: #ff8a80;
+  --idle: #726c62;
+
+  --radius-sm: 4px;
+  --radius: 7px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --font: -apple-system, system-ui, sans-serif;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+
+  --focus: 0 0 0 2px rgba(218, 119, 86, 0.55);
+  --t: 160ms ease;
+  --t-fast: 120ms ease;
+}
+
+:focus-visible { outline: none; box-shadow: var(--focus); }
