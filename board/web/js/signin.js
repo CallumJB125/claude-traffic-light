@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 let flowId = null;
 
 async function post(path, body) {
-  const res = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) }); // privacy-flow: board-view
   const data = await res.json().catch(() => null);
   return { ok: res.ok, status: res.status, error: data?.error ?? null, data };
 }

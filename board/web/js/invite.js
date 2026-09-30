@@ -36,7 +36,7 @@ async function main() {
   let res;
   let data = null;
   try {
-    res = await fetch('/api/invites/preview', { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ t: token }) });
+    res = await fetch('/api/invites/preview', { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ t: token }) }); // privacy-flow: board-view
     data = await res.json().catch(() => null);
   } catch {
     fail('Could not reach the board. Check your connection and reload.');

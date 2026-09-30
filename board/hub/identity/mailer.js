@@ -11,11 +11,11 @@ import { isExposed } from '../config.js';
 const RESEND_URL = 'https://api.resend.com/emails';
 const SEND_TIMEOUT_MS = 10_000;
 
-export function resendMailer({ apiKey, from, fetchImpl = globalThis.fetch }) {
+export function resendMailer({ apiKey, from, fetchImpl = globalThis.fetch }) { // privacy-flow: hub-server
   return {
     kind: 'resend',
     async send({ to, subject, text, idempotencyKey = null }) {
-      const res = await fetchImpl(RESEND_URL, {
+      const res = await fetchImpl(RESEND_URL, { // privacy-flow: hub-server
         method: 'POST',
         headers: {
           authorization: `Bearer ${apiKey}`,
