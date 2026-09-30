@@ -522,19 +522,68 @@ test('a hit reports the tab; a miss falls back to activating; a refusal is expla
   assert.equal(denied.log.activate.length, 1);
 });
 
-test('one jump at a time: a second click shares the jump in flight', async () => {
+test('the same target clicked twice shares the jump in flight; a later click runs again', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });
   const { jump, log } = jumperWith({ focusResult: () => gate.then(() => ({ ok: true, adapter: 'wezterm', exact: true })) });
-  const s = { host: HOST, terminal: { env: {} } };
+  const s = { sessionId: 'A', host: HOST, terminal: { env: {} } };
   const a = jump(s, 'x');
-  const b = jump(s, 'x');
+  const b = jump({ ...s }, 'x');
   assert.equal(a, b);
   release();
-  await a;
+  assert.deepEqual(await a, { app: 'WezTerm', exact: true });
   assert.equal(log.focus.length, 1);
   await jump(s, 'x');
-  assert.equal(log.focus.length, 2, 'a later click runs again');
+  assert.equal(log.focus.length, 2);
+});
+
+test('a different target starts its own jump and supersedes the pending one, which reports nothing', async () => {
+  const gates = {};
+  const cancelSeen = {};
+  const log = { activate: [] };
+  const jump = createJumper({
+    localHost: HOST,
+    platform: 'darwin',
+    focus: async (s, opts) => {
+      await new Promise((r) => { gates[s.sessionId] = r; });
+      cancelSeen[s.sessionId] = opts.isCancelled();
+      return { ok: true, adapter: 'iterm', exact: true, app: `app-${s.sessionId}` };
+    },
+    activate: async (...args) => { log.activate.push(args); return { app: 'Terminal', exact: false }; },
+    explainer: { onNeeds: () => null, onDenied: () => {} },
+  });
+  const A = { sessionId: 'A', host: HOST, terminal: { env: {} } };
+  const B = { sessionId: 'B', host: HOST, terminal: { env: {} } };
+  const pa = jump(A, 'a');
+  const pb = jump(B, 'b');
+  assert.notEqual(pa, pb);
+  gates.B();
+  assert.deepEqual(await pb, { app: 'app-B', exact: true });
+  gates.A();
+  assert.equal(await pa, null, 'the superseded jump must not report A as found');
+  assert.equal(cancelSeen.A, true);
+  assert.equal(cancelSeen.B, false);
+  assert.equal(log.activate.length, 0, 'the superseded jump does not fall back either');
+  // Without a session, the folder is the target.
+  const f = jumperWith();
+  const p1 = f.jump(null, 'one');
+  const p2 = f.jump(null, 'two');
+  assert.notEqual(p1, p2);
+  assert.equal(f.jump(null, 'two'), p2);
+  assert.equal(await p1, null);
+  assert.deepEqual(await p2, { app: 'Terminal', exact: false });
+  // 'one' had already activated before 'two' was clicked; only its report is dropped.
+  assert.deepEqual(f.log.activate, [['one', null], ['two', null]]);
+});
+
+test('a superseded jump stops issuing commands mid-chain', async () => {
+  let cancelled = false;
+  const calls = [];
+  const exec = async (file) => { calls.push(file); cancelled = true; return { ok: true, stdout: 'no match' }; };
+  const s = sess(TMUX_ENV, { hostApp: 'iTerm2' });
+  const r = await Focus.focusSession(s, ctxOf({ exec, isCancelled: () => cancelled }));
+  assert.equal(r.ok, false);
+  assert.equal(calls.length, 1, 'only the command already under way ran');
 });
 
 // ── Asking for Automation, only when an adapter needs it ────────────────────

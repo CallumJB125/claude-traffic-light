@@ -83,7 +83,9 @@ async function focusSession(session, over = {}, adapters = ADAPTERS, clock = nul
   const ctx = makeContext(over);
   if (!session || typeof session !== 'object') return { ok: false, reason: 'no session' };
   const deadline = clock || { at: ctx.now() + JUMP_DEADLINE_MS };
+  const cancelled = () => !!(ctx.isCancelled && ctx.isCancelled());
   const bounded = (cap) => (file, args) => {
+    if (cancelled()) return Promise.resolve({ ok: false, stdout: '', stderr: 'superseded by a newer jump' });
     const left = deadline.at - ctx.now();
     if (left <= 0) return Promise.resolve({ ok: false, stdout: '', stderr: 'jump deadline passed' });
     return ctx.exec(file, args, { timeout: Math.min(cap, left) });
@@ -95,6 +97,7 @@ async function focusSession(session, over = {}, adapters = ADAPTERS, clock = nul
   let last = { ok: false, reason: Ids.inTmux(session) ? 'tmux pane not reachable' : 'no adapter for this terminal' };
   for (const a of tried) {
     if (ctx.now() >= deadline.at) return { ...last, ok: false, reason: 'jump deadline passed' };
+    if (cancelled()) return { ...last, ok: false, reason: 'superseded by a newer jump' };
     let can = false;
     try { can = a.canHandle(session, ctx); } catch { can = false; }
     if (!can) continue;

@@ -8,13 +8,16 @@ const { ADAPTERS } = require('./index.js');
 const isRemote = (s) => !!(s && (s.remote || s.device || String(s.sessionId || '').startsWith('remote:')));
 
 function createJumper({ localHost, platform, focus, activate, explainer, log = () => {} }) {
-  let inflight = null;
+  let current = null; // { key, gen, promise } of the jump in flight
+  let gen = 0;
 
-  // Same shape as activate's answer: { app, exact } or null.
-  async function run(session, folderHint, preferApp) {
+  // Same shape as activate's answer: { app, exact } or null. `stale()` turns
+  // true once a click for another target has superseded this one.
+  async function run(session, folderHint, preferApp, stale) {
     if (isRemote(session)) return null;
     if (platform === 'darwin' && session && session.terminal && session.host === localHost) {
-      const r = await focus(session, { onNeeds: (needs) => explainer.onNeeds(needs) });
+      const r = await focus(session, { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale });
+      if (stale()) return null;
       if (r.ok) {
         const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
         return { app: r.app || session.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact };
@@ -22,15 +25,24 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; activating the app instead`);
       if (r.denied) explainer.onDenied(r.needs);
     }
-    return activate(folderHint, preferApp);
+    return stale() ? null : activate(folderHint, preferApp);
   }
 
-  // One jump at a time: a double click, or a click while a slow jump is
-  // still running, shares the jump in flight instead of racing it.
+  // A repeat click on the same target shares the jump in flight. A click for
+  // another target (the cycle hotkey pressed twice) starts its own jump and
+  // supersedes the pending one: that one stops issuing commands and answers
+  // null, so its caller never reports a tab the user was taken away from.
   return function jump(session, folderHint = '', preferApp = null) {
-    if (inflight) return inflight;
-    inflight = run(session, folderHint, preferApp).catch((e) => { log(`failed: ${e.message}`); return null; }).finally(() => { inflight = null; });
-    return inflight;
+    const key = session && session.sessionId ? `session:${session.sessionId}` : `folder:${folderHint}`;
+    if (current && current.key === key) return current.promise;
+    const mine = ++gen;
+    const stale = () => mine !== gen;
+    const promise = run(session, folderHint, preferApp, stale)
+      .catch((e) => { log(`failed: ${e.message}`); return null; })
+      .then((r) => (stale() ? null : r))
+      .finally(() => { if (current && current.gen === mine) current = null; });
+    current = { key, gen: mine, promise };
+    return promise;
   };
 }
 
