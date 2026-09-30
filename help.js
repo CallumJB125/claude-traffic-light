@@ -82,6 +82,12 @@ const UNSET = { pose: 'none', eyes: 'default', effect: 'none', costume: 'none', 
 
 // state: what computeState() returns for the real (not travelling) widget.
 // extra.travel: the name of whatever he is off doing on screen, if anything.
+function remoteCounts(sessions) {
+  const by = new Map();
+  for (const s of sessions || []) if (s && s.remote && s.deviceName) by.set(s.deviceName, (by.get(s.deviceName) || 0) + 1);
+  return [...by].map(([device, n]) => `${n} on ${device}`).join(', ');
+}
+
 function explain(state, rules, extra = {}) {
   const look = (state && state.look) || {};
   const owned = (state && state.owned) || {};
@@ -96,6 +102,9 @@ function explain(state, rules, extra = {}) {
     activity: null,
     agents: null,
     sessions: (state.sessions || []).length,
+    // "2 on devbox": sessions another machine reports, which Buddy can show
+    // but not jump to.
+    remote: remoteCounts(state.sessions),
   };
   if (state.reason === 'manual') out.meaning = 'You set this colour by hand from the menu-bar icon. It clears itself after 5 minutes, or use Clear override.';
   if (state.reason === 'preview') out.meaning = 'This is a preview from the Lights editor; the real state comes back in a few seconds.';
@@ -194,7 +203,11 @@ function notifiable({ sessions = [], pending = [], offline = false, spend = null
 }
 
 function message(kind, s, text) {
-  const where = s ? folderOf(s.cwd) : '';
+  const folder = s ? folderOf(s.cwd) : '';
+  const device = s && s.remote && s.deviceName ? s.deviceName : null;
+  const where = device ? `${folder ? `${folder} ` : ''}on ${device}` : folder;
+  // A remote session's terminal is on its own machine.
+  const retry = device ? `Retry it on ${device}.` : 'Retry in the terminal.';
   if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `${s.burn}. Click to jump to its terminal.` };
   if (kind === 'budget-exceeded') return { title: 'Over budget', body: `${text || 'Spend is over your budget'}.` };
   if (kind === 'budget-warning') return { title: 'Nearing your budget', body: `${text || 'Spend is close to your budget'}.` };
@@ -204,7 +217,7 @@ function message(kind, s, text) {
   }
   if (kind === 'turn-failed') {
     const why = Rules.fillText('{fail}', s);
-    return { title: `Turn failed${where ? ` — ${where}` : ''}`, body: why === 'FAILED' ? 'The last request errored. Retry in the terminal.' : `${why[0]}${why.slice(1).toLowerCase()}. Retry in the terminal.` };
+    return { title: `Turn failed${where ? ` — ${where}` : ''}`, body: why === 'FAILED' ? `The last request errored. ${retry}` : `${why[0]}${why.slice(1).toLowerCase()}. ${retry}` };
   }
   return { title: 'No network', body: "This computer is offline; Claude can't reach its servers." };
 }

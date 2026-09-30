@@ -26,7 +26,7 @@ const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
+const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
   TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
@@ -166,6 +166,9 @@ const DEFAULT_CONFIG = {
   busyFocus: true,
   busyFocusShortcut: '',
   voice: { ...Voice.DEFAULTS },
+  // Accept paired devices' events on the Tailscale address too (loopback
+  // only otherwise, which an ssh -R tunnel reaches).
+  remoteTailscale: false,
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -291,6 +294,15 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // session's folder. POST also needs the per-install token, written 0600 next
 // to the port file, so only something that can read your files can move a
 // light.
+// Paired machines report their sessions over POST /remote/event, signed per
+// device, on a port of their own that serves nothing else (src/remote-devices.js,
+// docs/remote-reporter.md). Their writes land outside SESSIONS_DIR, so the
+// watcher there doesn't see them: onChange does.
+const RemoteDevices = require('./src/remote-devices.js')({
+  rootDir: ROOT_DIR,
+  onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
+  log: (m) => console.log(m),
+});
 const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
@@ -298,6 +310,10 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
 });
+// A remote session's folder names a directory on another machine: it is
+// shown, never opened, copied as a path, knocked on or used to find a
+// terminal here.
+const { localSessions } = require('./src/remote-devices.js');
 
 // ── Waiting inputs (P3+): every ask, answerable or not, as one list
 // (state.inputs; schema in docs/waiting-inputs.md). Dialogs no hook can see
@@ -422,6 +438,7 @@ function sweepSessionFiles() {
   const c = loadConfig();
   const maxAge = Math.max(c.waitingStaleHours * 3600000 || 0, c.workingStaleMinutes * 60000 || 0, AGENT_KEEPALIVE_MS) + SESSION_SWEEP_MARGIN_MS;
   const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
+  for (const dir of RemoteDevices.deviceDirs()) removed.push(...Agents.sweepStaleFiles(dir, maxAge));
   if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
 }
 
@@ -432,12 +449,14 @@ const lastPresented = new Map(); // sessionId -> { signal, loggedAt, skipped }
 function logTransition(data, signal, source, now) {
   const sid = String(data.sessionId || '?');
   const last = lastPresented.get(sid);
+  // Remote ids are minted elsewhere; don't let them grow this without bound.
+  if (!last && lastPresented.size >= 1000) lastPresented.delete(lastPresented.keys().next().value);
   if (last && last.signal === signal) return;
   const entry = { signal, loggedAt: last ? last.loggedAt : 0, skipped: last ? last.skipped : 0 };
   if (now - entry.loggedAt >= TRANSITION_LOG_MS) {
     const tail = String(data.cwd || '').split('/').filter(Boolean).slice(-2).join('/');
     const why = signal === 'turn-failed' ? ` [${data.failKind || 'error'}]` : '';
-    console.log(`[state] ${sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal}${why} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
+    console.log(`[state] ${data.logId || sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal}${why} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
     entry.loggedAt = now;
     entry.skipped = 0;
   } else entry.skipped += 1;
@@ -484,6 +503,24 @@ function readSessions(config, pendingIds = []) {
     } catch {
       // skip unreadable/partially-written file
     }
+  }
+  return sessions;
+}
+
+// Paired devices' sessions, through the same reader machine; liveness is the
+// device's heartbeat (a pid on another machine can't be checked from here).
+function readRemoteSessions(config) {
+  const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
+  const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
+  const now = Date.now();
+  const sessions = [];
+  for (const data of RemoteDevices.readSessions()) {
+    const c = Rules.classifySession(data, { now, isGone: () => RemoteDevices.isGone(data, now), workingStaleMs, waitingStaleMs });
+    if (c.dropped === 'gone') logTransition(data, 'gone', 'heartbeat lapsed', now);
+    if (c.held) wakeWhenHoldEnds(data, now);
+    if (!c.live) continue;
+    logTransition(data, c.presented, c.source, now);
+    sessions.push(c.session);
   }
   return sessions;
 }
@@ -590,7 +627,7 @@ function cameosChanged() {
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
-  const sessions = readSessions(config, requests.map((r) => r.sessionId));
+  const sessions = readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   const inputs = PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs });
@@ -1141,7 +1178,7 @@ function maybeNotify(st) {
       // A runaway's whole point is the jump, so it goes even without a known host app.
       const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
       // Another machine's session: nothing on this Mac to jump to.
-      if (isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
+      if (String(n.sessionId || '').startsWith('remote:') || isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
         jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
       }
@@ -1820,7 +1857,7 @@ async function roamAndKnock(st, { force = false } = {}) {
   let appName = null;
   let icon = null;
   try {
-    appName = await terminalForSessions(st.sessions);
+    appName = await terminalForSessions(localSessions(st.sessions));
     if (!appName) return giveUp('no terminal app running', { app: null, running: false });
     if (!force && (await frontmostApp()) === appName) return giveUp('already the front app', { app: appName, running: true, frontmost: true });
     icon = await dockIconRect(appName);
@@ -1880,7 +1917,7 @@ async function knockNow() {
 function maybeRoam(st) {
   const config = loadConfig();
   if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
-  const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
+  const waiting = st.pending?.length || localSessions(st.sessions).some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
@@ -1926,6 +1963,7 @@ function maybeRandomEvent(st) {
   let milestone = false;
   for (const s of st.sessions) {
     if (!seenSessions.has(s.sessionId)) {
+      if (seenSessions.size >= 5000) seenSessions.delete(seenSessions.values().next().value);
       seenSessions.add(s.sessionId);
       stats.sessionsSeen = (stats.sessionsSeen || 0) + 1;
       statsDirty = true;
@@ -2166,14 +2204,16 @@ ipcMain.handle('get-aggregate-status', () => {
 // live signal is a waiting one. Cycles through them, oldest first; a limit
 // hit jumps the queue.
 ipcMain.handle('go-to-needing-session', async () => {
-  const { sessions } = aggregateState();
+  const sessions = localSessions(aggregateState().sessions);
   const needing = sessions
     .filter((s) => WAITING_SIGNALS.has(s.signal))
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 
   if (needing.length === 0) {
     cycleIndex = 0;
-    return { opened: 'none', total: 0 };
+    // Nothing here to jump to, but say where the waiting is.
+    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+    return away ? { opened: 'remote', total: 0, feedback: `waiting on ${away.deviceName}` } : { opened: 'none', total: 0 };
   }
 
   const limits = needing.filter((s) => s.signal === 'limit-hit');
@@ -2213,6 +2253,7 @@ function commitConfig(partial) {
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
   if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
   if ('showWidget' in partial) applyWidgetVisibility();
+  if ('remoteTailscale' in partial) syncTailnetListener();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   if ('voice' in partial) applyVoiceHotkey();
   broadcastStatus();
@@ -2578,13 +2619,17 @@ ipcMain.handle('get-spend', () => {
 let snoozeTimer = null;
 let cycleIndex = 0;
 async function runAction(action, st) {
-  const needing = st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
-  const target = needing[0] || st.sessions[0] || null;
+  const local = localSessions(st.sessions);
+  const needing = local.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  const target = needing[0] || local[0] || null;
   const cwd = target?.cwd || null;
   const folderHint = cwd ? cwd.split('/').filter(Boolean).pop() : '';
   switch (action.type) {
     case 'jump': {
-      if (!needing.length) return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+      if (!needing.length) {
+        const away = st.sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+        return away ? { feedback: `waiting on ${away.deviceName}` } : { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+      }
       const r = await jumpToNeeding();
       return { feedback: r };
     }
@@ -2637,9 +2682,12 @@ async function runAction(action, st) {
 }
 
 async function jumpToNeeding() {
-  const { sessions } = aggregateState();
+  const sessions = localSessions(aggregateState().sessions);
   const needing = sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
-  if (!needing.length) return 'nothing waiting';
+  if (!needing.length) {
+    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+    return away ? `waiting on ${away.deviceName}` : 'nothing waiting';
+  }
   const limits = needing.filter((s) => s.signal === 'limit-hit');
   const queue = limits.length > 0 ? limits : needing;
   cycleIndex = cycleIndex % queue.length;
@@ -2863,6 +2911,39 @@ ipcMain.handle('connect-agent', (e, which) => {
 });
 ipcMain.handle('git-status', () => ({ ...git.status(), enabled: loadConfig().gitSignals !== false }));
 ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+// Not the signal server's port: an ssh -R tunnel makes this one reachable to
+// every user of the far host, so it serves only the signed device route.
+// A bad override is reported in Settings, never thrown at startup.
+const REMOTE_PORT = process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT ? Number(process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT) : SIGNAL_PORT + 1;
+function syncTailnetListener() {
+  return RemoteDevices.syncTailnet(!!loadConfig().remoteTailscale, REMOTE_PORT)
+    .then((r) => { if (r.error) console.log('[remote]', r.error); return r; })
+    .catch((e) => { console.log('[remote] tailnet:', e.message); });
+}
+function remoteDevicesView() {
+  const live = {};
+  for (const s of readRemoteSessions(loadConfig())) live[s.device] = (live[s.device] || 0) + 1;
+  return { devices: RemoteDevices.list(live), port: REMOTE_PORT, loopback: RemoteDevices.loopbackStatus(), tailnet: { enabled: !!loadConfig().remoteTailscale, ...RemoteDevices.tailnetStatus() } };
+}
+ipcMain.handle('remote-devices', () => remoteDevicesView());
+// The pairing code goes to the window that asked, once; nothing else keeps it.
+ipcMain.handle('remote-pair', (_e, name) => {
+  const r = RemoteDevices.pair(String(name || ''));
+  return r.error ? { error: r.error } : { ...remoteDevicesView(), paired: r.device, code: r.code };
+});
+// The clipboard forgets the code after a minute, unless something else has
+// been copied since.
+ipcMain.handle('remote-copy-code', (_e, code) => {
+  const text = String(code || '');
+  if (!/^buddy-pair-v1\./.test(text)) return false;
+  clipboard.writeText(text);
+  setTimeout(() => { if (clipboard.readText() === text) clipboard.writeText(''); }, 60000);
+  return true;
+});
+ipcMain.handle('remote-revoke', (_e, id) => {
+  const revoked = RemoteDevices.revoke(String(id || ''));
+  return { ...remoteDevicesView(), revoked };
+});
 
 ipcMain.handle('choose-sound-file', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
@@ -3058,6 +3139,12 @@ app.whenReady().then(() => {
   startSignalServer();
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
   every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');
+  // Dev and demo runs share this machine with a real install; they only
+  // listen for devices when given a port of their own.
+  if (!IS_DEV_RUN || process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT) RemoteDevices.listenLoopback(REMOTE_PORT);
+  syncTailnetListener();
+  // Tailscale can come up (or change address) after Buddy does.
+  every(60000, () => { if (loadConfig().remoteTailscale) syncTailnetListener(); }, 'tailnet');
   if (DEMO === 'weed') {
     // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
     // at 6½ min a fake session appears so the state changes and the hammer teardown plays.
@@ -3154,7 +3241,7 @@ app.whenReady().then(() => {
       try {
         const st = aggregateState({ ignoreTravel: true });
         report.sessions = st.sessions.map((s) => ({ hostApp: s.hostApp, signal: s.signal }));
-        report.terminal = await terminalForSessions(st.sessions);
+        report.terminal = await terminalForSessions(localSessions(st.sessions));
         report.result = await knockNow();
       } catch (e) {
         report.error = e.stack || e.message;

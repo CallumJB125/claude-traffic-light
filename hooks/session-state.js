@@ -122,9 +122,9 @@ function readJson(file) {
 // failure). Everything the hooks and the app's pollers store on the file is
 // carried through, so a bare signal never wipes it; a held signal keeps its
 // tool too.
-function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp }, nowIso = new Date().toISOString()) {
+function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp, fromSubagent = false }, nowIso = new Date().toISOString()) {
   const p = prev || {};
-  const t = Machine.step(prev, { signal, writer: 'bare' }, nowIso);
+  const t = Machine.step(prev, { signal, writer: 'bare', fromSubagent }, nowIso);
   return {
     ...p,
     sessionId,
@@ -155,8 +155,9 @@ function sessionFileFor(dir, host, source, sessionId) {
 
 // One normalized adapter event ({ signal, sessionId, cwd, tool, pid } from an
 // adapter's normalize()) onto its session file: emit.js --adapter and the
-// app's /hook/:adapter route both land here.
-function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallbackCwd, waitMs }) {
+// app's /hook/:adapter route both land here. `decorate(next, prev)` may add
+// fields inside the same lock (reporter mode's pid and sequence number).
+function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallbackCwd, waitMs, decorate = null }) {
   const sessionId = safeSessionId(event.sessionId || fallbackSession);
   const file = sessionFileFor(dir, host, source, sessionId);
   if (event.signal === 'session-end') { fs.rmSync(file, { force: true }); return file; }
@@ -164,6 +165,7 @@ function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallback
     const prev = readJson(file);
     const next = applyBareSignal(prev, { sessionId, host, source, cwd: (typeof event.cwd === 'string' && event.cwd.slice(0, 500)) || prev?.cwd || fallbackCwd || '', signal: event.signal, tool: typeof event.tool === 'string' ? event.tool.slice(0, 80) : null });
     if (Number.isInteger(event.pid) && event.pid > 1) next.claudePid = event.pid;
+    if (decorate) decorate(next, prev);
     writeJsonAtomic(file, next);
   }, waitMs);
   return file;
@@ -183,4 +185,4 @@ function processGone(session, host) {
   }
 }
 
-module.exports = { sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
+module.exports = { safeSessionId, sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };

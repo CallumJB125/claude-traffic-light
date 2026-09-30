@@ -7,8 +7,9 @@
 //
 // Limitation: /hook/claude and `emit.js --adapter claude` go through
 // applyBareSignal, which records less than set-status.js (no host app, model,
-// subagent list, cost, or PermissionRequest answer). Nothing installs either
-// route for Claude Code; the installed hooks always run set-status.js.
+// subagent list, cost, or PermissionRequest answer). The app's installs
+// always run set-status.js; only reporter mode (hooks/remote.js), whose
+// sessions show on another machine, installs `emit.js --adapter claude`.
 const fs = require('fs');
 const path = require('path');
 const Runtime = require('./runtime.js');

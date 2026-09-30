@@ -102,7 +102,7 @@
       if (!h) { $('headline').textContent = 'Could not load the status — try reopening this window.'; return; }
       $('lamp').className = `lamp ${h.lamp}`;
       $('headline').textContent = h.headline;
-      $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}` : ''}`;
+      $('lampText').textContent = `${h.lampText}${h.sessions ? ` · ${h.sessions} session${h.sessions === 1 ? '' : 's'}${h.remote ? ` (${h.remote})` : ''}` : ''}`;
       $('meaning').textContent = h.meaning || '';
       $('activity-box').hidden = !h.activity;
       $('activity').textContent = h.activity || '';
