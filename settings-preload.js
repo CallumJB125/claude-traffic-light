@@ -22,4 +22,8 @@ contextBridge.exposeInMainWorld('settingsApi', {
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
   exportSetup: () => ipcRenderer.invoke('setup-export'),
   showDataFolder: () => ipcRenderer.invoke('show-data-folder'),
+  remoteDevices: () => ipcRenderer.invoke('remote-devices'),
+  remotePair: (name) => ipcRenderer.invoke('remote-pair', name),
+  remoteRevoke: (id) => ipcRenderer.invoke('remote-revoke', id),
+  remoteCopyCode: (code) => ipcRenderer.invoke('remote-copy-code', code),
 });

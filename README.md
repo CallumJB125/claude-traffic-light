@@ -192,6 +192,16 @@ Signals: prompt-submit, tool-use, tool-done, tool-failed, stop,
 permission-ask, limit-hit, idle-nudge, session-start, session-end,
 subagent-start, subagent-done.
 
+### Sessions on another machine
+
+Claude Code in tmux on a server can light this widget too. Pair the machine in
+Preferences → Remote devices, then from a checkout on that machine run
+`node hooks/install.js --remote http://127.0.0.1:47173` over an
+`ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:47173:127.0.0.1:47173` tunnel
+(a unix socket on shared hosts, or opt in to Tailscale). Every event is
+signed with the device's own key, and its sessions show under the device's
+name. Recipes, wire format and threat notes: [docs/remote-reporter.md](docs/remote-reporter.md).
+
 ## Windows
 
 `npm run dist:win` builds an x64 installer and a portable exe (cross-built

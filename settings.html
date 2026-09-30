@@ -139,6 +139,15 @@
   #busy-sources { display: flex; flex-direction: column; gap: 3px; padding-left: 23px; }
   .busy-state { font-size: var(--text-xs); color: var(--muted); padding-left: 23px; margin-top: -3px; }
   .busy-state.ok { color: var(--green); }
+  #remote-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #remote-list li { display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  #remote-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #remote-list .who span:last-child { font-size: var(--text-xs); color: var(--muted); }
+  #remote-list:empty { display: none; }
+  #remote-code { display: flex; flex-direction: column; gap: 6px; padding: var(--space-2); background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); }
+  #remote-code[hidden] { display: none; }
+  #remote-list button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #remote-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); user-select: all; }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
     button:active { transform: none; }
@@ -368,6 +377,26 @@
     <div class="hint" id="hint-focus">macOS only lets Buddy read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Buddy never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
   </div>
 
+  <h2>Remote devices</h2>
+  <div class="field" id="remote-devices">
+    <div class="hint">Claude Code on another machine (a server, tmux over SSH) can light this widget: pair the machine here, then run Buddy's hooks there in reporter mode. Its sessions show under the device's name. Buddy never opens their folders or jumps to their terminals.</div>
+    <label for="remote-name">Pair a device</label>
+    <div class="row">
+      <input type="text" id="remote-name" placeholder="devbox" maxlength="40" aria-describedby="remote-pair-status" />
+      <button type="button" class="secondary" id="remote-pair">Pair</button>
+    </div>
+    <div class="hint" id="remote-pair-status" role="status" aria-live="polite"></div>
+    <div id="remote-code" hidden>
+      <div class="hint">Shown once. On <b id="remote-code-name"></b>, run <code>node hooks/remote.js pair http://127.0.0.1:<span class="remote-port">47173</span></code> from a Buddy checkout and paste:</div>
+      <pre id="remote-code-text"></pre>
+      <div class="row"><button type="button" class="secondary" id="remote-copy">Copy code</button><button type="button" class="secondary" id="remote-done">Done</button></div>
+      <div class="hint">The code works once, within 10 minutes. Copied, it leaves the clipboard after a minute. Lost it? Revoke the device and pair again.</div>
+    </div>
+    <ul id="remote-list" aria-label="Paired devices"></ul>
+    <div class="hint">Reach this Mac with a tunnel from here: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> devbox</code>. Every event is signed with the device's own key; revoking stops it at once.</div>
+    <div class="hint" id="remote-listener" role="status" aria-live="polite"></div>
+    <label class="row"><input type="checkbox" id="remoteTailscale" aria-describedby="remote-tailnet" /> Also accept devices over Tailscale</label>
+    <div class="hint" id="remote-tailnet">Listens on this Mac's Tailscale address only, for signed device events and nothing else.</div>
   <h2>Privacy</h2>
   <div class="field" id="privacy">
     <div class="hint">Buddy reads your sessions on this machine and sends nothing to us. The full notice is below, and it is a draft pending legal review.</div>
@@ -424,6 +453,7 @@
       document.getElementById('gitRepos').value = (config.gitRepos || []).join(', ');
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
       loadSpend(config.spend || {}); // F1 spend
+      document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
       document.getElementById('busyHold').checked = config.busyHold !== false;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
@@ -562,8 +592,10 @@
         busyFocus: document.getElementById('busyFocus').checked,
         busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
+        remoteTailscale: document.getElementById('remoteTailscale').checked,
       });
       setTimeout(showBusy, 1500);
+      showRemote(await window.settingsApi.remoteDevices());
       status.className = '';
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 2500);
@@ -600,6 +632,64 @@
         : '';
     };
     window.settingsApi.gitStatus().then(showGit);
+
+    const remoteEl = (id) => document.getElementById(`remote-${id}`);
+    const ago = (iso) => {
+      const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+      return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+    };
+    // textContent throughout: device names come from this window, but a
+    // hand-edited devices.json shouldn't be able to inject markup.
+    function showRemote(v) {
+      if (!v) return;
+      document.querySelectorAll('.remote-port').forEach((el) => { el.textContent = v.port; });
+      const list = remoteEl('list');
+      list.replaceChildren(...v.devices.map((d) => {
+        const li = document.createElement('li');
+        const who = document.createElement('div'); who.className = 'who';
+        const name = document.createElement('span'); name.textContent = d.name;
+        const meta = document.createElement('span');
+        meta.textContent = d.pairing === 'expired' ? 'Code expired unused: revoke and pair again'
+          : d.pairing === 'waiting' ? 'Waiting for the device to use its code'
+          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Buddy started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
+        who.append(name, meta);
+        const revoke = document.createElement('button');
+        revoke.type = 'button'; revoke.className = 'secondary'; revoke.textContent = 'Revoke';
+        revoke.setAttribute('aria-label', `Revoke ${d.name}`);
+        revoke.addEventListener('click', async () => {
+          if (!revoke.dataset.armed) {
+            revoke.dataset.armed = '1'; revoke.textContent = 'Revoke now?'; revoke.classList.add('armed');
+            remoteEl('pair-status').textContent = `Click again to revoke ${d.name}. Its key stops working at once.`;
+            setTimeout(() => { delete revoke.dataset.armed; revoke.textContent = 'Revoke'; revoke.classList.remove('armed'); }, 4000);
+            return;
+          }
+          const r = await window.settingsApi.remoteRevoke(d.id);
+          remoteEl('pair-status').textContent = r.revoked ? `Revoked ${d.name}. Its key no longer works.` : `${d.name} was already gone.`;
+          showRemote(r);
+        });
+        li.append(who, revoke);
+        return li;
+      }));
+      const lb = v.loopback || {};
+      remoteEl('listener').textContent = lb.error ? lb.error : lb.listening ? `Listening for devices on 127.0.0.1:${v.port}.` : 'Not listening for devices in this run.';
+      const t = v.tailnet;
+      remoteEl('tailnet').textContent = !t.enabled ? 'Listens on this Mac\'s Tailscale address only, for signed device events and nothing else.'
+        : t.listening ? `Listening on ${t.address}:${v.port} for signed device events only.`
+        : t.error || 'Not listening yet.';
+    }
+    remoteEl('pair').addEventListener('click', async () => {
+      const r = await window.settingsApi.remotePair(remoteEl('name').value);
+      if (r.error) { remoteEl('pair-status').textContent = r.error; return; }
+      remoteEl('pair-status').textContent = `Paired ${r.paired.name}.`;
+      remoteEl('name').value = '';
+      remoteEl('code-name').textContent = r.paired.name;
+      remoteEl('code-text').textContent = r.code;
+      remoteEl('code').hidden = false;
+      showRemote(r);
+    });
+    remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
+    remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
+    window.settingsApi.remoteDevices().then(showRemote);
     const pvStatus = document.getElementById('privacy-status');
     const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
     document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));

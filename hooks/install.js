@@ -8,7 +8,12 @@ const path = require('path');
 const Claude = require('../adapters/claude-code.js');
 const Runtime = require('../adapters/runtime.js');
 
-if (require.main === module) {
+// `--remote <url>`: this machine becomes a reporter for a Buddy elsewhere
+// (hooks/remote.js pair; it asks for the pairing code).
+const remoteAt = process.argv.indexOf('--remote');
+if (require.main === module && remoteAt >= 0) {
+  require('./remote.js').cli(['pair', process.argv[remoteAt + 1], ...process.argv.slice(2).filter((a) => a === '--no-hooks' || a === '--force')]).then((code) => process.exit(code), (e) => { console.error(e.message); process.exit(1); });
+} else if (require.main === module) {
   const runtime = Runtime.make({ execPath: null, hooksDir: __dirname, dataDir: path.join(os.homedir(), '.claude-traffic-light') });
   try {
     const r = Claude.install({ home: os.homedir(), runtime });

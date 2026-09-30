@@ -44,6 +44,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   }
   fs.writeFileSync(path.join(home, 'window-bounds.json'), JSON.stringify({ x: 200, y: 200, width: 200, height: 200 }));
   const port = await freePort();
+  const remotePort = await freePort();
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
   // run (no hook installs, no login item, no background pollers) without
   // overriding CLAUDE_TRAFFIC_LIGHT_HOME/PORT.
@@ -53,6 +54,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       ...process.env,
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
+      CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
       ...env,
     },
@@ -62,7 +64,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
   };
-  return { app, home, port, projects, cleanup };
+  return { app, home, port, remotePort, projects, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.
