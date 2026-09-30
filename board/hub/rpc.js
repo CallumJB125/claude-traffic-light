@@ -3,7 +3,7 @@
 // repo_id = the run's repo). Network work (GitHub) happens before the queue.
 
 import { randomUUID } from 'node:crypto';
-import { RPC_METHODS } from '../shared/protocol.js';
+import { RPC_METHODS, TOOL_SCOPES } from '../shared/protocol.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
@@ -154,7 +154,7 @@ const METHODS = {
   board_recall(hub, { run, row }, params) {
     const kinds = Array.isArray(params.kinds) ? params.kinds.filter((k) => k === 'handoff') : ['handoff'];
     if (!kinds.length) return { memories: [] };
-    let rows = hub.db.all("SELECT * FROM memories WHERE repo_id = ? AND kind = 'handoff' AND status != 'archived' ORDER BY created_at DESC LIMIT 100", run.repo_id);
+    let rows = hub.db.all("SELECT * FROM memories WHERE repo_id = ? AND card_id IN (SELECT id FROM cards WHERE board_id = ?) AND kind = 'handoff' AND status != 'archived' ORDER BY created_at DESC LIMIT 100", run.repo_id, row.board_id);
     if (Array.isArray(params.paths) && params.paths.length) {
       const ps = params.paths.filter((p) => typeof p === 'string');
       rows = rows.filter((m) => m.path == null || ps.some((p) => p.startsWith(m.path) || m.path.startsWith(p)));
@@ -265,6 +265,26 @@ const METHODS = {
   },
 };
 
+// The scope (protocol TOOL_SCOPES) each runner RPC is held to, runner-only
+// plumbing included. A method missing here is refused, so a new RPC cannot
+// ship without a declared scope.
+export const METHOD_SCOPES = Object.freeze({
+  board_get_card: 'card:read',
+  board_list_cards: 'repo:read',
+  board_ask_human: 'card:write',
+  board_attach_evidence: 'card:write',
+  board_complete: 'card:write',
+  board_release: 'card:write',
+  board_declare_plan: 'card:write',
+  board_check_overlap: 'repo:read',
+  board_recall: 'repo:read',
+  approval: 'permission:ask',
+  team_context: 'repo:read',
+  approval_cancel: 'permission:ask',
+  board_create_card: 'card:create_child',
+  board_add_lesson: 'lesson:suggest',
+});
+
 async function attachEvidence(hub, device, msg) {
   const params = msg.params ?? {};
   if (!EVIDENCE_KINDS.includes(params.kind)) throw new HubError('VALIDATION', `kind must be one of ${EVIDENCE_KINDS.join('|')}`);
@@ -302,6 +322,7 @@ async function attachEvidence(hub, device, msg) {
 
 export async function handleRpc(hub, device, msg) {
   if (!RPC_METHODS.includes(msg.method)) throw new HubError('VALIDATION', `unknown method ${msg.method}`);
+  if (!Object.hasOwn(METHOD_SCOPES, msg.method) || !TOOL_SCOPES[METHOD_SCOPES[msg.method]]) throw new HubError('FORBIDDEN', `method ${msg.method} has no declared scope`);
   if (msg.method === 'board_attach_evidence') return attachEvidence(hub, device, msg);
   const row = hub.card(msg.card_id);
   if (!row) throw new HubError('NOT_FOUND', 'card not found');

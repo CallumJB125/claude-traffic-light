@@ -451,6 +451,8 @@ Server name `board`, stdio, one per run. Each tool forwards `tool {name, args}` 
 | `lesson:suggest` | append a lesson suggestion for this run's repo in the board's org; never read back to agents | `board_add_lesson` |
 | `permission:ask` | ask this card's approvers; cannot grant | `approval` |
 
+The hub keeps the same map for runner RPCs (`hub/rpc.js` `METHOD_SCOPES`), runner-only plumbing included (`team_context`: `repo:read`, `approval_cancel`: `permission:ask`); `handleRpc` refuses (`FORBIDDEN`) any method without an entry. Scopes are enforced by what each method reads and writes, not by claims in the run token. `board_recall` reads only handoff notes whose card is on the run's board.
+
 | Tool | Input (zod) | Output | Runner routing |
 |---|---|---|---|
 | `board_get_card` | `{key?: string}` | card, acceptance, handover_md, open asks, trusted comments; every text field enveloped (§7.4) | rpc |
