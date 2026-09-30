@@ -2168,7 +2168,11 @@ function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
 // Memoized per turns version, spend settings and minute, with the runaway
 // latch carried between recomputes (one notification per episode).
 const spendTracker = Spend.tracker();
+// The visual tests hand in a snapshot they priced against a fixed clock, so a
+// baseline never waits on the refresh or on how many minutes have passed.
+const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 function spendSnapshot(config) {
+  if (SPEND_FIXTURE && fs.existsSync(SPEND_FIXTURE)) return JSON.parse(fs.readFileSync(SPEND_FIXTURE, 'utf8'));
   return spendTurns.turns ? spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend) : null;
 }
 // What the tooltip adds after the spend rule that fired: the burn rate or
