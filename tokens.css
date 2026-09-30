@@ -7,9 +7,10 @@
   --panel-2: #2a2731;
   --line: #35313d;
   --line-strong: #46414f;
+  --line-input: #7a748a;
   --text: #ece8e2;
-  --muted: #9a9484;
-  --faint: #857f72;
+  --muted: #a8a293;
+  --faint: #979183;
   --accent: #da7756;
   --accent-ink: #211f1c;
   --accent-soft: rgba(218, 119, 86, 0.14);
@@ -40,7 +41,7 @@
   --text-lg: 15px;
   --text-xl: 18px;
 
-  --focus: 0 0 0 2px rgba(218, 119, 86, 0.55);
+  --focus: 0 0 0 2px var(--accent);
   --t: 160ms ease;
   --t-fast: 120ms ease;
 }
