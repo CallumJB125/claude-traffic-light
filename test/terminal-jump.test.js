@@ -57,7 +57,10 @@ test('no controlling tty, a failing ps, or no pid all record tty as null without
   let called = false;
   assert.equal(captureTerminal({ env: {}, pid: 0, run: () => { called = true; }, platform: 'darwin' }).tty, null);
   assert.equal(called, false);
-  assert.equal(captureTerminal({ env: {}, pid: 10, run: () => 'pts/3', platform: 'linux' }).tty, '/dev/pts/3');
+  // Linux: nothing reads the tty there, and /bin/ps may not exist, so no probe.
+  let linuxRan = false;
+  assert.equal(captureTerminal({ env: {}, pid: 10, run: () => { linuxRan = true; return 'pts/3'; }, platform: 'linux' }).tty, null);
+  assert.equal(linuxRan, false);
   assert.equal(captureTerminal({ env: {}, pid: 10, run: () => 'ttys1; rm -rf ~', platform: 'darwin' }).tty, null);
 });
 
