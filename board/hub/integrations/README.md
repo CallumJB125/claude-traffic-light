@@ -38,6 +38,17 @@ unless the bind cookie set by `POST …/start` comes back: `__Host-board_int_<pr
 Inside the desktop shell only, the web passes the bind in the connect window's name and the app
 sets the cookie in its connect window; a browser tab gets `_blank` and uses the cookie it has (D42).
 
+**Connect flows.** `authorizeUrl` is a GET redirect. A provider that wants a POSTed form (GitHub's
+App-manifest flow) declares `connect.manifestForm({state, redirectUri, webhookUrl, config}) → {action, fields}`
+and `connect.formHost` (one of `hosts`) instead: `/start` then returns `{form, bind}` and refuses a form whose
+`action` isn't https on exactly `formHost` or whose fields aren't strings; the web renders a real POST form the
+admin submits; the web CSP's `form-action` names each `formHost`. Every flow gets `webhookUrl` (the connection's
+id is minted at `/start`, so a manifest can name its webhook URL) and `config` (the stored `settings.config` of
+your team's active connection of this provider, for a reconnect; else `{}`). `exchange` may return `settings`
+(non-secret scalars ≤ 2 KB → `settings.config`; `autonomy` is ignored) and `next_url` (https on one of `hosts`:
+the success page's single "Continue on <name>" link, e.g. installing the app). Anything else it returns, such
+as an id or org, is ignored.
+
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,
 a stale-timestamp test where the provider signs one, and recorded-fixture tests for each

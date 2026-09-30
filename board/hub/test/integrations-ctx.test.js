@@ -8,6 +8,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { branchName } from '../../shared/fence.js';
 import { cardView } from '../views.js';
 import fake from '../integrations/fake/index.js';
+import { defineConnector } from '../integrations/connector.js';
 import { startHub } from './helpers.js';
 
 async function setup() {
@@ -204,5 +205,174 @@ test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is 
     // A revoked connection's links stop speaking for the card.
     reg.revokeConnection(conn.id, h.ids.alice);
     assert.equal(view().pr_link_status, null);
+  } finally { await h.close(); }
+});
+
+// ── App-manifest connect ────────────────────────────────────────────────────
+
+// Shaped like GitHub's flow: POST a manifest to the provider's form; it
+// redirects back with ?code=, which exchange() converts; next_url is where the
+// admin installs the app.
+function manifestConnector({ id = 'fake-app', action = null, fields = null, exchange = null, seen = [] } = {}) {
+  return defineConnector({
+    id, name: 'Fake App', scopes: ['pull_requests:read'], secrets: ['private_key'], hosts: ['fake-app.example', 'api.fake-app.example'],
+    connect: {
+      kind: 'app_install',
+      formHost: 'fake-app.example',
+      manifestForm: (a) => {
+        seen.push(a);
+        return {
+          action: action ?? `https://fake-app.example/settings/apps/new?state=${encodeURIComponent(a.state)}`,
+          fields: fields ?? { manifest: JSON.stringify({ name: 'Buddy', redirect_url: a.redirectUri, hook_attributes: { url: a.webhookUrl }, public: false }) },
+        };
+      },
+      exchange: exchange ?? (async (a) => {
+        seen.push(a);
+        if (a.query.get('code') !== 'good-code') throw new Error('bad code');
+        return { external_id: 'app-1', display_name: 'Fake App (acme)', scopes: ['pull_requests:read'], secrets: { private_key: 'pk_secret' }, settings: { app_id: 12, app_slug: 'buddy-acme' }, next_url: 'https://fake-app.example/apps/buddy-acme/installations/new' };
+      }),
+    },
+  });
+}
+
+test('defineConnector: a manifest form is app_install only, needs exchange and a declared formHost, and excludes authorizeUrl', () => {
+  const base = { id: 'm-x', name: 'M', scopes: [], secrets: [], hosts: ['fake-app.example'] };
+  const ok = { kind: 'app_install', formHost: 'fake-app.example', manifestForm: () => ({}), exchange: async () => ({}) };
+  assert.doesNotThrow(() => defineConnector({ ...base, connect: ok }));
+  assert.throws(() => defineConnector({ ...base, connect: { ...ok, kind: 'oauth' } }), /manifestForm/);
+  assert.throws(() => defineConnector({ ...base, connect: { ...ok, formHost: undefined } }), /formHost/);
+  assert.throws(() => defineConnector({ ...base, connect: { ...ok, formHost: 'evil.example' } }), /formHost/);
+  assert.throws(() => defineConnector({ ...base, connect: { ...ok, authorizeUrl: () => 'x' } }), /not both/);
+  assert.throws(() => defineConnector({ ...base, connect: { ...ok, exchange: undefined } }), /exchange/);
+});
+
+test('manifest: /start returns {form, bind} (state in the action, callback + webhook url in the manifest); the web CSP allows posting to that host only', async () => {
+  const { h, reg } = await setup();
+  try {
+    const alice = await h.login('alice');
+    const before = await fetch(`${h.base}/`);
+    assert.ok(!before.headers.get('content-security-policy').includes('form-action'), 'no manifest connector: CSP unchanged');
+    const seen = [];
+    reg.register(manifestConnector({ seen }));
+    const start = await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
+    assert.equal(start.status, 200, start.text);
+    assert.deepEqual(Object.keys(start.body).sort(), ['bind', 'form']);
+    assert.deepEqual(Object.keys(start.body.form).sort(), ['action', 'fields']);
+    assert.match(start.headers.get('set-cookie'), new RegExp(`^board_int_fake-app=${start.body.bind}; HttpOnly`));
+    const action = new URL(start.body.form.action);
+    assert.equal(action.origin, 'https://fake-app.example');
+    assert.ok(action.searchParams.get('state'));
+    const manifest = JSON.parse(start.body.form.fields.manifest);
+    assert.equal(manifest.redirect_url, `${h.base}/integrations/fake-app/callback`);
+    assert.match(manifest.hook_attributes.url, new RegExp(`^${h.base}/integrations/[0-9a-f-]{36}/webhook$`));
+    assert.deepEqual(seen[0].config, {}, 'no existing connection: empty config');
+    const csp = (await fetch(`${h.base}/`)).headers.get('content-security-policy');
+    assert.match(csp, /; form-action 'self' https:\/\/fake-app\.example$/);
+    assert.match(csp, /^default-src 'self'/);
+  } finally { await h.close(); }
+});
+
+test('manifest: a form for an undeclared host, http, a port or credentials, or with non-string fields is refused', async () => {
+  const { h, reg } = await setup();
+  try {
+    const alice = await h.login('alice');
+    const bad = [
+      { action: 'http://fake-app.example/settings/apps/new' },
+      { action: 'https://api.fake-app.example/settings/apps/new' },
+      { action: 'https://evil.example/settings/apps/new' },
+      { action: 'https://fake-app.example:8443/settings/apps/new' },
+      { action: 'https://u:p@fake-app.example/settings/apps/new' },
+      { action: 'javascript:alert(1)' },
+      { fields: { manifest: { name: 'x' } } },
+      { fields: { 'bad key': 'x' } },
+      { fields: 'manifest' },
+    ];
+    for (const [i, over] of bad.entries()) {
+      reg.register(manifestConnector({ id: `bad-app-${i}`, ...over }));
+      const r = await h.api(alice, 'POST', `/api/integrations/bad-app-${i}/start`, { request_id: randomUUID() });
+      assert.equal(r.status, 403, `${JSON.stringify(over)} ${r.text}`);
+      assert.equal(r.body.error.code, 'POLICY_DENIED');
+      assert.equal(r.headers.get('set-cookie'), null);
+    }
+  } finally { await h.close(); }
+});
+
+test('manifest callback: same state + bind; the connection takes the minted id; settings land under config (never autonomy); next_url is one link', async () => {
+  const { h, reg } = await setup();
+  try {
+    const seen = [];
+    reg.register(manifestConnector({
+      seen,
+      exchange: async (a) => {
+        seen.push(a);
+        return {
+          external_id: 'app-1', display_name: 'Fake App (acme)', scopes: [], secrets: { private_key: 'pk_secret' },
+          settings: { app_id: 12, app_slug: 'buddy-acme', autonomy: { 'x.y': 'auto' }, nested: { a: 1 } },
+          next_url: 'https://fake-app.example/apps/buddy-acme/installations/new', id: 'forged-id', orgId: 'forged-org',
+        };
+      },
+    }));
+    const alice = await h.login('alice');
+    const start = await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
+    const state = new URL(start.body.form.action).searchParams.get('state');
+    const hook = JSON.parse(start.body.form.fields.manifest).hook_attributes.url;
+    const cb = (q, bind = start.body.bind) => fetch(`${h.base}/integrations/fake-app/callback?${new URLSearchParams(q)}`, { headers: bind ? { cookie: `board_int_fake-app=${bind}` } : {} });
+    assert.equal((await cb({ state, code: 'good-code' }, null)).status, 400, 'the bind cookie is still mandatory');
+    const r = await cb({ state, code: 'good-code' });
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.match(html, /Fake App \(acme\) is connected/);
+    const links = [...html.matchAll(/<a [^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g)];
+    assert.equal(links.length, 1);
+    assert.equal(links[0][1], 'https://fake-app.example/apps/buddy-acme/installations/new');
+    assert.equal(links[0][2], 'Continue on Fake App');
+    assert.ok(!html.includes('pk_secret'));
+    const [conn] = reg.list(h.ids.org).filter((c) => c.provider === 'fake-app');
+    assert.equal(hook, `${h.base}/integrations/${conn.id}/webhook`);
+    assert.deepEqual(conn.settings, { config: { app_id: 12, app_slug: 'buddy-acme' } });
+    assert.equal(h.db.get('SELECT org_id FROM connections WHERE id = ?', conn.id).org_id, h.ids.org);
+    assert.equal(seen[1].webhookUrl, hook);
+    assert.deepEqual(seen[1].config, {});
+    // A reconnect start hands the stored non-secret config back to the connector.
+    await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
+    assert.deepEqual(seen[2].config, { app_id: 12, app_slug: 'buddy-acme' });
+  } finally { await h.close(); }
+});
+
+test('manifest callback: a next_url off the declared hosts or not https is dropped; oversized settings refuse the connection', async () => {
+  const { h, reg } = await setup();
+  try {
+    const alice = await h.login('alice');
+    let n = 0;
+    for (const next of ['http://fake-app.example/install', 'https://evil.example/install', 'https://fake-app.example:444/x', 'javascript:alert(1)', 42]) {
+      n += 1;
+      reg.register(manifestConnector({ id: `nx-${n}`, exchange: async () => ({ external_id: `app-${n}`, display_name: 'App', scopes: [], secrets: {}, next_url: next }) }));
+      const start = await h.api(alice, 'POST', `/api/integrations/nx-${n}/start`, { request_id: randomUUID() });
+      const state = new URL(start.body.form.action).searchParams.get('state');
+      const r = await fetch(`${h.base}/integrations/nx-${n}/callback?${new URLSearchParams({ state, code: 'c' })}`, { headers: { cookie: `board_int_nx-${n}=${start.body.bind}` } });
+      assert.equal(r.status, 200, String(next));
+      const html = await r.text();
+      assert.ok(!html.includes('<a '), String(next));
+      assert.match(html, /close this window/);
+    }
+    reg.register(manifestConnector({ id: 'big-app', exchange: async () => ({ external_id: 'app-big', scopes: [], secrets: {}, settings: { blob: 'x'.repeat(2100) } }) }));
+    const start = await h.api(alice, 'POST', '/api/integrations/big-app/start', { request_id: randomUUID() });
+    const state = new URL(start.body.form.action).searchParams.get('state');
+    const r = await fetch(`${h.base}/integrations/big-app/callback?${new URLSearchParams({ state, code: 'c' })}`, { headers: { cookie: `board_int_big-app=${start.body.bind}` } });
+    assert.equal(r.status, 400);
+    assert.equal(reg.list(h.ids.org).filter((c) => c.provider === 'big-app').length, 0);
+  } finally { await h.close(); }
+});
+
+test('token connect: verifyToken cannot choose the connection id', async () => {
+  const { h, reg } = await setup();
+  try {
+    const forged = '00000000-0000-4000-8000-000000000000';
+    reg.register(defineConnector({ id: 'tok-id', name: 'Tok', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({ external_id: 'w-tok', id: forged }) } }));
+    const alice = await h.login('alice');
+    const r = await h.api(alice, 'POST', '/api/integrations/tok-id/token', { request_id: randomUUID(), token: 'abc' });
+    assert.equal(r.status, 200, r.text);
+    assert.notEqual(r.body.connection.id, forged);
+    assert.match(r.body.connection.id, /^[0-9a-f-]{36}$/);
   } finally { await h.close(); }
 });
