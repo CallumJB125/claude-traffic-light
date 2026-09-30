@@ -276,6 +276,20 @@
     <div class="hint" id="hint-git-deploy">Workflow names that count as a deploy, comma-separated.</div>
   </div>
 
+  <!-- ── Voice (F7 push-to-talk questions) ── self-contained: saves on change -->
+  <h2>Voice</h2>
+  <div class="field">
+    <label for="voice-hotkey">Hold to ask a question</label>
+    <div class="row">
+      <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
+    </div>
+    <div class="hint" id="voice-hint" role="status" aria-live="polite">Hold the key, ask “What's blocked?”, “What's my Claude doing?”, “How much have I spent today?” or “What happened while I was out?”, and let go. Buddy answers out loud. Speech is turned into text on this Mac; audio is never stored or sent.</div>
+    <label class="row"><input type="checkbox" id="voice-longPress" /> Press and hold the widget to ask</label>
+    <label class="row"><input type="checkbox" id="voice-askClaude" /> Other questions: ask my own Claude (Haiku)</label>
+    <div class="hint">Anything outside the four questions goes to your own <code>claude</code> login, with no tools, settings or MCP servers, capped at 5 cents a question. It sees session states and today's spend, never your code.</div>
+  </div>
+  <!-- ── end Voice ── -->
+
   <div class="field">
     <div class="group-label">What the lights mean</div>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
@@ -560,6 +574,34 @@
     };
     window.settingsApi.gitStatus().then(showGit);
     load();
+
+    // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.
+    (async () => {
+      const hotkey = document.getElementById('voice-hotkey');
+      const longPress = document.getElementById('voice-longPress');
+      const askClaude = document.getElementById('voice-askClaude');
+      const hint = document.getElementById('voice-hint');
+      const intro = hint.textContent;
+      const [config, st] = await Promise.all([window.settingsApi.getConfig(), window.settingsApi.voiceStatus()]);
+      for (const h of st.hotkeys) hotkey.append(new Option(h.label, h.accelerator));
+      const v = config.voice || {};
+      hotkey.value = v.hotkey || '';
+      longPress.checked = v.longPress !== false;
+      askClaude.checked = !!v.askClaude;
+      const show = (cur) => {
+        hint.textContent = !st.available ? st.reason
+          : cur.taken ? `${cur.taken} is taken by another app — pick another key.`
+            : intro;
+      };
+      show({ taken: st.hotkeyTaken });
+      if (!st.available) for (const el of [hotkey, longPress, askClaude]) el.disabled = true;
+      const save = async () => {
+        await window.settingsApi.saveConfig({ voice: { hotkey: hotkey.value || null, longPress: longPress.checked, askClaude: askClaude.checked } });
+        const now = await window.settingsApi.voiceStatus();
+        show({ taken: now.hotkeyTaken });
+      };
+      for (const el of [hotkey, longPress, askClaude]) el.addEventListener('change', () => save().catch((err) => { hint.textContent = `Save failed — ${err.message}`; }));
+    })();
   </script>
 </body>
 </html>

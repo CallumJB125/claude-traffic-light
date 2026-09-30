@@ -29,4 +29,10 @@ contextBridge.exposeInMainWorld('trafficLight', {
   gesture: (g) => ipcRenderer.invoke('gesture', g),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
+  // Push-to-talk (F7): long-press starts and ends a question; main pushes
+  // listening / thinking / talking / idle / error back for the mic badge and the mouth.
+  voiceEnabled: () => ipcRenderer.invoke('voice-enabled'),
+  voiceStart: () => ipcRenderer.invoke('voice-start'),
+  voiceStop: () => ipcRenderer.invoke('voice-stop'),
+  onVoice: (cb) => ipcRenderer.on('voice-state', (e, st) => cb(st)),
 });

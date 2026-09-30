@@ -435,6 +435,8 @@
       <rect x="48" y="42" width="4" height="8" rx="1.5" />
     </g>
     <g class="mouth-anchor"><rect class="grumpy-mouth" x="26" y="49" width="12" height="1.8" rx="0.9" /></g>
+    <!-- talking (rig.talking): an open mouth that works while he speaks an answer -->
+    <g class="mouth-anchor"><g class="talk-mouth"><rect x="27.5" y="48.2" width="9" height="3.6" rx="1.6" fill="#211f1c" /><rect class="talk-tongue" x="29.5" y="50.3" width="5" height="1.3" rx="0.6" fill="#c2574a" /></g></g>
     <!-- prop: guitar, slung across the front, strummed by a small hand -->
     <g class="prop prop-guitar">
       <rect x="24" y="48" width="20" height="11" rx="4" fill="#8a5a2b" />
@@ -1729,6 +1731,13 @@
     }
     // Poke the pet: it reacts for a second and a half.
     let petTimer = null;
+    // Push-to-talk: the mouth moves for as long as the spoken answer lasts.
+    // An overlay like grumpy, so whatever pose the rules chose carries on.
+    function talking(on) {
+      if (svg.classList.contains('talking') === !!on) return;
+      svg.classList.toggle('talking', !!on);
+      if (ambient) ambient.scan();
+    }
     function pokePet() {
       if (!current || !current.pet || current.pet === 'none') return false;
       svg.classList.remove('pet-react'); void svg.getBoundingClientRect(); svg.classList.add('pet-react');
@@ -1759,7 +1768,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, talking, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

@@ -729,3 +729,19 @@ test('reduced motion: a finite animation’s un-animated transform/opacity is it
   assert.ok(checked.length >= 5, `expected to check the zyn/juice end states, checked ${checked.length}`);
   assert.deepEqual(wrong, []);
 });
+
+// ── Talking (push-to-talk answers) ─────────────────────────────────────────
+test('rig.talking works the mouth over any pose, and the other mouths step aside', () => {
+  const { svg, rig } = mount();
+  rig.setLook({ lamp: 'green', pose: 'grin' });
+  assert.ok(svg.querySelector('.mouth-anchor .talk-mouth'), 'the talking mouth sits in a mouth anchor, so photo cameos move it too');
+  rig.talking(true);
+  assert.ok(svg.classList.contains('talking'));
+  assert.ok(svg.classList.contains('pose-grin'), 'the pose carries on');
+  rig.setLook({ lamp: 'amber', pose: 'wave' });
+  assert.ok(svg.classList.contains('talking'), 'a status push does not stop the talking');
+  rig.talking(false);
+  assert.ok(!svg.classList.contains('talking'));
+  assert.match(RIG_CSS, /\.rig\.talking \.talk-mouth \{ opacity: 1; animation: rig-talk-jaw /);
+  assert.match(RIG_CSS, /\.rig\.talking :is\(\.grin, \.grumpy-mouth, \.cameo-lips\) \{ opacity: 0; \}\s*$/, 'last, so it beats the grin and munch mouths');
+});

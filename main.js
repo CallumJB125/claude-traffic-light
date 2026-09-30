@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -19,6 +19,7 @@ const Setup = require('./setup.js');
 const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
+const Voice = require('./src/voice.js');
 const http = require('http');
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions });
@@ -158,6 +159,7 @@ const DEFAULT_CONFIG = {
   busyIcsUrl: '',
   busyFocus: true,
   busyFocusShortcut: '',
+  voice: { ...Voice.DEFAULTS },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -190,6 +192,7 @@ function buildConfig() {
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
   config.spend = Spend.normalize(saved.spend);
+  config.voice = Voice.normalizeConfig(saved.voice);
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -2025,6 +2028,7 @@ function commitConfig(partial) {
   if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
+  if ('voice' in partial) applyVoiceHotkey();
   broadcastStatus();
   return next;
 }
@@ -2381,6 +2385,103 @@ ipcMain.handle('gesture', async (e, gesture) => {
   try { return await runAction(action, st); } catch (err) { return { feedback: err.message }; }
 });
 
+// ── Voice: push-to-talk questions (F7 step 1, src/voice.js) ──────────────────
+// Hold the hotkey (none until picked in Preferences) or press and hold the
+// widget; the on-device helper turns the question into text, Buddy answers
+// out loud and his mouth moves while he talks. Questions only: nothing here
+// changes any state. The mic is only open while the key or the press is held,
+// and the widget shows a mic badge the whole time.
+const VOICE_HELPER = app.isPackaged ? path.join(process.resourcesPath, 'voice', 'buddy-listen') : path.join(__dirname, 'native', 'voice', 'build', 'buddy-listen');
+const McpServer = require('./mcp-server.js');
+const sendVoice = (st) => win?.webContents.send('voice-state', st);
+const VoiceHelper = require('./src/voice-helper.js');
+const { spawn } = require('child_process');
+const flow = VoiceHelper.createFlow({ reply: voiceReply, speak, send: sendVoice, speakable: Voice.speakable });
+const listener = VoiceHelper.createListener({
+  spawn, helperPath: VOICE_HELPER, exists: fs.existsSync,
+  onState: sendVoice, onFinal: (text) => { flow.question(text).catch((err) => console.warn('[voice]', err.message)); }, log: console.log,
+});
+// The last stretch the screen was locked or the Mac asleep: "while I was out".
+let awayFrom = null;
+let lastAway = null;
+const AWAY_FRESH_MS = 12 * 3600000;
+
+async function voiceReply(text, onCancel) {
+  const intent = Voice.parseIntent(text);
+  const cfg = Voice.normalizeConfig(loadConfig().voice);
+  const free = intent.intent === 'unknown' && cfg.askClaude;
+  // The transcript itself stays out of app.log; the intent is enough to debug.
+  console.log(`[voice] intent ${intent.intent}${free ? ' (asking claude)' : ''}`);
+  const st = aggregateState({ ignoreTravel: true });
+  const now = Date.now();
+  const ctx = { sessions: st.sessions || [], pending: st.pending || [], now };
+  if (intent.intent === 'spend' || free) ctx.turns = await getUsageTurns();
+  if (intent.intent === 'away' || free) {
+    ctx.transitions = McpServer.buddyRecentTransitions({ root: ROOT_DIR, limit: 500 }).transitions;
+    const away = lastAway && now - lastAway.to < AWAY_FRESH_MS ? lastAway : null;
+    ctx.since = away ? away.from : undefined;
+    ctx.awayKnown = !!away;
+  }
+  if (free) {
+    const ask = VoiceHelper.askClaude({
+      spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
+      env: Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`),
+    });
+    onCancel(ask.cancel);
+    const said = await ask.promise;
+    if (said) return said;
+  }
+  return Voice.answer(intent, ctx);
+}
+
+function startListening(holdKey) {
+  flow.interrupt();
+  const r = listener.start({ holdKey });
+  if (!r.ok && r.reason !== 'already listening') sendVoice({ state: 'error', error: r.reason });
+  return r;
+}
+
+let voiceHotkey = null;
+let voiceHotkeyTaken = null;
+function applyVoiceHotkey() {
+  if (voiceHotkey) { globalShortcut.unregister(voiceHotkey); voiceHotkey = null; }
+  voiceHotkeyTaken = null;
+  if (!IS_MAC || IS_DEV_RUN) return;
+  const hk = Voice.hotkey(Voice.normalizeConfig(loadConfig().voice).hotkey);
+  if (!hk) return;
+  // Held: the helper sees the key come up (and gives up if it can't read it).
+  const ok = globalShortcut.register(hk.accelerator, () => {
+    if (!listener.listening) startListening(hk.keyCode);
+  });
+  if (ok) voiceHotkey = hk.accelerator;
+  else { voiceHotkeyTaken = hk.accelerator; console.warn(`[voice] ${hk.accelerator} is already taken by another app`); }
+}
+
+function initVoice() {
+  powerMonitor.on('lock-screen', () => { awayFrom = awayFrom || Date.now(); });
+  powerMonitor.on('suspend', () => { awayFrom = awayFrom || Date.now(); });
+  const back = () => { if (awayFrom) lastAway = { from: awayFrom, to: Date.now() }; awayFrom = null; };
+  powerMonitor.on('unlock-screen', back);
+  powerMonitor.on('resume', back);
+  applyVoiceHotkey();
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); listener.cancel(); });
+}
+
+// A long-press where voice can't work (not a Mac, helper not bundled) stays
+// an ordinary click: no tooltip, nothing swallowed.
+ipcMain.handle('voice-start', () => {
+  if (!listener.available() || !Voice.normalizeConfig(loadConfig().voice).longPress) return { ok: false, reason: 'off' };
+  return startListening(null);
+});
+ipcMain.handle('voice-enabled', () => listener.available() && Voice.normalizeConfig(loadConfig().voice).longPress);
+ipcMain.handle('voice-stop', () => listener.stop());
+ipcMain.handle('voice-status', () => ({
+  available: listener.available(),
+  reason: listener.available() ? null : listener.unavailableReason(),
+  hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
+  hotkeyTaken: voiceHotkeyTaken,
+}));
+
 ipcMain.handle('answer-request', (e, id, decision) => {
   const ok = answerRequest(String(id), String(decision));
   setTimeout(broadcastStatus, 250);
@@ -2709,6 +2810,7 @@ app.whenReady().then(() => {
   every(5000, checkOnline, 'net');
   BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
+  initVoice();
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 

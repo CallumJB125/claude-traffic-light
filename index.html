@@ -98,6 +98,13 @@
   #away .more { opacity: 0.65; }
   #away .row.held { cursor: default; opacity: 0.8; }
   #away .row.held:hover { text-decoration: none; color: inherit; }
+  /* Push-to-talk: a red mic badge for as long as the mic is open, so
+     listening is never covert. It stays put under reduced motion. */
+  #mic { display: none; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--danger); color: #fff; place-items: center; pointer-events: none; box-shadow: 0 0 0 0 rgba(226, 35, 26, 0.55); }
+  #mic svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  body.listening #mic { display: grid; animation: mic-ring 1.2s ease-out infinite; }
+  @keyframes mic-ring { from { box-shadow: 0 0 0 0 rgba(226, 35, 26, 0.55); } to { box-shadow: 0 0 0 7px rgba(226, 35, 26, 0); } }
+  @media (prefers-reduced-motion: reduce) { body.listening #mic { animation: none; box-shadow: 0 0 0 2px rgba(226, 35, 26, 0.35); } }
 </style>
 </head>
 <body>
@@ -107,6 +114,7 @@
   </div>
   <button id="gear" title="Lights — program what Claude does (right-click the widget also works)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button>
   <button id="help" title="What does this mean?">?</button>
+  <div id="mic" role="status" aria-label="Listening" title="Listening — let go to ask"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8" rx="2.5"/><path d="M3.3 7.8a4.7 4.7 0 0 0 9.4 0M8 12.5v2"/></svg></div>
   <div id="ask">
     <div id="ask-what"></div>
     <button class="allow" id="allow" title="Allow this tool call">Allow</button>
@@ -299,8 +307,34 @@
       if (dragTo) { window.trafficLight.setWindowPosition(dragTo.x, dragTo.y); dragTo = null; }
     };
 
+    // Press and hold (without moving) = ask a question out loud; letting go
+    // sends it. The release is not also a click.
+    const LONG_PRESS_MS = 650;
+    // Known up front, so a hold where voice can't work stays a plain click.
+    let longPressOn = false;
+    const syncVoice = () => window.trafficLight.voiceEnabled().then((on) => { longPressOn = !!on; }).catch(() => { longPressOn = false; });
+    syncVoice();
+    window.trafficLight.onStatusChanged(syncVoice);
+    let pressTimer = 0;
+    let pressTalking = false;
+    let swallowClick = false;
+    const endPress = () => {
+      clearTimeout(pressTimer);
+      pressTimer = 0;
+      if (!pressTalking) return;
+      pressTalking = false;
+      swallowClick = true;
+      window.trafficLight.voiceStop();
+    };
     app.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      clearTimeout(pressTimer);
+      if (longPressOn) pressTimer = setTimeout(() => {
+        pressTimer = 0;
+        if (!drag || didDrag) return;
+        pressTalking = true;
+        window.trafficLight.voiceStart().then((r) => { if (r && r.ok) drag = null; else pressTalking = false; }).catch(() => { pressTalking = false; });
+      }, LONG_PRESS_MS);
       drag = { grabX: e.clientX, grabY: e.clientY, startX: e.screenX, startY: e.screenY, samples: [{ x: e.screenX, y: e.screenY, t: e.timeStamp }] };
       didDrag = false;
       window.trafficLight.dragStart();
@@ -368,7 +402,7 @@
       const v = window.BuddyMotion.releaseVelocity(d.samples, e.timeStamp);
       window.trafficLight.dragEnd(released ? v.vx : 0, released ? v.vy : 0);
     }
-    window.addEventListener('mouseup', (e) => endDrag(e, true));
+    window.addEventListener('mouseup', (e) => { endPress(); endDrag(e, true); });
 
     let wheelAccum = 0;
     app.addEventListener('wheel', (e) => {
@@ -405,6 +439,28 @@
     document.getElementById('allow').addEventListener('click', (e) => { e.stopPropagation(); answer('allow'); });
     document.getElementById('deny').addEventListener('click', (e) => { e.stopPropagation(); answer('deny'); });
     window.trafficLight.onEvent((name) => rig.playEvent(name));
+
+    // Voice states from main: the mic badge while listening, what was heard
+    // and the answer on the tooltip, and the mouth working while he talks.
+    let voiceTimer = null;
+    function showVoiceText(text, ms) {
+      clearTimeout(feedbackTimer);
+      clearTimeout(voiceTimer);
+      tooltip.textContent = text;
+      tooltip.style.opacity = '1';
+      if (ms) voiceTimer = setTimeout(() => { tooltip.style.opacity = ''; refresh(); }, ms);
+    }
+    window.trafficLight.onVoice((st) => {
+      const listening = st.state === 'listening';
+      document.body.classList.toggle('listening', listening);
+      rig.talking(st.state === 'talking');
+      if (listening) showVoiceText(st.partial ? `“${st.partial}”` : 'Listening…');
+      else if (st.state === 'authorizing') showVoiceText('Allow Claude Buddy in the macOS prompt');
+      else if (st.state === 'thinking') showVoiceText(st.heard ? `“${st.heard}”` : '…');
+      else if (st.state === 'talking') showVoiceText(st.text || '');
+      else if (st.state === 'error') showVoiceText(st.error || 'Could not listen', 6000);
+      else showVoiceText(tooltip.textContent, 4000);
+    });
     window.trafficLight.onSoundFlash(() => rig.flash(600));
 
     // Gestures are programmable per state (Lights → On click). The main
@@ -418,6 +474,7 @@
     let clickTimer = null;
     app.addEventListener('dblclick', () => { clearTimeout(clickTimer); clickTimer = null; gesture('double'); });
     app.addEventListener('click', (e) => {
+      if (swallowClick) { swallowClick = false; return; }
       if (didDrag) return;
       // Clicking an agent chip names it and says what it is doing.
       const chip = e.target.closest && e.target.closest('.minion');

@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld('settingsApi', {
   busyStatus: () => ipcRenderer.invoke('busy-status'),
   busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
   busyReconnectCalendar: () => ipcRenderer.invoke('busy-reconnect-calendar'),
+  voiceStatus: () => ipcRenderer.invoke('voice-status'),
 });

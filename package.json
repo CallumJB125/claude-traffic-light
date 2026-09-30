@@ -6,17 +6,20 @@
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
-    "dist": "npm run calendar-helper && electron-builder --mac",
+    "predist": "npm run calendar-helper && npm run voice-helper",
+    "dist": "electron-builder --mac",
     "test": "node --test test/*.test.js test/adapters/*.test.js",
     "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder --win --x64",
-    "dist:mac": "npm run calendar-helper && electron-builder --mac",
+    "predist:mac": "npm run calendar-helper && npm run voice-helper",
+    "dist:mac": "electron-builder --mac",
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",
     "tune": "electron tools/tuning-main.js",
-    "calendar-helper": "sh scripts/build-calendar-helper.sh"
+    "calendar-helper": "sh scripts/build-calendar-helper.sh",
+    "voice-helper": "node scripts/build-voice-helper.js"
   },
   "author": "",
   "license": "MIT",
@@ -75,7 +78,9 @@
       "target": "dmg",
       "extendInfo": {
         "NSCalendarsFullAccessUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
-        "NSCalendarsUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on."
+        "NSCalendarsUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
+        "NSMicrophoneUsageDescription": "Claude Buddy listens only while you hold the talk key or press and hold the widget, to answer your question.",
+        "NSSpeechRecognitionUsageDescription": "Claude Buddy turns your question into text on this Mac. Audio is never stored or sent anywhere."
       },
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
@@ -85,6 +90,13 @@
           "to": "calendar-helper",
           "filter": [
             "buddy-calendar"
+          ]
+        },
+        {
+          "from": "native/voice/build",
+          "to": "voice",
+          "filter": [
+            "buddy-listen"
           ]
         }
       ],
