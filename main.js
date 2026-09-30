@@ -3059,8 +3059,8 @@ ipcMain.handle('remote-revoke', (_e, id) => {
 });
 
 // ── Health (Preferences → Health, tray Health…) ────────────────────────────
-// Item 1's updater replaces this; until then the check says "not set up yet".
-let updateStatus = Health.notConfigured;
+// The updater answers synchronously from its last check.
+const updateStatus = () => (Updater ? Updater.healthStatus() : { state: 'unknown' });
 function healthReport() {
   const report = Health.runChecks({
     home: os.homedir(),
