@@ -268,6 +268,7 @@ const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: HOOK_PATHS.execPath, hook
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 require('./src/spellcheck.js').keepOffline({ app, getDefaultSession: () => require('electron').session.defaultSession });
+require('./src/desktop-shell.js').setup({ app, Menu });
 
 function claudeHookOpts() {
   return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
