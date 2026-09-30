@@ -12,6 +12,7 @@ import { isLoopback } from './config.js';
 import { publicMember } from './api.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
+import { clientIp } from './ratelimit.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
@@ -23,6 +24,19 @@ function sendJson(res, status, body, headers = {}) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers });
   res.end(data);
 }
+
+// Dispatch-like actions start paid agent runs: a tighter per-member limit.
+const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
+
+export function limitOrThrow(hub, rule, key) {
+  const r = hub.limiter.take(rule, key);
+  if (!r.ok) {
+    const s = Math.max(1, Math.ceil(r.retry_after_ms / 1000));
+    throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
+  }
+}
+
+const retryHeader = (e) => (e.code === 'RATE_LIMITED' && e.extra?.retry_after_s ? { 'retry-after': String(e.extra.retry_after_s) } : {});
 
 function errorBody(e) {
   const { code, message, extra = {} } = e;
@@ -156,6 +170,8 @@ export function createHttpHandler({ hub, api, config }) {
       }
       if (!match) throw new HubError('NOT_FOUND', 'no such route');
       const { r, params } = match;
+      const ip = clientIp(req, config);
+      if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ip);
       if (r.mutating) {
         if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
@@ -166,6 +182,10 @@ export function createHttpHandler({ hub, api, config }) {
       if (rid) {
         const hit = hub.cachedResponse(member.id, rid);
         if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
+      }
+      if (member && r.mutating) {
+        limitOrThrow(hub, 'mutate_member', member.id);
+        if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', member.id);
       }
       let status = 200;
       let out;
@@ -180,7 +200,7 @@ export function createHttpHandler({ hub, api, config }) {
       if (rid) hub.cacheResponse(member.id, rid, status, out);
       return sendJson(res, status, out);
     } catch (e) {
-      if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e));
+      if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
       hub.log.error('http handler failed', { path: url.pathname, err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
     }

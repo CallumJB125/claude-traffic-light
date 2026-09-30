@@ -21,6 +21,7 @@ import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
+import { RateLimiter } from './ratelimit.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -55,6 +56,7 @@ export class Hub extends EventEmitter {
     this.requestCache = new Map();  // `${member}|${request_id}` → {status, body, exp}
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
     this.secret = config.secret ?? this.loadSecret();
+    this.limiter = new RateLimiter({ now: () => this.mono(), limits: config.rateLimits });
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -753,6 +755,7 @@ export class Hub extends EventEmitter {
     this.pushLeaseTicks();
     this.sweepRequestCache();
     this.sweepPendingCmds();
+    this.limiter.sweep();
     await this.idle();
   }
 

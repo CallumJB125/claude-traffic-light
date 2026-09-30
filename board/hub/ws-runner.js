@@ -79,6 +79,15 @@ export class RunnerConn {
   }
 
   onMessage(data) {
+    if (this.closed) return;
+    // A runner past its frame cap is disconnected, not dropped frame by frame:
+    // it reconnects with backoff and replays its outbox, so nothing is lost.
+    if (!this.hub.limiter.take('ws_runner', this.device_id).ok) {
+      this.hub.log.warn('runner over its frame rate: disconnecting', { device_id: this.device_id });
+      this.closed = true;
+      this.close(WS_CLOSE.RATE_LIMITED, 'rate limited');
+      return;
+    }
     let msg;
     try { msg = JSON.parse(String(data)); } catch {
       this.error('VALIDATION', 'frame is not JSON');

@@ -124,6 +124,8 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 | `GET /api/boards/:board_id/journal?after_seq=&limit=` | member (board's org) | — | `{rows:[{seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload}], next_after_seq}`; this board's rows only, `seq` ascending, `limit` ≤ 1000 (default 200) | 404 |
 | `POST /api/members` | admin | `{request_id, github_login, github_id, email, display_name, role}` | `{member}` | `CONFLICT` |
 
+**Rate limits** (`hub/ratelimit.js`, token buckets on the hub monotonic clock, `config.rateLimits` overrides): every mutating request is limited per client IP (`mutate_ip` 300/min; `/api/dev/login` uses `login_ip` 10/min instead), and after auth per member (`mutate_member` 120/min), with a tighter per-member bucket for the actions that start paid runs (`dispatch`, `retry`, `take_over_with_claude`: `dispatch_member` 30/min). A replayed `request_id` served from the D8 cache costs nothing. Over the limit: `429 RATE_LIMITED`, header `Retry-After: <s>`, body `error.retry_after_s`. The client IP is the socket address, or `CF-Connecting-IP` under `BOARD_AUTH=access` (the hub sits on loopback behind the tunnel).
+
 **Actions** (`:action` → `states.js` event; the hub builds `ctx` per §10.2):
 
 | `:action` | Extra body | Event | Notes |
@@ -142,7 +144,7 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 
 ### 5.3 WebSocket `/ws/board`
 
-Read-only push; every mutation goes over HTTP. Frames are JSON text. Server pings every 20 s (WS ping frame); client may send `ping` → `pong`.
+Read-only push; every mutation goes over HTTP. Frames are JSON text. Server pings every 20 s (WS ping frame); client may send `ping` → `pong`. A browser socket may send 60 frames per 10 s (`ws_browser`); past that each frame gets `error{code:'RATE_LIMITED'}` and is ignored.
 
 Client → hub (`browser→hub` in `protocol.SHAPES`):
 
@@ -222,7 +224,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 
 ### 6.1 Connection
 
-`wss://<hub>/ws/runner` with the §4.2 headers. Reconnect with `liveness.reconnectDelay(attempt)` (exponential, full jitter, **cap 30 s**). A second connection from the same device replaces the first (old one closed `4409`).
+`wss://<hub>/ws/runner` with the §4.2 headers. Reconnect with `liveness.reconnectDelay(attempt)` (exponential, full jitter, **cap 30 s**). A second connection from the same device replaces the first (old one closed `4409`). A device may send 3000 frames per 10 s (`ws_runner`); past that the hub closes the socket `4429` and the runner reconnects with backoff and replays its outbox (nothing is lost).
 
 1. Runner → `hello {protocol, device_id, runner_version, outbox_head_seq, runs:[{run_id, card_id, fence, local_state}], form_factor?}` where `local_state` ∈ `running | paused_offline | fenced | ending` and `form_factor` ∈ `laptop | desktop` (battery present; `policy.json` `form_factor` overrides). The hub stores it in `devices.form_factor` (migration 002).
    `outbox_id` (a UUID the runner creates together with its outbox, stored in `head.json`) and `outbox_acked_seq` (the runner's persisted acked seq) settle the outbox before `welcome` (migration 004): a changed `outbox_id` means the outbox was wiped and restarted at seq 1, so the hub resets `devices.last_seq_acked` to 0 (and moves `devices.seq_base` past every stored `events.seq` of the device, keeping `UNIQUE(device_id, seq)`); then `last_seq_acked = max(hub, outbox_acked_seq)`, so a hub restored from an older backup never waits for entries the runner already dropped. Each move is a `device.outbox` journal row (§15).
@@ -502,7 +504,7 @@ Codes and HTTP statuses: `protocol.ERRORS`.
 | `BOOT_GRACE`, `TUNNEL_DOWN` | (503) | Hub-internal guard results from `step()`; the reaper just retries next tick. Never sent to clients |
 | `OUT_OF_SCOPE`, `GATE_CLOSED`, `HUB_UNREACHABLE`, `BAD_RUN_TOKEN` | — | Runner-local; returned to board-mcp/shim/CLI, never sent by the hub |
 
-WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded).
+WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded), `4429` runner over its frame rate (reconnect with backoff).
 
 ## 9. Versioning
 

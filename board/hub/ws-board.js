@@ -2,6 +2,7 @@
 // subscribe → snapshot, then card.upsert / event.append / lease.tick for that
 // board. Every mutation goes over HTTP (D18).
 
+import { randomUUID } from 'node:crypto';
 import { validate, compatible, PROTOCOL_VERSION, WS_CLOSE } from '../shared/protocol.js';
 import { boardSnapshot } from './views.js';
 import { publicMember } from './api.js';
@@ -16,6 +17,7 @@ export class BrowserConn {
     this.boardId = null;
     this.helloed = false;
     this.ticks = new Map();
+    this.key = randomUUID();
     hub.browsers.add(this);
     this.ping = setInterval(() => { try { ws.ping(); } catch { /* closed */ } }, PING_MS);
     this.ping.unref?.();
@@ -38,6 +40,11 @@ export class BrowserConn {
   }
 
   onMessage(data) {
+    const rl = this.hub.limiter.take('ws_browser', this.key);
+    if (!rl.ok) {
+      this.send({ type: 'error', code: 'RATE_LIMITED', message: 'too many frames; slow down' });
+      return;
+    }
     let msg;
     try { msg = JSON.parse(String(data)); } catch {
       this.send({ type: 'error', code: 'VALIDATION', message: 'frame is not JSON' });

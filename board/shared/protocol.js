@@ -53,6 +53,7 @@ export const WS_CLOSE = Object.freeze({
   UNAUTHENTICATED: 4401,
   REVOKED: 4403,
   REPLACED: 4409,            // same device connected again; newest connection wins
+  RATE_LIMITED: 4429,        // runner over its frame cap: reconnect with backoff, replay the outbox
   PROTOCOL_UNSUPPORTED: 4426,
 });
 
