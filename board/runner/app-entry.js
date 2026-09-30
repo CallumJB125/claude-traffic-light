@@ -31,6 +31,8 @@ export function configError(m) {
   let u;
   try { u = new URL(m.hub_url); } catch { return 'hub_url is not a URL'; }
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return 'hub_url must be http(s) or ws(s)';
+  // The device token rides this connection: cleartext only to this machine.
+  if ((u.protocol === 'http:' || u.protocol === 'ws:') && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return 'hub_url must be https: or wss: unless it is localhost';
   if (!str(m.device_id)) return 'device_id required';
   if (!str(m.device_token)) return 'device_token required';
   if ((m.cf_client_id != null || m.cf_client_secret != null) && !(str(m.cf_client_id) && str(m.cf_client_secret))) return 'cf_client_id and cf_client_secret go together';

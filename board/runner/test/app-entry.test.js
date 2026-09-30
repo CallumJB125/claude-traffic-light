@@ -88,6 +88,10 @@ test('app mode: a bad runner.config is fatal with a non-zero exit (and never ech
       [{ device_token: '' }, /device_token/],
       [{ data_dir: 'relative/dir' }, /data_dir/],
       [{ hub_url: 'ftp://x' }, /hub_url/],
+      [{ hub_url: 'http://hub.example.com' }, /hub_url must be https: or wss:/],
+      [{ hub_url: 'ws://10.0.0.5:8080/ws/runner' }, /hub_url must be https: or wss:/],
+      [{ hub_url: 'http://localhost.evil.com' }, /hub_url must be https: or wss:/],
+      [{ hub_url: 'http://127.0.0.1.nip.io' }, /hub_url must be https: or wss:/],
       [{ cf_client_secret: undefined }, /cf_client_id and cf_client_secret/],
     ]) {
       const app = spawnApp(root);
