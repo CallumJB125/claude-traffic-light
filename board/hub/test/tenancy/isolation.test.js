@@ -92,7 +92,7 @@ test('T-WS-REVOKE: removal from A closes the A socket (4403) but not S on B; B t
     assert.equal(sb.closeCode, null, 'the B socket stays');
     await as(users.ub, 'POST', `/api/boards/${B.board}/cards`, { request_id: rid(), title: 'still here' });
     await sb.next('card.upsert', (m) => m.card.title === 'still here');
-    assert.equal((await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: fx.db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug })).status, 200);
+    assert.equal((await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: fx.db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug, flow_id: await fx.h.stepUp(users.ub.token, users.ub.email) })).status, 200);
     assert.equal(await sb.closed(), 4403);
   } finally {
     await fx.h.close();

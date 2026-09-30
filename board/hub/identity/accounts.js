@@ -446,13 +446,30 @@ export class Accounts {
    * drop identities and flows, tombstone the user, soft-remove and
    * pseudonymise every membership. Journal rows keep pointing at member ids.
    */
-  deleteAccount(ident, body, { ip }) {
-    const user = ident.user;
-    const f = typeof body.flow_id === 'string' ? this.db.get('SELECT * FROM login_flows WHERE id = ?', body.flow_id) : null;
+  /**
+   * The step-up that deleting an account or a team needs: a purpose:'delete'
+   * flow this user started and verified in the last 5 minutes, not used yet.
+   * → the flow, or STEP_UP_REQUIRED.
+   */
+  requireStepUp(userId, flowId) {
+    const f = typeof flowId === 'string' ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     const age = f?.verified_at ? this.hub.ageOf(f.verified_at) : null;
-    if (!f || f.purpose !== 'delete' || f.user_id !== user.id || f.consumed_at || age == null || age > STEP_UP_MS) {
+    if (!f || f.purpose !== 'delete' || f.user_id !== userId || f.consumed_at || age == null || age > STEP_UP_MS) {
       throw new HubError('STEP_UP_REQUIRED', "confirm with a fresh email code first (start + verify with purpose 'delete')", { max_age_s: STEP_UP_MS / 1000 });
     }
+    return f;
+  }
+
+  /** Spend a step-up (inside the caller's transaction): single use. */
+  consumeStepUp(f) {
+    if (!this.db.run('UPDATE login_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL', this.now(), f.id).changes) {
+      throw new HubError('STEP_UP_REQUIRED', 'that confirmation was already used', { max_age_s: STEP_UP_MS / 1000 });
+    }
+  }
+
+  deleteAccount(ident, body, { ip }) {
+    const user = ident.user;
+    this.requireStepUp(user.id, body.flow_id);
     const soleOwner = this.db.all(`SELECT o.id, o.name FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.role = 'owner' AND m.removed_at IS NULL AND o.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.role = 'owner' AND x.removed_at IS NULL)
@@ -460,6 +477,10 @@ export class Accounts {
     if (soleOwner.length) throw new HubError('CONFLICT', 'you are the only owner of a team with other members: make someone else owner first', { sole_owner_of: soleOwner });
     const now = this.now();
     const email = user.primary_email;
+    // Every address the user held: all of them leave the database (M3).
+    const addresses = [...new Set([email, ...this.db.all('SELECT email FROM identities WHERE user_id = ? AND email IS NOT NULL', user.id).map((r) => r.email)]
+      .filter(Boolean).map((e) => e.toLowerCase()))];
+    const inAddresses = `(${addresses.map(() => '?').join(',') || 'NULL'})`;
     const members = this.db.all('SELECT * FROM members WHERE user_id = ?', user.id);
     const creds = [
       ...this.db.all('SELECT id FROM user_devices WHERE user_id = ? AND revoked_at IS NULL', user.id).map((r) => ({ kind: 'device', id: r.id })),
@@ -467,9 +488,15 @@ export class Accounts {
     ];
     const runnerDevices = this.db.all('SELECT d.id FROM devices d JOIN members m ON m.id = d.member_id WHERE m.user_id = ? AND d.revoked_at IS NULL', user.id);
     this.hub.txn(() => {
-      this.db.run("UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted') WHERE user_id = ?", now, user.id);
+      this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
+        name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
-      this.db.run('DELETE FROM login_flows WHERE user_id = ? OR email = ?', user.id, email ?? '');
+      this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
+      // Invites to them: pending ones are withdrawn, then every invite they
+      // accepted or that names one of their addresses forgets the address.
+      this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'
+        WHERE email IN ${inAddresses} AND accepted_at IS NULL AND revoked_at IS NULL`, now, ...addresses);
+      this.db.run(`UPDATE invites SET email = 'deleted:' || id WHERE accepted_by_user = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
       // Teams where they were the only member are soft-deleted with them (a

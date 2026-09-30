@@ -179,7 +179,7 @@ test('removal and leaving: last owner protected (API and DB trigger); sockets cl
   }
 });
 
-test('rename (admin) and soft delete (owner, confirm_slug): the team 404s everywhere, sockets and devices go', async () => {
+test('rename (admin) and soft delete (owner, confirm_slug + step-up): the team 404s everywhere, sockets and devices go', async () => {
   const fx = await tenancy();
   try {
     const { as, users, A, db } = fx;
@@ -193,7 +193,18 @@ test('rename (admin) and soft delete (owner, confirm_slug): the team 404s everyw
     db.insert('devices', { id: dev, member_id: A.s, name: 'mbp', kind: 'runner', token_hash: randomUUID(), created_at: fx.h.hub.iso() });
     assert.equal((await as(users.aadmin, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha' })).status, 403, 'admins cannot delete');
     assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'wrong' })).status, 400);
-    const d = await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha' });
+    // M4: the slug is not enough; a fresh purpose:'delete' step-up (5 min, single use) is needed too.
+    const noStep = await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha' });
+    assert.equal(noStep.status, 401);
+    assert.equal(noStep.body.error.code, 'STEP_UP_REQUIRED');
+    const stale = await fx.h.stepUp(users.ua.token, users.ua.email);
+    fx.h.clock.advance(5 * 60_000 + 1);
+    assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: stale })).body.error.code, 'STEP_UP_REQUIRED', 'stale');
+    const adminStep = await fx.h.stepUp(users.aadmin.token, users.aadmin.email);
+    assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: adminStep })).body.error.code, 'STEP_UP_REQUIRED', "someone else's step-up");
+    fx.h.clock.advance(15 * 60_000);
+    const flow = await fx.h.stepUp(users.ua.token, users.ua.email);
+    const d = await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: flow });
     assert.equal(d.status, 200, d.text);
     assert.equal(Date.parse(d.body.purge_after) - Date.parse(fx.h.hub.iso()), 7 * 86_400_000);
     assert.equal(await sock.closed(), 4403);
@@ -213,6 +224,7 @@ test('rename (admin) and soft delete (owner, confirm_slug): the team 404s everyw
     const again = await as(users.ua, 'POST', '/api/teams', { name: 'Alpha' });
     assert.equal(again.body.team.slug, 'alpha-2');
     assert.ok(db.get("SELECT 1 AS x FROM audit WHERE action = 'team.delete' AND org_id = ?", A.team));
+    assert.ok(db.get('SELECT consumed_at FROM login_flows WHERE id = ?', flow).consumed_at, 'the step-up is spent');
     await settle();
   } finally {
     await fx.h.close();

@@ -185,13 +185,14 @@ The app flow:
 
 → `{"ok": true}`. In one transaction the hub:
 
-- revokes every device token and deletes the web sessions,
+- revokes every device token (their names, platforms and last IP prefixes are cleared) and deletes the web sessions,
 - deletes the sign-in identities and pending flows,
+- withdraws pending invites addressed to any of the user's addresses, and replaces the address on every invite they accepted or that names them with `deleted:<invite id>`,
 - turns the user into a tombstone ("Deleted user", no email),
 - removes the user from every team, with the member rows renamed "Deleted user" and their email cleared,
 - revokes those members' runner devices.
 
-Cards, comments and journal entries stay with their teams, attributed to "Deleted user". Open sockets close `4401`, and a confirmation mail goes to the old address. Signing in again later with that address creates a new, empty account.
+Afterwards no table holds the address (audit rows only ever carry a keyed hash of it). Cards, comments and journal entries stay with their teams, attributed to "Deleted user". Open sockets close `4401`, and (with a mailer) a confirmation mail goes to the old address. Signing in again later with that address creates a new, empty account.
 
 Errors:
 
@@ -283,7 +284,7 @@ Admin. `{name}` → `{team}`.
 
 ### `DELETE /api/teams/:id`
 
-Owner. `{"confirm_slug": "<the team's slug>"}` (`400` if it doesn't match) → `{ok:true, purge_after}`.
+Owner. `{"confirm_slug": "<the team's slug>", "flow_id": "…"}` → `{ok:true, purge_after}`. Like `DELETE /api/account`, it needs a **step-up**: a `purpose:'delete'` flow this user started and verified within the last 5 minutes (`start {purpose:'delete'}`, the code from the mail, `verify {flow_id, code}`), which this spends (single use). A wrong slug → `400 VALIDATION`; no fresh, unused step-up → `401 STEP_UP_REQUIRED {max_age_s: 300}`.
 
 Soft delete: from that moment every route for the team, its boards and cards answers `404`, it drops out of `/api/account`, runner devices enrolled in it are revoked (their sockets close `4403`), and browser sockets subscribed to its boards close `4403`. The hard purge 7 days later is P5 (not built); there is no restore route yet.
 
@@ -391,7 +392,7 @@ Agreed with the app builder; nothing here exists on the hub yet.
 | `VALIDATION` | 400 | bad body |
 | `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code); an invite token, id or code that is unknown, used, expired, withdrawn or not yours |
 | `UNAUTHENTICATED` | 401 | no, unknown or revoked credential |
-| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` without a fresh verified delete flow (`max_age_s`) |
+| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused verified delete flow (`max_age_s`) |
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |

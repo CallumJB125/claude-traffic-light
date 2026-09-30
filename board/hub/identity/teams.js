@@ -143,7 +143,8 @@ export class Teams {
   }
 
   /**
-   * DELETE /api/teams/:team_id {confirm_slug} (owner): soft delete. Every
+   * DELETE /api/teams/:team_id {confirm_slug, flow_id} (owner, with a fresh
+   * purpose:'delete' step-up that this spends): soft delete. Every
    * route 404s at once, runner devices are revoked (their sockets close
    * 4403), pending invites die and browser sockets on the team close 4403.
    * The hard purge after 7 days is P5.
@@ -152,11 +153,14 @@ export class Teams {
     if (!can(member, 'team.delete')) throw new HubError('FORBIDDEN', 'only an owner can delete the team');
     const o = this.org(member.org_id);
     if (body.confirm_slug !== o.slug) throw new HubError('VALIDATION', 'confirm_slug must be the team slug');
+    // Like deleting the account: a fresh email code first (M4).
+    const step = this.accounts.requireStepUp(member.user_id, body.flow_id);
     const now = this.hub.iso();
     const members = this.db.all('SELECT id FROM members WHERE org_id = ? AND removed_at IS NULL', o.id);
     const devices = this.db.all('SELECT d.id FROM devices d JOIN members m ON m.id = d.member_id WHERE m.org_id = ? AND d.revoked_at IS NULL', o.id);
     const purgeAfter = new Date(this.hub.wallMs() + PURGE_AFTER_MS).toISOString();
     this.hub.txn(() => {
+      this.accounts.consumeStepUp(step);
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');

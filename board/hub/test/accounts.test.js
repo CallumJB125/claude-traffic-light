@@ -532,6 +532,14 @@ test('DELETE /api/account: step-up with a fresh code (5 min), sole-owner guard, 
     const card = await h.call('POST', `/api/boards/${h.ids.board}/cards`, { token: tok, body: { request_id: 'c1', title: 'bob was here' } });
     const sock = await h.browser({ token: tok });
     await sock.subscribe(h.ids.board);
+    // M3: an invite bob accepted and one still pending for his address.
+    const at = alice.body.device_token;
+    const other = await h.call('POST', '/api/teams', { token: at, headers: { origin: h.base }, body: { name: 'Other' } });
+    const third = await h.call('POST', '/api/teams', { token: at, headers: { origin: h.base }, body: { name: 'Third' } });
+    const acc = await h.call('POST', `/api/teams/${other.body.team.id}/invites`, { token: at, headers: { origin: h.base }, body: { email: 'Bob@Dev.local' } });
+    assert.equal((await h.call('POST', '/api/invites/accept', { token: tok, body: { t: acc.body.link.split('#')[1] } })).status, 200);
+    const pend = await h.call('POST', `/api/teams/${third.body.team.id}/invites`, { token: at, headers: { origin: h.base }, body: { email: 'bob@dev.local' } });
+    assert.equal(pend.status, 200, pend.text);
     h.clock.advance(15 * MIN);
     const s2 = await h.call('POST', '/api/auth/email/start', { token: tok, body: { purpose: 'delete' } });
     await h.call('POST', '/api/auth/email/verify', { token: tok, body: { flow_id: s2.body.flow_id, code: h.codeFor('bob@dev.local') } });
@@ -550,6 +558,15 @@ test('DELETE /api/account: step-up with a fresh code (5 min), sole-owner guard, 
     assert.equal(m.display_name, 'Deleted user');
     assert.equal(m.email, null);
     assert.ok(!JSON.stringify(m).includes('bob'), 'no trace of the name in the member row');
+    // M3: nothing in the database still holds the address or the device's details.
+    const dump = dumpDb(h.db);
+    assert.ok(!/bob@dev\.local/i.test(dump), 'the address is gone from every table');
+    const inv = h.db.get('SELECT * FROM invites WHERE id = ?', pend.body.invite.id);
+    assert.deepEqual([inv.email, inv.revoke_reason], [`deleted:${inv.id}`, 'account_deleted']);
+    assert.equal(h.db.get('SELECT email FROM invites WHERE id = ?', acc.body.invite.id).email, `deleted:${acc.body.invite.id}`);
+    for (const d of h.db.all('SELECT * FROM user_devices WHERE user_id = ?', u.id)) {
+      assert.deepEqual([d.name, d.platform, d.last_ip_prefix], ['Deleted device', null, null]);
+    }
     // History keeps pointing at the member id.
     assert.equal(h.db.get('SELECT created_by FROM cards WHERE id = ?', card.body.card.id).created_by, h.ids.bob);
     assert.ok(h.db.get("SELECT 1 AS x FROM journal WHERE actor_id = ? AND kind = 'card.create'", h.ids.bob));
