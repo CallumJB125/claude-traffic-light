@@ -6,7 +6,18 @@ import { icon } from './icons.js';
 import { formatAge } from './view.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
-const DECISION_LABEL = { auto: 'Done automatically', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
+const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
+// Health and audit carry a short code from the hub, never provider text.
+const ERROR_LABEL = {
+  provider_error: 'the tool’s server is having trouble',
+  provider_unreachable: 'can’t reach the tool',
+  host_refused: 'it tried to reach an address it isn’t allowed to',
+  handler_failed: 'an update from the tool could not be applied',
+  handler_timeout: 'an update from the tool took too long',
+  actor_unavailable: 'the person who connected it was removed or can’t edit; reconnect it',
+  rate_limited: 'too many changes at once',
+};
+export const errorLabel = (code) => ERROR_LABEL[code] ?? 'something went wrong';
 
 // Plain names for the actions connectors declare (fallback: the id itself).
 const ACTION_LABEL = {
@@ -24,7 +35,7 @@ function health(conn, nowMs) {
   const hh = conn.health;
   if (!hh) return { tone: 'grey', text: 'No activity yet' };
   if (hh.ok) return { tone: 'ok', text: hh.last_ok_at ? `Working · last event ${formatAge(Math.max(0, nowMs - Date.parse(hh.last_ok_at)))} ago` : 'Working' };
-  return { tone: 'bad', text: `Problem: ${hh.last_error ?? 'unknown error'}` };
+  return { tone: 'bad', text: `Problem: ${errorLabel(hh.last_error)}` };
 }
 
 function autonomyRows(conn, connector, canEdit, busy) {
@@ -50,7 +61,7 @@ function activity(entries) {
   return h('ol', { class: 'integ-activity' }, entries.map((e) => h('li', { key: e.id },
     h('span', { class: 'integ-act-what' }, actionLabel(e.action)),
     e.external_ref ? h('span', { class: 'integ-act-ref num' }, e.external_ref) : null,
-    h('span', { class: 'integ-act-decision', 'data-decision': e.decision }, DECISION_LABEL[e.decision] ?? e.decision),
+    h('span', { class: 'integ-act-decision', 'data-decision': e.decision }, DECISION_LABEL[e.decision] ?? e.decision, e.decision === 'failed' && e.error ? `: ${errorLabel(e.error)}` : null),
     e.card_id ? h('button', { type: 'button', class: 'link small', 'data-action': 'open', 'data-card': e.card_id }, 'Open card') : null,
     h('time', { class: 'integ-act-at muted', datetime: e.at }, new Date(e.at).toLocaleString()))));
 }
@@ -83,6 +94,16 @@ function connectedCard(conn, m) {
 function availableCard(c, m) {
   const tokenOpen = m.tokenFor === c.id;
   const busy = m.busy.has(`integ-connect:${c.id}`);
+  // The desktop app's connect window has its own cookies: the hub then waits
+  // for this admin to finish here (D42).
+  if (m.canEdit && m.completeFor === c.id) {
+    return h('article', { key: c.id, class: 'integ-card integ-available' },
+      h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
+      h('p', { class: 'muted small' }, `Approve ${c.name} in the window that opened, then finish here.`),
+      h('div', { class: 'integ-card-actions' },
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-complete', 'data-provider': c.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Finish connecting'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-complete-cancel' }, 'Cancel')));
+  }
   return h('article', { key: c.id, class: 'integ-card integ-available' },
     h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
     c.scopes?.length ? h('p', { class: 'muted small' }, `Asks for: ${c.scopes.join(', ')}`) : null,
@@ -111,7 +132,7 @@ export function integrationsScreen(model) {
   const data = m.data;
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
-    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, completeFor: m.complete?.provider ?? null, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
   };
   const connected = data.connections ?? [];
   const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id));

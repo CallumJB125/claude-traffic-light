@@ -10,7 +10,7 @@ const available = [
   { id: 'github', name: 'GitHub', scopes: ['pull_requests:read'], connect: 'app_install', actions: { 'system.pr_merged': { default: 'auto' }, 'github.comment': { default: 'ask' } } },
   { id: 'fake', name: 'Fake tracker', scopes: ['issues:read'], connect: 'token', actions: { 'card.create': { default: 'auto' } } },
 ];
-const conn = { id: 'c1', provider: 'github', display_name: 'acme', status: 'active', health: { ok: false, last_error: 'answered 502' }, settings: { autonomy: { 'github.comment': 'off' } } };
+const conn = { id: 'c1', provider: 'github', display_name: 'acme', status: 'active', health: { ok: false, last_error: 'provider_error' }, settings: { autonomy: { 'github.comment': 'off' } } };
 
 const m = (over = {}, role = 'owner') => {
   const base = model([], { view: 'integrations' });
@@ -20,7 +20,7 @@ const m = (over = {}, role = 'owner') => {
 test('connected tools show health and per-action autonomy; available ones offer the right connect', () => {
   const v = integrationsScreen(m());
   const t = textOf(v);
-  assert.match(t, /Problem: answered 502/);
+  assert.match(t, /Problem: the tool’s server is having trouble/);
   assert.match(t, /Mark a card Done when its PR merges/);
   const selects = findAll(v, (n) => n.tag === 'select' && n.props['data-change'] === 'integ-autonomy');
   assert.equal(selects.length, 2);
@@ -58,6 +58,20 @@ test('token form, loading and error states', () => {
   assert.equal(byAttr(integrationsScreen(m({ tokenFor: 'fake' })), 'data-form', 'integ-token').length, 1);
   assert.match(textOf(integrationsScreen(m({ status: 'loading', data: null }))), /Loading integrations/);
   assert.equal(byAttr(integrationsScreen(m({ status: 'error', data: null, error: 'nope' })), 'data-action', 'integ-reload').length, 1);
+});
+
+test('health codes and failed actions read as fixed text; an unknown code never shows raw', () => {
+  const odd = { ...conn, health: { ok: false, last_error: '<script>token xoxb' } };
+  const t = textOf(integrationsScreen(m({ data: { available, connections: [odd], vault: true }, open: 'c1', audit: { c1: [{ id: 'a', action: 'card.create', decision: 'failed', error: 'handler_timeout', at: '2026-09-30T19:00:00Z' }] } })));
+  assert.match(t, /Problem: something went wrong/);
+  assert.ok(!t.includes('xoxb'));
+  assert.match(t, /Failed: an update from the tool took too long/);
+});
+
+test('after starting an OAuth connect the admin can finish it here (desktop connect window)', () => {
+  const v = integrationsScreen(m({ data: { available, connections: [], vault: true }, complete: { provider: 'github', token: 't' } }));
+  assert.equal(byAttr(v, 'data-action', 'integ-complete')[0].props['data-provider'], 'github');
+  assert.equal(byAttr(integrationsScreen(m({ data: { available, connections: [], vault: true }, complete: { provider: 'github', token: 't' } }, 'member')), 'data-action', 'integ-complete').length, 0);
 });
 
 test('Integrations is not in the board view switcher', () => {

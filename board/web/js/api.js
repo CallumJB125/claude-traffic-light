@@ -66,6 +66,7 @@ export const api = {
   integrations: () => call('GET', '/api/integrations'),
   connectToken: (provider, token) => mut('POST', `/api/integrations/${enc(provider)}/token`, { token }),
   startConnect: (provider) => mut('POST', `/api/integrations/${enc(provider)}/start`),
+  completeConnect: (provider, complete_token) => mut('POST', `/api/integrations/${enc(provider)}/complete`, { complete_token }),
   patchIntegration: (id, patch) => mut('PATCH', `/api/integrations/${enc(id)}`, patch),
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),

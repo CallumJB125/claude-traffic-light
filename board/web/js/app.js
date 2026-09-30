@@ -107,9 +107,21 @@ async function connectIntegration(provider, kind) {
   if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
   const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
   if (!res?.url) return;
+  state.integ = { ...state.integ, complete: { provider, token: res.complete_token } };
   // The desktop app opens this name in its own sign-in window; a browser opens a tab.
   window.open(res.url, 'buddy-connect', 'noopener');
-  toast('Finish connecting in the window that opened, then come back here.');
+  update();
+}
+
+// A browser tab connects on the provider's redirect (same cookies); the
+// desktop's connect window can't, so the hub waits for this.
+async function completeIntegration(provider) {
+  const c = state.integ.complete;
+  if (!c || c.provider !== provider) return;
+  const res = await withBusy(`integ-connect:${provider}`, () => api.completeConnect(provider, c.token));
+  state.integ = { ...state.integ, complete: null };
+  if (res) toast('Connected.');
+  loadIntegrations();
 }
 
 async function submitIntegrationToken(form) {
@@ -775,6 +787,8 @@ function onClick(e) {
     case 'integ-reload': loadIntegrations(); return;
     case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
     case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
+    case 'integ-complete': completeIntegration(el.dataset.provider); return;
+    case 'integ-complete-cancel': state.integ = { ...state.integ, complete: null }; update(); return;
     case 'integ-activity': toggleActivity(el.dataset.conn); return;
     case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
     case 'integ-disconnect-cancel': state.integ = { ...state.integ, confirmDisconnect: null }; update(); return;
