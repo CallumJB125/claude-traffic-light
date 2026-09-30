@@ -144,8 +144,9 @@ async function withHook(input, askMs, fn) {
     const deadline = Date.now() + 4000;
     while (!req && Date.now() < deadline) {
       const f = fs.existsSync(dir) && fs.readdirSync(dir).find((x) => x.endsWith('.json'));
-      if (f) req = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-      else await new Promise((r) => setTimeout(r, 20));
+      // The hook can remove its request between the listing and the read.
+      if (f) { try { req = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch {} }
+      if (!req) await new Promise((r) => setTimeout(r, 20));
     }
     return await fn({ dir, req, exited, keyFor: srv.keyFor });
   } finally { srv.close(); }
@@ -175,9 +176,13 @@ test('end to end with the real hook: a phone allow is applied only after the hoo
 });
 
 test('end to end: the hook times out first → the phone is told "not applied", not success', async () => {
-  await withHook({ command: 'git status' }, 300, async ({ dir, req, exited, keyFor }) => {
+  // Long enough that a loaded machine still reads the live request and signs it before the
+  // hook gives up; the decision is only sent once the hook has exited.
+  await withHook({ command: 'git status' }, 1500, async ({ dir, req, exited, keyFor }) => {
+    assert.ok(req, 'the hook wrote its request');
     const { approvals, pending, sign } = await approvalsOver(dir, { maxAgeMs: 60000, keyFor });
     const p = await pending.get(req.id);
+    assert.ok(p, 'the request was still live when the phone read it');
     const { envelope } = await sign(p);
     assert.equal(await exited, '', 'hook gave up with no decision');
     const out = await approvals.handleDecision(envelope);
