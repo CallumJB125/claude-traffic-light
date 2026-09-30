@@ -137,6 +137,7 @@ export class RunnerConn {
       case 'out': return this.onOut(msg);
       case 'rpc': return this.onRpc(msg);
       case 'salvage': return this.onSalvage(msg);
+      case 'presence': return this.hub.presence.update(this, msg);
       default: return undefined;
     }
   }

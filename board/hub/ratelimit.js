@@ -11,6 +11,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   mutate_ip: { capacity: 300, per_ms: 60_000 },
   mutate_member: { capacity: 120, per_ms: 60_000 },
   dispatch_member: { capacity: 30, per_ms: 60_000 },   // dispatch, retry, take_over_with_claude
+  presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
   ws_browser: { capacity: 60, per_ms: 10_000 },
