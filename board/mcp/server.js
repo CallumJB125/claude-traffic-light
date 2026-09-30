@@ -22,7 +22,7 @@ export const INSTRUCTIONS = `You are working on a card from your team's board. T
 3. Blocked on a human? board_ask_human with one clear, self-contained question.
 4. Finished? Attach evidence (PR or pushed commit, plus a test run or a no-tests reason) with board_attach_evidence, then board_complete. Can't finish? board_release.
 
-Errors: FENCED or RUN_ENDED mean this card was taken over or stopped; stop working and end your turn. GATE_CLOSED or HUB_UNREACHABLE mean the board is offline; status, progress, handover and comment calls are queued, other calls should be retried later.`;
+Errors: FENCED means this card was taken over or stopped, RUN_ENDED that this run is over (completed, released or stopped); either way stop working and end your turn. GATE_CLOSED or HUB_UNREACHABLE mean the board is offline; status, progress, handover and comment calls are queued, other calls should be retried later.`;
 
 function log(level, msg, extra = {}) {
   process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), level, msg, ...extra })}\n`);

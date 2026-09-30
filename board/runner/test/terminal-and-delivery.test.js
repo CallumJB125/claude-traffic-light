@@ -174,3 +174,63 @@ test('an ended run leaves no worktree or run dir behind; its branch and snapshot
     assert.doesNotMatch(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' }), /T-13/);
   }, { opts: { keepRunFiles: false } });
 });
+
+test('board_complete then RUN_ENDED: ends normally, final snapshot on the outbox, no salvage, no "taken over"', () => withRunner({
+  steps: [
+    { tool: 'Write', input: { file_path: 'done.txt', content: 'ok\n' } },
+    { mcp: 'board_complete', args: { summary: 'did it', evidence_ids: ['e1'] } },
+    { tool: 'Bash', input: { command: 'sleep 1' }, ms: 1200 },
+    { result: 'success' },
+  ],
+}, async ({ hub, sup }) => {
+  hub.rpcReply = (f) => (f.method === 'board_complete' ? { ok: true, result: { state: 'in_review' } } : { ok: true, result: {} });
+  const run = await claimRun(sup, hub, offerFor({ key: 'T-14' }));
+  await waitFor(() => run.completed, { what: 'board_complete' });
+  hub.endedRuns.add(run.run_id);
+  sup.sendHbNow();
+  await waitFor(() => run.fenced, { what: 'RUN_ENDED seen' });
+  const pre = await hookCall(run, 'pre', { tool_name: 'Read', tool_input: { file_path: 'README.md' } });
+  assert.match(pre.result.stdout.hookSpecificOutput.permissionDecisionReason, /ended/);
+  assert.doesNotMatch(pre.result.stdout.hookSpecificOutput.permissionDecisionReason, /taken over/);
+  await waitFor(() => run.ended, { what: 'ended', timeout: 8000 });
+  assert.equal(run.endReason, 'completed');
+  assert.equal(run.postFence, false);
+  await waitFor(() => hub.outs('snapshot').some((m) => m.status === 'pushed'), { what: 'final snapshot via outbox' });
+  assert.equal(hub.of('salvage').length, 0, 'a completed run never salvages');
+}));
+
+test('board_release{requeue} then FENCED: ends normally; the fence moved, so the final writes go as salvage without a takeover note', () => withRunner({
+  steps: [
+    { mcp: 'board_release', args: { reason: 'blocked on infra', requeue: true } },
+    { tool: 'Write', input: { file_path: 'late.txt', content: 'late\n' } },
+    { result: 'success' },
+  ],
+}, async ({ hub, sup }) => {
+  hub.rpcReply = (f) => (f.method === 'board_release' ? { ok: true, result: { state: 'queued' } } : { ok: true, result: {} });
+  const run = await claimRun(sup, hub, offerFor({ key: 'T-15' }));
+  await waitFor(() => run.released, { what: 'released' });
+  hub.fencedRuns.add(run.run_id);
+  sup.sendHbNow();
+  await waitFor(() => run.ended, { what: 'ended', timeout: 8000 });
+  assert.equal(run.endReason, 'released');
+  assert.equal(run.postFence, true);
+  assert.equal(hub.of('salvage').filter((s) => s.kind === 'note' && /fenced/.test(s.payload.text)).length, 0);
+}));
+
+test('park: a FENCED heartbeat inside the handover window does not cut it short', () => withRunner({
+  steps: [{ result: 'success' }],
+  on_input: { 'asked for a handover': [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 1500 }, { mcp: 'board_write_handover', args: { patch: { next: 'finish the parser' } } }, { result: 'success' }] },
+}, async ({ hub, sup }) => {
+  const run = await claimRun(sup, hub, offerFor({ key: 'T-16' }));
+  await waitFor(() => !run.backend.turnActive, { what: 'idle' });
+  hub.send({ type: 'cmd', cmd_id: 'p2', run_id: run.run_id, card_id: run.card_id, fence: run.fence, cmd: 'park', wait_ms: 20000 });
+  await waitFor(() => run.handover && run.backend.turnActive, { what: 'handover turn started' });
+  hub.fencedRuns.add(run.run_id);
+  sup.sendHbNow();
+  hub.send({ type: 'fenced', run_id: run.run_id, card_id: run.card_id, held_fence: run.fence, current_fence: run.fence + 1 });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(run.ended, false, 'still inside the park window');
+  await waitFor(() => run.ended, { what: 'ended', timeout: 15000 });
+  assert.equal(run.endReason, 'parked');
+  assert.ok(hub.of('salvage').some((s) => s.kind === 'handover' && s.payload.patch.next === 'finish the parser'), 'the handover written after FENCED arrived');
+}));

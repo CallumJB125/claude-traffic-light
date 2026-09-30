@@ -98,6 +98,7 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
     handoverVersion: 0,
     current: true,         // hb.ack current flag
     fencedRuns: new Set(),
+    endedRuns: new Set(),  // hb.ack current:false reason RUN_ENDED
     holdHb: false,         // withhold hb.acks (silent hub on a live socket)
     heldHb: [],
     down: null,
@@ -142,7 +143,10 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
           break;
         case 'hb':
           if (hub.holdHb) { hub.heldHb.push(() => send(ws, { type: 'hb.ack', seq_hb: f.seq_hb, hub_epoch: hub.epoch, runs: f.runs.map((r) => ({ run_id: r.run_id, fence: r.fence, current: true, state: 'running' })) })); break; }
-          send(ws, { type: 'hb.ack', seq_hb: f.seq_hb, hub_epoch: hub.epoch, runs: f.runs.map((r) => ({ run_id: r.run_id, fence: r.fence, current: hub.current && !hub.fencedRuns.has(r.run_id), state: 'running', ...(hub.fencedRuns.has(r.run_id) ? { reason: 'FENCED' } : {}) })) });
+          send(ws, { type: 'hb.ack', seq_hb: f.seq_hb, hub_epoch: hub.epoch, runs: f.runs.map((r) => {
+            const reason = hub.fencedRuns.has(r.run_id) ? 'FENCED' : hub.endedRuns.has(r.run_id) ? 'RUN_ENDED' : null;
+            return { run_id: r.run_id, fence: r.fence, current: hub.current && !reason, state: 'running', ...(reason ? { reason } : {}) };
+          }) });
           break;
         case 'claim': {
           const body = hub.claimReply ? hub.claimReply(f) : {

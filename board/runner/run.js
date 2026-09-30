@@ -79,6 +79,8 @@ export class Run {
     this.backend = null;
     this.localState = 'running';
     this.fenced = false;
+    this.endedNormally = false;  // fenced because board_complete/board_release ended it, not a takeover
+    this.releaseRequeued = false;
     this.postFence = false;      // hub already bumped the fence (stop/park/fenced): final writes go as salvage
     this.ending = false;
     this.ended = false;
@@ -399,7 +401,7 @@ export class Run {
         await this.backend?.interrupt();
         return;
       case 'stop':
-        this.postFence = true;
+        this.postFence = this.#fenceBumpedOnHub();
         if (this.ending) return;
         this.ending = true;
         this.endReason = 'stopped';
@@ -442,15 +444,34 @@ export class Run {
     this.#end();
   }
 
+  // Only a stop from the hub, park, a takeover or a requeueing release bump the
+  // fence. board_complete (row 31) and a failing release (row 25) end the run
+  // at the same fence, so their final writes stay on the outbox, not salvage.
+  #fenceBumpedOnHub() {
+    if (this.completed) return false;
+    if (this.released) return this.releaseRequeued === true;
+    return true;
+  }
+
   // hb.ack current:false / fenced / rpc FENCED|RUN_ENDED → zombie revival (§6.9).
   async onFenced(reason) {
     if (this.fenced) return;
-    // board_complete/board_release already ended the run on the hub: RUN_ENDED
-    // is the expected answer, not a takeover. Deny further tools and finish normally.
-    if ((this.completed || this.released) && reason === 'RUN_ENDED') {
+    // board_complete/board_release already ended the run on the hub (RUN_ENDED,
+    // or FENCED after a requeue): expected, not a takeover. Deny further tools
+    // and finish normally.
+    if (this.completed || this.released) {
       this.fenced = true;
-      this.postFence = true;
+      this.endedNormally = true;
+      this.postFence = this.#fenceBumpedOnHub();
+      for (const a of this.approvals.values()) a.resolve({ behavior: 'deny', message: 'The run has ended normally.' });
+      this.approvals.clear();
       if (!this.ending) await this.finish(this.completed ? 'completed' : 'released');
+      return;
+    }
+    // Park already bumped the fence; its handover window (wait_ms) still runs
+    // to the end, and its final writes go as salvage.
+    if (this.handover?.mode === 'park' && !this.handover.done) {
+      this.log.info('fenced during park: letting the handover window finish', { run_id: this.run_id, reason });
       return;
     }
     this.fenced = true;
@@ -646,6 +667,7 @@ export class Run {
   }
 
   async #hookPre(payload) {
+    if (this.endedNormally) return deny('this run has ended (the card was completed or released); no more tools');
     if (this.fenced) return deny('this card was taken over; this run is fenced');
     let g = this.gateState();
     if (!g.open && g.reason === 'await_ack') {
@@ -788,6 +810,7 @@ export class Run {
   }
 
   async tool(name, args = {}, ctx = {}) {
+    if (this.endedNormally) throw err('RUN_ENDED', 'this run has ended normally');
     if (this.fenced) throw err('FENCED', 'this card was taken over');
     if (name === 'approval') return this.#approval(args, ctx);
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
@@ -813,6 +836,7 @@ export class Run {
         const r = await this.sup.rpc(this, 'board_release', { reason: this.#text(args.reason, 500), requeue: !!args.requeue });
         this.turnSignals.release = true;
         this.released = true;
+        this.releaseRequeued = r.state === 'queued';
         return r;
       }
       case 'board_declare_plan': {

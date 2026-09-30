@@ -319,7 +319,7 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 |---|---|
 | `interrupt` | stdin `{"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}`; SIGINT if no `control_response` in 2 s |
 | `stop` | **Stop recipe**: interrupt → wait ≤ `INTERRUPT_WAIT_MS` (5 s) → end stdin → SIGTERM → after `STOP_GRACE_MS` (10 s), if the CLI pid **and** its start time (`lstart`) still match: SIGKILL it and `kill -9 -- -<pgid>` every descendant process group (Bash tool trees have their own pgid and reparent to 1). Then snapshot, final facts, exit the run |
-| `park` | Stop recipe after asking for a final handover (as `handover_begin` with `wait_ms` 30 s); the hub already bumped the fence, so the final writes go as `salvage` (§6.9, D7) |
+| `park` | Stop recipe after asking for a final handover (as `handover_begin` with `wait_ms` 30 s); the hub already bumped the fence, so the final writes go as `salvage` (§6.9, D7). A `FENCED` hb.ack / `fenced` frame inside that window is expected and does not cut it short |
 | `handover_begin` | Inject "write your final handover now via board_write_handover" at the next tool boundary (PostToolUse `additionalContext`, or a stdin user message if idle), wait ≤ `wait_ms` (90 s) for `board_write_handover`, then stop recipe, snapshot + push, `handover.complete` |
 
 **Terminal state comes from the stream's `result` message** (`subtype`, `total_cost_usd`, `num_turns`, `terminal_reason`, `permission_denials`), never from the Stop hook (Stop does not fire on `error_max_budget_usd`, spike 3). Mapping: `success` after `board_complete` → nothing (hub already moved); `error_max_budget_usd` → `run.failed{budget}`; rate-limit / usage-limit → `run.failed{limit}` (3 backoff retries first for transient 429s); network patterns → `network` (reuse `failureOf()` regexes from `hooks/set-status.js`); anything else, or CLI exit without `result` → `error`. `--max-budget-usd` overshoots by one API call: the budget is soft by one call (spike 8 in "Design changes forced").
@@ -333,7 +333,9 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 
 ### 6.9 Zombie revival and salvage
 
-`hb.ack current:false` (or `fenced`, or an `rpc` answered `FENCED`/`RUN_ENDED`): set `fenced` (PreToolUse denies "this card was taken over"), interrupt then stop recipe, snapshot to `salvageRef(KEY, n)` (push if possible), send `salvage` frames (handover narrative, snapshot ref, note), tell Buddy. **Promotion rule (D7):** the hub records salvage as events; when a salvage `handover`/`snapshot` comes from the card's **most recent** run and no newer run has been claimed, the hub also promotes it to the current handover version / snapshot with provenance `post_fence`. This is how `park`, `stop` and timed-out handovers keep their final narrative.
+A run that called `board_complete` or `board_release` **ends normally** on `hb.ack current:false` / `fenced` / `RUN_ENDED`: tools are denied with "this run has ended" (never "taken over"), the turn finishes, and the final facts + snapshot stay on the **outbox** (rows `31` and `25` keep the fence); only a requeueing release (row `24`, fence bumped) sends its final snapshot as `salvage`, without a fenced note.
+
+Otherwise `hb.ack current:false` (or `fenced`, or an `rpc` answered `FENCED`/`RUN_ENDED`): set `fenced` (PreToolUse denies "this card was taken over"), interrupt then stop recipe, snapshot to `salvageRef(KEY, n)` (push if possible), send `salvage` frames (handover narrative, snapshot ref, note), tell Buddy. **Promotion rule (D7):** the hub records salvage as events; when a salvage `handover`/`snapshot` comes from the card's **most recent** run and no newer run has been claimed, the hub also promotes it to the current handover version / snapshot with provenance `post_fence`. This is how `park`, `stop` and timed-out handovers keep their final narrative.
 
 ### 6.10 Local surfaces (runner-internal, for Buddy later)
 
