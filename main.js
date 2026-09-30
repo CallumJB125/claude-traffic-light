@@ -308,7 +308,7 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // to the port file, so only something that can read your files can move a
 // light.
 const Smoke = require('./src/smoke.js');
-const AutoUpdate = require('./src/auto-update.js');
+const Updater = require('./src/updater/index.js');
 const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
@@ -3105,13 +3105,10 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
-  // Windows and Linux AppImage install updates themselves; macOS is notify-only
-  // until the app is signed. Reports through UpdateCheck once that lands.
-  if (!IS_DEV_RUN) {
-    let updateCheck = null;
-    try { updateCheck = require('./src/update-check.js'); } catch { /* notify layer not in this build */ }
-    AutoUpdate.start({ app, updateCheck });
-  }
+  // In-app updates on every platform, each checked against the signed
+  // release (src/updater/). A dev run gets the IPC but never installs.
+  Updater.start({ app, ipcMain, net, dev: IS_DEV_RUN, isBusy: () => Updater.busyReason(aggregateState({ ignoreTravel: true })) });
+  Updater.markLaunched({ app });
   startSignalServer();
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
   every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');
