@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   confirm: (yes) => call('confirm', !!yes),
   email: (email) => call('email', str(email)),
   code: (code) => call('code', str(code)),
+  oauth: (provider) => call('oauth', str(provider)),
+  cancelOAuth: () => call('cancelOAuth'),
   resend: () => call('resend'),
   createTeam: (name) => call('createTeam', str(name)),
   // Team actions name the team the page rendered; main refuses them if it changed.

@@ -12,6 +12,9 @@ const { SCHEMES } = require('./brand');
 
 const ROUTES = {
   health: ['GET', '/api/health'],
+  authMethods: ['GET', '/api/auth/methods'],
+  oauthStart: ['POST', '/api/auth/oauth/start'],
+  oauthExchange: ['POST', '/api/auth/oauth/exchange'],
   emailStart: ['POST', '/api/auth/email/start'],
   emailVerify: ['POST', '/api/auth/email/verify'],
   account: ['GET', '/api/account'],
@@ -122,6 +125,16 @@ function inviteOutcome(r, { gone = INVITE_GONE } = {}) {
   return r;
 }
 
+const PROVIDER_LABEL = { google: 'Google', github: 'GitHub' };
+// A provider sign-in's errors: the flow is one-shot, so "try again" is the whole advice.
+function oauthOutcome(r, provider, host) {
+  if (r.ok) return r;
+  const who = PROVIDER_LABEL[provider] ?? 'That';
+  if (r.code === 'INVALID_TOKEN') return { ...r, error: 'That sign-in didn’t work. Try again.' };
+  if (r.code === 'ACCOUNT_CONFLICT') return { ...r, error: `That ${who} account’s email already signs in to a different account on ${host}. Use an email code instead.` };
+  return r;
+}
+
 function deleteOutcome(r) {
   if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: 'That check timed out. Send a new code and do the check again.' };
   const owned = Array.isArray(r.detail?.sole_owner_of) ? r.detail.sole_owner_of.map((t) => String(t?.name ?? '').slice(0, 60)).filter(Boolean) : [];
@@ -183,6 +196,15 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
   }
 
   const need = (cond, error) => (cond ? null : { ok: false, error });
+  function signedInWith(r) {
+    if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
+    try {
+      store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
+    } catch {
+      return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
+    }
+    return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [] };
+  }
   const device = ({ deviceName, platform } = {}) => ({ device_name: String(deviceName ?? 'Mac').slice(0, 100), platform: String(platform ?? 'darwin').slice(0, 50) });
   const codeOk = (c) => (typeof c === 'string' && INVITE_CODE_RE.test(c) ? c.toUpperCase() : null);
   const linkOk = (link) => typeof link === 'string' && link.startsWith(`${origin}/invite#`) && TOKEN_RE.test(link.slice(origin.length + 8));
@@ -214,15 +236,33 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       const r = await call('emailVerify', { body: { flow_id: flow.id, code: c, ...device(dev) }, auth: false });
       // The flow stays on a bad code: "Send a new code" reuses its email.
       if (!r.ok) return r;
-      if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
-      try {
-        store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
-      } catch {
-        return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
-      }
       const email = flow.email;
-      flow = null;
-      return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [], email };
+      const done = signedInWith(r);
+      if (done.ok) flow = null;
+      return done.ok ? { ...done, email } : done;
+    },
+
+    /** Which sign-ins this hub offers: → {ok, google, github, email} (booleans). */
+    async methods() {
+      const r = await call('authMethods', { auth: false });
+      return r.ok ? { ok: true, google: r.google === true, github: r.github === true, email: r.email === true } : r;
+    },
+
+    /** Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller. */
+    async startOAuth(provider, { challenge, redirectUri, state }, dev = {}) {
+      if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
+      const r = await call('oauthStart', { body: { provider, code_challenge: challenge, redirect_uri: redirectUri, state, ...device(dev) }, auth: false });
+      if (!r.ok) return oauthOutcome(r, provider, host);
+      if (typeof r.flow_id !== 'string' || typeof r.url !== 'string') return { ok: false, error: `${host} didn’t start a sign-in.` };
+      return { ok: true, flow_id: r.flow_id, url: r.url };
+    },
+
+    /** Step 2: the loopback's code plus the verifier; the answer is the same as a verified email code. */
+    async exchangeOAuth({ flowId, code, state, verifier, provider }, dev = {}) {
+      const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false });
+      if (!r.ok) return oauthOutcome(r, provider, host);
+      const done = signedInWith(r);
+      return done.ok ? { ...done, email: r.user?.email ?? null } : done;
     },
 
     pendingEmail: () => (flow?.purpose === 'signin' ? flow.email : null),

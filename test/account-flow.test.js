@@ -28,7 +28,15 @@ const until = async (fn, ms = 2000) => {
   throw new Error('timed out');
 };
 
-async function harness(fn) {
+// The system browser's part in a provider sign-in: open the hub's page,
+// follow its redirect to the loopback, like a person clicking "Allow".
+async function realBrowser(url) {
+  const r = await fetch(url, { redirect: 'manual' });
+  const to = r.headers.get('location');
+  if (to) await fetch(to);
+}
+
+async function harness(fn, { oauthTimeoutMs } = {}) {
   const hub = createMockAccountsHub();
   const origin = await hub.listen();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-flow-'));
@@ -43,8 +51,13 @@ async function harness(fn) {
   const signedIn = (o) => !!vault(o).load();
   const store = createWorkspaceStore(path.join(dir, 'ws.json'), { allowOrigins, signedIn });
   const requests = []; // every URL any client asked for
+  const bodies = []; // every request body sent
+  const logs = [];
+  const opened = [];
+  let browser = realBrowser;
   const fetchImpl = async (u, init) => {
     requests.push(new URL(u));
+    if (init?.body) bodies.push(String(init.body));
     if (!u.startsWith(origin)) throw new TypeError('fetch failed');
     return fetch(u, init);
   };
@@ -78,6 +91,10 @@ async function harness(fn) {
     hasDeviceFile: (ws) => fs.existsSync(deviceFile(ws)),
     discardDeviceFiles: (o) => { for (const n of fs.readdirSync(devDir)) if (n.startsWith(`${hubKey(o)}-`)) fs.rmSync(path.join(devDir, n)); },
     deviceInfo: () => ({ deviceName: 'Test Mac', platform: 'darwin-arm64' }),
+    openBrowser: (u) => { opened.push(u); Promise.resolve().then(() => browser(u)).catch(() => {}); },
+    oauthAllowOrigins: allowOrigins,
+    oauthTimeoutMs,
+    log: (...a) => logs.push(JSON.stringify(a)),
     ui: {
       show: (s) => shown.push(s),
       select: (id) => selects.push(id),
@@ -107,7 +124,7 @@ async function harness(fn) {
     await c.verifyCode(hub.lastCode(email));
     return c;
   };
-  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, host: hostOf(origin) };
+  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, host: hostOf(origin) };
   try { await fn(h); } finally { await flow.stopDevices(); await hub.close(); }
 }
 
@@ -590,4 +607,213 @@ test('no invite mail from the hub: Email it opens a mailto: the flow built from 
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
   assert.ok(!/emailed it|Invite sent/i.test(page));
   assert.ok(!/email/i.test(require('../buddy-window/brand').COPY.inviteHint.replace('doesn’t email', '')), 'no promise of an email');
+}));
+
+// ── Google / GitHub sign-in (system browser, PKCE, loopback) ───────────────
+
+const { pkcePair, providerUrlOk, callbackHandler, listenOnce } = require('../buddy-window/oauth');
+const crypto = require('node:crypto');
+
+test('oauth: PKCE is 32 random bytes and base64url(sha256(verifier))', () => {
+  const { verifier, challenge } = pkcePair();
+  assert.match(verifier, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(challenge, crypto.createHash('sha256').update(verifier).digest('base64url'));
+  assert.notEqual(pkcePair().verifier, verifier);
+});
+
+test('oauth: the browser is sent only to https on a public name', () => {
+  for (const u of ['https://accounts.google.com/o/oauth2/v2/auth?x=1', 'https://github.com/login/oauth/authorize', 'https://app.plexiform.dev/api/auth/oauth/go']) assert.equal(providerUrlOk(u), true, u);
+  for (const u of ['http://accounts.google.com/', 'https://127.0.0.1/x', 'https://localhost/x', 'https://10.0.0.8/', 'https://192.168.1.1/', 'https://169.254.169.254/', 'https://[::1]/', 'https://intranet/', 'https://user:pw@github.com/', 'javascript:alert(1)', 'file:///etc/passwd', 'not a url']) assert.equal(providerUrlOk(u), false, u);
+  assert.equal(providerUrlOk('http://127.0.0.1:5555/dev/oauth/authorize', { allowOrigins: ['http://127.0.0.1:5555'] }), true, 'the dev mock’s exact origin only');
+  assert.equal(providerUrlOk('http://127.0.0.1:5556/', { allowOrigins: ['http://127.0.0.1:5555'] }), false);
+});
+
+test('oauth: Continue with Google, full path against the mock: loopback, exchange, signed in; no code, verifier or token in any log', async () => harness(async (h) => {
+  h.hub.setOAuthIdentity('google', { email: 'callum@example.com' });
+  await h.A.hub(h.origin);
+  const s = await h.A.state();
+  assert.deepEqual(s.methods, { google: true, github: true, email: true });
+  assert.equal((await h.A.oauth('google')).ok, true);
+  assert.equal(h.flow.acct.screen, 'browser');
+  assert.equal((await h.A.state()).provider, 'google');
+  const r = await h.flow.pendingOAuth();
+  assert.equal(r.ok, true, r.error);
+  assert.equal(h.vault(h.origin).load().user.email, 'callum@example.com');
+  assert.equal(h.flow.acct.screen, 'create-team');
+  const start = h.hub.oauthStarts()[0];
+  assert.equal(start.provider, 'google');
+  assert.match(start.redirect_uri, /^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+  assert.match(start.code_challenge, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(start.device_name, 'Test Mac');
+  assert.equal(start.code_verifier, undefined, 'the verifier goes only to the exchange');
+  const ex = JSON.parse(h.bodies.find((b) => b.includes('code_verifier')));
+  assert.equal(crypto.createHash('sha256').update(ex.code_verifier).digest('base64url'), start.code_challenge);
+  assert.equal(ex.state, start.state);
+  const logged = h.logs.join('\n');
+  for (const secret of [ex.code, ex.code_verifier, h.vault(h.origin).load().token, ex.state]) assert.ok(!logged.includes(secret), 'never logged');
+  assert.ok(h.opened[0].startsWith(`${h.origin}/dev/oauth/authorize`));
+  // The listener is gone: replaying the callback reaches nothing.
+  await assert.rejects(fetch(h.hub.oauthCallback()));
+}));
+
+test('oauth: a wrong state or a stray request never completes the flow nor echoes input; the right one then does', async () => harness(async (h) => {
+  let callback = null;
+  h.setBrowser(async (u) => { callback = (await fetch(u, { redirect: 'manual' })).headers.get('location'); });
+  await h.A.hub(h.origin);
+  await h.A.oauth('github');
+  await until(() => callback);
+  const good = new URL(callback);
+  const bad = new URL(callback);
+  bad.searchParams.set('state', 'x'.repeat(43));
+  const res = await fetch(bad);
+  assert.equal(res.status, 400);
+  const text = await res.text();
+  assert.ok(!text.includes(good.searchParams.get('code')) && !text.includes('xxxx'), 'nothing echoed');
+  const noState = new URL(callback);
+  noState.searchParams.delete('state');
+  assert.equal((await fetch(noState)).status, 400);
+  assert.equal((await fetch(new URL('/other', callback))).status, 404);
+  assert.equal((await fetch(callback, { method: 'POST' })).status, 405, 'GET only');
+  assert.equal(h.flow.acct.screen, 'browser', 'still waiting');
+  const ok = await fetch(callback);
+  assert.match(await ok.text(), /You’re signed in to Plexiform, you can close this tab/);
+  await until(() => h.flow.acct.screen === 'create-team');
+  assert.ok(h.vault(h.origin).load());
+}));
+
+test('oauth: the hub refuses a replayed code and a verifier that doesn’t match the challenge', async () => harness(async (h) => {
+  const c = createAccountClient({ origin: h.origin, store: { load: () => null, save() {}, clear() {} } });
+  const { verifier, challenge } = pkcePair();
+  const state = 's'.repeat(43);
+  const start = await c.startOAuth('google', { challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const loc = new URL((await fetch(start.url, { redirect: 'manual' })).headers.get('location'));
+  const code = loc.searchParams.get('code');
+  assert.equal(loc.searchParams.get('state'), state);
+  const wrong = await c.exchangeOAuth({ flowId: start.flow_id, code, state, verifier: pkcePair().verifier, provider: 'google' });
+  assert.equal(wrong.error, 'That sign-in didn’t work. Try again.');
+  const again = await c.exchangeOAuth({ flowId: start.flow_id, code, state, verifier, provider: 'google' });
+  assert.equal(again.ok, false, 'the code was spent by the first try');
+  // A fresh flow, the right verifier: signed in once, and only once.
+  let saved = null;
+  const c2 = createAccountClient({ origin: h.origin, store: { load: () => saved, save: (x) => { saved = x; }, clear: () => { saved = null; } } });
+  const p = pkcePair();
+  const s2 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const code2 = new URL((await fetch(s2.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
+  assert.equal((await c2.exchangeOAuth({ flowId: s2.flow_id, code: code2, state: 'z'.repeat(43), verifier: p.verifier, provider: 'github' })).ok, false, 'wrong state at the hub');
+  const s3 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const code3 = new URL((await fetch(s3.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
+  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state, verifier: p.verifier, provider: 'github' })).ok, true);
+  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state, verifier: p.verifier, provider: 'github' })).ok, false, 'replay');
+  assert.equal(saved.user.email, 'github-user@example.com');
+  h.hub.setNow(Date.now() + 11 * 60_000);
+  assert.equal((await fetch(s3.url, { redirect: 'manual' })).status, 400, 'expired');
+}));
+
+test('oauth: the listener times out; Cancel closes it; a second sign-in replaces the first', async () => harness(async (h) => {
+  h.setBrowser(async () => {});
+  await h.A.hub(h.origin);
+  await h.A.oauth('google');
+  const r = await h.flow.pendingOAuth();
+  assert.equal(r.error, 'The browser sign-in timed out. Try again.');
+  assert.equal(h.flow.acct.screen, 'email');
+  assert.equal((await h.A.state()).alert, 'The browser sign-in timed out. Try again.');
+  await h.A.oauth('google');
+  await until(() => h.hub.oauthStarts().length === 2);
+  const first = h.hub.oauthStarts()[1].redirect_uri;
+  await h.A.oauth('github');
+  await until(() => h.hub.oauthStarts().length === 3);
+  await assert.rejects(fetch(first), 'the first listener closed');
+  const second = h.hub.oauthStarts()[2].redirect_uri;
+  const done = h.flow.pendingOAuth();
+  assert.equal((await h.A.cancelOAuth()).ok, true);
+  assert.equal((await done).cancelled, true);
+  assert.equal(h.flow.acct.screen, 'email');
+  await assert.rejects(fetch(second), 'cancel closes the listener');
+  assert.equal(h.vault(h.origin).load(), null);
+}, { oauthTimeoutMs: 300 }));
+
+test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and non-GET are refused', async () => {
+  const l = await listenOnce({ state: 's', brand: 'Plexiform', timeoutMs: 5000 });
+  try {
+    assert.equal(l.address, '127.0.0.1');
+    const finished = [];
+    const handler = callbackHandler({ port: 4242, state: 'st', brand: 'Plexiform', finish: (r) => finished.push(r) });
+    const fake = (over) => {
+      const socket = { remoteAddress: '127.0.0.1', destroyed: false, destroy() { this.destroyed = true; } };
+      const req = { method: 'GET', url: '/callback?code=abc&state=st', headers: { host: '127.0.0.1:4242' }, socket, ...over };
+      const res = { status: null, body: null, writeHead(st) { this.status = st; }, end(b) { this.body = b; } };
+      handler(req, res);
+      return { req, res, socket: req.socket };
+    };
+    const far = fake({ socket: { remoteAddress: '192.168.1.20', destroy() { this.destroyed = true; } } });
+    assert.equal(far.socket.destroyed, true, 'a non-loopback peer is cut off');
+    assert.equal(far.res.status, null);
+    assert.equal(fake({ headers: { host: 'evil.example:4242' } }).res.status, 400, 'DNS rebinding: wrong Host');
+    assert.equal(fake({ method: 'POST' }).res.status, 405);
+    assert.equal(fake({ method: 'HEAD' }).res.status, 405);
+    assert.deepEqual(finished, []);
+    assert.equal(fake({ socket: { remoteAddress: '::ffff:127.0.0.1' } }).res.status, 200);
+    assert.equal(fake({}).res.status, 400, 'only one request completes it');
+    assert.deepEqual(finished, [{ ok: true, code: 'abc' }]);
+  } finally { l.close(); }
+  assert.deepEqual(await l.result, { ok: false, reason: 'cancelled' });
+});
+
+test('oauth: an invite waits through Continue with Google, then the join preview', async () => harness(async (h) => {
+  const luke = await h.other('luke@example.com');
+  const team = (await luke.createTeam('Pistor')).team;
+  const inv = await luke.invite(team.id, 'callum@example.com', 'member');
+  h.hub.setOAuthIdentity('google', { email: 'callum@example.com' });
+  h.flow.openInvite(inv.link);
+  assert.equal(h.flow.acct.screen, 'confirm', 'a hub never used before is confirmed first');
+  await h.A.confirm(true);
+  assert.equal(h.flow.acct.screen, 'email');
+  await h.A.oauth('google');
+  assert.equal((await h.flow.pendingOAuth()).ok, true);
+  assert.equal(h.flow.acct.screen, 'join');
+  const s = await h.A.state();
+  assert.equal(s.invite.team, 'Pistor');
+  assert.equal((await h.A.accept(s.invite.id)).ok, true);
+  assert.equal(h.store.active().name, 'Pistor');
+}));
+
+test('oauth: nothing starts for an unconfirmed hub; hub errors are plain sentences', async () => harness(async (h) => {
+  h.flow.openInvite('claudebuddy://join?hub=https://buddy.stranger.example&t=inv_abc123');
+  assert.match((await h.A.oauth('google')).error, /Start again/);
+  assert.equal((await h.A.oauth('facebook')).ok, false);
+  assert.deepEqual(h.requests, []);
+  await h.A.notNow();
+  await h.A.hub(h.origin);
+  assert.equal((await h.A.oauth('facebook')).error, 'Pick Google or GitHub.');
+  h.hub.setOAuthIdentity('github', { email: 'x@example.com', conflict: true });
+  await h.A.oauth('github');
+  assert.match((await h.flow.pendingOAuth()).error, /That GitHub account’s email already signs in to a different account/);
+  assert.equal(h.flow.acct.screen, 'email');
+  h.hub.setOAuthIdentity('google', { email: 'y@example.com', verified: false });
+  await h.A.oauth('google');
+  assert.equal((await h.flow.pendingOAuth()).error, 'Verify your email first.');
+  const { humanError } = require('../buddy-window/accounts');
+  assert.match(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 120 } }, 'h'), /Wait 2 minutes/);
+}));
+
+test('sign-in methods: GET /api/auth/methods decides the buttons; each combination; a failed fetch says so', async () => harness(async (h) => {
+  await h.A.hub(h.origin);
+  const combos = [];
+  for (const google of [true, false]) for (const github of [true, false]) for (const email of [true, false]) combos.push({ google, github, email });
+  for (const m of combos) {
+    h.hub.setMethods(m);
+    const s = await h.A.state();
+    assert.deepEqual(s.methods, m);
+    assert.equal(s.methodsError, null);
+  }
+  h.hub.setMethods({ google: true });
+  assert.equal((await h.A.email('me@example.com')).ok, false, 'the hub refuses a switched-off email sign-in');
+  await h.hub.close();
+  const s = await h.A.state();
+  assert.equal(s.methods, null);
+  assert.match(s.methodsError, /Couldn’t reach/);
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  for (const t of ['Continue with Google', 'Continue with GitHub', 'Use an email code instead', 'This server has no sign-in method enabled. Ask the admin.', 'Try again']) assert.ok(page.includes(t), t);
+  const { ROUTES } = require('../buddy-window/accounts');
+  assert.deepEqual([ROUTES.authMethods, ROUTES.oauthStart, ROUTES.oauthExchange], [['GET', '/api/auth/methods'], ['POST', '/api/auth/oauth/start'], ['POST', '/api/auth/oauth/exchange']]);
 }));

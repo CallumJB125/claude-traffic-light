@@ -8,15 +8,17 @@
 const crypto = require('node:crypto');
 const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE } = require('./accounts');
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
+const { startProviderSignIn, PROVIDERS } = require('./oauth');
 const BRAND = require('./brand');
 
-// Screens the page itself may ask for; the rest (`confirm`, `code`) are
-// reached only through the flow (e.g. `confirm` after an invite link).
+// Screens the page itself may ask for; the rest (`confirm`, `code`, `browser`)
+// are reached only through the flow (e.g. `confirm` after an invite link).
 const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites']);
 
 // Argument types per action; the IPC layer refuses anything else before it runs.
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
+  oauth: ['string'], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], deleteTeam: ['string', 'string'], addBoard: ['string', 'string'],
   joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
@@ -39,13 +41,15 @@ async function clearHubSessions(origin, fromPartition) {
 
 /**
  * createAccountFlow({store, clientFor, signedIn, userOf, normHub, normLink, probe,
- *   makeDevice, hasDeviceFile, discardDeviceFiles, deviceInfo, ui, log})
+ *   makeDevice, hasDeviceFile, discardDeviceFiles, deviceInfo, openBrowser,
+ *   oauthAllowOrigins, ui, log})
  *   ui: {show(screen), select(pageId), switchWorkspace(id, {show}), pushState(),
  *        forgetHub(), hubSignedOut(origin), isOpen(), onHubPage(), devicesChanged(),
  *        openMail(mailtoUrl)}
  */
-function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), ui, log = () => {} }) {
-  const acct = { screen: null, hub: null, notice: null, deleting: false };
+function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {} }) {
+  const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
+  let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
   let pendingInvite = null; // {hub|null, token, previewId?}
   // A hub named by an invite link must be confirmed by the member before any
   // request goes to it; a hub they typed themselves counts as confirmed.
@@ -67,10 +71,36 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   // A bare host reads back as https; anything else (the dev mock) needs its scheme.
   const prefill = (origin) => (!origin ? '' : origin.startsWith('https://') ? hostOf(origin) : origin);
 
-  function show(screen, { notice = null } = {}) {
+  function show(screen, { notice = null, alert = null } = {}) {
     acct.screen = screen;
     acct.notice = notice;
+    acct.alert = alert;
     ui.show(screen);
+  }
+
+  function cancelOAuth() {
+    const r = oauthRun;
+    oauthRun = null;
+    r?.run.cancel();
+  }
+
+  /** "Continue with Google/GitHub": one at a time; a new one (or leaving the screen) cancels the old. */
+  function beginOAuth(origin, provider) {
+    cancelOAuth();
+    const run = startProviderSignIn({ client: clientFor(origin), provider, device: deviceInfo(), openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
+    const me = { hub: origin, provider, run };
+    me.done = run.done.then(async (r) => {
+      if (oauthRun !== me) return r;
+      oauthRun = null;
+      if (r.ok) {
+        log('signed in to team hub', { host: hostOf(origin), via: provider });
+        await afterSignIn(origin);
+      } else if (!r.cancelled) show('email', { alert: r.error });
+      return r;
+    });
+    oauthRun = me;
+    show('browser');
+    return me.done;
   }
 
   async function refreshAccount(origin) {
@@ -229,10 +259,16 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
 
   async function screenState() {
     const screen = acct.screen;
-    const base = { ok: true, brand: { name: BRAND.NAME, copy: BRAND.COPY }, screen, notice: acct.notice, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub()), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
+    const base = { ok: true, brand: { name: BRAND.NAME, copy: BRAND.COPY }, screen, notice: acct.notice, alert: acct.alert, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub()), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
     acct.notice = null;
+    acct.alert = null;
     if (screen === 'hub') return { ...base, forInvite: !!pendingInvite };
-    if (screen === 'email') return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '' };
+    if (screen === 'email') {
+      // Nothing is asked of a hub the member hasn't confirmed, this included.
+      const m = hubTrusted(acct.hub) ? await clientFor(acct.hub).methods() : { ok: false, error: 'Start again: enter the team hub address.' };
+      return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '', methods: m.ok ? { google: m.google, github: m.github, email: m.email } : null, methodsError: m.ok ? null : m.error };
+    }
+    if (screen === 'browser') return { ...base, provider: oauthRun?.provider ?? null };
     if (screen === 'code') return { ...base, email: acct.hub ? clientFor(acct.hub).pendingEmail() : null };
     if (screen === 'create-team') {
       const hub = acct.hub && signedIn(acct.hub) ? acct.hub : (activeTeam()?.hub ?? store.hubs().find(signedIn) ?? null);
@@ -294,6 +330,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     state: () => screenState(),
     go(screen) {
       if (!PAGE_SCREENS.has(screen)) return { ok: false };
+      cancelOAuth();
       if (screen === 'hub' || screen === 'email') acct.deleting = false;
       if (screen === 'join') {
         if (pendingInvite && !hubTrusted(pendingInvite.hub)) pendingInvite = null;
@@ -303,6 +340,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return { ok: true };
     },
     async hub(input) {
+      cancelOAuth();
       let origin;
       try { origin = normHub(input); } catch (e) { return { ok: false, error: e.message }; }
       // An invite without a hub, and a hub we have never used: confirm it first.
@@ -326,6 +364,18 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const r = await clientFor(origin).startEmail(email, deviceInfo());
       if (!r.ok) return r;
       show('code');
+      return { ok: true };
+    },
+    async oauth(provider) {
+      const origin = acct.hub;
+      if (!hubTrusted(origin)) return { ok: false, error: 'Start again: enter the team hub address.' };
+      if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
+      beginOAuth(origin, provider);
+      return { ok: true };
+    },
+    async cancelOAuth() {
+      cancelOAuth();
+      show('email');
       return { ok: true };
     },
     async code(code) {
@@ -535,8 +585,11 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     checkSignedIn,
     dropDevices,
     refreshAccount,
+    /** Tests and the dev walk: the provider sign-in in progress (its result), or null. */
+    pendingOAuth: () => oauthRun?.done ?? null,
     /** The sidebar's workspace-menu actions. */
     startFlow(which) {
+      cancelOAuth();
       if (which === 'signin' || which === 'join') { pendingInvite = null; acct.hub = null; }
       show(which === 'signin' ? 'hub' : which);
     },
@@ -551,7 +604,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     },
     /** Names of the teams this Mac is running cards for right now. */
     runningTeams: () => [...devices.entries()].filter(([, e]) => e.d.running()).map(([id, e]) => store.get(id)?.name ?? e.name),
-    stopDevices: () => Promise.all([...devices.values()].map((e) => e.d.stop())),
+    stopDevices: () => { cancelOAuth(); return Promise.all([...devices.values()].map((e) => e.d.stop())); },
   };
 }
 

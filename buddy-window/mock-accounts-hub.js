@@ -10,7 +10,17 @@
 // Test hooks: `lastCode(email)` (the emailed sign-in code), `inviteCode(email)`
 // (the last invite's XXXX-XXXX code), `setNow(ms)` (clock), `starts()` (email/start
 // bodies), `revokeAll(email)`, `enrolments()`, `setVerified(email, bool)`,
-// `teamHeaders()` (X-Board-Team values seen).
+// `teamHeaders()` (X-Board-Team values seen), `setMethods({google, github,
+// email})`, `setOAuthIdentity(provider, {email, verified, conflict})`,
+// `oauthStarts()` (oauth/start bodies), `oauthCallback(url)` (the loopback
+// URL the fake provider page last redirected to).
+//
+// Provider sign-in (the real hub's OAuth phase isn't built): oauth/start
+// keeps {challenge, redirect_uri, state} and answers a URL on this hub,
+// /dev/oauth/authorize, which stands in for Google or GitHub and redirects
+// straight to the loopback with a one-time code and the app's state;
+// oauth/exchange checks sha256(verifier) = challenge, the state and the
+// code (single use, 10 minutes).
 'use strict';
 
 const http = require('node:http');
@@ -35,8 +45,13 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const mask = (email) => `${email.charAt(0)}…@${email.split('@')[1]}`;
 const firstName = (u) => String(u?.display_name ?? 'Someone').split(/\s+/)[0];
 
-function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), quotas = {} } = {}) {
+function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), quotas = {}, methods = {} } = {}) {
   const limits = { ...QUOTAS, ...quotas };
+  let signInMethods = { google: true, github: true, email: true, ...methods };
+  const oauthFlows = new Map(); // id → {provider, challenge, redirect, state, expires, codeHash, codeUsed, device_name}
+  const oauthStarts = [];
+  const identities = { google: { email: 'google-user@example.com', verified: true }, github: { email: 'github-user@example.com', verified: true } };
+  let lastCallback = null;
   let skew = null;
   const now = () => skew ?? clock();
   let base = null; // our own origin, once listening
@@ -194,6 +209,49 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       return { status: 302, body: {}, headers: { location: to } };
     }
 
+    if (method === 'GET' && path === '/api/auth/methods') return ok({ ...signInMethods });
+
+    if (method === 'POST' && path === '/api/auth/oauth/start') {
+      oauthStarts.push({ ...body });
+      const provider = body.provider;
+      if (!['google', 'github'].includes(provider) || !signInMethods[provider]) return err(400, 'VALIDATION', 'provider not enabled');
+      if (!/^[A-Za-z0-9_-]{43}$/.test(String(body.code_challenge ?? ''))) return err(400, 'VALIDATION', 'bad code_challenge');
+      if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/callback$/.test(String(body.redirect_uri ?? ''))) return err(400, 'VALIDATION', 'redirect_uri must be the loopback callback');
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(body.state ?? ''))) return err(400, 'VALIDATION', 'bad state');
+      const id = crypto.randomBytes(18).toString('base64url');
+      oauthFlows.set(id, { provider, challenge: body.code_challenge, redirect: body.redirect_uri, state: body.state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name });
+      return ok({ flow_id: id, url: `${base}/dev/oauth/authorize?flow=${id}` });
+    }
+
+    // The fake provider page: "approved", straight back to the app's loopback.
+    if (method === 'GET' && path === '/dev/oauth/authorize') {
+      const f = oauthFlows.get(url.searchParams.get('flow') ?? '');
+      if (!f || f.expires <= now() || f.codeHash) return err(400, 'INVALID_TOKEN', 'no such sign-in');
+      const code = crypto.randomBytes(24).toString('base64url');
+      f.codeHash = sha(code);
+      const to = new URL(f.redirect);
+      to.searchParams.set('code', code);
+      to.searchParams.set('state', f.state);
+      lastCallback = to.href;
+      return { status: 302, body: {}, headers: { location: to.href } };
+    }
+
+    if (method === 'POST' && path === '/api/auth/oauth/exchange') {
+      const f = oauthFlows.get(String(body.flow_id ?? ''));
+      const invalid = () => err(400, 'INVALID_TOKEN', 'invalid sign-in');
+      if (!f || f.expires <= now() || !f.codeHash || f.codeUsed) return invalid();
+      if (sha(String(body.code ?? '')) !== f.codeHash) return invalid();
+      // A right code is spent whatever else is wrong: no second try with it.
+      f.codeUsed = true;
+      if (body.state !== f.state) return invalid();
+      const got = crypto.createHash('sha256').update(String(body.code_verifier ?? '')).digest('base64url');
+      if (got !== f.challenge) return invalid();
+      const who = identities[f.provider];
+      if (!who.verified) return err(403, 'EMAIL_UNVERIFIED', 'the provider has not verified this email');
+      if (who.conflict) return err(409, 'ACCOUNT_CONFLICT', 'this identity belongs to another user');
+      return signInUser(who.email, body.device_name ?? f.device_name);
+    }
+
     if (method === 'POST' && path === '/api/auth/email/start') {
       starts.push({ ...body });
       const purpose = body.purpose ?? 'signin';
@@ -203,6 +261,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
         if (!me) return err(401, 'UNAUTHENTICATED', 'not signed in');
         return ok({ flow_id: startFlow(me.user.email, 'delete', me.user.id), expires_in: CODE_TTL_MS / 1000 });
       }
+      if (!signInMethods.email) return err(400, 'VALIDATION', 'email sign-in is off');
       const email = String(body.email ?? '').trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(400, 'VALIDATION', 'enter a valid email');
       if (body.client !== undefined && !['buddy_desktop', 'web'].includes(body.client)) return err(400, 'VALIDATION', 'bad client');
@@ -476,6 +535,10 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     inviteCode: (email) => inviteCodes.get(String(email).toLowerCase()) ?? null,
     setVerified: (email, v) => { const u = users.get(byEmail.get(String(email).toLowerCase())); if (u) u.email_verified = !!v; },
     teamHeaders: () => teamHeaders.slice(),
+    setMethods: (m) => { signInMethods = { google: false, github: false, email: false, ...m }; },
+    setOAuthIdentity: (provider, who) => { identities[provider] = { verified: true, ...who, email: String(who.email).toLowerCase() }; },
+    oauthStarts: () => oauthStarts.slice(),
+    oauthCallback: () => lastCallback,
     revokeAll: (email) => { const id = byEmail.get(email); for (const [h, t] of tokens) if (t.user_id === id) revoke(h); },
     enrolments: () => enrolments.slice(),
   };

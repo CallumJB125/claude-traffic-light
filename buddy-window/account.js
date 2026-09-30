@@ -154,15 +154,50 @@ const SCREENS = {
   },
 
   email(s) {
-    return [
-      heading('Sign in', null),
-      el('p', { class: 'acct-sub' }, 'to ', hostTag(s.host), s.forInvite ? ' to accept your invite. ' : '. ', 'We’ll email you a 6-digit code. New here? This creates your account.'),
-      form({
-        fields: field('Email', input({ name: 'email', type: 'email', autocomplete: 'email', placeholder: 'you@example.com', value: s.email ?? '', required: true, autofocus: true })),
+    const out = [heading('Sign in', null), el('p', { class: 'acct-sub' }, 'to ', hostTag(s.host), s.forInvite ? ' to accept your invite.' : '.')];
+    const foot = el('p', { class: 'acct-foot' }, link('Use a different team hub', () => api.go('hub')));
+    if (!s.methods) {
+      out.push(el('p', { class: 'acct-error', role: 'alert' }, `Couldn’t check how to sign in to ${s.host ?? 'this server'}. ${s.methodsError ?? ''}`.trim()),
+        el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => render() }, 'Try again')), foot);
+      return out;
+    }
+    const m = s.methods;
+    const providers = [['google', 'Continue with Google'], ['github', 'Continue with GitHub']].filter(([p]) => m[p]).map(([p, text]) => {
+      const b = el('button', { type: 'button', class: `btn btn-provider btn-${p}` }, text);
+      b.addEventListener('click', async () => { b.disabled = true; const r = await api.oauth(p); if (!r?.ok) { b.disabled = false; flash(r?.error ?? 'Something went wrong. Try again.', true); } });
+      return b;
+    });
+    if (!providers.length && !m.email) {
+      out.push(el('p', { class: 'acct-hint' }, 'This server has no sign-in method enabled. Ask the admin.'), foot);
+      return out;
+    }
+    if (providers.length) out.push(el('div', { class: 'acct-providers' }, providers));
+    if (m.email) {
+      const emailForm = form({
+        fields: field('Email', input({ name: 'email', type: 'email', autocomplete: 'email', placeholder: 'you@example.com', value: s.email ?? '', required: true, autofocus: !providers.length })),
         submit: 'Email me a code', busy: 'Sending…',
         fn: (v) => api.email(v.email),
-      }),
-      el('p', { class: 'acct-foot' }, link('Use a different team hub', () => api.go('hub'))),
+      });
+      const box = el('div', { class: 'acct-emailcode' }, el('p', { class: 'acct-hint' }, 'We’ll email you a 6-digit code. New here? This creates your account.'), emailForm);
+      if (providers.length) {
+        box.hidden = true;
+        const show = link('Use an email code instead', () => { box.hidden = false; showWrap.remove(); box.querySelector('input')?.focus(); });
+        const showWrap = el('p', { class: 'acct-foot acct-foot-tight' }, show);
+        out.push(showWrap);
+      }
+      out.push(box);
+    }
+    out.push(foot);
+    return out;
+  },
+
+  browser(s) {
+    const who = { google: 'Google', github: 'GitHub' }[s.provider] ?? 'the sign-in page';
+    return [
+      heading('Continue in your browser', null),
+      el('p', { class: 'acct-sub' }, `We opened ${who} in your browser. Sign in there, then come back here. `, s.host ? ['Signing in to ', hostTag(s.host), '.'] : null),
+      el('p', { class: 'acct-hint', role: 'status' }, 'Waiting for your browser…'),
+      el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn', onclick: () => api.cancelOAuth() }, 'Cancel')),
     ];
   },
 
@@ -399,7 +434,8 @@ async function render() {
   try { s = await api.state(); } catch { s = null; }
   if (!s?.ok) return;
   const draw = SCREENS[s.screen ?? screen] ?? SCREENS.hub;
-  const card = el('div', { class: `acct-card${WIDE.has(s.screen) ? ' acct-card-wide' : ''}` }, notice(s.notice), draw(s));
+  const alert = s.alert ? el('p', { class: 'acct-error', role: 'alert' }, s.alert) : null;
+  const card = el('div', { class: `acct-card${WIDE.has(s.screen) ? ' acct-card-wide' : ''}` }, notice(s.notice), alert, draw(s));
   document.title = s.brand?.name ?? '';
   root.textContent = '';
   root.dataset.screen = s.screen ?? screen;

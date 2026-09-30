@@ -320,8 +320,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     await clearHubSessions(origin, (p) => session.fromPartition(p));
   }
 
+  // Dev only: the walk stands in for the system browser (main.js gates it on !app.isPackaged).
+  let devBrowser = null;
   const flow = createAccountFlow({
     store, clientFor, signedIn, userOf, normHub: norm, normLink,
+    // The provider's sign-in page, in the system browser: Google refuses embedded views.
+    openBrowser: (url) => (devBrowser ? devBrowser(url) : shell.openExternal(url)), // privacy-flow: team-hub-account
+    oauthAllowOrigins: allowOrigins,
     // A throwaway, in-memory session: a signed-in partition would answer 200
     // and hide the Access team we must pin.
     probe: (origin) => probeHub(origin, `board-probe-${crypto.randomUUID()}`),
@@ -649,6 +654,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     status: () => ({ selected, hub: hubStatus, viewError, workspace: store.active().id, screen: flow.acct.screen, url: content === hubView ? (hubView?.webContents.getURL() ?? null) : null }),
     // Dev only (main.js gates it on !app.isPackaged): the hub-address step without the form.
     devConnect: (url) => flow.ACCT.hub(url),
+    // Dev only: take the system browser's part in a provider sign-in.
+    devBrowser: (fn) => { devBrowser = fn; },
     // Dev only: drive the account page as a person would (fills and clicks in the page).
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // Dev hook: capture what's on screen.
