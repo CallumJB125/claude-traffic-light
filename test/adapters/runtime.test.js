@@ -78,3 +78,22 @@ test('isInstalled is false when the wrapper an installed command runs through is
     assert.equal(adapter.isInstalled({ home, runtime: rt }), true);
   }
 });
+
+test('isInstalled is false when the wrapper runs a different binary (a reinstall elsewhere, a moved AppImage)', () => {
+  for (const [platform, adapter] of [['linux', Codex], ['win32', Cursor]]) {
+    const home = tmp();
+    const dataDir = platform === 'win32' ? `C:\\Users\\x\\AppData\\ctl-${path.basename(home)}` : path.join(home, 'data');
+    const files = new Map();
+    const memFs = {
+      readFileSync: (f) => { if (!files.has(f)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return files.get(f); },
+      writeFileSync: (f, t) => files.set(f, String(t)),
+      mkdirSync: () => {},
+      chmodSync: () => {},
+    };
+    const rt = Runtime.make({ execPath: platform === 'win32' ? 'C:\\Old\\Buddy.exe' : '/opt/Old/Buddy', platform, hooksDir: '/h', dataDir });
+    assert.equal(adapter.install({ home, runtime: rt, fs: memFs }).ok, true);
+    assert.equal(Runtime.wrapperPresent(rt, { argv: adapter === Codex }, memFs), true);
+    files.set(Runtime.wrapperPath(rt), Runtime.wrapperText({ ...rt, execPath: platform === 'win32' ? 'C:\\New\\Buddy.exe' : '/opt/New/Buddy' }));
+    assert.equal(Runtime.wrapperPresent(rt, { argv: adapter === Codex }, memFs), false, `${platform}: a wrapper for another binary is stale`);
+  }
+});

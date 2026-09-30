@@ -62,11 +62,13 @@ function ensureWrapper(rt, fsImpl = fs) {
 // Whether a shell-string install needs the wrapper file on disk.
 const shellNeedsWrapper = (rt) => !rt.node && isWin(rt);
 
-// False when the installed command form runs through a wrapper that is no
-// longer on disk (argv forms always do; shell strings only on Windows).
+// False when the installed command form runs through a wrapper (argv forms
+// always do; shell strings only on Windows) that is gone or no longer runs
+// this binary: the wrapper's path never changes, so a reinstall to another
+// folder or a moved AppImage leaves a matching command and a stale wrapper.
 function wrapperPresent(rt, { argv = false } = {}, fsImpl = fs) {
   if (!(argv ? !rt.node : shellNeedsWrapper(rt))) return true;
-  try { return fsImpl.existsSync(wrapperPath(rt)); } catch { return false; }
+  try { return fsImpl.readFileSync(wrapperPath(rt), 'utf8') === wrapperText(rt); } catch { return false; }
 }
 
 function shellCommand(rt, scriptPath, args = []) {
