@@ -74,6 +74,17 @@ test('normalizeRemote: ssh, https, ssh:// and .git forms all become owner/repo; 
   assert.deepEqual(G.normalizeRepoList('acme/widget, https://github.com/acme/other.git  junk acme/widget'), ['acme/widget', 'acme/other']);
 });
 
+test('repo names: every owner/name segment must look like a GitHub name; traversal and junk are refused from remotes, config and the hub', () => {
+  for (const bad of ['https://github.com/../..', 'https://github.com/acme/..', 'git@github.com:./widget.git', 'https://github.com/-acme/widget', 'https://github.com/acme/.hidden', 'https://github.com/acme%2F../widget', 'https://github.com/acme/wid get', 'https://github.com/acme/widget/extra', 'https://github.com/acme/widget?x=1']) {
+    assert.equal(G.normalizeRemote(bad), null, bad);
+  }
+  assert.deepEqual(G.normalizeRepoList(['../..', 'acme/..', '.x/y', 'acme/widget', 'acme/widget.git', 'a/b/c', 'acme/wid;get']), ['acme/widget']);
+  assert.equal(G.validSegment('..'), false);
+  assert.equal(G.validSegment('a'.repeat(101)), false);
+  const { p } = poller();
+  assert.deepEqual(p.ingest([{ id: 'x1', signal: 'ci-failed', repo: '../..', at: '2026-09-30T11:59:00Z' }, { id: 'x2', signal: 'ci-failed', repo: 'acme/widget', at: '2026-09-30T11:59:00Z' }]).map((e) => e.id), ['x2']);
+});
+
 test('isDeployWorkflow: names with deploy/release/publish by default, release notes excluded; a chosen list replaces the heuristic', () => {
   assert.equal(G.isDeployWorkflow('Deploy to production'), true);
   assert.equal(G.isDeployWorkflow('Release'), true);

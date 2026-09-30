@@ -57,17 +57,27 @@ const SETUP_HINT = {
   'no-auth': 'Run gh auth login in a terminal to light up for PRs and CI.',
 };
 
+// Repo names end up in API paths, so each segment is held to GitHub's own
+// shape: no '.', '..', leading dot/dash, or anything that could walk the path.
+const SEGMENT = /^[A-Za-z0-9][\w.-]*$/;
+const validSegment = (x) => SEGMENT.test(x) && x !== '.' && x !== '..' && x.length <= 100;
+function repoName(owner, name) {
+  const n = String(name || '').replace(/\.git$/i, '');
+  return validSegment(String(owner || '')) && validSegment(n) ? `${owner}/${n}` : null;
+}
+
 // git@github.com:o/r.git, https://github.com/o/r, ssh://git@github.com/o/r.git → 'o/r'.
 function normalizeRemote(url) {
-  const m = /^(?:[\w+.-]+:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com[:/]+([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(String(url || '').trim());
-  return m ? `${m[1]}/${m[2]}` : null;
+  const m = /^(?:[\w+.-]+:\/\/)?(?:[^@/\s]+@)?(?:www\.)?github\.com(?::\d+)?[:/]+([^/\s]+)\/([^/\s]+?)\/?$/i.exec(String(url || '').trim());
+  return m ? repoName(m[1], m[2]) : null;
 }
 
 function normalizeRepoList(list) {
   const raw = Array.isArray(list) ? list : String(list || '').split(/[\s,]+/);
   const out = [];
   for (const x of raw) {
-    const r = normalizeRemote(x) || (/^[\w.-]+\/[\w.-]+$/.test(String(x).trim()) ? String(x).trim() : null);
+    const plain = /^([^/\s]+)\/([^/\s]+)$/.exec(String(x).trim());
+    const r = normalizeRemote(x) || (plain ? repoName(plain[1], plain[2]) : null);
     if (r && !out.includes(r)) out.push(r);
   }
   return out;
@@ -342,7 +352,8 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
 
   // The webhook/hub entry point: same dedupe, freshness and hold as polling.
   function ingest(events, source = 'hub') {
-    const fired = record((Array.isArray(events) ? events : []).map((e) => ({ ...e, id: e && e.id ? String(e.id) : null })), source);
+    const valid = (Array.isArray(events) ? events : []).filter((e) => e && typeof e.repo === 'string' && normalizeRepoList([e.repo])[0] === e.repo);
+    const fired = record(valid.map((e) => ({ ...e, id: e.id ? String(e.id) : null })), source);
     if (fired.length) save();
     return fired;
   }
@@ -386,4 +397,4 @@ function readState(stateFile, t = Date.now()) {
   return { ...rest, active: saved.state === 'disabled' ? [] : activeEvents(events, t), recent: (Array.isArray(events) ? events : []).slice(-10).reverse() };
 }
 
-module.exports = { SIGNALS, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
+module.exports = { SIGNALS, validSegment, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
