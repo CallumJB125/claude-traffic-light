@@ -4,6 +4,7 @@
 const { shell } = require('electron');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const PowerShell = require('./powershell.js');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -14,7 +15,7 @@ module.exports = ({ getWin }) => {
     if (name === 'beep') { shell.beep(); return; }
     if (IS_WIN) {
       if (!name.startsWith('file:')) { shell.beep(); return; }
-      execFile('powershell', ['-NoProfile', '-c', `(New-Object Media.SoundPlayer '${name.slice(5).replace(/'/g, "''")}').PlaySync()`], () => {}); // privacy-flow: local-sound
+      PowerShell.run(PowerShell.SCRIPTS.playSound, [name.slice(5)], {}, () => {}); // privacy-flow: local-sound
       return;
     }
     const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
@@ -25,7 +26,7 @@ module.exports = ({ getWin }) => {
   // done: called when the speech ends (the voice answers lip-sync to it).
   // Returns the child so a new question can cut an answer short.
   function speak(text, done = () => {}) {
-    if (IS_WIN) return execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => done()); // privacy-flow: local-sound
+    if (IS_WIN) return PowerShell.run(PowerShell.SCRIPTS.speak, [String(text)], {}, () => done()); // privacy-flow: local-sound
     // '--': a reply starting with '-' is words, never a `say` option.
     return execFile('say', ['--', String(text)], () => done());
   }
