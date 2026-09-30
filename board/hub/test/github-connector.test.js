@@ -1,5 +1,7 @@
-// GitHub connector behaviour against a stub ctx (ctx.cardForBranch and
-// s.linkStatus are builder-5's feat/integrations-ctx; stubbed here until it lands).
+// GitHub connector behaviour against a stub ctx shaped like builder-5's
+// registry (feat/integrations-ctx): cardForBranch → {card_id, base_ref},
+// linkedByCard → external_id | null, s.link refuses a second PR on a card.
+// github-e2e.test.js drives the real registry.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -10,21 +12,27 @@ const repo = { id: 501, full_name: 'acme/app', default_branch: 'main' };
 const pr = (over = {}) => ({ id: 991, number: 42, html_url: 'https://github.com/acme/app/pull/42', draft: false, merged: false,
   head: { ref: 'board/BDL-12-r3', sha: 'a'.repeat(40), repo }, base: { ref: 'main', repo }, requested_reviewers: [], ...over });
 
-function stubCtx({ branches = { 'acme/app board/BDL-12-r3': 'card-12' } } = {}) {
+function stubCtx({ branches = { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: 'main' } } } = {}) {
   const links = new Map();
   const calls = [];
+  const byCard = (card, kind) => [...links].filter(([k, c]) => c === card && k.startsWith(`${kind}:`)).map(([k]) => k.slice(kind.length + 1)).at(-1) ?? null;
   const ctx = {
     calls, links,
     linked: (kind, id) => links.get(`${kind}:${id}`) ?? null,
+    linkedByCard: byCard,
     cardForBranch: (r, b) => branches[`${r.toLowerCase()} ${b}`] ?? null,
     async act(action, meta, run) {
       calls.push(['act', action, meta.external_ref]);
       await run({
-        link: (card, kind, id, url) => { links.set(`${kind}:${id}`, card); calls.push(['link', card, id, url]); },
+        link: (card, kind, id, url) => {
+          const have = byCard(card, kind);
+          if (kind === 'pr' && have != null && have !== String(id)) throw Object.assign(new Error('this card already has a PR'), { code: 'CONFLICT' });
+          links.set(`${kind}:${id}`, card); calls.push(['link', card, id, url]);
+        },
         linkStatus: (card, kind, id, status) => calls.push(['status', card, id, status]),
       });
     },
-    system: { event: async (type, ev) => calls.push(['system', type, ev.external_id, ev.pr, ev.by]) },
+    system: { event: async (type, ev) => { calls.push(['system', type, ev.external_id, ev.pr, ev.by]); ctx.lastEvent = ev; return { done: false, reason: 'no_verified_pr' }; } },
   };
   return ctx;
 }
@@ -46,6 +54,7 @@ test('merging a linked PR raises pr_merged for its card (the state machine moves
   ctx.calls.length = 0;
   await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ merged: true, merged_by: { login: 'tonde' } }), repository: repo });
   assert.deepEqual(ctx.calls.at(-1), ['system', 'pr_merged', '991', 42, 'tonde']);
+  assert.equal(ctx.lastEvent.repo, 'acme/app', 'the registry matches it against the verified PR\'s repo');
   assert.deepEqual(ctx.calls.find((c) => c[0] === 'status'), ['status', 'card-12', '991', { state: 'merged' }]);
 });
 
@@ -103,19 +112,35 @@ test('H1: a PR opened into another base first, then retargeted to the default br
   assert.equal(ctx.linked('pr', '991'), 'card-12');
 });
 
-test('H1 forward-compatible: cardForBranch → {card_id, base_ref} picks the base; linkedByCard allows one PR per card', async () => {
-  const ctx = stubCtx();
-  ctx.cardForBranch = (r, b) => (b === 'board/BDL-12-r3' ? { card_id: 'card-12', base_ref: 'release' } : null);
-  ctx.linkedByCard = (card, kind) => [...ctx.links].filter(([k, c]) => c === card && k.startsWith(`${kind}:`)).map(([k]) => k.slice(kind.length + 1));
+test('H1: the run\'s base_ref decides the base; a missing base_ref falls back to the default branch', async () => {
+  const ctx = stubCtx({ branches: { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: 'release' } } });
   await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
   assert.equal(ctx.linked('pr', '991'), null, 'main is the default branch, but not the run\'s base');
   const intoRelease = pr({ base: { ref: 'release', repo } });
   await run(ctx, 'pull_request', { action: 'opened', pull_request: intoRelease, repository: repo });
   assert.equal(ctx.linked('pr', '991'), 'card-12');
-  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 992, number: 43, base: { ref: 'release', repo } }), repository: repo });
-  assert.equal(ctx.linked('pr', '992'), null, 'a second PR for the same card');
   await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...intoRelease, merged: true, merged_by: { login: 'tonde' } }, repository: repo });
   assert.deepEqual(ctx.calls.at(-1), ['system', 'pr_merged', '991', 42, 'tonde']);
+
+  const noBase = stubCtx({ branches: { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: null } } });
+  await run(noBase, 'pull_request', { action: 'opened', pull_request: intoRelease, repository: repo });
+  assert.equal(noBase.linked('pr', '991'), null);
+  await run(noBase, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  assert.equal(noBase.linked('pr', '991'), 'card-12');
+});
+
+test('H1: one PR per card: a second PR for a linked card is not linked, and a link CONFLICT is not an error', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  // Closed and reopened as a new PR from the same branch into main.
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 992, number: 43 }), repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null);
+  // A race: linkedByCard said none, then s.link found one.
+  const racy = stubCtx();
+  await run(racy, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  racy.linkedByCard = () => null;
+  await assert.doesNotReject(run(racy, 'pull_request', { action: 'opened', pull_request: pr({ id: 993, number: 44 }), repository: repo }));
+  assert.equal(racy.linked('pr', '993'), null);
 });
 
 test('nothing happens for a PR the board did not create, a fork, or free text naming a card', async () => {
