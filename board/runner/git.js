@@ -13,7 +13,7 @@ export const TOTAL_CAP = 25 * 1024 * 1024;
 
 export function git(cwd, args, { env, input, timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = execFile('git', args, {
+    const child = execFile('git', args, { // privacy-flow: runner-local
       cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env }, timeout: timeoutMs, maxBuffer: 64 << 20, encoding: 'utf8',
     }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; err.stdout = stdout; reject(err); } else resolve(stdout);
@@ -81,7 +81,7 @@ async function secretScan(wt, files, { gitleaks }) {
     if (gitleaks) {
       const report = `${tmpd}.report.json`;
       const code = await new Promise((resolve) => {
-        execFile(gitleaks, ['dir', tmpd, '--no-banner', '--redact', '-r', report], { timeout: 60000 }, (err) => resolve(err ? (err.code ?? 1) : 0));
+        execFile(gitleaks, ['dir', tmpd, '--no-banner', '--redact', '-r', report], { timeout: 60000 }, (err) => resolve(err ? (err.code ?? 1) : 0)); // privacy-flow: runner-local
       });
       if (code === 0) { fs.rmSync(report, { force: true }); return null; }
       let hits = [];

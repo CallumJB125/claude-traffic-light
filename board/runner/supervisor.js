@@ -133,7 +133,7 @@ export class Supervisor extends EventEmitter {
       headers['CF-Access-Client-Secret'] = this.device.cf_client_secret;
     }
     const WS = this.opts.WebSocketImpl ?? WebSocket;
-    const ws = new WS(url, { headers, handshakeTimeout: 15000 });
+    const ws = new WS(url, { headers, handshakeTimeout: 15000 }); // privacy-flow: team-hub
     this.ws = ws;
     ws.on('open', () => { if (this.ws === ws) this.#sendHello(); });
     ws.on('message', (data) => { if (this.ws === ws) this.#onFrame(String(data)); });

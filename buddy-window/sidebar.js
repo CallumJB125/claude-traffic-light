@@ -14,6 +14,8 @@ const ICONS = {
   puzzle: ['M3 5.5h2.25a1.5 1.5 0 1 1 3 0H10.5v2.25a1.5 1.5 0 1 1 0 3V13H3z'],
   lights: ['M5.25 1.75h5.5v12.5h-5.5z', 'M8 4.25v.01M8 8v.01M8 11.75v.01'],
   gear: ['M8 5.75a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5z', 'M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1'],
+  laptop: ['M3.25 3.75h9.5v6.5h-9.5z', 'M1.75 12.25h12.5'],
+  user: ['M8 7.25a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13.75c.6-2.4 2.5-3.75 5-3.75s4.4 1.35 5 3.75'],
   external: ['M9.5 2.75h3.75V6.5M13.25 2.75L7.5 8.5M11.5 9.5v3a.75.75 0 0 1-.75.75h-7.5a.75.75 0 0 1-.75-.75v-7.5a.75.75 0 0 1 .75-.75h3'],
 };
 
@@ -85,11 +87,8 @@ function build() {
   paint();
 }
 
-const HUB_TEXT = {
-  starting: 'Starting the board…',
-  restarting: 'Board restarting…',
-  failed: 'Board unavailable',
-};
+// From main (brand.js), with the page list.
+let HUB_TEXT = {};
 
 function paint() {
   for (const [id, btn] of buttons) {
@@ -98,8 +97,10 @@ function paint() {
   }
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
-  hub.textContent = HUB_TEXT[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? 'Team board' : 'Board on this Mac') : '');
-  hub.dataset.state = s ?? 'stopped';
+  const runners = s === 'failed' ? [] : state.runners ?? [];
+  // A runner works for the team whatever board is showing; say so while it's on.
+  hub.textContent = runners.length ? (HUB_TEXT.running ?? '').replace('{teams}', runners.join(', ')) : ({ starting: HUB_TEXT.starting, restarting: HUB_TEXT.restarting, failed: HUB_TEXT.failed }[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? HUB_TEXT.team : HUB_TEXT.local) : '')) ?? '';
+  hub.dataset.state = runners.length ? 'running' : s ?? 'stopped';
 }
 
 // ↑/↓ move between entries, like a native source list.
@@ -112,5 +113,55 @@ document.addEventListener('keydown', (e) => {
   all[(i + (e.key === 'ArrowDown' ? 1 : -1) + all.length) % all.length].focus();
 });
 
-window.buddy.onState((s) => { Object.assign(state, s); paint(); });
-window.buddy.pages().then((r) => { if (!r) return; pages = r.pages; groups = r.groups; build(); });
+// Workspace switcher: the board on this Mac, every team on each signed-in
+// hub (grouped by hub when there are several), then the account actions.
+const ACTIONS = ['create-team', 'join', 'signin'];
+let wsKey = '';
+function paintWorkspaces() {
+  const box = document.getElementById('ws');
+  const list = state.workspaces ?? [];
+  const key = JSON.stringify([list, state.active, state.signedIn]);
+  if (key === wsKey) return;
+  wsKey = key;
+  box.textContent = '';
+  const label = el('label', { class: 'sr-only', for: 'ws-select' }, 'Workspace');
+  const sel = el('select', { class: 'ws-select', id: 'ws-select' });
+  const groups = new Map();
+  for (const w of list) {
+    const o = el('option', { value: w.id }, w.kind === 'local' ? 'My board (this Mac)' : w.name);
+    if (w.id === state.active) o.selected = true;
+    if (w.group) {
+      if (!groups.has(w.group)) { const g = el('optgroup', { label: w.group }); groups.set(w.group, g); sel.append(g); }
+      groups.get(w.group).append(o);
+    } else sel.append(o);
+  }
+  const more = el('optgroup', { label: '──────────' });
+  if (state.signedIn) more.append(el('option', { value: 'create-team' }, 'Create a team…'));
+  more.append(el('option', { value: 'join' }, 'Join with an invite…'), el('option', { value: 'signin' }, 'Sign in to a team hub…'));
+  sel.append(more);
+  sel.addEventListener('change', () => {
+    const v = sel.value;
+    window.buddy.workspace(v);
+    // An action isn't a place to stay selected; repaint on the active one.
+    if (ACTIONS.includes(v)) { wsKey = ''; paintWorkspaces(); }
+  });
+  box.append(label, sel);
+  const active = list.find((w) => w.id === state.active);
+  if (active?.kind === 'access') {
+    const out = el('button', { type: 'button', class: 'ws-signout' }, `Sign out of ${active.name}`);
+    out.addEventListener('click', () => window.buddy.signOut(active.id));
+    box.append(out);
+  }
+}
+
+window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(); });
+window.buddy.pages().then((r) => {
+  if (!r) return;
+  pages = r.pages;
+  groups = r.groups;
+  HUB_TEXT = r.brand.hubText;
+  document.title = r.brand.name;
+  document.getElementById('brand').textContent = r.brand.name;
+  document.querySelector('.sidebar').setAttribute('aria-label', r.brand.name);
+  build();
+});

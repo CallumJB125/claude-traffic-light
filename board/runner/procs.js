@@ -10,7 +10,7 @@ const PS = process.platform === 'darwin' ? '/bin/ps' : 'ps';
 export function lstartOf(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
-    const s = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const s = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); // privacy-flow: runner-local
     return s || null;
   } catch { return null; }
 }
@@ -26,7 +26,7 @@ export function sameProcess(pid, lstart) {
 
 export function processTable() {
   let out = '';
-  try { out = execFileSync(PS, ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; }
+  try { out = execFileSync(PS, ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return []; } // privacy-flow: runner-local
   const rows = [];
   for (const line of out.split('\n')) {
     const m = /^\s*(\d+)\s+(\d+)\s+(\d+)/.exec(line);

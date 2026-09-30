@@ -71,13 +71,18 @@
       "tray.html",
       "tray-preload.js",
       "buddy-window/**/*",
+      "!buddy-window/mock-accounts-hub.js",
+      "!buddy-window/dev-walk.js",
       "board/package.json",
       "board/hub/**/*",
       "board/shared/**/*",
       "board/web/**/*",
+      "board/runner/**/*",
+      "board/mcp/**/*",
       "!board/**/test/**",
       "!board/web/mock/**",
       "!board/web/scripts/**",
+      "!board/runner/scripts/**",
       "!board/hub/data/**",
       "!board/**/*.db*"
     ],
@@ -93,6 +98,7 @@
     ],
     "mac": {
       "icon": "assets/icon.icns",
+      "protocols": [{ "name": "Plexiform", "schemes": ["plexiform", "claudebuddy"] }],
       "category": "public.app-category.developer-tools",
       "target": "dmg",
       "extendInfo": {
@@ -131,7 +137,18 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "asarUnpack": [
+      "board/package.json",
+      "board/mcp/**",
+      "board/shared/**",
+      "board/runner/hook-shim.js",
+      "board/runner/procs.js",
+      "board/runner/ipc.js",
+      "board/runner/launch.js",
+      "node_modules/@modelcontextprotocol/sdk/**",
+      "node_modules/zod/**"
+    ]
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

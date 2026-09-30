@@ -49,7 +49,7 @@ async function main() {
     case 'start': {
       if (!f.foreground) {
         const log = fs.openSync(l.log, 'a', 0o600);
-        const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--foreground'], { detached: true, stdio: ['ignore', log, log], env: process.env });
+        const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--foreground'], { detached: true, stdio: ['ignore', log, log], env: process.env }); // privacy-flow: runner-local
         child.unref();
         process.stdout.write(`board runner started (pid ${child.pid}); log ${l.log}\n`);
         return;

@@ -961,10 +961,20 @@ function createSettingsWindow() {
   });
 }
 
-// The Buddy main window (board, views, integrations…): buddy-window/.
+// The Plexiform main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
+const BRAND = require('./buddy-window/brand');
+// plexiform:// and the legacy claudebuddy:// open the same links.
+const DEEP_LINK_RE = new RegExp(`^(${BRAND.SCHEMES.join('|')}):`, 'i');
 let buddyWin = null;
-function openBuddy(page = null) {
+// Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
+// Buddy window reads its origin once, when created, so nothing may create the
+// window (a deep link, the tray, a second instance) until it is listening.
+const devMock = !app.isPackaged && process.argv.includes('--buddy-mock-accounts') ? require('./buddy-window/mock-accounts-hub').createMockAccountsHub({ log: (m) => console.log(m) }) : null;
+let devAccountsHub = null;
+let devMockReady = !devMock;
+function getBuddy() {
+  if (!devMockReady) throw new Error('the dev mock accounts hub is still starting');
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       openWindow: (which) => {
@@ -973,8 +983,14 @@ function openBuddy(page = null) {
         else if (which === 'mix') { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
       },
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin) app.dock.hide(); },
+      devAccountsHub: app.isPackaged ? null : devAccountsHub,
     });
   }
+  return buddyWin;
+}
+function openBuddy(page = null) {
+  if (!devMockReady) return;
+  getBuddy();
   if (IS_MAC) app.dock.show();
   buddyWin.open(page);
 }
@@ -987,6 +1003,24 @@ function showHealth() {
   else settingsWin.webContents.send('show-section', 'health');
 }
 
+// Invite deep links (plexiform://invite/<token>, plexiform://join?hub=…&t=…, and the same under claudebuddy://).
+// macOS delivers open-url before `ready` on a cold start, so links wait until
+// then. The link is never logged: it carries an invite token.
+const pendingLinks = [];
+let linksReady = false;
+function handleDeepLink(url) {
+  if (typeof url !== 'string' || url.length > 2048 || !DEEP_LINK_RE.test(url)) return;
+  if (!linksReady) { if (pendingLinks.length < 5) pendingLinks.push(url); return; }
+  try {
+    getBuddy().openInvite(url);
+    openBuddy();
+  } catch (err) {
+    console.error(`[deep-link] could not open ${BRAND.NAME}:`, err.message);
+  }
+}
+app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
+// Only an installed app may claim the scheme: a dev run would steal it from it.
+if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
 let lightsWin = null;
 
 function createLightsWindow() {
@@ -1782,6 +1816,7 @@ function broadcastStatus() {
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
     if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
+    buddyWin?.sessionsChanged(st.sessions);
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
@@ -2034,7 +2069,7 @@ function createTray() {
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
   const menu = Menu.buildFromTemplate([
-    { label: 'Open Buddy…', accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
+    { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
@@ -3197,7 +3232,9 @@ if (!gotLock) {
     // This fires on an instance that may be mid-teardown, where opening a
     // window throws — and an uncaught throw here took the whole app down.
     try {
-      if (argv.includes('--lights')) createLightsWindow();
+      const link = argv.find((a) => DEEP_LINK_RE.test(a));
+      if (link) handleDeepLink(link);
+      else if (argv.includes('--lights')) createLightsWindow();
       else if (argv.includes('--buddy')) openBuddy();
       else win?.show();
     } catch (err) {
@@ -3243,12 +3280,40 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
-  // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
-  // window (optionally on a page) and can capture both halves, then quit.
-  if (process.argv.includes('--buddy')) {
+  (async () => {
+    // `--buddy-mock-accounts` (dev): the mock accounts hub on loopback, listening before anything below can create the window.
+    if (devMock) {
+      devAccountsHub = await devMock.listen(); // privacy-flow: local-board-hub
+      devMockReady = true;
+      console.log('[buddy] mock accounts hub at', devAccountsHub);
+      app.on('will-quit', () => { devMock.close(); });
+    }
+    // Links that arrived before ready (cold start), then any in our own argv
+    // (Windows/Linux pass the link as an argument).
+    linksReady = true;
+    for (const link of [...pendingLinks.splice(0), ...process.argv.filter((a) => DEEP_LINK_RE.test(a))]) handleDeepLink(link);
+    // Runners the member left on come back at launch, window or not; a dev
+    // run shares the Mac with an installed app, so only when asked to.
+    const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';
+    if (resumeRunners) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
+    // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
+    // window (optionally on a page) and can capture both halves, then quit.
+    // `--buddy-accounts-walk prefix` (with --buddy-mock-accounts) walks the
+    // account flow against the mock hub, capturing each step.
+    if (!process.argv.includes('--buddy')) return;
     const at = process.argv.indexOf('--buddy');
     const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
+    const mock = devMock;
     openBuddy(page);
+    const connectAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-connect');
+    if (connectAt > 0 && process.argv[connectAt + 1]) buddyWin.devConnect(process.argv[connectAt + 1]).then((r) => console.log('[buddy-connect]', JSON.stringify(r)));
+    const walkAt = app.isPackaged || !mock ? -1 : process.argv.indexOf('--buddy-accounts-walk');
+    if (walkAt > 0 && process.argv[walkAt + 1]) {
+      require('./buddy-window/dev-walk').walkAccounts({ buddy: buddyWin, mock, hub: devAccountsHub, prefix: process.argv[walkAt + 1], fs })
+        .catch((err) => console.error('[walk] failed:', err.stack))
+        .finally(() => app.quit());
+      return;
+    }
     const shotAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-shot');
     if (shotAt > 0 && process.argv[shotAt + 1]) {
       setTimeout(async () => {
@@ -3260,7 +3325,7 @@ app.whenReady().then(() => {
         app.quit();
       }, Number(process.env.BUDDY_SHOT_DELAY_MS ?? 6000));
     }
-  }
+  })();
   // After the widget has had time to appear, so the panel can sit beside it.
   if (process.argv.includes('--help-window') || process.argv.includes('--shot-help')) setTimeout(createHelpWindow, 1200);
   else setTimeout(maybeAutoShowHelp, 2500);
