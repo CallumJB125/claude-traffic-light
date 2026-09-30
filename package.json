@@ -86,7 +86,8 @@
             "buddy-calendar"
           ]
         }
-      ]
+      ],
+      "sign": "./build/sign.js"
     },
     "win": {
       "target": [

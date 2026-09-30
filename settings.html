@@ -346,6 +346,20 @@
       const words = st.calendar.on ? CAL_WORDS[st.calendar.status] || ['Checking…', false] : ['', false];
       cal.textContent = words[0] + (words[1] && st.calendar.next ? ` Next busy: ${hhmm(st.calendar.next)}.` : '');
       cal.className = `busy-state${words[1] ? ' ok' : ''}`;
+      // macOS dropped a grant it had given (an update signed differently does
+      // that): one click asks again, instead of untick-and-tick.
+      if (st.calendar.on && st.calendar.reset) {
+        cal.textContent = 'macOS forgot Buddy’s calendar access (this can happen after an update).';
+        cal.className = 'busy-state';
+        const again = document.createElement('button');
+        again.type = 'button';
+        again.className = 'secondary';
+        again.style.marginLeft = '6px';
+        again.style.padding = '1px 8px';
+        again.textContent = 'Reconnect calendar';
+        again.addEventListener('click', async () => { again.disabled = true; try { await window.settingsApi.busyReconnectCalendar(); } finally { showBusy(); } });
+        cal.append(again);
+      }
       if (st.calendar.on && ['denied', 'writeOnly'].includes(st.calendar.status)) {
         const open = document.createElement('button');
         open.type = 'button';

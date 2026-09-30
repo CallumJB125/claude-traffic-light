@@ -228,14 +228,15 @@ function rig(over = {}) {
     return v;
   };
   let changes = 0;
+  const logs = [];
   const w = busyWatch({
     rootDir: '/buddy', home: '/home', helperPath: '/app/buddy-calendar',
     loadConfig: () => config, isDevRun: !!over.isDevRun, fakeFile: over.fakeFile || null,
-    exec, readFile, writeFile: (f, t) => files.set(f, t), exists: (f) => files.has(f) || (f === '/app/buddy-calendar' && over.helper !== null),
+    exec, readFile, writeFile: (f, t) => files.set(f, t), removeFile: (f) => files.delete(f), exists: (f) => files.has(f) || (f === '/app/buddy-calendar' && over.helper !== null),
     fetch: over.fetch || (async () => { throw new Error('no network in tests'); }),
-    now: () => clock, onChange: () => { changes += 1; },
+    now: () => clock, onChange: () => { changes += 1; }, log: (...a) => logs.push(a.join(' ')),
   });
-  return { w, calls, files, helperState, advance: (ms) => { clock += ms; }, setConfig: (c) => { config = { ...config, ...c }; }, changes: () => changes };
+  return { w, calls, files, helperState, logs, advance: (ms) => { clock += ms; }, setConfig: (c) => { config = { ...config, ...c }; }, changes: () => changes };
 }
 const meeting = { start: at('2026-09-30T10:00:00Z'), end: at('2026-09-30T11:00:00Z'), allDay: false, availability: 'busy', cancelled: false, declined: false };
 
@@ -254,7 +255,7 @@ test('watch: calendar is off by default and a tick never prompts, even when swit
 test('watch: ticking the calendar in Settings asks once, then reads busy from events', async () => {
   const r = rig({ helper: { events: [meeting] } });
   await r.w.enableCalendar();
-  assert.deepEqual(r.calls.map((c) => c[1]), ['status', 'request', 'status', 'events']);
+  assert.deepEqual(r.calls.map((c) => c[1]), ['status', 'request', 'events'], 'a poll is one spawn: events reports the status too');
   assert.equal(r.w.env().busy, true);
   assert.equal(r.w.holding(), true);
   assert.equal(r.w.status().calendar.status, 'fullAccess');
@@ -302,11 +303,13 @@ test('watch: ICS feed is fetched, cached and survives a failed refresh', async (
   const feed = ics(['UID:m', 'DTSTART:20260930T100000Z', 'DTEND:20260930T110000Z']);
   const r = rig({
     config: { busyCalendar: false, busyIcsUrl: 'webcal://cal.example/private.ics' },
-    fetch: async (url) => { assert.equal(url, 'https://cal.example/private.ics'); if (fail) throw new Error('offline'); return { ok: true, status: 200, text: async () => feed }; },
+    fetch: async (url, opts) => { assert.equal(url, 'https://cal.example/private.ics'); assert.ok(opts.signal, 'fetched with an abort signal'); if (fail) throw new Error('offline'); return { ok: true, status: 200, text: async () => feed }; },
   });
   await r.w.tick();
   assert.equal(r.w.env().busy, true);
-  assert.deepEqual(JSON.parse(r.files.get('/buddy/busy-ics-cache.json')), { url: 'https://cal.example/private.ics', text: feed });
+  const cache = JSON.parse(r.files.get('/buddy/busy-ics-cache.json'));
+  assert.deepEqual(Object.keys(cache).sort(), ['events', 'key', 'titles', 'v']);
+  assert.equal(cache.key, require('crypto').createHash('sha256').update('https://cal.example/private.ics').digest('hex'));
   fail = true;
   r.advance(11 * 60000);
   await r.w.tick();
@@ -321,9 +324,11 @@ test('watch: ICS rejects non-calendars and bad URLs', async () => {
   const r = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://x.example/page' }, fetch: async () => ({ ok: true, text: async () => '<html>' }) });
   await r.w.tick();
   assert.equal(r.w.status().ics.error, 'not a calendar feed');
-  const bad = rig({ config: { busyCalendar: false, busyIcsUrl: 'file:///etc/passwd' } });
-  await bad.w.tick();
-  assert.equal(bad.w.status().ics.on, false);
+  for (const url of ['file:///etc/passwd', 'http://cal.example/private.ics']) {
+    const bad = rig({ config: { busyCalendar: false, busyIcsUrl: url } });
+    await bad.w.tick();
+    assert.equal(bad.w.status().ics.on, false, url);
+  }
 });
 
 test('watch: Focus from Assertions.json when readable, else the Shortcut', async () => {
@@ -340,7 +345,7 @@ test('watch: Focus from Assertions.json when readable, else the Shortcut', async
 
   const viaShortcut = rig({ config: { busyCalendar: false, busyFocus: true, busyFocusShortcut: 'Buddy Focus' }, files: [[dnd('Assertions.json'), eperm]], shortcut: 'Work\n' });
   await viaShortcut.w.tick();
-  assert.deepEqual(viaShortcut.calls, [['shortcuts', 'run', 'Buddy Focus']]);
+  assert.deepEqual(viaShortcut.calls, [['shortcuts', 'run', '--', 'Buddy Focus']]);
   assert.deepEqual([viaShortcut.w.env().busy, viaShortcut.w.status().focus.mode], [true, 'Work']);
 });
 
@@ -349,23 +354,25 @@ test('watch: the recap arrives once when a busy spell ends, then back-from-busy 
   await r.w.tick();
   const s = (signal) => [{ sessionId: 'a', cwd: '/w/api', signal, tool: 'Bash' }];
   assert.equal(r.w.observe(s('tool-use')), null);
-  r.w.noteHeld();
+  r.w.noteHeld('Task finished', 'stop');
   assert.equal(r.w.observe(s('stop')), null);
   r.advance(31 * 60000); // meeting over at 11:00
   r.advance(60000);
   await r.w.tick();
   assert.equal(r.w.env().busy, false);
   const recap = r.w.observe(s('stop'));
-  assert.equal(recap.headline, '1 done');
+  assert.equal(recap.headline, '1 done · 1 ping held');
   assert.equal(recap.held, 1);
+  assert.deepEqual(recap.heldPings, [{ rule: 'Task finished', signal: 'stop', count: 1 }]);
   assert.equal(r.w.observe(s('stop')), null, 'only once');
-  assert.equal(JSON.parse(r.files.get('/buddy/away.json')).headline, '1 done');
-  assert.equal(r.w.recap().headline, '1 done');
+  assert.equal(JSON.parse(r.files.get('/buddy/away.json')).headline, recap.headline);
+  assert.equal(r.w.recap().headline, recap.headline);
   assert.equal(r.w.env().backFromBusy, true);
   r.advance(busyWatch.BACK_MS);
   assert.equal(r.w.env().backFromBusy, false);
   r.w.dismiss();
   assert.equal(r.w.recap(), null);
+  assert.ok(!r.files.has('/buddy/away.json'), 'dismissed means gone from disk too');
 });
 
 test('watch: with holding off, busy is still a rule condition but nothing is logged or held', async () => {
@@ -376,6 +383,208 @@ test('watch: with holding off, busy is still a rule condition but nothing is log
   r.advance(H);
   await r.w.tick();
   assert.equal(r.w.observe([{ sessionId: 'a', signal: 'stop' }]), null);
+});
+
+// ── Review fixes ────────────────────────────────────────────────────────────
+test('ICS perf: 500 weekly TZID series from 2021 expand over ±1 day in under 50 ms', () => {
+  const zones = ['Europe/London', 'America/New_York', 'Africa/Johannesburg', 'Asia/Tokyo', 'Pacific Standard Time'];
+  const series = [];
+  for (let i = 0; i < 500; i += 1) series.push([`UID:p${i}`, `DTSTART;TZID=${zones[i % zones.length]}:20210104T0${i % 9}0000`, 'DURATION:PT30M', 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR', `EXDATE;TZID=${zones[i % zones.length]}:20210106T0${i % 9}0000`]);
+  const events = B.parseICS(ics(...series));
+  const now = at('2026-09-30T10:00:00Z');
+  B.expandICS(events, now - 86400000, now + 86400000); // warm the formatter cache
+  const t0 = process.hrtime.bigint();
+  const out = B.expandICS(events, now - 86400000, now + 86400000);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(out.length >= 500, `expanded ${out.length}`);
+  assert.ok(ms < 50, `took ${ms.toFixed(1)} ms`);
+});
+
+test('ICS: jumping ahead to the window keeps INTERVAL and monthly patterns aligned to DTSTART', () => {
+  const starts = (rrule, from, to, dt) => expand(ics(['UID:x', `DTSTART:${dt}`, 'DURATION:PT1H', `RRULE:${rrule}`]), from, to).map((o) => new Date(o.start).toISOString().slice(0, 10));
+  assert.deepEqual(starts('FREQ=WEEKLY;INTERVAL=3;BYDAY=TU', '2026-09-01T00:00:00Z', '2026-10-15T00:00:00Z', '20190101T080000Z'), ['2026-09-15', '2026-10-06']);
+  assert.deepEqual(starts('FREQ=DAILY;INTERVAL=5', '2026-09-28T00:00:00Z', '2026-10-06T00:00:00Z', '20200101T080000Z'), ['2026-10-01']);
+  assert.deepEqual(starts('FREQ=MONTHLY;INTERVAL=4;BYDAY=1MO', '2026-08-01T00:00:00Z', '2027-02-01T00:00:00Z', '20180101T080000Z'), ['2026-09-07', '2027-01-04']);
+  // With COUNT the series is still counted from DTSTART.
+  assert.deepEqual(starts('FREQ=WEEKLY;COUNT=2', '2026-09-01T00:00:00Z', '2026-10-01T00:00:00Z', '20200101T080000Z'), []);
+});
+
+test('ICS: Windows zone names resolve through the CLDR map, whatever the local zone', () => {
+  const was = process.env.TZ;
+  process.env.TZ = 'Africa/Johannesburg';
+  try {
+    const out = expand(ics(['UID:w', 'DTSTART;TZID=Pacific Standard Time:20260930T090000', 'DTEND;TZID=Pacific Standard Time:20260930T100000'], ['UID:v', 'DTSTART;TZID="W. Europe Standard Time":20260115T090000', 'DURATION:PT1H']), '2026-01-01T00:00:00Z', '2026-12-31T00:00:00Z');
+    assert.deepEqual(out.map((o) => new Date(o.start).toISOString()).sort(), ['2026-01-15T08:00:00.000Z', '2026-09-30T16:00:00.000Z']);
+  } finally {
+    if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+  }
+  assert.equal(B.ianaZone('/mozilla.org/20050126_1/Europe/London'), 'Europe/London');
+  assert.equal(B.ianaZone('Europe/Paris'), 'Europe/Paris');
+});
+
+test('ICS: parse drops titles unless asked', () => {
+  const text = ics(['UID:t', 'DTSTART:20260930T100000Z', 'DURATION:PT1H', 'SUMMARY:Secret project', 'DESCRIPTION:dial-in 1234', 'LOCATION:Room 7', 'ATTENDEE:mailto:a@b.c']);
+  const [slim] = B.parseICS(text, { titles: false });
+  assert.equal(slim.title, undefined);
+  assert.doesNotMatch(JSON.stringify(slim), /dial-in|Room 7|mailto/);
+  assert.equal(B.parseICS(text)[0].title, 'Secret project');
+});
+
+test('watch: the ICS cache holds busy fields only, keyed by a hash of the URL', async () => {
+  const feed = ics(['UID:m', 'DTSTART:20260930T100000Z', 'DTEND:20260930T110000Z', 'SUMMARY:Board meeting', 'DESCRIPTION:pin 4242', 'LOCATION:HQ']);
+  const r = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/secret-abc123.ics' }, fetch: async () => ({ ok: true, text: async () => feed }) });
+  await r.w.tick();
+  const raw = r.files.get('/buddy/busy-ics-cache.json');
+  for (const leak of ['secret-abc123', 'Board meeting', 'pin 4242', 'HQ', 'BEGIN:VCALENDAR']) assert.ok(!raw.includes(leak), leak);
+  r.setConfig({ busyCalendarTitles: true });
+  await r.w.tick();
+  assert.match(r.files.get('/buddy/busy-ics-cache.json'), /Board meeting/, 'titles only once opted in');
+  const legacy = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/x.ics' }, files: [['/buddy/busy-ics-cache.json', JSON.stringify({ url: 'https://cal.example/x.ics', text: feed })]] });
+  await legacy.w.tick();
+  assert.ok(!legacy.files.has('/buddy/busy-ics-cache.json'), 'the old raw-feed cache is deleted, not read');
+  // A fresh start (same URL, no network) reads the cache back.
+  const again = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/secret-abc123.ics' }, files: [['/buddy/busy-ics-cache.json', raw]] });
+  await again.w.tick();
+  assert.equal(again.w.env().busy, true);
+});
+
+test('watch: ICS occurrences are expanded on fetch and hourly, not every tick', async () => {
+  const feed = ics(['UID:m', 'DTSTART:20200106T100000Z', 'DURATION:PT1H', 'RRULE:FREQ=DAILY']);
+  const r = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/a.ics' }, fetch: async () => ({ ok: true, text: async () => feed }) });
+  const real = B.expandICS;
+  let calls = 0;
+  B.expandICS = (...a) => { calls += 1; return real(...a); };
+  try {
+    await r.w.tick();
+    for (let i = 0; i < 20; i += 1) { r.advance(15000); await r.w.tick(); }
+    assert.equal(calls, 1);
+    r.advance(60 * 60000);
+    await r.w.tick();
+    assert.equal(calls, 2, 'the hourly re-expand keeps tomorrow covered');
+  } finally {
+    B.expandICS = real;
+  }
+});
+
+test('watch: ICS fetch refuses oversized feeds by header or by streamed bytes, and times out', async () => {
+  const big = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/a.ics' }, fetch: async () => ({ ok: true, headers: { get: () => String(6 * 1024 * 1024) }, text: async () => { throw new Error('must not buffer'); } }) });
+  await big.w.tick();
+  assert.equal(big.w.status().ics.error, 'feed is over 5 MB');
+  let cancelled = false;
+  const chunk = new Uint8Array(1024 * 1024);
+  let sent = 0;
+  const stream = rig({
+    config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/b.ics' },
+    fetch: async () => ({ ok: true, headers: { get: () => null }, body: { getReader: () => ({ read: async () => { sent += 1; return { done: false, value: chunk }; }, cancel: async () => { cancelled = true; } }) } }),
+  });
+  await stream.w.tick();
+  assert.equal(stream.w.status().ics.error, 'feed is over 5 MB');
+  assert.ok(cancelled && sent <= 6, `stopped after ${sent} MB`);
+  const slow = rig({
+    config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/c.ics' },
+    fetch: (url, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))),
+  });
+  const realSet = global.setTimeout;
+  global.setTimeout = (fn, ms, ...a) => realSet(fn, ms >= 20000 ? 0 : ms, ...a);
+  try { await slow.w.tick(); } finally { global.setTimeout = realSet; }
+  assert.equal(slow.w.status().ics.error, 'timed out');
+});
+
+test('watch: one failed Focus poll keeps the last reading; the third in a row drops it', async () => {
+  const dnd = path.join('/home/Library/DoNotDisturb/DB', 'Assertions.json');
+  const on = JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: 'x.work' } }] }] });
+  const r = rig({ config: { busyCalendar: false, busyFocus: true }, files: [[dnd, on]] });
+  await r.w.tick();
+  assert.equal(r.w.env().busy, true);
+  r.files.set(dnd, Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+  let flips = r.changes();
+  await r.w.tick();
+  await r.w.tick();
+  assert.equal(r.w.env().busy, true, 'two failures: still the last good reading');
+  assert.equal(r.changes(), flips, 'no flap');
+  await r.w.tick();
+  assert.equal(r.w.env().busy, null, 'third failure: honest unknown');
+  r.files.set(dnd, on);
+  await r.w.tick();
+  assert.equal(r.w.env().busy, true);
+
+  const sc = rig({ config: { busyCalendar: false, busyFocus: true, busyFocusShortcut: 'F' }, files: [[dnd, Object.assign(new Error('EPERM'), { code: 'EPERM' })]], shortcut: 'Work' });
+  await sc.w.tick();
+  assert.equal(sc.w.env().busy, true);
+  sc.advance(59000);
+  await sc.w.tick();
+  assert.equal(sc.calls.length, 1, 'the Shortcut runs at most once a minute');
+});
+
+test('watch: a calendar grant that macOS forgot is reported as a reset, with a reconnect path', async () => {
+  const r = rig({ helper: { status: 'fullAccess', events: [meeting] } });
+  await r.w.tick();
+  assert.ok(r.files.has('/buddy/.calendar-granted'));
+  assert.equal(r.w.status().calendar.reset, false);
+  r.helperState.status = 'notDetermined'; // e.g. an ad-hoc signed update
+  r.advance(2 * 60000);
+  await r.w.tick();
+  assert.deepEqual([r.w.status().calendar.status, r.w.status().calendar.reset], ['notDetermined', true]);
+  assert.equal(r.calls.filter((c) => c[1] === 'request').length, 0, 'the timer still never asks');
+  await r.w.enableCalendar();
+  assert.deepEqual([r.w.status().calendar.status, r.w.status().calendar.reset], ['fullAccess', false]);
+  const fresh = rig();
+  await fresh.w.tick();
+  assert.equal(fresh.w.status().calendar.reset, false, 'never granted: not a reset');
+});
+
+test('watch: held pings alone still make a recap, listed per rule', async () => {
+  const r = rig({ helper: { status: 'fullAccess', events: [meeting] } });
+  await r.w.tick();
+  r.w.observe([]);
+  for (let i = 0; i < 3; i += 1) r.w.noteHeld('Waiting for you', 'idle-nudge');
+  r.w.noteHeld('Budget warning', 'budget-warning');
+  r.w.noteHeld('Working over 10 minutes', 'long-running');
+  r.advance(H);
+  await r.w.tick();
+  const recap = r.w.observe([]);
+  assert.equal(recap.headline, '5 pings held');
+  assert.deepEqual(recap.heldPings.map((h) => [h.rule, h.count]), [['Waiting for you', 3], ['Budget warning', 1], ['Working over 10 minutes', 1]]);
+});
+
+test('watch: meeting titles never reach the log', async () => {
+  const r = rig({ helper: { status: 'fullAccess', events: [{ ...meeting, title: 'Layoffs sync' }] }, config: { busyCalendarTitles: true } });
+  await r.w.tick();
+  assert.deepEqual(r.w.status().reasons, ['Calendar: Layoffs sync']);
+  assert.ok(r.logs.some((l) => l.includes('busy (Calendar)')));
+  assert.ok(!r.logs.some((l) => l.includes('Layoffs')));
+});
+
+test('watch: an undismissed recap expires and takes away.json with it', async () => {
+  const r = rig({ helper: { status: 'fullAccess', events: [meeting] } });
+  await r.w.tick();
+  r.w.observe([]);
+  r.w.noteHeld('Task finished', 'stop');
+  r.advance(H);
+  await r.w.tick();
+  r.w.observe([]);
+  assert.ok(r.files.has('/buddy/away.json'));
+  r.advance(61 * 60000);
+  assert.equal(r.w.recap(), null);
+  assert.ok(!r.files.has('/buddy/away.json'));
+});
+
+test('packaging: the calendar helper is signed with calendars-only entitlements', () => {
+  const fs = require('fs');
+  const Sign = require('../build/sign.js');
+  const opts = Sign.withHelperEntitlements(() => ({ entitlements: 'inherit.plist', hardenedRuntime: true }));
+  assert.deepEqual(opts('/out/Claude Buddy.app/Contents/Resources/calendar-helper/buddy-calendar'), { entitlements: Sign.HELPER_ENTITLEMENTS, hardenedRuntime: true });
+  assert.deepEqual(opts('/out/Claude Buddy.app/Contents/Frameworks/Electron Framework.framework'), { entitlements: 'inherit.plist', hardenedRuntime: true });
+  const plist = fs.readFileSync(Sign.HELPER_ENTITLEMENTS, 'utf8');
+  assert.deepEqual([...plist.matchAll(/<key>([^<]+)<\/key>/g)].map((m) => m[1]), ['com.apple.security.personal-information.calendars']);
+  assert.equal(require('../package.json').build.mac.sign, './build/sign.js');
+});
+
+test('main: the pending-permission look also gets the busy signals', () => {
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const resolves = main.slice(main.indexOf('function computeState'), main.indexOf('// The tool of the most recently updated session')).match(/Rules\.resolve\(config\.rules, (?!synthetic)[^\n]*/g);
+  assert.equal(resolves.length, 2);
+  for (const r of resolves) assert.match(r, /BusyWatch\.env\(\)/, r);
 });
 
 // ── Help ────────────────────────────────────────────────────────────────────

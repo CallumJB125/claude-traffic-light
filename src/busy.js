@@ -95,22 +95,68 @@ function parseLine(line) {
   return { name: name.toUpperCase(), params: p, value: line.slice(colon + 1) };
 }
 
+// Outlook and Exchange feeds name zones the Windows way. A subset of CLDR's
+// windowsZones.xml (the "001" territory row of each), covering the zones
+// such feeds actually use; anything else still falls back to local time.
+const WINDOWS_TZ = {
+  'Dateline Standard Time': 'Etc/GMT+12', 'Hawaiian Standard Time': 'Pacific/Honolulu', 'Alaskan Standard Time': 'America/Anchorage',
+  'Pacific Standard Time': 'America/Los_Angeles', 'US Mountain Standard Time': 'America/Phoenix', 'Mountain Standard Time': 'America/Denver',
+  'Central America Standard Time': 'America/Guatemala', 'Central Standard Time': 'America/Chicago', 'Canada Central Standard Time': 'America/Regina',
+  'Central Standard Time (Mexico)': 'America/Mexico_City', 'SA Pacific Standard Time': 'America/Bogota', 'Eastern Standard Time': 'America/New_York',
+  'US Eastern Standard Time': 'America/Indianapolis', 'Atlantic Standard Time': 'America/Halifax', 'SA Western Standard Time': 'America/La_Paz',
+  'Newfoundland Standard Time': 'America/St_Johns', 'E. South America Standard Time': 'America/Sao_Paulo', 'Argentina Standard Time': 'America/Buenos_Aires',
+  'SA Eastern Standard Time': 'America/Cayenne', 'Pacific SA Standard Time': 'America/Santiago', 'UTC': 'Etc/UTC', 'Coordinated Universal Time': 'Etc/UTC',
+  'GMT Standard Time': 'Europe/London', 'Greenwich Standard Time': 'Atlantic/Reykjavik', 'W. Europe Standard Time': 'Europe/Berlin',
+  'Central Europe Standard Time': 'Europe/Budapest', 'Romance Standard Time': 'Europe/Paris', 'Central European Standard Time': 'Europe/Warsaw',
+  'W. Central Africa Standard Time': 'Africa/Lagos', 'GTB Standard Time': 'Europe/Bucharest', 'E. Europe Standard Time': 'Europe/Chisinau',
+  'Egypt Standard Time': 'Africa/Cairo', 'South Africa Standard Time': 'Africa/Johannesburg', 'FLE Standard Time': 'Europe/Kiev',
+  'Israel Standard Time': 'Asia/Jerusalem', 'Namibia Standard Time': 'Africa/Windhoek', 'Turkey Standard Time': 'Europe/Istanbul',
+  'Arab Standard Time': 'Asia/Riyadh', 'Arabic Standard Time': 'Asia/Baghdad', 'E. Africa Standard Time': 'Africa/Nairobi',
+  'Russian Standard Time': 'Europe/Moscow', 'Iran Standard Time': 'Asia/Tehran', 'Arabian Standard Time': 'Asia/Dubai',
+  'Mauritius Standard Time': 'Indian/Mauritius', 'Afghanistan Standard Time': 'Asia/Kabul', 'Pakistan Standard Time': 'Asia/Karachi',
+  'West Asia Standard Time': 'Asia/Tashkent', 'India Standard Time': 'Asia/Calcutta', 'Sri Lanka Standard Time': 'Asia/Colombo',
+  'Nepal Standard Time': 'Asia/Katmandu', 'Bangladesh Standard Time': 'Asia/Dhaka', 'Myanmar Standard Time': 'Asia/Rangoon',
+  'SE Asia Standard Time': 'Asia/Bangkok', 'China Standard Time': 'Asia/Shanghai', 'Singapore Standard Time': 'Asia/Singapore',
+  'Taipei Standard Time': 'Asia/Taipei', 'W. Australia Standard Time': 'Australia/Perth', 'Tokyo Standard Time': 'Asia/Tokyo',
+  'Korea Standard Time': 'Asia/Seoul', 'Cen. Australia Standard Time': 'Australia/Adelaide', 'AUS Central Standard Time': 'Australia/Darwin',
+  'E. Australia Standard Time': 'Australia/Brisbane', 'AUS Eastern Standard Time': 'Australia/Sydney', 'Tasmania Standard Time': 'Australia/Hobart',
+  'West Pacific Standard Time': 'Pacific/Port_Moresby', 'New Zealand Standard Time': 'Pacific/Auckland', 'Fiji Standard Time': 'Pacific/Fiji',
+  'Tonga Standard Time': 'Pacific/Tongatapu', 'Azores Standard Time': 'Atlantic/Azores', 'Morocco Standard Time': 'Africa/Casablanca',
+};
+function ianaZone(tzid) {
+  const id = String(tzid || '').trim().replace(/^"|"$/g, '');
+  if (!id) return null;
+  if (WINDOWS_TZ[id]) return WINDOWS_TZ[id];
+  // "/mozilla.org/20050126_1/Europe/London"-style prefixes (older Lightning/Evolution exports)
+  const m = /([A-Za-z]+\/[A-Za-z_+-]+(?:\/[A-Za-z_+-]+)?)$/.exec(id);
+  return m && id.startsWith('/') ? m[1] : id;
+}
+
 // Wall-clock fields in a time zone → epoch ms. tz null = floating (this
-// machine's local time); an unknown TZID (Outlook's Windows names) falls
-// back to local time too, rather than dropping the event.
-function tzOffset(tz, t) {
-  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
-  const p = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, Number(x.value)]));
+// machine's local time); a zone Intl doesn't know falls back to local time
+// too, rather than dropping the event. One formatter per zone: building
+// Intl.DateTimeFormat is the expensive part.
+const formatters = new Map();
+function formatterFor(tz) {
+  if (!formatters.has(tz)) {
+    let f = null;
+    try { f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }); } catch { f = null; }
+    formatters.set(tz, f);
+  }
+  return formatters.get(tz);
+}
+function tzOffset(f, t) {
+  const p = {};
+  for (const x of f.formatToParts(new Date(t))) p[x.type] = Number(x.value);
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(t / 1000) * 1000;
 }
 function wallToEpoch(w, tz) {
   if (tz === 'UTC') return Date.UTC(w.y, w.m, w.d, w.h, w.mi, w.s);
-  if (tz) {
-    try {
-      // Twice: the offset at the guess can differ from the offset at the answer near a DST change.
-      const guess = Date.UTC(w.y, w.m, w.d, w.h, w.mi, w.s);
-      return guess - tzOffset(tz, guess - tzOffset(tz, guess));
-    } catch { /* unknown zone: local */ }
+  const f = tz ? formatterFor(tz) : null;
+  if (f) {
+    // Twice: the offset at the guess can differ from the offset at the answer near a DST change.
+    const guess = Date.UTC(w.y, w.m, w.d, w.h, w.mi, w.s);
+    return guess - tzOffset(f, guess - tzOffset(f, guess));
   }
   return new Date(w.y, w.m, w.d, w.h, w.mi, w.s).getTime();
 }
@@ -121,7 +167,7 @@ function parseDate(prop) {
   if (!m) return null;
   const allDay = !m[4] || prop.params.VALUE === 'DATE';
   const w = { y: +m[1], m: +m[2] - 1, d: +m[3], h: +(m[4] || 0), mi: +(m[5] || 0), s: +(m[6] || 0) };
-  const tz = allDay ? null : m[7] ? 'UTC' : prop.params.TZID || null;
+  const tz = allDay ? null : m[7] ? 'UTC' : ianaZone(prop.params.TZID);
   return { w, tz, allDay, t: wallToEpoch(w, tz) };
 }
 
@@ -134,7 +180,7 @@ function parseDuration(v) {
 
 // Raw VEVENTs: only what decides busy/free (and the title, which the caller
 // drops unless the user opted in).
-function parseICS(text) {
+function parseICS(text, { titles = true } = {}) {
   const events = [];
   let ev = null;
   for (const line of unfold(text)) {
@@ -153,7 +199,7 @@ function parseICS(text) {
     else if (p.name === 'TRANSP') ev.transp = p.value.trim().toUpperCase();
     else if (p.name === 'STATUS') ev.status = p.value.trim().toUpperCase();
     else if (p.name === 'X-MICROSOFT-CDO-BUSYSTATUS') ev.msBusy = p.value.trim().toUpperCase();
-    else if (p.name === 'SUMMARY') ev.title = p.value.replace(/\\([,;\\])/g, '$1').replace(/\\n/gi, ' ');
+    else if (p.name === 'SUMMARY' && titles) ev.title = p.value.replace(/\\([,;\\])/g, '$1').replace(/\\n/gi, ' ');
   }
   return events;
 }
@@ -206,16 +252,19 @@ function monthDays(y, m, rule, startW) {
   return days.map((d) => (d < 0 ? n + d + 1 : d)).filter((d) => d >= 1 && d <= n).sort((a, b) => a - b);
 }
 
-// Every start (wall-clock fields) the rule produces, in order, from DTSTART.
-// Iteration is capped so a malformed feed can't spin.
-function* ruleStarts(startW, rule, stopAfterDay) {
+// Every start (wall-clock fields) the rule produces, in order, from DTSTART,
+// or from fromDay on when the caller doesn't need to count (no COUNT): a
+// weekly meeting from 2019 then costs a few days of stepping, not seven
+// years of it. Each step re-checks the interval against DTSTART, so where it
+// starts can't shift the pattern. Capped so a malformed feed can't spin.
+function* ruleStarts(startW, rule, stopAfterDay, fromDay = -Infinity) {
   const first = dayNum(startW);
   const LIMIT = 50000;
   let steps = 0;
   if (rule.freq === 'DAILY' || rule.freq === 'WEEKLY') {
     const weekStart = first - ((weekdayOf(first) - rule.wkst + 7) % 7);
     const days = rule.freq === 'WEEKLY' && rule.byday ? rule.byday.map((b) => b.wd) : rule.freq === 'WEEKLY' ? [weekdayOf(first)] : null;
-    for (let n = first; n <= stopAfterDay && steps < LIMIT; n += 1, steps += 1) {
+    for (let n = Math.max(first, fromDay); n <= stopAfterDay && steps < LIMIT; n += 1, steps += 1) {
       if (rule.freq === 'DAILY') {
         if ((n - first) % rule.interval) continue;
         if (rule.byday && !rule.byday.some((b) => b.wd === weekdayOf(n))) continue;
@@ -229,7 +278,13 @@ function* ruleStarts(startW, rule, stopAfterDay) {
   }
   if (rule.freq === 'MONTHLY' || rule.freq === 'YEARLY') {
     const monthStep = rule.freq === 'MONTHLY' ? rule.interval : 12 * rule.interval;
-    for (let i = 0; steps < LIMIT; i += monthStep, steps += 1) {
+    let skip = 0;
+    if (fromDay > first) {
+      const d = new Date(fromDay * DAY_MS);
+      const months = (d.getUTCFullYear() - startW.y) * 12 + (d.getUTCMonth() - startW.m) - 1;
+      if (months > 0) skip = Math.floor(months / monthStep) * monthStep;
+    }
+    for (let i = skip; steps < LIMIT; i += monthStep, steps += 1) {
       const y = startW.y + Math.floor((startW.m + i) / 12);
       const m = (startW.m + i) % 12;
       if (Date.UTC(y, m, 1) / DAY_MS > stopAfterDay) return;
@@ -259,8 +314,10 @@ function expandICS(events, from, to, { titles = false } = {}) {
     const rule = parseRRule(ev.rrule);
     if (!['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(rule.freq)) { push(ev, ev.start.t, ev.start.t + len); continue; }
     const stopAfterDay = Math.floor(to / DAY_MS) + 1;
+    // Occurrences that could still overlap `from`: back off by the event's length and a day for time zones.
+    const fromDay = rule.count === null ? Math.floor((from - Math.max(0, len)) / DAY_MS) - 2 : -Infinity;
     let n = 0;
-    for (const w of ruleStarts(ev.start.w, rule, stopAfterDay)) {
+    for (const w of ruleStarts(ev.start.w, rule, stopAfterDay, fromDay)) {
       const t = wallToEpoch(w, ev.start.tz);
       if (rule.until !== null && t > rule.until) break;
       n += 1;
@@ -290,7 +347,18 @@ function awayKind(prev, next) {
 }
 
 function startAway(now, reasons = [], sessions = []) {
-  return { v: RECAP_VERSION, from: now, reasons: reasons.slice(0, 3), seen: Object.fromEntries(sessions.filter((s) => s && s.sessionId).map((s) => [s.sessionId, s.signal])), items: [], held: 0 };
+  return { v: RECAP_VERSION, from: now, reasons: reasons.slice(0, 3), seen: Object.fromEntries(sessions.filter((s) => s && s.sessionId).map((s) => [s.sessionId, s.signal])), items: [], held: [] };
+}
+
+// A ping (sound, notification, knock) that waited because you were busy:
+// counted per rule and signal, so the recap can say what was held back.
+function noteHeld(log, { rule = null, signal = null } = {}, now = Date.now()) {
+  if (!log) return log;
+  if (!Array.isArray(log.held)) log.held = [];
+  const name = String(rule || signal || 'a ping').slice(0, 40);
+  const hit = log.held.find((h) => h.rule === name && h.signal === (signal || null));
+  if (hit) { hit.count += 1; hit.last = now; } else log.held.push({ rule: name, signal: signal || null, count: 1, last: now });
+  return log;
 }
 
 // sessions: the live list at this tick. Each session keeps its latest
@@ -330,10 +398,13 @@ function finishAway(log, now, sessions = []) {
     parts.push(`${counts.needsYou} need${counts.needsYou === 1 ? 's' : ''} you${first ? ` (${first.detail} on ${first.folder || 'a session'})` : ''}`);
   }
   if (counts.failed) parts.push(`${plural(counts.failed, 'failure')}`);
+  const heldPings = (Array.isArray(log.held) ? log.held : []).map((h) => ({ rule: h.rule, signal: h.signal, count: h.count })).sort((a, b) => b.count - a.count);
+  const held = heldPings.reduce((n, h) => n + h.count, 0);
+  if (held) parts.push(`${plural(held, 'ping')} held`);
   return {
-    v: RECAP_VERSION, from: log.from, to: now, reasons: log.reasons, held: log.held || 0,
+    v: RECAP_VERSION, from: log.from, to: now, reasons: log.reasons, held, heldPings,
     counts, items, headline: parts.length ? parts.join(' · ') : 'Nothing happened',
   };
 }
 
-module.exports = { blocks, busyAt, nextBusy, parseFocusAssertions, parseFocusShortcut, combine, parseICS, expandICS, parseRRule, wallToEpoch, icsAvailability, RECAP_VERSION, awayKind, startAway, noteAway, finishAway };
+module.exports = { blocks, busyAt, nextBusy, parseFocusAssertions, parseFocusShortcut, combine, parseICS, expandICS, parseRRule, wallToEpoch, icsAvailability, RECAP_VERSION, awayKind, startAway, noteAway, noteHeld, finishAway, WINDOWS_TZ, ianaZone };

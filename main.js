@@ -564,7 +564,7 @@ function computeState(opts = {}) {
   // the session files say (the hook blocks before Notification fires). It
   // replaces the look only; the chips, number and season still apply.
   const { look, fired, owned } = pending.length
-    ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
+    ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), { offline: !online, ...BusyWatch.env() })
     : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online, ...BusyWatch.env() });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
@@ -616,6 +616,7 @@ const BusyWatch = require('./src/busy-watch.js')({
   exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
   readFile: (f) => fs.readFileSync(f, 'utf8'),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
+  removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
   fetch: (url) => net.fetch(url),
   log: (...a) => console.log(...a),
@@ -623,12 +624,21 @@ const BusyWatch = require('./src/busy-watch.js')({
 });
 
 // Whether a ping from this rule may sound now. Not busy: always.
+// Every ping that waits is noted by rule and signal for the recap; any
+// feature with a ping of its own (a budget warning, say) goes through here.
 function pingAllowed(ruleId, opts = {}) {
   if (!BusyWatch.holding()) return true;
   const rule = loadConfig().rules.find((r) => r.id === ruleId);
   if (Rules.pingsWhileBusy(rule, opts)) return true;
-  BusyWatch.noteHeld();
+  BusyWatch.noteHeld(rule ? rule.name : null, opts.signal || firedSignal(rule));
   return false;
+}
+// Which of a rule's signals is live right now (a virtual one, like
+// long-running, isn't in the session list: then its first signal).
+function firedSignal(rule) {
+  if (!rule) return null;
+  const live = new Set(aggregateState({ ignoreTravel: true }).sessions.map((s) => s.signal));
+  return rule.when.signal.find((x) => live.has(x)) || rule.when.signal[0] || null;
 }
 // A notification kind is a signal; the first enabled rule listening for it
 // decides, so "Needs your input" follows that rule's busy setting.
@@ -636,7 +646,7 @@ function notificationAllowed(n) {
   if (!BusyWatch.holding()) return true;
   const rule = Rules.orderedRules(loadConfig().rules).find((r) => r.enabled && r.when.signal.includes(n.kind));
   const ok = rule ? Rules.pingsWhileBusy(rule, { session: n.session }) : n.kind !== 'turn-failed';
-  if (!ok) BusyWatch.noteHeld();
+  if (!ok) BusyWatch.noteHeld(rule ? rule.name : n.title, n.kind);
   return ok;
 }
 
@@ -662,6 +672,8 @@ async function openAwayItem(i) {
 ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
 ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 ipcMain.handle('busy-status', () => BusyWatch.status());
+// Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
+ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
 ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
 function createWindow() {
@@ -1673,11 +1685,18 @@ function maybeRoam(st) {
   if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
-  // A knock is a ping: while you're busy only the lamp owner's rule can send one.
-  if (BusyWatch.holding() && !Rules.pingsWhileBusy(loadConfig().rules.find((r) => r.id === (st.owned && st.owned.lamp)), { lamp: st.look.lamp })) return;
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
+  // A knock is a ping: while you're busy only the lamp owner's rule can send
+  // one. Noted once per waiting spell, not on every broadcast.
+  if (BusyWatch.holding()) {
+    const rule = loadConfig().rules.find((r) => r.id === (st.owned && st.owned.lamp));
+    if (!Rules.pingsWhileBusy(rule, { lamp: st.look.lamp })) {
+      if (roamState.heldFor !== roamState.waitingSince) { roamState.heldFor = roamState.waitingSince; BusyWatch.noteHeld(rule ? `${rule.name} (knock)` : 'Knock', firedSignal(rule)); }
+      return;
+    }
+  }
   // maybeRoam runs from every broadcast, and the checks above it are all
   // synchronous — but deciding whether to roam needs three osascript spawns.
   // Without this guard a waiting session fired a fresh trio of `osascript`

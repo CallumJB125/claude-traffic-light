@@ -96,6 +96,8 @@
   #away .row.done .dot { background: var(--green); }
   #away .row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #away .more { opacity: 0.65; }
+  #away .row.held { cursor: default; opacity: 0.8; }
+  #away .row.held:hover { text-decoration: none; color: inherit; }
 </style>
 </head>
 <body>
@@ -238,7 +240,9 @@
       if (!recap) { rows.replaceChildren(); return; }
       document.getElementById('away-head').textContent = 'While you were away';
       document.getElementById('away-head').title = `${recap.headline}${recap.reasons && recap.reasons.length ? ` — while busy (${recap.reasons.join(', ')})` : ''}`;
-      const shown = recap.items.length > AWAY_LINES ? AWAY_LINES - 1 : AWAY_LINES;
+      // Held pings take the last line when there were any.
+      const room = AWAY_LINES - (recap.held ? 1 : 0);
+      const shown = recap.items.length > room ? room - 1 : recap.items.length;
       const els = recap.items.slice(0, shown).map((x, i) => {
         const b = document.createElement('button');
         b.className = `row ${x.kind}`;
@@ -254,6 +258,18 @@
       });
       const extra = recap.items.length - shown;
       if (extra > 0) { const m = document.createElement('div'); m.className = 'more'; m.textContent = `+${extra} more`; els.push(m); }
+      if (recap.held) {
+        const h = document.createElement('div');
+        h.className = 'row held';
+        const list = (recap.heldPings || []).map((p) => `${p.rule}${p.count > 1 ? ` ×${p.count}` : ''}`);
+        h.title = `Held while you were busy: ${list.join(', ')}`;
+        const dot = document.createElement('i');
+        dot.className = 'dot';
+        const text = document.createElement('span');
+        text.textContent = `${recap.held} held${list.length ? ` · ${list.join(', ')}` : ''}`;
+        h.append(dot, text);
+        els.push(h);
+      }
       rows.replaceChildren(...els);
     }
     document.getElementById('away-x').addEventListener('mousedown', (e) => e.stopPropagation());

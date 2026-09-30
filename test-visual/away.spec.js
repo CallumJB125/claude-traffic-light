@@ -39,9 +39,11 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   await expect.poll(async () => (await aggregate()).sessions.find((s) => s.cwd === '/work/api')?.signal).toBe('permission-ask');
   expect((await aggregate()).away).toBeNull();
   setBusy(false);
-  await expect.poll(async () => (await aggregate()).away?.headline, { timeout: 5000 }).toBe('1 done · 1 needs you (permission for Bash on api) · 1 failure');
+  await expect.poll(async () => (await aggregate()).away?.headline, { timeout: 5000 }).toBe('1 done · 1 needs you (permission for Bash on api) · 1 failure · 1 ping held');
   const recap = (await aggregate()).away;
   expect(recap.items.map((x) => [x.kind, x.folder, x.open])).toEqual([['needs-you', 'api', true], ['failed', 'docs', false], ['done', 'web', false]]);
+  // The "Turn failed" notification is amber, so it waited; the red ask did not.
+  expect(recap.heldPings).toEqual([{ rule: 'Turn failed', signal: 'turn-failed', count: 1 }]);
   // The same record is on disk for other readers (the phone, later).
   expect(JSON.parse(fs.readFileSync(path.join(h.home, 'away.json'), 'utf8')).headline).toBe(recap.headline);
   await widget.waitForTimeout(600);
