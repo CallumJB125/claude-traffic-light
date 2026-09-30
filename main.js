@@ -1043,7 +1043,8 @@ function createLightsWindow() {
     minHeight: 560,
     useContentSize: true,
     title: 'Lights',
-    titleBarStyle: 'hiddenInset',
+    // Off macOS 'hiddenInset' hides the window controls with the title bar.
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     backgroundColor: '#1c1a1f',
     webPreferences: {
       spellcheck: false,
@@ -1073,6 +1074,8 @@ function createLightsWindow() {
   // pins document.hasFocus()), so the window's is sent in.
   lightsWin.on('focus', () => lightsWin?.webContents.send('window-focus', true));
   lightsWin.on('blur', () => lightsWin?.webContents.send('window-focus', false));
+  // The page's own title bar leaves room for the macOS traffic lights.
+  if (!IS_MAC) lightsWin.webContents.on('dom-ready', () => lightsWin?.webContents.insertCSS('#titlebar { padding-left: 14px; }').catch(() => {}));
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
