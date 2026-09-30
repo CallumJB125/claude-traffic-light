@@ -52,6 +52,9 @@ export const OVERLAP_DEBOUNCE_MS = 10 * S;
 export const NARRATIVE_NUDGE_MS = 10 * MIN;  // handover narrative staleness nudge
 export const NARRATIVE_NUDGE_CALLS = 25;
 export const DEGRADED_NO_SESSIONSTART_MS = 30 * S;
+export const PRESENCE_MIN_MS = 5 * S;        // D37b: runner sends a changed presence at most this often
+export const PRESENCE_KEEPALIVE_MS = 60 * S; // D37b: runner re-sends an unchanged presence
+export const PRESENCE_TTL_MS = 90 * S;       // D37b: hub forgets a device's presence this long after its last frame
 
 // bound(Bash) = its timeout (default 2 min, max 10 min) + 30 s; bound(other) = 10 min.
 export function toolBound(tool) {
