@@ -89,6 +89,21 @@ test('redact: toplevel → relative, other local paths → <path>, credentials �
   assert.doesNotThrow(() => assertNoForeignBytes({ repo_id: 'r', tail: out }, { repo_id: 'r' }));
 });
 
+test('redact + guard: a local path after any non-path character is caught (file://, <, |, {)', () => {
+  for (const s of ['file:///Users/callum/secret.txt', 'cat</Users/callum/.aws/credentials', 'x|/home/bob/x', '{/Users/callum/a}', 'open file:///C:/Users/bob/x', 'x>/tmp/y', 'a;~/.ssh/id_rsa']) {
+    assert.throws(() => assertNoForeignBytes({ repo_id: 'r', t: s }, { repo_id: 'r' }), /local absolute path/, s);
+    const out = redact(s, '/Users/callum/repo');
+    assert.doesNotMatch(out, /callum|bob|\.aws|\.ssh|\/tmp\//, s);
+    assert.match(out, /<path>/, s);
+    assert.doesNotThrow(() => assertNoForeignBytes({ repo_id: 'r', t: out }, { repo_id: 'r' }), s);
+  }
+  // A repo-relative path whose segment happens to be tmp/private/home is not local.
+  for (const s of ['lib/tmp/x.js', 'src/private/a.ts', 'docs/home/index.md', 'https://example.com/tmp/x']) {
+    assert.doesNotThrow(() => assertNoForeignBytes({ repo_id: 'r', t: s }, { repo_id: 'r' }), s);
+    assert.equal(redact(s, '/Users/c/wt'), s);
+  }
+});
+
 test('assertNoForeignBytes: exit (f) — non-repo session and out-of-repo paths produce zero bytes', () => {
   const scope = { repo_id: 'r-bondly', toplevel: '/Users/c/wt' };
   assert.throws(() => serializeOutbound({ kind: 'facts', repo_id: 'r-bondly' }, null), ForeignBytesError);

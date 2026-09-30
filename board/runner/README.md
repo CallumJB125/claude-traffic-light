@@ -30,7 +30,7 @@ runner → app  {type:'runner.ready'}
 runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable'|'stopping', detail?}
 runner → app  {type:'runner.fatal', message}          then exit 2 (bad config) / 1 (startup failed)
 runner → app  {type:'runner.stopped', parked, orphaned} then exit 0 (after SIGTERM/SIGINT)
-app → runner  {type:'runner.presence', enabled, sessions:[{session_id, agent, cwd, state, since, summary?}]}   since: ISO-8601, ≤ 40 chars
+app → runner  {type:'runner.presence', enabled, share_summaries?, sessions:[{session_id, agent, cwd, state, since, summary?}]}   since: ISO-8601, ≤ 40 chars; share_summaries default false
 ```
 
 `data_dir` (absolute) takes the place of `BOARD_HOME`. The token and the Access
@@ -46,9 +46,12 @@ as an orphan (stop recipe, snapshot, `run.failed{supervisor crash}`).
 Team presence (`runner.presence`) is off until the app enables it. Each session's `cwd`
 is mapped to its repo's configured origin; sessions in repos that are not on one of the
 member's boards are dropped. The hub gets `{hashed session_id, agent, repo_id, branch,
-state, since, redacted summary ≤ 120}` in a `presence` frame, on change at most every
+state, since, summary?}` in a `presence` frame, on change at most every
 5 s and every 60 s as a keepalive. `enabled:false` sends one empty frame so the hub
-clears it at once.
+clears it at once. Summaries are a second opt-in: without `share_summaries:true` no
+`summary` is sent. With it, the summary is redacted (credentials, repo paths made
+relative), then every home-style prefix anywhere in it (`/Users/`, `/home/`, `~/`, …) and
+every `/`-rooted run of two or more segments becomes `<path>`, and it is clipped to 120.
 
 ## Modules
 

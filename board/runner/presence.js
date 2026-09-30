@@ -3,7 +3,10 @@
 // the runner maps each cwd to its repo's configured origin (D27), drops every
 // session whose repo is not on one of the member's boards (the welcome
 // allowlist: default deny), and sends only {hashed session_id, agent, repo_id,
-// branch, state, since, redacted summary ≤ 120}: never a cwd or any path.
+// branch, state, since, summary?}: never a cwd or any path. The summary is a
+// separate opt-in (share_summaries) and goes through redact plus a stricter
+// presence-only pass (every home-style prefix anywhere, and every /-rooted run
+// of 2+ segments, becomes <path>), clipped to 120.
 // Sent on change at most every PRESENCE_MIN_MS, re-sent every
 // PRESENCE_KEEPALIVE_MS; disabled (or never enabled) sends nothing, except one
 // empty frame so the hub clears what it had.
@@ -17,6 +20,14 @@ import { sessionOf, git } from './git.js';
 import { clip } from './util.js';
 
 const DEVICE_SCOPE = Object.freeze({ repo_id: '__device__', toplevel: null });
+const HOME_PREFIX_ANYWHERE = /(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/])\S*/g;
+const ROOTED_RUN = /(?<![\w.-])\/[^\s/]+(?:\/[^\s/]*)+/g;
+
+/** Presence summary text: redact, then no path-looking text at all survives. */
+export function presenceSummary(text, toplevel) {
+  const once = redact(text.replace(/\s+/g, ' ').trim(), toplevel);
+  return clip(once.replace(HOME_PREFIX_ANYWHERE, '<path>').replace(ROOTED_RUN, '<path>'), PRESENCE_SUMMARY_MAX);
+}
 
 /** cwd → {toplevel, remote_url, branch} from git, or null (not a repo with an origin). */
 export async function resolveCwd(cwd) {
@@ -34,6 +45,7 @@ export class PresenceReporter {
     this.resolve = resolve;
     this.salt = crypto.randomBytes(32);   // per runner process: hashed ids never link across restarts
     this.enabled = false;
+    this.shareSummaries = false;
     this.input = [];
     this.sessions = [];
     this.lastSig = null;
@@ -52,6 +64,7 @@ export class PresenceReporter {
   /** The app's `runner.presence` message. → Promise (resolved once reduced and scheduled). */
   update(msg) {
     this.enabled = msg?.enabled === true;
+    this.shareSummaries = this.enabled && msg.share_summaries === true;
     this.input = this.enabled && Array.isArray(msg.sessions) ? msg.sessions.slice(0, PRESENCE_MAX_SESSIONS) : [];
     return this.refresh();
   }
@@ -85,7 +98,7 @@ export class PresenceReporter {
     const repoId = matchRepo(where.remote_url, this.sup.allowlist);
     if (!repoId) return null;   // not a repo linked to one of the member's boards
     const scope = { repo_id: repoId, toplevel: where.toplevel };
-    const summary = typeof s.summary === 'string' ? clip(redact(s.summary.replace(/\s+/g, ' ').trim(), where.toplevel), PRESENCE_SUMMARY_MAX) : '';
+    const summary = this.shareSummaries && typeof s.summary === 'string' ? presenceSummary(s.summary, where.toplevel) : '';
     const out = {
       session_id: crypto.createHmac('sha256', this.salt).update(s.session_id).digest('base64url').slice(0, 22),
       agent: s.agent, repo_id: repoId, ...(where.branch ? { branch: clip(where.branch, 200) } : {}), state: s.state, since,

@@ -130,7 +130,7 @@ test('app mode: close codes map to runner.status (4503 unavailable → connected
   }
 });
 
-test('app mode presence: default deny, no paths, hashed ids, redacted ≤ 120-char summary; enabled:false clears', async () => {
+test('app mode presence: default deny, no paths, hashed ids, opt-in redacted ≤ 120-char summary; enabled:false clears', async () => {
   const root = tmpDir();
   const hub = await startFakeHub();
   fs.mkdirSync(path.join(root, 'a'));
@@ -145,7 +145,7 @@ test('app mode presence: default deny, no paths, hashed ids, redacted ≤ 120-ch
     app.child.send(config(hub, root));
     await app.next('runner.status', (m) => m.state === 'connected');
     const longSummary = `editing ${repo.checkout}/src/parser.js and /Users/someone/notes.txt with sk-ant-api03-SECRETSECRETSECRET ${'x'.repeat(200)}`;
-    app.child.send({ type: 'runner.presence', enabled: true, sessions: [
+    app.child.send({ type: 'runner.presence', enabled: true, share_summaries: true, sessions: [
       { session_id: 'local-session-1', agent: 'claude', cwd: path.join(repo.checkout, 'src'), state: 'working', since: '2026-09-30T10:00:00Z', summary: longSummary },
       { session_id: 'local-session-2', agent: 'codex', cwd: other.checkout, state: 'idle', since: '2026-09-30T10:00:00Z', summary: 'the other repo' },
       { session_id: 'local-session-3', agent: 'cursor', cwd: plain, state: 'waiting', since: '2026-09-30T10:00:00Z' },

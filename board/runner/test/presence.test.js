@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { PresenceReporter } from '../presence.js';
+import { PresenceReporter, presenceSummary } from '../presence.js';
+import { assertNoForeignBytes } from '../../shared/scope.js';
 import { CANON, REPO_ID, waitFor } from './helpers.js';
 
 function stubSup() {
@@ -69,4 +70,29 @@ test('presence reporter: keepalive re-sends while enabled; never enabled sends n
     p.stop();
     idle.stop();
   }
+});
+
+test('presence summary: off unless share_summaries; paths never survive (file://, <, |, {, any /-rooted run)', async () => {
+  const sup = stubSup();
+  const p = new PresenceReporter(sup, { minMs: 0, keepaliveMs: 100_000, resolve });
+  try {
+    await p.update({ enabled: true, sessions: [s({ summary: 'fixing the parser' })] });
+    assert.equal(sup.sent.length, 1);
+    assert.equal('summary' in sup.sent[0].f.sessions[0], false, 'enabled alone shares no summary');
+    await p.update({ enabled: true, share_summaries: 'yes', sessions: [s({ summary: 'fixing the parser' })] });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(sup.sent.length, 1, 'only share_summaries:true opts in');
+    await p.update({ enabled: true, share_summaries: true, sessions: [s({ summary: 'see file:///Users/callum/secret.txt' })] });
+    await waitFor(() => sup.sent.length === 2, { what: 'summary frame' });
+    assert.equal(sup.sent[1].f.sessions[0].summary, 'see file://<path>');
+  } finally {
+    p.stop();
+  }
+  for (const text of ['file:///Users/callum/secret.txt', 'cat</Users/callum/.aws/credentials', 'x|/home/bob/x', '{/Users/callum/a}', 'x/Users/callum/a', 'read /opt/acme-internal/customer-list.csv']) {
+    const out = presenceSummary(text, '/w/app');
+    assert.doesNotMatch(out, /callum|bob|credentials|acme-internal|secret\.txt/, text);
+    assert.match(out, /<path>/, text);
+    assert.doesNotThrow(() => assertNoForeignBytes({ repo_id: 'r', summary: out }, { repo_id: 'r' }), text);
+  }
+  assert.equal(presenceSummary('editing /w/app/src/parser.js', '/w/app'), 'editing src/parser.js', 'repo paths stay relative');
 });
