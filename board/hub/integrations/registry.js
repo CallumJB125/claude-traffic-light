@@ -640,7 +640,7 @@ export function createIntegrations({
         if (e instanceof ActorUnavailable) { warn('integration acts as a removed member', c, e); return; }
         throw new Error(`${code}: ${redact(e?.message ?? e)}`);
       }
-    }, { kinds: conn.consumes });
+    }, { kinds: conn.consumes, orgId: c.org_id });
   }
 
   // ── registration ────────────────────────────────────────────────────────

@@ -54,8 +54,13 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         if (consumers.get(name) !== c) return;
         c.again = false;
         const from = cursor(name);
-        const rows = db.all('SELECT * FROM journal WHERE seq > ? ORDER BY seq LIMIT ?', from, BATCH);
-        if (!rows.length) break;
+        // An org's consumer reads only its boards' rows (journal_board_seq),
+        // then moves its cursor past everyone else's up to the head it saw.
+        const head = c.orgId ? db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM journal').s : null;
+        const rows = c.orgId
+          ? db.all('SELECT * FROM journal WHERE board_id IN (SELECT id FROM boards WHERE org_id = ?) AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?', c.orgId, from, head, BATCH)
+          : db.all('SELECT * FROM journal WHERE seq > ? ORDER BY seq LIMIT ?', from, BATCH);
+        if (!rows.length) { if (c.orgId && head > from) advance(name, head); break; }
         for (const row of rows) {
           if (consumers.get(name) !== c) return; // unsubscribed meanwhile
           current = row.seq;
@@ -69,6 +74,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
           c.lastError = null;
           if (stopped) return;
         }
+        if (c.orgId && rows.length < BATCH) advance(name, head);
         if (rows.length < BATCH && !c.again) break;
       }
     } catch (e) {
@@ -112,10 +118,10 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
   let poked = false;
 
   return {
-    /** subscribe(name, handler(row), {kinds?: string[]}) */
-    subscribe(name, handler, { kinds = null } = {}) {
+    /** subscribe(name, handler(row), {kinds?: string[], orgId?: only rows of this org's boards}) */
+    subscribe(name, handler, { kinds = null, orgId = null } = {}) {
       if (consumers.has(name)) throw new Error(`bus consumer ${name} already subscribed`);
-      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, failSeq: null, busy: 0, busySeq: null, timer: null, lastError: null });
+      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, orgId, running: false, again: false, failures: 0, failSeq: null, busy: 0, busySeq: null, timer: null, lastError: null });
       cursor(name);
       queueMicrotask(() => root(drain, name));
     },

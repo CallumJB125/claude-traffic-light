@@ -8,6 +8,9 @@ import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { Api } from '../api.js';
+import { createBus } from '../bus.js';
+import { createIntegrations } from '../integrations/registry.js';
 import { defineConnector } from '../integrations/connector.js';
 import fake, { sign } from '../integrations/fake/index.js';
 import { keyIdOf, loadPreviousKey } from '../vault.js';
@@ -306,5 +309,41 @@ test('L-3: members see connections and their autonomy, never settings.config; ad
     assert.deepEqual(asAdmin.settings, { autonomy: { 'card.create': 'ask' }, config: { channel: 'C123', repos: ['acme/secret'] } });
     // The audit log stays member-readable (it holds ids and codes only).
     assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
+  } finally { await h.close(); }
+});
+
+// ── L-4 ───────────────────────────────────────────────────────────────────
+
+test('L-4: an org’s bus consumer reads only its boards’ rows in SQL and still moves its cursor to the head', async () => {
+  const h = await hubWith();
+  try {
+    const t = h.hub.iso();
+    h.db.run("INSERT INTO orgs (id, name, created_at) VALUES ('o2', 'Other', ?)", t);
+    h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('b2', 'o2', 'Other', 'OTH')");
+    const bus = createBus({ db: h.db, timers: { setTimeout: () => null, clearTimeout: () => {} } });
+    const seen = [];
+    bus.subscribe('org-only', async (r) => { seen.push(r.board_id); }, { orgId: h.ids.org });
+    await bus.settle();
+    const queries = [];
+    const all = h.db.all.bind(h.db);
+    h.db.all = (sql, ...args) => { if (/FROM journal/.test(sql)) queries.push(sql); return all(sql, ...args); };
+    h.hub.journal({ board_id: 'b2', kind: 'card.transition', payload: {} });
+    h.hub.journal({ board_id: h.ids.board, kind: 'card.transition', payload: {} });
+    h.hub.journal({ board_id: null, kind: 'hub.restore_bump', payload: {} });
+    h.hub.journal({ board_id: 'b2', kind: 'card.transition', payload: {} });
+    bus.poke();
+    await bus.settle();
+    assert.deepEqual(seen, [h.ids.board], 'another org’s rows and hub-wide rows never reach it');
+    assert.ok(queries.length && queries.every((q) => /org_id = \?/.test(q)), 'filtered in SQL');
+    const head = h.db.get('SELECT MAX(seq) AS s FROM journal').s;
+    assert.equal(h.db.get("SELECT seq FROM bus_cursors WHERE consumer = 'org-only'").seq, head);
+    assert.equal(bus.health().find((x) => x.consumer === 'org-only').backlog, 0);
+    // The registry subscribes each connection with its org.
+    const subs = [];
+    const spy = { subscribe: (name, fn, opts) => subs.push(opts), has: () => false, unsubscribe() {} };
+    const reg = createIntegrations({ hub: h.hub, api: new Api(h.hub), bus: spy, log: null });
+    reg.register(probe('orgbus', { consumes: ['card.transition'], onEvent: async () => {} }));
+    reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'orgbus', external_id: 'w1' });
+    assert.deepEqual(subs, [{ kinds: ['card.transition'], orgId: h.ids.org }]);
   } finally { await h.close(); }
 });
