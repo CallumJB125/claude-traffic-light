@@ -14,9 +14,11 @@ const Runtime = require('./runtime.js');
 
 const SCRIPT = 'set-status.js';
 
-// PermissionRequest is opt-in (it changes how approvals reach you) and is the
-// only hook that blocks: it waits up to 60s for the widget's answer.
-const OPTIONAL_EVENTS = [['PermissionRequest', 'permission-request', 60]];
+// PermissionRequest and Elicitation are opt-in (they change how approvals and
+// MCP input requests reach you) and block: each waits up to 60s for the
+// widget's answer. (AskUserQuestion's PreToolUse waits too, when the same
+// askFromWidget switch is on; see set-status.js.)
+const OPTIONAL_EVENTS = [['PermissionRequest', 'permission-request', 60], ['Elicitation', 'elicitation', 60]];
 const HOOK_EVENTS = [
   ['UserPromptSubmit', 'prompt-submit'],
   ['PreToolUse', 'tool-use'],
@@ -73,7 +75,7 @@ function resolveSignal(signal, data) {
     else resolved = 'idle-nudge';
     if (resolved === 'permission-ask') askKind = 'notification';
   }
-  if (signal === 'permission-request') { resolved = 'permission-ask'; askKind = 'request'; }
+  if (signal === 'permission-request' || signal === 'elicitation') { resolved = 'permission-ask'; askKind = 'request'; }
   // AskUserQuestion blocks on the person until its PostToolUse: an ask, not work.
   if (signal === 'tool-use' && tool === 'AskUserQuestion') { resolved = 'permission-ask'; askKind = 'question'; via = 'tool-use/AskUserQuestion'; }
   // After an auto-compaction mid-turn Claude carries straight on, so that

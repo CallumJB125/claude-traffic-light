@@ -7,7 +7,8 @@
 //   node set-status.js <signal>
 //
 // signal: prompt-submit | tool-use | tool-done | subagent-done | stop |
-//         session-start | compact | notification | session-end
+//         session-start | compact | notification | session-end |
+//         permission-request | elicitation (the two blocking ones)
 // A hook must never break a Claude Code session: whatever goes wrong, exit 0
 // quietly. (The in-process fuzzer passes a process stand-in without .on.)
 if (typeof process.on === 'function') process.on('uncaughtException', () => process.exit(0));
@@ -26,10 +27,11 @@ const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir()
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
 
-const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end', 'task-created', 'task-done', 'permission-request'];
+const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end', 'task-created', 'task-done', 'permission-request', 'elicitation'];
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const { withLock, writeJsonAtomic } = require('./session-state.js');
 const Machine = require('./session-machine.js');
+const Input = require('./pending-input.js');
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
@@ -333,7 +335,35 @@ function failureOf(payload) {
   return { failReason: [error, detail].filter(Boolean).join(': ').slice(0, 120) || null, failKind };
 }
 
-function nextSession(prev, { hostApp, pid, terminal }) {
+// What the widget can show about an ask it can't answer itself: the question
+// and its options (AskUserQuestion's PreToolUse), or the notification's own
+// words. A blocking hook's request file carries the answerable version.
+function askOf(nowIso) {
+  if (askKind === 'question') return { kind: 'question', tool, questions: Input.questionsOf(data?.tool_input), at: nowIso };
+  if (askKind === 'notification') {
+    const s = (v, n) => (typeof v === 'string' ? v.slice(0, n) : null);
+    return { kind: 'notification', type: s(data?.notification_type, 60), title: s(data?.title, 200), message: s(data?.message, 2000), at: nowIso };
+  }
+  if (askKind === 'request') return { kind: signal === 'elicitation' ? 'elicitation' : Input.kindOfTool(tool), tool: tool || (signal === 'elicitation' ? `mcp:${String(data?.mcp_server_name || '').slice(0, 200)}` : null), at: nowIso };
+  return null;
+}
+
+// Auto mode's classifier (PermissionDenied only fires in auto mode) refused a
+// call. Not a prompt: the turn goes on, so it's kept until the next prompt.
+function blockedOf(prev, nowIso) {
+  if (resolved === 'prompt-submit' || resolved === 'session-start') return undefined;
+  if (resolved !== 'permission-denied') return prev?.blocked;
+  const input = data?.tool_input && typeof data.tool_input === 'object' ? data.tool_input : {};
+  const summary = typeof input.command === 'string' ? input.command : typeof input.file_path === 'string' ? input.file_path : typeof input.url === 'string' ? input.url : '';
+  return {
+    tool: tool || 'tool', summary: summary.slice(0, 300),
+    reason: typeof data?.reason === 'string' ? data.reason.slice(0, 500) : null,
+    agentId: typeof data?.agent_id === 'string' ? data.agent_id.slice(0, 100) : undefined,
+    at: nowIso,
+  };
+}
+
+function nextSession(prev, { hostApp, pid, terminal, owned }) {
   const now = new Date().toISOString();
   const t = stepOf(prev, now);
   // Task progress for the current turn: created/done counts, reset per prompt.
@@ -374,6 +404,11 @@ function nextSession(prev, { hostApp, pid, terminal }) {
     updatedAt: t.updatedAt,
     agentsAt: t.agentsAt,
     touchedAt: t.touchedAt,
+    // The ask as the widget can show it (see askOf); gone once it's over.
+    ask: signalOut !== 'permission-ask' ? undefined : t.held || signalOut !== resolved ? prev?.ask : (askOf(now) || prev?.ask),
+    blocked: blockedOf(prev, now),
+    // Buddy launched this session (owned.js): decided at SessionStart only.
+    owned: owned !== undefined ? (owned || undefined) : prev?.owned,
   };
 }
 
@@ -398,22 +433,28 @@ function appIsUp() {
   } catch { return true; }
 }
 
-// ── PermissionRequest: a BLOCKING hook. Write the request where the widget
-// can see it, then wait for an answer file. Answer → print the decision for
-// Claude Code. No answer in time → exit silently, so the normal dialog shows.
-if (signal === 'permission-request') {
+// ── Blocking asks: PermissionRequest, Elicitation, and AskUserQuestion's
+// PreToolUse. Write the request where the widget can see it, then wait for an
+// answer file. Answer → print it for Claude Code. No answer in time → exit
+// silently, so the normal prompt shows. Never a decision nobody made.
+function askFromWidgetOn() {
+  try { return !!JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.json'), 'utf8')).askFromWidget; } catch { return false; }
+}
+
+function waitForAnswer(channel, hookTimeoutS) {
   const askMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
+  const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
   // request whose Allow would release some other input.
-  const input = data?.tool_input;
+  const input = described.toolInput;
   if (!input || typeof input !== 'object' || Array.isArray(input)) finish();
-  // Nobody is listening for a request if the app is down: skip the 55s wait.
+  // Nobody is listening for a request if the app is down: skip the wait.
   if (askMs > 0 && !appIsUp()) finish();
   const Answer = require('./answer-file.js');
   // Stop waiting early enough to answer before Claude Code's own timeout
-  // (the installed PermissionRequest timeout) kills this hook.
-  const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || (Claude.OPTIONAL_EVENTS.find(([e]) => e === 'PermissionRequest')?.[2] || 60) * 1000;
+  // (the installed hook timeout) kills this hook.
+  const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || hookTimeoutS * 1000;
   const waitUntil = Math.min(Date.now() + askMs, HOOK_START + hookTimeoutMs - Answer.HOOK_MARGIN_MS);
   fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
@@ -426,24 +467,50 @@ if (signal === 'permission-request') {
   const summary = typeof input.command === 'string' ? input.command
     : typeof input.file_path === 'string' ? input.file_path
     : typeof input.url === 'string' ? input.url
+    : typeof input.message === 'string' ? input.message
     : Object.keys(input).length ? JSON.stringify(input) : '';
-  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), toolInput: input, toolInputHash, createdAt: new Date().toISOString() }, null, 2), { flag: 'wx', mode: 0o600 });
-  const deadline = waitUntil;
-  let decision = null;
+  const request = {
+    id, sessionId, host: HOST_TAG, cwd, tool: described.tool, kind: described.kind, channel,
+    summary: summary.slice(0, 200), toolInput: input, toolInputHash,
+    ...(described.permissionSuggestions ? { permissionSuggestions: described.permissionSuggestions } : {}),
+    createdAt: new Date().toISOString(), expiresAt: new Date(waitUntil).toISOString(),
+  };
+  // Complete before its name appears: readers never see half a request.
+  try { if (!Answer.createExclusive(reqFile, JSON.stringify(request, null, 2))) finish(); } catch { finish(); }
+  // An answer that doesn't fit this request (wrong kind, missing answers) is
+  // refused, so the terminal prompt stays in charge and the answerer is told.
+  const judge = (a) => Input.answerOutput(request, a) !== null;
+  let answer = null;
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  while (Date.now() < deadline) {
-    if (fs.existsSync(ansFile)) { decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash); answered = true; break; }
+  while (Date.now() < waitUntil) {
+    if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, toolInputHash, judge); answered = true; break; }
     Atomics.wait(sleeper, 0, 0, 150);
   }
   // The last word: either our timeout marker lands first, or an answer that
   // raced the deadline is already there and is honoured.
-  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash);
+  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, toolInputHash, judge);
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
-  hookOutput = Claude.answer(decision);
+  hookOutput = answer ? Input.answerOutput(request, answer) : null;
   finish();
 }
+
+const optionalTimeout = (event) => Claude.OPTIONAL_EVENTS.find(([e]) => e === event)?.[2] || 60;
+if (signal === 'permission-request') {
+  // AskUserQuestion is answered through its PreToolUse (the documented way);
+  // should a PermissionRequest also come for it, pass straight through so the
+  // person never waits twice before the terminal shows the question.
+  if (data?.tool_name === 'AskUserQuestion') {
+    writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
+    finish();
+  }
+  waitForAnswer('PermissionRequest', optionalTimeout('PermissionRequest'));
+}
+if (signal === 'elicitation') waitForAnswer('Elicitation', optionalTimeout('Elicitation'));
+// PreToolUse has Claude Code's 600 s default timeout (none is installed), so
+// the same 55 s wait fits. Only with the widget's answering switched on.
+if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && askFromWidgetOn()) waitForAnswer('PreToolUse', 600);
 
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps
@@ -465,7 +532,19 @@ if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done'
 const pidNow = claudePid(prevOnEntry?.claudePid);
 const starting = signal === 'session-start';
 let terminal = null;
+let owned;
 if (starting) {
+  // BUDDY_OWNED=<launch id> only counts against the record Buddy wrote when
+  // it launched this CLI (owned.js); a compaction's SessionStart keeps it.
+  if (resolved !== 'compact') {
+    owned = null;
+    if (process.env.BUDDY_OWNED) {
+      try {
+        const r = require('./owned.js').checkOwned(ROOT_DIR, process.env.BUDDY_OWNED, { sessionId, claudePid: pidNow, cwd });
+        if (r.owned) owned = { launchId: r.launchId, launcher: r.launcher, since: r.since };
+      } catch {}
+    }
+  }
   try {
     const { execFileSync } = require('child_process');
     terminal = require('./terminal-id.js').captureTerminal({
@@ -478,5 +557,5 @@ if (starting) {
     terminal = { env: {}, tty: null, cwd: null };
   }
 }
-writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal });
+writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal, owned });
 finish();

@@ -6,7 +6,13 @@
 //                full tool input and toolInputHash = sha256(canonical input)
 //   <id>.answer  created exactly once: answerers write a temp file and link()
 //                it into place, so EEXIST means someone else already answered.
-//                Holds {decision, toolInputHash, by, ack, nonce}.
+//                Holds {decision, toolInputHash, by, ack, nonce, extra?}.
+//                decision: allow | deny (tool permissions, plans, questions)
+//                or accept | decline | cancel (MCP elicitations); `extra`
+//                carries what a richer answer needs (question answers, a
+//                permission suggestion index, a plan mode, a deny message,
+//                elicitation content). The hook judges both against the kind
+//                of request it wrote (set-status.js answerOutput).
 //                At its deadline the hook claims <id>.answer the same way with
 //                a `timeout` marker, so a late answer can't slip in unseen.
 //   <id>.taken   the hook renamed an ack-wanting answer after acting on it
@@ -19,6 +25,35 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ID_RE = /^[A-Za-z0-9_-][\w.-]{0,199}$/;
+const DECISIONS = new Set(['allow', 'deny', 'accept', 'decline', 'cancel']);
+
+const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+const shortStr = (v, max) => typeof v === 'string' && v.length <= max;
+
+// What an answerer may attach, shape-checked here so a junk answer never
+// reaches the hook's output. null = refused.
+function cleanExtra(extra) {
+  if (extra == null) return {};
+  if (!plain(extra)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === undefined) continue;
+    if (k === 'answers') {
+      if (!plain(v) || Object.keys(v).length > 8 || !Object.entries(v).every(([q, a]) => shortStr(q, 2000) && shortStr(a, 2000))) return null;
+    } else if (k === 'permissionIndex') {
+      if (!Number.isInteger(v) || v < 0 || v > 31) return null;
+    } else if (k === 'mode') {
+      if (v !== 'acceptEdits' && v !== 'default') return null;
+    } else if (k === 'message') {
+      if (!shortStr(v, 1000)) return null;
+    } else if (k === 'content') {
+      if (!plain(v) || Object.keys(v).length > 50 || !Object.values(v).every((x) => ['string', 'number', 'boolean'].includes(typeof x) || (Array.isArray(x) && x.length <= 50 && x.every((y) => shortStr(y, 2000))))) return null;
+      if (Object.values(v).some((x) => typeof x === 'string' && x.length > 10000)) return null;
+    } else return null;
+    out[k] = v;
+  }
+  return out;
+}
 
 // RFC 8785 canonical JSON; must stay byte-identical to remote/src/canonical.js
 // (remote/test checks both on the same inputs).
@@ -76,15 +111,17 @@ function createExclusive(file, text) {
 // ── Answerer side ───────────────────────────────────────────────────────────
 // { ok: true, nonce } or { ok: false, error }. `ack: true` asks the hook to
 // leave <id>.taken behind so the answerer can confirm it was acted on.
-function writeAnswer(dir, id, decision, { by = 'desk', ack = false } = {}) {
+function writeAnswer(dir, id, decision, { by = 'desk', ack = false, extra = null } = {}) {
   const p = paths(dir, String(id || ''));
   if (!p) return { ok: false, error: 'bad request id' };
-  if (decision !== 'allow' && decision !== 'deny') return { ok: false, error: 'decision must be "allow" or "deny"' };
+  if (!DECISIONS.has(decision)) return { ok: false, error: 'decision must be one of allow, deny, accept, decline, cancel' };
+  const clean = cleanExtra(extra);
+  if (!clean) return { ok: false, error: 'malformed answer' };
   let req;
   try { req = JSON.parse(fs.readFileSync(p.req, 'utf8')); } catch { return { ok: false, error: 'no such pending request (answered, timed out, or never existed)' }; }
   if (!req || typeof req.toolInputHash !== 'string') return { ok: false, error: 'request has no input hash (hook too old) — answer in the terminal' };
   const nonce = crypto.randomBytes(16).toString('hex');
-  const body = JSON.stringify({ v: 1, decision, toolInputHash: req.toolInputHash, by: String(by).slice(0, 40), ack: !!ack, nonce });
+  const body = JSON.stringify({ v: 1, decision, toolInputHash: req.toolInputHash, by: String(by).slice(0, 40), ack: !!ack, nonce, ...(Object.keys(clean).length ? { extra: clean } : {}) });
   try {
     if (!createExclusive(p.ans, body)) return { ok: false, error: 'already answered' };
   } catch (e) {
@@ -118,17 +155,27 @@ async function awaitTaken(dir, id, nonce, { timeoutMs = 1500, intervalMs = 50 } 
 // ── Hook side ───────────────────────────────────────────────────────────────
 // Read the answer, judge it against the input the hook is holding, and move
 // it out of the way: renamed to .taken/.refused if the answerer wants an
-// ack, removed otherwise. Returns 'allow' | 'deny' | null.
-function consumeAnswer(dir, id, expectedHash) {
+// ack, removed otherwise. consumeAnswerDetail returns {decision, extra} or
+// null; consumeAnswer just the decision. `accept(answer)` lets the hook refuse
+// an answer that doesn't fit the request's kind (so the answerer hears
+// 'refused', not 'applied').
+function consumeAnswerDetail(dir, id, expectedHash, accept = () => true) {
   const p = paths(dir, id);
   let a = null;
   try { a = JSON.parse(fs.readFileSync(p.ans, 'utf8')); } catch {}
-  const valid = !!a && (a.decision === 'allow' || a.decision === 'deny') && a.toolInputHash === expectedHash;
+  const extra = a ? cleanExtra(a.extra) : null;
+  let valid = !!a && DECISIONS.has(a.decision) && a.toolInputHash === expectedHash && !!extra;
+  if (valid) { try { valid = !!accept({ decision: a.decision, extra }); } catch { valid = false; } }
   try {
     if (a && a.ack) fs.renameSync(p.ans, valid ? p.taken : p.refused);
     else fs.unlinkSync(p.ans);
   } catch {}
-  return valid ? a.decision : null;
+  return valid ? { decision: a.decision, extra } : null;
+}
+
+function consumeAnswer(dir, id, expectedHash) {
+  const d = consumeAnswerDetail(dir, id, expectedHash, ({ decision }) => decision === 'allow' || decision === 'deny');
+  return d ? d.decision : null;
 }
 
 // At the deadline: true if the hook got the last word (nobody answered);
@@ -160,4 +207,4 @@ function sweep(dir, { maxAgeMs = 10 * 60 * 1000, staleRequestMs = STALE_REQUEST_
   }
 }
 
-module.exports = { HOOK_MARGIN_MS, STALE_REQUEST_MS, canonicalize, hashToolInput, paths, createExclusive, writeAnswer, awaitTaken, consumeAnswer, claimTimeout, sweep, ID_RE };
+module.exports = { HOOK_MARGIN_MS, STALE_REQUEST_MS, DECISIONS, canonicalize, hashToolInput, paths, createExclusive, cleanExtra, writeAnswer, awaitTaken, consumeAnswer, consumeAnswerDetail, claimTimeout, sweep, ID_RE };

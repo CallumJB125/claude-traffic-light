@@ -85,6 +85,15 @@ test('widget request store: no input, no hash, a hash that does not match, or a 
   for (const id of ['no-input', 'no-hash', 'bad-hash', 'no-date', 'junk-date', 'future', 'old']) assert.equal(await store.get(id), null, id);
 });
 
+test('widget request store: only permission and plan requests are answerable remotely', async () => {
+  const dir = tmp();
+  for (const kind of ['permission', 'plan', 'question', 'elicitation', 'blocked']) writeReq(dir, `k-${kind}`, { kind });
+  const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice' });
+  assert.ok(await store.get('k-permission'));
+  assert.ok(await store.get('k-plan'));
+  for (const kind of ['question', 'elicitation', 'blocked']) assert.equal(await store.get(`k-${kind}`), null, kind);
+});
+
 test('review attack: a request with no createdAt is not answerable however late it is', async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ id: 'a', sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolInputHash: Answer.hashToolInput({ command: 'ls' }) }));

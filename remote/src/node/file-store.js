@@ -81,6 +81,10 @@ export class WidgetRequestStore {
     let r;
     try { r = JSON.parse(fs.readFileSync(p.req, 'utf8')); } catch { return null; }
     if (!r || r.id !== requestId || !r.toolInput || typeof r.toolInput !== 'object' || typeof r.toolInputHash !== 'string') return null;
+    // A phone answers allow/deny only: tool permissions and plans. A question
+    // needs its answers and an MCP elicitation its action, so neither is
+    // offered remotely (hooks/pending-input.js).
+    if (r.kind !== undefined && r.kind !== 'permission' && r.kind !== 'plan') return null;
     const t = Date.parse(r.createdAt);
     const now = this.clock();
     if (!Number.isFinite(t) || now - t > this.maxAgeMs || t > now + 5000) return null;
