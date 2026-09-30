@@ -110,6 +110,21 @@ function explain(state, rules, extra = {}) {
     out.activity = `${travel}.`;
   }
 
+  // F5: only once a busy source is actually working, so nobody reads about
+  // held pings they never set up.
+  const busy = extra.busy;
+  if (busy && busy.busy !== null && busy.busy !== undefined) {
+    const why = busy.reasons && busy.reasons.length ? ` (${busy.reasons.join(', ')})` : '';
+    out.busy = {
+      busy: !!busy.busy,
+      until: busy.busy ? busy.until || null : null,
+      text: busy.busy
+        ? `You're busy${why}, so amber and green sounds, notifications and knocks are held; red ones (a permission ask, a limit, offline) still come through. The lights keep updating. When you're free, a “While you were away” card under Claude sums up what happened — click a line to jump to that terminal.`
+        : 'Busy detection is on. During a calendar event marked busy or a Focus, amber and green pings wait and red ones still come through; afterwards a “While you were away” card sums up what happened. Change which sources count in Preferences → Busy & Focus, and per rule in Lights → While you\'re busy.',
+    };
+  }
+  if (state.away) out.away = state.away.headline;
+
   const minions = state.minions || [];
   if (minions.length) {
     const n = minions.length;
