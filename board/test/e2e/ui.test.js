@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { stack, until, sleep } from './harness.js';
+import { stack, until, sleep, DEV_HEADERS } from './harness.js';
 
 let chromium = null;
 try { ({ chromium } = await import('playwright')); } catch { /* optional */ }
@@ -23,7 +23,7 @@ const SCENARIO = {
 
 async function browserFor(browser, hubUrl, login) {
   const ctx = await browser.newContext({ baseURL: hubUrl, viewport: { width: 1280, height: 860 } });
-  const r = await ctx.request.post('/api/dev/login', { data: { github_login: login } });
+  const r = await ctx.request.post('/api/dev/login', { data: { github_login: login }, headers: DEV_HEADERS });
   assert.equal(r.status(), 200);
   const page = await ctx.newPage();
   await page.goto('/');

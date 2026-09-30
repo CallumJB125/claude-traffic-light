@@ -3,7 +3,7 @@
 import { h } from './h.js';
 import { pixelClaude } from './icons.js';
 
-export function signinScreen({ status, error, devLogin, busy, email }) {
+export function signinScreen({ status, error, devLogin, devSecretKnown = false, busy, email }) {
   const forbidden = status === 'forbidden';
   return h('div', { class: 'app app-center' },
     h('main', { class: 'signin', 'aria-labelledby': 'signin-title' },
@@ -18,7 +18,10 @@ export function signinScreen({ status, error, devLogin, busy, email }) {
       error ? h('p', { class: 'form-error', role: 'alert' }, error) : null,
       devLogin && !forbidden ? h('form', { class: 'devlogin', 'data-form': 'devlogin', 'aria-labelledby': 'devlogin-title' },
         h('h2', { id: 'devlogin-title' }, 'Dev login'),
-        h('p', { class: 'hint' }, 'Only on a hub bound to localhost with BOARD_AUTH=dev.'),
+        h('p', { class: 'hint' }, 'Only on a hub bound to localhost with BOARD_AUTH=dev, never behind a proxy or tunnel. Open the URL the hub printed at startup, or paste its dev secret.'),
+        devSecretKnown ? null : h('div', { class: 'devlogin-row' },
+          h('label', { class: 'sr-only', for: 'dev-secret' }, 'Dev secret'),
+          h('input', { id: 'dev-secret', name: 'dev_secret', type: 'password', class: 'input input-sm num', placeholder: 'dev secret', autocomplete: 'off' })),
         h('div', { class: 'devlogin-row' },
           ['alice', 'bob'].map((l) => h('button', { type: 'submit', class: 'btn btn-sm', name: 'login', value: l, disabled: busy || null }, l)),
           h('label', { class: 'sr-only', for: 'dev-login' }, 'GitHub login'),

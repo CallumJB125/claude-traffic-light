@@ -78,7 +78,7 @@ Clocks: the hub judges every timeout on its **own** monotonic clock at receive t
 ### 4.1 Members (browsers)
 
 - **Production (`BOARD_AUTH=access`).** Cloudflare Access with GitHub as the only IdP sits in front of the hub. On every HTTP request and WS upgrade the hub verifies the `Cf-Access-Jwt-Assertion` header: RS256 against `https://<BOARD_ACCESS_TEAM>.cloudflareaccess.com/cdn-cgi/access/certs` (cached, refetched on unknown `kid`), `aud` contains `BOARD_ACCESS_AUD`, `exp` in the future. The verified `email` claim maps to `members.email` (case-insensitive) → the member. No match → `403 FORBIDDEN` ("not a member of this board"). Members are created by an admin with GitHub login + email (D4). Verification uses `node:crypto` only.
-- **Local dev (`BOARD_AUTH=dev`).** Allowed **only** when the hub is bound to a loopback address; otherwise it refuses to start. `POST /api/dev/login {github_login}` sets cookie `board_dev=<member_id>.<hmac>` (HttpOnly, SameSite=Strict, HMAC with the hub secret). `BOARD_DEV_SEED=1` creates org `dev`, board `DEV` (key prefix `DEV`), members `alice`/`bob` (negative github ids) and repo from `BOARD_DEV_REPO` if set.
+- **Local dev (`BOARD_AUTH=dev`).** Allowed **only** when the hub is bound to a loopback address; otherwise it refuses to start. **Dev auth must never sit behind any proxy or tunnel**: the hub refuses `BOARD_AUTH=dev` when `BOARD_PUBLIC_URL` or `BOARD_TUNNEL_PROBE_URL` is set. `POST /api/dev/login {github_login}` needs header `Board-Dev-Secret: <secret>` (`BOARD_DEV_LOGIN_SECRET`, else random per start; printed to stderr at startup as `http://<bind>:<port>/#dev_secret=<secret>`, which the web keeps in `sessionStorage`), is rate limited per IP (§5.2), and sets cookie `board_dev=<member_id>.<hmac>` (HttpOnly, SameSite=Strict, HMAC with the hub secret). `BOARD_DEV_SEED=1` creates org `dev`, board `DEV` (key prefix `DEV`), members `alice`/`bob` (negative github ids) and repo from `BOARD_DEV_REPO` if set.
 - Browsers never hold a token beyond the Access cookie (or the dev cookie). Mutating routes require `Content-Type: application/json` and reject a cross-origin `Origin` header (`403 FORBIDDEN`).
 
 ### 4.2 Runners (devices)
@@ -108,7 +108,7 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 |---|---|---|---|---|
 | `GET /api/health` | none | — | `{ok, protocol, hub_epoch, uptime_ms, auth:'access'\|'dev'}`. The web offers dev login only when `auth` is `dev` | — |
 | `GET /api/me` | member | — | `{member, org, boards:[{id,name,key_prefix}]}` | 401, 403 |
-| `POST /api/dev/login` | dev only | `{github_login}` | `{member}` + cookie | 404 when not dev |
+| `POST /api/dev/login` | dev only + `Board-Dev-Secret` header | `{github_login}` | `{member}` + cookie | 404 when not dev (or not loopback), 403 without the secret, 429 |
 | `GET /api/boards/:board_id` | member | — | `Snapshot` (as the WS `snapshot` body) | 404 |
 | `POST /api/boards/:board_id/cards` | member (not viewer) | `{request_id, title, body?, acceptance?, repo_id?, base_ref?, labels?, budget_usd?, assignees?}` | `{card: CardView}` | `VALIDATION`, `NOT_FOUND` |
 | `GET /api/cards/:card_id` | member | — | `CardDetail` (§5.4) | 404 |

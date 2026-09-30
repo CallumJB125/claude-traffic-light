@@ -18,6 +18,8 @@ import { replay, CARD_STATE } from '../../shared/journal.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BOARD = path.resolve(HERE, '..', '..');
 export const SCALE = Number(process.env.BOARD_TEST_TIME_SCALE ?? 0.05);
+export const DEV_SECRET = 'e2e-dev-login-secret-0123456789';
+export const DEV_HEADERS = Object.freeze({ 'board-dev-secret': DEV_SECRET });
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function freePort() {
@@ -48,7 +50,7 @@ export async function startHub({ dataDir, port, env = {} }) {
   const proc = spawn(process.execPath, [path.join(BOARD, 'hub', 'server.js')], {
     env: baseEnv({
       HOME: dataDir, BOARD_AUTH: 'dev', BOARD_BIND: '127.0.0.1', BOARD_PORT: String(port), BOARD_DATA_DIR: dataDir,
-      BOARD_DEV_SEED: '1', BOARD_DEV_REPO: REMOTE_URL, BOARD_SECRET: 'e2e-secret-0123456789abcdef0123456789abcdef', BOARD_LOG_LEVEL: 'info', ...env,
+      BOARD_DEV_SEED: '1', BOARD_DEV_REPO: REMOTE_URL, BOARD_SECRET: 'e2e-secret-0123456789abcdef0123456789abcdef', BOARD_DEV_LOGIN_SECRET: DEV_SECRET, BOARD_LOG_LEVEL: 'info', ...env,
     }),
     stdio: ['ignore', out, out],
   });
@@ -135,7 +137,7 @@ export class Proxy {
 
 // ── members (dev auth) ─────────────────────────────────────────────────────
 export async function login(hubUrl, githubLogin) {
-  const res = await fetch(`${hubUrl}/api/dev/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ github_login: githubLogin }) });
+  const res = await fetch(`${hubUrl}/api/dev/login`, { method: 'POST', headers: { 'content-type': 'application/json', ...DEV_HEADERS }, body: JSON.stringify({ github_login: githubLogin }) });
   if (!res.ok) throw new Error(`login ${githubLogin}: ${res.status}`);
   const cookie = res.headers.get('set-cookie').split(';')[0];
   const call = async (method, p, body) => {

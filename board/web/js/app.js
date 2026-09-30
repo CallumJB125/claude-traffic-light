@@ -107,7 +107,7 @@ function toasts() {
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -263,6 +263,23 @@ function closeDrawer() {
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* sandboxed */ }
   update();
   if (id) queueMicrotask(() => root.querySelector(`[data-card-id="${CSS.escape(id)}"] .card-open`)?.focus());
+}
+
+// The hub prints http://…/#dev_secret=<secret> at startup: keep it for this tab
+// only and take it out of the address bar.
+function devSecret() {
+  try { return sessionStorage.getItem('board_dev_secret'); } catch { return null; }
+}
+
+function rememberDevSecret(v) {
+  try { sessionStorage.setItem('board_dev_secret', v); } catch { /* storage off: typed each time */ }
+}
+
+function takeDevSecretFromHash() {
+  const m = location.hash.match(/^#dev_secret=([^&]+)$/);
+  if (!m) return;
+  rememberDevSecret(decodeURIComponent(m[1]));
+  history.replaceState(null, '', location.pathname + location.search);
 }
 
 function openFromHash() {
@@ -482,8 +499,11 @@ async function submitDialogForm(form, submitter) {
     if (!login) return undefined;
     state.authBusy = true;
     update();
-    try { await api.devLogin(login); state.authError = null; await boot(); } catch (err) {
-      state.authError = err.status === 404 ? 'Dev login is off on this hub.' : errorText(err);
+    const typed = String(fd.get('dev_secret') ?? '').trim();
+    if (typed) rememberDevSecret(typed);
+    try { await api.devLogin(login, devSecret()); state.authError = null; await boot(); } catch (err) {
+      state.authError = err.status === 404 ? 'Dev login is off on this hub.'
+        : err.status === 403 ? 'Dev login needs the secret the hub printed when it started (open the URL it printed).' : errorText(err);
     }
     state.authBusy = false;
     update();
@@ -656,4 +676,5 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 
 loadTheme();
+takeDevSecretFromHash();
 boot();

@@ -14,13 +14,13 @@ export class ApiError extends Error {
 
 export const requestId = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `r-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-async function call(method, path, body, { fetchImpl = globalThis.fetch } = {}) {
+async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {} } = {}) {
   let res;
   try {
     res = await fetchImpl(path, {
       method,
       credentials: 'same-origin',
-      headers: body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+      headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -39,7 +39,8 @@ const mut = (method, path, body = {}) => call(method, path, { request_id: reques
 export const api = {
   health: () => call('GET', '/api/health'),
   me: () => call('GET', '/api/me'),
-  devLogin: (github_login) => call('POST', '/api/dev/login', { github_login }),
+  // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
+  devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
   board: (id) => call('GET', `/api/boards/${enc(id)}`),
   card: (id) => call('GET', `/api/cards/${enc(id)}`),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),

@@ -105,9 +105,31 @@ test('dev auth refuses a non-loopback bind; access auth needs team + aud; secret
   assert.throws(() => loadConfig({}), /BOARD_ACCESS_TEAM/);
   assert.throws(() => loadConfig({ BOARD_AUTH: 'access', BOARD_ACCESS_TEAM: 't', BOARD_ACCESS_AUD: 'a', BOARD_DEV_SEED: '1' }), /DEV_SEED/);
   assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_SECRET: 'short' }), /32 bytes/);
+  assert.throws(() => loadConfig({ BOARD_AUTH: 'access', BOARD_ACCESS_TEAM: 't' }), /BOARD_ACCESS_AUD/, 'access without an AUD refuses to start');
+  assert.throws(() => loadConfig({ BOARD_AUTH: 'access', BOARD_ACCESS_AUD: 'a' }), /BOARD_ACCESS_TEAM/, 'access without a team refuses to start');
+  assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_PUBLIC_URL: 'https://board.example.com' }), /never sit behind a proxy or tunnel/);
+  assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_TUNNEL_PROBE_URL: 'https://board.example.com/api/health' }), /never sit behind a proxy or tunnel/);
+  assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_DEV_LOGIN_SECRET: 'short' }), /16 bytes/);
   const c = loadConfig({ BOARD_AUTH: 'access', BOARD_ACCESS_TEAM: 't', BOARD_ACCESS_AUD: 'a' });
   assert.equal(c.bind, '127.0.0.1');
   assert.equal(c.port, 8787);
+});
+
+test('dev login needs the startup secret header (a loopback peer alone is not enough)', async () => {
+  const h = await startHub();
+  try {
+    const login = (headers) => h.api(null, 'POST', '/api/dev/login', { github_login: 'alice' }, headers);
+    const none = await login({});
+    assert.equal(none.status, 403);
+    assert.match(none.body.error.message, /Board-Dev-Secret/);
+    assert.equal(none.headers.get('set-cookie'), null);
+    assert.equal((await login({ 'board-dev-secret': 'x'.repeat(30) })).status, 403);
+    const ok = await login(h.devHeaders);
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get('set-cookie'), /^board_dev=/);
+  } finally {
+    await h.destroy();
+  }
 });
 
 test('dev cookie and run tokens are HMAC-signed', () => {

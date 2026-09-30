@@ -10,6 +10,8 @@ BOARD_AUTH=dev BOARD_DEV_SEED=1 BOARD_DEV_REPO=git@github.com:acme/app.git node 
 curl -s localhost:8787/api/health
 ```
 
+**Dev auth must never sit behind any proxy or tunnel** (Cloudflare Tunnel, nginx, ssh -R, anything). Through a proxy every request arrives from loopback, so the loopback check proves nothing; the hub refuses `BOARD_AUTH=dev` when `BOARD_PUBLIC_URL` or `BOARD_TUNNEL_PROBE_URL` is set, and dev login additionally needs the secret printed at startup. Anything reachable by anyone else uses `BOARD_AUTH=access`.
+
 Node ≥ 22.13 (unflagged `node:sqlite`). No native dependencies, so it runs as-is on a
 Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that's expected.
 
@@ -64,6 +66,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_ACCESS_AUD` | — | The Access application AUD tag. Required for `access` |
 | `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta` |
 | `BOARD_PUBLIC_URL` | — | Public origin, e.g. `https://board.example.com`. Accepted as a same-origin `Origin` for mutations and WS upgrades |
+| `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
 | `BOARD_DEV_REPO` | — | With `BOARD_DEV_SEED`: a git remote to add as the DEV board's repo |
 | `BOARD_BOOTSTRAP` | — | `github_login,github_id,email`: on a DB with no members, create the org, a board and this owner |

@@ -16,6 +16,9 @@ import { seedDev } from '../seed.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+export const DEV_SECRET = 'dev-secret-for-tests-0123456789';
+export const DEV_HEADERS = Object.freeze({ 'board-dev-secret': DEV_SECRET });
+
 export function fakeClock(start = 1_000_000) {
   let mono = start;
   let wall = Date.parse('2026-09-30T10:00:00.000Z');
@@ -44,7 +47,7 @@ export function testConfig(over = {}) {
   const dir = over.dataDir ?? mkdtempSync(join(tmpdir(), 'board-hub-'));
   return validateConfig({
     bind: '127.0.0.1', port: 0, dataDir: dir, dbPath: join(dir, 'board.db'), auth: 'dev', accessTeam: null, accessAud: null,
-    secret: 'x'.repeat(40), publicUrl: null, devSeed: true, devRepo: 'git@github.com:acme/app.git', bootstrap: null,
+    secret: 'x'.repeat(40), devLoginSecret: DEV_SECRET, publicUrl: null, devSeed: true, devRepo: 'git@github.com:acme/app.git', bootstrap: null,
     restore: false, tunnelProbeUrl: null, githubToken: null, githubApi: 'https://api.github.com', githubPollMs: 60_000,
     webDir: resolve(HERE, 'fixtures', 'web'), sharedDir: resolve(HERE, '..', '..', 'shared'), logLevel: 'silent', shutdownGraceMs: 200,
     ...over,
@@ -71,9 +74,9 @@ export async function startHub({ clock = fakeClock(), github = fakeGitHub(), con
   const browsers = [];
 
   const h = {
-    app, hub: app.hub, db, clock, github, base, ids, dataDir: cfg.dataDir,
+    app, hub: app.hub, db, clock, github, base, ids, dataDir: cfg.dataDir, devHeaders: DEV_HEADERS,
     async login(login) {
-      const res = await fetch(`${base}/api/dev/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ github_login: login }) });
+      const res = await fetch(`${base}/api/dev/login`, { method: 'POST', headers: { 'content-type': 'application/json', ...DEV_HEADERS }, body: JSON.stringify({ github_login: login }) });
       return res.headers.get('set-cookie').split(';')[0];
     },
     async api(cookie, method, path, body, headers = {}) {

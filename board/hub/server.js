@@ -17,7 +17,11 @@ try {
 
 const log = createLogger({ level: config.logLevel });
 const app = createApp(config, { log });
-await app.listen();
+const addr = await app.listen();
+if (app.devLoginSecret) {
+  // Printed, not logged: the log may be shipped somewhere; this is for the person at the terminal.
+  process.stderr.write(`\nDEV AUTH (loopback only; never behind any proxy or tunnel). Sign in at:\n  http://${config.bind}:${addr.port}/#dev_secret=${app.devLoginSecret}\n\n`);
+}
 
 let stopping = false;
 async function stop(signal) {

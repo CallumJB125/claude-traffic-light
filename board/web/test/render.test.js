@@ -246,6 +246,8 @@ test('take over from suspended explains fencing and needs an explicit confirm', 
 test('sign-in: dev login only when enabled; forbidden explains membership', () => {
   assert.equal(byClass(signinScreen({ status: 'signed_out', devLogin: false }), 'devlogin').length, 0);
   assert.equal(byClass(signinScreen({ status: 'signed_out', devLogin: true }), 'devlogin').length, 1);
+  assert.equal(byAttr(signinScreen({ status: 'signed_out', devLogin: true }), 'name', 'dev_secret').length, 1, 'asks for the dev secret');
+  assert.equal(byAttr(signinScreen({ status: 'signed_out', devLogin: true, devSecretKnown: true }), 'name', 'dev_secret').length, 0);
   assert.match(textOf(signinScreen({ status: 'forbidden', email: 'x@y.z' })), /isn't a member of this board/);
 });
 

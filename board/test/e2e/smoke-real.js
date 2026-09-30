@@ -16,7 +16,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { findOnPath } from '../../runner/supervisor.js';
 import { makeRepo, tmpDir, rm, REMOTE_URL } from '../../runner/test/helpers.js';
-import { BOARD, freePort, until, login, sleep, Proxy } from './harness.js';
+import { BOARD, freePort, until, login, sleep, Proxy, DEV_HEADERS } from './harness.js';
 
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const BUDGET = Number(arg('budget', '0.15'));
@@ -60,7 +60,7 @@ async function main() {
     const port = await freePort();
     const hubOut = fs.openSync(path.join(root, 'hub.log'), 'a');
     const hub = spawn(process.execPath, [path.join(BOARD, 'hub', 'server.js')], {
-      env: { PATH: process.env.PATH, HOME: dataDir, BOARD_AUTH: 'dev', BOARD_BIND: '127.0.0.1', BOARD_PORT: String(port), BOARD_DATA_DIR: dataDir, BOARD_DEV_SEED: '1', BOARD_DEV_REPO: REMOTE_URL, BOARD_GITHUB_TOKEN: 'fake', BOARD_GITHUB_API: `http://127.0.0.1:${gh.address().port}` },
+      env: { PATH: process.env.PATH, HOME: dataDir, BOARD_AUTH: 'dev', BOARD_BIND: '127.0.0.1', BOARD_PORT: String(port), BOARD_DATA_DIR: dataDir, BOARD_DEV_SEED: '1', BOARD_DEV_REPO: REMOTE_URL, BOARD_DEV_LOGIN_SECRET: DEV_HEADERS['board-dev-secret'], BOARD_GITHUB_TOKEN: 'fake', BOARD_GITHUB_API: `http://127.0.0.1:${gh.address().port}` },
       stdio: ['ignore', hubOut, hubOut],
     });
     procs.push(hub);
@@ -121,7 +121,7 @@ async function main() {
       fs.mkdirSync(SHOTS, { recursive: true });
       const browser = await chromium.launch({ channel: 'chrome', headless: true });
       const ctx = await browser.newContext({ baseURL: url, viewport: { width: 1400, height: 900 }, deviceScaleFactor: 2 });
-      await ctx.request.post('/api/dev/login', { data: { github_login: 'alice' } });
+      await ctx.request.post('/api/dev/login', { data: { github_login: 'alice' }, headers: DEV_HEADERS });
       const page = await ctx.newPage();
       await page.goto('/');
       await page.waitForSelector(`[data-card-id="${card.id}"]`);

@@ -36,6 +36,7 @@ export function loadConfig(env = process.env) {
     publicUrl: env.BOARD_PUBLIC_URL || null,
     devSeed: flag(env.BOARD_DEV_SEED),
     devRepo: env.BOARD_DEV_REPO || null,
+    devLoginSecret: env.BOARD_DEV_LOGIN_SECRET || null,
     bootstrap: env.BOARD_BOOTSTRAP || null,
     bootstrapBoard: env.BOARD_BOOTSTRAP_BOARD || 'Team:BRD',
     restore: flag(env.BOARD_RESTORE),
@@ -57,6 +58,10 @@ export function validateConfig(cfg) {
   if (!['access', 'dev'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access or dev, got ${cfg.auth}`);
   if (cfg.devSeed && cfg.auth !== 'dev') throw new Error('BOARD_DEV_SEED needs BOARD_AUTH=dev');
   if (cfg.auth === 'dev' && !isLoopback(cfg.bind)) throw new Error(`BOARD_AUTH=dev is allowed only on a loopback bind (BOARD_BIND=${cfg.bind})`);
+  // Behind a proxy or tunnel every request arrives from loopback, so the
+  // loopback check on /api/dev/login proves nothing there: refuse outright.
+  if (cfg.auth === 'dev' && (cfg.publicUrl || cfg.tunnelProbeUrl)) throw new Error('BOARD_AUTH=dev must never sit behind a proxy or tunnel: unset BOARD_PUBLIC_URL and BOARD_TUNNEL_PROBE_URL, or use BOARD_AUTH=access');
+  if (cfg.devLoginSecret != null && Buffer.byteLength(cfg.devLoginSecret) < 16) throw new Error('BOARD_DEV_LOGIN_SECRET must be at least 16 bytes');
   if (cfg.auth === 'access' && (!cfg.accessTeam || !cfg.accessAud)) throw new Error('BOARD_AUTH=access needs BOARD_ACCESS_TEAM and BOARD_ACCESS_AUD');
   if (cfg.secret != null && Buffer.byteLength(cfg.secret) < 32) throw new Error('BOARD_SECRET must be at least 32 bytes');
   return cfg;

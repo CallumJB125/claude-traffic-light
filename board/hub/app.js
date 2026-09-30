@@ -4,6 +4,7 @@
 // drive hub.tick() themselves (timers: false).
 
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { WS_CLOSE } from '../shared/protocol.js';
 import { REAPER_MS, TIME_SCALE } from '../shared/liveness.js';
@@ -20,6 +21,9 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   const hub = new Hub({ db, config, clock, log, github: gh });
+  // Dev login needs this per-process secret (header Board-Dev-Secret), printed
+  // at startup: a loopback bind alone does not prove who is asking.
+  hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
   hub.access = config.auth === 'access'
     ? createAccessVerifier({ team: config.accessTeam, aud: config.accessAud, fetchImpl, now: clock.wall })
     : null;
@@ -63,7 +67,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   }
 
   return {
-    hub, api, server, db, config,
+    hub, api, server, db, config, devLoginSecret: hub.devLoginSecret,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);

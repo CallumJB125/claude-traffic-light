@@ -7,7 +7,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, httpStatus, WS_CLOSE, WS_PATHS } from '../shared/protocol.js';
 import { HubError } from './db.js';
-import { devCookieValue, parseCookies, parseDevCookie } from './auth.js';
+import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
 import { isLoopback } from './config.js';
 import { publicMember } from './api.js';
 import { BrowserConn } from './ws-board.js';
@@ -87,6 +87,7 @@ export function createHttpHandler({ hub, api, config }) {
   route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
   route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (config.auth !== 'dev' || !isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
+    if (!hub.devLoginSecret || !safeEqual(req.headers['board-dev-secret'] ?? '', hub.devLoginSecret)) throw new HubError('FORBIDDEN', 'dev login needs the Board-Dev-Secret printed when the hub started');
     const m = hub.db.get('SELECT * FROM members WHERE github_login = ? ORDER BY created_at LIMIT 1', String(body.github_login ?? ''));
     if (!m) throw new HubError('NOT_FOUND', 'no such member');
     res.setHeader('set-cookie', `board_dev=${encodeURIComponent(devCookieValue(hub.secret, m.id))}; HttpOnly; SameSite=Strict; Path=/`);
