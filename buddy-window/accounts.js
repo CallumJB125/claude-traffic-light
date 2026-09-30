@@ -62,6 +62,7 @@ function routePath(name, params = {}) {
 // hub's message is written for developers; these are the sentences a person sees.
 const INVITE_GONE = 'This invite link isn’t valid any more. Ask for a new one.';
 const INVITE_CODE_GONE = 'That code didn’t work. Check it, or ask for a new invite.';
+const SLUG_MISMATCH = 'That doesn’t match the team’s name. Type it exactly as shown.';
 const CODE_TEXT = {
   LAST_OWNER: 'A team needs at least one owner. Make someone else an owner first.',
   FORBIDDEN: 'You don’t have permission to do that in this team.',
@@ -290,6 +291,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         // holds, only its expiry is read, and the vault is never touched.
         const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier } });
         if (!keep()) return { ok: false, cancelled: true };
+        // The hub answers another person's provider account with the same INVALID_TOKEN as a bad code.
+        if (!r.ok && r.code === 'INVALID_TOKEN') return { ...r, error: `That didn’t confirm it’s you. Use the ${PROVIDER_LABEL[provider] ?? 'account'} account you sign in with, and try again.` };
         if (!r.ok) return oauthOutcome(r, provider, host);
         if (r.stepup_until == null) return { ok: false, error: `${host} didn’t confirm it’s you. Try again.` };
         return { ok: true, flowId, stepupUntil: stepUpUntil(r.stepup_until) };
@@ -318,10 +321,41 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
       return call('renameTeam', { params: { team }, body: { name: n } });
     },
-    /** Owner only; the hub wants the team's slug typed back. */
-    async deleteTeam(team, confirmSlug) {
-      const r = await call('deleteTeam', { params: { team }, body: { confirm_slug: String(confirmSlug ?? '').trim() } });
-      return !r.ok && r.status === 400 && r.code === 'VALIDATION' ? { ok: false, error: 'That doesn’t match the team’s name. Type it exactly as shown.' } : r;
+    /**
+     * Owner only; the hub wants the team's slug typed back and a fresh step-up's flow_id (the emailed
+     * `delete_team` code, or a Google/GitHub check), which it spends only when the team is deleted.
+     */
+    async deleteTeam(team, { confirmSlug, flowId } = {}) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+      const r = await call('deleteTeam', { params: { team }, body: { confirm_slug: String(confirmSlug ?? '').trim(), flow_id: flowId } });
+      if (r.ok) return { ok: true };
+      if (r.status === 400 && r.code === 'VALIDATION') return { ok: false, error: SLUG_MISMATCH };
+      if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: 'That check timed out or was already used. Confirm it’s you again to delete the team.' };
+      return r;
+    },
+    /**
+     * Team deletion, step 1 on a hub with a mailer: the hub emails a code to the signed-in address.
+     * Nothing is kept here: the flow_id goes back to the caller, so the account-deletion code path
+     * (`flow`) can never pick it up, nor this one an account code.
+     */
+    async startTeamDelete() {
+      const email = saved()?.user?.email ?? null;
+      const r = await call('emailStart', { body: { purpose: 'delete_team', client: 'buddy_desktop' } });
+      if (!r.ok) return r.code === 'METHOD_DISABLED' ? { ...r, error: `${host} can’t send email right now, so it can’t send the code.` } : r;
+      if (typeof r.flow_id !== 'string' || !r.flow_id) return { ok: false, error: `${host} didn’t send a code.` };
+      return { ok: true, flowId: r.flow_id, email };
+    },
+    /** Step 2: the emailed code. → {ok, stepupUntil}; the window never runs past 5 minutes from before the ask. */
+    async verifyTeamDelete(flowId, code) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Send a code first.' };
+      const c = String(code ?? '').replace(/\D/g, '');
+      if (c.length !== 6) return { ok: false, error: 'The code is 6 digits.' };
+      // From before the request: the hub starts its 5 minutes when it verifies, not when we hear back.
+      const t = now();
+      const r = await call('emailVerify', { body: { flow_id: flowId, code: c } });
+      if (!r.ok) return r;
+      const s = Number(r.step_up_expires_in);
+      return { ok: true, stepupUntil: t + (Number.isFinite(s) && s > 0 ? Math.min(s * 1000, STEP_UP_MS) : STEP_UP_MS) };
     },
     addBoard(team, name) {
       const n = String(name ?? '').trim();
@@ -569,4 +603,4 @@ function bearerHeaders(requestHeaders, url, { scope, token }) {
   return headers;
 }
 
-module.exports = { createAccountClient, oauthOutcome, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
+module.exports = { createAccountClient, oauthOutcome, SLUG_MISMATCH, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
