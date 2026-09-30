@@ -253,3 +253,43 @@ test('M-3: concurrent duplicates of one request create one card', async () => {
     assert.equal(h.db.get("SELECT COUNT(*) AS n FROM journal WHERE kind = 'card.create'").n, 1);
   } finally { await h.close(); }
 });
+
+// ── M-3b ──────────────────────────────────────────────────────────────────
+
+test('M-3b: an integration’s card.create journal row, as a member reads it, carries keyed hashes of its external ids and only the via: label', async () => {
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'm3e');
+    const ctx = h.app.integrations.ctxFor(conn.id);
+    // Built at runtime: identifiers a connector would take from its provider.
+    const ext = ['CUST', 'ACME', String(4471)].join('-');
+    const branch = `release/${ext.toLowerCase()}`;
+    const rid = `issue-${ext}`;
+    const label = `customer:${ext}`;
+    const { card } = (await ctx.act('card.create', { external_ref: ext }, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, {
+      request_id: rid, title: 'From outside', base_ref: branch, labels: [label],
+    }))).result;
+    const rows = h.app.api.journalPage(h.db.get('SELECT * FROM members WHERE id = ?', h.ids.bob), h.ids.board, { after_seq: 0, limit: 1000 }).rows;
+    const row = rows.find((r) => r.kind === 'card.create' && r.card_id === card.id);
+    const text = JSON.stringify(row);
+    for (const raw of [ext, branch, rid, label, ext.toLowerCase()]) assert.ok(!text.includes(raw), `the journal never holds ${raw}`);
+    const p = row.payload;
+    for (const f of ['external_ref', 'base_ref', 'request_id', 'title', 'body', 'acceptance']) assert.equal(f in p, false, `${f} is not journaled`);
+    assert.deepEqual(JSON.parse(p.labels), ['via:m3e']);
+    assert.match(p.external_ref_hmac, /^[0-9a-f]{32}$/);
+    assert.equal(p.external_ref_hmac, h.hub.refHash(ext), 'correlatable on this hub');
+    assert.equal(p.base_ref_hmac, h.hub.refHash(branch));
+    assert.equal(p.request_id_hmac, h.hub.refHash(rid));
+    assert.notEqual(p.external_ref_hmac, p.request_id_hmac);
+    // The card itself keeps what it needs; the hub's private tables are unchanged.
+    assert.equal(h.hub.card(card.id).base_ref, branch);
+    // Erasing the key makes the journal's hashes unlinkable to the ids.
+    h.db.run("DELETE FROM hub_meta WHERE k = 'journal_ref_key'");
+    assert.notEqual(h.hub.refHash(ext), p.external_ref_hmac);
+    assert.equal(h.hub.refHash(null), null);
+    // A person's own card is journaled as before.
+    const mine = await h.app.api.createCard(h.db.get('SELECT * FROM members WHERE id = ?', h.ids.alice), h.ids.board, { request_id: 'mine-1', title: 'Mine', base_ref: 'main', labels: ['x'] });
+    const own = h.db.get("SELECT payload FROM journal WHERE kind = 'card.create' AND card_id = ?", mine.card.id);
+    assert.deepEqual((({ base_ref, request_id, labels, title }) => ({ base_ref, request_id, labels, title }))(JSON.parse(own.payload)), { base_ref: 'main', request_id: 'mine-1', labels: '["x"]', title: 'Mine' });
+  } finally { await h.close(); }
+});

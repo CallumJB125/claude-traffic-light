@@ -7,7 +7,7 @@
 import { createVault } from './vault.js';
 import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
 import { CARD_STATE } from '../shared/journal.js';
@@ -222,6 +222,20 @@ export class Hub extends EventEmitter {
   revokeDeletedTeamConnections(now) {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+  }
+
+  /**
+   * An external identifier an integration names (issue id, branch, request
+   * id) as the journal may carry it: members read the journal, and it can
+   * never be erased, so it holds an HMAC under a per-hub key instead. Equal
+   * inputs hash equal on this hub; deleting hub_meta 'journal_ref_key' (a
+   * new one is minted on next use) makes every earlier hash unlinkable.
+   */
+  refHash(value) {
+    if (value == null) return null;
+    let k = this.db.meta('journal_ref_key');
+    if (!k) { k = randomBytes(32).toString('hex'); this.db.setMeta('journal_ref_key', k); }
+    return createHmac('sha256', Buffer.from(k, 'hex')).update(String(value)).digest('hex').slice(0, 32);
   }
 
   // ── journal (P-1): append-only, same transaction as the change ─────────────

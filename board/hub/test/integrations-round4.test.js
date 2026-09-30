@@ -154,7 +154,9 @@ test('M-2: an integration’s card.create journals hashes and ids, never the tit
     }
     assert.equal(p.title_sha256, createHash('sha256').update(secret).digest('hex').slice(0, 16));
     assert.equal(p.connection_id, conn.id);
-    assert.equal(p.external_ref, 'ISS-9');
+    // A keyed hash, never the id itself (hardening M-3b).
+    assert.equal('external_ref' in p, false);
+    assert.equal(p.external_ref_hmac, h.hub.refHash('ISS-9'));
     assert.equal(p.key, card.key);
     // Replay rebuilds the card (its title lives in `cards`), the Dashboard shows the live title.
     const rows = h.db.all('SELECT * FROM journal ORDER BY seq');

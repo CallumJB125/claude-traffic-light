@@ -163,12 +163,17 @@ export class Api {
         // An integration's card text is external text: the append-only
         // journal can never erase it, so it keeps only hashes (D41); the
         // text lives in `cards`, where replay and the Dashboard read it.
-        const texts = via?.member_id === member.id
-          ? { title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id, external_ref: via.external_ref ?? null }
-          : { title, body: text, acceptance };
-        this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload: {
-          key: c.key, ...texts, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
-        } });
+        // Its external identifiers (the act() external_ref, base_ref, request_id)
+        // go in as keyed hashes (hub.refHash) and its labels only as via:<provider>.
+        const common = { key: c.key, repo_id: c.repo_id, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)] };
+        const payload = via?.member_id === member.id
+          ? {
+            ...common, title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id,
+            external_ref_hmac: this.hub.refHash(via.external_ref), base_ref_hmac: this.hub.refHash(baseRef), request_id_hmac: this.hub.refHash(body.request_id),
+            labels: JSON.stringify(labels.filter((l) => l.startsWith('via:'))),
+          }
+          : { ...common, title, body: text, acceptance, base_ref: baseRef, labels: c.labels, request_id: body.request_id ?? null };
+        this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload });
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
       });
