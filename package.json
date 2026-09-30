@@ -43,6 +43,7 @@
       "tokens.css",
       "motion.js",
       "rules.js",
+      "brand.js",
       "help.js",
       "help.html",
       "help-preload.js",
