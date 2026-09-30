@@ -303,7 +303,7 @@ test('set-status: the app\'s port file wins over the env port when probing', asy
   const srv = await listening();
   try {
     fs.writeFileSync(path.join(home, 'port'), String(srv.address().port));
-    run(home, 'permission-request', { session_id: 'pf', tool_name: 'Bash' }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: '1' });
+    run(home, 'permission-request', { session_id: 'pf', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: '1' });
     assert.ok(fs.existsSync(path.join(home, 'requests')), 'probe reached the port from the file, so the request was written');
   } finally { srv.close(); }
 });

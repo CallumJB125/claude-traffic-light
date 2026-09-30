@@ -142,15 +142,22 @@ function claimTimeout(dir, id) {
   }
 }
 
-// Leftovers from crashed hooks or answerers nobody came back for.
-function sweep(dir, maxAgeMs = 10 * 60 * 1000, now = Date.now()) {
+// The hook stops waiting this long before Claude Code's hook timeout.
+const HOOK_MARGIN_MS = 5000;
+// No live hook is older than its timeout (60 s): a request file older than
+// this belongs to a hook that was killed, and must not be shown or answered.
+const STALE_REQUEST_MS = 75 * 1000;
+
+// Leftovers from killed hooks or answerers nobody came back for.
+function sweep(dir, { maxAgeMs = 10 * 60 * 1000, staleRequestMs = STALE_REQUEST_MS, now = Date.now() } = {}) {
   let files = [];
   try { files = fs.readdirSync(dir); } catch { return; }
   for (const f of files) {
-    if (!/\.(answer|taken|refused)$|\.answer\.tmp\.[0-9a-f]+$/.test(f)) continue;
+    const leftover = /\.(answer|taken|refused)$|\.answer\.tmp\.[0-9a-f]+$/.test(f);
+    if (!leftover && !f.endsWith('.json')) continue;
     const file = path.join(dir, f);
-    try { if (now - fs.statSync(file).mtimeMs > maxAgeMs) fs.unlinkSync(file); } catch {}
+    try { if (now - fs.statSync(file).mtimeMs > (leftover ? maxAgeMs : staleRequestMs)) fs.unlinkSync(file); } catch {}
   }
 }
 
-module.exports = { canonicalize, hashToolInput, paths, createExclusive, writeAnswer, awaitTaken, consumeAnswer, claimTimeout, sweep, ID_RE };
+module.exports = { HOOK_MARGIN_MS, STALE_REQUEST_MS, canonicalize, hashToolInput, paths, createExclusive, writeAnswer, awaitTaken, consumeAnswer, claimTimeout, sweep, ID_RE };

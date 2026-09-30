@@ -94,15 +94,20 @@ test('ack: applied only once the hook has taken our answer; lost / refused / unk
   assert.equal(await A.awaitTaken(dir, 'r8', bad.nonce), 'refused');
 });
 
-test('sweep removes stale leftovers only', () => {
+test('sweep removes stale leftovers, and request files older than any live hook', () => {
   const dir = tmp();
-  writeReq(dir, 'r9');
+  writeReq(dir, 'dead');
+  writeReq(dir, 'live');
+  writeReq(dir, 'recent');
   for (const f of ['a.answer', 'b.taken', 'c.refused', 'd.answer.tmp.00ff']) fs.writeFileSync(path.join(dir, f), '{}');
   fs.writeFileSync(path.join(dir, 'fresh.taken'), '{}');
   const old = new Date(Date.now() - 20 * 60 * 1000);
-  for (const f of ['a.answer', 'b.taken', 'c.refused', 'd.answer.tmp.00ff', 'r9.json']) fs.utimesSync(path.join(dir, f), old, old);
+  for (const f of ['a.answer', 'b.taken', 'c.refused', 'd.answer.tmp.00ff', 'dead.json']) fs.utimesSync(path.join(dir, f), old, old);
+  const recent = new Date(Date.now() - 30 * 1000);
+  fs.utimesSync(path.join(dir, 'recent.json'), recent, recent);
   A.sweep(dir);
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['fresh.taken', 'r9.json']);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['fresh.taken', 'live.json', 'recent.json']);
+  assert.ok(A.STALE_REQUEST_MS > 60000, 'longer than the hook timeout');
 });
 
 // ── the real hook ───────────────────────────────────────────────────────────
@@ -190,4 +195,37 @@ test('hook: request files are 0600 in a 0700 directory', async () => {
 test('the answer is spawnSync-safe: a CLI answerer on a missing request fails cleanly', () => {
   const r = spawnSync(process.execPath, ['-e', `console.log(JSON.stringify(require(${JSON.stringify(path.join(__dirname, '..', 'hooks', 'answer-file.js'))}).writeAnswer(${JSON.stringify(tmp())}, 'nope', 'allow')))`]);
   assert.equal(JSON.parse(r.stdout).ok, false);
+});
+
+test('hook: no request is written when the payload has no usable tool input', async () => {
+  const srv = await listening();
+  try {
+    for (const stdin of ['{not json', JSON.stringify({ session_id: 's', tool_name: 'Bash' }), JSON.stringify({ session_id: 's', tool_name: 'Bash', tool_input: ['rm'] }), JSON.stringify({ session_id: 's', tool_name: 'Bash', tool_input: 'rm -rf ~' })]) {
+      const home = tmp();
+      const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { input: stdin, env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '3000', CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.address().port) } });
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout.toString(), '', stdin);
+      const dir = path.join(home, 'requests');
+      assert.equal(fs.existsSync(dir) ? fs.readdirSync(dir).length : 0, 0, stdin);
+    }
+  } finally { srv.close(); }
+});
+
+test('hook: total time stays under the hook timeout minus the margin, whatever the ask window', async () => {
+  const home = tmp();
+  const srv = await listening();
+  try {
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { input: JSON.stringify({ session_id: 's', tool_name: 'Bash', tool_input: { command: 'ls' } }), env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '30000', CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS: '7000', CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.address().port) } });
+    const ms = Date.now() - t0;
+    assert.equal(r.status, 0);
+    assert.ok(ms < 7000 - A.HOOK_MARGIN_MS + 1500, `took ${ms} ms`);
+    assert.deepEqual(fs.readdirSync(path.join(home, 'requests')), []);
+  } finally { srv.close(); }
+});
+
+test('the installed PermissionRequest timeout is what the hook budgets against', () => {
+  const Claude = require('../adapters/claude-code.js');
+  assert.equal(Claude.OPTIONAL_EVENTS.find(([e]) => e === 'PermissionRequest')[2], 60);
+  assert.ok(55000 <= 60000 - A.HOOK_MARGIN_MS, 'default ask window fits');
 });
