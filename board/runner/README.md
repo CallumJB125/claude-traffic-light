@@ -18,6 +18,43 @@ path (default `board/mcp/server.js`). Buddy later spawns `cli.js start --foregro
 itself and talks NDJSON on `~/.board/runner.sock` (`status`, `subscribe`, `opt_in`,
 `confirm_offer`, `stop_all`, `host_suspending`, `host_resumed`).
 
+## Under the desktop app (D37)
+
+The app runs `runner/app-entry.js` as an Electron `utilityProcess` (never `cli.js`,
+never detached: the app is the supervisor). No device file and no env secret is read;
+the app posts the config over `process.parentPort`:
+
+```
+app → runner  {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
+runner → app  {type:'runner.ready'}
+runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable'|'stopping', detail?}
+runner → app  {type:'runner.fatal', message}          then exit 2 (bad config) / 1 (startup failed)
+runner → app  {type:'runner.stopped', parked, parked_pending, orphaned} then exit 0 (after SIGTERM/SIGINT)
+app → runner  {type:'runner.presence', enabled, share_summaries?, sessions:[{session_id, agent, cwd, state, since, summary?}]}   since: ISO-8601, ≤ 40 chars; share_summaries default false
+```
+
+`hub_url` must be `https:`/`wss:`; `http:`/`ws:` is accepted only for `localhost`,
+`127.0.0.1` and `::1`. `data_dir` (absolute) takes the place of `BOARD_HOME`; it must be a real directory owned by
+this user, and is refused if it is a symlink or cannot be made 0700. The token and the Access
+service-token pair live only in memory and only in the WS connect headers; they never
+reach a log line. SIGTERM (or SIGINT) parks every live run instead of orphaning it: the
+agent gets the final-handover prompt (10 s window), then the stop recipe, a pushed snapshot
+to `refs/board/<KEY>/r<fence>`, and `board_release{requeue:true}` at the run's fence, so the
+card goes back to the queue with its handover. New offers are ignored meanwhile. After at
+most 25 s the runner posts `runner.stopped` and exits 0; a run that could not be parked (hub
+unreachable, release refused, budget spent) stays in the ledger and the next start treats it
+as an orphan (stop recipe, snapshot, `run.failed{supervisor crash}`).
+
+Team presence (`runner.presence`) is off until the app enables it. Each session's `cwd`
+is mapped to its repo's configured origin; sessions in repos that are not on one of the
+member's boards are dropped. The hub gets `{hashed session_id, agent, repo_id, branch,
+state, since, summary?}` in a `presence` frame, on change at most every
+5 s and every 60 s as a keepalive. `enabled:false` sends one empty frame so the hub
+clears it at once. Summaries are a second opt-in: without `share_summaries:true` no
+`summary` is sent. With it, the summary is redacted (credentials, repo paths made
+relative), then every home-style prefix anywhere in it (`/Users/`, `/home/`, `~/`, …) and
+every `/`-rooted run of two or more segments becomes `<path>`, and it is clipped to 120.
+
 ## Modules
 
 | File | Role |
@@ -34,6 +71,8 @@ itself and talks NDJSON on `~/.board/runner.sock` (`status`, `subscribe`, `opt_i
 | `git.js` | Scope inputs, worktree per run, snapshot via private `GIT_INDEX_FILE` + secret scan + size cap |
 | `procs.js` | pid + lstart identity, process table, tree kill |
 | `policy.js` | Offer decision, advertise set, approval answerer re-check |
+| `app-entry.js` | Desktop-app entry (D37a): config over `parentPort`, ready/status/fatal replies, SIGTERM → park live runs, exit 0 |
+| `presence.js` | Team presence reporter (D37b): cwd → repo, default deny, hashing, redaction, throttle + keepalive |
 
 ## Tests
 

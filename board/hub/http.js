@@ -99,10 +99,10 @@ export function createHttpHandler({ hub, api, config }) {
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET' } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit });
   };
 
   route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
@@ -121,6 +121,7 @@ export function createHttpHandler({ hub, api, config }) {
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body }) => api.createCard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
+  route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
   route('PATCH', '/api/cards/:card_id', ({ member, params, body }) => api.patchCard(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body }) => api.action(member, params.card_id, params.action, body));
@@ -215,6 +216,7 @@ export function createHttpHandler({ hub, api, config }) {
         limitOrThrow(hub, 'mutate_member', member.id);
         if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', member.id);
       }
+      if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
       let status = 200;
       let out;
       try {
