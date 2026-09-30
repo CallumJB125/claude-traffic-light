@@ -150,13 +150,12 @@ test('readTurns skips files over the size cap and files untouched since `since`'
   assert.equal(r2.turns.length, 1);
 });
 
-test('spend gives Stats per-day, project and session cost matching summarise, and history only for days with turns', () => {
+test('spend gives Stats per-day, project and session cost matching summarise', () => {
   const mk = (over) => ({ id: Math.random(), ts: T0, sessionId: 's1', project: 'bondly', model: 'claude-opus-5', modelKey: 'opus', input: 0, output: 1e6, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, ...over });
   const turns = [
     mk({}), // $25
     mk({ sessionId: 's2', project: 'other', model: 'claude-sonnet-5', modelKey: 'sonnet' }), // $10
     mk({ ts: T0 - 2 * 86400000 }), // $25, two days ago, same session
-    mk({ ts: T0 - 20 * 86400000 }), // $25, history only
   ];
   const sp = U.spend(turns, { now: T0 });
   const key = (t) => require('../stats.js').dayKey(t);
@@ -167,8 +166,7 @@ test('spend gives Stats per-day, project and session cost matching summarise, an
   near(Object.values(sp.days).reduce((a, d) => a + d.cost, 0), U.summarise(turns, { days: 7, now: T0 }).total.cost);
   assert.deepEqual(sp.projects.map((p) => [p.name, p.cost]), [['bondly', 50], ['other', 10]]);
   assert.deepEqual(sp.sessions.map((s) => [s.id, s.cost]), [['s1', 50], ['s2', 10]]);
-  assert.deepEqual(Object.keys(sp.history).sort(), [key(T0 - 20 * 86400000), key(T0 - 2 * 86400000), key(T0)].sort());
-  near(sp.history[key(T0 - 20 * 86400000)], 25);
+  assert.equal(sp.history, undefined, 'per-day history is the permanent record’s now (usage-history.js)');
 });
 
 test('summarise totals actual and counterfactual cost, savings range and unknown models', () => {
