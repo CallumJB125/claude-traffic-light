@@ -629,6 +629,8 @@ Anything else → `ILLEGAL_TRANSITION`. Runner events with a stale `fence` → `
 | `NARRATIVE_NUDGE_MS` / `NARRATIVE_NUDGE_CALLS` | 10 min / 25 | handover nudges |
 | `DEGRADED_NO_SESSIONSTART_MS` | 30 s | degraded flag |
 
+**Test-only time compression.** `BOARD_TEST_TIME_SCALE` (Node env, 0 < x ≤ 1) multiplies every constant above (and `REAPER_MS`, the reaper cadence) so their ratios hold; `SLEEP_GAP_THRESHOLD_MS` is floored at 1 s so event-loop jitter never reads as a sleep. Browsers never see it. The hub and runner log a warning when it is set. Only `npm run test:e2e` sets it (0.05: HB 0.75 s, TTL 2.25 s, G 12 s, T_orphan 15 s).
+
 The reaper calls `timerEvent(snapshot)` for each card every second and feeds a non-null result to `step()`. Guard failures `BOOT_GRACE`/`TUNNEL_DOWN` are silent (retry next tick).
 
 ## 12. Decisions
@@ -683,6 +685,8 @@ The reaper calls `timerEvent(snapshot)` for each card every second and feeds a n
 | (j) No personal MCP/hooks/plugins in `system/init`; no credential in any hub-bound byte | `scope.test.js` exit (j) (every `CREDENTIAL_PATTERNS` kind) | `runner/test/exit-j-launch-profile.test.js` (argv/env/settings/mcp.json snapshot incl. env allowlist); `runner/scripts/check-isolation.sh` (manual, real CLI: asserts `system/init` tools/mcp_servers = ours only, and no user aliases in Bash) |
 | (k) Two runs on the same file show the overlap on both cards and in agent context ≤ 30 s | `overlap.test.js` exit (k) | `hub/test/exit-k-overlap.test.js` (two fake runners; both `card.upsert` overlaps and both `context.update` within debounce + 1 tick) |
 | (l) Hand over → "Handing over · waiting for checkpoint" → handover ≤ 3 min with handoff memory; teammate approval first-wins, second rejected | rows `27a`–`27d`; `schema.test.js` exit (l); `cardface` handing_over copy | `hub/test/exit-l-handover-approvals.test.js`; `runner/test/approval-recheck.test.js` (answerer not in local policy → deny) |
+
+**End to end (separate processes)**: `npm run test:e2e` runs `test/e2e/*.test.js`: the real hub process (serving the real web), real runner processes, the real board-mcp (spawned over stdio by `fake-claude` with `mcp_stdio`, as the CLI does) and a WebSocket-aware TCP proxy per runner (partition = black-hole with no FIN; it also records every decoded frame). `chaos.test.js`: kill -9 CLI → failed ≤ 1.5 s; kill -9 runner + CLI → unresponsive at ~TTL, orphaned at ~T_orphan of silence, handover from facts + narrative + pushed snapshot; SIGSTOP (after `host_suspending`) → suspended, SIGCONT → grey until post-wake activity; hub restart → reconnecting → recover, no orphan; partition → gate G before orphaned, takeover to a teammate's runner, the zombie is fenced, completes no tool after G, salvages (not promoted); two runners claim → one wins, one CLI; zero foreign bytes on the wire from a non-board repo. `ui.test.js` (Playwright, channel `chrome`): a dispatched card goes green; two approvers click the card-face Allow at once → one wins, the other is told who. Every chaos test replays the journal against the live cards (§15). `test/e2e/smoke-real.js` (`npm run smoke:real`, real `claude --model haiku`, budget-capped) is manual.
 
 Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas reject bad input, IPC token sent, `approval` output format) and `web/test/render.test.js` (pure render helpers over `cardFace`, run with `node --test` against the exported functions; no DOM framework).
 

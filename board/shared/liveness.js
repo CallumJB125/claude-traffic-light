@@ -9,7 +9,15 @@
 //
 // Browser-safe, dependency-free.
 
-const S = 1000;
+// Test-only time compression: BOARD_TEST_TIME_SCALE (0 < x ≤ 1, Node env only)
+// multiplies every timer below, so their ratios (G < T_orphan, TTL = 3 × HB…)
+// hold. Browsers never see it (no process.env): the web keeps real timers.
+export const TIME_SCALE = (() => {
+  const v = Number(globalThis.process?.env?.BOARD_TEST_TIME_SCALE);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 1;
+})();
+
+const S = 1000 * TIME_SCALE;
 const MIN = 60 * S;
 const H = 60 * MIN;
 
@@ -22,7 +30,7 @@ export const T_PARK_MS = 30 * MIN;           // blocked → parked
 export const T_SUSPEND_MS = 8 * H;           // suspended → orphaned
 export const T_CLAIM_MS = 120 * S;           // claimed → running budget; unresponsive(claimed) → queued
 export const RECONNECT_CAP_MS = 30 * S;      // runner reconnect backoff cap
-export const RECONNECT_BASE_MS = 500;        // runner reconnect backoff base
+export const RECONNECT_BASE_MS = S / 2;      // runner reconnect backoff base (500 ms)
 export const T_HANDOVER_MS = 3 * MIN;        // handing_over → handed_over cap (#27b)
 export const HANDOVER_WAIT_MS = 90 * S;      // runner waits this long for board_write_handover (#27a)
 export const ORPHAN_NOTIFY_MS = 10 * MIN;    // N-rules: notify after ≥ 10 min orphaned
@@ -35,8 +43,11 @@ export const BASH_MAX_TIMEOUT_MS = 10 * MIN;
 export const BASH_GRACE_MS = 30 * S;
 export const OTHER_TOOL_BOUND_MS = 10 * MIN;
 export const SLEEP_TICK_MS = 1 * S;          // runner tick-gap detector cadence
-export const SLEEP_GAP_THRESHOLD_MS = 5 * S; // a tick late by more than this = the host slept
+// A tick late by more than this = the host slept. Floored at 1 s under a test
+// time scale: event-loop jitter must never look like a sleep.
+export const SLEEP_GAP_THRESHOLD_MS = Math.max(5 * S, 1000);
 export const TICK_MAX_RATE_MS = 1 * S;       // lease.tick to browsers: ≤ 1/s/card
+export const REAPER_MS = 1 * S;              // hub reaper cadence
 export const OVERLAP_DEBOUNCE_MS = 10 * S;
 export const NARRATIVE_NUDGE_MS = 10 * MIN;  // handover narrative staleness nudge
 export const NARRATIVE_NUDGE_CALLS = 25;

@@ -10,6 +10,8 @@
   "scripts": {
     "test": "node --test \"*/test/**/*.test.js\"",
     "test:shared": "node --test \"shared/test/*.test.js\"",
+    "test:e2e": "BOARD_TEST_TIME_SCALE=0.05 node --test --test-concurrency=1 \"test/e2e/*.test.js\"",
+    "smoke:real": "node test/e2e/smoke-real.js",
     "web:mock": "node web/mock/server.js",
     "web:shots": "node web/scripts/shots.mjs"
   },

@@ -6,6 +6,7 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { WS_CLOSE } from '../shared/protocol.js';
+import { REAPER_MS, TIME_SCALE } from '../shared/liveness.js';
 import { openDb } from './db.js';
 import { Hub, defaultClock } from './hub.js';
 import { Api } from './api.js';
@@ -31,6 +32,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   const server = createServer(createHttpHandler({ hub, api, config }));
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authMember: makeAuthMember({ hub, config }) }));
 
+  if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
   const intervals = [];
   let ticking = false;
   let closed = false;
@@ -39,7 +41,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       if (ticking || closed) return;
       ticking = true;
       try { await hub.tick(); } catch (e) { log.error('reaper tick failed', { err: e }); } finally { ticking = false; }
-    }, 1000));
+    }, REAPER_MS));
     if (gh.enabled) {
       intervals.push(setInterval(() => { hub.pollMerges().catch((e) => log.warn('merge poll failed', { err: e })); }, config.githubPollMs));
     }

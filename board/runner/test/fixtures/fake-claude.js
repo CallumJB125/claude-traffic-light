@@ -8,6 +8,7 @@
 // (unless scenario.ignore_term), and can spawn a detached grandchild in its
 // own process group like the Bash tool does (for tree-kill tests).
 // Logs everything it saw to <run_dir>/fake.log (run_dir = dirname(--settings)).
+// scenario.mcp_stdio: board tools go through the real board MCP server (stdio).
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
@@ -60,7 +61,54 @@ function runHook(event, payload, matcherTool) {
   });
 }
 
+// scenario.mcp_stdio: like the real CLI, spawn the board MCP server from
+// mcp.json and call its tools over MCP (JSON-RPC, NDJSON on stdio).
+let mcpProc = null;
+let mcpNext = 1;
+const mcpPending = new Map();
+function mcpSend(obj) { mcpProc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...obj })}\n`); }
+function mcpRequest(method, params) {
+  const id = mcpNext++;
+  return new Promise((resolve, reject) => { mcpPending.set(id, { resolve, reject }); mcpSend({ id, method, params }); });
+}
+async function startMcp() {
+  const srv = mcp.mcpServers?.board;
+  mcpProc = spawn(srv.command, srv.args ?? [], { env: { ...process.env, ...(srv.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let mbuf = '';
+  mcpProc.stdout.setEncoding('utf8');
+  mcpProc.stdout.on('data', (d) => {
+    mbuf += d;
+    let i;
+    while ((i = mbuf.indexOf('\n')) >= 0) {
+      const line = mbuf.slice(0, i);
+      mbuf = mbuf.slice(i + 1);
+      let m;
+      try { m = JSON.parse(line); } catch { continue; }
+      const p = mcpPending.get(m.id);
+      if (!p) continue;
+      mcpPending.delete(m.id);
+      if (m.error) p.reject(new Error(m.error.message)); else p.resolve(m.result);
+    }
+  });
+  mcpProc.stderr.on('data', (d) => log({ ev: 'mcp_stderr', text: String(d).slice(0, 300) }));
+  const init = await mcpRequest('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '0' } });
+  mcpSend({ method: 'notifications/initialized' });
+  const list = await mcpRequest('tools/list', {});
+  log({ ev: 'mcp_ready', server: init.serverInfo?.name, tools: list.tools.map((t) => t.name) });
+  return list.tools.map((t) => `mcp__board__${t.name}`);
+}
+async function mcpTool(name, args) {
+  const r = await mcpRequest('tools/call', { name, arguments: args ?? {} });
+  const text = r.content?.[0]?.text ?? '';
+  if (r.isError) {
+    const m = /^([A-Z_]+): ([\s\S]*)$/.exec(text);
+    return { ok: false, error: { code: m?.[1] ?? 'INTERNAL', message: m?.[2] ?? text } };
+  }
+  try { return { ok: true, result: JSON.parse(text) }; } catch { return { ok: true, result: text }; }
+}
+
 function ipc(msg) {
+  if (mcpProc && msg.type === 'tool') return mcpTool(msg.name, msg.args);
   const env = mcp.mcpServers?.board?.env ?? {};
   return new Promise((resolve, reject) => {
     const s = net.createConnection(env.BOARD_RUN_SOCKET);
@@ -115,6 +163,7 @@ process.on('SIGTERM', () => {
   log({ ev: 'signal', sig: 'SIGTERM' });
   if (scenario.ignore_term) return;
   killGrandchildren();
+  mcpProc?.kill();
   process.exit(143);
 });
 process.on('SIGINT', () => {
@@ -187,9 +236,10 @@ async function runSteps(steps) {
 
 async function main() {
   await runHook('SessionStart', { source: resume ? 'resume' : 'startup' });
+  const mcpTools = scenario.mcp_stdio ? await startMcp() : ['mcp__board__approval'];
   if (scenario.no_init) { await new Promise(() => {}); }
   const first = await nextInput();
-  out({ type: 'system', subtype: 'init', cwd: process.cwd(), tools: (opt('--tools') ?? '').split(',').concat(['mcp__board__approval']), mcp_servers: [{ name: 'board', status: 'connected' }], model: 'fake', permissionMode: opt('--permission-mode') });
+  out({ type: 'system', subtype: 'init', cwd: process.cwd(), tools: (opt('--tools') ?? '').split(',').concat(mcpTools), mcp_servers: [{ name: 'board', status: 'connected' }], model: 'fake', permissionMode: opt('--permission-mode') });
   await runHook('UserPromptSubmit', { prompt: textOf(first) });
   const outcome = await runSteps(resume ? (scenario.resume_steps ?? [{ result: 'success' }]) : (scenario.steps ?? []));
   if (outcome === 'aborted') {

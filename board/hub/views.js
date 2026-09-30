@@ -4,6 +4,7 @@
 
 import { ACTIVE } from '../shared/states.js';
 import { isGreen } from '../shared/liveness.js';
+import { FEED_KINDS } from '../shared/protocol.js';
 import { json } from './db.js';
 
 export function leaseView(hub, row) {
@@ -141,8 +142,10 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
   const view = cardView(hub, row, viewerId);
   const runRow = hub.run(row.active_run_id) ?? hub.latestRun(row.id);
   const doc = hub.handoverDoc(row.id);
-  const feed = hub.db.all('SELECT * FROM events WHERE card_id = ? ORDER BY id DESC LIMIT 400', row.id)
-    .map((e) => feedEventOf(e)).filter(Boolean).slice(0, 200).reverse();
+  // The last 200 FEED events: internal rows (tool_start/_end, activity, facts…)
+  // are far more numerous and must not push feed lines out of the window.
+  const feed = hub.db.all(`SELECT * FROM events WHERE card_id = ? AND kind IN (${FEED_KINDS.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 200`, row.id, ...FEED_KINDS)
+    .map((e) => feedEventOf(e)).filter(Boolean).reverse();
   return {
     card: view,
     body: row.body,

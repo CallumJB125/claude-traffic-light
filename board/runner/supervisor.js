@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION, validate, MCP_TOOLS, WS_CLOSE } from '../shared/protocol.js';
 import { serializeOutbound, assertNoForeignBytes, scopeOf } from '../shared/scope.js';
-import { HB_MS, SLEEP_TICK_MS, STOP_GRACE_MS, INTERRUPT_WAIT_MS, reconnectDelay, sleptEstimate } from '../shared/liveness.js';
+import { HB_MS, SLEEP_TICK_MS, STOP_GRACE_MS, INTERRUPT_WAIT_MS, TIME_SCALE, reconnectDelay, sleptEstimate } from '../shared/liveness.js';
 import { branchName, snapshotRef } from '../shared/fence.js';
 import { initHome, readDevice, readPolicy, readLedger, writeLedger, writePolicy, hubWsUrl } from './config.js';
 import { Outbox } from './outbox.js';
@@ -94,6 +94,7 @@ export class Supervisor extends EventEmitter {
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
   async start() {
+    if (TIME_SCALE !== 1) this.log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
     await this.recoverOrphans();
     if (this.opts.controlSocket !== false) await this.#startControl();
     if (this.opts.powerMonitor) this.attachPowerMonitor(this.opts.powerMonitor);
