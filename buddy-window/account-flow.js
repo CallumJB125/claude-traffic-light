@@ -8,6 +8,7 @@
 const crypto = require('node:crypto');
 const { parseInvite, routeInvite } = require('./accounts');
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
+const BRAND = require('./brand');
 
 // Screens the page itself may ask for; the rest (`confirm`, `code`) are
 // reached only through the flow (e.g. `confirm` after an invite link).
@@ -223,7 +224,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
 
   async function screenState() {
     const screen = acct.screen;
-    const base = { ok: true, screen, notice: acct.notice, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub()), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
+    const base = { ok: true, brand: { name: BRAND.NAME, copy: BRAND.COPY }, screen, notice: acct.notice, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub()), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
     acct.notice = null;
     if (screen === 'hub') return { ...base, forInvite: !!pendingInvite };
     if (screen === 'email') return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '' };

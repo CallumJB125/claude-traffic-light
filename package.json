@@ -93,7 +93,7 @@
     ],
     "mac": {
       "icon": "assets/icon.icns",
-      "protocols": [{ "name": "Claude Buddy", "schemes": ["claudebuddy"] }],
+      "protocols": [{ "name": "Plexiform", "schemes": ["plexiform", "claudebuddy"] }],
       "category": "public.app-category.developer-tools",
       "target": "dmg",
       "extendInfo": {

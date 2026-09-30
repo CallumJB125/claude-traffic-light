@@ -1,4 +1,4 @@
-# Privacy flows for the Buddy window (to merge into PRIVACY.md)
+# Privacy flows for the Plexiform window (to merge into PRIVACY.md)
 
 These sections use the `<!-- flow:<slug> files=… -->` form that the privacy guard expects. They cover the three flows this branch adds. `local-board-hub` and `open-link-in-browser` are documented elsewhere.
 

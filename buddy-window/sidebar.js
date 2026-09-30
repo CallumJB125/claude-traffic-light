@@ -87,11 +87,8 @@ function build() {
   paint();
 }
 
-const HUB_TEXT = {
-  starting: 'Starting the board…',
-  restarting: 'Board restarting…',
-  failed: 'Board unavailable',
-};
+// From main (brand.js), with the page list.
+let HUB_TEXT = {};
 
 function paint() {
   for (const [id, btn] of buttons) {
@@ -102,7 +99,7 @@ function paint() {
   const s = state.hub?.state;
   const runners = s === 'failed' ? [] : state.runners ?? [];
   // A runner works for the team whatever board is showing; say so while it's on.
-  hub.textContent = runners.length ? `This Mac is running cards for ${runners.join(', ')}` : HUB_TEXT[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? 'Team board' : 'Board on this Mac') : '');
+  hub.textContent = runners.length ? (HUB_TEXT.running ?? '').replace('{teams}', runners.join(', ')) : ({ starting: HUB_TEXT.starting, restarting: HUB_TEXT.restarting, failed: HUB_TEXT.failed }[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? HUB_TEXT.team : HUB_TEXT.local) : '')) ?? '';
   hub.dataset.state = runners.length ? 'running' : s ?? 'stopped';
 }
 
@@ -158,4 +155,13 @@ function paintWorkspaces() {
 }
 
 window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(); });
-window.buddy.pages().then((r) => { if (!r) return; pages = r.pages; groups = r.groups; build(); });
+window.buddy.pages().then((r) => {
+  if (!r) return;
+  pages = r.pages;
+  groups = r.groups;
+  HUB_TEXT = r.brand.hubText;
+  document.title = r.brand.name;
+  document.getElementById('brand').textContent = r.brand.name;
+  document.querySelector('.sidebar').setAttribute('aria-label', r.brand.name);
+  build();
+});

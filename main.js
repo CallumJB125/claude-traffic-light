@@ -961,8 +961,11 @@ function createSettingsWindow() {
   });
 }
 
-// The Buddy main window (board, views, integrations…): buddy-window/.
+// The Plexiform main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
+const BRAND = require('./buddy-window/brand');
+// plexiform:// and the legacy claudebuddy:// open the same links.
+const DEEP_LINK_RE = new RegExp(`^(${BRAND.SCHEMES.join('|')}):`, 'i');
 let buddyWin = null;
 // Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
 // Buddy window reads its origin once, when created, so nothing may create the
@@ -1000,24 +1003,24 @@ function showHealth() {
   else settingsWin.webContents.send('show-section', 'health');
 }
 
-// Invite deep links (claudebuddy://invite/<token>, claudebuddy://join?hub=…&t=…).
+// Invite deep links (plexiform://invite/<token>, plexiform://join?hub=…&t=…, and the same under claudebuddy://).
 // macOS delivers open-url before `ready` on a cold start, so links wait until
 // then. The link is never logged: it carries an invite token.
 const pendingLinks = [];
 let linksReady = false;
 function handleDeepLink(url) {
-  if (typeof url !== 'string' || url.length > 2048 || !/^claudebuddy:/i.test(url)) return;
+  if (typeof url !== 'string' || url.length > 2048 || !DEEP_LINK_RE.test(url)) return;
   if (!linksReady) { if (pendingLinks.length < 5) pendingLinks.push(url); return; }
   try {
     getBuddy().openInvite(url);
     openBuddy();
   } catch (err) {
-    console.error('[deep-link] could not open Buddy:', err.message);
+    console.error(`[deep-link] could not open ${BRAND.NAME}:`, err.message);
   }
 }
 app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
 // Only an installed app may claim the scheme: a dev run would steal it from it.
-if (app.isPackaged) app.setAsDefaultProtocolClient('claudebuddy');
+if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
 let lightsWin = null;
 
 function createLightsWindow() {
@@ -2066,7 +2069,7 @@ function createTray() {
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
   const menu = Menu.buildFromTemplate([
-    { label: 'Open Buddy…', accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
+    { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
@@ -3229,7 +3232,7 @@ if (!gotLock) {
     // This fires on an instance that may be mid-teardown, where opening a
     // window throws — and an uncaught throw here took the whole app down.
     try {
-      const link = argv.find((a) => /^claudebuddy:/i.test(a));
+      const link = argv.find((a) => DEEP_LINK_RE.test(a));
       if (link) handleDeepLink(link);
       else if (argv.includes('--lights')) createLightsWindow();
       else if (argv.includes('--buddy')) openBuddy();
@@ -3288,7 +3291,7 @@ app.whenReady().then(() => {
     // Links that arrived before ready (cold start), then any in our own argv
     // (Windows/Linux pass the link as an argument).
     linksReady = true;
-    for (const link of [...pendingLinks.splice(0), ...process.argv.filter((a) => /^claudebuddy:/i.test(a))]) handleDeepLink(link);
+    for (const link of [...pendingLinks.splice(0), ...process.argv.filter((a) => DEEP_LINK_RE.test(a))]) handleDeepLink(link);
     // Runners the member left on come back at launch, window or not; a dev
     // run shares the Mac with an installed app, so only when asked to.
     const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';

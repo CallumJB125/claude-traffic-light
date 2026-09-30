@@ -5,6 +5,7 @@ const kind = q.get('kind') ?? 'soon';
 document.getElementById('title').textContent = q.get('title') ?? '';
 document.getElementById('blurb').textContent = q.get('blurb') ?? '';
 document.body.dataset.kind = kind;
+document.title = q.get('brand') ?? '';
 const badge = document.getElementById('badge');
 badge.textContent = kind === 'soon' ? 'Coming next' : kind === 'loading' ? 'Starting…' : kind === 'error' ? 'Board unavailable' : '';
 const retry = document.getElementById('retry');

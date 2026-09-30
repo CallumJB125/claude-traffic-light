@@ -23,6 +23,7 @@ const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromL
 const { createAccountClient, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
+const BRAND = require('./brand');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -67,7 +68,7 @@ function dispose(view, win) {
 }
 
 /**
- * Is `origin` a Buddy team hub, and where does it send people to sign in?
+ * Is `origin` a team hub, and where does it send people to sign in?
  * Asks from the hub's own partition without following redirects: a hub behind
  * Cloudflare Access answers 302 to <team>.cloudflareaccess.com (or 200 when
  * this app is already signed in); a bare hub answers /api/health itself.
@@ -81,7 +82,7 @@ function probeHub(origin, partition) {
     req.on('redirect', (_status, _method, location) => {
       try { req.abort(); } catch { /* done */ }
       const team = accessTeamFromLocation(location);
-      finish(team ? { ok: true, accessTeam: team, signedIn: false } : { ok: false, error: 'That address redirects somewhere that isn’t a Buddy sign-in.' });
+      finish(team ? { ok: true, accessTeam: team, signedIn: false } : { ok: false, error: BRAND.COPY.notASignIn });
     });
     req.on('response', (res) => {
       let body = '';
@@ -91,7 +92,7 @@ function probeHub(origin, partition) {
           const j = JSON.parse(body);
           if (res.statusCode === 200 && j.ok && j.protocol) return finish({ ok: true, accessTeam: null, signedIn: true, auth: j.auth });
         } catch { /* not JSON */ }
-        finish({ ok: false, error: 'That address answered, but it isn’t a Buddy team hub.' });
+        finish({ ok: false, error: BRAND.COPY.notAHub });
       });
     });
     req.on('error', (e) => finish({ ok: false, error: `Couldn’t reach it (${e.message}).` }));
@@ -253,7 +254,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const query = {
       title: page.title,
       kind: hub ? (failed ? 'error' : 'loading') : page.kind,
-      blurb: hub ? (failed ? (viewError ?? hubStatus.error ?? 'The board could not start.') : team ? `Opening ${team.name}…` : 'Starting the board…') : (page.blurb ?? ''),
+      blurb: hub ? (failed ? (viewError ?? hubStatus.error ?? 'The board could not start.') : team ? `Opening ${team.name}…` : BRAND.COPY.startingBoard) : (page.blurb ?? ''),
+      brand: BRAND.NAME,
       ...extra,
     };
     infoView.webContents.loadFile(path.join(DIR, 'info.html'), { query }).catch(() => {});
@@ -447,7 +449,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const ses = session.fromPartition(integrationPartitionFor(h.origin));
     hardenSession(ses);
     const w = new BrowserWindow({
-      width: 560, height: 720, title: 'Connect', autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
+      width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
       webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
     });
     w.hubOrigin = h.origin;
@@ -462,7 +464,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     wc.on('will-attach-webview', (e) => e.preventDefault());
     // The title names the site on screen, so a person can see who is asking for their password.
     w.on('page-title-updated', (e) => e.preventDefault());
-    wc.on('did-navigate', (_e, u) => { try { if (!w.isDestroyed()) w.setTitle(`Connect · ${new URL(u).host}`); } catch { /* not a URL */ } });
+    wc.on('did-navigate', (_e, u) => { try { if (!w.isDestroyed()) w.setTitle(`${BRAND.CONNECT_TITLE} · ${new URL(u).host}`); } catch { /* not a URL */ } });
     let closing = false;
     wc.on('did-finish-load', () => {
       if (closing || !isConnectCallback(wc.getURL(), w.hubOrigin)) return;
@@ -581,7 +583,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
@@ -601,7 +603,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     }
     win = new BaseWindow({
       width: 1320, height: 860, minWidth: 760, minHeight: 520,
-      title: 'Claude Buddy',
+      title: BRAND.WINDOW_TITLE,
       titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       trafficLightPosition: { x: 16, y: 18 },
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0',

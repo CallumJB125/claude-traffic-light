@@ -118,7 +118,7 @@ function showLink(link, email) {
 const SCREENS = {
   hub(s) {
     return [
-      heading(s.forInvite ? 'Where is your team?' : 'Sign in to your team', s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : 'Enter your team hub’s address. You’ll sign in with your email; no password.'),
+      heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),
       form({
         fields: field('Team hub address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: 'buddy.example.com', value: s.lastHub ?? '', required: true, autofocus: true })),
         submit: 'Continue', busy: 'Checking…',
@@ -201,7 +201,7 @@ const SCREENS = {
       const role = roleSelect('member', { label: 'Role for the invite' });
       const email = input({ name: 'email', type: 'email', autocomplete: 'off', placeholder: 'name@example.com', required: true, 'aria-label': 'Email to invite' });
       const f = form({ fields: el('div', { class: 'acct-row-form' }, email, role), submit: 'Send invite', busy: 'Sending…', fn: (v) => act(api.invite(team, v.email, v.role)) });
-      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Invite people'), el('p', { class: 'acct-hint' }, 'They get an email with a link that opens Buddy. You’ll also see the link here once, to send another way.'), f));
+      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Invite people'), el('p', { class: 'acct-hint' }, s.brand.copy.inviteHint), f));
     }
 
     const rows = s.members.map((m) => {
@@ -362,6 +362,7 @@ async function render() {
   if (!s?.ok) return;
   const draw = SCREENS[s.screen ?? screen] ?? SCREENS.hub;
   const card = el('div', { class: `acct-card${WIDE.has(s.screen) ? ' acct-card-wide' : ''}` }, notice(s.notice), draw(s));
+  document.title = s.brand?.name ?? '';
   root.textContent = '';
   root.dataset.screen = s.screen ?? screen;
   root.append(card);

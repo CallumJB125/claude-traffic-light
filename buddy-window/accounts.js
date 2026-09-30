@@ -8,6 +8,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { SCHEMES } = require('./brand');
 
 const ROUTES = {
   health: ['GET', '/api/health'],
@@ -285,8 +286,9 @@ const decode = (s) => { try { return decodeURIComponent(s); } catch { return nul
 
 /**
  * Parse an invite from a deep link or whatever someone pasted:
- *   claudebuddy://join?hub=<origin>&t=<token>
- *   claudebuddy://invite/<token>  ·  claudebuddy://invite?t=<token>
+ *   plexiform://join?hub=<origin>&t=<token>
+ *   plexiform://invite/<token>  ·  plexiform://invite?t=<token>
+ *   (and the same under the legacy claudebuddy:// scheme)
  *   https://<hub>/invite#<token>  (the universal link in the email; the
  *                                  token rides in the fragment so no server logs it)
  *   https://<hub>/invite/<token>
@@ -303,7 +305,7 @@ function parseInvite(input, { normalizeHub }) {
   let u;
   try { u = new URL(s); } catch { return null; }
   if (u.username || u.password) return null;
-  if (u.protocol === 'claudebuddy:') {
+  if (SCHEMES.includes(u.protocol.slice(0, -1))) {
     // Chromium puts the part after `//` in host for non-special schemes.
     const where = (u.host || '').toLowerCase();
     const segs = u.pathname.split('/').filter(Boolean);

@@ -11,6 +11,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { RUNNER_SERVICE } = require('./brand');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -100,7 +101,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     fs.chmodSync(dataDir, 0o700);
     // No args and no cwd: the entry refuses to run without a parentPort, and a
     // cwd inside app.asar makes the fork fail silently.
-    const c = fork(runnerEntry, [], { serviceName: 'Buddy Board Runner', stdio: 'pipe', env: { HOME: process.env.HOME, PATH: process.env.PATH, USER: process.env.USER, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR } }); // privacy-flow: team-hub-runner
+    const c = fork(runnerEntry, [], { serviceName: RUNNER_SERVICE, stdio: 'pipe', env: { HOME: process.env.HOME, PATH: process.env.PATH, USER: process.env.USER, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR } }); // privacy-flow: team-hub-runner
     child = c;
     c.startedAt = now();
     c.ready = false;

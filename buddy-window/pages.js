@@ -12,6 +12,8 @@
 //   soon    — named in the plan but not built yet; says so honestly.
 'use strict';
 
+const { NAME } = require('./brand');
+
 const PAGES = [
   { id: 'board', title: 'Board', icon: 'board', kind: 'hub', view: 'board', group: 'work',
     children: [
@@ -21,7 +23,7 @@ const PAGES = [
       { id: 'board:timeline', title: 'Timeline', kind: 'soon' },
     ] },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
-  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: 'Standalone Claude tasks you started from Buddy, with their messages. Being built by buddy-builder-2.' },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: `Standalone Claude tasks you started from ${NAME}, with their messages. Being built by buddy-builder-2.` },
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'window', window: 'mix', group: 'you' },

@@ -119,7 +119,7 @@ test('local mode: ready on board.listening; the secret comes from the port repor
   await new Promise((r) => setImmediate(r));
   assert.equal(children.length, 1);
   assert.equal(children[0].opts.env.BOARD_AUTH, 'local');
-  assert.equal(children[0].opts.serviceName, 'Buddy Board Hub');
+  assert.equal(children[0].opts.serviceName, 'Plexiform Board Hub');
   assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
   children[0].emit('message', { type: 'board.listening', port: 5123, hub_epoch: 'e1', local_secret: SECRET });
   const info = await p;
@@ -944,6 +944,40 @@ test('invite links: anything else is ignored', () => {
     `http://buddy.example.com/invite/${T}`, `http://buddy.example.com/invite#${T}`, `https://buddy.example.com/other#${T}`, `https://buddy.example.com/invite?x=1#${T}`, 'https://buddy.example.com/invite#', `https://buddy.example.com/other/${T}`, `file:///invite/${T}`, `claudebuddy://invite/<script>`,
   ];
   for (const s of bad) assert.equal(parseInvite(s, { normalizeHub: httpsOnly }), null, s);
+});
+
+test('invite links: plexiform:// and the legacy claudebuddy:// parse identically; any other scheme is ignored', () => {
+  const T = 'inv_AbC-123_xyz';
+  const shapes = [`://join?hub=https://buddy.example.com&t=${T}`, `://invite/${T}`, `://invite?t=${T}`, `://join?hub=https://127.0.0.1&t=${T}`, `://invite/${T}/more`, `://settings?t=${T}`, `://join?hub=https://buddy.example.com/evil&t=${T}`];
+  for (const rest of shapes) {
+    const a = parseInvite(`plexiform${rest}`, { normalizeHub: httpsOnly });
+    assert.deepEqual(a, parseInvite(`claudebuddy${rest}`, { normalizeHub: httpsOnly }), rest);
+    assert.deepEqual(parseInvite(`PLEXIFORM${rest}`, { normalizeHub: httpsOnly }), a, 'schemes are case-insensitive');
+  }
+  assert.deepEqual(parseInvite(`plexiform://join?hub=https://buddy.example.com&t=${T}`, { normalizeHub: httpsOnly }), { hub: 'https://buddy.example.com', token: T });
+  assert.deepEqual(parseInvite(`plexiform://invite/${T}`, { normalizeHub: httpsOnly }), { hub: null, token: T });
+  for (const other of ['plexi', 'buddy', 'claude', 'plexiformx', 'x-plexiform']) {
+    assert.equal(parseInvite(`${other}://invite/${T}`, { normalizeHub: httpsOnly }), null, other);
+    assert.equal(parseInvite(`${other}://join?hub=https://buddy.example.com&t=${T}`, { normalizeHub: httpsOnly }), null, other);
+  }
+});
+
+test('brand: one module holds the name, scheme and the Plexiform window’s copy', () => {
+  const BRAND = require('../buddy-window/brand');
+  assert.equal(BRAND.NAME, 'Plexiform');
+  assert.equal(BRAND.SCHEME, 'plexiform');
+  assert.deepEqual(BRAND.LEGACY_SCHEMES, ['claudebuddy']);
+  assert.deepEqual(BRAND.SCHEMES, ['plexiform', 'claudebuddy']);
+  assert.ok(Object.isFrozen(BRAND) && Object.isFrozen(BRAND.HUB_TEXT) && Object.isFrozen(BRAND.COPY));
+  for (const s of [BRAND.WINDOW_TITLE, BRAND.OPEN_MENU_LABEL, BRAND.COPY.signInHeading, BRAND.COPY.inviteHint, BRAND.COPY.startingBoard]) assert.match(s, /Plexiform/);
+  assert.ok(!JSON.stringify(BRAND).includes('Buddy'));
+  // No old name in what the window shows: its pages, and the strings main sends them.
+  const dir = path.join(__dirname, '..', 'buddy-window');
+  for (const f of ['sidebar.html', 'info.html', 'account.html', 'account.js', 'sidebar.js', 'info.js']) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    assert.ok(!/Claude Buddy|['"`>][^'"`<]*\bBuddy\b/.test(src), f);
+  }
+  assert.ok(!/blurb: [^\n]*\bBuddy\b/.test(fs.readFileSync(path.join(dir, 'pages.js'), 'utf8')));
 });
 
 test('invite links: malformed percent-encoding is null, never a thrown URIError', () => {
