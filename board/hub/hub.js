@@ -23,7 +23,8 @@ import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
-import { RateLimiter } from './ratelimit.js';
+import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
+import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
@@ -62,7 +63,16 @@ export class Hub extends EventEmitter {
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
     this.secret = config.secret ?? this.loadSecret();
     this.vaultKey = null;
-    this.limiter = new RateLimiter({ now: () => this.mono(), limits: config.rateLimits });
+    // Half of the daily mail cap stays for addresses that already have an account (M-C).
+    const mailCap = config.rateLimits?.mail_global?.capacity ?? config.mailDailyCap ?? DEFAULT_LIMITS.mail_global.capacity;
+    this.limiter = new RateLimiter({
+      now: () => this.mono(),
+      limits: {
+        mail_global: { capacity: mailCap, per_ms: 86_400_000 },
+        mail_global_new: { capacity: Math.max(1, Math.floor(mailCap / 2)), per_ms: 86_400_000 },
+        ...config.rateLimits,
+      },
+    });
     this.presence = new Presence(this);   // D37b, memory only
   }
 
@@ -105,6 +115,8 @@ export class Hub extends EventEmitter {
     this.epoch = epoch;
     if (restored) {
       applyRestoreBump(this.db.raw, epoch, this.iso());
+      // A restored DB may hold sessions revoked after the backup: all cookie sessions die (accounts, A13).
+      this.db.setMeta('session_epoch', Number(this.db.meta('session_epoch') ?? 1) + 1);
       this.journal({ board_id: null, actor_kind: 'system', kind: 'hub.restore_bump', payload: { bump: RESTORE_BUMP } });
       if (marker && existsSync(marker)) unlinkSync(marker);
       this.log.warn('restore bump applied', { hub_epoch: epoch });
@@ -202,9 +214,14 @@ export class Hub extends EventEmitter {
   boardSettings(boardId) { return json(this.board(boardId)?.settings, {}); }
   openAsks(cardId) { return this.db.all("SELECT * FROM asks WHERE card_id = ? AND state = 'open'", cardId); }
   openPermissions(cardId) { return this.db.all("SELECT * FROM permission_requests WHERE card_id = ? AND state = 'open' ORDER BY created_at", cardId); }
-  isAdmin(m) { return m && (m.role === 'owner' || m.role === 'admin'); }
-  canWrite(m) { return !!m && m.role !== 'viewer'; }
+  isAdmin(m) { return isAdmin(m); }
+  canWrite(m) { return canWrite(m); }
   cardSpentCents(cardId) { return this.db.get('SELECT COALESCE(SUM(cost_cents), 0) AS s FROM runs WHERE card_id = ?', cardId).s; }
+  // A deleted team's integrations stop with it: revoked, secrets erased (inside the deleting txn).
+  revokeDeletedTeamConnections(now) {
+    this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
+    this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+  }
 
   // ── journal (P-1): append-only, same transaction as the change ─────────────
   /** {board_id? (else from card_id), card_id?, run_id?, actor_kind, actor_id?, kind, payload} */
@@ -845,6 +862,16 @@ export class Hub extends EventEmitter {
   memberChanged(memberId) {
     this.recheckBrowsers(memberId);
     this.presence.changed();
+  }
+
+  // Accounts: a device token or cookie session was revoked (sign-out, device
+  // revoke, account deletion): its browser sockets hear why, then close 4401.
+  closeCredSockets(cred, reason = 'signed out') {
+    for (const b of [...this.browsers]) {
+      if (b.cred?.kind !== cred.kind || b.cred.id !== cred.id) continue;
+      b.send({ type: 'session.revoked' });
+      b.close(WS_CLOSE.UNAUTHENTICATED, reason);
+    }
   }
 
   // ── browser broadcasts ────────────────────────────────────────────────────

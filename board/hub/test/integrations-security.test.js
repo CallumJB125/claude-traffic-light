@@ -294,6 +294,8 @@ test('M3: when the member it acts as is removed or made a viewer, the provider g
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
+    // A second owner, so alice may be demoted or removed (members_keep_an_owner, D59).
+    h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", h.ids.bob);
     h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", h.ids.alice);
     const delivery = randomUUID();
     const r = await post(reg, conn, issue('ISS-GONE', 'Nobody to act as'), { delivery });

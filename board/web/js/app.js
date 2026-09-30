@@ -2,7 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { api, errorText, setOrg, currentOrg } from './api.js';
+import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
 import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
@@ -22,6 +22,7 @@ import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
+import { BRAND } from '../../shared/brand.js';
 
 const root = document.getElementById('root');
 const perf = () => performance.now();
@@ -343,7 +344,7 @@ function toasts() {
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -406,11 +407,12 @@ async function boot() {
     return;
   }
   state.auth = 'ok';
+  setCsrf(state.me.csrf_token);
   const wanted = new URLSearchParams(location.search).get('board');
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
-  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · Claude Buddy`;
+  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
   resetDashboard();
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });

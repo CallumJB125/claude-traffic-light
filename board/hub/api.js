@@ -297,6 +297,7 @@ export class Api {
       case 'request_changes': {
         const comment = str(body.comment, 10_000, 'comment', { required: true });
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
+        if (body.target_member_id != null) this.orgMember(member, body.target_member_id);
         const target = body.target_member_id ?? rel.run?.on_behalf_of ?? null;
         Object.assign(event, { request_id: body.request_id, target_member_id: target, comment });
         opts.pre = () => this.insertComment(member, cardId, { body: comment, for_agent: true });

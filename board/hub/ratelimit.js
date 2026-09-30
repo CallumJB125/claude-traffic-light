@@ -2,7 +2,7 @@
 // client IP for logins and mutations, and per connection for WS frames. They
 // run on the hub monotonic clock, so tests drive them with the fake clock.
 
-import { isIPv6 } from 'node:net'; // privacy-flow: hub-server
+import { isIP, isIPv6 } from 'node:net'; // privacy-flow: hub-server
 import { isLoopback } from './config.js';
 import { HubError } from './db.js';
 
@@ -15,6 +15,28 @@ export const DEFAULT_LIMITS = Object.freeze({
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
+  // BOARD_AUTH=accounts (ACCOUNTS-API.md "Rate limits"; design §9.1)
+  // Per address AND requesting network (/24, /64): a third party exhausting
+  // them can't silence the owner's own sign-in from elsewhere (M1).
+  auth_start_email: { capacity: 3, per_ms: 15 * 60_000 },     // over: silent (same answer, no mail)
+  auth_start_email_hour: { capacity: 10, per_ms: 3_600_000 }, // over: silent
+  auth_start_email_all: { capacity: 40, per_ms: 3_600_000 },  // per address, every network together; over: silent
+  auth_start_ip: { capacity: 20, per_ms: 3_600_000 },
+  auth_methods_ip: { capacity: 60, per_ms: 60_000 },          // GET /api/auth/methods (no auth)
+  auth_start_global: { capacity: 500, per_ms: 3_600_000 },
+  auth_verify_ip: { capacity: 10, per_ms: 10 * 60_000 },
+  auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // verify attempts per address AND network; the lockout is the failure budget
+  auth_lock_notice: { capacity: 1, per_ms: 86_400_000 },      // "someone is trying codes" mail, per address
+  mail_global: { capacity: 2000, per_ms: 86_400_000 },        // sign-in, invite and notice mails, whole hub (BOARD_MAIL_DAILY_CAP)
+  mail_global_new: { capacity: 1000, per_ms: 86_400_000 },    // … of which mail to addresses without an account (half the cap; M-C)
+  signup_ip: { capacity: 10, per_ms: 86_400_000 },            // new users per IP
+  team_create_user: { capacity: 3, per_ms: 86_400_000 },      // POST /api/teams (design §9.1)
+  invite_team: { capacity: 20, per_ms: 86_400_000 },          // invites sent (create + resend), per team
+  invite_user: { capacity: 50, per_ms: 86_400_000 },          // … per inviting user
+  invite_ip: { capacity: 50, per_ms: 3_600_000 },             // … per client IP
+  invite_preview_ip: { capacity: 30, per_ms: 10 * 60_000 },   // POST /api/invites/preview (no auth)
+  invite_accept_ip: { capacity: 30, per_ms: 10 * 60_000 },
+  invite_accept_user: { capacity: 30, per_ms: 10 * 60_000 },
   webhook_conn: { capacity: 600, per_ms: 60_000 },          // inbound webhooks, per connection
   integration_conn: { capacity: 120, per_ms: 60_000 },      // actAs calls, per connection (never mutate_member)
   integration_card_conn: { capacity: 20, per_ms: 3_600_000 }, // actAs().createCard, per connection
@@ -69,6 +91,76 @@ export class RateLimiter {
   }
 }
 
+/**
+ * Failed-attempt budget per key (H2): at most `budget` failures in any
+ * rolling `windowMs`. Each exhaustion also locks the key for lockBaseMs,
+ * doubling per exhaustion up to lockCapMs (the count of exhaustions decays
+ * two windows after the last lock ends, or on reset()). Counts failures, never attempts.
+ * Idle keys are swept at most once a minute; past `maxKeys` the least recently
+ * failed key goes first (memory stays bounded under a spray of addresses).
+ */
+export class FailureBudget {
+  constructor({ now, budget = 20, windowMs = 86_400_000, lockBaseMs = 3_600_000, lockCapMs = 86_400_000, maxKeys = 20_000, sweepMs = 60_000 }) {
+    Object.assign(this, { now, budget, windowMs, lockBaseMs, lockCapMs, maxKeys, sweepMs });
+    this.keys = new Map();   // key → {fails:[mono], k: exhaustions, until: lock end}; least recently failed first
+    this.sweptAt = -Infinity;
+  }
+
+  state(key) {
+    const now = this.now();
+    const e = this.keys.get(key);
+    if (!e) return null;
+    while (e.fails.length && e.fails[0] <= now - this.windowMs) e.fails.shift();
+    if (e.k && now - e.until > 2 * this.windowMs) e.k = 0;
+    if (!e.fails.length && !e.k && e.until <= now) { this.keys.delete(key); return null; }
+    return e;
+  }
+
+  /** ms until the key may fail again; 0 = open. */
+  lockedFor(key) {
+    const e = this.state(key);
+    if (!e) return 0;
+    const now = this.now();
+    const rolling = e.fails.length >= this.budget ? e.fails[e.fails.length - this.budget] + this.windowMs - now : 0;
+    return Math.max(0, rolling, e.until - now);
+  }
+
+  // The entry for key, made the most recent; sweeps and evicts first.
+  touch(key) {
+    const now = this.now();
+    if (now - this.sweptAt >= this.sweepMs) {
+      this.sweptAt = now;
+      for (const k of [...this.keys.keys()]) this.state(k);
+    }
+    const e = this.state(key) ?? { fails: [], k: 0, until: 0 };
+    this.keys.delete(key);
+    this.keys.set(key, e);
+    while (this.keys.size > this.maxKeys) this.keys.delete(this.keys.keys().next().value);
+    return e;
+  }
+
+  /** Record a failure → true when it exhausted the budget (a lockout began). */
+  fail(key) {
+    const now = this.now();
+    const e = this.touch(key);
+    e.fails.push(now);
+    if (e.fails.length < this.budget) return false;
+    e.k += 1;
+    e.until = now + Math.min(this.lockCapMs, this.lockBaseMs * 2 ** (e.k - 1));
+    return true;
+  }
+
+  /** Restore `n` failures recorded at monotonic time `at` (a restart must not unlock). */
+  seed(key, n, at) {
+    const e = this.touch(key);
+    for (let i = 0; i < n; i++) e.fails.push(at);
+    e.fails.sort((a, b) => a - b);
+    this.state(key);
+  }
+
+  reset(key) { this.keys.delete(key); }
+}
+
 /** Take one token or throw RATE_LIMITED with retry_after_s (HTTP routes and runner RPCs). */
 export function limitOrThrow(hub, rule, key) {
   const r = hub.limiter.take(rule, key);
@@ -78,12 +170,36 @@ export function limitOrThrow(hub, rule, key) {
   }
 }
 
+export function v6groups(a) {
+  const [head, tail = ''] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = a.includes('::') && tail ? tail.split(':') : [];
+  return [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+}
+
+const bare = (ip) => String(ip ?? '').replace(/^::ffff:/, '');
+
+/** Rate-limit key for a client address: IPv6 by its /64 (design §9.1), IPv4 whole. */
+export function ipKey(ip) {
+  const a = bare(ip);
+  return isIP(a) === 6 ? `${v6groups(a).slice(0, 4).join(':')}::/64` : a;
+}
+
+/** The requesting network: IPv4 /24, IPv6 /64 (per-address limits pair the address with this). */
+export function netKey(ip) {
+  const a = bare(ip);
+  if (isIP(a) === 4) return `${a.split('.').slice(0, 3).join('.')}.0/24`;
+  return ipKey(a);
+}
+
 // Behind Cloudflare Tunnel every request comes from cloudflared on loopback;
 // the edge's CF-Connecting-IP is the client. Only trusted with Access in front
-// and from a loopback peer (cloudflared), never from a direct connection.
+// (or BOARD_TRUST_CF_IP in accounts mode) and from a loopback peer
+// (cloudflared), never from a direct connection.
 export function clientIp(req, config) {
   const peer = String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
-  const cf = config.auth === 'access' && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
+  const trusted = config.auth === 'access' || (config.auth === 'accounts' && config.trustCfIp);
+  const cf = trusted && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
   return typeof cf === 'string' && cf ? cf : peer;
 }
 

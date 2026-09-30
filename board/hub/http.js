@@ -1,6 +1,8 @@
 // HTTP: static web/shared (CONTRACT §5.1), the JSON API (§5.2), member auth
-// (Access JWT, the loopback dev cookie or the local-mode cookie), CSRF guards (JSON content type,
-// same-origin), the (member, request_id) replay cache (D8) and WS upgrades.
+// (Access JWT, the loopback dev cookie, the local-mode cookie, or in accounts
+// mode a desktop device token / web cookie session), CSRF guards (JSON content
+// type, same-origin; plus Origin + X-CSRF-Token for accounts cookie sessions),
+// the (member, request_id) replay cache (D8) and WS upgrades.
 
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
@@ -8,17 +10,19 @@ import { extname, join, normalize, sep } from 'node:path';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, httpStatus, WS_CLOSE, WS_PATHS } from '../shared/protocol.js';
 import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
-import { isLoopback } from './config.js';
+import { isExposed, isLoopback } from './config.js';
 import { publicMember } from './api.js';
 import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
-import { clientIp, failBucketKey, limitOrThrow } from './ratelimit.js';
+import { clientIp, failBucketKey, ipKey, limitOrThrow } from './ratelimit.js';
 import { redact } from './log.js';
+import { appendCookie } from './identity/accounts.js';
+import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
-const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
+const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
 // Dev auth trusts a loopback peer. A request that passed through a proxy or
@@ -27,7 +31,25 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const PROXY_HEADERS = ['cf-connecting-ip', 'cf-ray', 'cf-access-jwt-assertion', 'x-forwarded-for', 'forwarded'];
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
-const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local';
+// Accounts mode without a public URL or tunnel is a loopback try-out (L-A): the same rule.
+const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
+// Accounts mode: pages served without auth (their JS talks to /api/auth/*;
+// tokens ride in the URL fragment, which never reaches the server).
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html' };
+
+// A cookie-session mutation or WS upgrade in accounts mode (design §4.6): the
+// Origin must be present and be this hub; Sec-Fetch-Site, when sent, same-origin.
+export function strictOrigin(req, publicUrl) {
+  const o = req.headers.origin;
+  if (!o) return false;
+  const site = req.headers['sec-fetch-site'];
+  if (site != null && site !== 'same-origin') return false;
+  try {
+    return publicUrl ? new URL(publicUrl).origin === o : new URL(o).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
 // Local auth (D35): every browser request carries the per-launch secret cookie.
 // (parseCookies throws on a malformed %-escape: that is just "no".)
 const localCookieOk = (hub, req) => {
@@ -99,12 +121,18 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
   const etags = new Map();
   const webhookReads = new Set(); // (connection|ip) pairs over their failure budget with a body read in flight
+  // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
+  const hsts = (() => { try { return new URL(config.publicUrl).protocol === 'https:'; } catch { return false; } })();
+
 
   const authMember = makeAuthMember({ hub, config });
   // The org a request's resource lives in: decides which member row answers
   // when one sign-in belongs to several orgs.
+  // undefined = the route names no resource; null = it names one that
+  // doesn't exist (or whose team was deleted).
   const resourceOrg = (r, params) => {
     const boardOrg = (boardId) => hub.board(boardId)?.org_id ?? null;
+    if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
     if (r.pattern.startsWith('/api/permission-requests/')) {
@@ -115,7 +143,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/integrations/:id')) return hub.db.get('SELECT org_id FROM connections WHERE id = ?', params.id)?.org_id ?? null;
-    return null;
+    return undefined;
   };
 
   const routes = [];
@@ -126,8 +154,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
-  route('POST', '/api/dev/login', ({ req, body, res }) => {
-    if (config.auth !== 'dev' || !isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
+  // Registered only in dev mode (design §9.5): elsewhere it is "no such route".
+  if (config.auth === 'dev') route('POST', '/api/dev/login', ({ req, body, res }) => {
+    if (!isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
     if (!hub.devLoginSecret || !safeEqual(req.headers['board-dev-secret'] ?? '', hub.devLoginSecret)) throw new HubError('FORBIDDEN', 'dev login needs the Board-Dev-Secret printed when the hub started');
     if (String(body.github_login ?? '').startsWith(LOCAL_ONLY)) throw new HubError('NOT_FOUND', 'no such member');
     const m = hub.db.get('SELECT * FROM members WHERE github_login = ? ORDER BY created_at LIMIT 1', String(body.github_login ?? ''));
@@ -135,7 +164,49 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     res.setHeader('set-cookie', `board_dev=${encodeURIComponent(devCookieValue(hub.secret, m.id))}; HttpOnly; SameSite=Strict; Path=/`);
     return { member: publicMember(m) };
   }, { auth: 'none' });
-  route('GET', '/api/me', ({ member }) => api.me(member));
+  if (config.auth === 'accounts') {
+    const acc = hub.accounts;
+    route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
+    route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
+    route('POST', '/api/auth/email/verify', ({ body, ip, ident, req, res }) => acc.verify(body, { ip, ident, req, res }), { auth: 'optional' });
+    route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
+    route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
+    route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
+    route('GET', '/api/account/devices', ({ ident }) => acc.listDevices(ident), { auth: 'user' });
+    route('DELETE', '/api/account/devices/:id', ({ ident, params, ip }) => acc.revokeDevice(ident, params.id, { ip }), { auth: 'user' });
+    // The older web asks /api/me: the account plus, once the user is in a
+    // team, the legacy {member, org, boards} of the chosen one.
+    route('GET', '/api/me', ({ ident, req, query }) => {
+      const out = acc.account(ident);
+      const cands = userMembers(hub, ident.user.id);
+      const requestedOrg = requestedTeam(req, query);
+      if (!cands.length && !requestedOrg) return { ...out, member: null, org: null, boards: [] };
+      return { ...out, ...api.me(pickAccountMember(hub, cands, { requestedOrg })) };
+    }, { auth: 'user' });
+    // Teams and members (P2, D59–D62). The team comes from the URL; the
+    // caller's membership in it is resolved before the handler runs.
+    const teams = hub.teams;
+    route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
+    route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
+    route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
+    route('DELETE', '/api/teams/:team_id', ({ member, body, ip }) => teams.remove(member, body, { ip }));
+    route('POST', '/api/teams/:team_id/boards', ({ member, body, ip }) => teams.createBoard(member, body, { ip }));
+    route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
+    route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
+    route('DELETE', '/api/teams/:team_id/members/:member_id', ({ member, params, ip }) => teams.removeMember(member, params.member_id, { ip }));
+    // Invites (P3, D64–D65). preview is public (rate limited); accept needs a
+    // signed-in user whose verified email is the invite's.
+    const inv = hub.invites;
+    route('GET', '/api/teams/:team_id/invites', ({ member }) => inv.list(member));
+    route('POST', '/api/teams/:team_id/invites', ({ member, body, ip, req }) => inv.create(member, body, { ip, req }));
+    route('DELETE', '/api/teams/:team_id/invites/:invite_id', ({ member, params, ip }) => inv.revoke(member, params.invite_id, { ip }));
+    route('POST', '/api/teams/:team_id/invites/:invite_id/resend', ({ member, params, ip, req }) => inv.resend(member, params.invite_id, { ip, req }));
+    route('POST', '/api/invites/preview', ({ body, ip }) => inv.preview(body, { ip }), { auth: 'none' });
+    route('POST', '/api/invites/accept', ({ ident, body, ip }) => inv.accept(ident, body, { ip }), { auth: 'user' });
+    route('POST', '/api/account/invites/:invite_id/accept', ({ ident, params, ip }) => inv.accept(ident, { invite_id: params.invite_id }, { ip }), { auth: 'user' });
+  } else {
+    route('GET', '/api/me', ({ member }) => api.me(member));
+  }
   route('GET', '/api/boards/:board_id', ({ member, params }) => api.snapshot(member, params.board_id));
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
@@ -162,8 +233,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('DELETE', '/api/devices/:id', ({ member, params }) => api.revokeDevice(member, params.id));
   route('GET', '/api/repos', ({ member }) => api.listRepos(member));
   route('POST', '/api/repos', ({ member, body }) => api.createRepo(member, body));
-  route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
-  route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
+  // Accounts mode adds people by invite and removes them per team (P2/P3).
+  if (config.auth !== 'accounts') {
+    route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
+    route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
+  }
 
   // ── integrations (I1, D41; buddy-builder-5) ──────────────────────────────
   // Team-level: members see what's connected and its health; admins connect,
@@ -237,7 +311,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     const headers = {
       'content-type': TYPES[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-cache', etag: entry.etag,
-      'content-security-policy': CSP, 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
+      'content-security-policy': CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
     };
     if (req.headers['if-none-match'] === entry.etag) { res.writeHead(304, headers); res.end(); return undefined; }
     res.writeHead(200, headers);
@@ -247,6 +321,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
 
   function staticPath(pathname) {
     if (pathname === '/') return join(config.webDir, 'index.html');
+    if (config.auth === 'accounts' && Object.hasOwn(ACCOUNT_PAGES, pathname)) return join(config.webDir, ACCOUNT_PAGES[pathname]);
     const shared = /^\/shared\/([a-z]+)\.js$/.exec(pathname);
     if (shared) return SHARED_BROWSER.has(shared[1]) ? join(config.sharedDir, `${shared[1]}.js`) : null;
     if (pathname.startsWith('/web/')) {
@@ -258,8 +333,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return null;
   }
 
-  return async function handle(req, res) {
+  // The route table, for the tenancy suite's coverage assertion (D63).
+  handle.routes = routes.map(({ method, pattern, auth }) => ({ method, pattern, auth }));
+  return handle;
+
+  async function handle(req, res) {
     const url = new URL(req.url, 'http://hub');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('content-security-policy', "frame-ancestors 'none'");
+    if (hsts) res.setHeader('strict-transport-security', 'max-age=31536000');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     // These two paths bypass Cloudflare Access (providers can't sign in):
@@ -323,6 +405,14 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
+        // The invite page's "Download" button (accounts): the configured app download.
+        if (config.auth === 'accounts' && url.pathname === '/download') {
+          const to = config.downloadUrl ?? BRAND.downloadUrlDefault;
+          if (!to) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'no download is configured (BOARD_DOWNLOAD_URL)' } });
+          res.writeHead(302, { location: to, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION) });
+          res.end();
+          return undefined;
+        }
         const p = staticPath(url.pathname);
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);
@@ -336,43 +426,61 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       if (!match) throw new HubError('NOT_FOUND', 'no such route');
       const { r, params } = match;
       const ip = clientIp(req, config);
-      if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ip);
+      if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ipKey(ip));
       if (r.mutating) {
         if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
       }
       const body = r.mutating ? await readBody(req) : {};
-      const member = r.auth === 'member'
-        ? await authMember(req, { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null })
-        : null;
-      const rid = member && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      const pick = { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null };
+      if (config.auth === 'accounts') pick.requestedOrg = requestedTeam(req, url.searchParams);
+      let ident = null;
+      let member = null;
+      if (config.auth === 'accounts') {
+        if (r.auth !== 'none') {
+          try { ident = hub.accounts.authenticate(req, { ip }); } catch (e) { if (r.auth !== 'optional') throw e; }
+          if (!ident && r.auth !== 'optional') throw new HubError('UNAUTHENTICATED', 'not signed in');
+        }
+        if (ident?.setCookie) appendCookie(res, ident.setCookie);
+        // Bearer (desktop) requests carry no ambient credential: no CSRF token.
+        // On an optional-auth route a cookie that fails CSRF is just ignored.
+        if (ident?.cred.kind === 'session' && r.mutating && (!strictOrigin(req, config.publicUrl) || !hub.accounts.csrfOk(ident, req.headers['x-csrf-token']))) {
+          if (r.auth !== 'optional') throw new HubError('FORBIDDEN', 'cross-site request or missing X-CSRF-Token');
+          ident = null;
+        }
+        if (r.auth === 'member') member = pickAccountMember(hub, userMembers(hub, ident.user.id), pick);
+      } else if (r.auth === 'member') {
+        member = await authMember(req, pick);
+      }
+      const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
+      const rid = actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       if (rid) {
-        const hit = hub.cachedResponse(member.id, rid);
+        const hit = hub.cachedResponse(actor, rid);
         if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
       }
-      if (member && r.mutating) {
-        limitOrThrow(hub, 'mutate_member', member.id);
-        if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', member.id);
+      if (actor && r.mutating) {
+        limitOrThrow(hub, 'mutate_member', actor);
+        if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', actor);
       }
       if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
       let status = 200;
       let out;
       try {
-        out = await r.handler({ req, res, member, params, body, query: url.searchParams });
+        out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
       } catch (e) {
         if (!(e instanceof HubError)) throw e;
         status = httpStatus(e.code);
         out = errorBody(e);
       }
       if (out === undefined) return undefined;
-      if (rid) hub.cacheResponse(member.id, rid, status, out);
-      return sendJson(res, status, out);
+      if (rid) hub.cacheResponse(actor, rid, status, out);
+      return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
       hub.log.error('http handler failed', { path: url.pathname, err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
     }
-  };
+  }
 }
 
 function normalizeAddr(a) {
@@ -390,6 +498,16 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
     if (loopbackOnly(config) && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
     // Runners keep device-token auth; every other upgrade needs the local cookie.
     if (config.auth === 'local' && pathname !== WS_PATHS.runner && !localCookieOk(hub, req)) return refuse(socket, 401, 'Unauthorized');
+    if (pathname === WS_PATHS.browser && config.auth === 'accounts') {
+      // Accounts: no credential → plain HTTP 401 on the upgrade, no socket.
+      let auth;
+      try { auth = await authenticate(req); } catch { return refuse(socket, 401, 'Unauthorized'); }
+      const originOk = auth.cred.kind === 'session' ? strictOrigin(req, config.publicUrl) : sameOrigin(req, config.publicUrl);
+      if (!originOk) return refuse(socket, 403, 'Forbidden');
+      return wss.handleUpgrade(req, socket, head, (ws) => {
+        new BrowserConn(hub, ws, { candidates: auth.candidates, user: auth.user, cred: auth.cred });
+      });
+    }
     if (pathname === WS_PATHS.browser) {
       if (!sameOrigin(req, config.publicUrl)) return refuse(socket, 403, 'Forbidden');
       let auth = null;
@@ -424,6 +542,12 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
  */
 export function makeAuthenticate({ hub, config }) {
   return async (req) => {
+    if (config.auth === 'accounts') {
+      // No rotation here: an upgrade response can't carry the new cookie.
+      const ident = hub.accounts.authenticate(req, { ip: clientIp(req, config), rotate: false });
+      if (!ident) throw new HubError('UNAUTHENTICATED', 'not signed in');
+      return { candidates: userMembers(hub, ident.user.id), exp_ms: null, user: ident.user, cred: ident.cred };
+    }
     if (config.auth === 'local') {
       const m = localCookieOk(hub, req) && hub.activeMember(hub.localMemberId);
       if (!m) throw new HubError('UNAUTHENTICATED', 'not signed in');
@@ -465,6 +589,35 @@ export function pickMember(hub, candidates, { resourceOrg = null, requestedOrg =
     orgs: candidates.map((m) => ({ id: m.org_id, name: hub.db.get('SELECT name FROM orgs WHERE id = ?', m.org_id)?.name ?? null, member_id: m.id })),
   });
 }
+
+/**
+ * Accounts mode (D61): the membership that acts is the one in the team that
+ * owns the resource in the URL. A route that names a resource the user's
+ * teams don't own, an unknown one, or one whose team was deleted → 404 (never
+ * 403: no existence oracle). An `X-Board-Team` / `Board-Org` header or
+ * `?team=` / `?org=` only picks among the user's own teams, and must agree
+ * with the resource when there is one. No resource and several teams → CONFLICT.
+ */
+export function pickAccountMember(hub, candidates, { resourceOrg = undefined, requestedOrg = null } = {}) {
+  const inOrg = (org) => candidates.find((m) => m.org_id === org) ?? null;
+  const notFound = () => new HubError('NOT_FOUND', 'not found');
+  if (resourceOrg !== undefined) {
+    if (!resourceOrg || (requestedOrg && requestedOrg !== resourceOrg)) throw notFound();
+    return inOrg(resourceOrg) ?? (() => { throw notFound(); })();
+  }
+  if (requestedOrg) return inOrg(requestedOrg) ?? (() => { throw notFound(); })();
+  if (!candidates.length) throw new HubError('NOT_FOUND', 'not in a team yet');
+  if (candidates.length === 1) return candidates[0];
+  throw new HubError('CONFLICT', 'you are in several teams: choose one with the X-Board-Team header or ?team=<team_id>', {
+    orgs: candidates.map((m) => ({ id: m.org_id, name: hub.db.get('SELECT name FROM orgs WHERE id = ?', m.org_id)?.name ?? null, member_id: m.id })),
+  });
+}
+
+const requestedTeam = (req, query) => req.headers['x-board-team'] || req.headers['board-org'] || query.get('team') || query.get('org') || null;
+
+// Live memberships of a user, in teams that aren't deleted.
+export const userMembers = (hub, userId) => hub.db.all(`SELECT m.* FROM members m JOIN orgs o ON o.id = m.org_id
+  WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY m.created_at`, userId);
 
 export function makeAuthMember({ hub, config }) {
   const authenticate = makeAuthenticate({ hub, config });

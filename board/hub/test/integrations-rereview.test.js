@@ -145,6 +145,8 @@ test('HIGH-2: the member is re-checked on every call of the handle', async () =>
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
+    // A second owner, so alice may be removed or demoted (members_keep_an_owner, D59).
+    h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", h.ids.bob);
     const ctx = reg.ctxFor(conn.id);
     await assert.rejects(ctx.act('card.create', {}, async (s) => {
       const me = s.actAs(h.ids.alice);
