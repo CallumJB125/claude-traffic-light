@@ -34,9 +34,16 @@
     // lamp change: a glow blooms off the newly lit lamp
     bloom: { ms: 420, scale: 1.9, opacity: 0.55 },
     // idle loops are sampled at this rate instead of every display frame;
-    // stepped loops wake only when their frame actually changes
-    ambient: { fps: 6, minMs: 1000 },
+    // stepped loops wake only when their frame actually changes; fastFps is
+    // the finer grid for the few quick loops in AMBIENT_FAST
+    ambient: { fps: 6, minMs: 1000, fastFps: 12 },
   };
+
+  // Quick all-day loops too fast for the ambient grid — the fire's flicker, a
+  // tail's wag — sampled on MOTION.ambient.fastFps, which lands on every slow
+  // frame so both cost one wake-up. Any other quick loop (legs, a knock, a
+  // hop) is motion someone is watching and keeps the display clock.
+  const AMBIENT_FAST = ['rig-flame', 'rig-wag'];
 
   // Apple-style parameters: `response` is roughly how long (s) the spring
   // takes to get there, `dampingRatio` 1 = no overshoot, < 1 = a little bounce.
@@ -187,8 +194,10 @@
   //   { stepped: true, points } — changes only at these iteration fractions,
   //     so it is woken exactly then;
   //   { stepped: false } — smooth, sampled at the ambient fps;
+  //   { stepped: false, fast: true } — smooth but quicker than minMs, and
+  //     allowed the fast grid (`fast`: its name is in AMBIENT_FAST);
   //   null — too short to sample (left to the display clock).
-  function ambientPlan(keyframes, durationMs, direction, minMs) {
+  function ambientPlan(keyframes, durationMs, direction, minMs, fast = false) {
     if (!(durationMs > 0) || !Array.isArray(keyframes) || keyframes.length < 2) return null;
     const segs = keyframes.slice(0, -1);
     const steps = segs.map((k) => /^steps\((\d+)|^step-(start|end)/.exec(String(k.easing || '')));
@@ -204,7 +213,8 @@
       const list = [...points].map((p) => Math.min(1, Math.max(0, p))).sort((x, y) => x - y);
       return { stepped: true, points: [...new Set(list)] };
     }
-    return durationMs >= minMs ? { stepped: false } : null;
+    if (durationMs >= minMs) return { stepped: false };
+    return fast ? { stepped: false, fast: true } : null;
   }
 
   // Local time (ms since the animation's start) when a stepped loop next
@@ -220,6 +230,6 @@
 
   return {
     MOTION, springParams, springStep, springSettled, hopHeight, project, releaseVelocity, glideTarget,
-    springEasing, softLimit, swayTarget, bounceAxis, reboundTarget, eyeOffset, nextBlinkDelay, ambientPlan, nextStepTime,
+    springEasing, softLimit, swayTarget, bounceAxis, reboundTarget, eyeOffset, nextBlinkDelay, ambientPlan, AMBIENT_FAST, nextStepTime,
   };
 }));
