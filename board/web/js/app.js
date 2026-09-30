@@ -11,6 +11,7 @@ import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
 import { paletteResults } from './palette.js';
+import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
@@ -42,6 +43,8 @@ const state = {
   busy: new Set(),
   toasts: [],
   theme: 'system',
+  bg: 'none', // board background (themes.js), per browser
+  themeMenu: false,
   showAllDone: false,
   repos: null,
   view: 'board',
@@ -62,18 +65,32 @@ let socket = null;
 // ── theme ────────────────────────────────────────────────────────────────────
 
 function loadTheme() {
-  try { state.theme = localStorage.getItem('board-theme') ?? 'system'; } catch { state.theme = 'system'; }
+  try { state.theme = normalizeTheme(localStorage.getItem('board-theme')); } catch { state.theme = 'system'; }
+  try { state.bg = normalizeBg(localStorage.getItem('board-bg')); } catch { state.bg = 'none'; }
   applyTheme();
 }
 function applyTheme() {
-  if (state.theme === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = state.theme;
+  const d = document.documentElement.dataset;
+  if (state.theme === 'system') delete d.theme; else d.theme = state.theme;
+  if (state.bg === 'none') delete d.boardBg; else d.boardBg = state.bg;
 }
 function setTheme(t) {
-  state.theme = ['dark', 'light'].includes(t) ? t : 'system';
+  state.theme = normalizeTheme(t);
   try { localStorage.setItem('board-theme', state.theme); } catch { /* private mode */ }
   applyTheme();
   update();
+}
+function setBg(b) {
+  state.bg = normalizeBg(b);
+  try { localStorage.setItem('board-bg', state.bg); } catch { /* private mode */ }
+  applyTheme();
+  update();
+}
+function closeThemeMenu({ refocus = false } = {}) {
+  if (!state.themeMenu) return;
+  state.themeMenu = false;
+  renderNow();
+  if (refocus) root.querySelector('[data-action="theme-menu"]')?.focus();
 }
 
 // ── views ───────────────────────────────────────────────────────────────────
@@ -223,6 +240,8 @@ function buildModel() {
     dialog: state.dialog,
     busy: state.busy,
     theme: state.theme,
+    bg: state.bg,
+    themeMenu: state.themeMenu,
     showAllDone: state.showAllDone,
     selection: state.selection,
     kbd: state.kbd,
@@ -955,6 +974,7 @@ function setSelection(next) {
 // ── DOM events ───────────────────────────────────────────────────────────────
 
 function onClick(e) {
+  if (state.themeMenu && !e.target.closest?.('.menu-wrap')) closeThemeMenu();
   const dlg = e.target.closest?.('dialog[data-dialog]');
   if (dlg && e.target === dlg) {
     // Backdrop click closes (the dialog element itself only receives clicks outside its content box).
@@ -1013,6 +1033,12 @@ function onClick(e) {
     }
     case 'quick-add-decline': state.quickAdd = { ...state.quickAdd, confirm: null }; update(); root.querySelector('.quickadd-input')?.focus(); return;
     case 'theme': setTheme(el.dataset.next); return;
+    case 'board-bg': setBg(el.dataset.bg); return;
+    case 'theme-menu':
+      state.themeMenu = !state.themeMenu;
+      renderNow();
+      if (state.themeMenu) root.querySelector('.theme-menu [aria-checked="true"]')?.focus();
+      return;
     case 'reconnect': socket?.reconnectNow(); return;
     case 'clear-selection': setSelection(new Set()); return;
     case 'filter-chip': setFilters({ ...state.filters, chips: toggleIn(state.filters.chips, el.dataset.chip) }); return;
@@ -1123,10 +1149,22 @@ function onFocusout(e) {
   update();
 }
 
+function themeMenuKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeThemeMenu({ refocus: true }); return true; }
+  const items = [...root.querySelectorAll('.theme-menu [role="menuitemradio"]')];
+  const i = items.indexOf(e.target.closest('[role="menuitemradio"]'));
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (step == null && e.key !== 'Home' && e.key !== 'End') return false;
+  e.preventDefault();
+  items[e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (i + step + items.length) % items.length]?.focus();
+  return true;
+}
+
 function onKeydown(e) {
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); togglePalette(); return; }
   if (e.target.dataset?.input === 'palette-q') { paletteKeydown(e); return; }
   if (kbdKeydown(e)) return;
+  if (e.target.closest?.('.theme-menu') && themeMenuKey(e)) return;
   if (e.target.dataset?.input === 'quickadd') {
     if (e.key === 'Escape') { e.preventDefault(); closeQuickAdd(); }
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); commitTitles(parseTitles(e.target.value), e.shiftKey); }

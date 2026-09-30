@@ -7,6 +7,7 @@ import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
 import { selectionBar } from './dnd.js';
 import { filterBar } from './render-filters.js';
+import { THEMES, BACKGROUNDS } from './themes.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -244,7 +245,30 @@ export function connectionBanner(conn) {
 
 export const THEME_NEXT = { system: 'dark', dark: 'light', light: 'system' };
 const THEME_ICON = { system: 'auto', dark: 'moon', light: 'sun' };
-const THEME_LABEL = { system: 'Theme: match system', dark: 'Theme: dark', light: 'Theme: light' };
+
+// One button opens a small menu: colour scheme, then the board background.
+// Roving focus (arrows), Esc and an outside click close it; see app.js.
+export function themeMenu(model) {
+  const open = !!model.themeMenu;
+  return h('div', { class: 'menu-wrap' },
+    h('button', {
+      type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'theme-menu', 'aria-haspopup': 'menu', 'aria-expanded': open ? 'true' : 'false',
+      'aria-controls': 'theme-menu', 'aria-label': 'Appearance', title: 'Appearance',
+    }, icon(THEME_ICON[model.theme] ?? 'auto')),
+    open ? h('div', { id: 'theme-menu', class: 'menu theme-menu', role: 'menu', 'aria-label': 'Appearance' },
+      h('p', { class: 'menu-title', id: 'menu-scheme' }, 'Theme'),
+      h('div', { role: 'group', 'aria-labelledby': 'menu-scheme' },
+        THEMES.map((t) => h('button', {
+          key: t.id, type: 'button', class: 'menu-item', role: 'menuitemradio', 'aria-checked': model.theme === t.id ? 'true' : 'false',
+          'data-action': 'theme', 'data-next': t.id,
+        }, icon(t.icon, 'icon-xs'), h('span', null, t.label), model.theme === t.id ? icon('check', 'icon-xs menu-check') : null))),
+      h('p', { class: 'menu-title', id: 'menu-bg' }, 'Board background'),
+      h('div', { role: 'group', 'aria-labelledby': 'menu-bg', class: 'bg-grid' },
+        BACKGROUNDS.map((b) => h('button', {
+          key: b.id, type: 'button', class: 'bg-opt', role: 'menuitemradio', 'aria-checked': (model.bg ?? 'none') === b.id ? 'true' : 'false',
+          'data-action': 'board-bg', 'data-bg': b.id, title: b.label,
+        }, h('span', { class: 'bg-swatch', 'data-bg': b.id, 'aria-hidden': 'true' }), h('span', { class: 'bg-name' }, b.label))))) : null);
+}
 
 export function topBar(model, lamps) {
   // /api/me is publicMember ({display_name, github_login}); snapshot members
@@ -263,7 +287,7 @@ export function topBar(model, lamps) {
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
-      h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'theme', 'data-next': THEME_NEXT[model.theme], 'aria-label': `${THEME_LABEL[model.theme]}. Switch to ${THEME_NEXT[model.theme]}.`, title: THEME_LABEL[model.theme] }, icon(THEME_ICON[model.theme])),
+      themeMenu(model),
       h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),
       model.readOnly ? null : h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-action': 'new-card', 'aria-keyshortcuts': 'n' }, icon('plus', 'icon-lead'), 'New card'),
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
