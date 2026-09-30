@@ -21,18 +21,33 @@ const STALE_LOCK_MS = 2000;
 const LOCK_WAIT_MS = 3000;
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 
+// Windows: antivirus, the search indexer and a reader that has the file open
+// make rename, unlink and create fail for a moment with EPERM, EACCES or
+// EBUSY. There that is contention, not failure: a few short retries, and a
+// lock that can't be created counts as held. macOS and Linux have no such
+// window, and keep failing at once.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function retryTransient(fn, { platform = process.platform, tries = 5, sleep = (ms) => Atomics.wait(sleeper, 0, 0, ms) } = {}) {
+  for (let i = 0; ; i += 1) {
+    try { return fn(); } catch (e) {
+      if (platform !== 'win32' || !TRANSIENT.has(e.code) || i >= tries - 1) throw e;
+      sleep(10 + i * 5);
+    }
+  }
+}
+
 // Each holder writes its own token into the lock, so it only ever releases a
 // lock that is still its own.
 function newToken() {
   return `${process.pid}-${Math.random().toString(36).slice(2)}`;
 }
 
-function tryLock(lock, token) {
+function tryLock(lock, token, platform = process.platform) {
   try {
     fs.writeFileSync(lock, token, { flag: 'wx' });
     return true;
   } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
+    if (e.code !== 'EEXIST' && !(platform === 'win32' && TRANSIENT.has(e.code))) throw e;
   }
   breakIfStale(lock, token);
   return false;
@@ -57,7 +72,7 @@ function breakIfStale(lock, token) {
 
 function release(lock, token) {
   try {
-    if (fs.readFileSync(lock, 'utf8') === token) fs.rmSync(lock, { force: true });
+    if (fs.readFileSync(lock, 'utf8') === token) retryTransient(() => fs.rmSync(lock, { force: true }));
   } catch { /* already gone */ }
 }
 
@@ -101,7 +116,7 @@ function writeJsonAtomic(file, obj) {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-    fs.renameSync(tmp, file);
+    retryTransient(() => fs.renameSync(tmp, file));
   } catch (e) {
     fs.rmSync(tmp, { force: true });
     throw e;
@@ -185,4 +200,4 @@ function processGone(session, host) {
   }
 }
 
-module.exports = { safeSessionId, sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
+module.exports = { retryTransient, tryLock, safeSessionId, sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
