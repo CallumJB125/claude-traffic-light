@@ -69,7 +69,9 @@
       "board/web/**/*",
       "!board/**/test/**",
       "!board/web/mock/**",
-      "!board/web/scripts/**"
+      "!board/web/scripts/**",
+      "!board/hub/data/**",
+      "!board/**/*.db*"
     ],
     "extraResources": [
       {

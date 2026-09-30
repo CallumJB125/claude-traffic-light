@@ -9,12 +9,15 @@
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const { BaseWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme } = require('electron');
 const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, pageForHubUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
+const LOCAL_PAGES = new Set(['sidebar.html', 'info.html'].map((f) => pathToFileURL(path.join(DIR, f)).href));
+const isLocalPage = (url) => { try { const u = new URL(url); u.search = ''; u.hash = ''; return LOCAL_PAGES.has(u.href); } catch { return false; } };
 
 function devLogin(url, secret, login = 'alice') {
   // Node http, not the view: we need the Set-Cookie header to copy it into the
@@ -34,6 +37,24 @@ function devLogin(url, secret, login = 'alice') {
   });
 }
 
+// Once per partition: the board needs no OS permissions, devices or downloads.
+const hardened = new Set();
+function hardenSession(ses) {
+  if (hardened.has(ses)) return;
+  hardened.add(ses);
+  ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  ses.setPermissionCheckHandler(() => false);
+  ses.setDevicePermissionHandler(() => false);
+  ses.on('will-download', (e) => e.preventDefault());
+}
+
+function dispose(view, win) {
+  if (!view) return;
+  try { win?.contentView.removeChildView(view); } catch { /* not attached */ }
+  // A detached WebContentsView keeps its page (and its sockets) alive until closed.
+  try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { /* already gone */ }
+}
+
 function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeamHub = () => null, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged } = {}) {
   let win = null;
   let sidebar = null;
@@ -42,10 +63,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
   let infoView = null;
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
-  let hubInfo = null; // {url, origin, accessTeam, partition}
+  let hubInfo = null; // {url, origin, accessTeam, partition, team}
+  let viewError = null; // the hub is fine but its page failed to load
+  let hubLoading = null;
 
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
+  const localUrl = () => (hubInfo && !hubInfo.team ? hubInfo.url : null);
   const supervisor = createHubSupervisor({
     fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts),
     hubEntry: path.join(app.getAppPath(), 'board', 'hub', 'server.js'),
@@ -53,10 +77,31 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     mode,
     isPackaged: !isDev,
     log: (...a) => log('[hub]', ...a),
-    onStatus: (s) => { hubStatus = s; pushState(); if (s.state !== 'ready' && isHubPage(selected)) showInfo(pageById(selected)); },
+    onStatus,
   });
 
   const isHubPage = (id) => pageById(id)?.kind === 'hub';
+
+  function onStatus(s) {
+    hubStatus = s;
+    // A restarted hub has a new port and a new secret: the old page, its
+    // socket and its cookie are all dead. Forget them and load afresh.
+    if (hubInfo && !hubInfo.team && (s.state !== 'ready' || s.url !== hubInfo.url)) forgetHub();
+    pushState();
+    if (!win || !isHubPage(selected)) return;
+    // During a first load showHubPage is already awaiting this start.
+    if (s.state === 'ready') { if (!hubLoading) showHubPage(pageById(selected)); } else showInfo(pageById(selected));
+  }
+
+  function forgetHub() {
+    const old = localUrl();
+    hubInfo = null;
+    viewError = null;
+    if (hubView) { if (content === hubView) content = null; dispose(hubView, win); hubView = null; }
+    if (old) session.fromPartition(partitionFor()).cookies.remove(old, 'board_local').catch(() => {});
+  }
+
+  const partitionFor = () => (mode === 'dev' ? 'persist:board-dev' : 'persist:board-local');
 
   function layout() {
     if (!win) return;
@@ -66,7 +111,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
   }
 
   function attach(view) {
-    if (content === view) return;
+    if (!win || content === view) return;
     if (content) win.contentView.removeChildView(content);
     content = view;
     if (view) win.contentView.addChildView(view);
@@ -75,35 +120,39 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
 
   function pushState() {
     if (!sidebar || sidebar.webContents.isDestroyed()) return;
+    const team = !!(hubInfo?.team ?? getTeamHub());
     sidebar.webContents.send('buddy:state', {
       selected,
-      hub: { state: hubStatus.state, error: hubStatus.error ?? null, mode: hubInfo ? (hubInfo.team ? 'team' : mode) : (getTeamHub() ? 'team' : mode) },
+      hub: { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode: team ? 'team' : mode },
     });
   }
 
   // ── info page (soon / loading / error) ──────────────────────────────────
 
-  function showInfo(page, extra = {}) {
+  function showInfo(page) {
+    if (!win || !page) return;
     if (!infoView) {
       infoView = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'info-preload.js') } });
       lockLocal(infoView);
     }
     const hub = isHubPage(page.id);
+    const failed = viewError || hubStatus.state === 'failed';
     const query = {
       title: page.title,
-      kind: hub ? (hubStatus.state === 'failed' ? 'error' : 'loading') : page.kind,
-      blurb: hub ? (hubStatus.state === 'failed' ? (hubStatus.error ?? 'The board could not start.') : 'Starting the board…') : (page.blurb ?? ''),
-      ...extra,
+      kind: hub ? (failed ? 'error' : 'loading') : page.kind,
+      blurb: hub ? (failed ? (viewError ?? hubStatus.error ?? 'The board could not start.') : 'Starting the board…') : (page.blurb ?? ''),
     };
-    infoView.webContents.loadFile(path.join(DIR, 'info.html'), { query });
+    infoView.webContents.loadFile(path.join(DIR, 'info.html'), { query }).catch(() => {});
     attach(infoView);
   }
 
-  // Local pages load app files only; nothing navigates them anywhere else.
+  // Local pages load our two files only; nothing navigates them anywhere else.
   function lockLocal(view) {
     const wc = view.webContents;
     wc.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-    wc.on('will-navigate', (e, url) => { if (!url.startsWith('file://')) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } });
+    const guard = (e, url) => { if (!isLocalPage(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } };
+    wc.on('will-navigate', guard);
+    wc.on('will-redirect', guard);
   }
 
   // ── hub view ────────────────────────────────────────────────────────────
@@ -115,8 +164,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
       return { url: team.url, origin, accessTeam: team.accessTeam ?? null, partition: `persist:board-${new URL(team.url).host}`, team: true };
     }
     const info = await supervisor.ensure();
-    const partition = mode === 'dev' ? 'persist:board-dev' : 'persist:board-local';
+    const partition = partitionFor();
     const ses = session.fromPartition(partition);
+    // Set before the first load: in local mode the hub gates everything,
+    // /api/health and static files included, on this cookie.
     if (info.localSecret) {
       await ses.cookies.set({ url: info.url, name: 'board_local', value: info.localSecret, httpOnly: true, sameSite: 'strict', path: '/' });
     } else if (info.devSecret) {
@@ -127,11 +178,9 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
   }
 
   function makeHubView(h) {
-    const ses = session.fromPartition(h.partition);
-    // The board needs no camera, mic, geolocation or notifications from the OS.
-    ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+    hardenSession(session.fromPartition(h.partition));
     const view = new WebContentsView({
-      webPreferences: { partition: h.partition, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: true },
+      webPreferences: { partition: h.partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
@@ -145,38 +194,51 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
+    wc.on('will-frame-navigate', (e) => { if (!e.isMainFrame && decide(e.url) !== 'allow') e.preventDefault(); });
+    wc.on('will-attach-webview', (e) => e.preventDefault());
     // The web's own view switcher changes ?view= in place; keep the sidebar in step.
-    wc.on('did-navigate-in-page', (_e, url) => { if (isHubPage(selected)) { selected = pageForHubUrl(url); pushState(); } });
+    wc.on('did-navigate-in-page', (_e, url, isMain) => { if (isMain && isHubPage(selected) && view === hubView) { selected = pageForHubUrl(url); pushState(); } });
     wc.on('did-fail-load', (_e, code, desc, url, isMain) => {
-      if (!isMain || code === -3) return; // -3: aborted by our own navigation
-      log('hub page failed to load', { code, desc, url });
-      hubStatus = { state: 'failed', error: `Could not load the board (${desc}).` };
-      showInfo(pageById(selected));
+      if (!isMain || code === -3 || view !== hubView) return; // -3: aborted by our own navigation
+      log('hub page failed to load', { code, desc });
+      // The page failed, not necessarily the hub: a retry reloads the page.
+      viewError = `Could not load the board (${desc}).`;
+      if (isHubPage(selected)) showInfo(pageById(selected));
       pushState();
     });
-    wc.on('render-process-gone', (_e, d) => { log('hub page crashed', d.reason); hubView = null; if (isHubPage(selected)) select(selected); });
+    wc.on('render-process-gone', (_e, d) => {
+      if (view !== hubView) return;
+      log('hub page crashed', d.reason);
+      if (content === hubView) content = null;
+      dispose(hubView, win);
+      hubView = null;
+      if (win && isHubPage(selected)) select(selected);
+    });
     return view;
   }
 
-  let hubLoading = null;
   async function showHubPage(page) {
+    if (!win || !page) return;
     if (!hubInfo) {
-      if (!hubLoading) hubLoading = resolveHub().finally(() => { hubLoading = null; });
       if (hubStatus.state !== 'ready') showInfo(page);
-      try { hubInfo = await hubLoading; } catch (e) {
+      if (!hubLoading) hubLoading = resolveHub().finally(() => { hubLoading = null; });
+      try {
+        const h = await hubLoading;
+        if (!hubInfo) hubInfo = h;
+      } catch (e) {
         log('board unavailable', e.message);
-        hubStatus = { state: 'failed', error: e.message };
-        if (selected === page.id) showInfo(page);
+        if (win && selected === page.id) showInfo(page);
         pushState();
         return;
       }
     }
-    if (selected !== page.id) return;
+    if (!win || selected !== page.id || !hubInfo) return;
     if (!hubView) hubView = makeHubView(hubInfo);
+    const view = hubView;
     const url = hubPageUrl(hubInfo.url, page);
-    const cur = hubView.webContents.getURL();
-    if (!cur || pageForHubUrl(cur) !== page.id || !cur.startsWith(hubInfo.origin)) await hubView.webContents.loadURL(url).catch(() => {});
-    if (selected === page.id) attach(hubView);
+    const cur = view.webContents.getURL();
+    if (!cur || !cur.startsWith(hubInfo.origin) || pageForHubUrl(cur) !== page.id) await view.webContents.loadURL(url).catch(() => {});
+    if (win && selected === page.id && view === hubView && !viewError) attach(view);
   }
 
   // ── selection ───────────────────────────────────────────────────────────
@@ -191,23 +253,32 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     else showInfo(page);
   }
 
+  const fromSidebar = (e) => sidebar && e.sender === sidebar.webContents && isLocalPage(e.senderFrame?.url ?? '');
+  const fromInfo = (e) => infoView && e.sender === infoView.webContents && isLocalPage(e.senderFrame?.url ?? '');
+
   function onSelect(e, id) {
-    if (!sidebar || e.sender !== sidebar.webContents) return;
+    if (!fromSidebar(e)) return;
     if (typeof id !== 'string' || !pageById(id)) return;
     select(id);
   }
 
   function onRetry(e) {
-    if (!sidebar || (e.sender !== sidebar.webContents && e.sender !== infoView?.webContents)) return;
-    hubInfo = null;
-    hubView = null;
+    if (!fromSidebar(e) && !fromInfo(e)) return;
+    if (viewError) {
+      // Page-level failure: reload the page; the hub is left alone.
+      viewError = null;
+      if (hubView) { if (content === hubView) content = null; dispose(hubView, win); hubView = null; }
+      select(isHubPage(selected) ? selected : 'board');
+      return;
+    }
+    if (hubStatus.state !== 'failed') return;
+    forgetHub();
     supervisor.retry().catch(() => {});
-    select(isHubPage(selected) ? selected : 'board');
   }
 
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
-  ipcMain.handle('buddy:pages', (e) => (sidebar && e.sender === sidebar.webContents ? { pages: PAGES, groups: GROUPS } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS } : null));
 
   function open(pageId = null) {
     if (win) {
@@ -228,14 +299,16 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     sidebar = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'sidebar-preload.js') } });
     lockLocal(sidebar);
     win.contentView.addChildView(sidebar);
-    sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html'));
+    sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html')).catch(() => {});
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
     win.on('resize', layout);
     win.on('closed', () => {
+      // Close every page: detached views otherwise keep running (and the board
+      // page keeps its socket). The hub keeps running while the app runs, so
+      // reopening is instant; it stops with the app.
+      for (const v of [sidebar, infoView, hubView]) dispose(v, null);
       win = null; sidebar = null; content = null; hubView = null; infoView = null;
       onClosed();
-      // The hub keeps running while the app runs: reopening is instant and the
-      // runner (later) talks to it. It stops with the app (stop()).
     });
     layout();
     select(pageId ?? selected);
@@ -245,15 +318,19 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     open,
     isOpen: () => !!win,
     select,
-    stop: () => supervisor.stop(),
-    status: () => ({ selected, hub: hubStatus }),
-    // Dev/test hooks: capture what's on screen.
+    async stop() {
+      const url = localUrl();
+      await supervisor.stop({ final: true });
+      // The secret dies with this hub; don't leave it in the cookie store.
+      if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {});
+    },
+    status: () => ({ selected, hub: hubStatus, viewError }),
+    // Dev hook: capture what's on screen.
     async capture() {
       if (!win) return null;
       const [side, main] = await Promise.all([sidebar.webContents.capturePage(), content?.webContents.capturePage()]);
       return { sidebar: side, content: main ?? null };
     },
-    get webContents() { return { sidebar: sidebar?.webContents ?? null, content: content?.webContents ?? null }; },
   };
 }
 

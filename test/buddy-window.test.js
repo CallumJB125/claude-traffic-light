@@ -68,7 +68,7 @@ test('dev auth is refused in a packaged build', () => {
 // ── supervisor ─────────────────────────────────────────────────────────────
 
 class FakeChild extends EventEmitter {
-  constructor() { super(); this.pid = 0; this.killed = 0; }
+  constructor() { super(); this.pid = 0; this.killed = 0; this.stderr = new (require('node:stream').PassThrough)(); }
   kill() { this.killed += 1; setImmediate(() => this.emit('exit', 0)); return true; }
 }
 
@@ -192,4 +192,57 @@ test('stop() sends SIGTERM (kill) and resolves on exit; no restart after stop', 
   assert.equal(sup.status().state, 'stopped');
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(children.length, 1);
+});
+
+test('retry() while a hub is running stops it first: never two hubs on one DB', async () => {
+  const { sup, children } = harness();
+  const p = sup.ensure();
+  await new Promise((r) => setImmediate(r));
+  children[0].emit('message', { type: 'board.listening', port: 5, local_secret: SECRET });
+  await p;
+  const q = sup.retry();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(children[0].killed, 1);
+  assert.equal(children.length, 2);
+  children[1].emit('message', { type: 'board.listening', port: 6, local_secret: SECRET });
+  const info = await q;
+  assert.equal(info.port, 6);
+  assert.equal(sup.status().state, 'ready');
+  // The old child's late exit must not disturb the new one.
+  assert.equal(sup.status().url, 'http://127.0.0.1:6');
+});
+
+test('a failed start kills only its own child', async () => {
+  const { sup, children } = harness({ readyTimeoutMs: 30 });
+  const first = sup.ensure();
+  await assert.rejects(first, /did not report/);
+  assert.equal(children[0].killed, 1);
+  const p = sup.retry();
+  await new Promise((r) => setImmediate(r));
+  children[1].emit('message', { type: 'board.listening', port: 7, local_secret: SECRET });
+  await p;
+  assert.equal(children[1].killed, 0);
+});
+
+test('stop() during a dev start (before the fork) forks nothing; final stop blocks later starts', async () => {
+  let release;
+  const { sup, children } = harness({ mode: 'dev', pickPort: () => new Promise((r) => { release = r; }) });
+  const p = sup.ensure();
+  await new Promise((r) => setImmediate(r));
+  await sup.stop({ final: true });
+  release(4444);
+  await assert.rejects(p, /stopped/);
+  assert.equal(children.length, 0);
+  await assert.rejects(sup.ensure(), /quitting/);
+  assert.equal(sup.status().state, 'stopped');
+});
+
+test('dev mode never logs the dev login secret from the hub stderr', async () => {
+  const lines = [];
+  const { sup, children } = harness({ mode: 'dev', pickPort: async () => 4555, log: (...a) => lines.push(a.join(' ')), fetchImpl: async () => ({ ok: true, json: async () => ({}) }) });
+  await sup.ensure();
+  children[0].stderr.write('Sign in at:\n  http://127.0.0.1:4555/#dev_secret=SuperSecretValue123\n');
+  await new Promise((r) => setImmediate(r));
+  assert.ok(lines.some((l) => l.includes('dev_secret=<redacted>')), lines.join('|'));
+  assert.ok(!lines.some((l) => l.includes('SuperSecretValue123')));
 });

@@ -2790,7 +2790,7 @@ app.whenReady().then(() => {
     const at = process.argv.indexOf('--buddy');
     const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
     openBuddy(page);
-    const shotAt = process.argv.indexOf('--buddy-shot');
+    const shotAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-shot');
     if (shotAt > 0 && process.argv[shotAt + 1]) {
       setTimeout(async () => {
         const shots = await buddyWin.capture();
