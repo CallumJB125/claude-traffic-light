@@ -7,8 +7,8 @@
 (function () {
   const I = window.UsageInsights;
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'unpriced'];
-  const FAMILY_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable', unpriced: 'Unpriced' };
+  const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'unpriced', 'legacy'];
+  const FAMILY_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable', unpriced: 'Unpriced', legacy: 'Estimated (cost only)' };
   const TOKEN_KINDS = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']];
   const RANGES = [['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days'], ['1y', 'Year'], ['all', 'All']];
   const W = 640;
@@ -60,18 +60,13 @@
       tip.style.top = `${evt.clientY - r.top + container.scrollTop + 14}px`;
     };
     const hideTip = () => { tip.hidden = true; };
+    // the keyboard's way to the same values: focusing a column shows its tooltip
+    const showTipAtEl = (node, lines) => { const r = node.getBoundingClientRect(); showTip({ clientX: r.left + r.width / 2, clientY: r.top + 16 }, lines); };
 
+    // one call: the main process reads its cached record once for everything
     async function fetchAll() {
-      const t = now();
-      const first = (await api.usageHistory({ from: 0, to: t, groupBy: 'none' })).extent;
-      const p = I.period(state.range, t, first && first.from);
-      const q = (from, to, groupBy) => api.usageHistory({ from: I.dayAt(from), to: I.dayAt(to), groupBy, project: state.project || undefined });
-      const cmp = state.compare && p.prev;
-      const [dayFamily, dayModel, hours, projects, projectDays, prevFamily, prevProjects] = await Promise.all([
-        q(p.from, p.to, 'day-family'), q(p.from, p.to, 'day-model'), q(p.from, p.to, 'weekday-hour'), q(p.from, p.to, 'project'), q(p.from, p.to, 'project-day'),
-        cmp ? q(p.prev.from, p.prev.to, 'day-family') : null, cmp ? q(p.prev.from, p.prev.to, 'project') : null,
-      ]);
-      return { p, first, dayFamily, dayModel, hours, projects, projectDays, prevFamily, prevProjects, mode: dayFamily.mode, progress: dayFamily.progress };
+      const b = await api.usageBundle({ range: state.range, project: state.project || undefined, compare: state.compare, now: now() });
+      return { ...b, first: b.extent };
     }
 
     // ── chart frame ──────────────────────────────────────────────────────
@@ -103,6 +98,7 @@
     // stacked bars: rows = buckets, each with parts [{key, value}], overlay columns for the tooltip
     function stackedBars({ buckets, keys, valueOf, classOf, nameOf, fmt, percent, label, markers = [], tipOf }) {
       const H = 170;
+      const long = buckets.length > 60;
       const svg = svgOf(H, label);
       const totals = buckets.map((b) => keys.reduce((a, k) => a + valueOf(b, k), 0));
       const max = percent ? 1 : niceMax(Math.max(0, ...totals));
@@ -124,13 +120,15 @@
           // 2px surface gap between stacked fills; the last one rounds its end
           svg.append(el('path', { class: `uv-fill ${classOf(k)}`, d: top ? topRound(x, y, bw, h, 4) : `M${x} ${y}h${bw}v${h}h${-bw}Z` }));
         });
-        const hit = el('rect', { class: 'uv-hit', x: PAD.l + i * step, y: PAD.t, width: step, height: span, tabindex: -1 });
+        const hit = el('rect', { class: 'uv-hit', x: PAD.l + i * step, y: PAD.t, width: step, height: span, tabindex: 0, 'aria-label': tipOf(b, totals[i]).join(', ') });
         hit.addEventListener('mousemove', (e) => showTip(e, tipOf(b, totals[i])));
+        hit.addEventListener('focus', () => showTipAtEl(hit, tipOf(b, totals[i])));
+        hit.addEventListener('blur', hideTip);
         hit.addEventListener('mouseleave', hideTip);
         svg.append(hit);
       });
       [0, Math.floor((buckets.length - 1) / 2), buckets.length - 1].filter((v, i, a) => a.indexOf(v) === i && buckets[v]).forEach((i) => {
-        svg.append(el('text', { class: 'uv-tick', x: PAD.l + i * step + step / 2, y: H - 6, 'text-anchor': i === 0 ? 'start' : i === buckets.length - 1 ? 'end' : 'middle', text: buckets[i].label.slice(5, 10) }));
+        svg.append(el('text', { class: 'uv-tick', x: PAD.l + i * step + step / 2, y: H - 6, 'text-anchor': i === 0 ? 'start' : i === buckets.length - 1 ? 'end' : 'middle', text: long ? buckets[i].label.slice(0, 10) : buckets[i].label.slice(5, 10) }));
       });
       for (const m of markers) {
         const i = buckets.findIndex((b) => b.days.some((d) => d.day === m.day));
@@ -166,8 +164,10 @@
       const last = vals.map((v, i) => [v, i]).filter(([v]) => v != null).pop();
       if (last) svg.append(el('circle', { class: `uv-dot ${cls}`, cx: at(last[0], last[1])[0], cy: at(last[0], last[1])[1], r: 4 }));
       buckets.forEach((b, i) => {
-        const hit = el('rect', { class: 'uv-hit', x: PAD.l + i * step, y: PAD.t, width: step, height: H - PAD.t - PAD.b });
+        const hit = el('rect', { class: 'uv-hit', x: PAD.l + i * step, y: PAD.t, width: step, height: H - PAD.t - PAD.b, tabindex: 0, 'aria-label': tipOf(b, vals[i]).join(', ') });
         hit.addEventListener('mousemove', (e) => showTip(e, tipOf(b, vals[i])));
+        hit.addEventListener('focus', () => showTipAtEl(hit, tipOf(b, vals[i])));
+        hit.addEventListener('blur', hideTip);
         hit.addEventListener('mouseleave', hideTip);
         svg.append(hit);
       });
@@ -248,23 +248,27 @@
       const fmtTile = { cost: money, turns: num, tokens: short, cache: (v) => (v == null ? '—' : pctText(v)) };
       kids.push(el('div', { class: 'uv-tiles' }, ...tiles.map((tl) => {
         const c = tl.change;
-        const good = tl.id === 'cache' ? c && c.abs > 0 : null;
-        const delta = !c ? null : c.points ? `${c.abs >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(c.abs * 100))} pts` : c.pct == null ? null : `${c.abs >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(c.pct * 100))}%`;
+        const rounded = !c ? 0 : c.points ? Math.round(c.abs * 100) : c.pct == null ? 0 : Math.round(c.pct * 100);
+        const good = tl.id === 'cache' && c && rounded !== 0 ? c.abs > 0 : null;
+        const arrow = c && c.abs >= 0 ? '▲' : '▼';
+        const delta = !c || (!c.points && c.pct == null) ? null : rounded === 0 ? 'no change' : `${arrow} ${Math.abs(rounded)}${c.points ? ' pts' : '%'}`;
         return el('div', { class: 'uv-tile' }, el('div', { class: 'uv-k', text: tl.id === 'cost' ? unit : tl.label }), el('div', { class: 'uv-v', text: fmtTile[tl.id](tl.value) }),
           el('div', { class: `uv-d${good === true ? ' up' : good === false ? ' down' : ''}`, text: delta ? `${delta} vs previous` : tl.id === 'cache' ? '' : p.prev && state.compare ? 'no change data' : '' }), spark(tileSeries[tl.id]));
       })));
 
       // 1 spend over time, by model family, with version-change markers
       const famKeys = FAMILIES.filter((f) => f !== 'unpriced' && series.some((s) => s.families[f] && s.families[f].cost > 0));
-      const markers = versionMarkers(d.dayModel.rows);
-      kids.push(card(`${unit} over time`, 'Daily, stacked by model family. A ▲ marks the first day a new model version appeared.',
-        stackedBars({ buckets, keys: famKeys, valueOf: (b, k) => sumOf(b, (s) => (s.families[k] ? s.families[k].cost : 0)), classOf: (k) => `uv-s${FAMILIES.indexOf(k) + 1}`, fmt: money, label: `${unit} per day by model family`, markers,
+      const famClass = (k) => (k === 'legacy' || k === 'unpriced' ? 'uv-none' : `uv-s${FAMILIES.indexOf(k) + 1}`);
+      const weekly = buckets.length && buckets[0].days.length > 1;
+      const markers = versionMarkers(d.firstSeen, p.from, p.to);
+      kids.push(card(`${unit} over time`, `${weekly ? 'Weekly totals' : 'Daily'}, stacked by model family. A ▲ marks the first day a new model version appeared.`,
+        stackedBars({ buckets, keys: famKeys, valueOf: (b, k) => sumOf(b, (s) => (s.families[k] ? s.families[k].cost : 0)), classOf: famClass, fmt: money, label: `${unit} per ${weekly ? 'week' : 'day'} by model family`, markers,
           tipOf: (b, tot) => [b.label.length > 10 ? b.label : I.dayLabel(b.label), `${unit}: ${money(tot)}`, ...famKeys.filter((k) => sumOf(b, (s) => (s.families[k] ? s.families[k].cost : 0)) > 0).map((k) => `${FAMILY_NAMES[k]}: ${money(sumOf(b, (s) => (s.families[k] ? s.families[k].cost : 0)))}`)] }),
-        legendOf(famKeys.map((k) => [FAMILY_NAMES[k], `uv-s${FAMILIES.indexOf(k) + 1}`])),
+        legendOf(famKeys.map((k) => [FAMILY_NAMES[k], famClass(k)])),
         [['Day', ...famKeys.map((k) => FAMILY_NAMES[k]), 'Total'], ...buckets.map((b) => [b.label, ...famKeys.map((k) => money(sumOf(b, (s) => (s.families[k] ? s.families[k].cost : 0)))), money(sumOf(b, (s) => s.cost))])]));
 
       // 2 model share over time (100% of turns)
-      const shareKeys = FAMILIES.filter((f) => series.some((s) => s.families[f] && s.families[f].turns > 0));
+      const shareKeys = FAMILIES.filter((f) => f !== 'legacy' && series.some((s) => s.families[f] && s.families[f].turns > 0));
       kids.push(card('Model share over time', 'Share of turns on each model. Watch whether Opus creeps up.',
         stackedBars({ buckets, keys: shareKeys, percent: true, valueOf: (b, k) => sumOf(b, (s) => (s.families[k] ? s.families[k].turns : 0)), classOf: (k) => (k === 'unpriced' ? 'uv-none' : `uv-s${FAMILIES.indexOf(k) + 1}`), label: 'Share of turns by model family',
           tipOf: (b, tot) => [b.label.length > 10 ? b.label : I.dayLabel(b.label), ...shareKeys.filter((k) => sumOf(b, (s) => (s.families[k] ? s.families[k].turns : 0)) > 0).map((k) => `${FAMILY_NAMES[k]}: ${pctText(sumOf(b, (s) => (s.families[k] ? s.families[k].turns : 0)) / (tot || 1))}`)] }),
@@ -284,7 +288,7 @@
       // 4 activity calendar
       const calSeries = series.slice(-371);
       const cal = I.calendar(calSeries, state.metric);
-      const weekdays = ['Mon', '', 'Wed', '', 'Fri', '', 'Sun'];
+      const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const calRows = weekdays.map((label, wd) => ({ label, cells: cal.weeks.map((w) => w[wd] || null) }));
       kids.push(card('Activity calendar', 'One square per day.',
         heat(calRows, cal.weeks.length, (c) => c.step, (c) => [I.dayLabel(c.day), `${unit}: ${money(c.cost)}`, `Turns: ${num(c.turns)}`], 'Activity by day'),
@@ -306,7 +310,7 @@
       const projects = d.projects.rows.filter((r) => r.cost > 0 || r.turns > 0).slice(0, 10);
       const pmax = Math.max(1e-9, ...projects.map((r) => r.cost));
       const pdays = new Map();
-      for (const r of d.projectDays.rows) { const [proj, day] = r.key.split('|'); (pdays.get(proj) || pdays.set(proj, new Map()).get(proj)).set(day, r); }
+      for (const r of d.projectDays.rows) { const at = r.key.lastIndexOf('|'); const proj = r.key.slice(0, at); const day = r.key.slice(at + 1); (pdays.get(proj) || pdays.set(proj, new Map()).get(proj)).set(day, r); }
       kids.push(card('Projects', 'Ranked by cost for this range. Click one to filter every chart to it.',
         el('ol', { class: 'uv-projects' }, ...projects.map((r) => {
           const days = pdays.get(r.key) || new Map();
@@ -332,13 +336,12 @@
 
     const familyTotals = (rows) => { const m = new Map(); for (const r of rows) { const f = r.key.split('|')[1]; m.set(f, (m.get(f) || 0) + r.turns); } return [...m].map(([key, turns]) => ({ key, turns })); };
     // the first day each exact model id appears, when its family had another id before
-    function versionMarkers(rows) {
-      const first = new Map();
-      for (const r of rows) { const [day, model] = r.key.split('|'); if (!first.has(model) || day < first.get(model)) first.set(model, day); }
+    function versionMarkers(firstSeen, from, to) {
       const byFamily = new Map();
-      for (const [model, day] of first) { const fam = /opus|sonnet|haiku|fable/.exec(model); const k = fam ? fam[0] : model; (byFamily.get(k) || byFamily.set(k, []).get(k)).push({ model, day }); }
+      for (const [model, day] of Object.entries(firstSeen || {})) { const fam = /opus|sonnet|haiku|fable/.exec(model); const k = fam ? fam[0] : model; (byFamily.get(k) || byFamily.set(k, []).get(k)).push({ model, day }); }
       const out = [];
-      for (const list of byFamily.values()) { list.sort((a, b) => (a.day < b.day ? -1 : 1)); list.slice(1).forEach((m) => out.push({ day: m.day, text: `${m.model.replace(/^claude-/, '')} first used` })); }
+      // ids after a family's first, whose first day falls in this window
+      for (const list of byFamily.values()) { list.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.model < b.model ? -1 : 1)); list.slice(1).filter((m) => m.day >= from && m.day <= to).forEach((m) => out.push({ day: m.day, text: `${m.model.replace(/^claude-/, '')} first used` })); }
       return out;
     }
     function download(kind) {

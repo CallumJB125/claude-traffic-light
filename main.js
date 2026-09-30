@@ -153,6 +153,8 @@ const DEFAULT_CONFIG = {
   gitRepos: [],
   gitDeployWorkflows: [],
   spend: { ...Spend.DEFAULTS },
+  // the widget tooltip's "Today $X · Y% above your usual" line
+  paceTooltip: true,
   // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
   busyHold: true,
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
@@ -588,7 +590,8 @@ function computeState(opts = {}) {
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend), paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.ready && spend.pace.aboveBy >= 20 ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  const sNote = spendNote(config.rules, fired, sessions, spend);
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -2228,13 +2231,15 @@ ipcMain.handle('model-mix', async () => ({ ...Usage.modelMix(await getUsageTurns
 
 // The Usage tab and buddy_usage_history read the permanent record from disk.
 // Asking also nudges a fresh fold in, so an open tab stays current.
-ipcMain.handle('usage-history', (_e, q = {}) => {
+// One call gives the tab everything it draws (usage-history.js bundle), read
+// from the cached store; `now` is only honoured in the visual tests.
+ipcMain.handle('usage-bundle', (_e, q = {}) => {
   if (Date.now() - historyAt > HISTORY_LIVE_MS && spendTurns.turns) historyTick();
-  const store = UsageHistory.open({ root: ROOT_DIR });
-  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
-  const now = Date.now();
-  const out = UsageHistory.query(store, { from: num(q.from, now - 30 * 86400000), to: num(q.to, now), groupBy: q.groupBy || 'day', project: q.project || null });
-  return { ...out, extent: UsageHistory.extent(store), progress: historyState.progress, mode: Spend.normalize(loadConfig().spend).mode };
+  const range = ['7d', '30d', '90d', '1y', 'all'].includes(q.range) ? q.range : '30d';
+  const now = DEMO === 'visual' && Number.isFinite(Number(q.now)) ? Number(q.now) : Date.now();
+  const project = typeof q.project === 'string' && q.project.length < 1024 ? q.project : null;
+  const out = UsageHistory.bundle(openHistory(), { range, now, project, compare: q.compare !== false });
+  return { ...out, progress: historyState.progress, mode: Spend.normalize(loadConfig().spend).mode };
 });
 
 // Hook activity is what moves spend, so each burst of it gets a fresh read
@@ -2292,6 +2297,10 @@ const HISTORY_EVERY_MS = 60 * 60 * 1000;
 const HISTORY_LIVE_MS = 5000;
 let historyAt = 0;
 let historyState = { first: false, progress: null, lastDone: null };
+// One store, opened once: the month files are parsed the first time they are
+// asked for and kept until the worker records something new.
+let historyStore = null;
+const openHistory = () => historyStore || (historyStore = UsageHistory.open({ root: ROOT_DIR }));
 function historyTick() {
   historyAt = Date.now();
   if (spendWorker) { spendWorker.postMessage({ type: 'history.tick', root: PROJECTS_DIR, dataDir: ROOT_DIR, statsFile: STATS_FILE }); return; }
@@ -2301,6 +2310,7 @@ function historyTick() {
     const store = UsageHistory.open({ root: ROOT_DIR });
     UsageHistory.record(store, spendTurns.turns);
     UsageHistory.flush(store);
+    historyStore = null;
     applyHistoryToStats();
   } catch (err) { console.warn('[history] inline tick failed:', err.message); }
 }
@@ -2308,14 +2318,15 @@ function onHistoryMessage(m) {
   if (m.type === 'history.progress') { historyState.progress = { done: m.done, of: m.of }; return; }
   if (m.type === 'history.error') { console.warn('[history] tick failed:', m.error); return; }
   historyState = { ...historyState, progress: null, lastDone: Date.now() };
+  historyStore = null;
+  paceBase = { key: null, value: null };
   if (m.first || m.added) console.log(`[history] ${m.first ? 'backfill' : 'recorded'}: ${m.added} turns${m.imported ? `, ${m.imported} legacy days` : ''}`);
   applyHistoryToStats();
 }
 // The Stats page's per-day cost is the record's, so the two can't disagree.
 function applyHistoryToStats() {
   try {
-    const store = UsageHistory.open({ root: ROOT_DIR });
-    const q = UsageHistory.query(store, { from: Date.now() - 60 * 86400000, to: Date.now(), groupBy: 'day' });
+    const q = UsageHistory.query(openHistory(), { from: Date.now() - 60 * 86400000, to: Date.now(), groupBy: 'day' });
     for (const r of q.rows) if (r.turns || r.legacyCost) Stats.recordCost(stats, r.key, r.cost);
     statsDirty = true;
   } catch (err) { console.warn('[history] stats sync failed:', err.message); }
@@ -2355,6 +2366,9 @@ function spendSnapshot(config) {
 // Today against your own usual (usage-history.js pace): recomputed per turns
 // version and minute. Needs a week of recorded history before it says anything.
 let paceMemo = { key: null, value: null };
+// The baseline is what you had spent by this time on earlier days: it only
+// changes when the hour turns or the record does, not with every turn.
+let paceBase = { key: null, value: null };
 function paceFor(turns, version) {
   const now = Date.now();
   const key = `${version}|${Math.floor(now / 60000)}|${historyState.lastDone || 0}`;
@@ -2364,9 +2378,11 @@ function paceFor(turns, version) {
     const from = new Date(now); from.setHours(0, 0, 0, 0);
     let today = 0;
     for (const t of turns) if (t.ts >= from.getTime() && t.ts <= now) today += Usage.costOf(t) || 0;
-    const p = UsageHistory.pace(UsageHistory.open({ root: ROOT_DIR }), today, { now });
+    const bkey = `${from.getTime()}|${new Date(now).getHours()}|${Math.floor(new Date(now).getMinutes() / 10)}|${historyState.lastDone || 0}`;
+    if (paceBase.key !== bkey) paceBase = { key: bkey, value: UsageHistory.paceBaseline(openHistory(), { now }) };
+    const p = UsageHistory.paceOf(paceBase.value, today);
     const money = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
-    value = { ...p, firing: UsageHistory.paceFiring(p), text: p.ready ? `Today ${money(p.today)} · ${p.aboveBy >= 0 ? `${p.aboveBy}% above` : `${-p.aboveBy}% below`} your usual for now (${money(p.avg)})` : '' };
+    value = { ...p, firing: UsageHistory.paceFiring(p), noteworthy: UsageHistory.paceNoteworthy(p), text: p.ready ? `Today ${money(p.today)} · ${p.aboveBy >= 0 ? `${p.aboveBy}% above` : `${-p.aboveBy}% below`} your usual for now (${money(p.avg)})` : '' };
   } catch (err) { console.warn('[history] pace failed:', err.message); }
   paceMemo = { key, value };
   return value;

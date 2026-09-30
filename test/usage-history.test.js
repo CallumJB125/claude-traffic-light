@@ -359,3 +359,70 @@ test('history: day×family and project×day groupings, and routine tokens priced
   assert.equal(d24.routineTurns, 0);
   assert.equal(d24.routineCost, 0);
 });
+
+test('history: a cost-only day is a legacy family row in day-family, so the charts add up to the total', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ ts: at('2026-09-22T10:00:00') })]);
+  History.importLegacy(store, { '2026-09-10': { cost: 12.5 } });
+  const q = History.query(store, { from: '2026-09-01', to: '2026-09-30', groupBy: 'day-family' });
+  assert.deepEqual(q.rows.map((r) => r.key), ['2026-09-10|legacy', '2026-09-22|opus']);
+  assert.equal(Math.round(q.rows.reduce((a, r) => a + r.cost, 0) * 1e4) / 1e4, q.total.cost);
+});
+
+test('history: a project path with a pipe in it survives the project×day key', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ cwd: '/work/a|b', ts: at('2026-09-22T10:00:00') })]);
+  const pd = History.query(store, { from: '2026-09-22', to: '2026-09-22', groupBy: 'project-day' });
+  const k = pd.rows[0].key;
+  assert.equal(k.slice(0, k.lastIndexOf('|')), '/work/a|b');
+  assert.equal(k.slice(k.lastIndexOf('|') + 1), '2026-09-22');
+});
+
+test('history: a routine turn that grows past routine takes back every routine token field', () => {
+  const store = History.open({ root: tmp() });
+  const t = turn({ ts: at('2026-09-22T10:00:00'), model: 'claude-opus-5-5', input: 100, output: 100, cacheRead: 500, cacheWrite: 50, cacheWrite1h: 20 });
+  History.record(store, [t]);
+  let b = store.months.get('2026-09').rec.days['2026-09-22'].sources.claude['claude-opus-5-5']['/work/alpha'];
+  assert.deepEqual([b.rInput, b.rOutput, b.rCacheRead, b.rCacheWrite, b.rCacheWrite1h, b.routineTurns], [100, 100, 500, 50, 20, 1]);
+  History.record(store, [{ ...t, output: 9000 }]);
+  b = store.months.get('2026-09').rec.days['2026-09-22'].sources.claude['claude-opus-5-5']['/work/alpha'];
+  assert.deepEqual([b.rInput, b.rOutput, b.rCacheRead, b.rCacheWrite, b.rCacheWrite1h, b.routineTurns], [0, 0, 0, 0, 0, 0]);
+  assert.equal(b.output, 9000);
+});
+
+test('history: firstSeen gives each model id its first day anywhere in the record', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ ts: at('2026-08-20T10:00:00'), model: 'claude-opus-5' }), turn({ ts: at('2026-07-02T10:00:00'), model: 'claude-opus-5' }), turn({ ts: at('2026-09-03T10:00:00'), model: 'claude-opus-5-5' })]);
+  assert.deepEqual(History.firstSeen(store), { 'claude-opus-5': '2026-07-02', 'claude-opus-5-5': '2026-09-03' });
+});
+
+test('history: the bundle is one read for everything the tab draws, current and previous period', () => {
+  const store = withDays(40, { perDay: 4 });
+  const b = History.bundle(store, { range: '7d', now: NOW });
+  assert.deepEqual([b.p.from, b.p.to], ['2026-09-24', '2026-09-30']);
+  assert.ok(b.dayFamily.rows.length && b.projects.rows.length && b.hours.rows.length && b.projectDays.rows.length);
+  assert.ok(b.prevFamily.rows.length, 'the week before is there for the tiles');
+  assert.equal(b.extent.to, '2026-09-29');
+  assert.ok(b.firstSeen['claude-opus-5-5']);
+  const noCmp = History.bundle(store, { range: '7d', now: NOW, compare: false });
+  assert.equal(noCmp.prevFamily, null);
+  assert.equal(History.bundle(store, { range: 'all', now: NOW }).prevFamily, null, '"all" has nothing before it');
+  const empty = History.bundle(History.open({ root: tmp() }), { range: '30d', now: NOW });
+  assert.equal(empty.extent, null);
+  assert.equal(empty.dayFamily.total.turns, 0);
+});
+
+test('pace: the baseline is reusable across turns, and the current hour counts only as far as it has passed', () => {
+  const store = withDays(10);
+  const half = at('2026-09-30T10:30:00');
+  // every earlier day put all $25 at 10:00: at 10:30 half of that hour had passed
+  const base = History.paceBaseline(store, { now: half });
+  assert.equal(base.days, 10);
+  assert.equal(Math.round(base.avg * 100) / 100, 12.5);
+  assert.equal(History.paceOf(base, 25).aboveBy, 100);
+  assert.equal(History.paceOf(base, 0).aboveBy, -100);
+  // the noteworthy line needs $2 more as well as 20%
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 0.01 }, 0.03)), false, 'a quiet early morning is not news');
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 10 }, 13)), true);
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 10 }, 11)), false, 'only 10% above');
+});

@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Usage = require('./usage.js');
+const Insights = require('./usage-insights.js');
 const { dayKey } = require('./stats.js');
 
 const VERSION = 1;
@@ -204,7 +205,9 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
       if (day < fromKey || day > toKey) continue;
       if (d.legacy && !d.sources && !project && (!source || source === 'claude')) {
         legacyDays += 1;
-        for (const r of groupBy === 'day' ? [row(day), total] : [total]) { r.cost += d.legacy.cost; r.legacyCost += d.legacy.cost; }
+        // a cost-only day is drawn as its own 'legacy' family, so the charts,
+        // the tiles and the export all agree on the total
+        for (const r of groupBy === 'day' ? [row(day), total] : groupBy === 'day-family' ? [row(`${day}|legacy`), total] : [total]) { r.cost += d.legacy.cost; r.legacyCost += d.legacy.cost; }
         continue;
       }
       const wd = new Date(`${day}T12:00:00`).getDay();
@@ -253,8 +256,10 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
 // that day (the day's cost times its share of turns so far), averaged; it
 // needs `minDays` such days, so a new install never reads as "above usual".
 // `todayCost` is passed in (the live transcripts are fresher than the record).
-function pace(store, todayCost, { now = Date.now(), days = 30, minDays = 7 } = {}) {
+function paceBaseline(store, { now = Date.now(), days = 30 } = {}) {
   const hour = new Date(now).getHours();
+  // the current hour counts only for the part of it that has passed
+  const passed = new Date(now).getMinutes() / 60;
   const todayKey = dayKey(now);
   const from = dayKey(now - days * DAY_MS);
   const perDay = new Map();
@@ -274,7 +279,7 @@ function pace(store, todayCost, { now = Date.now(), days = 30, minDays = 7 } = {
             if (c == null || !n) continue;
             cost += c;
             turns += n;
-            sofar += c * (b.hours.slice(0, hour + 1).reduce((a, v) => a + v, 0) / n);
+            sofar += c * ((b.hours.slice(0, hour).reduce((a, v) => a + v, 0) + b.hours[hour] * passed) / n);
           }
         }
       }
@@ -282,15 +287,34 @@ function pace(store, todayCost, { now = Date.now(), days = 30, minDays = 7 } = {
     }
   }
   const vals = [...perDay.values()];
-  const avg = vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;
-  const today = Math.round(todayCost * 1e4) / 1e4;
-  const ready = vals.length >= minDays && avg > 0;
-  return { ready, days: vals.length, today, avg: Math.round(avg * 1e4) / 1e4, ratio: ready ? today / avg : null, aboveBy: ready ? Math.round((today / avg - 1) * 100) : null };
+  return { days: vals.length, avg: vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0 };
 }
+// Today against a baseline: cheap, so it can run on every refresh.
+function paceOf(base, todayCost, { minDays = 7 } = {}) {
+  const today = Math.round(todayCost * 1e4) / 1e4;
+  const ready = base.days >= minDays && base.avg > 0;
+  return { ready, days: base.days, today, avg: Math.round(base.avg * 1e4) / 1e4, ratio: ready ? today / base.avg : null, aboveBy: ready ? Math.round((today / base.avg - 1) * 100) : null };
+}
+const pace = (store, todayCost, opts = {}) => paceOf(paceBaseline(store, opts), todayCost, opts);
 // Fires only for a clear difference: at least double the usual and $5 more.
 const PACE_RATIO = 2;
 const PACE_MIN_EXTRA = 5;
 const paceFiring = (p) => !!p && p.ready && p.today >= p.avg * PACE_RATIO && p.today - p.avg >= PACE_MIN_EXTRA;
+// The tooltip's gentler line: 20% above, and at least $2 more, so a quiet
+// early morning never reads "200% above".
+const paceNoteworthy = (p) => !!p && p.ready && p.aboveBy >= 20 && p.today - p.avg >= 2;
+
+// The first day each exact model id appears anywhere in the record, so a
+// version marker is true at the edge of any window.
+function firstSeen(store) {
+  const first = {};
+  for (const mk of months(store)) {
+    for (const [day, d] of Object.entries(month(store, mk).rec.days)) {
+      for (const models of Object.values(d.sources || {})) for (const model of Object.keys(models)) if (!own(first, model) || day < first[model]) first[model] = day;
+    }
+  }
+  return first;
+}
 
 // The earliest and latest recorded day, or null.
 function extent(store) {
@@ -302,4 +326,21 @@ function extent(store) {
   return first && last ? { from: first, to: last } : null;
 }
 
-module.exports = { VERSION, PRICE_VERSION, GROUPS, open, record, importLegacy, flush, catchUp, query, extent, pace, paceFiring, DAY_MS };
+// Everything the Usage tab draws, in ONE read of the record: the current
+// period and the one before, each grouped the ways the charts need. The store
+// is opened once by the caller and reused, so the month files are parsed at
+// most once between recordings.
+function bundle(store, { range = '30d', now = Date.now(), project = null, compare = true } = {}) {
+  const ext = extent(store);
+  const p = Insights.period(range, now, ext && ext.from);
+  const q = (from, to, groupBy) => query(store, { from, to, groupBy, project });
+  const cmp = compare && p.prev;
+  return {
+    p, extent: ext, firstSeen: firstSeen(store),
+    dayFamily: q(p.from, p.to, 'day-family'), dayModel: null, hours: q(p.from, p.to, 'weekday-hour'),
+    projects: q(p.from, p.to, 'project'), projectDays: q(p.from, p.to, 'project-day'),
+    prevFamily: cmp ? q(p.prev.from, p.prev.to, 'day-family') : null, prevProjects: cmp ? q(p.prev.from, p.prev.to, 'project') : null,
+  };
+}
+
+module.exports = { VERSION, PRICE_VERSION, GROUPS, open, record, importLegacy, flush, catchUp, query, extent, firstSeen, pace, paceBaseline, paceOf, paceFiring, paceNoteworthy, bundle, DAY_MS };

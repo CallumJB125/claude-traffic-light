@@ -46,8 +46,10 @@ test('dailySeries: every day is present, zero where nothing happened', () => {
   assert.equal(s[0].families.opus.routineTurns, 1);
 });
 
-test('steps: empty days are their own step and the rest split the busiest day in quarters', () => {
-  assert.deepEqual(I.steps([0, 1, 25, 50, 51, 100]), [0, 1, 1, 2, 3, 4], 'quarters are (0,25%], (25,50%], (50,75%], (75,100%]');
+test('steps: empty days are their own step, the rest a square-root scale of the busiest day', () => {
+  assert.deepEqual(I.steps([0, 1, 25, 50, 51, 100]), [0, 1, 2, 3, 3, 4], 'a square-root scale: quarters of sqrt(v/max)');
+  assert.deepEqual(I.steps([0, 1, 2, 3, 400]), [0, 1, 1, 1, 4], 'one outlier day does not flatten the rest to nothing');
+  assert.equal(I.steps([4, 100])[0], 1, 'a day at 4% of the busiest is still visible (step 1, not empty)');
   assert.deepEqual(I.steps([0, 0]), [0, 0]);
   assert.deepEqual(I.steps([]), []);
 });
@@ -128,4 +130,36 @@ test('toCsv: spreadsheet formulas in project-like cells are quoted, commas and q
   assert.equal(lines[1], '2026-09-28,opus,2,5,0,0,0,0,0');
   assert.match(lines[2], /^2026-09-29,"'=HYPERLINK\(""x""\)",1/);
   assert.match(lines[3], /^2026-09-30,"a,b"/);
+});
+
+test('callouts: the thresholds are pinned at their boundaries', () => {
+  const mk = (o, s) => [row('opus', { turns: o }), row('sonnet', { turns: s })];
+  const base = { cur: [row('x')], prev: [row('x')], series: [] };
+  // 10 points exactly fires, 9.5 does not (the floor is on the exact difference)
+  assert.equal(I.callouts({ ...base, curFamily: mk(60, 40), prevFamily: mk(50, 50) }).length, 1);
+  assert.equal(I.callouts({ ...base, curFamily: mk(59.5, 40.5), prevFamily: mk(50, 50) }).length, 0);
+  // 50 turns in each period is enough, 49 is not
+  assert.equal(I.callouts({ ...base, curFamily: mk(35, 15), prevFamily: mk(15, 35) }).length, 1);
+  assert.equal(I.callouts({ ...base, curFamily: mk(34, 15), prevFamily: mk(15, 35) }).length, 0);
+  // the cache rate: 30 turns and exactly 10 points
+  const cur = [row('a', { turns: 30, input: 0, cacheRead: 60, cacheWrite: 40 })];
+  const prev = [row('a', { turns: 30, input: 0, cacheRead: 70, cacheWrite: 30 })];
+  assert.equal(I.callouts({ cur, prev, series: [] }).length, 1);
+  assert.equal(I.callouts({ cur: [row('a', { turns: 29, cacheRead: 60, cacheWrite: 40 })], prev, series: [] }).length, 0);
+});
+
+test('callouts: the project named for a cache drop is its folder, not its path', () => {
+  const cur = [row('a', { turns: 60, input: 100, cacheRead: 500, cacheWrite: 400 })];
+  const prev = [row('a', { turns: 60, input: 100, cacheRead: 700, cacheWrite: 200 })];
+  const curProject = [row('/Users/me/Desktop/bondly', { cacheRead: 100, input: 50, cacheWrite: 350 })];
+  const prevProject = [row('/Users/me/Desktop/bondly', { cacheRead: 400, input: 50, cacheWrite: 50 })];
+  assert.match(I.callouts({ cur, prev, series: [], curProject, prevProject })[0].text, /mostly in bondly$/);
+});
+
+test('dailySeries: a legacy (cost-only) day is a family of its own and counts in the totals', () => {
+  const rows = [row('2026-09-28|legacy', { cost: 6.4 }), row('2026-09-29|opus', { cost: 2, turns: 3 })];
+  const s = I.dailySeries(rows, '2026-09-28', '2026-09-29');
+  assert.equal(s[0].cost, 6.4);
+  assert.equal(s[0].families.legacy.cost, 6.4);
+  assert.equal(I.totalsOf(rows).cost, 8.4);
 });

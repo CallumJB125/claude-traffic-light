@@ -433,16 +433,22 @@ async function buddySpend({ root, now = Date.now(), projectsDir } = {}) {
 // Opus in August?". Project paths are reduced to their folder name: an MCP
 // client can be remote-ish, so full paths never leave the record.
 const HISTORY_MAX_DAYS = 400;
-function historyRange(range, now) {
-  const DAY = 86400000;
-  const { dayKey } = require('./stats.js');
+function historyRange(range, now, first) {
+  // noon-anchored day arithmetic (usage-insights.js), so a DST change near
+  // midnight never moves a range by a day
+  const I = require('./usage-insights.js');
   const r = String(range || '30d').trim().toLowerCase();
-  const today = dayKey(now);
+  const today = I.key(now);
   let m;
   if (r === 'today') return { from: today, to: today };
-  if ((m = /^(\d{1,3})d$/.exec(r))) return { from: dayKey(now - (Number(m[1]) - 1) * DAY), to: today };
-  if (r === '1y') return { from: dayKey(now - 364 * DAY), to: today };
-  if (r === 'all') return { from: dayKey(now - (HISTORY_MAX_DAYS - 1) * DAY), to: today };
+  if ((m = /^(\d{1,3})d$/.exec(r))) return { from: I.addDays(today, -(Number(m[1]) - 1)), to: today };
+  if (r === '1y') return { from: I.addDays(today, -364), to: today };
+  if (r === 'all') {
+    // everything recorded, up to the cap; `capped` says when that cut it short
+    const floor = I.addDays(today, -(HISTORY_MAX_DAYS - 1));
+    const from = first && first > floor ? first : floor;
+    return { from, to: today, capped: !!first && first < floor };
+  }
   if ((m = /^(\d{4})-(\d{2})$/.exec(r))) {
     const last = new Date(Number(m[1]), Number(m[2]), 0).getDate();
     return { from: `${m[1]}-${m[2]}-01`, to: `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}` };
@@ -453,7 +459,8 @@ function historyRange(range, now) {
 async function buddyUsageHistory({ root, range = '30d', groupBy = 'day', now = Date.now() } = {}) {
   const History = require('./usage-history.js');
   const Spend = require('./spend.js');
-  const r = historyRange(range, now);
+  const first = History.extent(History.open({ root }));
+  const r = historyRange(range, now, first && first.from);
   const span = (Date.parse(`${r.to}T12:00:00`) - Date.parse(`${r.from}T12:00:00`)) / 86400000 + 1;
   if (!(span >= 1) || span > HISTORY_MAX_DAYS) throw new Error(`range must cover between 1 and ${HISTORY_MAX_DAYS} days`);
   if (!['day', 'model', 'family', 'project', 'source'].includes(groupBy)) throw new Error('groupBy is day, model, family, project or source');
@@ -475,8 +482,8 @@ async function buddyUsageHistory({ root, range = '30d', groupBy = 'day', now = D
   const ext = History.extent(store);
   const cfg = Spend.normalize((readJson(path.join(root, 'config.json')) || {}).spend);
   return {
-    summary: `${Spend.money(t.cost)} across ${t.turns} turns from ${r.from} to ${r.to}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${t.unpricedTurns ? ` ${t.unpricedTurns} turn${t.unpricedTurns === 1 ? '' : 's'} on unpriced models (${q.unpricedModels.join(', ')}) not in the cost.` : ''}${q.legacyDays ? ` ${q.legacyDays} early day${q.legacyDays === 1 ? '' : 's'} are cost-only estimates.` : ''}${ext ? '' : ' Nothing is recorded yet: Claude Buddy has to have run once.'}`,
-    range: r, groupBy, mode: cfg.mode,
+    summary: `${Spend.money(t.cost)} across ${t.turns} turns from ${r.from} to ${r.to}${r.capped ? ` (the last ${HISTORY_MAX_DAYS} days: this tool answers at most that far back)` : ''}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${t.unpricedTurns ? ` ${t.unpricedTurns} turn${t.unpricedTurns === 1 ? '' : 's'} on unpriced models (${q.unpricedModels.join(', ')}) not in the cost.` : ''}${q.legacyDays ? ` ${q.legacyDays} early day${q.legacyDays === 1 ? '' : 's'} are cost-only estimates.` : ''}${ext ? '' : ' Nothing is recorded yet: Claude Buddy has to have run once.'}`,
+    range: { from: r.from, to: r.to }, groupBy, mode: cfg.mode,
     total: t,
     rows: rows.map(({ key, turns, input, output, cacheRead, cacheWrite, cost, unpricedTurns, routineTurns, sessions, legacyCost }) => ({ key, turns, cost, input, output, cacheRead, cacheWrite, unpricedTurns, routineTurns, sessions, ...(legacyCost ? { approximate: true } : {}) })),
     unpricedModels: q.unpricedModels,

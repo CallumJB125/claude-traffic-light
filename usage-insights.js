@@ -79,7 +79,8 @@
   // split the busiest day's value into quarters.
   function steps(values) {
     const max = Math.max(0, ...values);
-    return values.map((v) => (v <= 0 || max <= 0 ? 0 : Math.min(4, 1 + Math.floor((v / max) * 4 - 1e-9))));
+    // square-root scale: one outlier day must not flatten everything else
+    return values.map((v) => (v <= 0 || max <= 0 ? 0 : Math.min(4, 1 + Math.floor(Math.sqrt(v / max) * 4 - 1e-9))));
   }
   // weekday × hour (rows of 'weekday-hour': key "weekday:hour") as a 7×24 grid
   function workGrid(rows, metric = 'turns') {
@@ -113,12 +114,13 @@
     if (prev && curFamily && prevFamily) {
       const c = share(curFamily, 'opus');
       const p = share(prevFamily, 'opus');
-      const pts = Math.round((c.s - p.s) * 100);
-      if (c.t >= MIN.turns && p.t >= MIN.turns && Math.abs(pts) >= MIN.sharePts) out.push({ id: 'opus-share', text: `Opus share ${pts > 0 ? 'up' : 'down'} ${Math.abs(pts)} pts vs ${periodLabel}` });
+      const exact = (c.s - p.s) * 100;
+      const pts = Math.round(exact);
+      if (c.t >= MIN.turns && p.t >= MIN.turns && Math.abs(exact) >= MIN.sharePts - 1e-9) out.push({ id: 'opus-share', text: `Opus share ${pts > 0 ? 'up' : 'down'} ${Math.abs(pts)} pts vs ${periodLabel}` });
     }
     const ct = totalsOf(cur);
     const pt = prev ? totalsOf(prev) : null;
-    if (pt && ct.cacheHit != null && pt.cacheHit != null && ct.turns >= MIN.cacheTurns && pt.turns >= MIN.cacheTurns && (pt.cacheHit - ct.cacheHit) * 100 >= MIN.cachePts) {
+    if (pt && ct.cacheHit != null && pt.cacheHit != null && ct.turns >= MIN.cacheTurns && pt.turns >= MIN.cacheTurns && (pt.cacheHit - ct.cacheHit) * 100 >= MIN.cachePts - 1e-9) {
       // name the project that lost the most hits
       let worst = null;
       if (curProject && prevProject) {
@@ -128,7 +130,7 @@
           const now = cacheHit(r);
           if (b == null || now == null) continue;
           const lost = (b - now) * (r.cacheRead + r.input + r.cacheWrite);
-          if (lost > 0 && (!worst || lost > worst.lost)) worst = { name: r.key, lost };
+          if (lost > 0 && (!worst || lost > worst.lost)) worst = { name: String(r.key).split(/[\\/]/).filter(Boolean).pop() || r.key, lost };
         }
         const total = (pt.cacheHit - ct.cacheHit) * (ct.cacheRead + ct.input + ct.cacheWrite);
         if (worst && worst.lost < total * 0.5) worst = null;
