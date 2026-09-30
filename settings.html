@@ -71,6 +71,15 @@
     text-transform: uppercase;
   }
   h1 + h2 { border-top: none; margin-top: 0; padding-top: 0; }
+  input[type="text"] {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--line-input);
+    border-radius: var(--radius);
+    color: inherit;
+    padding: 5px var(--space-2);
+    font: inherit;
+  }
   select {
     background: var(--panel-2);
     border: 1px solid var(--line-input);
@@ -244,6 +253,25 @@
     <div class="hint" id="mcp-hint" role="status" aria-live="polite">Adds Buddy as an MCP server for every Claude Code session, so you can ask Claude "why is my buddy amber?" or have it answer a waiting permission prompt. Writes one entry (<code>claude-buddy</code>) to <code>~/.claude.json</code>; restart open sessions to pick it up.</div>
   </div>
 
+  <h2>Git and CI</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="gitSignals" /> Light up for pull requests and CI</label>
+    <div class="hint">Review requests, changes requested on your PRs, and GitHub Actions runs you started (CI on the branch you're on, deploys anywhere), checked with your own <code>gh</code> login about every 90 seconds while a session is open. Each shows once, for a few minutes.</div>
+    <div class="hint" id="git-status" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="field">
+    <label for="gitRepos">Also watch</label>
+    <input type="text" id="gitRepos" placeholder="owner/repo, owner/other" aria-describedby="hint-git-repos" />
+    <div class="hint" id="hint-git-repos">Open sessions' repos are found from their git remote; add any others here.</div>
+  </div>
+
+  <div class="field">
+    <label for="gitDeployWorkflows">Deploy workflows</label>
+    <input type="text" id="gitDeployWorkflows" placeholder="Any with deploy, release or publish in the name" aria-describedby="hint-git-deploy" />
+    <div class="hint" id="hint-git-deploy">Workflow names that count as a deploy, comma-separated.</div>
+  </div>
+
   <div class="field">
     <div class="group-label">What the lights mean</div>
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
@@ -285,7 +313,11 @@
       document.getElementById('agentChipSize').value = ['small', 'normal', 'large'].includes(config.agentChipSize) ? config.agentChipSize : 'normal';
       document.getElementById('roam').checked = config.roam !== false;
       document.getElementById('randomEvents').checked = config.randomEvents !== false;
+      document.getElementById('gitSignals').checked = config.gitSignals !== false;
+      document.getElementById('gitRepos').value = (config.gitRepos || []).join(', ');
+      document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
     }
+    const commaList = (id) => document.getElementById(id).value.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 50);
 
     document.getElementById('save').addEventListener('click', async () => {
       try {
@@ -311,6 +343,9 @@
         agentChipSize: document.getElementById('agentChipSize').value,
         roam: document.getElementById('roam').checked,
         randomEvents: document.getElementById('randomEvents').checked,
+        gitSignals: document.getElementById('gitSignals').checked,
+        gitRepos: commaList('gitRepos'),
+        gitDeployWorkflows: commaList('gitDeployWorkflows'),
       });
       status.className = '';
       status.textContent = 'Saved';
@@ -338,6 +373,16 @@
     mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
     window.settingsApi.mcpStatus().then(showMcp);
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
+    const showGit = (g) => {
+      if (!g) return;
+      const n = g.repos.length;
+      document.getElementById('git-status').textContent = !g.enabled ? ''
+        : g.hint ? g.hint
+        : g.state === 'ok' ? `Watching ${n} repo${n === 1 ? '' : 's'} as @${g.login}${g.rate ? ` · ${g.rate.remaining} GitHub requests left this hour` : ''}.`
+        : g.state === 'rate-limited' || g.state === 'backoff' ? `GitHub didn't answer (${g.error}); trying again later.`
+        : '';
+    };
+    window.settingsApi.gitStatus().then(showGit);
     load();
   </script>
 </body>

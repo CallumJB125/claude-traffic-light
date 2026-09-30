@@ -1,0 +1,12 @@
+HTTP/2.0 304 Not Modified
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+Etag: "etag-any"
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4990
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 10
+

@@ -43,6 +43,47 @@
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
+  // F2 git/ci ────────────────────────────────────────────────────────────────
+  // Pull request and GitHub Actions events from src/github-signals.js (polled
+  // with the user's own gh login, later a hub webhook). Each is a transient
+  // event, not a session: main.js passes the live ones as env.git and they
+  // resolve like virtual signals, carrying the cwd of a session in that repo
+  // (or none), so project-scoped rules still work. The default rules only
+  // layer a pose/sign/eyes accent and never set the lamp: the lamp stays
+  // about Claude.
+  const GIT_SIGNALS = [
+    { id: 'pr-review-requested', label: 'Your review is requested on a PR', hook: null, kind: 'git' },
+    { id: 'pr-changes-requested', label: 'Changes requested on your PR', hook: null, kind: 'git' },
+    { id: 'ci-failed', label: 'CI failed on your branch', hook: null, kind: 'git' },
+    { id: 'ci-passed', label: 'CI passed on your branch', hook: null, kind: 'git' },
+    { id: 'deploy-failed', label: 'A deploy workflow failed', hook: null, kind: 'git' },
+    { id: 'deploy-finished', label: 'A deploy workflow finished', hook: null, kind: 'git' },
+  ];
+  SIGNALS.push(...GIT_SIGNALS);
+  function gitDefaultRules() {
+    return [
+      { id: 'git-ci-failed', name: 'CI failed', enabled: true, when: { signal: ['ci-failed'] }, then: { pose: 'banner', text: 'CI FAILED', eyes: '#e2231a', sound: 'Funk' } },
+      { id: 'git-deploy-failed', name: 'Deploy failed', enabled: true, when: { signal: ['deploy-failed'] }, then: { pose: 'banner', text: 'DEPLOY FAILED', eyes: '#e2231a', sound: 'Funk' } },
+      { id: 'git-changes-requested', name: 'Changes requested', enabled: true, when: { signal: ['pr-changes-requested'] }, then: { pose: 'banner', text: 'CHANGES ASKED', eyes: 'sad' } },
+      { id: 'git-review-requested', name: 'Review requested', enabled: true, when: { signal: ['pr-review-requested'] }, then: { pose: 'banner', text: 'REVIEW PLEASE', eyes: 'surprised' } },
+      { id: 'git-deploy-finished', name: 'Deploy finished', enabled: true, when: { signal: ['deploy-finished'] }, then: { pose: 'party', eyes: '#2fae3e' } },
+      { id: 'git-ci-passed', name: 'CI passed', enabled: true, when: { signal: ['ci-passed'] }, then: { pose: 'thumbs', eyes: '#2fae3e' } },
+    ];
+  }
+  // env.git: [{ signal, cwd, repo, pr, branch, … }] — the events still live.
+  function gitSessions(env) {
+    const known = new Set(GIT_SIGNALS.map((x) => x.id));
+    return (env && Array.isArray(env.git) ? env.git : []).filter((e) => e && known.has(e.signal))
+      .map((e) => ({ signal: e.signal, cwd: e.cwd || null, repo: e.repo || null, pr: e.pr || null, branch: e.branch || null, virtual: true, git: true }));
+  }
+  // v7: the git rules slot in just under "No network", above the accents.
+  function addGitRules(add, out) {
+    const offline = out.findIndex((r) => r.id === 'offline');
+    const at = offline >= 0 ? offline + 1 : out.findIndex((r) => !r.locked);
+    gitDefaultRules().forEach((r, i) => add(r.id, at < 0 ? -1 : at + i));
+  }
+  // ── end F2 git/ci
+
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
   // Signal sets, owned by the state machine: WAITING (blocked on you),
@@ -242,6 +283,7 @@
         when: { signal: ['offline'] },
         then: { lamp: 'red', eyes: 'x', pose: 'banner', text: 'OFFLINE', effect: 'rain' },
       },
+      ...gitDefaultRules(),
       {
         id: 'subagent', name: 'Subagent running', enabled: true,
         when: { signal: ['tool-use'], tool: 'Agent' },
@@ -313,7 +355,7 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 6;
+  const RULES_VERSION = 7;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -368,8 +410,9 @@
         if (!live.length && DEAD_DEFAULT_IDS.includes(r.id)) continue;
         kept.push({ ...r, enabled: live.length ? r.enabled : false, when: { ...r.when, signal: live } });
       }
-      return kept;
+      out.splice(0, out.length, ...kept);
     }
+    if (version < 7) addGitRules(add, out);
     return out;
   }
 
@@ -503,8 +546,8 @@
   function resolve(rules, sessions, now = Date.now(), env = {}) {
     const list = orderedRules(rules.map(normalizeRule));
     const real = sessions.filter((s) => sessionSignal(s));
-    const live = real.length ? real.concat(virtualSessions(real, now, env))
-      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : []);
+    const live = (real.length ? real.concat(virtualSessions(real, now, env))
+      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [])).concat(gitSessions(env));
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', cameo: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
@@ -579,5 +622,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions };
 });

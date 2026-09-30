@@ -1,0 +1,14 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Type: application/json; charset=utf-8
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+Etag: W/"etag-user"
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4990
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 10
+
+{"login": "octo-me", "id": 1, "type": "User", "html_url": "https://github.com/octo-me"}

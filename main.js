@@ -16,6 +16,7 @@ const McpInstall = require('./mcp-install.js');
 const Setup = require('./setup.js');
 const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
+const GitSignals = require('./src/github-signals.js');
 const http = require('http');
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions });
@@ -143,8 +144,13 @@ const DEFAULT_CONFIG = {
   agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
+  // Git and CI signals: on, but idle until `gh` is installed and logged in.
+  gitSignals: true,
+  gitRepos: [],
+  gitDeployWorkflows: [],
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
+const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
 
 // loadConfig() is called several times per status broadcast (and a broadcast
@@ -558,7 +564,7 @@ function computeState(opts = {}) {
   // replaces the look only; the chips, number and season still apply.
   const { look, fired, owned } = pending.length
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
-    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
+    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online, git: config.gitSignals !== false ? git.active() : [] });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
@@ -2248,6 +2254,7 @@ ipcMain.handle('connect-agent', (e, which) => {
     return { ok: false, file: adapter.configPath(os.homedir()), error: err.message };
   }
 });
+ipcMain.handle('git-status', () => ({ ...git.status(), enabled: loadConfig().gitSignals !== false }));
 ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 
 ipcMain.handle('choose-sound-file', async () => {
@@ -2473,6 +2480,19 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
+  // GitHub is asked at most once a poll interval (github-signals decides);
+  // dev runs never call gh, but still show saved events.
+  if (IS_DEV_RUN) git.pause('dev-run');
+  else {
+    const gitTick = () => git.tick({ sessions: readSessions(loadConfig()), config: loadConfig() }).then((fired) => {
+      if (!fired.length) return;
+      stateMemo = { at: 0, key: null, value: null };
+      broadcastStatus();
+      maybePlayAlertSound();
+    }).catch((e) => console.log('[git]', e.message));
+    setTimeout(gitTick, 5000);
+    every(15000, gitTick, 'git');
+  }
   // The visual tests screenshot a still face; a live cursor would shift it.
   if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
   sweepSessionFiles();

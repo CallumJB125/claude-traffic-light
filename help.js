@@ -30,6 +30,12 @@ const RULE_TEXT = {
   ignored: { signal: 'ignored-20', text: 'Something has been waiting on you for 20+ minutes, so he has crossed his arms and grown a beard.' },
   nudge: { signal: 'idle-nudge', text: 'Claude finished a while ago and is idle until you send the next message. Nothing is blocked.' },
   idle: { signal: 'idle', text: 'No Claude Code session is running (or they have all gone quiet).' },
+  'git-ci-failed': { signal: 'ci-failed', text: 'A GitHub Actions run you started on the branch you are working on just failed. It shows for 10 minutes; Preferences → Git and CI turns these off.' },
+  'git-deploy-failed': { signal: 'deploy-failed', text: 'A deploy workflow you started just failed on GitHub Actions. Which workflows count as deploys is set in Preferences → Git and CI.' },
+  'git-changes-requested': { signal: 'pr-changes-requested', text: 'Someone asked for changes on one of your pull requests.' },
+  'git-review-requested': { signal: 'pr-review-requested', text: 'Someone asked you to review their pull request.' },
+  'git-deploy-finished': { signal: 'deploy-finished', text: 'A deploy workflow you started finished successfully.' },
+  'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
 };
 
 const LAMP_TEXT = {

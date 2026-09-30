@@ -304,7 +304,7 @@
       const b = document.createElement('button');
       b.className = 'signal ' + s.kind + (r.when.signal.includes(s.id) ? ' on' : '');
       b.innerHTML = `<span class="k"></span>${s.label}`;
-      b.title = s.hook ? `Claude Code hook: ${s.hook}` : 'When no session file is live';
+      b.title = s.hook ? `Claude Code hook: ${s.hook}` : s.kind === 'git' ? 'From GitHub, via your gh login (Preferences → Git and CI)' : 'When no session file is live';
       b.addEventListener('click', () => {
         const i = r.when.signal.indexOf(s.id);
         if (i >= 0) r.when.signal.splice(i, 1); else r.when.signal.push(s.id);

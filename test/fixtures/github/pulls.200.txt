@@ -1,0 +1,14 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Type: application/json; charset=utf-8
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+Etag: W/"etag-pulls"
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4990
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 10
+
+[{"number": 7, "title": "Add the thing", "html_url": "https://github.com/acme/widget/pull/7", "updated_at": "2026-09-30T11:50:00Z", "draft": false, "state": "open", "user": {"login": "octo-friend"}, "head": {"ref": "friend/feature", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "requested_reviewers": [{"login": "octo-me"}], "requested_teams": []}, {"number": 8, "title": "Fix the widget", "html_url": "https://github.com/acme/widget/pull/8", "updated_at": "2026-09-30T11:52:00Z", "draft": false, "state": "open", "user": {"login": "octo-me"}, "head": {"ref": "feat/x", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "requested_reviewers": [{"login": "octo-friend"}], "requested_teams": []}, {"number": 9, "title": "Unrelated", "html_url": "https://github.com/acme/widget/pull/9", "updated_at": "2026-09-30T11:51:00Z", "draft": false, "state": "open", "user": {"login": "octo-friend"}, "head": {"ref": "friend/other", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "requested_reviewers": [{"login": "someone-else"}], "requested_teams": []}]

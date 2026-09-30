@@ -1,0 +1,12 @@
+HTTP/2.0 403 Forbidden
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 0
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 5000
+
+{"message": "API rate limit exceeded for user ID 1.", "documentation_url": "https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-primary-rate-limits", "status": "403"}

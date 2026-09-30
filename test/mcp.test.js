@@ -179,12 +179,12 @@ test('buddy_model_mix: reads transcripts from the given projects dir', async () 
   assert.match(r.recommendation, /No Opus turns/);
 });
 
-test('the server exposes exactly the eight buddy_ tools', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_pending_requests', 'buddy_answer_request']);
+test('the server exposes exactly the nine buddy_ tools', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_pending_requests', 'buddy_answer_request']);
   assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['buddy_answer_request']);
 });
 
-test('stdio: the server starts, lists eight tools and answers buddy_status end to end', async () => {
+test('stdio: the server starts, lists nine tools and answers buddy_status end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -198,7 +198,7 @@ test('stdio: the server starts, lists eight tools and answers buddy_status end t
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 8);
+    assert.equal(tools.length, 9);
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);
     assert.equal(st.sessionCount, 1);

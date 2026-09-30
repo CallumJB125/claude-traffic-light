@@ -1,0 +1,13 @@
+HTTP/2.0 403 Forbidden
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+Retry-After: 120
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4990
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 10
+
+{"message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.", "documentation_url": "https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits", "status": "403"}

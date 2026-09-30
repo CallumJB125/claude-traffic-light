@@ -16,6 +16,7 @@ const os = require('os');
 const http = require('http');
 const Rules = require('./rules.js');
 const SessionState = require('./hooks/session-state.js');
+const GitSignals = require('./src/github-signals.js');
 
 const DEFAULTS = {
   workingStaleMinutes: 6,
@@ -151,7 +152,8 @@ function computeState({ root, now = Date.now(), online = guessOnline() }) {
   const sessions = scanned.filter((s) => s.live).map((s) => s.session);
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !Rules.WAITING_ON_YOU.has(s.signal) && s.signal !== 'idle-nudge')) : null;
-  const env = { offline: !online };
+  const git = config.gitSignals !== false ? GitSignals.readState(path.join(root, 'git-signals.json'), now) : null;
+  const env = { offline: !online, git: git ? git.active : [] };
   const base = { config, requests, scanned, sessions, pending, tasks, online, env };
   const override = readManualOverride(root, now);
   if (override) {
@@ -292,8 +294,8 @@ function buddyWhy({ root, now = Date.now(), online, query } = {}) {
   // signals rules.js derives from them (or 'idle' when there are none).
   const entries = st.reason === 'manual' ? [{ signal: OVERRIDE_SIGNALS[st.override.state] || 'idle', cwd: '' }]
     : st.reason === 'pending-permission' ? [{ signal: 'permission-ask', cwd: st.pending[0].cwd }]
-    : st.sessions.length ? st.sessions.concat(Rules.virtualSessions(st.sessions, now, st.env))
-    : [{ signal: 'idle' }].concat(st.env.offline ? [{ signal: 'offline', virtual: true }] : []);
+    : (st.sessions.length ? st.sessions.concat(Rules.virtualSessions(st.sessions, now, st.env))
+      : [{ signal: 'idle' }].concat(st.env.offline ? [{ signal: 'offline', virtual: true }] : [])).concat(Rules.gitSessions(st.env));
   const context = { reason: st.reason, lampOwner: st.owned.lamp ? { ruleId: st.owned.lamp, rule: ruleName(rules, st.owned.lamp) } : null, resolvedAgainst: entries.map((e) => ({ sessionId: e.sessionId || null, signal: Rules.sessionSignal(e), cwd: e.cwd || null, tool: e.tool || null, virtual: !!e.virtual })) };
   if (st.reason === 'manual') context.note = 'A manual tray override is active; it replaces every session until it expires.';
   if (st.reason === 'pending-permission') context.note = 'A pending permission request forces the "permission-ask" state, whatever the session files say.';
@@ -385,6 +387,29 @@ async function buddyModelMix({ now = Date.now(), projectsDir } = {}) {
   return { ...Usage.modelMix(turns, { now }), transcripts: { files, turns: turns.length, overSizeCap: skipped.length } };
 }
 
+// What the Git and CI poller last saw, from the state file main.js writes.
+function buddyGitStatus({ root, now = Date.now() } = {}) {
+  const config = loadConfig(root);
+  const st = GitSignals.readState(path.join(root, 'git-signals.json'), now);
+  const enabled = config.gitSignals !== false;
+  if (!st) return { enabled, state: 'unknown', note: enabled ? 'The widget has not polled GitHub yet (is it running, with gh installed and logged in?).' : 'Git and CI signals are off in Preferences.', active: [], recent: [] };
+  const pick = (e) => ({ signal: e.signal, repo: e.repo, pr: e.pr ?? null, branch: e.branch || null, title: e.title || null, url: e.url || null, at: e.at || null, firedAt: e.firedAt ? new Date(e.firedAt).toISOString() : null, source: e.source || null });
+  return {
+    enabled,
+    state: st.state,
+    hint: st.hint || null,
+    error: st.error || null,
+    login: st.login || null,
+    repos: st.repos || [],
+    active: st.active.map(pick),
+    recent: st.recent.map(pick),
+    rate: st.rate || null,
+    lastPollAt: st.lastPollAt || null,
+    nextPollAt: st.nextPollAt || null,
+    note: '"active" events are what the widget is showing now (each shows once, for a few minutes); "recent" is the last 10 that fired.',
+  };
+}
+
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Claude Buddy widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
@@ -392,6 +417,7 @@ const TOOLS = [
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
   { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
   { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
+  { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
   { name: 'buddy_answer_request', description: 'Answer a pending permission request exactly as the widget\'s Allow/Deny buttons do. This approves or denies a tool call in ANOTHER Claude Code session — only do it when the user has asked you to.', input: (z) => ({ id: z.string().describe('request id from buddy_pending_requests'), decision: z.enum(['allow', 'deny']) }), readOnly: false, run: (a, c) => answerRequest(c.root, a.id, a.decision) },
 ];
@@ -418,7 +444,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

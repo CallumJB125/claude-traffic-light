@@ -922,7 +922,7 @@ test('migrateRules: a saved config gains offline and failed-turn once, in their 
   assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
   assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
   const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
-  assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn', 'started']);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', ...R.gitDefaultRules().map((r) => r.id), 'mine', 'failed-turn', 'started']);
 });
 
 test('migrateRules: offline and failed-turn you deleted on v2+ stay deleted through later upgrades', () => {

@@ -26,13 +26,14 @@ function freePort() {
   });
 }
 
-async function launchApp({ extraArgs = [], config = {} } = {}) {
+async function launchApp({ extraArgs = [], config = {}, files = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
   // Pre-mark the first-run help so it never pops up unasked.
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ ...FIXED_CONFIG, ...config }));
+  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(home, name), content);
   fs.writeFileSync(path.join(home, 'window-bounds.json'), JSON.stringify({ x: 200, y: 200, width: 200, height: 200 }));
   const port = await freePort();
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
