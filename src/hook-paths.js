@@ -15,7 +15,7 @@ const STABLE_PREFIX = 'hooks-';
 const MCP_STUB = `// Plexiform AppImage: the MCP server lives inside the AppImage, which mounts
 // somewhere new every launch. This runs as the AppImage's own binary, so the
 // server is found next to it.
-require(require('path').join(require('path').dirname(process.execPath), 'resources', 'app.asar', 'mcp-server.js'));
+require(require('path').join(require('path').dirname(process.execPath), 'resources', 'app.asar', 'mcp-server.js')); // privacy-flow: own-code
 `;
 
 // → { execPath, hooksDir, mcpAppPath, stableDir, copyFrom }. execPath null is

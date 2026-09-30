@@ -9,7 +9,7 @@ async function activate(folderHint, exec) {
   const tries = [folderHint, ...TITLES].filter(Boolean);
   for (const t of tries) {
     let ok = false;
-    try { ok = await exec('wmctrl', ['-a', t]); } catch { return null; }
+    try { ok = await exec('wmctrl', ['-a', t]); } catch { return null; } // privacy-flow: terminal-jump
     if (ok) return { app: t, exact: t === folderHint };
   }
   return null;

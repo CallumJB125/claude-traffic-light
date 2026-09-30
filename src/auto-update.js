@@ -29,7 +29,7 @@ function supported({ platform = process.platform, env = process.env, packaged })
  */
 function start({ app, updateCheck = null, updater = null, platform = process.platform, env = process.env, setTimer = setTimeout, setRepeat = setInterval, log = console }) {
   if (!supported({ platform, env, packaged: app.isPackaged })) return null;
-  const au = updater || require('electron-updater').autoUpdater;
+  const au = updater || require('electron-updater').autoUpdater; // privacy-flow: auto-update
   au.autoDownload = true;
   au.autoInstallOnAppQuit = true;
   au.allowDowngrade = true;

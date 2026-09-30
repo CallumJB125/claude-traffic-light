@@ -45,7 +45,7 @@ function firstHookCommand(settingsPath, event) {
 
 function runHook(command, payload, { env, timeoutMs = 15000 }) {
   return new Promise((resolve) => {
-    const child = spawn(command, { shell: true, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, { shell: true, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); // privacy-flow: release-smoke
     let stderr = '';
     child.stderr.on('data', (d) => { stderr += d; });
     const timer = setTimeout(() => { child.kill(); resolve({ code: null, stderr: `${stderr}\n(timed out)` }); }, timeoutMs);

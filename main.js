@@ -2770,7 +2770,7 @@ async function runAction(action, st) {
       if (IS_WIN) execFile('cmd', ['/c', 'start', '', action.arg || 'code', cwd], () => {});
       else if (IS_MAC) execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
       // Linux: the editor's command; if there is none, the folder in the file manager.
-      else execFile(LinuxActions.editorCommand(action.arg), [cwd], (err) => { if (err && err.code === 'ENOENT') shell.openPath(cwd); });
+      else execFile(LinuxActions.editorCommand(action.arg), [cwd], (err) => { if (err && err.code === 'ENOENT') shell.openPath(cwd); }); // privacy-flow: rule-command
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };

@@ -301,7 +301,7 @@ test('every external hostname in shipped code is documented in PRIVACY.md', () =
 
 test('the shipped dependency list is an allow-list', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  const allowed = new Set(['@modelcontextprotocol/sdk', 'zod', 'ws']); // ws: the team hub websocket, documented under flow:team-hub
+  const allowed = new Set(['@modelcontextprotocol/sdk', 'zod', 'ws', 'electron-updater']); // ws: the team hub websocket, documented under flow:team-hub; electron-updater: flow:auto-update
   for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
     for (const dep of Object.keys(pkg[k] || {})) assert.ok(allowed.has(dep), `new dependency ${dep}: check whether it reaches the network, document it in PRIVACY.md, then add it to this list`);
   }
