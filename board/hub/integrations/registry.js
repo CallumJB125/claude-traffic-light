@@ -16,6 +16,7 @@ import { HubError } from '../db.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
+import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY } from './connector.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -30,6 +31,9 @@ const CONFIG_MAX_BYTES = 8 * 1024;
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
+const BRANCH_MAX = 255;
+// Unicode spaces, controls and invisible format characters: never in a board branch.
+const BRANCH_BAD = /[\s\p{Cc}\p{Cf}]/u;
 // An allowlist, not a denylist: anything that starts a paid run, hands work
 // on, answers an agent or feeds it text stays a person's action.
 const ALLOWED_ACTIONS = new Set(['cancel', 'stop', 'approve_done']);
@@ -318,6 +322,37 @@ export function createIntegrations({
       };
     }
 
+    /**
+     * The only way a PR finds its card. `repo` ('owner/name' on github.com, or
+     * 'host/owner/name') and `branch` come from a payload any PR author
+     * controls, forks included, so nothing is parsed out of them: the branch
+     * must equal a branch the board recorded for a run (runs.branch, from
+     * fence.js branchName) in that repo, on a board of this connection's org,
+     * linked to that repo. Anything ambiguous is null.
+     */
+    function cardForBranch(repo, branch) {
+      if (typeof branch !== 'string' || !branch || branch.length > BRANCH_MAX || BRANCH_BAD.test(branch)) return null;
+      if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
+      const canon = normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
+      if (!canon) return null;
+      const repoIds = db.all(`SELECT DISTINCT r.id AS repo_id, r.canonical_url, r.aliases FROM repos r
+        JOIN board_repos br ON br.repo_id = r.id JOIN boards b ON b.id = br.board_id WHERE b.org_id = ? AND r.org_id = ?`, c.org_id, c.org_id)
+        .filter((r) => matchRepo(`https://${canon}`, [{ ...r, aliases: safeJson(r.aliases, []) }]))
+        .map((r) => r.repo_id);
+      if (!repoIds.length) return null;
+      const inRepos = repoIds.map(() => '?').join(',');
+      const found = new Set(db.all(`SELECT DISTINCT cards.id FROM runs JOIN cards ON cards.id = runs.card_id JOIN boards ON boards.id = cards.board_id
+        WHERE runs.branch = ? AND boards.org_id = ? AND runs.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds).map((r) => r.id));
+      // Extension point for self-driven (auto-tracked) cards, owned by that
+      // work: a branch a card claims without a run. Consulted only once such a
+      // column exists; the same exact-match, same-org, same-repo rules apply.
+      if (db.get("SELECT 1 AS x FROM pragma_table_info('cards') WHERE name = 'self_driven_branch'")) {
+        for (const r of db.all(`SELECT cards.id FROM cards JOIN boards ON boards.id = cards.board_id
+          WHERE cards.self_driven_branch = ? AND boards.org_id = ? AND cards.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds)) found.add(r.id);
+      }
+      return found.size === 1 ? [...found][0] : null;
+    }
+
     const cardInOrg = (cardId) => {
       const card = cardId ? hub.card(cardId) : null;
       return card && hub.board(card.board_id)?.org_id === c.org_id ? card : null;
@@ -428,6 +463,9 @@ export function createIntegrations({
       act,
       autonomyOf,
       signal,
+      // A pure read (writes nothing, links nothing), so it lives on ctx, not
+      // in an act() scope: the handler links what it finds inside act().
+      cardForBranch,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
