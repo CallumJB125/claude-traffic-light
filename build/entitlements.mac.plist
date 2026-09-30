@@ -7,6 +7,12 @@
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+    <!-- Kept: build/sign.js falls back to ad-hoc signing when no Developer ID is in the
+         keychain. Ad-hoc code has no Team ID, and under the hardened runtime library
+         validation then refuses Electron Framework and its helpers ("mapping process and
+         mapped file (non-platform) have different Team IDs"), so the app would not launch.
+         No shipped dependency has a native addon (ws's bufferutil/utf-8-validate are not
+         installed; the hub uses node:sqlite), so a Developer ID build would not need it. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     <!-- F5: under the hardened runtime, EventKit refuses without this (no prompt at all) -->
