@@ -9,7 +9,9 @@
   },
   "scripts": {
     "test": "node --test \"*/test/**/*.test.js\"",
-    "test:shared": "node --test \"shared/test/*.test.js\""
+    "test:shared": "node --test \"shared/test/*.test.js\"",
+    "web:mock": "node web/mock/server.js",
+    "web:shots": "node web/scripts/shots.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
