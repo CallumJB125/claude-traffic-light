@@ -1,0 +1,151 @@
+// Exit (j): the launch profile snapshot — argv, allowlisted env, settings.json,
+// mcp.json — and the Gap A isolation proof: a shell started with the run's env
+// loads no user aliases/functions even when the user's zshrc defines them.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { buildArgv, buildEnv, buildSettings, buildMcpConfig, HOOK_SHIM, MCP_SERVER, DISALLOWED_TOOLS, boardBrief, trustedInstructions } from '../launch.js';
+import { startFakeHub, startRunner, makeRepo, tmpDir, rm, offerFor, claimRun, readFakeLog, waitFor } from './helpers.js';
+
+const RUN_DIR = '/Users/m/.board/run/r1';
+
+test('argv is exactly the contract profile; resume keeps every isolation flag', () => {
+  const a = buildArgv({ runDir: RUN_DIR, sessionId: 'S', budgetUsd: 2.5, maxTurns: 40, systemPrompt: 'BRIEF' });
+  assert.deepEqual(a, [
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--session-id', 'S',
+    '--setting-sources', '',
+    '--settings', `${RUN_DIR}/settings.json`,
+    '--strict-mcp-config', '--mcp-config', `${RUN_DIR}/mcp.json`,
+    '--tools', 'Read,Edit,Write,Glob,Grep,Bash,TodoWrite,Task',
+    '--disallowedTools', 'WebFetch', 'WebSearch', 'Bash(git push --force*)', 'Bash(git push -f*)', 'Bash(git push * +*)',
+    'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
+    'Read(~/.claude-traffic-light/**)', 'Read(~/.board/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
+    'Edit(~/.board/**)', 'Write(~/.board/**)',
+    '--permission-mode', 'acceptEdits',
+    '--permission-prompt-tool', 'mcp__board__approval',
+    '--max-budget-usd', '2.5', '--max-turns', '40',
+    '--append-system-prompt', 'BRIEF',
+  ]);
+  assert.ok(!a.includes('bypassPermissions'));
+  const r = buildArgv({ runDir: RUN_DIR, sessionId: 'S', resume: true, budgetUsd: 2.5, maxTurns: 40, systemPrompt: 'BRIEF' });
+  assert.deepEqual(r.filter((x) => x !== '--resume' && x !== '--session-id'), a.filter((x) => x !== '--resume' && x !== '--session-id'));
+  assert.equal(r[r.indexOf('--resume') + 1], 'S');
+  assert.equal(DISALLOWED_TOOLS.length, 16);
+});
+
+test('env is an allowlist (D15): secrets and shell hooks of the member env never reach the CLI', () => {
+  const parent = {
+    HOME: '/Users/m', USER: 'm', LOGNAME: 'm', PATH: '/usr/bin:/bin', TMPDIR: '/tmp/x/', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TZ: 'Africa/Johannesburg',
+    HTTPS_PROXY: 'http://proxy:8080', NODE_EXTRA_CA_CERTS: '/etc/ca.pem',
+    AWS_SECRET_ACCESS_KEY: 'x', GITHUB_TOKEN: 'ghp_x', OPENAI_API_KEY: 'sk-x', SSH_AUTH_SOCK: '/tmp/ssh', BASH_ENV: '/Users/m/.bashenv', ENV: '/Users/m/.shrc',
+    ZDOTDIR: '/Users/m/.zsh', SHELL: '/bin/zsh', TERM: 'xterm-256color', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', NODE_OPTIONS: '--require /x.js', DYLD_INSERT_LIBRARIES: '/x.dylib',
+  };
+  const env = buildEnv(parent, { runDir: RUN_DIR, socket: `${RUN_DIR}/ipc.sock`, token: 'brt1.a.b', supervisorPid: 42, supervisorLstart: 'Wed Sep 30 10:00:00 2026' });
+  assert.deepEqual(Object.keys(env).sort(), [
+    'BOARD_RUN_SOCKET', 'BOARD_RUN_TOKEN', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID',
+    'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'HTTPS_PROXY', 'LANG', 'LC_ALL', 'LOGNAME',
+    'MCP_TOOL_TIMEOUT', 'NODE_EXTRA_CA_CERTS', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'TZ', 'USER', 'ZDOTDIR',
+  ]);
+  assert.equal(env.SHELL, '/bin/sh');
+  assert.equal(env.TERM, 'dumb');
+  assert.equal(env.ZDOTDIR, `${RUN_DIR}/shell`);
+  assert.equal(env.MCP_TOOL_TIMEOUT, '2100000');
+  assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.equal(env.BOARD_SUPERVISOR_PID, '42');
+  assert.ok(!('BASH_ENV' in env) && !('ENV' in env));
+  assert.equal(buildEnv({ ...parent, ANTHROPIC_API_KEY: 'sk-ant-k' }, { runDir: RUN_DIR }).ANTHROPIC_API_KEY, 'sk-ant-k', 'own API key passes only if the member has one');
+});
+
+test('settings.json: sandbox, permissions, git allow rules, hook shim on every event', () => {
+  const s = buildSettings({ worktree: '/wt', tmpdir: '/tmp/x/', node: '/usr/local/bin/node', repo: { bash_allow: ['npm test'], allowed_domains: ['registry.npmjs.org'], allow_write_extra: ['~/.m2'] } });
+  assert.equal(s.permissions.defaultMode, 'acceptEdits');
+  assert.deepEqual(s.permissions.allow, ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite', 'Task', 'mcp__board', 'Bash(git add *)', 'Bash(git commit *)', 'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)', 'Bash(git rev-parse*)', 'Bash(git branch*)', 'Bash(npm test)']);
+  assert.deepEqual(s.sandbox, {
+    enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
+    filesystem: {
+      allowWrite: ['/wt', '/tmp/x/', '~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn', '~/.m2'],
+      denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.board', '~/.codex', '~/.claude-traffic-light'],
+    },
+    network: { allowedDomains: ['registry.npmjs.org'], strictAllowlist: true },
+  });
+  const events = { SessionStart: 'start', UserPromptSubmit: 'prompt', PreToolUse: 'pre', PostToolUse: 'post', PostToolUseFailure: 'postfail', PreCompact: 'precompact', Stop: 'stop', StopFailure: 'stopfail', SubagentStop: 'substop' };
+  assert.deepEqual(Object.keys(s.hooks).sort(), Object.keys(events).sort());
+  for (const [ev, arg] of Object.entries(events)) {
+    const h = s.hooks[ev][0].hooks[0];
+    assert.equal(h.type, 'command');
+    assert.equal(h.command, `'/usr/local/bin/node' '${HOOK_SHIM}' ${arg}`);
+    assert.equal(h.timeout, ['pre', 'precompact'].includes(arg) ? 30 : 10);
+  }
+  assert.equal(s.hooks.PreToolUse[0].matcher, '*');
+  const m = buildMcpConfig({ socket: '/s', token: 'T', node: '/n' });
+  assert.deepEqual(m, { mcpServers: { board: { type: 'stdio', command: '/n', args: [MCP_SERVER], env: { BOARD_RUN_SOCKET: '/s', BOARD_RUN_TOKEN: 'T' } } } });
+});
+
+test('trusted instructions come from the member checkout, not the worktree', () => {
+  const dir = tmpDir();
+  try {
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'Trusted rule.\n');
+    fs.mkdirSync(path.join(dir, '.claude', 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'rules', 'a.md'), 'Rule A.\n');
+    const t = trustedInstructions(dir);
+    assert.match(t, /Trusted rule/);
+    assert.match(t, /Rule A/);
+    assert.match(boardBrief({ key: 'K-1', fence: 3, trusted: t }), /run r3.*board\/K-1-r3/s);
+  } finally { rm(dir); }
+});
+
+test('Gap A: with the run env a login+interactive zsh loads no user aliases or functions', { skip: !fs.existsSync('/bin/zsh') }, () => {
+  const dir = tmpDir();
+  try {
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(home);
+    fs.writeFileSync(path.join(home, '.zshrc'), "alias rm='rm -i'\nalias ll='ls -l'\nboardtestfn() { echo hi; }\n");
+    fs.writeFileSync(path.join(home, '.zshenv'), "alias gs='git status'\n");
+    const probe = "alias; print -r -- FN:$(typeset +f | grep -c boardtestfn); type rm";
+    // Control: the member's own environment DOES load them.
+    const control = spawnSync('/bin/zsh', ['-l', '-i', '-c', probe], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8' });
+    assert.match(control.stdout, /rm='rm -i'/);
+    assert.match(control.stdout, /FN:1/);
+    // The run env: ZDOTDIR = empty run shell dir, SHELL=/bin/sh, no BASH_ENV/ENV.
+    const runDir = path.join(dir, 'run');
+    fs.mkdirSync(path.join(runDir, 'shell'), { recursive: true });
+    const env = buildEnv({ HOME: home, USER: 'm', PATH: '/usr/bin:/bin', BASH_ENV: path.join(home, '.zshrc'), ENV: path.join(home, '.zshrc') }, { runDir, socket: 's', token: 't', supervisorPid: 1, supervisorLstart: 'x' });
+    const ours = spawnSync('/bin/zsh', ['-l', '-i', '-c', probe], { env, encoding: 'utf8' });
+    assert.doesNotMatch(ours.stdout, /rm='rm -i'|ll=|gs=/);
+    assert.match(ours.stdout, /FN:0/);
+    assert.match(ours.stdout, /rm is \/bin\/rm/);
+    // sh (SHELL) with ENV unset reads nothing either.
+    const sh = spawnSync('/bin/sh', ['-i', '-c', 'alias; type rm'], { env, encoding: 'utf8' });
+    assert.doesNotMatch(sh.stdout, /rm -i/);
+  } finally { rm(dir); }
+});
+
+test('the spawned CLI actually receives exactly the allowlisted env and the profile argv', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const repo = makeRepo(root);
+  const env = { HOME: process.env.HOME, USER: 'm', PATH: process.env.PATH, TMPDIR: '/tmp', LANG: 'en_US.UTF-8', AWS_SECRET_ACCESS_KEY: 'nope', GH_TOKEN: 'nope', SSH_AUTH_SOCK: '/x' };
+  const sup = await startRunner({ hub, home: path.join(root, 'home'), repo, env, scenario: { steps: [{ result: 'success' }] } });
+  try {
+    const run = await claimRun(sup, hub, offerFor({ key: 'APP-99' }));
+    const start = await waitFor(() => readFakeLog(run.runDir).find((e) => e.ev === 'start'), { what: 'fake start' });
+    const got = Object.keys(start.env).filter((k) => !['PWD', 'SHLVL', '_', 'OLDPWD', '__CF_USER_TEXT_ENCODING'].includes(k)).sort();
+    assert.deepEqual(got, ['BOARD_RUN_SOCKET', 'BOARD_RUN_TOKEN', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'LANG', 'MCP_TOOL_TIMEOUT', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'ZDOTDIR'].sort());
+    assert.equal(start.argv[start.argv.indexOf('--session-id') + 1], run.sessionId);
+    assert.equal(start.argv[start.argv.indexOf('--setting-sources') + 1], '');
+    assert.equal((fs.statSync(run.runDir).mode & 0o777), 0o700);
+    assert.equal((fs.statSync(path.join(run.runDir, 'settings.json')).mode & 0o777), 0o600);
+    assert.equal((fs.statSync(path.join(run.runDir, 'mcp.json')).mode & 0o777), 0o600);
+    assert.equal((fs.statSync(run.socketPath).mode & 0o777), 0o600);
+    assert.equal(fs.readdirSync(path.join(run.runDir, 'shell')).length, 0, 'empty ZDOTDIR');
+    assert.match(start.argv[start.argv.indexOf('--append-system-prompt') + 1], /Use tabs/, 'trusted CLAUDE.md appended');
+  } finally {
+    await sup.shutdown();
+    await hub.close();
+    rm(root);
+  }
+});
