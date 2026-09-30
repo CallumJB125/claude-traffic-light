@@ -47,8 +47,18 @@ const HOOK = {
   nudged: 'w w N N s f n x a l -',
   failed: 'w w X X s f X x a l -',
 };
-// A bare signal (emit.js, /signal) has no hook-only guards: it always lands.
-const BARE = Object.fromEntries(Object.keys(HOOK).map((s) => [s, 'w w w w s f n x a l -']));
+// A bare signal (emit.js, /signal) gets the same guards; only task counting
+// (hook-only data) is skipped, so a bare task signal lands as sent.
+const BARE = {
+  absent: 'w w w w s f n x a l -',
+  working: 'w w w w s f n x a l -',
+  started: 'w w S w s f n x a l -',
+  asking: 'w w A w s f n x a l -',
+  limited: 'w w L w s f n x a l -',
+  finished: 'w w F w s f n x a l -',
+  nudged: 'w w N w s f n x a l -',
+  failed: 'w w X w s f X x a l -',
+};
 const LETTER = { w: 'working', s: 'started', a: 'asking', l: 'limited', f: 'finished', n: 'nudged', x: 'failed', '-': 'absent' };
 
 test('machine: the spec covers every state and event the machine has', () => {

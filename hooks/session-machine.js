@@ -107,16 +107,20 @@
   // state follows from it), 'keep' leaves the stored signal as it was,
   // 'absent' removes the file. `bookkeeping` rows change lists and counters
   // but must not look like the session moved (updatedAt holds, agentsAt
-  // stamps). `hooksOnly` rows are guards only the Claude Code hook applies:
-  // a bare signal (emit.js, /signal) always lands as sent.
+  // stamps). The guards apply to every writer: a bare signal (emit.js,
+  // /signal) carries no agent_id, so only its subagent-start/-done can be an
+  // agent event, but those must not reopen a finished turn either.
+  // `hooksOnly` rows depend on data only the Claude Code hook has: task
+  // counters are counted from hook events (a /signal caller posts its own
+  // `tasks` instead), so a bare task signal, if one ever came, lands as sent.
   const TRANSITIONS = [
     { id: 'end', from: '*', on: 'end', to: 'absent',
       why: 'SessionEnd removes the file' },
     { id: 'task-bookkeeping', from: '*', on: 'task', to: 'keep', bookkeeping: true, hooksOnly: true,
       why: 'task events only count; they never change what the session is doing' },
-    { id: 'agent-after-turn', from: CLOSED, on: 'agent', to: 'keep', bookkeeping: true, hooksOnly: true,
+    { id: 'agent-after-turn', from: CLOSED, on: 'agent', to: 'keep', bookkeeping: true,
       why: 'a background agent working after the turn ended must not look like the turn restarted' },
-    { id: 'nudge-keeps-failure', from: ['failed'], on: 'nudge', to: 'keep', hooksOnly: true,
+    { id: 'nudge-keeps-failure', from: ['failed'], on: 'nudge', to: 'keep',
       why: 'the idle nudge ~60 s after a failed turn must not turn "the network dropped" into "waiting for you"' },
     { id: 'signal', from: '*', on: '*', to: 'signal',
       why: 'anything else is what the session is now doing' },

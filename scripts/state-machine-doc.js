@@ -80,7 +80,9 @@ ${ruleRows.join('\n')}
 as it was. **Bookkeeping** rows update agent and task lists but must not look
 like the session moved: \`updatedAt\` holds, \`agentsAt\` is stamped, and a
 closed turn keeps its \`workingSince\`. A bare signal (\`emit.js\`, \`/signal\`)
-skips the hook-only rows and always lands as sent.
+goes through the same guards; it carries no \`agent_id\`, so only its
+\`subagent-*\` signals are agent events. Hook-only rows need data only the
+hook has (task counting), so a bare writer skips them.
 
 ## Transition table (Claude Code hooks)
 
@@ -88,6 +90,11 @@ Target state for every (state, event) pair. **Bold¹** marks a guarded
 \`keep\`: the event did not change what the session shows.
 
 ${matrix('hook')}
+
+Bare signals (\`emit.js\`, \`/signal\`) differ only where a hook-only row
+would have applied:
+
+${matrix('bare')}
 
 ## Diagram
 

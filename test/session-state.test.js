@@ -490,6 +490,34 @@ test('emit.js: a bare signal keeps agents, mode and cwd, and a failed turn ends 
   assert.deepEqual([d.signal, d.workingSince, d.mode, d.iteration, d.agents.length, d.cwd, d.touchedAt], ['turn-failed', null, 'team', 3, 1, '/w/proj', d0.touchedAt]);
 });
 
+test('emit.js: bare signals get the same guards — a late subagent-done keeps "finished", the idle nudge keeps a failure', () => {
+  const home = tmpHome();
+  const emit = (...args) => {
+    const r = spawnSync(process.execPath, [EMIT, ...args, '--source', 'cursor', '--session', 'g1'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+    assert.equal(r.status, 0, r.stderr.toString());
+  };
+  const file = path.join(home, 'sessions', `${HOST}-cursor-g1.json`);
+  const readG = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  emit('tool-use', '--tool', 'Bash');
+  emit('stop');
+  const stopped = readG();
+  emit('subagent-done');
+  const d = readG();
+  assert.deepEqual([d.signal, d.tool, d.updatedAt], ['stop', stopped.tool, stopped.updatedAt], 'not green, and not the session moving');
+  assert.ok(d.agentsAt, 'bookkeeping stamps agentsAt');
+  emit('turn-failed');
+  emit('idle-nudge');
+  assert.equal(readG().signal, 'turn-failed');
+});
+
+test('applyBareSignal (/signal): a held signal keeps the stored tool; a landed one takes the new tool', () => {
+  const prev = { sessionId: 's', signal: 'stop', tool: 'Edit', updatedAt: '2026-09-30T10:00:00.000Z' };
+  const held = SessionState.applyBareSignal(prev, { sessionId: 's', host: 'h', source: 'x', signal: 'subagent-start', tool: 'Agent' }, '2026-09-30T10:01:00.000Z');
+  assert.deepEqual([held.signal, held.tool, held.updatedAt, held.agentsAt], ['stop', 'Edit', prev.updatedAt, '2026-09-30T10:01:00.000Z']);
+  const landed = SessionState.applyBareSignal(prev, { sessionId: 's', host: 'h', source: 'x', signal: 'tool-use', tool: 'Bash' }, '2026-09-30T10:01:00.000Z');
+  assert.deepEqual([landed.signal, landed.tool, landed.updatedAt], ['tool-use', 'Bash', '2026-09-30T10:01:00.000Z']);
+});
+
 test('set-status: touchedAt moves when you act, not when Claude does', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'tc', cwd: '/w' });

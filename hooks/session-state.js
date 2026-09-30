@@ -116,9 +116,11 @@ function readJson(file) {
 }
 
 // The state step for a writer that only knows a bare signal (emit.js and the
-// /signal endpoint): the machine's 'bare' writer, which skips the hook-only
-// guards. Everything the hooks and the app's pollers store on the file is
-// carried through, so a bare signal never wipes it.
+// /signal endpoint): the machine's 'bare' writer, under the same guards as
+// the hook (a late subagent-done is bookkeeping, the idle nudge keeps a
+// failure). Everything the hooks and the app's pollers store on the file is
+// carried through, so a bare signal never wipes it; a held signal keeps its
+// tool too.
 function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp }, nowIso = new Date().toISOString()) {
   const p = prev || {};
   const t = Machine.step(prev, { signal, writer: 'bare' }, nowIso);
@@ -130,13 +132,14 @@ function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = nu
     hostApp: hostApp ?? p.hostApp,
     cwd: cwd || p.cwd || '',
     signal: t.signal,
-    tool,
+    tool: t.held ? (p.tool ?? null) : tool,
     prevSignal: t.prevSignal,
     signalSince: t.signalSince,
     workingSince: t.workingSince,
     tasks: p.tasks || { created: 0, done: 0 },
     touchedAt: t.touchedAt,
     updatedAt: t.updatedAt,
+    agentsAt: t.agentsAt,
   };
 }
 

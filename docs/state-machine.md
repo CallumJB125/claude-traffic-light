@@ -56,15 +56,17 @@ First matching rule wins.
 |---|---|---|---|---|---|
 | `end` | any | `end` | absent | all | SessionEnd removes the file |
 | `task-bookkeeping` | any | `task` | keep (bookkeeping) | hook only | task events only count; they never change what the session is doing |
-| `agent-after-turn` | started, asking, limited, finished, nudged, failed | `agent` | keep (bookkeeping) | hook only | a background agent working after the turn ended must not look like the turn restarted |
-| `nudge-keeps-failure` | failed | `nudge` | keep | hook only | the idle nudge ~60 s after a failed turn must not turn "the network dropped" into "waiting for you" |
+| `agent-after-turn` | started, asking, limited, finished, nudged, failed | `agent` | keep (bookkeeping) | all | a background agent working after the turn ended must not look like the turn restarted |
+| `nudge-keeps-failure` | failed | `nudge` | keep | all | the idle nudge ~60 s after a failed turn must not turn "the network dropped" into "waiting for you" |
 | `signal` | any | any | signal | all | anything else is what the session is now doing |
 
 `keep` leaves the stored signal (and its tool, ask kind, via and failure)
 as it was. **Bookkeeping** rows update agent and task lists but must not look
 like the session moved: `updatedAt` holds, `agentsAt` is stamped, and a
 closed turn keeps its `workingSince`. A bare signal (`emit.js`, `/signal`)
-skips the hook-only rows and always lands as sent.
+goes through the same guards; it carries no `agent_id`, so only its
+`subagent-*` signals are agent events. Hook-only rows need data only the
+hook has (task counting), so a bare writer skips them.
 
 ## Transition table (Claude Code hooks)
 
@@ -81,6 +83,20 @@ Target state for every (state, event) pair. **Bold¹** marks a guarded
 | **finished** | working | working | **finished**¹ | **finished**¹ | started | finished | nudged | failed | asking | limited | absent |
 | **nudged** | working | working | **nudged**¹ | **nudged**¹ | started | finished | nudged | failed | asking | limited | absent |
 | **failed** | working | working | **failed**¹ | **failed**¹ | started | finished | **failed**¹ | failed | asking | limited | absent |
+
+Bare signals (`emit.js`, `/signal`) differ only where a hook-only row
+would have applied:
+
+| from \ event | prompt | work | agent | task | start | stop | nudge | fail | ask | limit | end |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **absent** | working | working | working | working | started | finished | nudged | failed | asking | limited | absent |
+| **working** | working | working | working | working | started | finished | nudged | failed | asking | limited | absent |
+| **started** | working | working | **started**¹ | working | started | finished | nudged | failed | asking | limited | absent |
+| **asking** | working | working | **asking**¹ | working | started | finished | nudged | failed | asking | limited | absent |
+| **limited** | working | working | **limited**¹ | working | started | finished | nudged | failed | asking | limited | absent |
+| **finished** | working | working | **finished**¹ | working | started | finished | nudged | failed | asking | limited | absent |
+| **nudged** | working | working | **nudged**¹ | working | started | finished | nudged | failed | asking | limited | absent |
+| **failed** | working | working | **failed**¹ | working | started | finished | **failed**¹ | failed | asking | limited | absent |
 
 ## Diagram
 
