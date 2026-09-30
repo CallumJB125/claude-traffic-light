@@ -1,9 +1,18 @@
 # Makes a staged version live, or rolls back to an older one. Run by hand:
 #   Actions → Promote release → version "1.2.0"
-# It publishes that version's draft GitHub Release and marks it latest (the
-# feed while GitHub Releases is the update source), then points the R2 feed
-# files at it. Rolling back is running this with the previous version; the
-# apps accept a downgrade from the feed.
+# It publishes that version's draft GitHub Release and marks it latest, then
+# points the R2 feed at it: installers, then latest*.yml, then the signed
+# release.json last (scripts/release-r2.js refuses a version without one).
+#
+# Rolling back: run it with the previous version and tick "rollback". The
+# apps refuse a downgrade unless the manifest is signed as a rollback, and a
+# manifest issued before one they already accepted, so this re-signs the
+# staged release.json with rollback:true and a fresh issuedAt. That needs the
+# PLEXIFORM_UPDATE_SIGNING_KEY secret. (Re-promoting a newer version after a
+# rollback needs a fresh signature too: stage a new version, or tick rollback.)
+#
+# "beta" promotes beta/<version>/ to the beta feed (beta/) instead; there is
+# no GitHub Release for betas.
 name: Promote release
 
 on:
@@ -12,6 +21,14 @@ on:
       version:
         description: Version to make live, without the v (e.g. 1.2.0)
         required: true
+      rollback:
+        description: 'Rollback: re-sign as a rollback (rollback:true, fresh issuedAt) so apps on a newer version accept it'
+        type: boolean
+        default: false
+      beta:
+        description: 'Beta: promote beta/<version>/ to the beta feed (beta/)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,6 +40,11 @@ concurrency:
 jobs:
   promote:
     runs-on: ubuntu-latest
+    env:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,14 +53,19 @@ jobs:
           echo "${{ inputs.version }}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "::error::not a version"; exit 1; }
 
       - name: Publish on GitHub and mark latest
+        if: ${{ !inputs.beta }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "v${{ inputs.version }}" --draft=false --latest
 
-      - name: Point the R2 feed at it
+      - name: Re-sign release.json as a rollback
+        if: ${{ inputs.rollback }}
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: node scripts/release-r2.js promote "${{ inputs.version }}"
+          PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
+        run: |
+          mkdir -p resigned
+          node scripts/release-r2.js fetch-manifest "${{ inputs.version }}" resigned ${{ inputs.beta && '--beta' || '' }}
+          node scripts/release-sign.js resign resigned/release.json --rollback
+
+      - name: Point the R2 feed at it
+        run: node scripts/release-r2.js ${{ inputs.beta && 'promote-beta' || 'promote' }} "${{ inputs.version }}" ${{ inputs.rollback && '--manifest-dir resigned' || '' }}

@@ -2,9 +2,11 @@
 # each packaged app, and stages the release. Nothing reaches users here:
 #   - the GitHub Release is created as a DRAFT
 #   - on R2 the files land under <version>/, and the feed files the apps read
-#     (latest*.yml at the bucket root) are not touched
+#     (latest*.yml, release.json at the bucket root) are not touched
+#   - release.json lists every installer's sha512 and is signed with
+#     PLEXIFORM_UPDATE_SIGNING_KEY; the apps install nothing it doesn't cover
 # Making a version live is release-promote.yml, run by hand. Rolling back is
-# the same workflow with an older version.
+# the same workflow with an older version and "rollback" ticked.
 #
 # Signing is off until there is a Developer ID (see docs/RELEASING.md).
 name: Release
@@ -83,11 +85,17 @@ jobs:
           echo "PLEXIFORM_UPDATE_FEED=https://download.plexiform.dev/beta" >> "$GITHUB_ENV"
           echo "beta version $v"
 
-      # Windows is report-only until item 5 has made the suite pass there; the
-      # smoke test below still gates the Windows installer.
+      # Gates tag builds only: branch and beta dry runs report failures without
+      # blocking packaging and the smoke test. The ICS tests assume SAST, and
+      # Electron-based tests need a display and no sandbox on Linux runners.
       - name: Unit tests
-        run: npm test
-        continue-on-error: ${{ matrix.platform == 'win' }}
+        shell: bash
+        env:
+          TZ: Africa/Johannesburg
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum npm test; else npm test; fi
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Native helpers (Mac)
         if: matrix.platform == 'mac'
@@ -135,6 +143,13 @@ jobs:
           path: out
           merge-multiple: true
 
+      # Installed apps refuse any release without this signature, so a tag
+      # release fails here rather than staging one nobody can install.
+      - name: Sign release.json
+        env:
+          PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
+        run: node scripts/release-sign.js build out --channel stable --version "${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md
+
       - name: Checksums
         working-directory: out
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
@@ -170,6 +185,13 @@ jobs:
           pattern: installers-*
           path: out
           merge-multiple: true
+
+      # Signed when the key is set; otherwise a warning, and beta apps will
+      # refuse this build (it still uploads, for manual testing).
+      - name: Sign release.json (if the key is set)
+        env:
+          PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
+        run: node scripts/release-sign.js build out --channel beta --notes-file docs/release-notes.md --optional
 
       - name: Checksums
         working-directory: out
