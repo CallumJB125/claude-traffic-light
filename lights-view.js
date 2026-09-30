@@ -1212,7 +1212,7 @@
       $(`view-${k}`).setAttribute('aria-selected', v === k);
     }
     if (v === 'stats') renderStats();
-    if (v === 'mix') renderMix();
+    if (v === 'mix') { renderMix(); renderUsageHistory(true); }
   }
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
@@ -1476,7 +1476,21 @@
       : '<li class="empty-small">No turns yet.</li>';
   }
 
+  // The history section: drawn from the permanent record (usage-view.js).
+  let usageView = null;
+  let usageAt = 0;
+  function renderUsageHistory(force) {
+    if (!window.UsageView) return;
+    // the tab redraws on every hook burst; the charts only need it now and then
+    if (!force && usageView && Date.now() - usageAt < 15000) return;
+    usageAt = Date.now();
+    const q = new URLSearchParams(location.search).get('now');
+    if (!usageView) usageView = window.UsageView.mount($('usage-history'), { api: window.lightsApi, ...(q ? { now: () => Number(q) } : {}) });
+    usageView.refresh();
+  }
+
   async function renderMix() {
+    renderUsageHistory();
     const mix = await window.lightsApi.modelMix();
     if (!mix) return;
     $('mix-loading').hidden = true;

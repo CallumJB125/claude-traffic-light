@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('lightsApi', {
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
   getCosts: () => ipcRenderer.invoke('get-costs'),
   modelMix: () => ipcRenderer.invoke('model-mix'),
+  usageBundle: (q) => ipcRenderer.invoke('usage-bundle', q),
   previewSound: (name) => ipcRenderer.invoke('preview-sound', name),
   chooseSoundFile: () => ipcRenderer.invoke('choose-sound-file'),
   exportRules: (rules) => ipcRenderer.invoke('export-rules', rules),
