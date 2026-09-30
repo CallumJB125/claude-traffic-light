@@ -61,7 +61,7 @@ const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add 
 // Directories whose files are scanned only if the app package actually includes them
 // (board/runner, board/mcp, board/web/mock and remote/ are dev or server-side tools).
 const BY_PACKAGING = new Set(['board', 'remote']);
-const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git']);
+const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git', 'dist', 'out', 'test-results', '.omc']);
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 function shipped(dir = ROOT, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
