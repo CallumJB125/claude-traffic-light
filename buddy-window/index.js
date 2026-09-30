@@ -224,9 +224,14 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
       if (!hubLoading) hubLoading = resolveHub().finally(() => { hubLoading = null; });
       try {
         const h = await hubLoading;
+        // A hub that restarted while we set its cookie has a new URL: let the
+        // next 'ready' drive the load instead of adopting a dead one.
+        if (!h.team && supervisor.status().url !== h.url) return;
         if (!hubInfo) hubInfo = h;
       } catch (e) {
         log('board unavailable', e.message);
+        // The hub may be fine (e.g. the cookie could not be set): offer Retry.
+        if (hubStatus.state === 'ready') viewError = `Could not open the board (${e.message}).`;
         if (win && selected === page.id) showInfo(page);
         pushState();
         return;
@@ -237,7 +242,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     const view = hubView;
     const url = hubPageUrl(hubInfo.url, page);
     const cur = view.webContents.getURL();
-    if (!cur || !cur.startsWith(hubInfo.origin) || pageForHubUrl(cur) !== page.id) await view.webContents.loadURL(url).catch(() => {});
+    if (!cur || !cur.startsWith(hubInfo.origin) || pageForHubUrl(cur) !== page.id) {
+      viewError = null;
+      await view.webContents.loadURL(url).catch(() => {});
+    }
     if (win && selected === page.id && view === hubView && !viewError) attach(view);
   }
 
