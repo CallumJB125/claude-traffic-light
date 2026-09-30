@@ -801,7 +801,7 @@ export class Run {
   }
 
   #hookStop(payload) {
-    if (payload.last_assistant_message) this.fact('message', { text: clip(redact(String(payload.last_assistant_message), this.worktree), 500) });
+    if (payload.last_assistant_message) this.fact('message', { text: this.#text(payload.last_assistant_message, 500) });
     this.snapshotNow({ why: 'stop' });
     const s = this.turnSignals;
     if (this.ending || this.completed || this.released || s.complete || s.ask || s.release) return PROCEED;
@@ -816,8 +816,10 @@ export class Run {
     return { run_id: this.run_id, card_id: this.card_id, key: this.key, fence: this.fence, repo_id: this.repo_id, tools: this.sup.mcpTools };
   }
 
+  // Agent text bound for the board. The nonce never leaves: echoed back in a
+  // read-tool result it would let this run's own text forge a closing tag.
   #text(s, n) {
-    return clip(redact(String(s ?? ''), this.worktree), n);
+    return clip(redact(String(s ?? ''), this.worktree).replaceAll(this.nonce, '[nonce]'), n);
   }
 
   #wrap(source, text) {
