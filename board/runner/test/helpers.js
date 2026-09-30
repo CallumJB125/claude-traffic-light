@@ -194,6 +194,7 @@ export async function startRunner({ hub, home, repo, scenario, clock, policyExtr
     env: env ?? { HOME: process.env.HOME, USER: process.env.USER, PATH: process.env.PATH, TMPDIR: '/tmp', LANG: 'en_US.UTF-8' },
     log: makeLogger(process.stderr, { quiet: !process.env.BOARD_TEST_LOG }),
     interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
+    keepRunFiles: true,   // tests read fake.log after the run ends
     ...opts,
   });
   await sup.start();

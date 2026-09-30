@@ -3,7 +3,11 @@
 // T_claim → prep.failed; the Stop-hook reminder.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createWorktree } from '../git.js';
+import { snapshotRef } from '../../shared/fence.js';
 import { startFakeHub, startRunner, makeRepo, tmpDir, rm, offerFor, claimRun, waitFor, readFakeLog, fakeClock, advance, hookCall, OWNER } from './helpers.js';
 
 async function withRunner(scenario, fn, extra = {}) {
@@ -137,4 +141,36 @@ test('no SessionStart within 30 s → degraded fact', async () => {
     const ok = await hookCall(run, 'start', { source: 'compact' });
     assert.match(ok.result.stdout.hookSpecificOutput.additionalContext, /handover/i);
   }, { clock });
+});
+
+test('worktree prep slower than T_claim: prep.failed once, the CLI is never spawned, nothing re-enters the ledger', async () => {
+  const clock = fakeClock();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const slow = async (a) => { await gate; return createWorktree(a); };
+  await withRunner({ steps: [{ result: 'success' }] }, async ({ hub, sup, root }) => {
+    hub.send(offerFor({ key: 'T-12' }));
+    const run = await waitFor(() => [...sup.runs.values()].find((r) => r.key === 'T-12'), { what: 'run registered' });
+    await advance(sup, clock, 121);
+    await waitFor(() => run.ended, { what: 'ended by T_claim' });
+    release();
+    await waitFor(() => fs.existsSync(run.worktree), { what: 'worktree finally created' });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(run.backend, null, 'no CLI for an ended run');
+    assert.equal(hub.outs('prep.failed').length, 1);
+    assert.equal(sup.runs.size, 0);
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(root, 'home', 'ledger.json'), 'utf8')).runs), []);
+  }, { clock, opts: { createWorktree: slow } });
+});
+
+test('an ended run leaves no worktree or run dir behind; its branch and snapshot ref stay', async () => {
+  await withRunner({ steps: [{ tool: 'Write', input: { file_path: 'notes.txt', content: 'x\n' } }, { result: 'error_max_budget_usd' }] }, async ({ hub, sup }) => {
+    const run = await claimRun(sup, hub, offerFor({ key: 'T-13' }));
+    await waitFor(() => run.ended, { what: 'ended' });
+    await waitFor(() => !fs.existsSync(run.worktree) && !fs.existsSync(run.runDir), { what: 'cleaned up' });
+    const repo = sup.policy.repos[run.repo_id].local_path;
+    assert.doesNotThrow(() => execFileSync('git', ['rev-parse', '--verify', run.branch], { cwd: repo, stdio: 'ignore' }));
+    assert.doesNotThrow(() => execFileSync('git', ['rev-parse', '--verify', snapshotRef('T-13', run.fence)], { cwd: repo, stdio: 'ignore' }));
+    assert.doesNotMatch(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' }), /T-13/);
+  }, { opts: { keepRunFiles: false } });
 });

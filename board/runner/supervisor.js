@@ -17,7 +17,7 @@ import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
 import { startIpcServer } from './ipc.js';
 import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
-import { createWorktree, sessionOf, snapshot as gitSnapshot } from './git.js';
+import { createWorktree, sessionOf, snapshot as gitSnapshot, git } from './git.js';
 import { decideOffer, advertisable } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
@@ -460,10 +460,14 @@ export class Supervisor extends EventEmitter {
       claimAckMono: sentMono, claimAckWall: sentWall,
     });
     this.runs.set(run.run_id, run);
+    // T_claim (Run.tick) may end the run while prep is still awaiting (a slow
+    // fetch): after every await, an ended run spawns nothing.
+    const over = () => run.ending || run.ended;
     try {
-      const w = await createWorktree({ localPath: repo.local_path, wt, key, fence, baseRef: offer.base_ref, fromSnapshot: offer.seed?.from_snapshot });
+      const w = await (this.opts.createWorktree ?? createWorktree)({ localPath: repo.local_path, wt, key, fence, baseRef: offer.base_ref, fromSnapshot: offer.seed?.from_snapshot });
       run.worktree = w.worktree;
       run.scope = { repo_id: scope.repo_id, toplevel: w.worktree };
+      if (over()) { this.cleanupRun(run); return run; }
       const s2 = scopeOf(await sessionOf(w.worktree), { allowlist: this.allowlist, opted_in: [offer.repo_id] });
       if (!s2 || s2.repo_id !== offer.repo_id) throw new Error('worktree does not scope to the offered repo');
     } catch (e) {
@@ -471,12 +475,14 @@ export class Supervisor extends EventEmitter {
       await run.prepFailed(`worktree: ${String(e.stderr || e.message).split('\n')[0]}`);
       return run;
     }
+    if (over()) { this.cleanupRun(run); return run; }
     try {
       // The socket must be up before the CLI's first hook fires.
       run.ipc = await startIpcServer({
         socketPath: run.socketPath, token: run.run_token, log: this.log,
         handler: { hello: () => run.hello(), tool: (n, a, ctx) => run.tool(n, a, ctx), hook: (e, p) => run.hook(e, p), cancel: (re, ctx) => run.cancel(ctx.connId, re) },
       });
+      if (over()) { run.ipc.close(); this.cleanupRun(run); return run; }
       this.#spawn(run, { resume: false });
       this.sendHbNow();   // the hub learns child_alive now, not at the next 15 s tick
     } catch (e) {
@@ -488,6 +494,7 @@ export class Supervisor extends EventEmitter {
   }
 
   #spawn(run, { resume }) {
+    if (run.ending || run.ended) return null;
     const repo = this.policy.repos[run.repo_id] ?? {};
     const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
@@ -525,6 +532,7 @@ export class Supervisor extends EventEmitter {
     delete ledger.runs[run.run_id];
     writeLedger(this.l, ledger);
     this.notifyLocal({ event: 'run_ended', run_id: run.run_id, key: run.key, reason: run.endReason });
+    this.cleanupRun(run);
     this.emit('run_ended', run);
     for (const [cardId, offer] of this.deferred) {
       this.deferred.delete(cardId);
@@ -533,7 +541,22 @@ export class Supervisor extends EventEmitter {
     }
   }
 
+  // An ended run's worktree and run dir go; its branch and snapshot/salvage refs
+  // stay in the member's repo (refs are shared by every worktree). A final
+  // snapshot that never got pushed keeps the worktree for a manual salvage.
+  cleanupRun(run) {
+    if (this.opts.keepRunFiles ?? this.env.BOARD_KEEP_RUN_FILES === '1') return;
+    try { fs.rmSync(run.runDir, { recursive: true, force: true }); } catch { /* gone */ }
+    const localPath = this.policy.repos?.[run.repo_id]?.local_path;
+    if (!localPath || !run.worktree || !fs.existsSync(run.worktree)) return;
+    if (run.unpushed) { this.log.warn('keeping the worktree: its last snapshot was never pushed', { run_id: run.run_id, worktree: run.worktree }); return; }
+    git(localPath, ['worktree', 'remove', '--force', run.worktree])
+      .then(() => git(localPath, ['worktree', 'prune']))
+      .catch((e) => this.log.warn('worktree cleanup failed', { run_id: run.run_id, err: String(e.stderr || e.message).split('\n')[0] }));
+  }
+
   saveLedger(run) {
+    if (run.ended || this.runs.get(run.run_id) !== run) return;   // never re-add an ended run
     const ledger = readLedger(this.l);
     const b = run.backend;
     ledger.runs[run.run_id] = {
