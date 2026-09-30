@@ -8,7 +8,8 @@
 // sealed value can't be copied into another row and decrypt there.
 
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, realpathSync, existsSync } from 'node:fs';
+import { dirname, basename, join, sep } from 'node:path';
 import { HubError } from './db.js';
 
 const KEY_BYTES = 32;
@@ -23,16 +24,37 @@ function decodeKey(text) {
 // Short, non-secret id: lets rows name the key they were sealed with.
 export const keyIdOf = (key) => createHash('sha256').update('board-vault-key-id').update(key).digest('hex').slice(0, 12);
 
+// Resolve symlinks and `..` so a keyfile can't sneak into the data dir; a
+// path that doesn't exist yet resolves through its parent.
+function real(p) {
+  if (existsSync(p)) return realpathSync(p);
+  const parent = dirname(p);
+  return parent === p ? p : join(real(parent), basename(p));
+}
+
 /**
- * loadKey({env, dataDir}) → Buffer | null
+ * loadKey({env, dataDir, hasParentPort}) → Buffer | null
  * A keyfile inside the data dir is refused: it would ride along in backups.
+ * Under the desktop app (parentPort) the key only ever arrives over
+ * parentPort (hub.setVaultKey), never from env. A key read from env is
+ * removed from it, so nothing started later can see it.
  */
-export function loadKey({ env = process.env, dataDir = null } = {}) {
-  if (env.BOARD_ENC_KEY) return decodeKey(env.BOARD_ENC_KEY);
+export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!process.parentPort } = {}) {
+  if ((env.BOARD_ENC_KEY || env.BOARD_ENC_KEY_FILE) && hasParentPort) {
+    throw new Error('BOARD_ENC_KEY(_FILE) is refused under the desktop app: the key comes over parentPort');
+  }
+  if (env.BOARD_ENC_KEY) {
+    const key = decodeKey(env.BOARD_ENC_KEY);
+    delete env.BOARD_ENC_KEY;
+    return key;
+  }
   if (env.BOARD_ENC_KEY_FILE) {
-    const file = env.BOARD_ENC_KEY_FILE;
-    if (dataDir && (file === dataDir || file.startsWith(`${dataDir.replace(/\/+$/, '')}/`))) {
-      throw new Error('BOARD_ENC_KEY_FILE must live outside BOARD_DATA_DIR (backups copy the data dir)');
+    const file = real(env.BOARD_ENC_KEY_FILE);
+    if (dataDir) {
+      const dir = real(dataDir);
+      if (file === dir || file.startsWith(dir.endsWith(sep) ? dir : dir + sep)) {
+        throw new Error('BOARD_ENC_KEY_FILE must live outside BOARD_DATA_DIR (backups copy the data dir)');
+      }
     }
     const mode = statSync(file).mode & 0o077;
     if (mode) throw new Error('BOARD_ENC_KEY_FILE must not be readable by group or others (chmod 600)');

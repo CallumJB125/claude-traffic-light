@@ -3,12 +3,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openDb } from '../db.js';
-import { createBus } from '../bus.js';
+import { createBus, DEAD_AFTER } from '../bus.js';
 import { createVault, loadKey, keyIdOf } from '../vault.js';
 import { startHub, runMsg, settle } from './helpers.js';
 
@@ -185,21 +185,33 @@ test('vault: without a key nothing can be sealed (connections are refused)', () 
 
 test('loadKey: env hex/base64, keyfile outside the data dir only, 0600 only, 32 bytes only', () => {
   const hex = randomBytes(32).toString('hex');
-  assert.equal(loadKey({ env: { BOARD_ENC_KEY: hex } }).toString('hex'), hex);
+  const env = { BOARD_ENC_KEY: hex };
+  assert.equal(loadKey({ env, hasParentPort: false }).toString('hex'), hex);
+  assert.equal(env.BOARD_ENC_KEY, undefined, 'the key is removed from env once read');
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: hex }, hasParentPort: true }), /parentPort/);
   const b64 = randomBytes(32).toString('base64');
-  assert.equal(loadKey({ env: { BOARD_ENC_KEY: b64 } }).toString('base64'), b64);
-  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: 'short' } }), /32 bytes/);
-  assert.equal(loadKey({ env: {} }), null);
+  assert.equal(loadKey({ env: { BOARD_ENC_KEY: b64 }, hasParentPort: false }).toString('base64'), b64);
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: 'short' }, hasParentPort: false }), /32 bytes/);
+  assert.equal(loadKey({ env: {}, hasParentPort: false }), null);
   const dir = mkdtempSync(join(tmpdir(), 'vault-'));
   const data = join(dir, 'data');
   const inside = join(data, 'enc.key');
-  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: inside }, dataDir: data }), /outside BOARD_DATA_DIR/);
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: inside }, dataDir: data, hasParentPort: false }), /outside BOARD_DATA_DIR/);
+  // `..` and symlinks can't get a keyfile into the data dir either.
+  mkdirSync(data, { recursive: true });
+  const sneaky = join(dir, 'x', '..', 'data', 'k');
+  writeFileSync(join(data, 'k'), randomBytes(32).toString('hex'), { mode: 0o600 });
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: sneaky }, dataDir: data, hasParentPort: false }), /outside BOARD_DATA_DIR/);
+  symlinkSync(join(data, 'k'), join(dir, 'link.key'));
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: join(dir, 'link.key') }, dataDir: data, hasParentPort: false }), /outside BOARD_DATA_DIR/);
+  symlinkSync(data, join(dir, 'datalink'));
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: join(dir, 'link.key') }, dataDir: join(dir, 'datalink'), hasParentPort: false }), /outside BOARD_DATA_DIR/);
   const f = join(dir, 'enc.key');
   writeFileSync(f, hex);
   chmodSync(f, 0o644);
-  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: f }, dataDir: data }), /chmod 600/);
+  assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: f }, dataDir: data, hasParentPort: false }), /chmod 600/);
   chmodSync(f, 0o600);
-  assert.equal(loadKey({ env: { BOARD_ENC_KEY_FILE: f }, dataDir: data }).toString('hex'), hex);
+  assert.equal(loadKey({ env: { BOARD_ENC_KEY_FILE: f }, dataDir: data, hasParentPort: false }).toString('hex'), hex);
 });
 
 test('migration 007: tables exist; identities are unique per workspace subject and per member', () => {
@@ -212,4 +224,24 @@ test('migration 007: tables exist; identities are unique per workspace subject a
   for (const t of ['connection_secrets', 'external_identities', 'external_links', 'routes', 'inbound_dedupe', 'bus_cursors']) {
     assert.ok(db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", t), t);
   }
+});
+
+test('bus: a poison row is dead-lettered after DEAD_AFTER tries on the same seq, and the consumer carries on', async () => {
+  const { db, add } = journalDb();
+  const timers = manualTimers();
+  const bus = createBus({ db, timers });
+  const got = [];
+  bus.subscribe('c', (r) => { if (r.payload.n === 2) throw new Error('always broken'); got.push(r.payload.n); });
+  await bus.settle();
+  add('x', { n: 1 }); add('x', { n: 2 }); add('x', { n: 3 });
+  bus.poke();
+  await bus.settle();
+  for (let i = 1; i < DEAD_AFTER; i += 1) { timers.q.pop().fn(); await bus.settle(); }
+  assert.deepEqual(got, [1, 3]);
+  const h = bus.health()[0];
+  assert.equal(h.dead_letters, 1);
+  assert.equal(h.backlog, 0);
+  const dl = db.get('SELECT * FROM bus_dead_letters');
+  assert.equal(dl.consumer, 'c');
+  assert.match(dl.error, /always broken/);
 });

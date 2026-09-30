@@ -4,6 +4,7 @@
 // liveness (D11), overlap recompute, notifications (N-rules) and the GitHub
 // merge poll. Transports (HTTP, /ws/board, /ws/runner) call into this class.
 
+import { createVault } from './vault.js';
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
@@ -52,6 +53,9 @@ export class Hub extends EventEmitter {
     this.offered = new Map();       // card_id → Set(device_id)
     this.pendingCmds = new Map();   // device_id → cmd frames for an offline device
     this.notifications = [];
+    // Sealed connector secrets (D41). No key until one is given: the desktop
+    // app sends it over parentPort, the Pi hub loads it from its env/keyfile.
+    this.vault = createVault(null);
     this.overlapDue = new Map();    // repo_id → due (mono)
     this.prStatus = new Map();      // card_id → PR status from the merge poll
     this.requestCache = new Map();  // `${member}|${request_id}` → {status, body, exp}
@@ -145,6 +149,13 @@ export class Hub extends EventEmitter {
       this.post.length = mark;
       throw e;
     }
+  }
+
+  /** One-shot: the first key wins; a second call is refused (never logged). */
+  setVaultKey(key) {
+    if (this.vault.available) return false;
+    this.vault = createVault(key);
+    return true;
   }
 
   later(fn) {

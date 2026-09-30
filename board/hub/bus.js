@@ -8,6 +8,8 @@
 const BATCH = 200;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
 const TICK_MS = 5_000;
+// ~10 min of retries on the same row, then it is dead-lettered and skipped.
+export const DEAD_AFTER = 8;
 
 export function createBus({ db, log, now = () => new Date().toISOString(), timers = { setTimeout, clearTimeout } }) {
   const consumers = new Map(); // name → {handler, kinds, running, again, failures, retryAt, timer, lastError}
@@ -34,6 +36,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
     if (c.running) { c.again = true; return; }
     if (c.timer) return; // backing off; the timer will drain
     c.running = true;
+    let current = null;
     try {
       for (;;) {
         c.again = false;
@@ -41,6 +44,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         const rows = db.all('SELECT * FROM journal WHERE seq > ? ORDER BY seq LIMIT ?', from, BATCH);
         if (!rows.length) break;
         for (const row of rows) {
+          current = row.seq;
           if (!c.kinds || c.kinds.has(row.kind)) {
             const r = { ...row, payload: safeJson(row.payload) };
             await c.handler(r);
@@ -53,8 +57,19 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         if (rows.length < BATCH && !c.again) break;
       }
     } catch (e) {
-      c.failures += 1;
+      c.failures = c.failSeq === current ? c.failures + 1 : 1;
+      c.failSeq = current;
       c.lastError = { message: e?.message ?? String(e), at: now() };
+      if (current != null && c.failures >= DEAD_AFTER) {
+        db.run('INSERT OR IGNORE INTO bus_dead_letters (consumer, seq, error, at) VALUES (?, ?, ?, ?)', name, current, String(c.lastError.message).slice(0, 500), now());
+        advance(name, current);
+        log?.warn?.('bus row dead-lettered', { consumer: name, seq: current, err: c.lastError.message });
+        c.failures = 0;
+        c.failSeq = null;
+        c.running = false;
+        queueMicrotask(() => drain(name));
+        return;
+      }
       const delay = BACKOFF_MS[Math.min(c.failures - 1, BACKOFF_MS.length - 1)];
       log?.warn?.('bus consumer failed; retrying', { consumer: name, failures: c.failures, delay, err: c.lastError.message });
       c.timer = timers.setTimeout(() => { c.timer = null; drain(name); }, delay);
@@ -71,7 +86,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
     /** subscribe(name, handler(row), {kinds?: string[]}) */
     subscribe(name, handler, { kinds = null } = {}) {
       if (consumers.has(name)) throw new Error(`bus consumer ${name} already subscribed`);
-      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, timer: null, lastError: null });
+      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, failSeq: null, timer: null, lastError: null });
       cursor(name);
       queueMicrotask(() => drain(name));
     },
@@ -93,6 +108,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
       const head = db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM journal').s;
       return [...consumers.entries()].map(([name, c]) => ({
         consumer: name, backlog: head - cursor(name), failures: c.failures, last_error: c.lastError,
+        dead_letters: db.get('SELECT COUNT(*) AS n FROM bus_dead_letters WHERE consumer = ?', name).n,
       }));
     },
     // Test hook: resolve when every consumer is idle and caught up.
