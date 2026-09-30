@@ -32,6 +32,7 @@ export const ERRORS = Object.freeze({
   CONFIRM_REQUIRED: 428,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  ACCESS_UNAVAILABLE: 503,  // Access signing keys unreachable: retry, the credential may be fine
   // hub-internal guard outcomes (reaper retries later; never sent to clients)
   BOOT_GRACE: 503,
   TUNNEL_DOWN: 503,
@@ -55,6 +56,7 @@ export const WS_CLOSE = Object.freeze({
   REPLACED: 4409,            // same device connected again; newest connection wins
   RATE_LIMITED: 4429,        // runner over its frame cap: reconnect with backoff, replay the outbox
   PROTOCOL_UNSUPPORTED: 4426,
+  UNAVAILABLE: 4503,         // hub cannot verify credentials right now (JWKS down): reconnect with backoff
 });
 
 export const WS_PATHS = Object.freeze({ browser: '/ws/board', runner: '/ws/runner' });

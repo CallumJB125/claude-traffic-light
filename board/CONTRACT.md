@@ -506,10 +506,11 @@ Codes and HTTP statuses: `protocol.ERRORS`.
 | `CONFIRM_REQUIRED` | 428 | Take over of suspended/unresponsive without `confirm:true` |
 | `RATE_LIMITED` | 429 | — |
 | `INTERNAL` | 500 | — |
+| `ACCESS_UNAVAILABLE` | 503 | The Access JWKS could not be fetched (error, timeout, non-200), so no assertion can be checked; retry. WS upgrades close `4503` |
 | `BOOT_GRACE`, `TUNNEL_DOWN` | (503) | Hub-internal guard results from `step()`; the reaper just retries next tick. Never sent to clients |
 | `OUT_OF_SCOPE`, `GATE_CLOSED`, `HUB_UNREACHABLE`, `BAD_RUN_TOKEN` | — | Runner-local; returned to board-mcp/shim/CLI, never sent by the hub |
 
-WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device or removed member, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded), `4429` runner over its frame rate (reconnect with backoff).
+WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device or removed member, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded), `4429` runner over its frame rate (reconnect with backoff), `4503` credentials cannot be checked right now, e.g. the Access JWKS is unreachable (reconnect with backoff).
 
 ## 9. Versioning
 

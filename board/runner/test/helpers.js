@@ -102,6 +102,7 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
     holdHb: false,         // withhold hb.acks (silent hub on a live socket)
     heldHb: [],
     down: null,
+    closeWith: null,       // close every new socket right after the upgrade with this code
     claimReply: null,      // (frame) => claim.result body
     rpcReply: (f) => ({ ok: true, result: {} }),
     nextRun: 0,
@@ -118,7 +119,11 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
       return;
     }
     hub.lastAuth = req.headers.authorization;
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
+    hub.upgrades = (hub.upgrades ?? 0) + 1;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      if (hub.closeWith) { ws.close(hub.closeWith, 'test close'); return; }
+      wss.emit('connection', ws);
+    });
   });
   const send = (ws, o) => ws.send(JSON.stringify(o));
   wss.on('connection', (ws) => {

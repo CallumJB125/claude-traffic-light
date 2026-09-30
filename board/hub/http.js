@@ -242,9 +242,11 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
       if (!sameOrigin(req, config.publicUrl)) return refuse(socket, 403, 'Forbidden');
       let auth = null;
       let close = null;
-      try { auth = await authenticate(req); } catch (e) { close = e.code === 'FORBIDDEN' ? WS_CLOSE.REVOKED : WS_CLOSE.UNAUTHENTICATED; }
+      try { auth = await authenticate(req); } catch (e) {
+        close = e.code === 'FORBIDDEN' ? WS_CLOSE.REVOKED : e.code === 'ACCESS_UNAVAILABLE' ? WS_CLOSE.UNAVAILABLE : WS_CLOSE.UNAUTHENTICATED;
+      }
       return wss.handleUpgrade(req, socket, head, (ws) => {
-        if (close) { ws.close(close, close === WS_CLOSE.REVOKED ? 'not a member of this board' : 'unauthenticated'); return; }
+        if (close) { ws.close(close, { [WS_CLOSE.REVOKED]: 'not a member of this board', [WS_CLOSE.UNAVAILABLE]: 'try again later' }[close] ?? 'unauthenticated'); return; }
         // Several orgs and no ?org=: the subscribed board's org decides (BrowserConn).
         let member = null;
         try { member = pickMember(hub, auth.candidates, { requestedOrg: searchParams.get('org') }); } catch { member = null; }

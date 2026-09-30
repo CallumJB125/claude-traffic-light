@@ -20,9 +20,11 @@ export const hmac = (secret, data) => createHmac('sha256', secret).update(data).
 // ── Cloudflare Access ───────────────────────────────────────────────────────
 
 const KID_REFETCH_MIN_MS = 10_000;
+const JWKS_TIMEOUT_MS = 10_000;
 
 /**
- * verifier.verify(token) → claims, or throws HubError('UNAUTHENTICATED').
+ * verifier.verify(token) → claims, or throws HubError('UNAUTHENTICATED'), or
+ * HubError('ACCESS_UNAVAILABLE') when the JWKS cannot be fetched.
  * JWKS cached; an unknown kid triggers a refetch (at most every 10 s).
  */
 export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
@@ -30,30 +32,42 @@ export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, 
   const issuer = `https://${team}.cloudflareaccess.com`;
   let keys = new Map();
   let lastFetch = -Infinity;
+  let fetchFailed = false;
   let inflight = null;
 
   async function refresh() {
     if (inflight) return inflight;
     lastFetch = now();
     inflight = (async () => {
-      const res = await fetchImpl(certsUrl);
-      if (!res.ok) throw new Error(`JWKS fetch ${res.status}`);
-      const body = await res.json();
-      const next = new Map();
-      for (const jwk of body.keys ?? []) {
-        if (jwk.kty !== 'RSA' || !jwk.kid) continue;
-        next.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' }));
+      try {
+        const res = await fetchImpl(certsUrl, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
+        if (!res.ok) throw new Error(`JWKS fetch ${res.status}`);
+        const body = await res.json();
+        const next = new Map();
+        for (const jwk of body.keys ?? []) {
+          if (jwk.kty !== 'RSA' || !jwk.kid) continue;
+          next.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' }));
+        }
+        keys = next;
+        fetchFailed = false;
+      } catch (e) {
+        fetchFailed = true;
+        throw e;
       }
-      keys = next;
     })().finally(() => { inflight = null; });
     return inflight;
   }
 
+  // An unknown kid while the JWKS is unreachable is "can't tell", not "bad
+  // token": callers must retry, not give up on a credential that may be fine.
   async function keyFor(kid) {
-    if (!keys.has(kid) && now() - lastFetch >= KID_REFETCH_MIN_MS) {
-      try { await refresh(); } catch { /* fall through: unknown kid */ }
+    if (!keys.has(kid)) {
+      if (inflight) await inflight.catch(() => {});
+      else if (now() - lastFetch >= KID_REFETCH_MIN_MS) await refresh().catch(() => {});
     }
-    return keys.get(kid) ?? null;
+    if (keys.has(kid)) return keys.get(kid);
+    if (fetchFailed) throw new HubError('ACCESS_UNAVAILABLE', 'Access signing keys are unavailable; retry shortly');
+    return null;
   }
 
   async function verify(token) {

@@ -32,7 +32,7 @@ export async function authenticateRunner(hub, req) {
         return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'service token does not belong to this device' };
       }
     } catch (e) {
-      return { close: WS_CLOSE.UNAUTHENTICATED, reason: e.message };
+      return { close: e.code === 'ACCESS_UNAVAILABLE' ? WS_CLOSE.UNAVAILABLE : WS_CLOSE.UNAUTHENTICATED, reason: e.message };
     }
   }
   return { device };

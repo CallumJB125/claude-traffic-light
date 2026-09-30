@@ -98,6 +98,50 @@ test('BOARD_AUTH=access: HTTP needs a valid assertion mapped to a member email; 
   }
 });
 
+test('JWKS unreachable (error or non-200): API 503 ACCESS_UNAVAILABLE, sockets close 4503 (retryable), recovers once a fetch succeeds', async () => {
+  const k = keypair('k1');
+  let mode = 'throw';
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    if (mode === 'throw') throw new Error('ECONNRESET');
+    if (mode === '502') return { ok: false, status: 502, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ keys: [k.jwk] }) };
+  };
+  const h = await startHub({ config: { auth: 'access', accessTeam: TEAM, accessAud: AUD }, fetchImpl });
+  try {
+    assert.ok(calls >= 1, 'prefetched at listen (and the failure did not stop the hub)');
+    const hdr = { 'cf-access-jwt-assertion': jwt(k, { email: 'alice@dev.local', common_name: 'svc-1.access' }) };
+    const me = await h.api(null, 'GET', '/api/me', null, hdr);
+    assert.equal(me.status, 503);
+    assert.equal(me.body.error.code, 'ACCESS_UNAVAILABLE');
+
+    const alice = h.db.get("SELECT * FROM members WHERE github_login = 'alice'");
+    const dev = h.app.api.createDevice(alice, { name: 'Mac', cf_service_token_id: 'svc-1.access' });
+    const connect = (path, headers) => new Promise((resolve) => {
+      const ws = new WebSocket(`${h.base.replace('http', 'ws')}${path}`, { headers });
+      ws.on('close', (code) => resolve(code));
+      ws.on('error', () => {});
+    });
+    const runnerHdr = { ...hdr, authorization: `Bearer ${dev.device_token}` };
+    assert.equal(await connect('/ws/runner', runnerHdr), 4503);
+    assert.equal(await connect('/ws/board', hdr), 4503);
+
+    mode = '502';
+    h.clock.advance(11_000);
+    assert.equal((await h.api(null, 'GET', '/api/me', null, hdr)).status, 503, 'non-200 JWKS is unavailable too');
+    assert.equal(await connect('/ws/runner', runnerHdr), 4503);
+
+    mode = 'ok';
+    h.clock.advance(11_000);
+    assert.equal((await h.api(null, 'GET', '/api/me', null, hdr)).status, 200);
+    const bad = jwt(k, { email: 'alice@dev.local' }).split('.');
+    assert.equal((await h.api(null, 'GET', '/api/me', null, { 'cf-access-jwt-assertion': `${bad[0]}.${bad[1]}.AAAA` })).status, 401, 'a bad token is still 401');
+  } finally {
+    await h.destroy();
+  }
+});
+
 test('dev auth refuses a non-loopback bind; access auth needs team + aud; secret ≥ 32 bytes', () => {
   assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_BIND: '0.0.0.0' }), /loopback/);
   assert.throws(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_BIND: '192.168.1.5' }), /loopback/);

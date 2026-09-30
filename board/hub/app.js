@@ -74,6 +74,9 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
         server.listen(port, host, () => {
           server.off('error', reject);
           if (timers) startTimers();
+          // Warm the JWKS cache so the first sign-in doesn't wait on it. Not
+          // fatal: until a fetch succeeds, requests get 503 / close 4503.
+          hub.access?.refresh().catch((e) => log.warn('Access JWKS prefetch failed', { err: e }));
           log.info('hub listening', { bind: host, port: server.address().port, auth: config.auth });
           resolve(server.address());
         });
