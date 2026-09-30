@@ -17,6 +17,8 @@
     <symbol id="lamp-skull" viewBox="0 0 16 16"><path d="M8 1a6 6 0 0 0-6 6c0 2.2 1.1 3.6 2.5 4.5V14h7v-2.5C12.9 10.6 14 9.2 14 7a6 6 0 0 0-6-6z" /><circle cx="5.7" cy="7" r="1.6" fill="#1c1a1f" /><circle cx="10.3" cy="7" r="1.6" fill="#1c1a1f" /><rect x="7.2" y="9.6" width="1.6" height="2" fill="#1c1a1f" /></symbol>
     <filter id="cig-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="0.7" /></filter>
     <linearGradient id="cig-wisp-fade" gradientUnits="userSpaceOnUse" x1="0" y1="46.6" x2="0" y2="34"><stop offset="0" stop-color="#e4e4ea" stop-opacity="0.85" /><stop offset="1" stop-color="#e4e4ea" stop-opacity="0" /></linearGradient>
+    <!-- a one-eyed character keeps only the left eye of every eye drawing -->
+    <clipPath id="rig-one-eye"><rect x="-64" y="-82" width="96" height="246" /></clipPath>
     <filter id="cameo-seam" x="-50%" y="-100%" width="200%" height="300%"><feGaussianBlur stdDeviation="1" /></filter>
   </defs>
   <g class="scene">
@@ -62,7 +64,9 @@
     </g>
     <!-- number mode: one big digit where the lamps were -->
     <text class="sign-number" x="32" y="21" text-anchor="middle"></text>
-    <rect fill="#da7756" x="0" y="29" width="9" height="10" />
+    <!-- a character with no hands stands the sign on a post instead -->
+    <rect class="sign-post" x="3" y="29" width="3" height="39" fill="#726c62" />
+    <rect class="sign-hand" fill="#da7756" x="0" y="29" width="9" height="10" />
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
   </g><!-- /sign-swing -->
@@ -88,6 +92,9 @@
          offset onto the character's -->
     <g class="char-back"></g>
     <g class="char-body"></g>
+    <!-- front: in front of the body, under cameos and a photo (a screen's
+         glass is front; the photo goes on it) -->
+    <g class="char-front"></g>
     <!-- cameos (back layer): hair, facial hair and collar, under the eyes so they stay alive -->
     <g class="cameo cameo-neo">
       <path d="M4 52h24l4 6 4-6h24v7H4z" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M28 52l4 6 4-6z" fill="#0c0c10" /><path d="M4.6 52.8h22.6l3.8 5.6M59.4 52.8H36.8l-3.8 5.6" stroke="#5a5a6a" stroke-width="0.7" fill="none" />
@@ -220,7 +227,7 @@
         <rect x="32.4" y="48.7" width="4.8" height="2.6" rx="0.6" fill="#d9a066" stroke="#211f1c" stroke-width="0.4" />
         <g fill="#b37a3e"><rect x="33.4" y="49.3" width="0.5" height="0.5" /><rect x="34.8" y="50.2" width="0.5" height="0.5" /><rect x="35.9" y="49.4" width="0.5" height="0.5" /></g>
         <rect x="36.7" y="48.9" width="0.5" height="2.2" fill="#e8c77a" />
-        <rect x="37.6" y="48" width="3.8" height="4" rx="1.3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+        <rect class="prop-hand" x="37.6" y="48" width="3.8" height="4" rx="1.3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
       </g></g>
       <g class="cig-smoke wisps">
         <path class="wisp-line" d="M48.9 46.6 c-1.3 -1.5 1.3 -3 0 -4.5 s1.3 -3 0 -4.5 s1 -2.4 0 -3.6" fill="none" stroke="url(#cig-wisp-fade)" stroke-width="0.5" stroke-linecap="round" />
@@ -282,7 +289,6 @@
       <rect x="23" y="41" width="18" height="11" rx="3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
       <path d="M27 41.5v10M31 41v10.5M35 41v10.5M39 41.5v10" stroke="#b85f3c" stroke-width="0.7" />
     </g>
-    <g class="char-front"></g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
     <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
@@ -428,7 +434,7 @@
         <rect x="48" y="53" width="4" height="7" rx="1" fill="#5a4a2a" transform="skewX(-12)" />
         <rect x="57" y="49" width="10" height="2.2" fill="#2b2b30" />
         <rect x="53" y="45.5" width="2" height="3" fill="#2b2b30" />
-        <rect x="41" y="52" width="5" height="4" rx="1" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
+        <rect class="prop-hand" x="41" y="52" width="5" height="4" rx="1" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
       </g>
       <polygon class="muzzle" points="67,50 73,46 70,50 74,50.5 70,51 73,54" fill="#ffd166" />
       <rect class="casing c1" x="52" y="46" width="1.6" height="2.6" rx="0.4" fill="#e0b040" />
@@ -445,7 +451,7 @@
         <rect x="55.5" y="45.3" width="2" height="2" fill="#38bdf8" />
         <rect x="49" y="47.5" width="1.5" height="1.2" fill="#1f2937" />
         <rect x="61" y="51.3" width="1.2" height="4" fill="#26282c" transform="rotate(-20 61 51)" /><rect x="63" y="51.3" width="1.2" height="4" fill="#26282c" transform="rotate(20 63 51)" />
-        <rect x="41" y="52" width="5" height="4" rx="1" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
+        <rect class="prop-hand" x="41" y="52" width="5" height="4" rx="1" fill="#da7756" stroke="#211f1c" stroke-width="0.5" />
       </g>
       <polygon class="muzzle" points="74,50.5 82,46 77,50.5 83,51 77,51.5 82,55" fill="#ffd166" />
     </g>
@@ -969,9 +975,10 @@
       const aim = Math.max(-35, Math.min(35, Number(look.aimAngle) || 0));
       svg.style.setProperty('--aim', `${look.facing === 'left' ? -aim : aim}deg`);
       const costume = COSTUMES.includes(look.costume) ? look.costume : 'none';
-      if (!current || current.costume !== costume) {
+      if (!current || current.costume !== costume || current.body !== body) {
         for (const c of COSTUMES) svg.classList.remove(`costume-${c}`);
         if (costume !== 'none') svg.classList.add(`costume-${costume}`);
+        nudgeCostume(costume);
       }
       // A photo when one exists for the id (the look's own, else the registry),
       // else the drawing for a built-in, else nothing (a removed photo).
@@ -1011,12 +1018,26 @@
     // drawn to Claude's anchors needs none, and its rig is left as drawn.
     let character = null;
     let wornPhoto = null;
+    // found once, before any character markup is in the rig
+    const slots = Object.fromEntries(Characters.LAYERS.map((l) => [l, svg.querySelector(`.char-${l}`)]));
+    // A built-in's own animations (contract `css`), once per page. Imported
+    // characters never carry CSS (characters/validate.js refuses it).
+    function addCharacterStyle(def) {
+      if (!def.css || !Characters.isBuiltin(def.id)) return;
+      const id = `char-style-${def.id}`;
+      if (document.getElementById(id)) return;
+      const el = document.createElement('style');
+      el.id = id;
+      el.textContent = def.css;
+      document.head.appendChild(el);
+    }
     function wearCharacter(id) {
       const prev = character;
       character = Characters.get(id);
       if (prev) svg.classList.remove(`body-${prev.id}`);
+      addCharacterStyle(character);
       svg.classList.add(`body-${character.id}`);
-      for (const layer of Characters.LAYERS) svg.querySelector(`.char-${layer}`).innerHTML = Characters.layerMarkup(character, layer);
+      for (const layer of Characters.LAYERS) slots[layer].innerHTML = Characters.layerMarkup(character, layer);
       const caps = Characters.capabilities(character);
       svg.classList.toggle('char-no-hands', !caps.hands);
       svg.classList.toggle('char-no-mouth', !caps.mouth);
@@ -1024,6 +1045,16 @@
       svg.classList.toggle('char-eyes-single', caps.eyes === 'single');
       svg.classList.toggle('char-eyes-none', caps.eyes === 'none');
       if (wornPhoto) wearPhoto(wornPhoto); else fitAnchors();
+    }
+    // A character may nudge one costume that doesn't sit right on it.
+    let nudged = false;
+    function nudgeCostume(costume) {
+      const o = character.offsets && Object.prototype.hasOwnProperty.call(character.offsets, costume) ? character.offsets[costume] : null;
+      nudged = !!o;
+      for (const [k, v] of [['--co-dx', o ? `${o.dx}px` : null], ['--co-dy', o ? `${o.dy}px` : null], ['--co-s', o ? String(o.s) : null]]) {
+        if (v == null) svg.style.removeProperty(k); else svg.style.setProperty(k, v);
+      }
+      fitAnchors();
     }
     function faceSquare() {
       const f = character.anchors.faceBox;
@@ -1034,8 +1065,8 @@
     // the same variables.
     function fitAnchors() {
       const fit = Characters.anchorVars(character);
-      svg.classList.toggle('char-fitted', fit.fitted);
-      if (!fit.fitted && !wornPhoto) return;
+      svg.classList.toggle('char-fitted', fit.fitted || nudged);
+      if (!fit.fitted && !nudged && !wornPhoto) return;
       const vars = { ...fit.css, ...(wornPhoto ? photoAnchors(wornPhoto, faceSquare()) : {}) };
       for (const [k, v] of Object.entries(vars)) svg.style.setProperty(k, v);
     }
@@ -1422,14 +1453,17 @@
     let minionKey = null;
     function drawMinions(list, showRoster, size, style, color) {
       const { scale, max } = MINION_SIZES[size] || MINION_SIZES.normal;
-      const sprite = MINION_SPRITES[style] || MINION_SPRITES.robot;
+      // 'character': the worn character's own chip, if it drew one; its
+      // status-coloured parts are painted currentColor
+      const mini = style === 'character' && character && character.mini ? character.mini : null;
+      const sprite = mini ? () => mini : MINION_SPRITES[style] || MINION_SPRITES.robot;
       const custom = /^#[0-9a-f]{6}$/i.test(color || '') ? color : null;
       const now = Date.now();
       const arr = (Array.isArray(list) ? list : []).slice(0, 32);
       // Elapsed time is bucketed to the minute (seconds while under a minute)
       // so the roster's "since" column keeps ticking without redrawing the
       // whole row on every 2s poll.
-      const key = `${showRoster ? 1 : 0}|${scale}|${style}|${custom}|${arr.map((a) => `${a.name}:${a.status}:${elapsed(a.since, now)}`).join(',')}`;
+      const key = `${showRoster ? 1 : 0}|${scale}|${style}|${mini ? character.id : ''}|${custom}|${arr.map((a) => `${a.name}:${a.status}:${elapsed(a.since, now)}`).join(',')}`;
       if (key === minionKey) return;
       minionKey = key;
       const g = svg.querySelector('.minions');
@@ -1460,7 +1494,7 @@
         const chip = mk('g', {
           class: `minion minion-${a.status}`,
           transform: `translate(${x0 + i * pitch} ${y0}) scale(${scale})`,
-          'data-name': a.name, 'data-status': a.status, style: 'pointer-events:auto;cursor:pointer',
+          'data-name': a.name, 'data-status': a.status, style: `pointer-events:auto;cursor:pointer${mini ? `;color:${fill}` : ''}`,
         });
         const inner = mk('g', { class: 'minion-in' });
         for (const [tag, attrs] of sprite(fill)) inner.appendChild(mk(tag, attrs));
@@ -1772,7 +1806,26 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, talking, get look() { return current; } };
+    // Is anything of the rig actually painted at this client point? Parts
+    // that aren't showing (a costume not worn, a pose's props at rest) sit at
+    // opacity 0 and still come back from a hit test, so look through them
+    // to the first one that paints.
+    function painted(el) {
+      for (let e = el; e && e !== svg; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) < 0.05) return false;
+      }
+      return true;
+    }
+    function solidAt(x, y) {
+      for (const el of document.elementsFromPoint(x, y)) {
+        if (el === svg || !svg.contains(el)) return false;
+        if (painted(el)) return true;
+      }
+      return false;
+    }
+
+    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, talking, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

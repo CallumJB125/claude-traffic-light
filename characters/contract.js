@@ -101,6 +101,11 @@
     v['--hat-dx'] = r2(head.x + head.w / 2 - 32);
     v['--hat-dy'] = r2(hatLine - REF.hatLine);
     v['--hat-s'] = r2(head.w / REF.head.w);
+    // drawn cameos are faces: Claude's face box onto the character's
+    const face = a.faceBox || REF.faceBox;
+    v['--face-dx'] = r2(face.x + face.w / 2 - (REF.faceBox.x + REF.faceBox.w / 2));
+    v['--face-dy'] = r2(face.y + face.h / 2 - (REF.faceBox.y + REF.faceBox.h / 2));
+    v['--face-s'] = r2(Math.min(face.w / REF.faceBox.w, face.h / REF.faceBox.h));
     const hands = a.hands || REF.hands;
     v['--hand-l-dx'] = r2(hands.left.x - REF.hands.left.x);
     v['--hand-l-dy'] = r2(hands.left.y - REF.hands.left.y);

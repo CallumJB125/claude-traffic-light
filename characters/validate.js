@@ -388,13 +388,16 @@ function checkGeometry(def, ext = null) {
   if (a.mouth && !inside(a.mouth, a.faceBox)) bad('anchors.mouth', 'mouth-outside-face', 'the mouth sits inside the faceBox');
   const overlap = (p, q) => p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h;
   if (!overlap(a.head, a.faceBox)) bad('anchors.faceBox', 'face-off-head', 'the faceBox overlaps the head box');
+  // the sign hangs across the top 29 units; a head up there is behind it
+  if (a.head.y < 29) bad('anchors.head', 'head-under-sign', 'the head reaches up behind the sign (keep it below y 29)', 'warning');
   // Held things ride the hand offsets: Claude's sign hand and prop area,
   // moved by the same amount, must stay on the grid.
   if (a.hands) {
     const R = Contract.REF.hands;
     const moved = (b, h, ref) => ({ x: b.x + h.x - ref.x, y: b.y + h.y - ref.y, w: b.w, h: b.h });
     const within = (b) => b.x >= V.x && b.y >= V.y && b.x + b.w <= V.x + V.w && b.y + b.h <= V.y + V.h;
-    if (!within(moved({ x: 0, y: 29, w: 9, h: 10 }, a.hands.left, R.left))) bad('anchors.hands.left', 'held-outside', 'the sign hand would leave the grid');
+    // the sign hangs from the left hand and spans the grid's width
+    if (!within(moved({ x: 0, y: 0, w: 60, h: 39 }, a.hands.left, R.left))) bad('anchors.hands.left', 'held-outside', 'the sign would leave the grid (it spans the width, so the left hand can only move down, or right by 4)');
     if (!within(moved({ x: 46, y: 40, w: 13, h: 16 }, a.hands.right, R.right))) bad('anchors.hands.right', 'held-outside', 'things held in the right hand would leave the grid');
   }
   if (ext) {

@@ -340,8 +340,8 @@
 @keyframes rig-tap { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-14deg) translateY(-1px); } }
 
 /* Pose: run — legs pump, body bobs, speed lines streak behind. */
-.rig.pose-run .body rect:nth-child(3), .rig.pose-run .body rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
-.rig.pose-run .body rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.pose-run :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(3), .rig.pose-run :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.pose-run :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
 .rig.pose-run .claude-body { animation: rig-run-bob 0.3s ease-in-out infinite alternate; }
 .rig.pose-run .speed-lines { animation: rig-speed 0.3s linear infinite; }
 @keyframes rig-leg-a { from { transform: translateY(-3px) rotate(6deg); } to { transform: translateY(0) rotate(-6deg); } }
@@ -565,6 +565,55 @@
 .rig.has-photo :is(.costume-crown, .costume-partyhat, .costume-halo, .costume-wizard, .costume-tophat, .costume-santa, .costume-pumpkin, .costume-bunny, .costume-unicorn),
 .rig.has-photo .costume-cat > polygon, .rig.has-photo .costume-devil > polygon:nth-of-type(-n+2) { transform: translateY(var(--hat-dy, 0px)); }
 .rig.has-photo .think-dot, .rig.has-photo .dead ellipse { cy: calc(34px + var(--hat-dy, 0px)); }
+
+/* Characters (characters/contract.js). Every part above is drawn for
+   Claude; a character whose anchors differ (.char-fitted) has its eyes,
+   mouth, headwear and hands moved onto its own with the offsets rig.js sets
+   from the contract (--eye-*, --mouth-*, --hat-*, --hand-*). The individual
+   translate/scale properties are used so they compose with whatever
+   transform a pose animates. A photo cameo's own transforms (above) keep
+   the eyes and mouth; its vars already include the character's face box. */
+.rig.char-fitted:not(.has-photo) :is(.eye-anchor, .facepalm-hand) { translate: var(--eye-dx, 0px) var(--eye-dy, 0px); scale: var(--eye-s, 1); transform-origin: 32px 45.75px; }
+.rig.char-fitted:not(.has-photo) .mouth-anchor { translate: var(--mouth-dx, 0px) var(--mouth-dy, 0px); }
+/* drawn cameos map face box to face box; headwear sits on the head:
+   centred on it, on the hat line, scaled to its width, plus any per-costume
+   nudge the character asks for */
+.rig.char-fitted .cameo { translate: var(--face-dx, 0px) var(--face-dy, 0px); scale: var(--face-s, 1); transform-origin: 32px 45px; }
+.rig.char-fitted :is(.costume:not(.costume-shades), .think-dot, .dead) {
+  translate: calc(var(--hat-dx, 0px) + var(--co-dx, 0px)) calc(var(--hat-dy, 0px) + var(--co-dy, 0px));
+  scale: calc(var(--hat-s, 1) * var(--co-s, 1));
+  transform-origin: 32px 39px;
+}
+.rig.char-fitted.has-photo :is(.costume-crown, .costume-partyhat, .costume-halo, .costume-wizard, .costume-tophat, .costume-santa, .costume-pumpkin, .costume-bunny, .costume-unicorn),
+.rig.char-fitted.has-photo .costume-cat > polygon, .rig.char-fitted.has-photo .costume-devil > polygon:nth-of-type(-n+2) { transform: none; }
+.rig.char-fitted.has-photo .think-dot, .rig.char-fitted.has-photo .dead ellipse { cy: 34px; }
+.rig.char-fitted .sign-swing { translate: var(--hand-l-dx, 0px) var(--hand-l-dy, 0px); }
+.rig.char-fitted :is(.thumbs-up, .knock-fist, .cookie, .selfie, .gun-aim, .hammer, .tools, .needle, .cig-pack, .prop-guitar, .prop-notes) { translate: var(--hand-r-dx, 0px) var(--hand-r-dy, 0px); }
+/* Legs: new characters mark theirs .cp-leg-a / .cp-leg-b (the original
+   bodies swing their 3rd–5th rects, below). */
+.rig:is(.walking, .pose-run) .cp-leg-a { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 0%; }
+.rig:is(.walking, .pose-run) .cp-leg-b { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 0%; }
+
+/* Fallbacks: a character without a capability never shows a broken part. */
+.rig .sign-post { display: none; }
+/* No hands: the sign stands on a post; hand props are not drawn, and arm
+   poses become moves of the whole body. */
+.rig.char-no-hands .sign-post { display: inline; }
+.rig.char-no-hands :is(.sign-hand, .prop-hand, .thumbs-up, .arms-crossed, .cheer-arms, .facepalm-hand, .knock-fist, .strum-hand, .muscles, .plunger, .cookie, .selfie) { display: none; }
+.rig.char-no-hands:is(.pose-thumbs, .pose-cheer, .pose-wave) .claude-body { animation: rig-cheer-hop 0.6s ease-in-out infinite; transform-origin: 32px 68px; }
+.rig.char-no-hands.pose-wave .sign-assembly { animation: none; }
+.rig.char-no-hands:is(.pose-arms, .pose-facepalm) .claude-body { animation: rig-char-lean 2.4s ease-in-out infinite; transform-origin: 32px 68px; }
+.rig.char-no-hands.pose-knock .claude-body { animation: rig-knock-lean 0.5s ease-in-out infinite; transform-origin: 32px 68px; }
+@keyframes rig-char-lean { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+/* No mouth: mouth items and lips are hidden; talking squashes instead. */
+.rig.char-no-mouth :is(.mouth-anchor, .cameo-lips, .lip-bump, .exhale) { display: none; }
+.rig.char-no-mouth.talking .claude-body { animation: rig-char-talk 0.42s steps(1, end) infinite; transform-origin: 32px 68px; }
+@keyframes rig-char-talk { 0% { transform: scale(1, 1); } 33% { transform: scale(1.04, 0.95); } 66% { transform: scale(1.02, 0.98); } 100% { transform: scale(1, 1); } }
+/* No legs: walking and running hop; the original bodies' leg rects stay still. */
+.rig.char-no-legs:is(.walking, .pose-run) .claude-body { animation: rig-cheer-hop 0.45s ease-in-out infinite; transform-origin: 32px 68px; }
+/* One eye: the left eye of every eye drawing, moved onto it. No eyes: none. */
+.rig.char-eyes-single .eye-anchor { clip-path: url(#rig-one-eye); }
+.rig.char-eyes-none .eye-anchor, .rig.char-eyes-none .zyn-glints { display: none; }
 
 /* Grumpy: a sleep pose that has dragged on. */
 .rig .grumpy-mouth { opacity: 0; fill: #211f1c; }
@@ -903,8 +952,8 @@
 @keyframes rig-tilt { from { transform: rotate(-10deg); } to { transform: rotate(-35deg); } }
 @keyframes rig-dirtfall { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-2px, 12px); opacity: 0; } }
 @keyframes rig-waterfall { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-3px, 14px); opacity: 0; } }
-.rig.walking .body rect:nth-child(3), .rig.walking .body rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
-.rig.walking .body rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.walking :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(3), .rig.walking :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(5) { animation: rig-leg-a 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
+.rig.walking :is(.body-default, .body-dog, .body-cat, .body-frog, .body-robot) rect:nth-child(4) { animation: rig-leg-b 0.3s ease-in-out infinite alternate; transform-origin: 32px 59px; }
 .rig.gardening.face-left .claude-body, .rig.gardening.face-left .sign-assembly { transform: scaleX(-1); transform-origin: 32px 41px; }
 .rig .pot { animation: rig-grow 0.5s var(--ease-pop, cubic-bezier(0.2, 0.9, 0.3, 1.2)) 1 backwards; }
 .rig .pot .dirt, .rig .pot .seed { opacity: 0; transition: opacity 400ms ease; }
@@ -956,7 +1005,8 @@
   .rig .cig-glow, .rig .wisp-line, .rig .cig-held, .rig .cig-butt-fly, .rig .cig-butt-body, .rig .cig-scuff, .rig .dust, .rig .cig-pack, .rig .cig-pack-stick, .rig .cig-flame,
   .rig .hp-led, .rig .tassel, .rig .propeller, .rig .pom,
   .rig .twinkle, .rig .bubble, .rig .leaf, .rig .glyph, .rig .floatheart, .rig .firefly, .rig .petal,
-  .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms {
+  .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms,
+  .rig .char-back *, .rig .char-body *, .rig .char-front *, .rig .char-face *, .rig .cp-leg-a, .rig .cp-leg-b {
     animation: none !important;
   }
   /* walking/running/tapping legs, the munching mouth, agent chips, the selfie

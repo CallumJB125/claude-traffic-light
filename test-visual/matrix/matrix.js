@@ -49,6 +49,57 @@
     ],
   };
 
+  // Geometry: measured on the rendered rig, in rig units.
+  if (axis === 'geometry') { geometry(); return; }
+  function geometry() {
+    const def = window.BuddyCharacters.get(body);
+    const A = def.anchors;
+    const stage = document.createElement('div');
+    stage.className = 'stage';
+    document.getElementById('grid').appendChild(stage);
+    const rig = window.mountRig(stage);
+    const svg = rig.svg;
+    const toRig = (r) => {
+      const m = svg.getScreenCTM().inverse();
+      const p = (x, y) => new DOMPoint(x, y).matrixTransform(m);
+      const a = p(r.left, r.top), b = p(r.right, r.bottom);
+      return { x0: a.x, y0: a.y, x1: b.x, y1: b.y };
+    };
+    const box = (sel) => { const el = svg.querySelector(sel); const r = el && el.getBoundingClientRect(); return r && r.width ? toRig(r) : null; };
+    const out = { hats: {}, eyes: [], held: {}, body: null, hit: {} };
+    const HATS = ['crown', 'partyhat', 'halo', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'unicorn', 'devil', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
+    for (const c of HATS) { rig.setLook({ ...base, costume: c }); out.hats[c] = box(`.costume-${c}`); }
+    rig.setLook({ ...base });
+    for (const el of svg.querySelectorAll('.eye-track .eye-open')) {
+      const r = el.getBoundingClientRect();
+      if (r.width && getComputedStyle(el).opacity !== '0' && getComputedStyle(el.closest('.eye-anchor')).display !== 'none') {
+        // a clipped-away eye has no painted area inside its clip
+        const b = toRig(r);
+        out.eyes.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 });
+      }
+    }
+    for (const [pose, sel] of [['thumbs', '.thumbs-up'], ['knock', '.knock-fist'], ['none', '.sign-assembly'], ['selfie', '.selfie']]) {
+      rig.setLook({ ...base, pose });
+      const el = svg.querySelector(sel);
+      out.held[pose] = el && getComputedStyle(el).display !== 'none' ? box(sel) : 'hidden';
+    }
+    rig.setLook({ ...base });
+    out.body = box('.char-body');
+    // click-through: what the widget's hit test would see
+    const at = (x, y) => {
+      const pt = new DOMPoint(x, y).matrixTransform(svg.getScreenCTM());
+      return rig.solidAt(pt.x, pt.y);
+    };
+    out.hit.face = at(A.faceBox.x + A.faceBox.w / 2, A.faceBox.y + A.faceBox.h / 2);
+    out.hit.corner = at(1, 80);
+    // on Claude's arm: solid only for a character that draws something there
+    out.hit.arm = at(10, 56);
+    out.anchors = A;
+    out.eyeMode = window.BuddyCharacters.eyeMode(A);
+    window.__geometry = out;
+    document.body.dataset.ready = '1';
+  }
+
   const grid = document.getElementById('grid');
   const rigs = [];
   for (const c of (cells[axis] || cells.costume)()) {

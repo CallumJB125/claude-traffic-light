@@ -492,7 +492,9 @@ test('hit test: the elements index.html probes for are there and clickable', () 
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   // #mic is pointer-events: none (a hold on it is a hold on the widget), so it isn't listed.
   assert.match(html, /el\.closest\('#gear, #help, #ask, #ask-full, #away, \.minion'\)/, 'index.html hit test changed — update this test');
-  assert.match(html, /el\.closest\('svg\.rig'\)/);
+  // rig parts go through rig.solidAt, which skips parts at opacity 0 (its
+  // behaviour is in test-visual/characters.spec.js: jsdom has no elementsFromPoint)
+  assert.match(html, /return rig\.solidAt\(x, y\);/);
   assert.match(html, /closest\('\.pet'\)/);
   const { svg, rig } = mount();
   rig.setLook({ minions: agents(2), pet: 'duck' });

@@ -382,7 +382,7 @@
       const el = document.elementFromPoint(x, y);
       if (!el) return false;
       if (el.closest('#gear, #help, #ask, #ask-full, #away, .minion')) return true;
-      return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
+      return rig.solidAt(x, y);
     };
     const hitTest = (x, y) => {
       const ignore = !solidAt(x, y);

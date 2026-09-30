@@ -53,6 +53,7 @@ test('characters: anchors that differ become offsets from Claude’s frame', () 
     '--eye-dx': 3.5, '--eye-dy': -5.75, '--eye-s': 2,
     '--mouth-dx': 3, '--mouth-dy': -2,
     '--hat-dx': 2.5, '--hat-dy': -10, '--hat-s': 1.5,
+    '--face-dx': 0, '--face-dy': 0, '--face-s': 1,
     '--hand-l-dx': 2, '--hand-l-dy': -4, '--hand-r-dx': -3.5, '--hand-r-dy': 3,
   });
   assert.equal(css['--eye-dx'], '3.5px');
@@ -216,6 +217,8 @@ test('validator: geometry — eyes and mouth in the face box, hats on the head, 
   assert.deepEqual(codes({ mouth: { x: 32, y: 70 } }), ['mouth-outside-face']);
   assert.deepEqual(codes({ hatLine: 10 }), ['hat-off-head']);
   assert.deepEqual(codes({ hands: { left: { x: 1, y: 34 }, right: { x: 53.5, y: 49 } } }), ['held-outside']);
+  assert.deepEqual(codes({ hands: { left: { x: 4.5, y: 30 }, right: { x: 53.5, y: 49 } } }), ['held-outside'], 'the sign would go off the top');
+  assert.deepEqual(codes({ hands: { left: { x: 7, y: 44 }, right: { x: 53.5, y: 49 } } }), [], 'down and a little right is fine');
   assert.deepEqual(codes({ hands: { left: { x: 4.5, y: 34 }, right: { x: 62, y: 49 } } }), ['held-outside']);
   assert.deepEqual(codes({ faceBox: { x: 50, y: 0, w: 10, h: 10 }, eyes: 'none', mouth: null }), ['face-off-head']);
   assert.deepEqual(codes({ hands: null, eyes: 'none', mouth: null }), [], 'a limbless, faceless blob is valid');
