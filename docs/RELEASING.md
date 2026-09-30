@@ -69,6 +69,31 @@ Signing is off until there is a Developer ID. The download page should say:
 - **Linux AppImage:** `chmod +x Plexiform-*.AppImage`. Ubuntu 22.04+ needs
   `libfuse2` to run AppImages.
 
+## Linux: what the AppImage needs
+
+- **FUSE 2.** AppImages mount themselves through libfuse2, which Ubuntu
+  22.04+ and Fedora no longer install by default. Without it the AppImage
+  exits with "dlopen(): error loading libfuse.so.2". Fix:
+  `sudo apt install libfuse2` (Ubuntu 24.04+: `libfuse2t64`), or run it
+  unmounted with `./Plexiform-*.AppImage --appimage-extract-and-run`.
+- **AppArmor on Ubuntu 23.10+.** Unprivileged user namespaces are restricted
+  by AppArmor, so Chromium's sandbox can't start and the app exits at once
+  ("The SUID sandbox helper binary was found, but is not configured
+  correctly"). The .deb is not affected: its after-install sets the
+  chrome-sandbox helper up. For the AppImage, either add an AppArmor profile
+  that allows `userns` for it (the Ubuntu 24.04 release notes show the
+  profile), or launch it with `--no-sandbox`. Recommend the .deb on Ubuntu.
+- **Where it keeps its hooks.** An AppImage mounts somewhere new every launch,
+  so the agents' hook commands run the .AppImage file itself against a copy
+  of hooks/ in `~/.claude-traffic-light/hooks-<version>/`. Moving or renaming
+  the .AppImage breaks them until the app is next opened, when it rewrites
+  them.
+- **Uninstall.** An AppImage has no uninstaller: before deleting it, run
+  `./Plexiform-*.AppImage --uninstall-hooks` to take its hooks out of the
+  agents' configs. The .deb and the Windows uninstaller do this themselves.
+- **Icons.** `linux.icon` points at `build/icons/` (16–1024 px PNGs made from
+  assets/icon.icns; `npm run icons` rebuilds them with the rest).
+
 ## Turning signing on (Callum)
 
 What is needed, all as GitHub Actions secrets:

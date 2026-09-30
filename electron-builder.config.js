@@ -63,6 +63,8 @@ module.exports = {
       { target: 'deb', arch: ['x64'] },
     ],
     category: 'Development',
+    // NxN.png per size; electron-builder reads the size from the name.
+    icon: 'build/icons',
     executableName: 'plexiform',
     synopsis: Brand.tagline,
     description: Brand.tagline,
