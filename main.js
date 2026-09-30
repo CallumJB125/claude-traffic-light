@@ -34,6 +34,14 @@ const {
   runningTerminal, bounceOwnDock,
 } = Terminal;
 
+// `--uninstall-hooks`: the Windows uninstaller runs this to take Buddy's
+// entries out of the agents' configs before the binary goes, then exits
+// before any window, lock or data folder is touched.
+if (process.argv.includes('--uninstall-hooks')) {
+  for (const r of require('./adapters/uninstall-all.js').run({ home: os.homedir(), mcp: McpInstall })) console.log(`[uninstall-hooks] ${r.id}: ${r.error || (r.changed ? 'removed' : 'nothing to remove')}`);
+  process.exit(0);
+}
+
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
 // own home folder, a 24x clock, every plant is weed, a long deal, then quit.
 const DEMO = process.argv.includes('--demo') ? process.argv[process.argv.indexOf('--demo') + 1] || 'weed' : null;
