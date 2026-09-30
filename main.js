@@ -260,13 +260,15 @@ function flushStats() {
 }
 
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
-// the checked-out hooks/ dir next to main.js.
-const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
+// the checked-out hooks/ dir next to main.js. A Linux AppImage copies it out
+// to a path that survives a relaunch (src/hook-paths.js).
+const HOOK_PATHS = require('./src/hook-paths.js').resolve({ packaged: app.isPackaged, platform: process.platform, env: process.env, execPath: process.execPath, resourcesPath: process.resourcesPath, appDir: __dirname, appPath: app.getAppPath(), rootDir: ROOT_DIR, version: app.getVersion() });
+const HOOKS_DIR = HOOK_PATHS.hooksDir;
 const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 // Hooks run the app's own binary as Node (ELECTRON_RUN_AS_NODE), so a machine
 // without node still lights up. An unpackaged dev run has no app binary worth
 // pinning into agent configs and falls back to plain `node`.
-const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: app.isPackaged ? process.execPath : null, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
+const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: HOOK_PATHS.execPath, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 // Linux panels are often dark and don't recolour template images, so it gets its own colour icon.
@@ -2953,7 +2955,7 @@ ipcMain.handle('import-rules', async () => {
 function mcpOpts() {
   return {
     home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
-    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: process.execPath, appPath: app.getAppPath(), dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
+    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
 ipcMain.handle('mcp-status', () => McpInstall.status(mcpOpts()));
