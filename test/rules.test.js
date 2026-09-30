@@ -916,13 +916,27 @@ test('a failed turn has its own look; {fail} says why; it waits on you', () => {
 });
 
 test('migrateRules: a saved config gains offline and failed-turn once, in their default places', () => {
-  const saved = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn').map(R.normalizeRule);
+  // A v0 config predates the v7 git and v8 spend rules too; the git rules
+  // are in rules() already, so only spend is taken out here.
+  const spendIds = R.SPEND_RULES.map((r) => r.id);
+  const saved = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn' && !spendIds.includes(r.id)).map(R.normalizeRule);
   const m = R.migrateRules(saved, 0);
   assert.deepEqual(m.map((r) => r.id), rules().map((r) => r.id));
   assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
   assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
   const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
-  assert.deepEqual(custom.map((r) => r.id), ['offline', ...R.gitDefaultRules().map((r) => r.id), 'mine', 'failed-turn', 'started']);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', 'runaway', ...R.gitDefaultRules().map((r) => r.id), 'mine', 'failed-turn', 'budget-exceeded', 'budget-warning', 'started']);
+});
+
+test('migrateRules: a v6 config gains the git (v7) and spend (v8) rules once each; deleting them afterwards sticks', () => {
+  const added = [...R.gitDefaultRules().map((r) => r.id), ...R.SPEND_RULES.map((r) => r.id)];
+  const v6 = R.defaultRules().filter((r) => !added.includes(r.id)).map(R.normalizeRule);
+  const m = R.migrateRules(v6, 6);
+  assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id));
+  assert.deepEqual(R.migrateRules(m, 6), m, 'never duplicated');
+  const pruned = m.filter((r) => r.id !== 'git-ci-passed' && r.id !== 'runaway');
+  assert.equal(R.migrateRules(pruned, R.RULES_VERSION), pruned);
+  assert.deepEqual(R.migrateRules(pruned, 7).map((r) => r.id), [...pruned.map((r) => r.id).slice(0, 3), 'runaway', ...pruned.map((r) => r.id).slice(3)], 'a v7 config gets spend only, not the git rule it deleted');
 });
 
 test('migrateRules: offline and failed-turn you deleted on v2+ stay deleted through later upgrades', () => {

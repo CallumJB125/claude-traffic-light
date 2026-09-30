@@ -277,6 +277,47 @@
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
 
+  <!-- F1 spend -->
+  <h2>Spend</h2>
+  <div class="field">
+    <label for="spend-mode">How you pay for Claude Code</label>
+    <div class="row">
+      <select id="spend-mode" aria-describedby="hint-spend-mode">
+        <option value="api">API key (billed per token)</option>
+        <option value="subscription">Pro / Max subscription</option>
+      </select>
+    </div>
+    <div class="hint" id="hint-spend-mode">Every turn is priced from your transcripts at API list prices. On a subscription that's an equivalent, not a bill, and not a share of your usage window: Claude Code doesn't write that anywhere Buddy can read.</div>
+    <div class="hint" id="spend-now" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="field">
+    <div id="budget-label" class="group-label">Budget</div>
+    <div class="row wrap" role="group" aria-labelledby="budget-label">
+      <label class="row" for="spend-daily">$ <input type="number" id="spend-daily" min="0" step="1" /> a day</label>
+      <label class="row" for="spend-weekly">$ <input type="number" id="spend-weekly" min="0" step="1" /> a week</label>
+    </div>
+    <div class="row">
+      <label for="spend-warn">Warn at</label>
+      <input type="number" id="spend-warn" min="10" max="100" step="5" aria-describedby="hint-budget" />
+      <span aria-hidden="true">%</span>
+    </div>
+    <div class="hint" id="hint-budget">0 turns a budget off. Weeks start on Monday. Near it, a finished turn shows amber with money eyes; over it, red.</div>
+  </div>
+
+  <div class="field">
+    <div id="runaway-label" class="group-label">Runaway session</div>
+    <div class="row wrap" role="group" aria-labelledby="runaway-label">
+      <label class="row" for="spend-runaway-dollars">$ <input type="number" id="spend-runaway-dollars" min="0" step="1" /></label>
+      <label class="row" for="spend-runaway-tokens">or <input type="number" id="spend-runaway-tokens" min="0" step="100" /> k tokens</label>
+      <label class="row" for="spend-runaway-minutes">in <input type="number" id="spend-runaway-minutes" min="1" max="240" /> min</label>
+    </div>
+    <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Buddy never stops or types into a session you started. 0 turns a limit off.</div>
+    <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget" /> Notify me near and over budget</label>
+  </div>
+  <!-- end F1 spend -->
+
   <div class="actions">
     <span id="status" role="status" aria-live="polite"></span>
     <button id="save">Save</button>
@@ -316,8 +357,44 @@
       document.getElementById('gitSignals').checked = config.gitSignals !== false;
       document.getElementById('gitRepos').value = (config.gitRepos || []).join(', ');
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
+      loadSpend(config.spend || {}); // F1 spend
     }
     const commaList = (id) => document.getElementById(id).value.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 50);
+
+    // ── F1 spend ──
+    const spendEl = (id) => document.getElementById(`spend-${id}`);
+    function loadSpend(sp) {
+      spendEl('mode').value = sp.mode === 'subscription' ? 'subscription' : 'api';
+      spendEl('daily').value = sp.dailyBudget || 0;
+      spendEl('weekly').value = sp.weeklyBudget || 0;
+      spendEl('warn').value = Math.round((sp.warnAt || 0.8) * 100);
+      spendEl('runaway-dollars').value = sp.runawayDollars ?? 40;
+      spendEl('runaway-tokens').value = Math.round((sp.runawayTokens || 0) / 1000);
+      spendEl('runaway-minutes').value = sp.runawayMinutes || 20;
+      spendEl('notify-runaway').checked = sp.notifyRunaway !== false;
+      spendEl('notify-budget').checked = sp.notifyBudget !== false;
+    }
+    function spendSettings() {
+      const n = (id) => Math.max(0, Number(spendEl(id).value) || 0);
+      return {
+        mode: spendEl('mode').value,
+        dailyBudget: n('daily'),
+        weeklyBudget: n('weekly'),
+        warnAt: Math.min(1, Math.max(0.1, n('warn') / 100 || 0.8)),
+        runawayDollars: n('runaway-dollars'),
+        runawayTokens: n('runaway-tokens') * 1000,
+        runawayMinutes: Math.min(240, Math.max(1, n('runaway-minutes') || 20)),
+        notifyRunaway: spendEl('notify-runaway').checked,
+        notifyBudget: spendEl('notify-budget').checked,
+      };
+    }
+    window.settingsApi.spend().then((sp) => {
+      if (!sp) { spendEl('now').textContent = 'Reading your transcripts…'; return; }
+      const eq = sp.mode === 'subscription' ? ' (API-price equivalent)' : '';
+      const n = sp.budget.week.unpriced;
+      spendEl('now').textContent = `So far: $${sp.budget.day.spent.toFixed(2)} today, $${sp.budget.week.spent.toFixed(2)} this week${eq}.${n ? ` ${n} turn${n === 1 ? '' : 's'} unpriced (unknown model), not counted.` : ''}`;
+    }).catch(() => {});
+    // ── end F1 spend ──
 
     document.getElementById('save').addEventListener('click', async () => {
       try {
@@ -346,6 +423,7 @@
         gitSignals: document.getElementById('gitSignals').checked,
         gitRepos: commaList('gitRepos'),
         gitDeployWorkflows: commaList('gitDeployWorkflows'),
+        spend: spendSettings(), // F1 spend
       });
       status.className = '';
       status.textContent = 'Saved';

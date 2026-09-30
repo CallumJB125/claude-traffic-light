@@ -504,11 +504,13 @@ test('rules: every git signal has a default rule; unknown git signals are ignore
 });
 
 test('rules v7: saved rules gain the git rules once, just under No network; deleted ones stay deleted', () => {
-  const v6 = R.defaultRules().filter((r) => !r.id.startsWith('git-')).map(R.normalizeRule);
+  // A real v6 config predates the v8 spend rules as well.
+  const spend = R.SPEND_RULES.map((r) => r.id);
+  const v6 = R.defaultRules().filter((r) => !r.id.startsWith('git-') && !spend.includes(r.id)).map(R.normalizeRule);
   const m = R.migrateRules(v6, 6);
   assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id));
   assert.deepEqual(R.migrateRules(m, 6), m, 'never duplicated');
-  assert.equal(R.migrateRules(v6, 7), v6);
+  assert.ok(!R.migrateRules(v6, 7).some((r) => r.id.startsWith('git-')), 'a v7 config that deleted its git rules keeps them deleted');
   assert.ok(R.RULES_VERSION >= 7);
 });
 

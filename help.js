@@ -30,12 +30,17 @@ const RULE_TEXT = {
   ignored: { signal: 'ignored-20', text: 'Something has been waiting on you for 20+ minutes, so he has crossed his arms and grown a beard.' },
   nudge: { signal: 'idle-nudge', text: 'Claude finished a while ago and is idle until you send the next message. Nothing is blocked.' },
   idle: { signal: 'idle', text: 'No Claude Code session is running (or they have all gone quiet).' },
+  // F2 git/ci
   'git-ci-failed': { signal: 'ci-failed', text: 'A GitHub Actions run you started on the branch you are working on just failed. It shows for 10 minutes; Preferences → Git and CI turns these off.' },
   'git-deploy-failed': { signal: 'deploy-failed', text: 'A deploy workflow you started just failed on GitHub Actions. Which workflows count as deploys is set in Preferences → Git and CI.' },
   'git-changes-requested': { signal: 'pr-changes-requested', text: 'Someone asked for changes on one of your pull requests.' },
   'git-review-requested': { signal: 'pr-review-requested', text: 'Someone asked you to review their pull request.' },
   'git-deploy-finished': { signal: 'deploy-finished', text: 'A deploy workflow you started finished successfully.' },
   'git-ci-passed': { signal: 'ci-passed', text: 'CI passed on the branch you are working on.' },
+  // F1 spend
+  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover Claude for how much, how fast). Check it's doing what you meant — Buddy never stops a session you started; the notification jumps to its terminal." },
+  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
+  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
 };
 
 const LAMP_TEXT = {
@@ -138,7 +143,9 @@ const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: 
 
 const folderOf = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
 
-function notifiable({ sessions = [], pending = [], offline = false }) {
+const periodKey = (b) => (b.which === 'week' ? b.weekKey : b.dayKey);
+
+function notifiable({ sessions = [], pending = [], offline = false, spend = null }) {
   const out = new Map();
   for (const s of sessions) {
     if (!s || !s.sessionId || (s.signal !== 'permission-ask' && s.signal !== 'turn-failed')) continue;
@@ -156,11 +163,26 @@ function notifiable({ sessions = [], pending = [], offline = false }) {
   // Only worth saying while a session is open: a laptop dropping wifi with
   // nothing running is none of Claude's business.
   if (offline && sessions.length) out.set('offline', { kind: 'offline', session: null });
+  // F1 spend: keyed on spend alone, never on which sessions are open. A
+  // runaway is one key per episode (the app's latch keeps firedAt while the
+  // session hovers near the line or its turn ends); a budget level is one
+  // key per day or week.
+  if (spend) {
+    for (const r of spend.runaway || []) {
+      const s = sessions.find((x) => x.sessionId && x.sessionId === r.sessionId) || {};
+      out.set(`runaway:${r.sessionId}:${r.firedAt || 0}`, { kind: 'runaway', session: { ...s, sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, burn: r.burn } });
+    }
+    const b = spend.budget;
+    if (b && b.level) out.set(`budget-${b.level}:${b.which}:${periodKey(b)}`, { kind: `budget-${b.level}`, session: null, text: spend.budgetText });
+  }
   return out;
 }
 
-function message(kind, s) {
+function message(kind, s, text) {
   const where = s ? folderOf(s.cwd) : '';
+  if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `${s.burn}. Click to jump to its terminal.` };
+  if (kind === 'budget-exceeded') return { title: 'Over budget', body: `${text || 'Spend is over your budget'}.` };
+  if (kind === 'budget-warning') return { title: 'Nearing your budget', body: `${text || 'Spend is close to your budget'}.` };
   if (kind === 'permission-ask') {
     const body = s.askKind === 'question' ? 'Claude has a question for you.' : s.tool ? `Claude wants to use ${s.tool}.` : 'Claude is waiting for your answer.';
     return { title: `Needs your input${where ? ` — ${where}` : ''}`, body };
@@ -177,19 +199,31 @@ function notifyConfig(config) {
   return { on: !config || config.notifyOnStates !== false, kinds: { ...NOTIFY_DEFAULTS, ...per } };
 }
 
+// F1 spend: toggled in Preferences → Spend, under the master switch.
+function spendMuted(kind, config) {
+  const sp = (config && config.spend) || {};
+  if (kind === 'runaway') return sp.notifyRunaway === false;
+  if (kind === 'budget-warning' || kind === 'budget-exceeded') return sp.notifyBudget === false;
+  return false;
+}
+
 // prevKeys: the key set from last time, or null on the very first look —
 // which only records what is already going on, so a restart doesn't replay
 // every ask and failure that is still sitting there.
 function notifications(prevKeys, next, config) {
   const now = notifiable(next);
   const keys = new Set(now.keys());
+  // A budget notice stays sent for its day or week, even if the level dips
+  // (a raised budget, a new day's first read) and comes back.
+  const b = next.spend && next.spend.budget;
+  for (const k of prevKeys || []) if (k.startsWith('budget-') && (!b || k.endsWith(`:${b.dayKey}`) || k.endsWith(`:${b.weekKey}`))) keys.add(k);
   if (!prevKeys) return { keys, fire: [] };
   const { on, kinds } = notifyConfig(config);
   const fire = [];
   if (on) {
-    for (const [key, { kind, session }] of now) {
-      if (prevKeys.has(key) || kinds[kind] === false) continue;
-      fire.push({ key, kind, ...message(kind, session), hostApp: (session && session.hostApp) || null, cwd: (session && session.cwd) || null });
+    for (const [key, { kind, session, text }] of now) {
+      if (prevKeys.has(key) || kinds[kind] === false || spendMuted(kind, config)) continue;
+      fire.push({ key, kind, ...message(kind, session, text), hostApp: (session && session.hostApp) || null, cwd: (session && session.cwd) || null, sessionId: (session && session.sessionId) || null });
     }
   }
   return { keys, fire };

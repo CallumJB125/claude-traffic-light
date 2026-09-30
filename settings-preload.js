@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('settingsApi', {
   mcpStatus: () => ipcRenderer.invoke('mcp-status'),
   mcpSetEnabled: (on) => ipcRenderer.invoke('mcp-set-enabled', on),
   gitStatus: () => ipcRenderer.invoke('git-status'),
+  spend: () => ipcRenderer.invoke('get-spend'),
 });

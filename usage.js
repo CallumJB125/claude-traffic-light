@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { dayKey } = require('./stats.js');
 
 // USD per million tokens.
@@ -63,11 +64,28 @@ function turnFrom(j, file, subagent) {
   };
 }
 
+// A hash of the first line: a file rewritten in place (same inode, and grown
+// past the old offset) has a different one, and must not resume mid-line
+// into different content. null until the first line is complete.
+async function headOf(file) {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const buf = Buffer.alloc(4096);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const nl = buf.subarray(0, bytesRead).indexOf(10);
+    return nl < 0 ? null : crypto.createHash('sha1').update(buf.subarray(0, nl)).digest('hex');
+  } finally {
+    await fh.close();
+  }
+}
+
 // Transcripts are append-only, so a file that only grew is read from where
-// the last pass stopped; one that shrank or was replaced is read from zero.
+// the last pass stopped; one that shrank, was replaced, or was rewritten in
+// place (a different first line) is read from zero.
 async function parseFile(file, stat, prev) {
   const subagent = file.split(path.sep).includes('subagents');
-  const resume = prev && stat.size >= prev.offset && prev.ino === stat.ino;
+  const head = await headOf(file);
+  const resume = prev && stat.size >= prev.offset && prev.ino === stat.ino && prev.head === head;
   const turns = resume ? prev.turns : new Map();
   let offset = resume ? prev.offset : 0;
   if (stat.size > offset) {
@@ -96,7 +114,7 @@ async function parseFile(file, stat, prev) {
     // A trailing line with no newline may still be mid-write; leave it (and
     // the offset before it) for the next pass.
   }
-  return { key: `${stat.mtimeMs}:${stat.size}`, ino: stat.ino, offset, turns };
+  return { key: `${stat.mtimeMs}:${stat.size}`, ino: stat.ino, head, offset, turns };
 }
 
 async function listJsonl(root) {
