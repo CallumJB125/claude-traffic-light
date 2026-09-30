@@ -1,0 +1,29 @@
+<!--page {"title":"Privacy · Plexiform","desc":"What Plexiform reads, what it keeps on your computer, and the few things that ever leave it.","nav":"privacy"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Privacy</h1>
+    <p class="lede">What {{brand.name}} reads, what stays on your computer, and what little ever leaves it.</p>
+    <p class="prose" style="margin-top:18px"><strong>Beta notice.</strong> This page summarises the beta's privacy notice, which is a draft and hasn't had its legal review yet. Where they differ, the notice inside the app wins.</p>
+    <div class="doc">
+      <nav aria-label="On this page"><a href="#short">In short</a><a href="#stays">What stays here</a><a href="#leaves">What leaves</a><a href="#waitlist-data">This website</a></nav>
+      <div>
+        <section id="short"><h2>In short</h2><ul><li><strong>Never:</strong> telemetry or analytics. Nothing is sent to us by the app.</li><li><strong>Off by default:</strong> calendar, calendar subscription links, voice questions, answering permission prompts from the widget, and remote devices.</li><li><strong>On by default:</strong> checking GitHub for pull requests and builds through your own <code>gh</code> login, if you have one signed in, and reading your Focus status on this computer.</li><li><strong>Only if you join a team board:</strong> the board sends your cards, handovers and run progress to your team's hub.</li></ul></section>
+        <section id="stays"><h2>What stays on your computer</h2><ul><li>Your Claude Code conversation logs are read on your machine to work out tokens and cost. Only counts and costs are kept, not the text.</li><li>Your prompts and the replies are never stored by {{brand.name}}.</li><li>Session state: the folder, the state, the current tool, the model name and task counts.</li><li>Your settings, rules and any face photos you add as cameos.</li><li>Voice is turned into text on your device. Audio is never written to disk.</li></ul></section>
+        <section id="leaves"><h2>What leaves, and when</h2><ul><li><strong>GitHub</strong>, through your own login, about every 90 seconds, only if <code>gh</code> is installed and signed in.</li><li><strong>Your AI tools</strong> send your prompts to their providers under those providers' terms. {{brand.name}} neither sees nor changes that.</li><li><strong>A calendar subscription link</strong>, only if you paste one, fetched over HTTPS.</li><li><strong>A team board</strong>, only if you join one: card text, handovers, run progress, member names and the identity of repos you link. Text passes a filter for credential-like strings and home-folder paths first. Sharing what you're working on is a separate opt-in.</li></ul></section>
+        <section id="waitlist-data"><h2>This website</h2><p>This site has no analytics and sets no cookies. If you join the waitlist, we store your email, the agent you said you use, and the time, and use them only to send you a beta invite. Email <a href="mailto:{{raw:page.contact}}">{{raw:page.contact}}</a> to have it removed.</p></section>
+      </div>
+    </div>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+</body>
+</html>

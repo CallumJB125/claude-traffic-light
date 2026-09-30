@@ -34,6 +34,8 @@
       download: `${SITE}/download`,
       privacy: `${SITE}/privacy`,
       hub: HUB,
+      // where installers and the latest*.yml update feeds are published
+      downloads: 'https://download.plexiform.dev',
       // where the app looks for updates. A GitHub Release until the download
       // host is live; then https://download.plexiform.dev (a one-line change)
       updates: 'https://github.com/CallumJB125/claude-traffic-light/releases/latest/download',

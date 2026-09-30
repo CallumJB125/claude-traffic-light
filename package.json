@@ -1,14 +1,14 @@
 {
   "name": "claude-buddy",
   "version": "1.0.0",
-  "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini…) session — lights, moods, costumes, pets, a garden, and clicks that do things.",
+  "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
     "predist": "npm run calendar-helper && npm run voice-helper",
     "dist": "electron-builder --mac",
-    "test": "node --test test/*.test.js test/adapters/*.test.js && npm run test:remote",
+    "test": "node --test test/*.test.js test/adapters/*.test.js && npm run test:remote site/test/*.test.js",
     "test:remote": "npm --prefix remote test",
     "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
@@ -20,7 +20,8 @@
     "test:visual:update": "playwright test --update-snapshots",
     "tune": "electron tools/tuning-main.js",
     "calendar-helper": "sh scripts/build-calendar-helper.sh",
-    "voice-helper": "node scripts/build-voice-helper.js"
+    "voice-helper": "node scripts/build-voice-helper.js",
+    "build:site": "node site/build.js"
   },
   "author": "",
   "license": "MIT",

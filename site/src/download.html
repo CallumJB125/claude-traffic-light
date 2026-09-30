@@ -1,0 +1,69 @@
+<!--page {"title":"Download Plexiform","desc":"Download Plexiform for Mac, Windows or Linux. Private beta: the builds are unsigned for now, so the first open takes one extra step.","nav":"download"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Download {{brand.name}}</h1>
+    <p class="lede">The beta is for small teams. You can install it now; joining a team board needs an invite.</p>
+
+    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="{{brand.urls.updates}}">
+      <p id="dl-status" role="status">Looking for the latest build…</p>
+      <div id="dl-primary"></div>
+      <p id="dl-meta"></p>
+    </div>
+
+    <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
+    <ul class="os-list" id="dl-all">
+      <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
+      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Checking…</span></li>
+      <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
+    </ul>
+
+    <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
+    <p class="prose" style="margin-top:12px">The beta isn't signed with a developer certificate yet, so your system asks you to confirm once. It's a normal step for software that isn't from an app store, and it only happens the first time.</p>
+    <div class="grid-2" style="margin-top:28px">
+      <div>
+        <h3>On a Mac</h3>
+        <ol class="steps">
+          <li><strong>Open the download</strong> and drag {{brand.name}} into Applications.</li>
+          <li><strong>Right-click</strong> {{brand.name}} in Applications and choose <strong>Open</strong>. Double-clicking won't offer the option.</li>
+          <li>In the box that appears, choose <strong>Open</strong> again.</li>
+          <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries. <strong>Restart any Claude Code sessions</strong> that were already running.</li>
+        </ol>
+      </div>
+      <div>
+        <h3>On Windows</h3>
+        <ol class="steps">
+          <li><strong>Run the installer.</strong> If SmartScreen says it protected your PC, choose <strong>More info</strong>.</li>
+          <li>Then choose <strong>Run anyway</strong>.</li>
+          <li>Restart any Claude Code sessions that were already running.</li>
+        </ol>
+        <h3 style="margin-top:28px">On Linux</h3>
+        <ol class="steps"><li>Make the AppImage executable and run it, or install the .deb with your package manager.</li></ol>
+      </div>
+    </div>
+
+    <h2 style="margin-top:64px;font-size:1.7rem">Got an invite link?</h2>
+    <ol class="steps">
+      <li><strong>Install and open {{brand.name}}</strong> using the steps above.</li>
+      <li><strong>Sign in with Google</strong> when the app asks.</li>
+      <li><strong>Click your invite link again.</strong> It opens the app and puts you on your team.</li>
+    </ol>
+
+    <h2 style="margin-top:64px;font-size:1.7rem">Check your download</h2>
+    <p class="prose" style="margin-top:12px">Each build is listed with a SHA-512 checksum. To compare it on a Mac or Linux, run this and check it matches:</p>
+    <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">openssl dgst -sha512 -binary &lt;file&gt; | base64</code></p>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+<script src="{{asset:assets/feed.js}}" defer></script>
+<script src="{{asset:assets/download.js}}" defer></script>
+</body>
+</html>

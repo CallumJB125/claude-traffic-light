@@ -1,0 +1,40 @@
+<!--page {"title":"Docs · Plexiform","desc":"Install Plexiform, what it adds to Claude Code, the lamps, and the MCP tools a session can call.","nav":"docs"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Docs</h1>
+    <p class="lede">The short version of how {{brand.name}} works and what it touches on your machine.</p>
+    <div class="doc">
+      <nav aria-label="On this page"><a href="#install">Install</a><a href="#hooks">What it adds to Claude Code</a><a href="#lamps">The lamps</a><a href="#rules">Rules</a><a href="#mcp">MCP tools</a><a href="#data">Where your data lives</a></nav>
+      <div>
+        <section id="install"><h2>Install</h2><p>Get the build for your system from the <a href="/download">download page</a>. On a Mac, right-click the app and choose Open the first time. On first launch the app registers its hooks and turns on Open at Login, which you can switch off from the tray menu and it will stay off.</p><p>Restart any Claude Code sessions that were already running so they pick up the hooks.</p></section>
+        <section id="hooks"><h2>What it adds to Claude Code</h2><p>{{brand.name}} appends its own entries to <code>~/.claude/settings.json</code> and never touches anything else in that file. It checks every ten minutes that they're still there. If you move the app, use <strong>Reinstall hooks</strong> in the tray menu, because the hook commands point at the app's path.</p><p>Hooks always exit cleanly, so a problem in {{brand.name}} can't block a Claude Code session.</p></section>
+        <section id="lamps"><h2>The lamps</h2><ul><li><strong>Green</strong>: at least one session is working.</li><li><strong>Amber</strong>: your turn. A session finished, is waiting for your next prompt, or a turn failed.</li><li><strong>Red</strong>: blocked until you act. A permission prompt, a usage limit, or no network.</li><li><strong>Off</strong>: no sessions are running.</li></ul><p>Click the widget to jump to the session that needs you. With several waiting, each click goes to the next.</p></section>
+        <section id="rules"><h2>Rules</h2><p>Every event is a signal, and a rule says which lamp, eye colour, pose, sound or costume it triggers. Open <strong>Lights</strong> from the widget's menu to edit them. Rules can be scoped to one tool or folder, reordered, and previewed live with <strong>Try on widget</strong>. The permission and usage-limit rules are locked above the rest so a stray rule can't hide a real block.</p></section>
+        <section id="mcp"><h2>MCP tools</h2><p>{{brand.name}} ships a read-only MCP server so a session can ask about what the widget is showing. The tools:</p><ul>
+          <li><code>buddy_status</code>: what the widget shows now, and why.</li>
+          <li><code>buddy_sessions</code>: every session the widget sees.</li>
+          <li><code>buddy_why</code>: why a rule is or isn't firing.</li>
+          <li><code>buddy_rules</code>: the configured rules in order.</li>
+          <li><code>buddy_recent_transitions</code>: the latest state changes.</li>
+          <li><code>buddy_model_mix</code>: which models your turns ran on, and what they cost.</li>
+          <li><code>buddy_git_status</code>: pull request and build signals.</li>
+          <li><code>buddy_spend</code>: today's and this week's spend against your budget.</li>
+          <li><code>buddy_usage_history</code>: spend and tokens over any range up to 400 days, grouped by day, model, family, project or source.</li>
+          <li><code>buddy_pending_requests</code>: permission requests waiting for an answer.</li></ul><p>The tool names still say "buddy" for now.</p></section>
+        <section id="data"><h2>Where your data lives</h2><p>Your rules, settings, usage record and cameo photos are in a folder in your home directory, <code>~/.claude-traffic-light</code>. That folder may move in a later release, and the app will migrate it for you. Nothing in it is uploaded. The <a href="/privacy">privacy notice</a> lists every file and every flow that leaves your machine.</p></section>
+      </div>
+    </div>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!--page {"title":"Join your team on Plexiform","desc":"Install Plexiform, sign in with Google, then open your invite link again.","nav":"invite","noindex":true}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+<meta name="robots" content="noindex" />
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap" style="max-width:760px;margin-inline:0 auto">
+    <h1>You're invited to join a team on {{brand.name}}.</h1>
+    <p class="lede" id="invite-line">Three quick steps. Keep this page open, because you'll come back to this link.</p>
+    <ol class="steps" style="margin-top:34px;max-width:none">
+      <li><strong>Download {{brand.name}}</strong> for your computer.<div style="margin-top:12px"><a class="btn btn-os" href="{{brand.urls.site}}/download" data-os-label data-download-cta>Download {{brand.name}} for Mac</a></div></li>
+      <li id="first-open"><strong>Open it the first time with a right-click.</strong> The beta isn't signed yet. In Applications, right-click {{brand.name}}, choose <strong>Open</strong>, then <strong>Open</strong> again. On Windows, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+      <li><strong>Sign in with Google</strong> in the app.</li>
+      <li><strong>Click this invite link again.</strong> It opens {{brand.name}} and puts you on your team.</li>
+    </ol>
+    <p style="margin-top:30px"><a class="btn btn-ghost" id="open-app" href="{{raw:brand.scheme}}://invite">Open {{brand.name}} with this invite</a></p>
+    <p class="hero-note" style="margin-top:22px">Your invite stays in this link's fragment, after the #, so it's never sent to a server when this page loads.</p>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+<script src="{{asset:assets/app/brand.js}}" defer></script>
+<script src="{{asset:assets/invite.js}}" defer></script>
+</body>
+</html>
