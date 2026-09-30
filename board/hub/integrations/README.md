@@ -38,6 +38,8 @@ unless the bind cookie set by `POST …/start` comes back: `__Host-board_int_<pr
 Inside the desktop shell only, the web passes the bind in the connect window's name and the app
 sets the cookie in its connect window; a browser tab gets `_blank` and uses the cookie it has (D42).
 
+**Reconnect.** A second live connection for the same `(team, provider, external_id)` is refused with `CONFLICT` (`this <name> is already connected`) and leaves nothing behind: no connection row, no sealed secret, no journal row; the live one is untouched. The callback page shows that message. If your provider creates a new external resource before `exchange` returns (GitHub's App-manifest flow makes a new App each time), return a **stable per-resource id** as `external_id` (the App id, not the account), so a reconnect that made a new resource is a new connection rather than a clash with, or a silent takeover of, the old one; the admin revokes the old connection when it is no longer wanted.
+
 **Connect flows.** `authorizeUrl` is a GET redirect. A provider that wants a POSTed form (GitHub's
 App-manifest flow) declares `connect.manifestForm({state, redirectUri, webhookUrl, config}) → {action, fields}`
 and `connect.formHost` (one of `hosts`) instead: `/start` then returns `{form, bind}` and refuses a form whose

@@ -363,6 +363,30 @@ test('link: at most one live pr link per card per connection (same id is a no-op
   } finally { await h.close(); }
 });
 
+test('createConnection: an already-active (org, provider, external_id) is a clean CONFLICT that leaves nothing behind', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const count = (sql, ...a) => h.db.get(sql, ...a).n;
+    const before = {
+      conns: count('SELECT COUNT(*) AS n FROM connections'), secrets: count('SELECT COUNT(*) AS n FROM connection_secrets'),
+      journal: count('SELECT COUNT(*) AS n FROM journal'),
+    };
+    const id = randomUUID();
+    assert.throws(() => reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: conn.external_id, secrets: { api_token: 'fake_new', webhook_secret: 'whsec_new' }, id }), (e) => e.code === 'CONFLICT');
+    assert.deepEqual({
+      conns: count('SELECT COUNT(*) AS n FROM connections'), secrets: count('SELECT COUNT(*) AS n FROM connection_secrets'),
+      journal: count('SELECT COUNT(*) AS n FROM journal'),
+    }, before);
+    assert.equal(count('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', id), 0);
+    assert.equal(reg.get(id), null);
+    // The live connection and its secrets are untouched.
+    assert.equal(reg.ctxFor(conn.id).secret('webhook_secret'), 'whsec_abcdef123456');
+    // Once revoked, the same external id connects again.
+    reg.revokeConnection(conn.id, h.ids.alice);
+    assert.equal(reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: conn.external_id, id }).id, id);
+  } finally { await h.close(); }
+});
+
 // ── App-manifest connect ────────────────────────────────────────────────────
 
 // Shaped like GitHub's flow: POST a manifest to the provider's form; it
