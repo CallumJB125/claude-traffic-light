@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { PRESENCE_TTL_MS } from '../../shared/liveness.js';
+import { PRESENCE_TTL_MS, PRESENCE_MIN_MS, PRESENCE_PUSH_MS } from '../../shared/liveness.js';
 import { DEFAULT_LIMITS } from '../ratelimit.js';
 import { startHub, settle } from './helpers.js';
 
@@ -45,13 +45,18 @@ test('presence: board-linked repos only, exact browser shape, same view over HTT
 });
 
 test('presence: enabled:false (an empty frame) clears at once; a disconnect keeps it until the TTL', async () => {
-  const { h, r, b } = await setup();
+  const { h, alice, r, b } = await setup();
   try {
     r.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo })] });
     await b.next('team.presence', (m) => m.members.length === 1, { fresh: true });
     r.send({ type: 'presence', sessions: [] });
-    await b.next('team.presence', (m) => m.members.length === 0, { fresh: true });
+    await settle(50);
+    assert.deepEqual((await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.members, [], 'the hub forgets at once');
+    const cleared = b.next('team.presence', (m) => m.members.length === 0, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);   // the push itself is coalesced (≤ 1/s/board)
+    await cleared;
 
+    await h.tick(PRESENCE_MIN_MS);
     r.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo, state: 'waiting' })] });
     await b.next('team.presence', (m) => m.members[0]?.sessions[0]?.state === 'waiting', { fresh: true });
     r.terminate();
@@ -153,6 +158,74 @@ test('presence: malformed frames are refused (agent, state, summary over 120, no
     }
     await settle(50);
     assert.deepEqual(latest(b).members, []);
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('presence flood: 500 alternating frames → a bounded number of pushes; the last accepted state always goes out', async () => {
+  const { h, alice, r, b } = await setup();
+  try {
+    await b.next('team.presence');
+    const before = b.all('team.presence').length;
+    const frame = (i) => ({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo, state: i % 2 ? 'working' : 'idle' })] });
+    for (let i = 0; i < 500; i++) r.send(frame(i));
+    await settle(300);
+    assert.ok(b.all('team.presence').length - before <= 1, 'same instant: one frame accepted, one push');
+
+    // Spread over 5 s of hub time with the reaper running: still ≤ 1 accepted frame per PRESENCE_MIN_MS/2.
+    const n0 = b.all('team.presence').length;
+    for (let i = 0; i < 500; i++) {
+      r.send(frame(i));
+      if (i % 10 === 9) { await settle(2); await h.tick(100); }
+    }
+    await settle(100);
+    await h.tick(PRESENCE_PUSH_MS);
+    await settle(50);
+    const pushes = b.all('team.presence').length - n0;
+    assert.ok(pushes <= Math.ceil(5000 / (PRESENCE_MIN_MS / 2)) + 1, `bounded pushes (${pushes})`);
+    const shown = (await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.members;
+    assert.deepEqual(latest(b).members, shown, 'browsers end on the hub\'s current view');
+
+    // An empty frame is never throttled.
+    r.send({ type: 'presence', sessions: [] });
+    await settle(50);
+    assert.deepEqual((await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.members, []);
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('presence pushes: ≤ 1 per board per second, trailing edge carries the last state; other orgs\' boards are not recomputed', async () => {
+  const { h, alice, r, b } = await setup();
+  try {
+    await b.next('team.presence');
+    const r2 = await h.runner(await h.enroll(alice));
+    const n0 = b.all('team.presence').length;
+    r.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo })] });
+    await b.next('team.presence', (m) => m.members.length === 1, { fresh: true });
+    const views = [];
+    const view = h.hub.presence.view.bind(h.hub.presence);
+    h.hub.presence.view = (id) => { views.push(id); return view(id); };
+    r2.send({ type: 'presence', sessions: [sess({ session_id: 'h-9', repo_id: h.ids.repo, state: 'idle' })] });
+    await settle(100);
+    assert.equal(b.all('team.presence').length - n0, 1, 'held back inside the push interval');
+    const trailing = b.next('team.presence', (m) => m.members[0]?.sessions.length === 2, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);
+    await trailing;
+    assert.equal(b.all('team.presence').length - n0, 2);
+
+    // A frame from another org marks only that org's boards.
+    const now = new Date().toISOString();
+    h.db.insert('orgs', { id: 'o2', name: 'other', created_at: now });
+    h.db.insert('members', { id: 'm-eve', org_id: 'o2', github_id: 99, github_login: 'eve', email: 'eve@x.io', display_name: 'Eve', role: 'owner', created_at: now });
+    const eve = await h.login('eve');
+    const re = await h.runner(await h.enroll(eve), { advertise: false });
+    await h.tick(PRESENCE_PUSH_MS);   // alice's board could push again now
+    views.length = 0;
+    re.send({ type: 'presence', sessions: [] });
+    await settle(50);
+    assert.deepEqual(views, [], 'alice\'s board is not recomputed for org o2');
   } finally {
     await h.destroy();
   }

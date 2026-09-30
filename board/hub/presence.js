@@ -3,26 +3,35 @@
 // journaled: one entry per device, dropped PRESENCE_TTL_MS after its last
 // frame (a disconnect just stops the frames). A board's subscribers see only
 // sessions of their own org's members in repos linked to THAT board.
+// Flood bounds: a connection's non-empty frames closer than PRESENCE_MIN_MS/2
+// are dropped, and a board's browsers get at most one push per
+// PRESENCE_PUSH_MS (trailing edge, flushed by the reaper, so the last state
+// always goes out).
 
-import { PRESENCE_TTL_MS } from '../shared/liveness.js';
+import { PRESENCE_TTL_MS, PRESENCE_MIN_MS, PRESENCE_PUSH_MS } from '../shared/liveness.js';
 
 export class Presence {
   constructor(hub) {
     this.hub = hub;
     this.byDevice = new Map();   // device_id → {member_id, org_id, sessions, at}
     this.sent = new Map();       // board_id → last members JSON pushed to its subscribers
+    this.pushedAt = new Map();   // board_id → mono of its last push
+    this.dirty = new Set();      // board_ids whose view may have changed, push held back
   }
 
   /** A `presence` frame from a ready runner connection (already shape-validated). */
   update(conn, msg) {
+    const now = this.hub.mono();
+    if (msg.sessions.length && conn.presenceAt != null && now - conn.presenceAt < PRESENCE_MIN_MS / 2) return;
+    conn.presenceAt = now;
     // Default deny on the hub too: only repos on a board of the device member's org.
     const allowed = new Set(conn.allowlist().map((r) => r.repo_id));
     const sessions = msg.sessions.filter((s) => allowed.has(s.repo_id)).map((s) => ({
       session_id: s.session_id, agent: s.agent, repo_id: s.repo_id, branch: s.branch ?? null, state: s.state, since: s.since, summary: s.summary ?? null,
     }));
-    if (sessions.length) this.byDevice.set(conn.device_id, { member_id: conn.member_id, org_id: conn.member.org_id, sessions, at: this.hub.mono() });
+    if (sessions.length) this.byDevice.set(conn.device_id, { member_id: conn.member_id, org_id: conn.member.org_id, sessions, at: now });
     else this.byDevice.delete(conn.device_id);
-    this.changed();
+    this.changed(conn.member.org_id);
   }
 
   // Reaper pass: expire silent devices.
@@ -31,6 +40,7 @@ export class Presence {
     let gone = false;
     for (const [id, e] of this.byDevice) if (now - e.at > PRESENCE_TTL_MS) { this.byDevice.delete(id); gone = true; }
     if (gone) this.changed();
+    else this.flush();
   }
 
   /** {members:[{member_id, name, sessions:[{agent, repo_short, branch?, state, since, summary?}]}]} for one board. */
@@ -56,22 +66,38 @@ export class Presence {
   }
 
   // A browser just subscribed: it gets the current view after its snapshot.
+  // (It never updates `sent` for a board that already has one: a held-back
+  // push must still reach the board's other browsers.)
   subscribed(conn) {
     const v = this.view(conn.boardId);
-    this.sent.set(conn.boardId, JSON.stringify(v.members));
+    if (!this.sent.has(conn.boardId)) this.sent.set(conn.boardId, JSON.stringify(v.members));
     conn.send({ type: 'team.presence', ...v });
   }
 
-  // Push team.presence to each subscribed board whose view changed.
-  changed() {
+  // Mark the subscribed boards of orgId (all orgs when null) for a push.
+  changed(orgId = null) {
+    for (const boardId of new Set([...this.hub.browsers].map((b) => b.boardId).filter(Boolean))) {
+      if (orgId == null || this.hub.board(boardId)?.org_id === orgId) this.dirty.add(boardId);
+    }
+    this.flush();
+  }
+
+  // Push team.presence to each marked board whose view changed, at most once
+  // per PRESENCE_PUSH_MS per board; the rest wait for a later flush.
+  flush() {
+    const now = this.hub.mono();
     const boards = new Set([...this.hub.browsers].map((b) => b.boardId).filter(Boolean));
-    for (const boardId of boards) {
+    for (const boardId of this.dirty) {
+      if (!boards.has(boardId)) { this.dirty.delete(boardId); continue; }
+      if (now - (this.pushedAt.get(boardId) ?? -Infinity) < PRESENCE_PUSH_MS) continue;
+      this.dirty.delete(boardId);
       const v = this.view(boardId);
       const sig = JSON.stringify(v.members);
       if ((this.sent.get(boardId) ?? '[]') === sig) continue;
       this.sent.set(boardId, sig);
+      this.pushedAt.set(boardId, now);
       for (const b of this.hub.browsers) if (b.boardId === boardId) b.send({ type: 'team.presence', ...v });
     }
-    for (const id of this.sent.keys()) if (!boards.has(id)) this.sent.delete(id);
+    for (const m of [this.sent, this.pushedAt]) for (const id of m.keys()) if (!boards.has(id)) m.delete(id);
   }
 }
