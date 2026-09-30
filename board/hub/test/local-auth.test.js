@@ -303,6 +303,8 @@ test('L3: a stored local owner that is missing or removed is fatal at startup', 
   try {
     const h = await startLocal({ dataDir });
     const id = h.app.hub.localMemberId;
+    // A team keeps an owner (D59 trigger): simulate the damage with the trigger out of the way.
+    h.app.db.run('DROP TRIGGER members_keep_an_owner');
     h.app.db.run('UPDATE members SET removed_at = ? WHERE id = ?', new Date().toISOString(), id);
     await h.app.close({ graceMs: 200 });
     const cfg = testConfig({ auth: 'local', localSecret: SECRET, devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });

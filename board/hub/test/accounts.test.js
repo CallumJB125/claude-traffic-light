@@ -20,7 +20,7 @@ test('desktop sign-up = sign-in: code mail names the device, token is shown once
     assert.deepEqual(Object.keys(s.body).sort(), ['expires_in', 'flow_id']);
     assert.equal(s.body.expires_in, 600);
     const mail = h.mailer.last('alice@dev.local');
-    assert.match(mail.subject, /^\d{6} is your Buddy sign-in code$/);
+    assert.match(mail.subject, /^\d{6} is your Plexiform sign-in code$/);
     assert.match(mail.text, /"MacBook-Pro" \(darwin-arm64\)/);
     assert.match(mail.text, /Never share this code/);
     assert.doesNotMatch(mail.text, /auth\/email#/, 'desktop mails carry no link');
@@ -45,7 +45,7 @@ test('desktop sign-up = sign-in: code mail names the device, token is shown once
     assert.equal(acct.status, 200);
     assert.deepEqual(Object.keys(acct.body).sort(), ['pending_invites', 'teams', 'user']);
     assert.deepEqual(acct.body.pending_invites, []);
-    assert.equal(acct.body.teams[0].slug, null, 'teams made by the legacy seed have no slug yet');
+    assert.equal(acct.body.teams[0].slug, 'dev', 'teams made by the legacy seed get a slug (P2 backfill)');
 
     // Signing in again: same user, a second device.
     const again = await h.signIn('alice@dev.local');
@@ -371,7 +371,7 @@ test('a user with no team keeps a socket but finds no board; removal from the te
     const sb = await h.browser({ token: bob.body.device_token });
     await sb.subscribe(h.ids.board);
     const alice = await h.signIn('alice@dev.local');
-    const rm = await h.call('DELETE', `/api/members/${h.ids.bob}`, { token: alice.body.device_token, body: { request_id: 'rm1' } });
+    const rm = await h.call('DELETE', `/api/teams/${h.ids.org}/members/${h.ids.bob}`, { token: alice.body.device_token, body: { request_id: 'rm1' } });
     assert.equal(rm.status, 200, rm.text);
     assert.equal(await sb.closed(), 4403);
   } finally {
@@ -397,7 +397,7 @@ test('DELETE /api/account: step-up with a fresh code (5 min), sole-owner guard, 
     assert.equal(s.status, 200);
     const mail = h.mailer.last();
     assert.equal(mail.to, 'bob@dev.local');
-    assert.match(mail.subject, /confirms deleting your Buddy account/);
+    assert.match(mail.subject, /confirms deleting your Plexiform account/);
     const code = h.codeFor('bob@dev.local');
     assert.equal((await del({ flow_id: s.body.flow_id })).body.error.code, 'STEP_UP_REQUIRED', 'started but not verified');
     // Another user can't verify or use bob's delete flow.
@@ -442,7 +442,7 @@ test('DELETE /api/account: step-up with a fresh code (5 min), sole-owner guard, 
     // History keeps pointing at the member id.
     assert.equal(h.db.get('SELECT created_by FROM cards WHERE id = ?', card.body.card.id).created_by, h.ids.bob);
     assert.ok(h.db.get("SELECT 1 AS x FROM journal WHERE actor_id = ? AND kind = 'card.create'", h.ids.bob));
-    assert.equal(h.mailer.last('bob@dev.local').subject, 'Your Buddy account was deleted');
+    assert.equal(h.mailer.last('bob@dev.local').subject, 'Your Plexiform account was deleted');
     assert.ok(h.db.get("SELECT 1 AS x FROM audit WHERE action = 'user.deleted' AND actor_user_id = ?", u.id));
     // Signing in again with that address is a new, team-less user.
     h.clock.advance(15 * MIN);

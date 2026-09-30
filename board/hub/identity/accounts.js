@@ -10,6 +10,8 @@ import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { EMAIL_ONLY } from '../views.js';
+import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
+import { BRAND } from '../../shared/brand.js';
 
 export const SESSION_COOKIE = '__Host-buddy_session';
 export const FLOW_COOKIE = '__Host-buddy_flow';
@@ -202,7 +204,7 @@ export class Accounts {
     let device = null;
     if (f.client === 'buddy_desktop') {
       device = {
-        name: optStr(body.device_name, 100, 'device_name') ?? f.device_name ?? 'Buddy desktop',
+        name: optStr(body.device_name, 100, 'device_name') ?? f.device_name ?? `${BRAND.name} desktop`,
         platform: optStr(body.platform, 50, 'platform') ?? f.platform,
         form_factor: body.form_factor ?? null,
       };
@@ -346,8 +348,9 @@ export class Accounts {
   // ── account ───────────────────────────────────────────────────────────────
 
   teams(userId) {
-    const rows = this.db.all(`SELECT o.id, o.name, o.slug, m.role, m.id AS member_id FROM members m JOIN orgs o ON o.id = m.org_id
-      WHERE m.user_id = ? AND m.removed_at IS NULL ORDER BY o.name, o.id`, userId);
+    if (this.db.get('SELECT 1 AS x FROM orgs WHERE slug IS NULL LIMIT 1')) backfillSlugs(this.db);
+    const rows = this.db.all(`SELECT o.id, o.name, o.slug, o.plan, m.role, m.id AS member_id FROM members m JOIN orgs o ON o.id = m.org_id
+      WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY o.name, o.id`, userId);
     return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
   }
 
@@ -407,7 +410,7 @@ export class Accounts {
       throw new HubError('STEP_UP_REQUIRED', "confirm with a fresh email code first (start + verify with purpose 'delete')", { max_age_s: STEP_UP_MS / 1000 });
     }
     const soleOwner = this.db.all(`SELECT o.id, o.name FROM members m JOIN orgs o ON o.id = m.org_id
-      WHERE m.user_id = ? AND m.role = 'owner' AND m.removed_at IS NULL
+      WHERE m.user_id = ? AND m.role = 'owner' AND m.removed_at IS NULL AND o.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.role = 'owner' AND x.removed_at IS NULL)
         AND EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.removed_at IS NULL)`, user.id);
     if (soleOwner.length) throw new HubError('CONFLICT', 'you are the only owner of a team with other members: make someone else owner first', { sole_owner_of: soleOwner });
@@ -425,6 +428,12 @@ export class Accounts {
       this.db.run('DELETE FROM login_flows WHERE user_id = ? OR email = ?', user.id, email ?? '');
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
+      // Teams where they were the only member are soft-deleted with them (a
+      // team needs an owner, D59); the purge after 7 days is P5.
+      this.db.run(`UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE deleted_at IS NULL AND id IN (
+        SELECT m.org_id FROM members m WHERE m.user_id = ? AND m.removed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.removed_at IS NULL))`,
+      now, this.at(PURGE_AFTER_MS), user.id);
       for (const m of members) {
         // github_login/github_id are NOT NULL and unique per org until the P2
         // rebuild: a private placeholder (never shown) and a stable negative id.
@@ -440,7 +449,7 @@ export class Accounts {
       });
     });
     if (email) {
-      this.mailer.send({ to: email, subject: 'Your Buddy account was deleted', text: 'Your Buddy account and its sign-in details were deleted. Cards and comments you wrote stay with their teams, shown as "Deleted user".\n\nIf you did not do this, reply to this email.\n' })
+      this.mailer.send({ to: email, subject: `Your ${BRAND.name} account was deleted`, text: `Your ${BRAND.name} account and its sign-in details were deleted. Cards and comments you wrote stay with their teams, shown as "Deleted user".\n\nIf you did not do this, reply to this email.\n` })
         .catch((e) => this.hub.log.warn('deletion mail failed', { mailer: this.mailer.kind, err: e.message }));
     }
     return { ok: true };
@@ -463,18 +472,18 @@ export function appendCookie(res, cookie) {
 
 function codeMail({ purpose, client, code, deviceName, platform, link }) {
   const what = client === 'buddy_desktop'
-    ? `Buddy for desktop${deviceName ? ` on "${mailSafe(deviceName)}"` : ''}${platform ? ` (${mailSafe(platform, 30)})` : ''}`
-    : 'Buddy in a web browser';
-  const warn = 'Never share this code. Nobody from Buddy will ever ask you for it: anyone who asks you to read it out, forward it or type it somewhere else is trying to get into your account.';
+    ? `${BRAND.name} for desktop${deviceName ? ` on "${mailSafe(deviceName)}"` : ''}${platform ? ` (${mailSafe(platform, 30)})` : ''}`
+    : `${BRAND.name} in a web browser`;
+  const warn = `Never share this code. Nobody from ${BRAND.name} will ever ask you for it: anyone who asks you to read it out, forward it or type it somewhere else is trying to get into your account.`;
   if (purpose === 'delete') {
     return {
-      subject: `${code} confirms deleting your Buddy account`,
-      text: `Someone signed in to your Buddy account asked to delete it.\n\nYour confirmation code: ${code}\n\nIt expires in 10 minutes and works once.\n\n${warn}\n\nIf this wasn't you, don't use the code, and sign out your devices.\n`,
+      subject: `${code} confirms deleting your ${BRAND.name} account`,
+      text: `Someone signed in to your ${BRAND.name} account asked to delete it.\n\nYour confirmation code: ${code}\n\nIt expires in 10 minutes and works once.\n\n${warn}\n\nIf this wasn't you, don't use the code, and sign out your devices.\n`,
     };
   }
   return {
-    subject: `${code} is your Buddy sign-in code`,
-    text: `Your Buddy sign-in code: ${code}\n\nThis signs in ${what}.\nIt expires in 10 minutes and works once.\n\n${warn}\n`
+    subject: `${code} is your ${BRAND.name} sign-in code`,
+    text: `Your ${BRAND.name} sign-in code: ${code}\n\nThis signs in ${what}.\nIt expires in 10 minutes and works once.\n\n${warn}\n`
       + (link ? `\nOr open this link in the same browser:\n${link}\n` : '')
       + "\nIf you didn't ask for this, ignore this email: nobody gets in without the code.\n",
   };

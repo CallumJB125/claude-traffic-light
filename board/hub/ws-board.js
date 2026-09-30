@@ -47,7 +47,10 @@ export class BrowserConn {
   // team yet keeps the socket; subscribe just finds nothing). Other modes:
   // the member rows the sign-in mapped to at upgrade, still active.
   liveCandidates() {
-    if (this.user) return this.hub.db.all('SELECT * FROM members WHERE user_id = ? AND removed_at IS NULL', this.user.id);
+    if (this.user) {
+      return this.hub.db.all(`SELECT m.* FROM members m JOIN orgs o ON o.id = m.org_id
+        WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL`, this.user.id);
+    }
     return this.candidates.map((c) => this.hub.activeMember(c.id)).filter(Boolean);
   }
 

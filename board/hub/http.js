@@ -19,7 +19,7 @@ import { clientIp, limitOrThrow } from './ratelimit.js';
 import { appendCookie } from './identity/accounts.js';
 
 const MAX_BODY = 1024 * 1024;
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
@@ -104,8 +104,11 @@ export function createHttpHandler({ hub, api, config }) {
   const authMember = makeAuthMember({ hub, config });
   // The org a request's resource lives in: decides which member row answers
   // when one sign-in belongs to several orgs.
+  // undefined = the route names no resource; null = it names one that
+  // doesn't exist (or whose team was deleted).
   const resourceOrg = (r, params) => {
     const boardOrg = (boardId) => hub.board(boardId)?.org_id ?? null;
+    if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
     if (r.pattern.startsWith('/api/permission-requests/')) {
@@ -115,7 +118,7 @@ export function createHttpHandler({ hub, api, config }) {
     }
     if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
-    return null;
+    return undefined;
   };
 
   const routes = [];
@@ -150,9 +153,21 @@ export function createHttpHandler({ hub, api, config }) {
     route('GET', '/api/me', ({ ident, req, query }) => {
       const out = acc.account(ident);
       const cands = userMembers(hub, ident.user.id);
-      if (!cands.length) return { ...out, member: null, org: null, boards: [] };
-      return { ...out, ...api.me(pickMember(hub, cands, { requestedOrg: req.headers['board-org'] || query.get('org') || null })) };
+      const requestedOrg = requestedTeam(req, query);
+      if (!cands.length && !requestedOrg) return { ...out, member: null, org: null, boards: [] };
+      return { ...out, ...api.me(pickAccountMember(hub, cands, { requestedOrg })) };
     }, { auth: 'user' });
+    // Teams and members (P2, D59–D62). The team comes from the URL; the
+    // caller's membership in it is resolved before the handler runs.
+    const teams = hub.teams;
+    route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
+    route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
+    route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
+    route('DELETE', '/api/teams/:team_id', ({ member, body, ip }) => teams.remove(member, body, { ip }));
+    route('POST', '/api/teams/:team_id/boards', ({ member, body, ip }) => teams.createBoard(member, body, { ip }));
+    route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
+    route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
+    route('DELETE', '/api/teams/:team_id/members/:member_id', ({ member, params, ip }) => teams.removeMember(member, params.member_id, { ip }));
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
@@ -181,8 +196,11 @@ export function createHttpHandler({ hub, api, config }) {
   route('DELETE', '/api/devices/:id', ({ member, params }) => api.revokeDevice(member, params.id));
   route('GET', '/api/repos', ({ member }) => api.listRepos(member));
   route('POST', '/api/repos', ({ member, body }) => api.createRepo(member, body));
-  route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
-  route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
+  // Accounts mode adds people by invite and removes them per team (P2/P3).
+  if (config.auth !== 'accounts') {
+    route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
+    route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
+  }
 
   async function serveFile(req, res, path) {
     let info;
@@ -219,7 +237,11 @@ export function createHttpHandler({ hub, api, config }) {
     return null;
   }
 
-  return async function handle(req, res) {
+  // The route table, for the tenancy suite's coverage assertion (D63).
+  handle.routes = routes.map(({ method, pattern, auth }) => ({ method, pattern, auth }));
+  return handle;
+
+  async function handle(req, res) {
     const url = new URL(req.url, 'http://hub');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
@@ -245,6 +267,7 @@ export function createHttpHandler({ hub, api, config }) {
       }
       const body = r.mutating ? await readBody(req) : {};
       const pick = { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null };
+      if (config.auth === 'accounts') pick.requestedOrg = requestedTeam(req, url.searchParams);
       let ident = null;
       let member = null;
       if (config.auth === 'accounts') {
@@ -259,11 +282,7 @@ export function createHttpHandler({ hub, api, config }) {
           if (r.auth !== 'optional') throw new HubError('FORBIDDEN', 'cross-site request or missing X-CSRF-Token');
           ident = null;
         }
-        if (r.auth === 'member') {
-          const cands = userMembers(hub, ident.user.id);
-          if (!cands.length) throw new HubError('NOT_FOUND', 'not in a team yet');
-          member = pickMember(hub, cands, pick);
-        }
+        if (r.auth === 'member') member = pickAccountMember(hub, userMembers(hub, ident.user.id), pick);
       } else if (r.auth === 'member') {
         member = await authMember(req, pick);
       }
@@ -294,7 +313,7 @@ export function createHttpHandler({ hub, api, config }) {
       hub.log.error('http handler failed', { path: url.pathname, err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
     }
-  };
+  }
 }
 
 function normalizeAddr(a) {
@@ -404,7 +423,34 @@ export function pickMember(hub, candidates, { resourceOrg = null, requestedOrg =
   });
 }
 
-export const userMembers = (hub, userId) => hub.db.all('SELECT * FROM members WHERE user_id = ? AND removed_at IS NULL ORDER BY created_at', userId);
+/**
+ * Accounts mode (D61): the membership that acts is the one in the team that
+ * owns the resource in the URL. A route that names a resource the user's
+ * teams don't own, an unknown one, or one whose team was deleted → 404 (never
+ * 403: no existence oracle). An `X-Board-Team` / `Board-Org` header or
+ * `?team=` / `?org=` only picks among the user's own teams, and must agree
+ * with the resource when there is one. No resource and several teams → CONFLICT.
+ */
+export function pickAccountMember(hub, candidates, { resourceOrg = undefined, requestedOrg = null } = {}) {
+  const inOrg = (org) => candidates.find((m) => m.org_id === org) ?? null;
+  const notFound = () => new HubError('NOT_FOUND', 'not found');
+  if (resourceOrg !== undefined) {
+    if (!resourceOrg || (requestedOrg && requestedOrg !== resourceOrg)) throw notFound();
+    return inOrg(resourceOrg) ?? (() => { throw notFound(); })();
+  }
+  if (requestedOrg) return inOrg(requestedOrg) ?? (() => { throw notFound(); })();
+  if (!candidates.length) throw new HubError('NOT_FOUND', 'not in a team yet');
+  if (candidates.length === 1) return candidates[0];
+  throw new HubError('CONFLICT', 'you are in several teams: choose one with the X-Board-Team header or ?team=<team_id>', {
+    orgs: candidates.map((m) => ({ id: m.org_id, name: hub.db.get('SELECT name FROM orgs WHERE id = ?', m.org_id)?.name ?? null, member_id: m.id })),
+  });
+}
+
+const requestedTeam = (req, query) => req.headers['x-board-team'] || req.headers['board-org'] || query.get('team') || query.get('org') || null;
+
+// Live memberships of a user, in teams that aren't deleted.
+export const userMembers = (hub, userId) => hub.db.all(`SELECT m.* FROM members m JOIN orgs o ON o.id = m.org_id
+  WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY m.created_at`, userId);
 
 export function makeAuthMember({ hub, config }) {
   const authenticate = makeAuthenticate({ hub, config });

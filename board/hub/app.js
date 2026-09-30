@@ -18,6 +18,7 @@ import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
+import { Teams } from './identity/teams.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer = null } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -40,13 +41,15 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
   // to whoever first proves that email address.
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer ?? createMailer(config, { fetchImpl }) }) : null;
+  hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();
 
   const api = new Api(hub);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const server = createServer(createHttpHandler({ hub, api, config }));
+  const handler = createHttpHandler({ hub, api, config });
+  const server = createServer(handler);
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
   if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
@@ -80,7 +83,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   }
 
   return {
-    hub, api, server, db, config, devLoginSecret: hub.devLoginSecret,
+    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);

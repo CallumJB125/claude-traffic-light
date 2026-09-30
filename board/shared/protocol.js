@@ -16,10 +16,14 @@ export const ERRORS = Object.freeze({
   STEP_UP_REQUIRED: 401,    // accounts: needs a fresh email code first (D56)
   FORBIDDEN: 403,
   POLICY_DENIED: 403,
+  QUOTA_EXCEEDED: 403,      // accounts: a free-plan limit (extra: resource, limit; D62)
+  EMAIL_UNVERIFIED: 403,    // accounts: team create / invite needs a verified email
+  WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (extra: email_masked; D64)
   NOT_FOUND: 404,
   ILLEGAL_TRANSITION: 409,
   FENCED: 409,
   CONFLICT: 409,
+  ALREADY_MEMBER: 409,      // accounts: inviting / accepting for someone already in the team (extra: team)
   VERSION_CONFLICT: 409,
   ALREADY_ANSWERED: 409,
   CLAIM_LOST: 409,

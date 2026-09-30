@@ -22,6 +22,7 @@ import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
 import { RateLimiter } from './ratelimit.js';
+import { isAdmin, canWrite } from './permissions.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -178,8 +179,8 @@ export class Hub extends EventEmitter {
   boardSettings(boardId) { return json(this.board(boardId)?.settings, {}); }
   openAsks(cardId) { return this.db.all("SELECT * FROM asks WHERE card_id = ? AND state = 'open'", cardId); }
   openPermissions(cardId) { return this.db.all("SELECT * FROM permission_requests WHERE card_id = ? AND state = 'open' ORDER BY created_at", cardId); }
-  isAdmin(m) { return m && (m.role === 'owner' || m.role === 'admin'); }
-  canWrite(m) { return !!m && m.role !== 'viewer'; }
+  isAdmin(m) { return isAdmin(m); }
+  canWrite(m) { return canWrite(m); }
   cardSpentCents(cardId) { return this.db.get('SELECT COALESCE(SUM(cost_cents), 0) AS s FROM runs WHERE card_id = ?', cardId).s; }
 
   // ── journal (P-1): append-only, same transaction as the change ─────────────

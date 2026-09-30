@@ -80,6 +80,7 @@ test('board_create_card: scope denial (foreign repo, viewer member, bad input) w
       assert.equal(bad.error.code, 'VALIDATION', JSON.stringify(params));
     }
     const memberId = h.db.get('SELECT on_behalf_of FROM runs WHERE id = ?', run.run_id).on_behalf_of;
+    h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", h.ids.bob);   // a team keeps an owner (D59 trigger)
     h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", memberId);
     const viewer = await r.rpc(run, 'board_create_card', { title: 'as a viewer' });
     assert.deepEqual([viewer.ok, viewer.error.code], [false, 'FORBIDDEN']);

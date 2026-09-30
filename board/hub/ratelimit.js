@@ -21,6 +21,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   auth_verify_ip: { capacity: 10, per_ms: 10 * 60_000 },
   auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // every verify attempt; empty = that email is locked out
   signup_ip: { capacity: 10, per_ms: 86_400_000 },            // new users per IP
+  team_create_user: { capacity: 3, per_ms: 86_400_000 },      // POST /api/teams (design §9.1)
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
 });

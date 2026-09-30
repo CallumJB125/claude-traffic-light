@@ -15,6 +15,7 @@ import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
+import { BRAND } from '../../shared/brand.js';
 
 const root = document.getElementById('root');
 const perf = () => performance.now();
@@ -286,7 +287,7 @@ async function boot() {
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
-  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · Claude Buddy`;
+  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
   resetDashboard();
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });

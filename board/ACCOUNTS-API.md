@@ -1,6 +1,8 @@
-# Buddy accounts API (hub `BOARD_AUTH=accounts`, P1)
+# Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P2)
 
-For the desktop app builder. What exists today (P1), and the P2–P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D58; background: ACCOUNTS-DESIGN.md (where the two differ, this file and D50–D58 win).
+For the desktop app builder. What exists today (P1 sign-in, P2 teams and members), and the P3–P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D63; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
+
+The product name is **Plexiform** (`shared/brand.js`). Only user-facing text uses it; technical names keep `buddy` for now (the `__Host-buddy_*` cookies, the `bdt_` token prefix, `BOARD_*` env vars, route paths).
 
 ## Conventions
 
@@ -60,7 +62,7 @@ No auth for `purpose:'signin'`. `purpose:'delete'` needs the Bearer token (or th
 ```
 
 - `client`: `'buddy_desktop'` (default) or `'web'`.
-- `device_name` (≤ 100 chars) and `platform` (≤ 50) are optional. The mail names them ("This signs in Buddy for desktop on "Jo's MacBook Pro" (darwin-arm64)") so a phished user can see what they would be approving.
+- `device_name` (≤ 100 chars) and `platform` (≤ 50) are optional. The mail names them ("This signs in Plexiform for desktop on "Jo's MacBook Pro" (darwin-arm64)") so a phished user can see what they would be approving.
 - `purpose`: `'signin'` (default) or `'delete'` (step-up for account deletion). For `'delete'`, `email` and `client` are ignored: the code goes to the signed-in account's own address.
 
 → `200 {"flow_id": "<24 chars>", "expires_in": 600}`. The answer is the same whether or not an account exists, and whether or not the per-address limit silently dropped the mail.
@@ -110,8 +112,8 @@ Bearer or cookie.
 
 → `{"user": {…}, "teams": [ {id, name, slug, role, member_id, boards:[{id, name, key_prefix}]} ], "pending_invites": []}`, plus `csrf_token` for cookie sessions.
 
-- `teams` has one entry per live membership, sorted by name.
-- `slug` is `null` for teams created by the legacy paths (seed/bootstrap) until P2.
+- `teams` has one entry per live membership in a team that isn't deleted, sorted by name: `{id, name, slug, plan, role, member_id, boards}`.
+- Every team has a `slug` (teams made by the legacy seed/bootstrap paths get one the first time they're listed).
 - `pending_invites` stays `[]` until P3; from then on it lists invites for the user's **verified** email.
 
 `401 UNAUTHENTICATED` without a valid credential.
@@ -120,7 +122,7 @@ Bearer or cookie.
 
 Kept for the existing web board. In accounts mode it returns `/api/account`'s fields plus the legacy `{member, org, boards}` of the chosen team:
 
-- the team named by header `Board-Org` or `?org=`,
+- the team named by header `X-Board-Team` (or `Board-Org`), or `?team=` (or `?org=`), which must be one of the user's teams (`404` otherwise),
 - else the only team,
 - else `409 CONFLICT {orgs:[…]}`.
 
@@ -177,7 +179,7 @@ Errors:
 - `401 STEP_UP_REQUIRED {max_age_s: 300}`: no fresh verified delete flow.
 - `409 CONFLICT {sole_owner_of: [{id, name}]}`: the user is the only owner of a team that has other members.
 
-Not yet (P5): stopping the user's active runs, deleting teams where they were the only member, and "also erase my comments".
+Teams where the user was the only member are soft-deleted with the account (see `DELETE /api/teams/:id`). Not yet (P5): stopping the user's active runs, purging those teams, and "also erase my comments".
 
 ### `/ws/board` (WebSocket)
 
@@ -199,18 +201,93 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 
 All static pages send `Referrer-Policy: no-referrer`.
 
-## Planned, not built (P2–P4)
+## Routes built in P2: teams and members
+
+### Which team a request acts in
+
+Membership is resolved from the **resource in the URL**, never from a "current team" (CONTRACT D61):
+
+- `/api/teams/:id/…`, `/api/boards/:id/…`, `/api/cards/:id/…`, `/api/permission-requests/:id/…`, `/api/devices/:id`: the team that owns that id. If the user isn't a live member of that team, the id doesn't exist, or the team was deleted, the answer is **`404 NOT_FOUND`**, never `403`, so a foreign id and a made-up one look the same.
+- Routes without an id (`GET /api/me`, `GET|POST /api/repos`, `GET|POST /api/devices`): the team named by header `X-Board-Team: <team_id>` (or `Board-Org`) or query `?team=` (or `?org=`); else the user's only team; else `409 CONFLICT {orgs}`. A named team the user isn't in → `404`.
+- A header or query naming a team **and** a URL id in a different team → `404`.
+- Inside a team, a role that may not do something gets `403 FORBIDDEN` (the member already knows the thing exists).
+
+The `/ws/board` socket works the same way: each `subscribe {board_id}` picks the membership in that board's team.
+
+### Roles
+
+`owner` > `admin` > `member` > `viewer` (the full matrix is `hub/permissions.js`, CONTRACT D60):
+
+| | owner | admin | member | viewer |
+|---|---|---|---|---|
+| read the team, its boards, cards, journal, member names | ✓ | ✓ | ✓ | ✓ |
+| member emails | ✓ | ✓ | | |
+| create / edit cards, comment, dispatch, answer | ✓ | ✓ | ✓ | |
+| rename the team, add boards, repos; change roles; remove members; invite (P3) | ✓ | ✓ | | |
+| make or unmake owners, remove an owner, delete the team | ✓ | | | |
+| leave (remove yourself) | ✓ | ✓ | ✓ | ✓ |
+
+The **last owner** can't be demoted or removed, and can't leave (`409 CONFLICT {reason:'LAST_OWNER'}`; a database trigger enforces it too). Make someone else owner first.
+
+### Quotas (free plan)
+
+| Resource | Limit | Error |
+|---|---|---|
+| teams a user owns | 10 | `403 QUOTA_EXCEEDED {resource:'teams', limit:10}` |
+| boards per team | 10 | `403 QUOTA_EXCEEDED {resource:'boards', limit:10}` |
+| members per team (P3: counted with pending invites) | 25 | `403 QUOTA_EXCEEDED {resource:'members', limit:25}` |
+| team creations | 3 a day per user | `429 RATE_LIMITED` |
+
+`pro` teams get ×10; teams that existed before accounts are `self_hosted` (no limits).
+
+### `POST /api/teams`
+
+Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise).
+
+```json
+{ "name": "Acme Rockets", "slug": "acme" }
+```
+
+- `name`: 1–60 characters, no control characters (whitespace runs collapse to one space).
+- `slug` (optional): 3–40 of `a-z 0-9 -`, not starting or ending with `-`, not reserved (`api`, `admin`, `invite`, …). Taken → `409 CONFLICT`. Without it the hub makes one from the name (`acme-rockets`, then `acme-rockets-2`, …; names that don't slug get `team-<6 hex>`). Slugs never change on rename, and a deleted team's slug stays taken.
+
+→ `{"team": {id, name, slug, plan:'free'}, "board": {id, name, key_prefix}}`. The creator becomes the owner, and one board named after the team is created (key prefix from the name's first letters, e.g. `ACM`).
+
+### `GET /api/teams/:id`
+
+Any member. → `{team:{id, name, slug, plan}, me:{member_id, role}, counts:{members, boards}, quotas:{members, boards}}` (`null` = unlimited).
+
+### `PATCH /api/teams/:id`
+
+Admin. `{name}` → `{team}`.
+
+### `DELETE /api/teams/:id`
+
+Owner. `{"confirm_slug": "<the team's slug>"}` (`400` if it doesn't match) → `{ok:true, purge_after}`.
+
+Soft delete: from that moment every route for the team, its boards and cards answers `404`, it drops out of `/api/account`, runner devices enrolled in it are revoked (their sockets close `4403`), and browser sockets subscribed to its boards close `4403`. The hard purge 7 days later is P5 (not built); there is no restore route yet.
+
+### `POST /api/teams/:id/boards`
+
+Admin. `{name, key_prefix?}` (`key_prefix`: 1–10 capital letters) → `{board:{id, name, key_prefix}}`.
+
+### `GET /api/teams/:id/members`
+
+Any member. → `{members:[{member_id, user_id, display_name, role, joined_at, email?}]}`, owners first. `email` only for owners and admins.
+
+### `PATCH /api/teams/:id/members/:member_id`
+
+Admin; changes to or from `owner` need an owner. `{role}` → `{member}`.
+
+### `DELETE /api/teams/:id/members/:member_id`
+
+Admin (an owner only by an owner), or the member themselves (leave). `{}` → `{ok:true}`. The row stays for history (cards and journal keep pointing at it); the member's runner devices in that team are revoked and closed, and their browser sockets on that team close `4403`. The old `POST /api/members` and `DELETE /api/members/:id` are not served in accounts mode.
+
+Every team and member change writes an `audit` row (`team.create`, `team.update`, `team.delete`, `board.create`, `member.role`, `member.remove`, `member.leave`) with `org_id` and `actor_user_id`.
+
+## Planned, not built (P3–P4)
 
 The shapes below are the plan agreed with 70. They may still change; nothing here exists on the hub yet.
-
-### P2: teams and members
-
-| Method + path | Who | Body | Response |
-|---|---|---|---|
-| `POST /api/teams` | any signed-in user with a verified email | `{name}` | `{team:{id, name, slug}, board}`: the creator becomes owner, and one board is created |
-| `GET /api/teams/:id/members` | member+ (emails only for admins) | — | `{members:[{member_id, user_id, display_name, role, joined_at, email?}]}` |
-| `PATCH /api/teams/:id/members/:mid` | admin (owner changes: owner only) | `{role}` | `{member}` |
-| `DELETE /api/teams/:id/members/:mid` | admin, or yourself (leave) | `{}` | `{ok}`: their sockets on that team close `4403` |
 
 ### P3: invites
 
@@ -247,8 +324,10 @@ Token rotation (`prev_token_hash`, old token valid 5 min) arrives with P4.
 | `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code) |
 | `UNAUTHENTICATED` | 401 | no, unknown or revoked credential |
 | `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` without a fresh verified delete flow (`max_age_s`) |
-| `FORBIDDEN` | 403 | cross-origin request, or a cookie mutation without a valid `X-CSRF-Token` |
-| `NOT_FOUND` | 404 | unknown route, or a resource outside the user's teams |
-| `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `Board-Org` on `/api/me` |
+| `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
+| `EMAIL_UNVERIFIED` | 403 | creating a team without a verified email |
+| `QUOTA_EXCEEDED` | 403 | a plan limit (`resource`, `limit`) |
+| `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
+| `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |
 | `RATE_LIMITED` | 429 | see Rate limits (`retry_after_s`) |
