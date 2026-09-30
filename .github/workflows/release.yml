@@ -12,12 +12,20 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
+    # Until this workflow is on main (workflow_dispatch only runs workflows on
+    # the default branch), a push to this branch is the beta dry run.
+    # REMOVE before merging.
+    branches: ['feat/installers']
   workflow_dispatch:
     inputs:
       ref:
         description: 'Tag or branch to build (a dry run: artifacts only, nothing staged)'
         required: true
         default: main
+      beta:
+        description: 'Beta: version it <version>-beta.<run>, point it at the beta feed, and upload to R2 beta/<version>/ (no GitHub Release, no feed files)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -63,6 +71,17 @@ jobs:
           fi
 
       - run: npm ci
+
+      # A beta build gets a prerelease version and looks for updates on the
+      # beta feed, so beta installs never follow the stable one.
+      - name: Beta version
+        if: (github.event_name == 'workflow_dispatch' && inputs.beta) || github.ref == 'refs/heads/feat/installers'
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")-beta.${GITHUB_RUN_NUMBER}"
+          npm version --no-git-tag-version "$v"
+          echo "PLEXIFORM_UPDATE_FEED=https://download.plexiform.dev/beta" >> "$GITHUB_ENV"
+          echo "beta version $v"
 
       # Windows is report-only until item 5 has made the suite pass there; the
       # smoke test below still gates the Windows installer.
@@ -135,3 +154,34 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
         run: node scripts/release-r2.js stage "${GITHUB_REF_NAME#v}" out
+
+  stage-beta:
+    name: stage beta (R2 beta/<version>/ only)
+    needs: build
+    if: (github.event_name == 'workflow_dispatch' && inputs.beta) || github.ref == 'refs/heads/feat/installers'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: out
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: out
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Upload to R2 beta/ (never the root feed)
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
+        run: |
+          v="$(ls out | sed -nE 's/^Plexiform-(.+)-(mac|win|linux)-.*/\1/p' | head -1)"
+          echo "version $v"
+          node scripts/release-r2.js stage-beta "$v" out
