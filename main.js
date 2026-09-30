@@ -1948,6 +1948,7 @@ async function roamAndKnock(st, { force = false } = {}) {
     return { ok: false, why: e.message };
   } finally {
     travelLook = null;
+    sendLean(0);
     try { if (win && !win.isDestroyed()) win.setBounds(home); } catch { /* window gone */ }
     if (!wasVisible) win?.hide();
     roamState.busy = false;
