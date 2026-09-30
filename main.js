@@ -286,13 +286,37 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // session's folder. POST also needs the per-install token, written 0600 next
 // to the port file, so only something that can read your files can move a
 // light.
-const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest } = require('./src/signal-server.js')({
+const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
   requestsDir: REQUESTS_DIR,
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
 });
+
+// ── Waiting inputs (P3+): every ask, answerable or not, as one list
+// (state.inputs; schema in docs/waiting-inputs.md). Dialogs no hook can see
+// are read off the session's tmux pane, read-only and rate-limited.
+const PendingInputs = require('./src/pending-inputs.js');
+const PaneDialogs = require('./src/pane-dialogs.js');
+const Owned = require('./hooks/owned.js');
+const AnswerFile = require('./hooks/answer-file.js');
+let paneDialogs = [];
+let paneDetector = null;
+async function scanPaneDialogs() {
+  if (process.platform === 'win32') return;
+  const Focus = require('./src/focus/index.js');
+  paneDetector = paneDetector || PaneDialogs.createDetector({ exec: Focus.exec, serverOk: Focus.tmuxServerOk, tmuxBin: Focus.which(require('./src/focus/tmux.js').BINS) });
+  const st = aggregateState();
+  const pendingSessionIds = new Set((st.pending || []).map((r) => r.sessionId));
+  const next = await paneDetector.scan({ sessions: st.sessions || [], pendingSessionIds, launches: Owned.unclaimedLaunches(ROOT_DIR) });
+  const sig = (list) => list.map((d) => `${d.key}:${d.dialog}:${d.options.length}`).join('|');
+  if (sig(next) !== sig(paneDialogs)) {
+    paneDialogs = next;
+    stateMemo = { at: 0, key: null, value: null };
+    broadcastStatus();
+  } else paneDialogs = next;
+}
 
 let win;
 let tray;
@@ -564,17 +588,18 @@ function computeState(opts = {}) {
   const sessions = readSessions(config, requests.map((r) => r.sessionId));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
+  const inputs = PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs });
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks, away: BusyWatch.recap() };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap() };
   }
   const override = readManualOverride();
   if (override) {
     const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
-    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, tasks };
+    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, inputs, tasks };
   }
   // A pending permission request is the "Needs your input" state, whatever
   // the session files say (the hook blocks before Notification fires). It
@@ -591,7 +616,7 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -2433,10 +2458,14 @@ async function runAction(action, st) {
       return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
+      // Tool permissions only: a plan, question or elicitation is answered
+      // from its own options, never by a gesture.
       const req = st.pending && st.pending[0];
       if (!req) return { feedback: 'nothing to answer' };
-      answerRequest(req.id, action.type);
+      if (req.kind && req.kind !== 'permission') return { feedback: 'open it to answer' };
+      const ok = answerRequest(req.id, action.type);
       setTimeout(broadcastStatus, 250);
+      if (!ok) return { feedback: 'answer it in the terminal' };
       return { feedback: action.type === 'allow' ? 'allowed' : 'denied' };
     }
     case 'poke': return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
@@ -2594,10 +2623,40 @@ ipcMain.handle('voice-status', () => ({
   hotkeyTaken: voiceHotkeyTaken,
 }));
 
+// allow | deny for a tool permission only (answerRequest checks both).
 ipcMain.handle('answer-request', (e, id, decision) => {
   const ok = answerRequest(String(id), String(decision));
   setTimeout(broadcastStatus, 250);
   return ok;
+});
+
+// A click on a PendingInput option: the renderer sends the input id and the
+// option id (plus free-text answers, form content or a deny message); the
+// answer itself is rebuilt from the request file, never taken from the
+// renderer. First answer wins (answer-file.js); every answer is logged.
+ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
+  const req = readRequests().find((r) => r.id === String(id));
+  if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
+  const m = more && typeof more === 'object' ? more : {};
+  const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
+  if (!answer) return { ok: false, error: 'not an option for this request' };
+  // Bound to the request as shown (readRequests drops edited ones): the file
+  // must still hash the same when the answer is written.
+  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
+  console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
+  setTimeout(broadcastStatus, 250);
+  return w.ok ? { ok: true } : { ok: false, error: w.error };
+});
+
+// "Open it": jump to the pane or tab the input is waiting in. Never types.
+ipcMain.handle('open-input', async (e, id) => {
+  const item = (aggregateState().inputs || []).find((i) => i.id === String(id));
+  if (!item) return { ok: false, error: 'gone' };
+  const dialog = item.source === 'tmux' ? paneDialogs.find((d) => `dialog-${d.key}` === item.id) : null;
+  const session = dialog ? dialog.jump : (aggregateState().sessions || []).find((s) => s.sessionId === item.session);
+  if (!session) return { ok: false, error: 'session not found' };
+  const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  return { ok: !!r, app: r ? r.app : null };
 });
 
 // The widget grows a strip of Allow / Deny buttons while a request waits,
@@ -2862,6 +2921,8 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startSignalServer();
+  // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
+  every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');
   if (DEMO === 'weed') {
     // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
     // at 6½ min a fake session appears so the state changes and the hammer teardown plays.

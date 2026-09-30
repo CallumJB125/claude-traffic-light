@@ -79,19 +79,44 @@ then the remote allow-list → first-wins settle → the hook confirms it took t
 answer (`.taken`) before the desktop signs `applied`.
 
 **Answer files** (`hooks/answer-file.js`, shared by the hook, the widget
-buttons, the MCP tool and the phone path):
+buttons and the phone path):
 
 ```
-<id>.json     hook, O_EXCL 0600 in a 0700 dir: full toolInput + toolInputHash; id = host-UUID
+<id>.json     hook, O_EXCL 0600 in a 0700 dir: full toolInput + toolInputHash (the phone's hash)
+              + decisionHash = sha256(canonical {kind, channel, tool, toolInput, permissionSuggestions,
+              cwd, sessionId, host});
+              id = host-UUID
 <id>.answer   created once via temp file + link() (EEXIST = someone else won):
-              {decision, toolInputHash, by, ack, nonce}; the hook claims it with a
-              `timeout` marker at its deadline, or honours an answer that beat it
+              {v, id, decision, decisionHash, by, ack, nonce, extra?, mac}; the hook
+              claims it with a `timeout` marker at its deadline, or honours an answer that beat it
 <id>.taken    hook renamed an ack-wanting answer after acting on it (refused → .refused)
 ```
 
-The hook only honours an answer whose `toolInputHash` equals the input it is
-holding. The desktop reports `applied` only on seeing its own nonce in
-`.taken` within ~1.5 s; otherwise `unknown` ("not applied — check at your desk").
+**Per-request key.** Before `<id>.json` exists, the hook generates 32 random
+bytes and hands them to the running app over the local signal server. It
+finds the server through `~/.claude-traffic-light/port` (written 0600,
+atomically, by the app), and before sending anything secret it makes the
+listener prove it holds the per-install token: the hook sends a random
+nonce (no secret) to `POST /request-key/challenge`, the server replies
+`HMAC-SHA256(token, "buddy.request-key.v1|" ‖ its own port ‖ "|" ‖ nonce)`,
+and the hook checks it with a timing-safe compare for the port it connected
+to (so a listener can't relay the challenge to the real app and reuse the
+answer). Only then does it `POST /request-key` with `{id, key}`,
+token-authenticated; first registration per id wins. The key is
+held in the app's memory only (`requestKeys`) and never written to disk. Every
+answer carries `mac = HMAC-SHA256(key, canonical answer fields)`; the hook
+verifies it with a timing-safe compare against the key it kept in memory. No
+app, or an app that won't take the key → no request file, no wait: the
+terminal prompt shows.
+
+The hook only honours an answer whose mac verifies and whose `decisionHash`
+equals the request it is holding. A `permissionIndex` answer also names the
+hash of the suggestion shown; the hook applies it only if the suggestion at
+that index hashes the same, so the label clicked is the rule applied. The app
+recomputes `decisionHash` from the request file before showing it and again
+before answering, and drops any request that no longer matches. The desktop
+reports `applied` only on seeing its own nonce in `.taken` within ~1.5 s;
+otherwise `unknown` ("not applied — check at your desk").
 
 ## 2. Assets
 
@@ -139,9 +164,40 @@ holding. The desktop reports `applied` only on seeing its own nonce in
   desktop-signed (notices, challenges, completions, results).
 - **B3 hub ↔ desktop app**: untrusted. Nothing the hub delivers is acted on
   unless device-signed and verified against the local registry.
-- **B4 desktop app ↔ waiting hook**: local filesystem (`~/.claude-traffic-light/requests`),
-  same-user trust. A local attacker running as the user is out of scope (they
-  can already answer the hook or run the tool themselves).
+- **B4 desktop app ↔ waiting hook**: local filesystem (`~/.claude-traffic-light/requests`,
+  `port`, `token`) plus the per-request key over the local signal server.
+  The question is whether the agent can approve its own permission prompt,
+  least of all with a session-wide rule. The answer depends on what the agent
+  can already do:
+  - **Protected: an agent limited to Claude Code's file tools** (Read, Edit,
+    Write…, including under acceptEdits) **and sandboxed Bash** (writes
+    confined to the project, no listener it can point Buddy at). It can
+    read `requests/` but that gives nothing to sign with, so a forged
+    `<id>.answer` is refused and the terminal prompt stays; the request file
+    is bound by `decisionHash` (kind, channel, tool, input, suggestions, cwd,
+    session, host), so
+    editing it only gets the request dropped; and the
+    deny rule the hook installer adds to `~/.claude/settings.json`,
+    `Edit(<state dir>/**)` (`~/.claude-traffic-light` unless
+    `CLAUDE_TRAFFIC_LIGHT_HOME` moves it; Edit rules cover every built-in file
+    editing tool, Write included), keeps its file tools out of Buddy's state
+    altogether. The settings file is written atomically; a malformed
+    `permissions` block is left alone with a warning (no rule added); and
+    uninstall removes the rule only if Buddy recorded adding it, so a
+    person's identical rule stays.
+  - **Not protected: unsandboxed Bash or any other arbitrary code execution
+    as the user.** Such an agent can read `token` and talk to the app like
+    the app's own hook, or rewrite `port` and run a listener that holds the
+    token too, so the challenge (which stops a listener that *doesn't* know
+    the token, e.g. whatever grabbed port 47172 after the app quit) no longer
+    helps; it can also race the hook's key registration or read the app's
+    memory. None of that is worth defending further: an agent with that
+    power can run the tool call it is asking about directly, without any
+    prompt. What stays exposed there is exactly that: an allow (including a
+    session rule) can be forged, and the terminal prompt is not a boundary.
+    The real bound for such agents is Claude Code's own permission rules and
+    the sandbox, not Buddy.
+  - Other same-user processes are out of scope for the same reason.
 
 ## 5. What the hub can and cannot do
 
@@ -190,6 +246,7 @@ holding. The desktop reports `applied` only on seeing its own nonce in
 | T3 | Tampering | Hub alters what the phone displays | Desktop-signed `buddy.request`; phone recomputes the hash from the displayed input before signing |
 | T4 | Tampering | Parser differentials (duplicate keys, number forms) | Canonical round-trip check; strict JCS subset; schema with exact key set |
 | T5 | Tampering | Registry / identity files edited | 0600 files in 0700 dir; a corrupt registry fails loudly. Local same-user attacker out of scope |
+| T6 | Tampering | The agent forges `<id>.answer`, edits `<id>.json` to change what the answer applies, or rewrites `port` to collect the key | Covers agents limited to file tools or sandboxed Bash (§4 B4): per-request key held only in the app's memory; HMAC-SHA256 over the whole answer, timing-safe verify in the hook; `decisionHash` binds kind, channel, tool, input, suggestions, cwd, session and host (so the allow-list's cwd is the hook's); a suggestion index is bound to that suggestion's hash; the key goes only to a listener that proves the token for its own port (challenge, §1); port file 0600; installer deny rule `Edit(<state dir>/**)`. **Not covered:** an agent with unsandboxed Bash or other code execution can read the token (or be the listener), so it can forge an allow; it could equally run the tool itself |
 | R1 | Repudiation | "I never approved that" / who approved; log tampering | Audit event per outcome with deviceId, device name, owner, requestId, card, tool, input **hash**, reason, rule, and the signed decision envelope as evidence; events are hash-chained (`seq`, `prevHash`, `hash`); unauthenticated junk is rate-limited (20/min, overflow counted) |
 | I1 | Info disclosure | Request content visible to the hub | Accepted for v1 (R3); audit logs carry only the hash |
 | I2 | Info disclosure | Pairing secret leaks via the hub | Secret never sent; only HMAC tags cross the hub (tested) |
@@ -197,7 +254,7 @@ holding. The desktop reports `applied` only on seeing its own nonce in
 | E1 | Elevation | Remote approval of destructive actions, or of anything that runs repo-controlled code | **Remote allow-list** (`allowlist.js`): Read/Grep/Glob (not credential paths), Edit/Write inside the session dir (not credentials, hooks, shell rc, CI, package.json), Bash only for read-only programs (ls/cat/grep/rg/find/…, `git status/diff/log/show/blame/ls-files/rev-parse` with no `-c`/`-C`, `--ext-diff`, `--textconv`, `--output`, pager or upload-pack options, read-only `gh`) with no expansion/redirect/subshell/wrapper/interpreter. Package scripts, test runners, compilers, and `git commit/push/add/fetch/checkout` (hooks) are desk-only; a repo can opt in to remote *test* commands (`trustTestCommands`, off by default), never commit/push. Everything else → "approve at your desk". Deny-list (tokenised, `shell.js`) behind it: destructive shell, any force/delete push, `git -c alias`, interpreter `-c/-e`, writes to code-running paths, prod-labelled repos. Inputs > 8 KB desk-only |
 | E2 | Elevation | Replay of a captured approval | Per-device nonce cache until expiry+skew; requests single-use (first-wins); `aud` binding; TTL ≤ 120 s |
 | E3 | Elevation | Revoked/stolen device keeps acting | Revoke one / revoke all on the desktop, effective immediately and offline (local registry) |
-| E4 | Elevation | Concurrent answers (desk, phone, MCP) both applied; one answer releases a parallel call | Random request ids; link-based exclusive `.answer`; hash-bound answers; hook's deadline claim; `.taken` ack (§1) |
+| E4 | Elevation | Concurrent answers (desk, phone, MCP) both applied; one answer releases a parallel call | Random request ids; link-based exclusive `.answer`; hash- and key-bound answers; hook's deadline claim; `.taken` ack (§1) |
 
 ## 7. Actor-by-actor
 
@@ -251,9 +308,18 @@ holding. The desktop reports `applied` only on seeing its own nonce in
 - **R10 — Hook ack window.** The desktop waits ~1.5 s for `.taken`; a very
   slow machine reports `unknown` although the hook did act. Fails safe (the
   phone says "not applied — check at your desk").
-- **R11 — Old hooks.** A hook installed before the answer-file protocol writes
-  no `toolInputHash`; the new app refuses to answer such requests from the
-  widget, MCP or phone (the terminal dialog still works). Reinstall hooks.
+- **R11 — Old hooks.** A hook installed before the per-request key writes no
+  `decisionHash` and registers no key; the new app refuses to answer such
+  requests from the widget or phone (the terminal dialog still works). The
+  hook scripts are run from the app, so an app update updates them too.
+- **R12 — Junk key registration only costs the widget.** Anything that holds
+  the token can `POST /request-key` for ids of its choosing: fill the store
+  (1024 keys, each kept ≤ 75 s), or guess an id first. Ids are random UUIDs
+  the hook registers before the request file exists, so a guess never
+  matches, and a full store or a taken id makes the hook's registration fail.
+  Either way the hook writes no request and doesn't wait: the terminal prompt
+  shows, as when the app is down. Never an allow; at worst the widget and
+  phone can't answer until the junk expires.
 
 ## 9. Integration notes (for whoever wires this into the widget/hub)
 
@@ -271,8 +337,15 @@ holding. The desktop reports `applied` only on seeing its own nonce in
    Resume the audit chain with `readAuditHead()`.
 3. Remote answers must go through `RemoteApprovals.handleDecision` only; never
    add a hub endpoint that writes `.answer` files directly.
+   Construct `WidgetRequestStore` in the app process with
+   `keyFor: signalServer.keyFor`; without it every settle is refused (no key,
+   no answer), which is the safe failure.
 4. `repoLabels`, `cwd` for the allow-list, and the teammate list must come
-   from desktop-side configuration, never from the hub or phone.
+   from desktop-side configuration, never from the hub or phone. The allow-list's
+   `cwd` is the request file's, which `decisionHash` binds: an edited cwd makes
+   the request unanswerable (the store drops it, or the hook, which holds the
+   original hash, refuses the answer). Taking it from the session record instead
+   would add nothing: `sessions/` is the same same-user-writable directory.
    `WidgetRequestStore`'s `describe()` can add card fields but can't override
    the input, owner or ids.
 5. The hub's relay endpoint must be authenticated (Cloudflare Access / Tailscale

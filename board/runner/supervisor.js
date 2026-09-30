@@ -16,7 +16,7 @@ import { Outbox } from './outbox.js';
 import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
 import { startIpcServer } from './ipc.js';
-import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
+import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, buddyHomeOf, recordBuddyLaunch, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
 import { createWorktree, sessionOf, snapshot as gitSnapshot, git } from './git.js';
 import { decideOffer, advertisable } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
@@ -513,7 +513,10 @@ export class Supervisor extends EventEmitter {
     writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
     writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     writeFileAtomic(path.join(run.runDir, HOOK_TOKEN_FILE), run.run_token);
-    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart });
+    // opts.buddyHome: null = don't mark runs as Buddy-owned; undefined = Buddy's own home, if installed.
+    const buddyHome = this.opts.buddyHome === undefined ? buddyHomeOf(this.env) : this.opts.buddyHome;
+    const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
+    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
     const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path) });
     const Backend = this.opts.Backend ?? ClaudeBackend;
     const backend = new Backend({

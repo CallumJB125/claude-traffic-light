@@ -28,6 +28,9 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks.
 module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus }) => {
+  // Per-request answer keys from the blocking hooks: memory only, never on
+  // disk, so nothing that can write requests/ can also sign an answer.
+  const requestKeys = Answer.requestKeys();
   function readBody(req, done, then) {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
@@ -59,10 +62,18 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       const host = String(req.headers.host || '').replace(/:\d+$/, '');
       if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
       if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
+      // Unauthenticated on purpose: the hook asks before it trusts this
+      // listener with the token (hooks/answer-file.js requestKeyProof).
+      if (req.method === 'POST' && req.url === '/request-key/challenge') {
+        return readBody(req, done, (d) => (typeof d.nonce === 'string' && /^[0-9a-f]{64}$/.test(d.nonce)
+          ? done(200, { proof: Answer.requestKeyProof(SIGNAL_TOKEN, req.socket.localPort, d.nonce) })
+          : done(400, { error: 'nonce must be 64 hex chars' })));
+      }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
+      if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' })));
       readBody(req, done, (d) => {
         if (!KNOWN_SIGNALS.has(d.signal)) return done(400, { error: 'unknown signal', known: [...KNOWN_SIGNALS] });
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
@@ -92,7 +103,12 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       // The token first, so whoever sees the port can already read it; chmod
       // too, since the mode only applies when the file is created.
       try { fs.writeFileSync(tokenFile, SIGNAL_TOKEN, { mode: 0o600 }); fs.chmodSync(tokenFile, 0o600); } catch {}
-      try { fs.writeFileSync(portFile, String(server.address().port)); } catch {}
+      // 0600 and atomic: a hook never reads half a port number.
+      try {
+        const tmp = `${portFile}.tmp.${crypto.randomBytes(8).toString('hex')}`;
+        fs.writeFileSync(tmp, String(server.address().port), { flag: 'wx', mode: 0o600 });
+        fs.renameSync(tmp, portFile);
+      } catch {}
       // Only the instance that bound the port owns these files.
       app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
@@ -110,16 +126,24 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       try {
         const r = JSON.parse(fs.readFileSync(path.join(requestsDir, f), 'utf8'));
         if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
+        // Edited since the hook wrote it: never shown, so never clicked.
+        if (!Answer.requestIntact(r)) continue;
         out.push({ ...r, view: describeRequest(r) });
       } catch { /* partial write */ }
     }
     return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   }
 
-  // First answer wins (desk, MCP or phone); see hooks/answer-file.js.
+  // First answer wins (desk or phone); see hooks/answer-file.js. The bare
+  // allow/deny path (gestures, the old answerRequest IPC) answers tool
+  // permissions only: a plan, question or elicitation needs its own option
+  // (answerInput), never a blind "allow".
   function answerRequest(id, decision) {
-    return Answer.writeAnswer(requestsDir, id, decision, { by: 'desk' }).ok;
+    if (decision !== 'allow' && decision !== 'deny') return false;
+    const req = readRequests().find((r) => r.id === String(id));
+    if (!req || (req.kind !== undefined && req.kind !== 'permission')) return false;
+    return Answer.writeAnswer(requestsDir, req.id, decision, { by: 'desk', key: requestKeys.get(req.id), decisionHash: req.decisionHash }).ok;
   }
 
-  return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest };
+  return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor: (id) => requestKeys.get(id) };
 };

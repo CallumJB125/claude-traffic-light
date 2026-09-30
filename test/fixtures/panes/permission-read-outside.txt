@@ -1,0 +1,15 @@
+⏺ Read(/Users/callumbaker/Desktop/notes.md)
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Read file                                                                    │
+│                                                                              │
+│   Read(/Users/callumbaker/Desktop/notes.md)                                  │
+│                                                                              │
+│ Claude requested permissions to read from /Users/callumbaker/Desktop, but   │
+│ you haven't granted it yet.                                                  │
+│                                                                              │
+│ Do you want to proceed?                                                      │
+│ ❯ 1. Yes                                                                     │
+│   2. Yes, allow reading from Desktop/ during this session                    │
+│   3. No, and tell Claude what to do differently (esc)                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
