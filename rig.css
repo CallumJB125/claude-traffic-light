@@ -544,7 +544,8 @@
    drawn after, so a crown sits on the hair. */
 .rig .cameo { opacity: 0; transition: opacity 150ms ease; }
 .rig.cameo-neo .cameo-neo, .rig.cameo-alfred .cameo-alfred, .rig.cameo-mcafee .cameo-mcafee,
-.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker { opacity: 1; }
+.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker,
+.rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
 /* Opaque shades (neo) hide only plain eyes. Any other eye state — closed, a
    mood, or a pose that works the eyes (zyn, line, juice, smoke, grin, dead) —
    shows through lenses gone smoky, so no pose ever loses its eyes. */

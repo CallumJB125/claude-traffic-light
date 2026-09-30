@@ -188,6 +188,43 @@
       <g fill="#c9c2b8" opacity="0.8"><rect x="22" y="49.2" width="1" height="1" /><rect x="26" y="49.9" width="1" height="1" /><rect x="30" y="49.8" width="1" height="1" /><rect x="34" y="49.9" width="1" height="1" /><rect x="38" y="49.9" width="1" height="1" /><rect x="42" y="49.2" width="1" height="1" /></g>
       <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
+    <!-- generic bearded wizard: long hair, robe collar and a great beard -->
+    <g class="cameo cameo-wizard">
+      <rect x="4" y="52" width="56" height="7" fill="#463a66" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M4.6 52.8h20M39.4 52.8h20" stroke="#5f5286" stroke-width="0.7" />
+      <polygon points="15,40 13,54 18,59 20,52 19,42" fill="#cbc8bf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="49,40 51,54 46,59 44,52 45,42" fill="#cbc8bf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <polygon points="16,45 16,39 18,34 24,31 32,30 40,31 46,34 48,39 48,45 46,45 46,41 44,39.5 20,39.5 18,41 18,45" fill="#d0cdc4" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <rect x="22" y="33.5" width="10" height="0.8" fill="#bdbab1" /><rect x="33" y="34.2" width="8" height="0.8" fill="#bdbab1" />
+      <path d="M20 50 q12 5 24 0 q-1 10 -12 12 q-11 -2 -12 -12 z" fill="#dcd9d0" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M26 54v6M32 55v7M38 54v6" stroke="#bdbab1" stroke-width="0.6" />
+      <path d="M24 49 q8 4 16 0 q-4 3.5 -8 3.5 q-4 0 -8 -3.5 z" fill="#cfccc3" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    </g>
+    <!-- generic mad scientist: frazzled white hair, forehead goggles, lab coat -->
+    <g class="cameo cameo-scientist">
+      <rect x="4" y="52" width="56" height="7" fill="#eef0f2" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="25,52 32,57 39,52" fill="#dfe3e6" /><rect x="31" y="52" width="2" height="6" fill="#38bdf8" />
+      <polygon points="15,46 13,40 16,41 15,35 19,39 20,33 24,38 25,32 30,37 32,31 34,37 39,32 40,38 44,33 45,39 48,35 47,41 50,40 49,46 46,45 46,41 44,39.5 20,39.5 18,41 18,46" fill="#eceae4" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <rect x="17" y="39.4" width="30" height="2.2" rx="1" fill="#5a5a6a" /><circle cx="23" cy="40.4" r="2.2" fill="#cfe9ff" stroke="#3a3a46" stroke-width="0.8" /><circle cx="41" cy="40.4" r="2.2" fill="#cfe9ff" stroke="#3a3a46" stroke-width="0.8" />
+      <rect class="cameo-lips" x="29" y="50.4" width="6" height="0.8" fill="#211f1c" opacity="0.7" />
+    </g>
+    <!-- generic pirate: red bandana, dark beard, hoop earring, striped shirt -->
+    <g class="cameo cameo-pirate">
+      <rect x="4" y="52" width="56" height="7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><g fill="#c8202a"><rect x="4.5" y="52.4" width="55" height="1.1" /><rect x="4.5" y="55" width="55" height="1.1" /><rect x="4.5" y="57.4" width="55" height="1.1" /></g>
+      <path d="M17 40 q15 -12 30 0 z" fill="#c8202a" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <polygon points="46,38 53,35 51,41 55,44 47,43" fill="#c8202a" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+      <g fill="#f2efe8" opacity="0.7"><rect x="24" y="34" width="1" height="1" /><rect x="30" y="32" width="1" height="1" /><rect x="36" y="34" width="1" height="1" /><rect x="21" y="36.5" width="1" height="1" /><rect x="42" y="36.5" width="1" height="1" /></g>
+      <path d="M19 47 q13 8 26 0 q-1 9 -13 11 q-12 -2 -13 -11 z" fill="#2e241c" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M24 48.5 q8 3 16 0 q-4 3 -8 3 q-4 0 -8 -3 z" fill="#241c15" />
+      <circle cx="48.5" cy="51" r="1.6" fill="none" stroke="#f2d16b" stroke-width="0.9" />
+    </g>
+    <!-- generic punk: green mohawk, studded leather collar -->
+    <g class="cameo cameo-punk">
+      <rect x="4" y="52" width="56" height="7" fill="#1c1a1f" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="24,52 32,58 40,52" fill="#0e0d10" />
+      <g fill="#b9b3a9"><circle cx="12" cy="55.4" r="0.7" /><circle cx="17" cy="56.4" r="0.7" /><circle cx="47" cy="56.4" r="0.7" /><circle cx="52" cy="55.4" r="0.7" /></g>
+      <polygon points="27,40 27.5,32 29.5,34 30,25 32,33 34,27 34.5,34 37,31 37,40" fill="#2fae3e" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M30 39v-6M32 39v-9M34 39v-6" stroke="#26922f" stroke-width="0.6" />
+      <g fill="#8a7f73" opacity="0.45"><rect x="20" y="42" width="1" height="1" /><rect x="22" y="44" width="1" height="1" /><rect x="43" y="42" width="1" height="1" /><rect x="41" y="44" width="1" height="1" /></g>
+      <path d="M48 49.5v3.5" stroke="#c9c2b8" stroke-width="0.9" /><circle cx="48" cy="49.3" r="0.7" fill="#c9c2b8" />
+      <rect class="cameo-lips" x="29" y="50.4" width="6" height="0.8" fill="#211f1c" opacity="0.7" />
+    </g>
     <!-- photo cameo: the user's own face (cameos.js), a real photo in the head
          box (17,30)–(47,60), untouched but for its cut-out, with a soft
          shadow where the chin meets the body; mouth props and hats go on top -->
@@ -382,6 +419,11 @@
     </g>
     <g class="cameo cameo-powell" fill="none" stroke="#d5dbe0" stroke-width="0.6">
       <rect x="20.8" y="42.6" width="7" height="6.2" rx="1" /><rect x="36.2" y="42.6" width="7" height="6.2" rx="1" /><path d="M27.8 44.4h8.4M20.8 44.2h-2.6M43.2 44.2h2.6" />
+    </g>
+    <!-- pirate eyepatch (front layer): covers the left eye, strap over the brow -->
+    <g class="cameo cameo-pirate">
+      <path d="M17 43 h11 v3.4 l-11 1.2 z" fill="#141319" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+      <path d="M13 42.4 l15 0.8 M28 44 l17 -1.4" fill="none" stroke="#141319" stroke-width="0.8" />
     </g>
     <circle class="think-dot d1" cx="24" cy="34" r="2" />
     <circle class="think-dot d2" cx="32" cy="34" r="2" />
@@ -702,7 +744,7 @@
   const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
   // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
   // user photo); the drawings below are the fallback, and alfred's the face.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
+  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
   // cameos whose eyewear is opaque: the eyes underneath are hidden, like the shades costume
   const CAMEOS_HIDE_EYES = new Set(['neo']);
   // Photo cameos: any id the user added (cameos.js). A built-in id with a
