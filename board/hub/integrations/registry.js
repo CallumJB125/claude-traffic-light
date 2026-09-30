@@ -7,7 +7,7 @@
 //   - the bus: one consumer per connection, only its own team's rows
 //   - ctx: sealed secrets, a host-restricted retrying fetch, act() for the
 //     autonomy policy + audit log, whose scope is the only way to act on the
-//     board (actAs a member, link a card), health
+//     board (actAs a member, link a card), health, an AbortSignal
 //
 // A connector never gets the DB, the vault key, or another connection's secrets.
 
@@ -15,14 +15,11 @@ import { randomUUID, createHmac, createHash, randomBytes, timingSafeEqual } from
 import { HubError } from '../db.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
-import { DISPATCH_ACTIONS } from '../http.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { AUTONOMY } from './connector.js';
 
 const MAX_BODY = 1024 * 1024;
 const STATE_TTL_MS = 10 * 60_000;
-const PENDING_TTL_MS = 10 * 60_000;
-const PENDING_MAX = 200;
 const b64 = (x) => Buffer.from(x).toString('base64url');
 const sha = (x) => createHash('sha256').update(String(x)).digest('base64url');
 const FETCH_TIMEOUT_MS = 10_000;
@@ -33,6 +30,12 @@ const CONFIG_MAX_BYTES = 8 * 1024;
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
+// An allowlist, not a denylist: anything that starts a paid run, hands work
+// on, answers an agent or feeds it text stays a person's action.
+const ALLOWED_ACTIONS = new Set(['cancel', 'stop', 'approve_done']);
+// Accepting work speaks for a person: only under an act() action the
+// connector declared 'ask', so it runs only once an admin switched it to auto.
+const ASK_GATED_ACTIONS = new Set(['approve_done']);
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -58,10 +61,14 @@ function errCode(e) {
   return 'handler_failed';
 }
 
-function withTimeout(promise, ms) {
+function withTimeout(promise, ms, controller = null) {
   let t;
   const timeout = new Promise((_, reject) => {
-    t = setTimeout(() => reject(Object.assign(new Error(`handler did not finish within ${ms} ms`), { code: 'TIMEOUT' })), ms);
+    t = setTimeout(() => {
+      const e = Object.assign(new Error(`handler did not finish within ${ms} ms`), { code: 'TIMEOUT' });
+      controller?.abort(e);
+      reject(e);
+    }, ms);
     t.unref?.();
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
@@ -87,7 +94,7 @@ export function createIntegrations({
   const connectors = new Map();
   const db = hub.db;
   const now = () => hub.iso();
-  const pending = new Map(); // sha(complete_token) → {m, o, p, v, exp}: OAuth results waiting for POST …/complete
+  const inflight = new Map(); // consumer name → the onEvent call still running after its timeout
 
   const warn = (msg, c, e) => log?.warn?.(msg, { integration: c?.provider ?? c?.id, connection_id: c?.id, err: redact(e?.message ?? e) });
 
@@ -173,7 +180,8 @@ export function createIntegrations({
       let url = check(u);
       let opts = { ...init };
       for (let hop = 0; ; hop += 1) {
-        const res = await fetchImpl(url.href, { ...opts, redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+        const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+        const res = await fetchImpl(url.href, { ...opts, redirect: 'manual', signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout });
         const loc = res.status >= 300 && res.status < 400 ? res.headers?.get?.('location') : null;
         if (!loc) return res;
         if (hop >= 1) throw tagged(`${url.host}: too many redirects`, 'provider_error');
@@ -187,18 +195,19 @@ export function createIntegrations({
 
   // ── ctx given to a connector for one connection ─────────────────────────
 
-  function ctxFor(c) {
+  function ctxFor(c, signal = null) {
     const conn = connectors.get(c.provider);
     const settings = safeJson(c.settings, {});
     const secrets = () => secretsOf(c);
     const fetchOnce = restrictedFetch(conn);
-    let openScopes = 0;
 
     // Retries with backoff on network errors, 5xx and 429 (honouring Retry-After);
     // records health. Never logs bodies or headers.
     async function retryingFetch(url, init = {}) {
       let last;
+      if (signal && !init.signal) init = { ...init, signal };
       for (let i = 0; i < FETCH_TRIES; i += 1) {
+        if (init.signal?.aborted) throw init.signal.reason;
         try {
           const res = await fetchOnce(url, init);
           if (res.status === 429 || res.status >= 500) {
@@ -219,43 +228,64 @@ export function createIntegrations({
       throw last;
     }
 
+    // Only the member who connected it, or one linked from this workspace by
+    // an explicit identity link (never any writable member of the org).
+    const mayActAs = (memberId) => memberId === c.created_by
+      || !!db.get('SELECT 1 AS x FROM external_identities WHERE provider = ? AND workspace_id = ? AND member_id = ?', c.provider, c.external_id, memberId);
+
+    // Re-read on every call: a handle must not outlive a removal or demotion.
+    function actor(memberId) {
+      const m = hub.member(memberId);
+      if (!m || m.org_id !== c.org_id || !mayActAs(m.id)) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+      if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable();
+      // Admin rights never pass to a tool (Api uses role for "involved" checks).
+      return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
+    }
+
     // The member an integration acts as goes through the same Api methods,
     // per-member rate limit and D8 replay cache as a browser would; the
-    // journal and feed name the integration (D42, §15).
-    function actAs(memberId) {
-      const member = hub.member(memberId);
-      if (!member || member.org_id !== c.org_id) throw new HubError('FORBIDDEN', 'not a member of this team');
-      if (member.removed_at || !hub.canWrite(member)) throw new ActorUnavailable();
-      const via = { connection_id: c.id, member_id: member.id, name: conn.name };
-      const call = async (requestId, fn) => {
+    // journal and feed name the integration (D42, §15). `live()` is the
+    // act() scope: every call on the handle checks it, so a stashed handle
+    // is dead once run() returns.
+    function actAs(memberId, { live, action: actName }) {
+      const first = actor(memberId);
+      const via = { connection_id: c.id, member_id: first.id, name: conn.name };
+      const call = async (body, fn) => {
+        if (!live()) throw new Error('this act() scope has ended');
+        const member = actor(first.id);
+        // Required so a handler retried after a timeout replays instead of acting twice (D8).
+        if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
         // Namespaced per connection: never collides with the member's own browser request ids.
-        const rid = requestId == null ? null : `int:${c.id}:${String(requestId).slice(0, 200)}`;
-        if (rid) {
-          const hit = hub.cachedResponse(member.id, rid);
-          if (hit) {
-            if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
-            return hit.body;
-          }
+        const rid = `int:${c.id}:${body.request_id.slice(0, 200)}`;
+        const hit = hub.cachedResponse(member.id, rid);
+        if (hit) {
+          if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
+          return hit.body;
         }
         limitOrThrow(hub, 'mutate_member', member.id);
         let out;
         try {
-          out = await hub.actVia(via, fn);
+          out = await hub.actVia(via, () => fn(member));
         } catch (e) {
-          if (rid && e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
+          if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
           throw e;
         }
-        if (rid) hub.cacheResponse(member.id, rid, 200, out);
+        hub.cacheResponse(member.id, rid, 200, out);
         return out;
       };
       return {
-        member: { id: member.id, role: member.role },
-        createCard: (boardId, body = {}) => call(body.request_id, () => api.createCard(member, boardId, body)),
-        comment: (cardId, body = {}) => call(body.request_id, () => api.comment(member, cardId, body)),
+        member: { id: first.id, role: first.role },
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, body)),
+        comment: (cardId, body = {}) => {
+          if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
+          return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));
+        },
         action: (cardId, action, body = {}) => {
-          // Callum's autonomy policy: an integration never starts a paid run.
-          if (DISPATCH_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration never starts an agent run on its own; a person does it from the card');
-          return call(body.request_id, () => api.action(member, cardId, action, body));
+          if (!ALLOWED_ACTIONS.has(action)) throw new HubError('POLICY_DENIED', 'an integration may only cancel, stop or approve; a person does the rest from the card');
+          if (ASK_GATED_ACTIONS.has(action) && conn.actions[actName]?.default !== 'ask') {
+            throw new HubError('POLICY_DENIED', `${action} needs an action declared 'ask', switched to auto by an admin`);
+          }
+          return call(body, (m) => api.action(m, cardId, action, body));
         },
         answerPermission: () => { throw new HubError('POLICY_DENIED', 'an integration never answers a permission request'); },
       };
@@ -285,7 +315,8 @@ export function createIntegrations({
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
-     * ({actAs, link}) works only while run() is running.
+     * ({actAs, link}) and every handle actAs returns work only while run()
+     * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
       const mode = autonomyOf(action);
@@ -299,11 +330,11 @@ export function createIntegrations({
       if (mode === 'ask') { audit('asked'); return { done: false, decision: 'asked' }; }
       const auditId = audit('attempted');
       let open = true;
-      const guard = (fn) => (...args) => { if (!open) throw new Error('this act() scope has ended'); return fn(...args); };
-      const scope = { actAs: guard(actAs), link: guard(link) };
+      const live = () => open && !signal?.aborted;
+      const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); return fn(...args); };
+      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action })), link: guard(link) };
       let decision = 'failed';
       let error = 'handler_failed';
-      openScopes += 1;
       try {
         const out = await run(scope);
         decision = 'auto';
@@ -314,7 +345,6 @@ export function createIntegrations({
         throw e;
       } finally {
         open = false;
-        openScopes -= 1;
         db.run('UPDATE integration_audit SET decision = ?, error = ? WHERE id = ?', decision, error, auditId);
       }
     }
@@ -358,10 +388,7 @@ export function createIntegrations({
       fetch: retryingFetch,
       act,
       autonomyOf,
-      link: (...args) => {
-        if (!openScopes) throw new Error('ctx.link works only inside act(); use the scope it passes');
-        return link(...args);
-      },
+      signal,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
@@ -408,16 +435,30 @@ export function createIntegrations({
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
     }
+    // Spent only by verified deliveries: whoever merely knows the URL can't drain it.
+    limitOrThrow(hub, 'webhook_conn', c.id);
     let payload;
     try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
     const key = `${c.id}:${String(v.dedupe_key).slice(0, 200)}`;
     const lease = reserve(c.provider, key);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
     if (lease.dup === 'busy') return { status: 200, body: { ok: true, in_progress: true } };
-    const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key = ?", c.provider, key);
+    const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key = ? AND lease_until = ?", c.provider, key, lease.until);
+    const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ? AND lease_until = ?', c.provider, key, lease.until);
+    const controller = new AbortController();
+    const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }));
     try {
-      await withTimeout(Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c) })), handlerTimeoutMs);
+      await withTimeout(running, handlerTimeoutMs, controller);
     } catch (e) {
+      if (e?.code === 'TIMEOUT') {
+        // The handler may still be running: the lease stays (a retry answers
+        // in_progress) and the row settles when it really ends, or the lease
+        // expires and a later retry takes it over.
+        running.then(done, release);
+        setHealth(c.id, false, 'handler_timeout');
+        warn('integration webhook handler timed out', c, e);
+        return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+      }
       if (e instanceof ActorUnavailable) {
         // An admin has to reconnect it; the provider's retries would fail the same way.
         done();
@@ -426,7 +467,7 @@ export function createIntegrations({
         return { status: 200, body: { ok: true, skipped: true } };
       }
       // Released: the provider's retry gets another go.
-      db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ? AND lease_until = ?', c.provider, key, lease.until);
+      release();
       setHealth(c.id, false, errCode(e));
       warn('integration webhook handler failed', c, e);
       return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
@@ -438,9 +479,12 @@ export function createIntegrations({
 
   // ── OAuth / app-install connect ─────────────────────────────────────────
   // `state` = payload.HMAC(hub secret): the admin, their team, the provider,
-  // 10 minutes, single use, and two bindings to whoever started it: the hash
-  // of an HttpOnly cookie nonce (same browser) and the hash of a complete
-  // token only the starting app holds (the desktop's separate connect window).
+  // 10 minutes, single use, and the hash of a bind nonce that must come back
+  // as the HttpOnly cookie board_int_<provider>. The binding is to the
+  // browser that consents: a victim who consents in a browser without that
+  // cookie connects nothing (so nobody can send the link to someone else and
+  // collect their workspace). The desktop app sets the cookie in its connect
+  // window from the window name the web page gives it (D42).
 
   const mac = (payload) => createHmac('sha256', hub.secret).update(`integration-state|${payload}`).digest();
   const redirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/callback`;
@@ -451,22 +495,18 @@ export function createIntegrations({
     if (!conn || conn.connect.kind === 'token') throw new HubError('NOT_FOUND', 'no such integration');
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
     const bind = randomBytes(24).toString('base64url');
-    const completeToken = randomBytes(24).toString('base64url');
     const payload = b64(JSON.stringify({
-      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind), c: sha(completeToken),
+      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind),
     }));
     const state = `${payload}.${mac(payload).toString('base64url')}`;
     return {
       url: conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, provider), config: {} }),
-      complete_token: completeToken,
+      bind,
       cookie: { name: bindCookieName(provider), value: bind, max_age_s: STATE_TTL_MS / 1000 },
     };
   }
 
-  /**
-   * → {ok:true, connection} (cookie matched) | {ok:true, pending:true} (no
-   * cookie: waits for POST …/complete) | {ok:false, error} (error is safe to show).
-   */
+  /** → {ok:true, connection} | {ok:false, error} (error is safe to show). */
   async function oauthCallback({ provider, query, publicUrl, bindCookie = null }) {
     const conn = connectors.get(provider);
     if (!conn || conn.connect.kind === 'token') return { ok: false, error: 'Unknown integration.' };
@@ -478,13 +518,14 @@ export function createIntegrations({
     const want = mac(payload);
     if (got.length !== want.length || !timingSafeEqual(got, want)) return invalid;
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
-    if (!st || st.p !== provider || typeof st.n !== 'string' || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
+    if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
     if (Number(first.changes) !== 1) return { ok: false, error: 'This link was already used. Start again from Buddy.' };
     const member = hub.member(st.m);
     if (!member || member.removed_at || member.org_id !== st.o || !['owner', 'admin'].includes(member.role)) return { ok: false, error: 'Only a team admin can connect this.' };
     if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
-    if (bindCookie != null && !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'This connection was started in another browser. Start again from Buddy.' };
     let v;
     try {
       v = await conn.connect.exchange({ query, redirectUri: redirectFor(publicUrl, provider), config: {}, fetch: restrictedFetch(conn) });
@@ -492,29 +533,11 @@ export function createIntegrations({
       warn('integration connect failed', conn, e);
       return { ok: false, error: 'The provider did not accept the connection. Try again.' };
     }
-    if (bindCookie == null) {
-      const t = Date.now();
-      for (const [k, p] of pending) if (p.exp < t) pending.delete(k);
-      if (pending.size >= PENDING_MAX) return { ok: false, error: 'Too many connections are waiting. Try again in a few minutes.' };
-      pending.set(st.c, { m: member.id, o: member.org_id, p: provider, v, exp: t + PENDING_TTL_MS });
-      return { ok: true, pending: true };
-    }
     try {
       return { ok: true, connection: createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider }) };
     } catch (e) {
       return { ok: false, error: e instanceof HubError ? e.message : 'Could not save the connection.' };
     }
-  }
-
-  /** POST /api/integrations/:provider/complete: only the admin who started it, within 10 minutes, once. */
-  function oauthComplete({ member, provider, completeToken }) {
-    const k = sha(completeToken);
-    const p = pending.get(k);
-    if (!p || p.exp < Date.now() || p.p !== provider || p.m !== member.id || p.o !== member.org_id) {
-      throw new HubError('NOT_FOUND', 'nothing to finish: it may have expired, start again');
-    }
-    pending.delete(k);
-    return createConnection({ ...p.v, orgId: member.org_id, memberId: member.id, provider });
   }
 
   // ── the bus: one consumer per connection (a stuck team never stalls another) ──
@@ -528,8 +551,16 @@ export function createIntegrations({
       if (!orgOf || orgOf !== c.org_id) return;
       const cur = row(c.id);
       if (!cur || cur.status !== 'active') return;
+      const name = consumerName(c);
+      // A timed-out call may still be acting: never run the row again beside it.
+      if (inflight.has(name)) throw Object.assign(new Error('handler_busy: the previous call has not ended'), { busy: true });
+      const controller = new AbortController();
+      const running = Promise.resolve().then(() => conn.onEvent(r, ctxFor(cur, controller.signal)));
+      inflight.set(name, running);
+      const settled = () => { if (inflight.get(name) === running) inflight.delete(name); };
+      running.then(settled, settled);
       try {
-        await withTimeout(Promise.resolve().then(() => conn.onEvent(r, ctxFor(cur))), handlerTimeoutMs);
+        await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
         const code = errCode(e);
         setHealth(c.id, false, code);
@@ -586,7 +617,6 @@ export function createIntegrations({
     sweepDedupe,
     oauthStart,
     oauthCallback,
-    oauthComplete,
     bindCookieName,
     ctxFor: (id) => { const c = row(id); return c ? ctxFor(c) : null; },
   };

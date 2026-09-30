@@ -140,7 +140,7 @@ test('bus: board events reach the connector for its own team only; "ask" by defa
   } finally { await h.close(); }
 });
 
-test('actAs: only inside act(), only members of the connection’s team; revoked connection drops secrets and 404s webhooks', async () => {
+test('actAs: only inside act(), only the member who connected it (or one linked); revoked connection drops secrets and 404s webhooks', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
@@ -149,10 +149,11 @@ test('actAs: only inside act(), only members of the connection’s team; revoked
     let kept;
     await ctx.act('card.create', {}, async (s) => {
       assert.throws(() => s.actAs('not-a-member'), (e) => e.code === 'FORBIDDEN');
-      assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob);
+      assert.throws(() => s.actAs(h.ids.bob), (e) => e.code === 'FORBIDDEN', 'a teammate who never linked an identity');
+      assert.equal(s.actAs(h.ids.alice).member.id, h.ids.alice);
       kept = s;
     });
-    assert.throws(() => kept.actAs(h.ids.bob), /scope has ended/);
+    assert.throws(() => kept.actAs(h.ids.alice), /scope has ended/);
     reg.revokeConnection(conn.id, h.ids.alice);
     assert.equal(h.db.get('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', conn.id).n, 0);
     assert.equal((await post(reg, conn, issue('ISS-9'))).status, 404);
@@ -225,7 +226,7 @@ test('ctx.system: only declared facts, only for a card linked to this connection
     // Not linked as a PR yet → nothing happens, even with the right card id nowhere in reach.
     assert.deepEqual(await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 }), { done: false, reason: 'not linked' });
     await assert.rejects(ctx.system.event('pr_closed', { kind: 'pr', external_id: 'PR-1' }), /may not raise/);
-    assert.throws(() => ctx.link(cardId, 'pr', 'PR-1'), /only inside act/);
+    assert.equal(ctx.link, undefined, 'links only through the act() scope');
     await ctx.act('card.create', {}, async (s) => s.link(cardId, 'pr', 'PR-1'));
     // The card is in To do, so the state machine refuses pr_merged: applied exactly like the merge poll.
     const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 });

@@ -44,6 +44,17 @@ export class RateLimiter {
     return { ok: false, retry_after_ms: Math.ceil((1 - b.tokens) / rate) };
   }
 
+  /** Would take() succeed? Same answer, spends nothing and creates no bucket. */
+  peek(rule, key) {
+    const lim = this.limits[rule];
+    if (!lim) throw new Error(`unknown rate limit ${rule}`);
+    const b = this.buckets.get(`${rule}|${key}`);
+    if (!b) return { ok: true };
+    const rate = lim.capacity / lim.per_ms;
+    const tokens = Math.min(lim.capacity, b.tokens + (this.now() - b.at) * rate);
+    return tokens >= 1 ? { ok: true } : { ok: false, retry_after_ms: Math.ceil((1 - tokens) / rate) };
+  }
+
   // A bucket may go only once it would have refilled anyway: an hourly rule
   // swept after 10 idle minutes would come back full and could be waited out.
   sweep() {

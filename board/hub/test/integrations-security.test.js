@@ -220,7 +220,7 @@ test('H3: a hung onEvent or handleWebhook times out instead of blocking for ever
     const r = await hookPost(reg, conn, 'slow-1');
     assert.equal(r.status, 500);
     assert.equal(reg.get(conn.id).health.last_error, 'handler_timeout');
-    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = 'hangs'").n, 0);
+    assert.equal(h.db.get("SELECT state FROM inbound_dedupe WHERE provider = 'hangs'").state, 'processing', 'leased until lease_until (L-a)');
     await bus.settle();
     h.hub.journal({ board_id: h.ids.board, kind: 'card.transition', payload: {} });
     await new Promise((res) => setTimeout(res, 80));
@@ -366,49 +366,33 @@ const fakeOauth = defineConnector({
   },
 });
 
-test('M6: OAuth state is bound to the browser (cookie) or to the starting admin (complete_token)', async () => {
+test('M6: OAuth state is bound to the browser that started it: another browser’s cookie or none is refused', async () => {
   const { h, reg } = await setup();
   try {
     reg.register(fakeOauth);
-    h.db.run("UPDATE members SET role = 'admin' WHERE id = ?", h.ids.bob);
     const alice = await h.login('alice');
-    const bob = await h.login('bob');
-    const start = async (who = alice) => {
-      const r = await h.api(who, 'POST', '/api/integrations/fake-oauth/start', { request_id: randomUUID() });
+    const start = async () => {
+      const r = await h.api(alice, 'POST', '/api/integrations/fake-oauth/start', { request_id: randomUUID() });
       assert.equal(r.status, 200, r.text);
-      return { state: new URL(r.body.url).searchParams.get('state'), token: r.body.complete_token, cookie: r.headers.get('set-cookie').split(';')[0] };
+      return { state: new URL(r.body.url).searchParams.get('state'), cookie: r.headers.get('set-cookie').split(';')[0] };
     };
     const cb = (state, cookie) => fetch(`${h.base}/integrations/fake-oauth/callback?${new URLSearchParams({ state, code: 'good-code' })}`, { headers: cookie ? { cookie } : {} });
-    // Another browser's cookie → refused (connection injection).
     const s1 = await start();
     const other = await start();
-    const r1 = await cb(s1.state, other.cookie);
-    assert.equal(r1.status, 400);
-    assert.match(await r1.text(), /another browser/);
-    // No cookie (the desktop's connect window): nothing connects until the same admin completes.
-    const s2 = await start();
-    const r2 = await cb(s2.state, null);
-    assert.equal(r2.status, 200);
-    const page = await r2.text();
-    assert.match(page, /data-connect="pending"/);
-    assert.match(page, /Finish connecting in Buddy/);
+    for (const cookie of [other.cookie, null]) {
+      const r = await cb(s1.state, cookie);
+      assert.equal(r.status, 400);
+      assert.match(await r.text(), /Open this link in the window Plexiform opened/);
+    }
     assert.equal(reg.list(h.ids.org).filter((c) => c.provider === 'fake-oauth').length, 0);
-    const done = (who, token, provider = 'fake-oauth') => h.api(who, 'POST', `/api/integrations/${provider}/complete`, { request_id: randomUUID(), complete_token: token });
-    assert.equal((await done(bob, s2.token)).status, 404, 'another admin cannot finish it');
-    assert.equal((await done(alice, 'x'.repeat(32))).status, 404);
-    assert.equal((await done(alice, s2.token, 'fake')).status, 404);
-    const ok = await done(alice, s2.token);
-    assert.equal(ok.status, 200, ok.text);
-    assert.equal(ok.body.connection.display_name, 'OAuth workspace');
-    assert.equal(h.db.get('SELECT org_id, created_by FROM connections WHERE id = ?', ok.body.connection.id).org_id, h.ids.org, 'exchange output cannot pick the org');
-    assert.equal((await done(alice, s2.token)).status, 404, 'once');
-    // The cookie path connects at once and clears the cookie.
-    reg.revokeConnection(ok.body.connection.id, h.ids.alice);
-    const s3 = await start();
-    const r3 = await cb(s3.state, s3.cookie);
-    assert.equal(r3.status, 200);
-    assert.match(await r3.text(), /data-connect="ok"/);
-    assert.match(r3.headers.get('set-cookie'), /Max-Age=0/);
+    // Refused before the single-use nonce is spent: the right browser still connects, once.
+    const r1 = await cb(s1.state, s1.cookie);
+    assert.equal(r1.status, 200);
+    assert.match(await r1.text(), /data-connect="ok"/);
+    assert.match(r1.headers.get('set-cookie'), /Max-Age=0/);
+    const created = reg.list(h.ids.org).find((c) => c.provider === 'fake-oauth');
+    assert.equal(h.db.get('SELECT org_id FROM connections WHERE id = ?', created.id).org_id, h.ids.org, 'exchange output cannot pick the org');
+    assert.match(await (await cb(s1.state, s1.cookie)).text(), /already used/);
   } finally { await h.close(); }
 });
 
@@ -454,7 +438,7 @@ test('M8: an unknown webhook target is 404 before the body is read', async () =>
   } finally { await h.close(); }
 });
 
-test('M8: per-connection webhook bucket; failed signatures spend a per-IP bucket; mutate_ip is not used', async () => {
+test('M8: per-connection webhook bucket; failed signatures spend a per-IP bucket that then refuses that IP; mutate_ip is not used', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
@@ -470,7 +454,7 @@ test('M8: per-connection webhook bucket; failed signatures spend a per-IP bucket
     assert.equal((await hook(raw, 'sha256=00')).status, 401);
     assert.equal((await hook(raw, 'sha256=00')).status, 401);
     assert.equal((await hook(raw, 'sha256=00')).status, 429);
-    assert.equal((await hook(raw, good)).status, 429, 'the connection bucket (5) is spent');
+    assert.equal((await hook(raw, good)).status, 429, 'this IP is refused before its body is read');
   } finally { await h.close(); }
 });
 

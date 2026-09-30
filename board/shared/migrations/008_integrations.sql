@@ -5,7 +5,10 @@
 -- An integration's own actions are journaled as actor_kind 'integration',
 -- actor_id = the connection id. SQLite can't widen a CHECK in place, so the
 -- journal is rebuilt (same columns, seqs, indexes and append-only triggers;
--- DROP TABLE fires no triggers).
+-- DROP TABLE fires no triggers). DROP also deletes the journal's
+-- sqlite_sequence row, which can be above MAX(seq): it is kept and restored
+-- so a seq is never handed out twice (bus cursors point at seqs).
+CREATE TEMP TABLE _s AS SELECT seq FROM sqlite_sequence WHERE name = 'journal';
 CREATE TABLE journal_new (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   board_id TEXT,
@@ -22,10 +25,41 @@ INSERT INTO journal_new (seq, board_id, card_id, run_id, at_hub, hub_epoch, acto
   SELECT seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload FROM journal ORDER BY seq;
 DROP TABLE journal;
 ALTER TABLE journal_new RENAME TO journal;
+INSERT INTO sqlite_sequence (name, seq) SELECT 'journal', 0 WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'journal') AND EXISTS (SELECT 1 FROM _s);
+UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM _s), 0)) WHERE name = 'journal';
+DROP TABLE _s;
 CREATE INDEX journal_board_seq ON journal (board_id, seq);
 CREATE INDEX journal_card_seq ON journal (card_id, seq);
 CREATE TRIGGER journal_no_update BEFORE UPDATE ON journal BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
 CREATE TRIGGER journal_no_delete BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
+
+-- Comments an integration writes are source 'integration', trusted 0 (never
+-- delivered to an agent). Same rebuild for the widened CHECK; rowids are kept
+-- (delivery orders by created_at, rowid). reply_to names comments_new so the
+-- DROP below never sees a child row pointing at the old table; RENAME
+-- rewrites it to comments.
+CREATE TABLE comments_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT NOT NULL REFERENCES cards,
+  author_member_id TEXT REFERENCES members,
+  author_run_id TEXT,
+  source TEXT NOT NULL CHECK (source IN ('web','widget','agent','linear','github','integration')),
+  trusted INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  for_agent INTEGER NOT NULL DEFAULT 0,
+  reply_to TEXT REFERENCES comments_new,
+  delivered_at TEXT,
+  delivered_run_id TEXT,
+  created_at TEXT NOT NULL,
+  anchor_kind TEXT NOT NULL DEFAULT 'card' CHECK (anchor_kind IN ('card','event','file_range','diff_hunk')),
+  anchor TEXT,
+  plan_step_id TEXT,
+  CHECK (author_member_id IS NOT NULL OR author_run_id IS NOT NULL)
+);
+INSERT INTO comments_new (rowid, id, card_id, author_member_id, author_run_id, source, trusted, body, for_agent, reply_to, delivered_at, delivered_run_id, created_at, anchor_kind, anchor, plan_step_id)
+  SELECT rowid, id, card_id, author_member_id, author_run_id, source, trusted, body, for_agent, reply_to, delivered_at, delivered_run_id, created_at, anchor_kind, anchor, plan_step_id FROM comments;
+DROP TABLE comments;
+ALTER TABLE comments_new RENAME TO comments;
 
 CREATE TABLE connections (
   id TEXT PRIMARY KEY,

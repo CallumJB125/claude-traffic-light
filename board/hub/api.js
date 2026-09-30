@@ -360,8 +360,12 @@ export class Api {
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
-    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source: 'web', trusted: 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
-    this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: 'web', for_agent: !!for_agent } });
+    // Text an integration wrote (inside its actVia scope) is outside text:
+    // never trusted, so it can never reach a running agent (deliverComments).
+    const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
+    const source = byIntegration ? 'integration' : 'web';
+    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source, for_agent: !!for_agent } });
     return id;
   }
 
@@ -377,7 +381,7 @@ export class Api {
       });
       if (body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: member.display_name, source: c.source, trusted: true, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
+      return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
     });
   }
 

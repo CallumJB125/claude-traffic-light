@@ -38,12 +38,13 @@
 //   // Actions and their default autonomy (Callum's policy: facts are automatic,
 //   // anything that speaks for a person or touches production asks). Every
 //   // side effect runs inside ctx.act(action, meta, (s) => s.actAs(member)…);
-//   // an integration can never dispatch/retry/take over or answer a permission.
+//   // card actions are limited to cancel/stop/approve_done (approve_done only
+//   // under an action declared 'ask'), comments are never for the agent.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
 //
 //   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
 //   // declared as action `system.<event>`. Only for a card linked to this
-//   // connection (ctx.link); never from a card id or key in the payload.
+//   // connection (the act() scope's link); never from a card id or key in the payload.
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
 //   async health(ctx) → { ok, detail? },

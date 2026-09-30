@@ -40,8 +40,7 @@ function sendJson(res, status, body, headers = {}) {
   res.end(data);
 }
 
-// Dispatch-like actions start paid agent runs: a tighter per-member limit, and
-// integrations may never take them (integrations/registry.js).
+// Dispatch-like actions start paid agent runs: a tighter per-member limit.
 export const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
 
 const retryHeader = (e) => (e.code === 'RATE_LIMITED' && e.extra?.retry_after_s ? { 'retry-after': String(e.extra.retry_after_s) } : {});
@@ -81,12 +80,11 @@ async function readBody(req) {
 }
 
 // The provider's redirect lands here in the connect window: text only, no
-// script, nothing from the query echoed back. kind: ok | pending | error.
-const CONNECT_TITLE = { ok: 'Connected', pending: 'Finish connecting in Buddy', error: 'Not connected' };
+// script, nothing from the query echoed back. kind: ok | error.
+const CONNECT_TITLE = { ok: 'Connected', error: 'Not connected' };
 function sendConnectPage(res, status, text, kind, headers = {}) {
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const tail = kind === 'pending' ? 'Close this window and press Finish connecting in Buddy.' : 'You can close this window and go back to Buddy.';
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p><p>${tail}</p></body></html>`;
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p><p>You can close this window and go back to Buddy.</p></body></html>`;
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
   res.end(body);
 }
@@ -192,22 +190,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       return { connection: integrations.createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
     });
-    // OAuth / app install. Two bindings to whoever started it (D42): an
-    // HttpOnly cookie for the same browser, and complete_token for the
-    // desktop's connect window (its own cookie jar) → POST …/complete.
+    // OAuth / app install (D42): the callback needs this cookie back. A
+    // browser tab has it already; the desktop app's connect window (its own
+    // session) gets `bind` through the window name and sets it itself.
     route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
       api.requireAdmin(member);
       const base = publicBase(req);
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: base });
       const secure = base.startsWith('https:') ? '; Secure' : '';
       res.setHeader('set-cookie', `${out.cookie.name}=${out.cookie.value}; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=${out.cookie.max_age_s}${secure}`);
-      return { url: out.url, complete_token: out.complete_token };
-    });
-    route('POST', '/api/integrations/:provider/complete', ({ member, params, body }) => {
-      api.requireAdmin(member);
-      const token = typeof body.complete_token === 'string' ? body.complete_token : '';
-      if (!token || token.length > 100) throw new HubError('VALIDATION', 'complete_token is required');
-      return { connection: integrations.oauthComplete({ member, provider: params.provider, completeToken: token }) };
+      return { url: out.url, bind: out.bind };
     });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
@@ -277,7 +269,6 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: publicBase(req), bindCookie: bind });
         const clear = bind != null ? { 'set-cookie': `${integrations.bindCookieName(cb[1])}=; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=0` } : {};
         if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
-        if (out.pending) return sendConnectPage(res, 200, 'Almost done: Buddy has to confirm this connection.', 'pending', clear);
         return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear);
       } catch (e) {
         hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
@@ -287,15 +278,18 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
     if (hook) {
       try {
-        // Unknown or inactive → 404 before a byte of the body is read.
+        // Unknown or inactive → 404 before a byte of the body is read; so is
+        // an IP that keeps failing signatures (checked, not spent, here).
         if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
-        limitOrThrow(hub, 'webhook_conn', hook[1]);
+        const ip = clientIp(req, config);
+        const peek = hub.limiter.peek('webhook_fail_ip', ip);
+        if (!peek.ok) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: Math.max(1, Math.ceil(peek.retry_after_ms / 1000)) });
         const chunks = [];
         let n = 0;
         for await (const c of req) { n += c.length; if (n > MAX_BODY) return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } }); chunks.push(c); }
+        // webhook() spends webhook_conn only once the signature is verified.
         const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
-        // Only failed signature checks spend the per-IP budget.
-        if (out.status === 401) limitOrThrow(hub, 'webhook_fail_ip', clientIp(req, config));
+        if (out.status === 401) hub.limiter.take('webhook_fail_ip', ip);
         return sendJson(res, out.status, out.body);
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));

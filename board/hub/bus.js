@@ -4,6 +4,8 @@
 //
 // A consumer's rows are handled strictly in order; a failing row is retried
 // with backoff and blocks that consumer only (never the hub, never others).
+// A handler that throws an error with `busy: true` is retried the same way
+// but never dead-lettered for it.
 // Consumers run in the context the bus was created in, never in the async
 // context of whatever committed the row (a board queue, an integration's actor).
 
@@ -66,8 +68,12 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
       }
     } catch (e) {
       if (consumers.get(name) !== c) return;
-      c.failures = c.failSeq === current ? c.failures + 1 : 1;
-      c.failSeq = current;
+      // A handler still busy with this row (a timed-out call that hasn't ended)
+      // waits without moving the row toward the dead-letter queue.
+      if (!e?.busy) {
+        c.failures = c.failSeq === current ? c.failures + 1 : 1;
+        c.failSeq = current;
+      }
       c.lastError = { message: e?.message ?? String(e), at: now() };
       if (current != null && c.failures >= DEAD_AFTER) {
         db.run('INSERT OR IGNORE INTO bus_dead_letters (consumer, seq, error, at) VALUES (?, ?, ?, ?)', name, current, String(c.lastError.message).slice(0, 500), now());
@@ -79,7 +85,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         queueMicrotask(() => root(drain, name));
         return;
       }
-      const delay = BACKOFF_MS[Math.min(c.failures - 1, BACKOFF_MS.length - 1)];
+      const delay = BACKOFF_MS[Math.max(0, Math.min(c.failures - 1, BACKOFF_MS.length - 1))];
       log?.warn?.('bus consumer failed; retrying', { consumer: name, failures: c.failures, delay, err: c.lastError.message });
       c.timer = timers.setTimeout(() => { c.timer = null; root(drain, name); }, delay);
       c.timer?.unref?.();
