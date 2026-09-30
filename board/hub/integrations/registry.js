@@ -17,7 +17,7 @@ import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
-import { AUTONOMY } from './connector.js';
+import { AUTONOMY, cleanLinkStatus } from './connector.js';
 
 const MAX_BODY = 1024 * 1024;
 const STATE_TTL_MS = 10 * 60_000;
@@ -40,6 +40,8 @@ const ALLOWED_ACTIONS = new Set(['cancel', 'stop', 'approve_done']);
 // Accepting work speaks for a person: only under an act() action the
 // connector declared 'ask', so it runs only once an admin switched it to auto.
 const ASK_GATED_ACTIONS = new Set(['approve_done']);
+
+const LINK_STATUS_MAX = 512;
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -364,6 +366,20 @@ export function createIntegrations({
         cardId, c.id, String(kind), String(externalId), url == null ? null : String(url).slice(0, 500), now());
     }
 
+    // Partial updates merge: a PR event knows the state, a check suite the
+    // checks, a review the review; none may clobber the others.
+    function linkStatus(cardId, kind, externalId, patch) {
+      if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
+      if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
+      const next = cleanLinkStatus(patch);
+      if (!Object.keys(next).length) throw new HubError('VALIDATION', 'no valid status field');
+      const merged = JSON.stringify({ ...cleanLinkStatus(safeJson(link.status, null)), ...next });
+      if (Buffer.byteLength(merged) > LINK_STATUS_MAX) throw new HubError('VALIDATION', 'status over 512 bytes');
+      db.run('UPDATE external_links SET status = ? WHERE connection_id = ? AND kind = ? AND external_id = ?', merged, c.id, String(kind), String(externalId));
+      hub.later(() => hub.broadcastCard(cardId));
+    }
+
     function autonomyOf(action) {
       if (!Object.hasOwn(conn.actions, action)) throw new Error(`${conn.id} did not declare action ${action}`);
       const def = conn.actions[action].default;
@@ -377,7 +393,7 @@ export function createIntegrations({
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
-     * ({actAs, link}) and every handle actAs returns work only while run()
+     * ({actAs, link, linkStatus}) and every handle actAs returns work only while run()
      * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
@@ -399,7 +415,7 @@ export function createIntegrations({
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link) };
+      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), linkStatus: guard(linkStatus) };
       let decision = 'failed';
       let error = 'handler_failed';
       try {

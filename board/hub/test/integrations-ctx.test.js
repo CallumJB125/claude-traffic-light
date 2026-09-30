@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { branchName } from '../../shared/fence.js';
+import { cardView } from '../views.js';
 import fake from '../integrations/fake/index.js';
 import { startHub } from './helpers.js';
 
@@ -128,5 +129,80 @@ test('cardForBranch: consults cards.self_driven_branch only when that column exi
     assert.equal(ctx.cardForBranch('acme/app', 'Feature/login'), null);
     h.db.run('UPDATE cards SET self_driven_branch = ? WHERE id = ?', r.branch, selfDriven);
     assert.equal(ctx.cardForBranch('acme/app', r.branch), null, 'a run branch also claimed by a self-driven card is ambiguous');
+  } finally { await h.close(); }
+});
+
+const statusOf = (h, conn, id) => JSON.parse(h.db.get("SELECT status FROM external_links WHERE connection_id = ? AND kind = 'pr' AND external_id = ?", conn.id, id).status ?? 'null');
+
+test('linkStatus: partials merge into the link\'s status (allowlisted keys and values only), inside act() only', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-20', fence: 1 });
+    await ctx.act('card.create', { card_id: r.cardId, external_ref: 'PR-5' }, async (s) => { s.link(r.cardId, 'pr', 'PR-5', 'https://fake.example/pr/5'); });
+    await ctx.act('card.create', { card_id: r.cardId }, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', { state: 'open' }));
+    await ctx.act('card.create', { card_id: r.cardId }, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', { checks: 'pending' }));
+    await ctx.act('card.create', { card_id: r.cardId }, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', { review: 'requested' }));
+    assert.deepEqual(statusOf(h, conn, 'PR-5'), { state: 'open', checks: 'pending', review: 'requested' });
+    // An invalid value or unknown key is dropped without clobbering the stored one.
+    await ctx.act('card.create', { card_id: r.cardId }, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', { checks: 'passing', state: 'exploded', review: 7, title: 'x'.repeat(30), nested: { a: 1 } }));
+    assert.deepEqual(statusOf(h, conn, 'PR-5'), { state: 'open', checks: 'passing', review: 'requested' });
+    // Nothing valid → refused (audited failed), nothing changed.
+    await assert.rejects(ctx.act('card.create', { card_id: r.cardId }, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', { state: 'nope', url: 'https://x' })), (e) => e.code === 'VALIDATION');
+    await assert.rejects(ctx.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-5', 'open')), (e) => e.code === 'VALIDATION');
+    assert.deepEqual(statusOf(h, conn, 'PR-5'), { state: 'open', checks: 'passing', review: 'requested' });
+    const audit = reg.audit(conn.id);
+    assert.deepEqual(audit.slice(0, 2).map((a) => [a.decision, a.error]), [['failed', 'validation'], ['failed', 'validation']]);
+    assert.ok(audit.slice(2).every((a) => a.decision === 'auto'));
+    // Outside a scope: there is no ctx.linkStatus, and a stashed scope is dead.
+    assert.equal(ctx.linkStatus, undefined);
+    let kept;
+    await ctx.act('card.create', {}, async (s) => { kept = s; });
+    assert.throws(() => kept.linkStatus(r.cardId, 'pr', 'PR-5', { state: 'merged' }), /scope has ended/);
+    assert.equal(statusOf(h, conn, 'PR-5').state, 'open');
+  } finally { await h.close(); }
+});
+
+test('linkStatus: the link must exist for this connection and card; the merged blob is capped at 512 bytes', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-21', fence: 1 });
+    const other = addRun(h, { key: 'BDL-22', fence: 1 });
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-6'));
+    const set = (cardId, kind, id, st) => ctx.act('card.create', {}, async (s) => s.linkStatus(cardId, kind, id, st));
+    await assert.rejects(set(r.cardId, 'pr', 'PR-404', { state: 'open' }), (e) => e.code === 'NOT_FOUND');
+    await assert.rejects(set(other.cardId, 'pr', 'PR-6', { state: 'open' }), (e) => e.code === 'NOT_FOUND', 'the link is to another card');
+    await assert.rejects(set(r.cardId, 'issue', 'PR-6', { state: 'open' }), (e) => e.code === 'NOT_FOUND');
+    // Another connection's link to the same card is not ours to annotate.
+    const second = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: 'fake-workspace-2', secrets: {} });
+    await assert.rejects(reg.ctxFor(second.id).act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-6', { state: 'open' })), (e) => e.code === 'NOT_FOUND');
+    // A stored blob over the cap (written by something older or broken) is not grown.
+    h.db.run("UPDATE external_links SET status = ? WHERE external_id = 'PR-6'", JSON.stringify({ state: 'open', junk: 'x'.repeat(600) }));
+    await set(r.cardId, 'pr', 'PR-6', { checks: 'failing' });
+    const st = statusOf(h, conn, 'PR-6');
+    assert.deepEqual(st, { state: 'open', checks: 'failing' }, 'only allowlisted keys survive a merge');
+    assert.ok(Buffer.byteLength(JSON.stringify(st)) <= 512);
+  } finally { await h.close(); }
+});
+
+test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is unchanged)', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-23', fence: 1 });
+    const view = () => cardView(h.hub, h.hub.card(r.cardId), h.ids.alice);
+    assert.equal(view().pr_link_status, null);
+    assert.equal(view().pr, null);
+    await ctx.act('card.create', {}, async (s) => { s.link(r.cardId, 'pr', 'PR-7'); s.linkStatus(r.cardId, 'pr', 'PR-7', { state: 'draft', checks: 'none' }); });
+    assert.deepEqual(view().pr_link_status, { state: 'draft', checks: 'none', review: null });
+    h.clock.advance(1000);
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-8'));
+    assert.equal(view().pr_link_status, null, 'the newest pr link has no status yet');
+    await ctx.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-8', { review: 'approved' }));
+    assert.deepEqual(view().pr_link_status, { state: null, checks: null, review: 'approved' });
+    // A revoked connection's links stop speaking for the card.
+    reg.revokeConnection(conn.id, h.ids.alice);
+    assert.equal(view().pr_link_status, null);
   } finally { await h.close(); }
 });

@@ -58,6 +58,20 @@ export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
 export const SYSTEM_EVENTS = Object.freeze(['pr_merged', 'pr_closed']);
 
+// What a link's status may say (the card face renders these, nothing else).
+export const LINK_STATUS = Object.freeze({
+  state: Object.freeze(['open', 'draft', 'merged', 'closed']),
+  checks: Object.freeze(['passing', 'failing', 'pending', 'none']),
+  review: Object.freeze(['none', 'requested', 'changes_requested', 'approved']),
+});
+/** Only allowlisted keys with allowlisted values; everything else is dropped. */
+export function cleanLinkStatus(v) {
+  const out = {};
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const [k, allowed] of Object.entries(LINK_STATUS)) if (Object.hasOwn(v, k) && allowed.includes(v[k])) out[k] = v[k];
+  return out;
+}
+
 export function defineConnector(spec) {
   const errs = [];
   if (!ID_RE.test(spec?.id ?? '')) errs.push('id must match /^[a-z][a-z0-9-]{1,31}$/');
