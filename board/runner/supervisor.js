@@ -59,9 +59,13 @@ export class Supervisor extends EventEmitter {
     this.log = opts.log ?? makeLogger();
     this.l = initHome(opts.home);
     this.device = opts.device ?? readDevice(this.l);
-    if (!this.device?.device_id || !this.device?.device_token) throw new Error(`not enrolled: run \`board-runner enroll\` (no ${this.l.device})`);
+    // Accounts P4 (D80): {hub, runner_token, team_id} from the desktop app; the
+    // hub names the runner device in welcome. Otherwise {hub, device_id, device_token}.
+    this.enrolled = typeof this.device?.runner_token === 'string' && typeof this.device?.team_id === 'string';
+    if (!this.enrolled && (!this.device?.device_id || !this.device?.device_token)) throw new Error(`not enrolled: run \`board-runner enroll\` (no ${this.l.device})`);
+    this.hubDeviceId = this.device.device_id ?? null;
     this.policy = readPolicy(this.l);
-    this.outbox = new Outbox(this.l.outboxDir, this.device.device_id);
+    this.outbox = new Outbox(this.l.outboxDir, this.enrolled ? `team-${this.device.team_id}` : this.device.device_id);
     this.runs = new Map();
     this.ws = null;
     this.connected = false;
@@ -127,8 +131,11 @@ export class Supervisor extends EventEmitter {
   connect() {
     if (this.stopped) return;
     const url = this.opts.hubUrl ?? hubWsUrl(this.device.hub);
-    const headers = { Authorization: `Bearer ${this.device.device_token}` };
-    if (this.device.cf_client_id) {
+    // Credentials ride the WS connect only (never argv, env, logs or files).
+    const headers = this.enrolled
+      ? { Authorization: `Bearer ${this.device.runner_token}`, 'Board-Team': this.device.team_id }
+      : { Authorization: `Bearer ${this.device.device_token}` };
+    if (!this.enrolled && this.device.cf_client_id) {
       headers['CF-Access-Client-Id'] = this.device.cf_client_id;
       headers['CF-Access-Client-Secret'] = this.device.cf_client_secret;
     }
@@ -186,7 +193,7 @@ export class Supervisor extends EventEmitter {
 
   #sendHello() {
     this.#sendDevice({
-      type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.device.device_id, runner_version: RUNNER_VERSION,
+      type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.enrolled ? '' : this.device.device_id, runner_version: RUNNER_VERSION,
       outbox_head_seq: this.outbox.head, outbox_id: this.outbox.id, outbox_acked_seq: this.outbox.acked,
       ...(this.formFactor ? { form_factor: this.formFactor } : {}),
       runs: [...this.runs.values()].map((r) => ({ run_id: r.run_id, card_id: r.card_id, fence: r.fence, local_state: r.ending ? 'ending' : r.localState })),
@@ -235,6 +242,7 @@ export class Supervisor extends EventEmitter {
 
   #onWelcome(m) {
     this.hubEpoch = m.hub_epoch;
+    this.hubDeviceId = m.device_id;
     this.memberId = m.member_id;
     this.allowlist = m.allowlist ?? [];
     this.attempt = 0;
@@ -625,7 +633,7 @@ export class Supervisor extends EventEmitter {
 
   status() {
     return {
-      connected: this.connected, origin_down: this.originDown, device_id: this.device.device_id, outbox_head: this.outbox.head, outbox_acked: this.outbox.acked,
+      connected: this.connected, origin_down: this.originDown, device_id: this.hubDeviceId, outbox_head: this.outbox.head, outbox_acked: this.outbox.acked,
       runs: [...this.runs.values()].map((r) => ({ run_id: r.run_id, key: r.key, fence: r.fence, local_state: r.localState, gate: r.gateOpen ? 'open' : 'closed', cost_usd: r.costUsd })),
     };
   }

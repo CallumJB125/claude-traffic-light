@@ -10,6 +10,7 @@ import { fakeClients, fakeProviders, s256 } from './fake-oauth.js';
 import { fakeClock } from './helpers.js';
 import { createLogger } from '../log.js';
 import { emailOnlyIdentity } from '../views.js';
+import { outboxMailer } from '../identity/mailer.js';
 
 const REDIRECT = 'http://127.0.0.1:53682/callback';
 const ROOMY = Object.fromEntries(['oauth_start_ip', 'oauth_exchange_ip', 'signup_ip', 'mutate_ip', 'login_ip', 'mutate_member'].map((k) => [k, { capacity: 10_000, per_ms: 60_000 }]));
@@ -330,31 +331,45 @@ test('delete step-up by OAuth: needs a Bearer, the same provider identity, from 
     const me = await r.signIn('google', { sub: 'g-del', email: 'del@example.test', name: 'Del' });
     const token = me.ex.body.device_token;
     assert.equal((await r.start('google', { verifier: verifierOf(), body: { purpose: 'delete' } })).status, 401, 'no Bearer');
-    // Another Google account cannot confirm.
+    // Another Google account cannot confirm: the generic 400 (never a 401, which would sign the app out).
     const wrong = await r.signIn('google', gUser(), { token, purpose: 'delete' });
-    assert.equal(wrong.ex.status, 403);
-    assert.equal(wrong.ex.body.error.code, 'WRONG_ACCOUNT');
+    assert.equal(wrong.ex.status, 400);
+    assert.equal(wrong.ex.body.error.code, 'INVALID_TOKEN');
+    const wrongProvider = await r.signIn('github', ghUser(), { token, purpose: 'delete' });
+    assert.deepEqual([wrongProvider.ex.status, wrongProvider.ex.body.error.code], [400, 'INVALID_TOKEN'], 'a provider the account never used: the same answer');
+    assert.equal((await r.h.call('GET', '/api/account', { token })).status, 200, 'still signed in');
     assert.equal((await r.h.call('DELETE', '/api/account', { token, body: {} })).body.error.code, 'STEP_UP_REQUIRED');
     assert.equal(r.h.db.get("SELECT COUNT(*) AS n FROM identities WHERE provider = 'google'").n, 1, 'a failed step-up creates no account');
     // Team deletion with an OAuth step-up.
     const team = await r.h.call('POST', '/api/teams', { token, body: { name: 'Doomed' } });
     const step = await r.signIn('google', { sub: 'g-del', email: 'del@example.test' }, { token, purpose: 'delete' });
     assert.equal(step.ex.status, 200, step.ex.text);
-    assert.deepEqual(Object.keys(step.ex.body).sort(), ['flow_id', 'ok', 'step_up_expires_in', 'stepup_until']);
+    assert.deepEqual(Object.keys(step.ex.body), ['stepup_until'], 'exactly {stepup_until}: no device_token, user or teams');
+    assert.match(step.ex.body.stepup_until, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     assert.equal(Date.parse(step.ex.body.stepup_until) - r.clock.wall(), 300_000);
+    assert.equal(r.h.db.get('SELECT COUNT(*) AS n FROM user_devices WHERE user_id = ?', me.ex.body.user.id).n, 1, 'a step-up mints no device');
     // Another device of the same user cannot spend it.
     const other = await r.signIn('google', { sub: 'g-del', email: 'del@example.test' });
     const slug = team.body.team.slug;
     assert.equal((await r.h.call('DELETE', `/api/teams/${team.body.team.id}`, { token: other.ex.body.device_token, body: { confirm_slug: slug } })).body.error.code, 'STEP_UP_REQUIRED');
-    const del = await r.h.call('DELETE', `/api/teams/${team.body.team.id}`, { token, body: { confirm_slug: slug } });
+    const del = await r.h.call('DELETE', `/api/teams/${team.body.team.id}`, { token, body: { confirm_slug: slug, flow_id: step.s.body.flow_id } });
     assert.equal(del.status, 200, del.text);
     assert.equal((await r.h.call('DELETE', '/api/account', { token, body: {} })).body.error.code, 'STEP_UP_REQUIRED', 'spent: single use');
     // Expiry.
     const late = await r.signIn('google', { sub: 'g-del', email: 'del@example.test' }, { token, purpose: 'delete' });
     r.clock.advance(300_001);
-    assert.equal((await r.h.call('DELETE', '/api/account', { token, body: { flow_id: late.ex.body.flow_id } })).body.error.code, 'STEP_UP_REQUIRED', 'older than 5 minutes');
+    assert.equal((await r.h.call('DELETE', '/api/account', { token, body: { flow_id: late.s.body.flow_id } })).body.error.code, 'STEP_UP_REQUIRED', 'older than 5 minutes');
+    // A delete that fails (the only owner of a team with members: 409) does not spend the step-up.
+    const t2 = await r.h.call('POST', '/api/teams', { token, body: { name: 'Shared' } });
+    const now = r.h.hub.iso();
+    const mate = randomUUID();
+    r.h.db.insert('members', { id: mate, org_id: t2.body.team.id, role: 'member', display_name: 'Mate', email: 'mate@example.test', ...emailOnlyIdentity('mate@example.test'), created_at: now });
     const fresh = await r.signIn('google', { sub: 'g-del', email: 'del@example.test' }, { token, purpose: 'delete' });
-    const gone = await r.h.call('DELETE', '/api/account', { token, body: { flow_id: fresh.ex.body.flow_id } });
+    const blocked = await r.h.call('DELETE', '/api/account', { token, body: { flow_id: fresh.s.body.flow_id } });
+    assert.equal(blocked.status, 409, blocked.text);
+    assert.equal(r.h.db.get('SELECT consumed_at FROM oauth_flows WHERE id = ?', fresh.s.body.flow_id).consumed_at, null, 'not spent');
+    r.h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, mate);
+    const gone = await r.h.call('DELETE', '/api/account', { token, body: { flow_id: fresh.s.body.flow_id } });
     assert.equal(gone.status, 200, gone.text);
     assert.equal(r.h.db.get('SELECT COUNT(*) AS n FROM oauth_flows WHERE user_id = ?', me.ex.body.user.id).n, 0, 'no flows left behind');
     assert.equal((await r.h.call('GET', '/api/account', { token })).status, 401);
@@ -362,6 +377,27 @@ test('delete step-up by OAuth: needs a Bearer, the same provider identity, from 
     const back = await r.signIn('google', { sub: 'g-del', email: 'del@example.test' });
     assert.notEqual(back.ex.body.user.id, me.ex.body.user.id);
     assert.deepEqual(back.ex.body.teams, []);
+  } finally {
+    await r.h.close();
+  }
+});
+
+test('GET /api/account lists the proven sign-in providers by name only', async () => {
+  const r = await rig({ mailer: outboxMailer() });
+  try {
+    const g = await r.signIn('google', { sub: 'g-ids', email: 'ids@example.test' });
+    const token = g.ex.body.device_token;
+    assert.deepEqual((await r.h.call('GET', '/api/account', { token })).body.identities, [{ provider: 'google' }]);
+    await r.signIn('github', ghUser(8080, 'ids@example.test'));
+    // An email code for the same address adds 'email'.
+    await r.h.signIn('ids@example.test');
+    const acct = await r.h.call('GET', '/api/account', { token });
+    assert.deepEqual(acct.body.identities, [{ provider: 'email' }, { provider: 'github' }, { provider: 'google' }]);
+    assert.ok(!JSON.stringify(acct.body.identities).includes('8080') && !JSON.stringify(acct.body.identities).includes('g-ids'));
+    // Migration 009's unproven GitHub id is not listed.
+    const u = await r.signIn('google', { sub: 'g-solo', email: 'solo@example.test' });
+    r.h.db.insert('identities', { id: randomUUID(), user_id: u.ex.body.user.id, provider: 'github', subject: '999999', email_verified: 0, created_at: r.h.hub.iso() });
+    assert.deepEqual((await r.h.call('GET', '/api/account', { token: u.ex.body.device_token })).body.identities, [{ provider: 'google' }]);
   } finally {
     await r.h.close();
   }

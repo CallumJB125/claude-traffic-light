@@ -4,6 +4,7 @@
 // and never reach a log line.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -82,6 +83,35 @@ test('app mode: config → ready → connected, credentials only on the WS conne
   }
 });
 
+test('app mode, accounts P4 (D80): {hub_url, runner_token, team_id, data_dir} → Bearer + Board-Team on the WS connect only; hello names no device', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  // Runtime-assembled (never a token-shaped literal in the source).
+  const runnerToken = ['brt', '_'].join('') + crypto.randomBytes(32).toString('base64url');
+  const teamId = crypto.randomUUID();
+  const app = spawnApp(root);
+  try {
+    app.child.send({ type: 'runner.config', hub_url: hub.url.replace('ws://', 'http://').replace('/ws/runner', ''), runner_token: runnerToken, team_id: teamId, data_dir: path.join(root, 'app-data') });
+    await app.next('runner.ready');
+    await app.next('runner.status', (m) => m.state === 'connected');
+    assert.equal(hub.lastAuth, `Bearer ${runnerToken}`);
+    assert.equal(hub.lastHeaders['board-team'], teamId);
+    assert.equal(hub.lastHeaders['cf-access-client-id'], undefined);
+    assert.equal(hub.of('hello')[0].device_id, '', 'the hub names the device in welcome');
+    for (const raw of hub.raw) assert.ok(!raw.includes(runnerToken));
+    const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : e.isSocket() ? [] : [path.join(dir, e.name)]));
+    for (const f of files(path.join(root, 'app-data'))) assert.ok(!fs.readFileSync(f, 'utf8').includes(runnerToken), `${f} holds the token`);
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
+    assert.ok(!app.logs().includes(runnerToken) && !app.logs().includes(runnerToken.slice(4, 24)), 'never logged');
+    for (const m of app.messages) assert.ok(!JSON.stringify(m).includes(runnerToken));
+  } finally {
+    app.child.kill('SIGKILL');
+    await hub.close();
+    rm(root);
+  }
+});
+
 test('app mode: a bad runner.config is fatal with a non-zero exit (and never echoes the token)', async () => {
   const root = tmpDir();
   const hub = await startFakeHub();
@@ -95,6 +125,9 @@ test('app mode: a bad runner.config is fatal with a non-zero exit (and never ech
       [{ hub_url: 'http://localhost.evil.com' }, /hub_url must be https: or wss:/],
       [{ hub_url: 'http://127.0.0.1.nip.io' }, /hub_url must be https: or wss:/],
       [{ cf_client_secret: undefined }, /cf_client_id and cf_client_secret/],
+      [{ runner_token: ['bdt', '_x'].join(''), team_id: 't1', device_id: undefined, device_token: undefined, cf_client_id: undefined, cf_client_secret: undefined }, /runner_token required/],
+      [{ runner_token: ['brt', '_x'].join(''), device_id: undefined, device_token: undefined, cf_client_id: undefined, cf_client_secret: undefined }, /team_id required/],
+      [{ runner_token: ['brt', '_x'].join(''), team_id: 't1' }, /runner_token goes without/],
     ]) {
       const app = spawnApp(root);
       app.child.send(config(hub, root, over));

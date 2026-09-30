@@ -477,10 +477,12 @@ export class Accounts {
     return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
   }
 
-  /** GET /api/account → {user, teams, pending_invites} (invites for the user's verified addresses, P3). */
+  /** GET /api/account → {user, identities, teams, pending_invites} (invites for the user's verified addresses, P3). */
   account(ident) {
     return {
       user: publicUser(ident.user),
+      // The sign-in methods this account has proven (provider names only, D78): the app offers these for a step-up.
+      identities: this.db.all("SELECT DISTINCT provider FROM identities WHERE user_id = ? AND verified_at IS NOT NULL AND provider IN ('email','google','github') ORDER BY provider", ident.user.id),
       teams: this.teams(ident.user.id),
       pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
@@ -502,6 +504,7 @@ export class Accounts {
     if (!d) throw new HubError('NOT_FOUND', 'device not found');
     this.hub.txn(() => {
       this.db.run('UPDATE user_devices SET revoked_at = ?, token_hash = NULL, revoke_reason = ? WHERE id = ?', this.now(), reason, id);
+      this.hub.enrolments?.revokeForUserDevice(id, reason);
       this.audit(reason === 'signout' ? 'auth.signout' : 'device.revoke', { user: ident.user.id, target: id, detail: { kind: 'device' }, ip });
       this.hub.later(() => this.hub.closeCredSockets({ kind: 'device', id }, reason === 'signout' ? 'signed out' : 'device revoked'));
     });
@@ -596,6 +599,8 @@ export class Accounts {
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
+      this.db.run(`UPDATE runner_enrollments SET revoked_at = COALESCE(revoked_at, ?), revoked_reason = COALESCE(revoked_reason, 'account_deleted'), token_hash = NULL,
+        name = 'Deleted device', last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       // Invites to them: pending ones are withdrawn, then every invite they
       // accepted or that names one of their addresses forgets the address.
       this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'

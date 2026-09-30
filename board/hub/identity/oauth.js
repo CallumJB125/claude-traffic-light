@@ -132,7 +132,7 @@ export class OAuth {
   /**
    * POST /api/auth/oauth/exchange {flow_id, code, state, code_verifier} →
    * the email-verify body ({user, teams, device_token, device_id}), or for a
-   * step-up {ok, flow_id, stepup_until, step_up_expires_in}.
+   * step-up exactly {stepup_until}.
    */
   async exchange(body, { ip, ident = null }) {
     limitOrThrow(this.hub, 'oauth_exchange_ip', ipKey(ip));
@@ -361,12 +361,12 @@ export class OAuth {
   }
 
   // Re-authentication for a deletion: the same provider identity the account
-  // already holds, from the same device token that started the flow.
+  // already holds, from the same device token that started the flow. Another
+  // identity is the generic INVALID_TOKEN (never a 401, which would sign the
+  // app out, and nothing about which identity the account has).
   stepUp(f, who, { ip, fail }) {
     const ident = this.identity(who.provider, who.subject);
-    if (!ident?.verified_at || ident.user_id !== f.user_id || !this.accounts.liveUser(f.user_id)) {
-      throw fail(new HubError('WRONG_ACCOUNT', `sign in with the ${f.provider === 'google' ? 'Google' : 'GitHub'} account this ${BRAND.name} account uses`), f);
-    }
+    if (!ident?.verified_at || ident.user_id !== f.user_id || !this.accounts.liveUser(f.user_id)) throw fail(invalid(), f, 'step_up_identity');
     const until = this.accounts.at(STEP_UP_MS);
     this.hub.txn(() => {
       this.db.run('UPDATE oauth_flows SET stepup_until = ? WHERE id = ?', until, f.id);
@@ -374,6 +374,7 @@ export class OAuth {
       this.accounts.audit('auth.stepup', { user: f.user_id, target: f.id, detail: { purpose: f.purpose, method: f.provider }, ip });
     });
     this.failures.reset(`oauth|${ipKey(ip)}`);
-    return { ok: true, flow_id: f.id, stepup_until: until, step_up_expires_in: STEP_UP_MS / 1000 };
+    // Exactly this: the app already holds flow_id (DELETE … {flow_id}).
+    return { stepup_until: until };
   }
 }

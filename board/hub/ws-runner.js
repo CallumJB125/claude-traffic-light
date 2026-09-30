@@ -10,6 +10,7 @@ import { validate, compatible, PROTOCOL_VERSION, WS_CLOSE } from '../shared/prot
 import { HubError, json } from './db.js';
 import { bearer, sha256hex } from './auth.js';
 import { handleRpc, relPath } from './rpc.js';
+import { isRunnerToken } from './identity/enrolments.js';
 import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
 
 const clip = (s, n) => {
@@ -17,10 +18,12 @@ const clip = (s, n) => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
-/** Upgrade auth: → {device} or {close: code, reason}. */
-export async function authenticateRunner(hub, req) {
+/** Upgrade auth: → {device, enrollmentId?} or {close: code, reason}. */
+export async function authenticateRunner(hub, req, { ip = null } = {}) {
   const token = bearer(req);
   if (!token) return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'missing device token' };
+  // Accounts P4 (D80): a runner token enrolled in one team, named by Board-Team.
+  if (hub.enrolments && isRunnerToken(token)) return hub.enrolments.authenticate(token, req.headers['board-team'], { ip });
   const device = hub.db.get('SELECT * FROM devices WHERE token_hash = ?', sha256hex(token));
   if (!device) return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'unknown device token' };
   if (device.revoked_at) return { close: WS_CLOSE.REVOKED, reason: 'device revoked' };
@@ -39,10 +42,11 @@ export async function authenticateRunner(hub, req) {
 }
 
 export class RunnerConn {
-  constructor(hub, ws, device) {
+  constructor(hub, ws, device, { enrollmentId = null } = {}) {
     this.hub = hub;
     this.ws = ws;
     this.device = device;
+    this.enrollmentId = enrollmentId;   // accounts: the runner enrolment this socket authenticated with (D80)
     this.device_id = device.id;
     this.member_id = device.member_id;
     this.member = hub.member(device.member_id);
@@ -158,12 +162,18 @@ export class RunnerConn {
       this.close(WS_CLOSE.REVOKED, dev?.revoked_at ? 'device revoked' : 'member removed');
       return;
     }
+    const bad = this.enrollmentId && hub.enrolments?.problem(hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', this.enrollmentId));
+    if (bad) {
+      this.close(bad.close, bad.reason);
+      return;
+    }
     if (!compatible(msg.protocol)) {
       this.error('PROTOCOL_UNSUPPORTED', `hub speaks protocol ${PROTOCOL_VERSION}`);
       this.close(WS_CLOSE.PROTOCOL_UNSUPPORTED, 'protocol unsupported');
       return;
     }
-    if (msg.device_id !== this.device_id) {
+    // An enrolled runner learns its device id from welcome: it may send ''.
+    if (msg.device_id !== this.device_id && !(this.enrollmentId && msg.device_id === '')) {
       this.close(WS_CLOSE.UNAUTHENTICATED, 'device_id does not match the token');
       return;
     }

@@ -207,6 +207,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/invites/preview', ({ body, ip }) => inv.preview(body, { ip }), { auth: 'none' });
     route('POST', '/api/invites/accept', ({ ident, body, ip }) => inv.accept(ident, body, { ip }), { auth: 'user' });
     route('POST', '/api/account/invites/:invite_id/accept', ({ ident, params, ip }) => inv.accept(ident, { invite_id: params.invite_id }, { ip }), { auth: 'user' });
+    // Runner enrolment (P4, D79–D81): this install as a runner in the team in the URL.
+    const enr = hub.enrolments;
+    route('POST', '/api/teams/:team_id/enrol', ({ member, ident, body, ip }) => enr.enrol(member, ident, body, { ip }));
+    route('DELETE', '/api/teams/:team_id/enrol', ({ member, ident, ip }) => enr.unenrol(member, ident, { ip }));
+    route('GET', '/api/teams/:team_id/enrolments', ({ member, ident }) => enr.list(member, ident));
+    route('DELETE', '/api/teams/:team_id/enrolments/:enrollment_id', ({ member, params, ip }) => enr.revoke(member, params.enrollment_id, { ip }));
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
@@ -527,10 +533,10 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
       });
     }
     if (pathname === WS_PATHS.runner) {
-      const auth = await authenticateRunner(hub, req);
+      const auth = await authenticateRunner(hub, req, { ip: clientIp(req, config) });
       return wss.handleUpgrade(req, socket, head, (ws) => {
         if (auth.close) { ws.close(auth.close, auth.reason); return; }
-        new RunnerConn(hub, ws, auth.device);
+        new RunnerConn(hub, ws, auth.device, { enrollmentId: auth.enrollmentId ?? null });
       });
     }
     return refuse(socket, 404, 'Not Found');

@@ -173,6 +173,7 @@ export class Teams {
       if (step) this.accounts.consumeStepUp(step);
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
+      this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'team_deleted', token_hash = NULL WHERE org_id = ? AND revoked_at IS NULL", now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.hub.revokeDeletedTeamConnections(now);
       this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });
@@ -268,6 +269,7 @@ export class Teams {
     this.hub.txn(() => {
       this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, t.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, t.id);
+      this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'member_removed', token_hash = NULL WHERE member_id = ? AND revoked_at IS NULL", now, t.id);
       this.hub.invites.revokeWhere('created_by', t.id, 'inviter_removed');
       this.audit(self ? 'member.leave' : 'member.remove', member, { ip, target: t.id, detail: { role: t.role } });
       this.hub.later(() => {

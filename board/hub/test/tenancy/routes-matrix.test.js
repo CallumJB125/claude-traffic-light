@@ -64,6 +64,14 @@ const MATRIX = {
   // An invite addressed to someone else is as unknown as a made-up id: the one
   // generic INVALID_TOKEN (not 404), and nothing about it in the answer.
   'POST /api/account/invites/:invite_id/accept': { kind: 'cross', status: 400, path: (fx) => `/api/account/invites/${fx.B.invite}/accept` },
+  // Runner enrolment (P4, D79–D81): an install as a runner in the team in the URL.
+  'POST /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
+  'DELETE /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
+  'GET /api/teams/:team_id/enrolments': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments` },
+  'DELETE /api/teams/:team_id/enrolments/:enrollment_id': {
+    kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments/${fx.B.enrollment}`,
+    alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],
+  },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}` },
   'GET /api/boards/:board_id/alerts': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/alerts` },
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
