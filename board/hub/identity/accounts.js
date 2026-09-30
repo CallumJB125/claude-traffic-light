@@ -445,7 +445,10 @@ export class Accounts {
       this.audit('user.deleted', { user: user.id, detail: { memberships: members.length }, ip });
       this.hub.later(() => {
         for (const c of creds) this.hub.closeCredSockets(c, 'account deleted');
-        for (const d of runnerDevices) this.hub.runners.get(d.id)?.close(4403, 'account deleted');
+        for (const d of runnerDevices) {
+          this.hub.runners.get(d.id)?.close(4403, 'account deleted');
+          this.hub.presence.dropDevice(d.id);
+        }
         for (const m of members) this.hub.memberChanged(m.id);
       });
     });

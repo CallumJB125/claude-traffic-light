@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { tenancy, INVARIANTS, MARK } from './fixture.js';
-import { settle } from '../helpers.js';
+import { settle, until, FakeRunner } from '../helpers.js';
 
 const rid = () => randomUUID();
 
@@ -167,6 +167,65 @@ test('T-TRIG: direct writes that point across teams raise "cross-team reference"
     db.insert('card_assignees', { card_id: A.card, member_id: A.member, role: 'collaborator' });
     db.insert('comments', { id: rid(), card_id: A.card, author_member_id: A.s, source: 'web', trusted: 1, body: 'ok', created_at: now });
     for (const [name, sql] of Object.entries(INVARIANTS)) assert.deepEqual(db.all(sql), [], name);
+  } finally {
+    await fx.h.close();
+  }
+});
+
+test('T-PRESENCE: team presence stays in its team over WS and HTTP; a revoked device, account deletion and team deletion drop it', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, A, B, h } = fx;
+    const sess = (repo, summary) => ({ session_id: `s-${rid().slice(0, 8)}`, agent: 'claude', repo_id: repo, state: 'working', since: '2026-09-30T10:00:00Z', summary });
+    async function runner(u, repo, summary) {
+      const dev = (await as(u, 'POST', '/api/devices', { request_id: rid(), name: 'laptop' })).body;
+      const r = new FakeRunner(h.base, dev);
+      await r.open();
+      await r.hello();
+      r.send({ type: 'presence', sessions: [sess(repo, summary)] });
+      await until(() => h.hub.presence.byDevice.has(dev.device_id));
+      return dev;
+    }
+    const devA = await runner(users.ua, A.repo, 'alpha work');
+    const devB = await runner(users.ub, B.repo, `${MARK} work`);
+    const devM = await runner(users.amember, A.repo, 'member work');
+
+    // WS (accounts-mode sockets: user + cred) and HTTP see only their own team.
+    const wa = await h.browser({ token: users.ua.token });
+    await wa.subscribe(A.board);
+    const ws = await h.browser({ token: users.s.token });
+    await ws.subscribe(A.board);
+    const wb = await h.browser({ token: users.ub.token });
+    await wb.subscribe(B.board);
+    for (const b of [wa, ws]) {
+      const p = await b.next('team.presence');
+      assert.deepEqual(p.members.map((m) => m.member_id).sort(), [A.owner, A.member].sort());
+    }
+    assert.deepEqual((await wb.next('team.presence')).members.map((m) => m.member_id), [B.owner]);
+    const httpA = await as(users.ua, 'GET', `/api/boards/${A.board}/presence`);
+    assert.equal(httpA.status, 200);
+    assert.equal(httpA.body.members.length, 2);
+    assert.equal((await as(users.ua, 'GET', `/api/boards/${B.board}/presence`)).status, 404);
+    assert.equal((await as(users.n, 'GET', `/api/boards/${B.board}/presence`)).status, 404);
+    assert.equal((await as(users.s, 'GET', `/api/boards/${B.board}/presence`, undefined, { 'x-board-team': A.team })).status, 404);
+    await settle();
+    for (const b of [wa, ws]) assert.ok(!JSON.stringify(b.msgs).includes(MARK), 'no B presence on an A socket');
+    assert.ok(!JSON.stringify(wb.msgs).includes('alpha work'), 'no A presence on a B socket');
+
+    // A revoked runner device disappears at once.
+    assert.equal((await as(users.ua, 'DELETE', `/api/devices/${devA.device_id}`, {})).status, 200);
+    assert.equal(h.hub.presence.byDevice.has(devA.device_id), false);
+    // Account deletion drops the user's runner devices' presence.
+    const flow = await h.stepUp(users.amember.token, users.amember.email);
+    assert.equal((await as(users.amember, 'DELETE', '/api/account', { flow_id: flow })).status, 200);
+    await settle();
+    assert.equal(h.hub.presence.byDevice.has(devM.device_id), false);
+    assert.deepEqual((await as(users.ua, 'GET', `/api/boards/${A.board}/presence`)).body, { members: [] });
+    // Team deletion drops the team's.
+    const del = await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: fx.db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug, flow_id: await h.stepUp(users.ub.token, users.ub.email) });
+    assert.equal(del.status, 200, del.text);
+    await settle();
+    assert.equal(h.hub.presence.byDevice.has(devB.device_id), false);
   } finally {
     await fx.h.close();
   }

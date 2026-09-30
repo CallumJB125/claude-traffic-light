@@ -162,7 +162,10 @@ export class Teams {
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.audit('team.delete', member, { ip, target: o.id, detail: { purge_after: purgeAfter } });
       this.hub.later(() => {
-        for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'team deleted');
+        for (const d of devices) {
+          this.hub.runners.get(d.id)?.close(4403, 'team deleted');
+          this.hub.presence.dropDevice(d.id);
+        }
         for (const m of members) this.hub.memberChanged(m.id);
       });
     });
@@ -253,7 +256,10 @@ export class Teams {
       this.hub.invites.revokeWhere('created_by', t.id, 'inviter_removed');
       this.audit(self ? 'member.leave' : 'member.remove', member, { ip, target: t.id, detail: { role: t.role } });
       this.hub.later(() => {
-        for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'member removed');
+        for (const d of devices) {
+          this.hub.runners.get(d.id)?.close(4403, 'member removed');
+          this.hub.presence.dropDevice(d.id);
+        }
         this.hub.memberChanged(t.id);
       });
     });
