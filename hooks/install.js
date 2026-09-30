@@ -112,11 +112,22 @@ function installCursor(hooksJson, emitPath = EMIT_SCRIPT) {
   return out;
 }
 
-// Codex CLI: ~/.codex/config.toml — a `notify` array. Returns the new file text.
+// Codex CLI: ~/.codex/config.toml — a top-level `notify` array. Codex runs
+// exactly one notify command, and other tools (Codex Computer Use, …) use it
+// too, so an existing one that isn't Buddy's is never replaced: that is
+// { error }, and the file is left alone. Otherwise → { text }.
 function installCodex(tomlText, emitPath = EMIT_SCRIPT) {
   const line = `notify = ["node", "${emitPath}", "--codex"]`;
-  const lines = String(tomlText || '').split('\n').filter((l) => !/^\s*notify\s*=/.test(l));
-  return [line, ...lines].join('\n').replace(/\n+$/, '') + '\n';
+  const lines = String(tomlText || '').split('\n');
+  // Top-level keys come before the first [table] header.
+  const tableAt = lines.findIndex((l) => /^\s*\[/.test(l));
+  const top = tableAt < 0 ? lines.length : tableAt;
+  const at = lines.slice(0, top).findIndex((l) => /^\s*notify\s*=/.test(l));
+  if (at >= 0 && !/emit\.js",\s*"--codex"\s*\]\s*$/.test(lines[at])) {
+    return { error: `${lines[at].trim().slice(0, 120)} is already set, and Codex runs only one notify command. Buddy left it alone; remove that line yourself to let Buddy use it instead.` };
+  }
+  const rest = at >= 0 ? lines.filter((_, i) => i !== at) : lines;
+  return { text: [line, ...rest].join('\n').replace(/\n+$/, '') + '\n' };
 }
 
 // Gemini CLI: ~/.gemini/settings.json — best effort, mirrors the Claude

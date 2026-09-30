@@ -2786,7 +2786,9 @@ ipcMain.handle('connect-agent', (e, which) => {
     const f = path.join(home, '.codex', 'config.toml');
     fs.mkdirSync(path.dirname(f), { recursive: true });
     let cur = ''; try { cur = fs.readFileSync(f, 'utf8'); } catch { /* none */ }
-    fs.writeFileSync(f, Hooks.installCodex(cur, EMIT_SCRIPT));
+    const r = Hooks.installCodex(cur, EMIT_SCRIPT);
+    if (r.error) return { ok: false, file: f, error: r.error };
+    fs.writeFileSync(f, r.text);
     return { ok: true, file: f };
   }
   if (which === 'gemini') {

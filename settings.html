@@ -325,7 +325,8 @@
 
     document.querySelectorAll('[data-agent]').forEach((b) => b.addEventListener('click', async () => {
       const r = await window.settingsApi.connectAgent(b.dataset.agent);
-      document.getElementById('connect-hint').textContent = r && r.ok ? `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.` : 'Could not connect.';
+      document.getElementById('connect-hint').textContent = r && r.ok ? `Connected ${b.textContent}: wrote ${r.file}. Restart it to pick up the hooks.`
+        : r && r.error ? `Did not connect ${b.textContent}: in ${r.file}, ${r.error}` : 'Could not connect.';
     }));
     const mcpToggle = document.getElementById('mcp-toggle');
     const showMcp = (st) => {

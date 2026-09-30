@@ -721,13 +721,22 @@ test('adapters: cursor/codex/gemini config writers are idempotent and keep forei
   assert.deepEqual(cur, twice);
   assert.deepEqual(cur.hooks.stop.map((h) => h.command), ['echo mine', 'node "/e/emit.js" --cursor stop']);
   assert.ok(cur.hooks.beforeShellExecution.length === 1);
-  const toml = H.installCodex('model = "o3"\nnotify = ["old"]\n', '/e/emit.js');
-  assert.equal(toml, 'notify = ["node", "/e/emit.js", "--codex"]\nmodel = "o3"\n');
-  assert.equal(H.installCodex(toml, '/e/emit.js'), toml);
+  const { text: toml } = H.installCodex('model = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', '/e/emit.js');
+  assert.equal(toml, 'notify = ["node", "/e/emit.js", "--codex"]\nmodel = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', 'a notify inside a table is another key');
+  assert.deepEqual(H.installCodex(toml, '/e/emit.js'), { text: toml });
+  assert.equal(H.installCodex(toml, '/new/emit.js').text, toml.replace('/e/emit.js', '/new/emit.js'), 'our own line moves with the app');
+  assert.equal(H.installCodex('', '/e/emit.js').text, 'notify = ["node", "/e/emit.js", "--codex"]\n');
   const gem = H.installGemini({ theme: 'x', hooks: { BeforeTool: [{ matcher: '', hooks: [{ type: 'command', command: 'echo keep' }] }] } }, '/e/emit.js');
   assert.equal(gem.theme, 'x');
   assert.equal(gem.hooks.BeforeTool.length, 2);
   assert.deepEqual(H.installGemini(gem, '/e/emit.js'), gem);
+});
+
+test('adapters: Connect Codex never removes a notify another tool owns', () => {
+  const theirs = 'model = "o3"\nnotify = ["/Applications/Codex Computer Use.app/Contents/MacOS/notify", "--turn"]\n[mcp_servers.x]\ncommand = "y"\n';
+  const r = H.installCodex(theirs, '/e/emit.js');
+  assert.equal(r.text, undefined, 'nothing to write');
+  assert.match(r.error, /Codex Computer Use.*already set.*only one notify/);
 });
 
 // ── hooks/install.js ────────────────────────────────────────────────────────
