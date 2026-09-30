@@ -100,8 +100,10 @@ function paint() {
   }
   const hub = document.getElementById('hub');
   const s = state.hub?.state;
-  hub.textContent = HUB_TEXT[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? 'Team board' : 'Board on this Mac') : '');
-  hub.dataset.state = s ?? 'stopped';
+  const runners = s === 'failed' ? [] : state.runners ?? [];
+  // A runner works for the team whatever board is showing; say so while it's on.
+  hub.textContent = runners.length ? `This Mac is running cards for ${runners.join(', ')}` : HUB_TEXT[s] ?? (s === 'ready' ? (state.hub.mode === 'team' ? 'Team board' : 'Board on this Mac') : '');
+  hub.dataset.state = runners.length ? 'running' : s ?? 'stopped';
 }
 
 // ↑/↓ move between entries, like a native source list.

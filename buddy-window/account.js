@@ -92,7 +92,25 @@ async function act(p, okText) {
   if (!r?.ok) { flash(r?.error ?? 'Something went wrong. Try again.', true); return r; }
   await render();
   if (okText || r.notice) flash(okText ?? r.notice);
+  if (r.link) showLink(r.link, r.email);
   return r;
+}
+
+// The hub shows an invite link once and keeps only its hash: copy it now or
+// send a new one later.
+function showLink(link, email) {
+  const box = el('input', { class: 'input acct-link-box', type: 'text', readonly: true, value: link, 'aria-label': 'Invite link', onfocus: (e) => e.currentTarget.select() });
+  const copy = el('button', { type: 'button', class: 'btn' }, 'Copy');
+  copy.addEventListener('click', async () => {
+    box.select();
+    try { await navigator.clipboard.writeText(link); } catch { document.execCommand('copy'); }
+    copy.textContent = 'Copied';
+  });
+  const sec = el('section', { class: 'acct-section acct-linkshow', role: 'status' },
+    el('p', { class: 'acct-hint' }, `Here’s ${email ? `${email}’s` : 'the'} invite link. We also emailed it. It’s shown only this once.`),
+    el('div', { class: 'acct-row-form' }, box, copy));
+  root.querySelector('.acct-linkshow')?.remove();
+  root.querySelector('.acct-section')?.after(sec);
 }
 
 // ── screens ───────────────────────────────────────────────────────────────
@@ -175,14 +193,15 @@ const SCREENS = {
           el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Join with an invite')),
       ];
     }
+    const team = s.team.id;
     const out = [el('h1', {}, s.team.name), el('p', { class: 'acct-sub' }, `${ROLE[s.team.role] ?? s.team.role} · `, hostTag(s.host))];
     if (s.error) out.push(el('p', { class: 'acct-error', role: 'alert' }, s.error));
 
     if (s.canManage) {
       const role = roleSelect('member', { label: 'Role for the invite' });
       const email = input({ name: 'email', type: 'email', autocomplete: 'off', placeholder: 'name@example.com', required: true, 'aria-label': 'Email to invite' });
-      const f = form({ fields: el('div', { class: 'acct-row-form' }, email, role), submit: 'Send invite', busy: 'Sending…', fn: (v) => act(api.invite(v.email, v.role)) });
-      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Invite people'), el('p', { class: 'acct-hint' }, 'They get an email with a link that opens Buddy.'), f));
+      const f = form({ fields: el('div', { class: 'acct-row-form' }, email, role), submit: 'Send invite', busy: 'Sending…', fn: (v) => act(api.invite(team, v.email, v.role)) });
+      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Invite people'), el('p', { class: 'acct-hint' }, 'They get an email with a link that opens Buddy. You’ll also see the link here once, to send another way.'), f));
     }
 
     const rows = s.members.map((m) => {
@@ -191,12 +210,12 @@ const SCREENS = {
       let roleCell;
       if (canEdit) {
         roleCell = roleSelect(m.role, { allowOwner: s.isOwner, label: `Role for ${m.name || m.email}` });
-        roleCell.addEventListener('change', async () => { const r = await act(api.setRole(m.id, roleCell.value), 'Role updated.'); if (!r?.ok) roleCell.value = m.role; });
+        roleCell.addEventListener('change', async () => { const r = await act(api.setRole(team, m.id, roleCell.value), 'Role updated.'); if (!r?.ok) roleCell.value = m.role; });
       } else roleCell = el('span', { class: 'chip chip-role' }, ROLE[m.role] ?? m.role);
       // Two clicks, no modal: the first arms it, the second removes.
       const remove = canEdit && !m.you ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${m.name || m.email}`, onclick: (e) => {
         const b = e.currentTarget;
-        if (b.dataset.armed) { act(api.removeMember(m.id), 'Removed.'); return; }
+        if (b.dataset.armed) { act(api.removeMember(team, m.id), 'Removed.'); return; }
         b.dataset.armed = '1';
         b.textContent = 'Confirm';
         b.classList.add('btn-danger-text');
@@ -210,8 +229,8 @@ const SCREENS = {
         el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, i.email), el('span', { class: 'acct-mail' }, expires(i.expires))),
         el('span', { class: 'chip chip-role' }, ROLE[i.role] ?? i.role),
         el('span', { class: 'acct-btns' },
-          el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.resendInvite(i.id)) }, 'Resend'),
-          el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.revokeInvite(i.id), 'Invite cancelled.') }, 'Revoke'))));
+          el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.resendInvite(team, i.id)) }, 'Resend'),
+          el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.revokeInvite(team, i.id), 'Invite cancelled.') }, 'Revoke'))));
       out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Pending invites'), inv.length ? el('ul', { class: 'acct-list' }, inv) : el('p', { class: 'acct-hint' }, 'No invites waiting.')));
     }
     return out;
@@ -234,7 +253,7 @@ const SCREENS = {
     const go = el('button', { type: 'button', class: 'btn btn-primary' }, 'Join team');
     go.addEventListener('click', async () => {
       go.disabled = true; go.textContent = 'Joining…'; err.textContent = ''; more.textContent = '';
-      const r = await api.accept();
+      const r = await api.accept(s.invite.id);
       if (r?.ok) return;
       go.disabled = false; go.textContent = 'Join team';
       err.textContent = r?.error ?? 'Something went wrong. Try again.';
@@ -247,7 +266,7 @@ const SCREENS = {
       el('p', { class: 'acct-sub' }, `${s.invite.inviter || 'Someone'} invited you to join as ${(ROLE[s.invite.role] ?? s.invite.role).toLowerCase()}.`),
       el('p', { class: 'acct-hint' }, s.email ? `Signed in as ${s.email} on ` : 'On ', hostTag(s.host)),
       err,
-      el('div', { class: 'acct-actions' }, go, el('button', { type: 'button', class: 'btn', onclick: () => api.confirm(false) }, 'Not now')),
+      el('div', { class: 'acct-actions' }, go, el('button', { type: 'button', class: 'btn', onclick: () => api.notNow() }, 'Not now')),
       more,
     ];
   },
@@ -279,7 +298,10 @@ const SCREENS = {
           form({
             fields: input({ name: 'code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '12', placeholder: '123456', class: 'input input-code', 'aria-label': '6-digit code', autofocus: true }),
             submit: 'Delete my account', busy: 'Deleting…', fn: (v) => api.deleteConfirm(v.code),
-            extra: link('Cancel', async () => { await api.cancelDelete(); render(); }),
+            extra: el('p', { class: 'acct-foot' },
+              link('Send a new code', async () => { const r = await api.deleteStart(a.host); flash(r.ok ? `We sent a new code to ${a.email}.` : r.error, !r.ok); }),
+              el('span', { class: 'acct-dot', 'aria-hidden': 'true' }, '·'),
+              link('Cancel', async () => { await api.cancelDelete(); render(); })),
           }));
         card.querySelector('.acct-go').classList.add('btn-danger');
       } else {
@@ -302,8 +324,8 @@ const SCREENS = {
     for (const h of s.hubs) {
       const sec = el('section', { class: 'acct-section' }, el('h2', {}, h.host));
       sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Share my live sessions with the team'), el('span', { class: 'acct-mail' }, 'Teammates see which projects your Claude sessions are in and whether they’re working. Off unless you turn it on.')),
-        toggle(h.share, 'Share my live sessions with the team', (on) => api.presence(h.host, on))));
+        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Share my live sessions with my teams'), el('span', { class: 'acct-mail' }, `Everyone in every team on ${h.host} sees which project folders your Claude sessions are in (the folder name, not the path) and whether they’re working. Off unless you turn it on.`)),
+        toggle(h.share, `Share my live sessions with every team on ${h.host}`, (on) => api.presence(h.host, on))));
       for (const t of h.teams) {
         const guest = t.role === 'guest';
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },

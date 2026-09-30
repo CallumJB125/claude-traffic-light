@@ -57,7 +57,7 @@ ul { padding: 0; list-style: none; }
 .sidebar-hub { min-height: 18px; padding: 8px 8px 0; font-size: var(--text-xs); color: var(--faint); display: flex; align-items: center; gap: 6px; }
 .sidebar-hub::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--line-strong); }
 .sidebar-hub:empty::before { display: none; }
-.sidebar-hub[data-state="ready"]::before { background: var(--green); }
+.sidebar-hub[data-state="ready"]::before, .sidebar-hub[data-state="running"]::before { background: var(--green); }
 .sidebar-hub[data-state="starting"]::before, .sidebar-hub[data-state="restarting"]::before { background: var(--amber); }
 .sidebar-hub[data-state="failed"]::before { background: var(--red); }
 

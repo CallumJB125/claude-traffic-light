@@ -3,12 +3,14 @@
 // Electron-free: index.js injects the account client (accounts.js), the
 // vault (safeStorage) and the process fork, so tests drive it with fakes.
 //
-// The runner's device token lives only in the safeStorage-encrypted file and
-// reaches the runner over parentPort, never argv or env (CONTRACT §4.2;
-// 70's runner.config interface).
+// The runner authenticates with the account's device token (bdt_, sealed by
+// main), or a runner-only token if the hub mints one at enrolment (sealed in
+// this controller's file). Either reaches the runner over parentPort only,
+// never argv or env, and the runner never persists it (70's runner.config).
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -27,6 +29,16 @@ const NO_RUNNER = 'Runner not available in this build';
 // SIGTERM parks live runs within about 25 s (70's runner); then we kill.
 const STOP_GRACE_MS = 30_000;
 const RUNNER_STATES = ['connected', 'backoff', 'unauthenticated', 'revoked', 'unavailable', 'stopping'];
+/** States in which a runner counts as on (the sidebar says so). */
+const RUNNING = new Set(['starting', 'connecting', 'connected', 'backoff', 'restarting', 'unavailable']);
+
+// The one place that knows the enrol answer's token shape: today the hub
+// answers {enrollment_id, team_id} and the runner uses the account token; a
+// later hub may add a runner-only brt_ token, which then wins.
+function runnerTokenFrom(r) {
+  const t = r?.runner_token ?? r?.device_token;
+  return typeof t === 'string' && /^brt_[A-Za-z0-9_-]{10,200}$/.test(t) ? t : null;
+}
 
 /** The widget's live sessions, cut down to what teammates may see. */
 function presenceSessions(sessions = []) {
@@ -35,20 +47,22 @@ function presenceSessions(sessions = []) {
     return {
       session_id: s.sessionId.slice(0, 100),
       agent: typeof s.via === 'string' && s.via ? s.via.slice(0, 40) : 'claude',
-      cwd: typeof s.cwd === 'string' ? s.cwd.slice(0, 300) : '',
+      // The folder name only: a full path says who you are and how your disk is laid out.
+      project: typeof s.cwd === 'string' ? path.basename(s.cwd).slice(0, 100) : '',
       state: typeof s.signal === 'string' ? s.signal.slice(0, 40) : 'unknown',
       since: new Date(Number.isFinite(t) ? t : Date.now()).toISOString(),
     };
   });
 }
 
-function createDeviceController({ account, teamId, credsFile, seal, unseal, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
-  // account: accounts.js client for the team's hub (origin + enrol()).
+function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
+  // account: accounts.js client for the team's hub (origin, enrol(), unenrol(), accessToken()).
   let creds = null;
   try { if (fs.existsSync(credsFile)) creds = JSON.parse(unseal(fs.readFileSync(credsFile))); } catch (e) { log('device creds unreadable; treat as not enrolled', e.message); creds = null; }
   if (creds && (creds.hub !== account.origin || creds.team_id !== teamId)) creds = null;
 
   let child = null;
+  let starting = false;
   let runner = { state: 'off', detail: null };
   let wanted = !!creds?.enabled;
   let parked = 0;
@@ -74,14 +88,19 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
 
   function setRunner(state, detail = null) { runner = { state, detail }; emit(); }
 
-  function start() {
-    if (child || !creds || !wanted) return;
+  async function start() {
+    if (child || starting || !creds || !wanted) return;
     if (!entryExists()) { setRunner('missing', NO_RUNNER); return; }
+    starting = true;
+    let token;
+    try { token = creds.runner_token ?? (await account.accessToken()); } catch { token = null; } finally { starting = false; }
+    if (child || !creds || !wanted) return;
+    if (!token) { setRunner('unauthenticated'); return; }
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(dataDir, 0o700);
     // No args and no cwd: the entry refuses to run without a parentPort, and a
     // cwd inside app.asar makes the fork fail silently.
-    const c = fork(runnerEntry, [], { serviceName: 'Buddy Board Runner', stdio: 'pipe', env: { HOME: process.env.HOME, PATH: process.env.PATH, USER: process.env.USER, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR } });
+    const c = fork(runnerEntry, [], { serviceName: 'Buddy Board Runner', stdio: 'pipe', env: { HOME: process.env.HOME, PATH: process.env.PATH, USER: process.env.USER, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR } }); // privacy-flow: team-hub-runner
     child = c;
     c.startedAt = now();
     c.ready = false;
@@ -94,10 +113,10 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
       else if (m.type === 'runner.stopped') { parked = Number.isInteger(m.parked) && m.parked > 0 ? m.parked : 0; emit(); } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', String(m.message ?? 'The runner stopped.').slice(0, 200)); }
     });
     c.once('exit', (code) => onExit(c, code));
-    c.postMessage({ type: 'runner.config', hub_url: account.origin, device_id: creds.enrollment_id, device_token: creds.device_token, data_dir: dataDir });
+    c.postMessage({ type: 'runner.config', hub_url: account.origin, device_token: token, team_id: teamId, data_dir: dataDir }); // privacy-flow: team-hub-runner
   }
 
-  function send(c, p) { try { c.postMessage({ type: 'runner.presence', enabled: p.enabled, sessions: p.enabled ? p.sessions : [] }); } catch { /* exiting */ } }
+  function send(c, p) { try { c.postMessage({ type: 'runner.presence', enabled: p.enabled, sessions: p.enabled ? p.sessions : [] }); } catch { /* exiting */ } } // privacy-flow: team-hub-runner
 
   function onExit(c, code) {
     if (c !== child) return;
@@ -113,7 +132,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
     restarts.push(t);
     const delay = Math.min(30_000, 1000 * 2 ** (restarts.length - 1));
     setRunner('restarting', null);
-    schedule(() => { if (wanted && !child) start(); }, delay);
+    schedule(() => (wanted && !child ? start() : undefined), delay);
   }
 
   function stop() {
@@ -136,14 +155,24 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
       if (!n) return { ok: false, error: 'Give this Mac a name.' };
       // No enrolment the hub would list for a runner that can't start here.
       if (!entryExists()) { setRunner('missing', NO_RUNNER); return { ok: false, error: `${NO_RUNNER}.` }; }
-      const r = await account.enrol(teamId, n);
+      // Nothing the hub would count as enrolled unless we can keep it sealed.
+      if (!canSeal()) return { ok: false, error: 'This Mac can’t store the runner’s sign-in securely right now, so it can’t run cards.' };
+      const r = await account.enrol(teamId);
       if (!r.ok) return { ok: false, error: r.signedOut ? 'Sign in again, then turn this on.' : r.error };
-      if (typeof r.enrollment_id !== 'string' || typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: 'The team hub didn’t set this Mac up. Try again.' };
-      creds = { hub: account.origin, team_id: teamId, enrollment_id: r.enrollment_id, device_token: r.device_token, name: n, enabled: true };
+      if (typeof r.enrollment_id !== 'string' || !r.enrollment_id || (r.team_id != null && String(r.team_id) !== teamId)) return { ok: false, error: 'The team hub didn’t set this Mac up. Try again.' };
+      creds = { hub: account.origin, team_id: teamId, enrollment_id: r.enrollment_id, runner_token: runnerTokenFrom(r), name: n, enabled: true };
+      try {
+        persist();
+      } catch (e) {
+        // An enrolment we can't remember would run nowhere and linger on the hub.
+        log('could not seal the runner enrolment; undoing it', e.message);
+        creds = null;
+        await account.unenrol(teamId).catch(() => {});
+        return { ok: false, error: 'This Mac couldn’t store the runner’s sign-in securely. Nothing was turned on.' };
+      }
       wanted = true;
-      persist();
       emit();
-      start();
+      await start();
       return { ok: true };
     },
     async setEnabled(on) {
@@ -151,7 +180,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
       wanted = !!on;
       creds.enabled = wanted;
       persist();
-      if (wanted) { restarts.length = 0; start(); } else await stop();
+      if (wanted) { restarts.length = 0; await start(); } else await stop();
       emit();
       return { ok: true };
     },
@@ -159,13 +188,22 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
     async remove() {
       wanted = false;
       await stop();
-      const id = creds?.enrollment_id;
+      const had = !!creds;
       creds = null;
       persist();
-      if (id) await account.unenrol(teamId, id).catch(() => {});
+      if (had) await account.unenrol(teamId).catch(() => {});
       setRunner('off');
       return { ok: true };
     },
+    /** Stop and forget every secret without asking the hub (signed out, or the account is gone). */
+    async discard() {
+      wanted = false;
+      await stop();
+      creds = null;
+      persist();
+      setRunner('off');
+    },
+    running: () => wanted && RUNNING.has(runner.state),
     /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. */
     setPresence(enabled, sessions = []) {
       const next = { enabled: !!enabled, sessions: enabled ? presenceSessions(sessions) : [] };
@@ -174,9 +212,9 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, fork
       if (child?.ready) send(child, presence);
     },
     /** App start: resume the runner if the member left it on. */
-    resume() { if (creds && wanted) start(); },
+    resume() { return creds && wanted ? start() : Promise.resolve(); },
     stop: () => { wanted = false; return stop(); },
   };
 }
 
-module.exports = { createDeviceController, defaultDeviceName, presenceSessions, NO_RUNNER };
+module.exports = { createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, NO_RUNNER };

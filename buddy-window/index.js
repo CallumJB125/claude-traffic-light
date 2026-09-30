@@ -19,17 +19,15 @@ const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron');
 const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
-const { createWorkspaceStore, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition, hostOf } = require('./workspaces');
-const { createAccountClient, parseInvite, routeInvite, maskEmail, bearerScope } = require('./accounts');
+const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
+const { createAccountClient, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
+const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
 const LOCAL_PAGES = new Set(['sidebar.html', 'info.html', 'account.html'].map((f) => pathToFileURL(path.join(DIR, f)).href));
-// Account-page screens the page itself may ask for; the rest are reached
-// only through main's own flow (e.g. `confirm` after an invite link).
-const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites']);
-const fileKey = (origin) => hostOf(origin).replace(/[^a-z0-9.-]/gi, '_');
+const fileKey = hubKey;
 const isLocalPage = (url) => { try { const u = new URL(url); u.search = ''; u.hash = ''; return LOCAL_PAGES.has(u.href); } catch { return false; } };
 
 function devLogin(url, secret, login = 'alice') {
@@ -78,7 +76,7 @@ function probeHub(origin, partition) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
-    const req = net.request({ url: `${origin}/api/health`, session: session.fromPartition(partition), redirect: 'manual', useSessionCookies: true });
+    const req = net.request({ url: `${origin}/api/health`, session: session.fromPartition(partition), redirect: 'manual', useSessionCookies: true }); // privacy-flow: team-hub-account
     const timer = setTimeout(() => { try { req.abort(); } catch { /* done */ } finish({ ok: false, error: 'The hub did not answer in 10 seconds.' }); }, 10_000);
     req.on('redirect', (_status, _method, location) => {
       try { req.abort(); } catch { /* done */ }
@@ -106,6 +104,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
   const norm = (u) => normalizeHubUrl(u, { allowOrigins });
+  const normLink = (u) => normalizeLinkHub(u, { allowOrigins });
   const userData = app.getPath('userData');
   const ACCOUNTS_DIR = path.join(userData, 'buddy-accounts');
   const DEVICES_DIR = path.join(userData, 'buddy-devices');
@@ -140,6 +139,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   }
   const signedIn = (origin) => !!vault(origin).load();
   const tokenFor = (origin) => vault(origin).load()?.token ?? null;
+  const userOf = (origin) => vault(origin).load()?.user ?? null;
 
   const store = createWorkspaceStore(path.join(userData, 'buddy-workspaces.json'), { allowOrigins, signedIn });
   const getTeamHub = () => { const w = store.active(); return w.kind === 'local' ? null : w; };
@@ -148,18 +148,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   function clientFor(origin) {
     let c = clients.get(origin);
     if (!c) {
-      c = createAccountClient({ origin, store: vault(origin), onSignedOut: () => signedOutOf(origin, { tell: true }) });
+      c = createAccountClient({ origin, store: vault(origin), onSignedOut: () => { flow.signedOutOf(origin, { tell: true }).catch((e) => log('sign-out cleanup failed', e.message)); } });
       clients.set(origin, c);
     }
     return c;
   }
-  const accounts = new Map(); // origin → last GET /api/account (teams, pending_invites)
-  async function refreshAccount(origin) {
-    const r = await clientFor(origin).me();
-    if (r.ok) { accounts.set(origin, r); store.setTeams(origin, r); pushState(); }
-    return r;
-  }
-
   let win = null;
   let sidebar = null;
   let content = null; // the view currently attached on the right
@@ -172,19 +165,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   let viewError = null; // the hub is fine but its page failed to load
   let hubLoading = null;
 
-  // The account flow in progress: which hub it is about, a note for the
-  // next screen, and an invite waiting on sign-in. Memory only.
-  const acct = { screen: null, hub: null, notice: null, deleting: false };
-  let pendingInvite = null; // {hub|null, token}
-  // A hub named by an invite link must be confirmed by the member before any
-  // email goes to it; a hub they typed themselves counts as confirmed.
-  let trustedHub = null;
-
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
   const localUrl = () => (hubInfo && !hubInfo.team ? hubInfo.url : null);
   const supervisor = createHubSupervisor({
-    fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts),
+    fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts), // privacy-flow: local-board-hub
     hubEntry: path.join(app.getAppPath(), 'board', 'hub', 'server.js'),
     dataDir: path.join(userData, mode === 'dev' ? 'board-dev' : 'board'),
     mode,
@@ -219,7 +204,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     hubInfo = null;
     viewError = null;
     if (hubView) { if (content === hubView) content = null; dispose(hubView, win); hubView = null; }
-    if (old) session.fromPartition(partitionFor()).cookies.remove(old, 'board_local').catch(() => {});
+    if (old) session.fromPartition(partitionFor()).cookies.remove(old, 'board_local').catch(() => {}); // privacy-flow: local-board-hub
   }
 
   const partitionFor = () => (mode === 'dev' ? 'persist:board-dev' : 'persist:board-local');
@@ -247,6 +232,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       workspaces: store.list().map(({ id, name, kind, group }) => ({ id, name, kind, group: group ?? null })),
       active: store.active().id,
       signedIn: store.hubs().some(signedIn),
+      runners: flow.runningTeams(),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
         : { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode },
@@ -285,12 +271,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   // ── account pages ──────────────────────────────────────────────────────
 
-  function showAccount(screen, { notice = null } = {}) {
-    if (!win) { acct.screen = screen; acct.notice = notice; selected = `flow:${screen}`; return; }
-    acct.screen = screen;
-    acct.notice = notice;
+  // Draws the account page for a screen the flow picked; the flow owns which.
+  function showScreen(screen) {
     const page = PAGES.find((p) => p.screen === screen);
     selected = page ? page.id : `flow:${screen}`;
+    if (!win) return;
     pushState();
     if (!accountView) {
       accountView = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'account-preload.js') } });
@@ -301,382 +286,78 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     attach(accountView);
   }
 
-  // A signed-out hub loses its teams from the switcher; its token is gone.
-  function signedOutOf(origin, { tell = false } = {}) {
-    const wasActive = store.active().hub === origin;
-    accounts.delete(origin);
-    store.forgetTeams(origin);
-    if (hubInfo?.origin === origin) forgetHub();
-    pushState();
-    if (tell && wasActive && win) { acct.hub = origin; showAccount('email', { notice: 'You’ve been signed out. Sign in again to open your team.' }); } else if (wasActive && win && isHubPage(selected)) select('board');
-  }
-
-  // After any sign-in: an invite waiting on it, else invites addressed to
-  // this email, else the team board, else "create a team".
-  async function afterSignIn(origin) {
-    store.addHub(origin);
-    trustedHub = null;
-    const r = await refreshAccount(origin);
-    if (pendingInvite && (pendingInvite.hub ?? origin) === origin) { pendingInvite.hub = origin; showAccount('join'); return; }
-    if (r.ok && r.pending_invites?.length) { acct.hub = origin; showAccount('invites'); return; }
-    const first = store.list().find((w) => w.kind === 'team' && w.hub === origin);
-    if (first) { switchWorkspace(first.id); return; }
-    acct.hub = origin;
-    showAccount('create-team');
-  }
-
-  function routePending() {
-    const r = routeInvite(pendingInvite, { knownHubs: store.hubs(), signedIn, lastHub: store.lastHub() });
-    if (r.action === 'need-hub') { acct.hub = null; showAccount('hub'); return r; }
-    pendingInvite.hub = r.hub;
-    acct.hub = r.hub;
-    if (r.action === 'confirm') showAccount('confirm');
-    else if (r.action === 'signin') { trustedHub = r.hub; showAccount('email'); } else showAccount('join');
-    return r;
-  }
-
-  /** A deep link or universal link. Anything that isn't a valid invite is dropped without a word. */
-  function openInvite(link) {
-    const inv = parseInvite(link, { normalizeHub: norm });
-    if (!inv) { log('ignored a link that is not a valid invite'); return false; }
-    pendingInvite = inv;
-    routePending();
-    return true;
-  }
-
-  const activeTeam = () => { const w = store.active(); return w.kind === 'team' ? w : null; };
-  // A bare host reads back as https; anything else (the dev mock) needs its scheme.
-  const prefill = (origin) => (!origin ? '' : origin.startsWith('https://') ? hostOf(origin) : origin);
-  const hubByHost = (host) => store.hubs().find((h) => hostOf(h) === host) ?? null;
-
   // ── this Mac as a runner, per team ──────────────────────────────────────
 
-  const devices = new Map(); // workspace id → controller
-  let lastSessions = [];
-  function deviceFor(ws) {
-    let d = devices.get(ws.id);
-    if (d) return d;
+  const deviceFile = (origin, teamId) => path.join(DEVICES_DIR, `${fileKey(origin)}-${teamId}.bin`);
+  function makeDevice(ws, { onStatus }) {
     const key = `${fileKey(ws.hub)}-${ws.teamId}`;
     fs.mkdirSync(DEVICES_DIR, { recursive: true, mode: 0o700 });
-    d = createDeviceController({
+    return createDeviceController({
       account: clientFor(ws.hub), teamId: ws.teamId,
-      credsFile: path.join(DEVICES_DIR, `${key}.bin`),
+      credsFile: deviceFile(ws.hub, ws.teamId),
       seal: (str) => safeStorage.encryptString(str), unseal: (b) => safeStorage.decryptString(b),
-      fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts),
+      canSeal: () => safeStorage.isEncryptionAvailable(),
+      fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts), // privacy-flow: team-hub-runner
       runnerEntry: path.join(app.getAppPath(), 'board', 'runner', 'app-entry.js'),
       dataDir: path.join(userData, 'runner', key),
       log: (...a) => log('[runner]', ...a),
-      onStatus: () => { if (acct.screen === 'thismac' && content === accountView) accountView?.webContents.send('buddy:acct:changed'); },
+      onStatus,
     });
-    d.setPresence(store.sharesPresence(ws.hub), lastSessions);
-    devices.set(ws.id, d);
-    return d;
   }
-  const deviceFileExists = (ws) => fs.existsSync(path.join(DEVICES_DIR, `${fileKey(ws.hub)}-${ws.teamId}.bin`));
-
-  // ── account page actions (IPC) ─────────────────────────────────────────
-
-  async function screenState() {
-    const screen = acct.screen;
-    const base = { ok: true, screen, notice: acct.notice, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub()), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
-    acct.notice = null;
-    if (screen === 'hub') return { ...base, forInvite: !!pendingInvite };
-    if (screen === 'email') return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (vault(acct.hub).load()?.user?.email ?? '') : '' };
-    if (screen === 'code') return { ...base, email: acct.hub ? clientFor(acct.hub).pendingEmail() : null };
-    if (screen === 'create-team') {
-      const hub = acct.hub && signedIn(acct.hub) ? acct.hub : (activeTeam()?.hub ?? store.hubs().find(signedIn) ?? null);
-      acct.hub = hub;
-      return { ...base, host: hub ? hostOf(hub) : null };
-    }
-    if (screen === 'invites') return { ...base, invites: (accounts.get(acct.hub)?.pending_invites ?? []).map((i) => ({ id: String(i.id), team: String(i.team_name ?? ''), inviter: String(i.inviter_name ?? ''), role: String(i.role ?? '') })) };
-    if (screen === 'join') {
-      if (!pendingInvite?.hub) return { ...base, invite: null };
-      const pv = await clientFor(pendingInvite.hub).previewInvite(pendingInvite.token);
-      if (!pv.ok) { pendingInvite = null; return { ...base, invite: null, error: pv.error }; }
-      const email = vault(pendingInvite.hub).load()?.user?.email ?? null;
-      return { ...base, host: hostOf(pendingInvite.hub), email, invite: { team: String(pv.team_name ?? ''), inviter: String(pv.inviter_name ?? ''), role: String(pv.role ?? '') } };
-    }
-    if (screen === 'team') {
-      const ws = activeTeam();
-      if (!ws) return { ...base, team: null, hasTeams: store.list().some((w) => w.kind === 'team') };
-      const c = clientFor(ws.hub);
-      const m = await c.listMembers(ws.teamId);
-      const canManage = ['owner', 'admin'].includes(ws.role);
-      const inv = canManage ? await c.listInvites(ws.teamId) : { ok: true, invites: [] };
-      const members = (m.members ?? []).map((x) => ({ id: String(x.id), name: String(x.display_name ?? ''), email: String(x.email ?? ''), role: String(x.role), you: !!x.you }));
-      return { ...base, host: hostOf(ws.hub), team: { name: ws.name, role: ws.role }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
-    }
-    if (screen === 'account') {
-      return { ...base, deleting: acct.deleting ? hostOf(acct.hub) : null, accounts: store.hubs().filter(signedIn).map((h) => { const u = vault(h).load()?.user ?? {}; return { host: hostOf(h), name: String(u.display_name ?? ''), email: String(u.email ?? '') }; }) };
-    }
-    if (screen === 'thismac') {
-      const hubs = store.hubs().filter(signedIn).map((h) => ({
-        host: hostOf(h),
-        share: store.sharesPresence(h),
-        teams: store.list().filter((w) => w.kind === 'team' && w.hub === h).map((w) => {
-          const st = devices.has(w.id) || deviceFileExists(w) ? deviceFor(w).status() : { enrolled: false, enabled: false, runner: { state: 'off' }, parked: 0 };
-          return { id: w.id, name: w.name, role: w.role, enabled: st.enabled, enrolled: st.enrolled, state: st.runner.state, detail: st.runner.detail, parked: st.parked };
-        }),
-      }));
-      return { ...base, hubs };
-    }
-    if (screen === 'confirm') return base;
-    return base;
+  function discardDeviceFiles(origin) {
+    const prefix = `${fileKey(origin)}-`;
+    let names = [];
+    try { names = fs.readdirSync(DEVICES_DIR); } catch { return; }
+    for (const n of names) if (n.startsWith(prefix) && n.endsWith('.bin')) fs.rmSync(path.join(DEVICES_DIR, n), { force: true });
   }
 
-  const inviteGone = (r) => /^INVITE_/.test(r.code ?? '');
-
-  const ACCT = {
-    state: () => screenState(),
-    go(screen) {
-      if (!PAGE_SCREENS.has(screen)) return { ok: false };
-      if (screen === 'hub' || screen === 'email') acct.deleting = false;
-      if (screen === 'join' && !pendingInvite) acct.hub = null;
-      showAccount(screen);
-      return { ok: true };
-    },
-    async hub(input) {
-      let origin;
-      try { origin = norm(input); } catch (e) { return { ok: false, error: e.message }; }
-      // An invite without a hub, and a hub we have never used: confirm it first.
-      if (pendingInvite && !store.knows(origin)) { pendingInvite.hub = origin; acct.hub = origin; showAccount('confirm'); return { ok: true }; }
-      return connectHub(origin);
-    },
-    async confirm(yes) {
-      if (!yes || !acct.hub) { pendingInvite = null; acct.hub = null; select('board'); return { ok: true }; }
-      trustedHub = acct.hub;
-      if (pendingInvite) pendingInvite.hub = acct.hub;
-      showAccount(signedIn(acct.hub) ? 'join' : 'email');
-      return { ok: true };
-    },
-    async email(email) {
-      const origin = acct.hub;
-      if (!origin || (trustedHub !== origin && !store.knows(origin))) return { ok: false, error: 'Start again: enter the team hub address.' };
-      const r = await clientFor(origin).startEmail(email);
-      if (!r.ok) return r;
-      showAccount('code');
-      return { ok: true };
-    },
-    async code(code) {
-      const origin = acct.hub;
-      if (!origin) return { ok: false, error: 'Start again: enter the team hub address.' };
-      const r = await clientFor(origin).verifyCode(code, { deviceName: defaultDeviceName(os.userInfo().username, os.hostname()), platform: process.platform });
-      if (!r.ok) return r;
-      log('signed in to team hub', { host: hostOf(origin) });
-      await afterSignIn(origin);
-      return { ok: true };
-    },
-    async resend() {
-      const c = acct.hub && clientFor(acct.hub);
-      const email = c?.pendingEmail();
-      if (!email) return { ok: false, error: 'Start again: enter your email.' };
-      const r = await c.startEmail(email);
-      return r.ok ? { ok: true, notice: `We sent a new code to ${email}.` } : r;
-    },
-    async createTeam(name) {
-      const origin = acct.hub;
-      if (!origin || !signedIn(origin)) return { ok: false, error: 'Sign in to a team hub first.' };
-      const r = await clientFor(origin).createTeam(name);
-      if (!r.ok) return r;
-      await refreshAccount(origin);
-      switchWorkspace(store.list().find((w) => w.kind === 'team' && w.hub === origin && w.teamId === r.team.id)?.id, { show: false });
-      showAccount('team', { notice: `${r.team.name} is ready. Invite your team.` });
-      return { ok: true };
-    },
-    async invite(email, role) {
-      const ws = activeTeam();
-      if (!ws) return { ok: false, error: 'Pick a team first.' };
-      const r = await clientFor(ws.hub).invite(ws.teamId, email, role);
-      return r.ok ? { ok: true, notice: `Invite sent to ${r.invite?.email ?? email}.` } : r;
-    },
-    async resendInvite(id) {
-      const ws = activeTeam();
-      if (!ws) return { ok: false, error: 'Pick a team first.' };
-      const c = clientFor(ws.hub);
-      const list = await c.listInvites(ws.teamId);
-      const inv = list.invites?.find((i) => String(i.id) === id);
-      if (!inv) return { ok: false, error: 'That invite is gone.' };
-      const r = await c.invite(ws.teamId, inv.email, inv.role);
-      return r.ok ? { ok: true, notice: `Sent again to ${inv.email}.` } : r;
-    },
-    async revokeInvite(id) {
-      const ws = activeTeam();
-      return ws ? clientFor(ws.hub).revokeInvite(ws.teamId, id) : { ok: false, error: 'Pick a team first.' };
-    },
-    async setRole(memberId, role) {
-      const ws = activeTeam();
-      if (!ws) return { ok: false, error: 'Pick a team first.' };
-      const r = await clientFor(ws.hub).setRole(ws.teamId, memberId, role);
-      if (r.ok) await refreshAccount(ws.hub);
-      return r;
-    },
-    async removeMember(memberId) {
-      const ws = activeTeam();
-      if (!ws) return { ok: false, error: 'Pick a team first.' };
-      const r = await clientFor(ws.hub).removeMember(ws.teamId, memberId);
-      if (r.ok) await refreshAccount(ws.hub);
-      return r;
-    },
-    async joinCode(code) {
-      const inv = parseInvite(code, { normalizeHub: norm });
-      if (!inv) return { ok: false, error: 'That doesn’t look like an invite. Paste the whole link or code.' };
-      pendingInvite = inv;
-      routePending();
-      return { ok: true };
-    },
-    async accept() {
-      const inv = pendingInvite;
-      if (!inv?.hub || !signedIn(inv.hub)) return { ok: false, error: 'Sign in first.' };
-      const r = await clientFor(inv.hub).acceptInvite({ t: inv.token });
-      return joined(inv.hub, r);
-    },
-    async acceptPending(id) {
-      const origin = acct.hub;
-      if (!origin || !signedIn(origin)) return { ok: false, error: 'Sign in first.' };
-      return joined(origin, await clientFor(origin).acceptInvite({ inviteId: id }));
-    },
-    async switchAccount() {
-      const origin = pendingInvite?.hub;
-      if (!origin) return { ok: false };
-      await clientFor(origin).signOut();
-      signedOutOf(origin);
-      trustedHub = origin;
-      acct.hub = origin;
-      showAccount('email');
-      return { ok: true };
-    },
-    async skipInvites() {
-      const origin = acct.hub;
-      const first = origin && store.list().find((w) => w.kind === 'team' && w.hub === origin);
-      if (first) switchWorkspace(first.id); else showAccount('create-team');
-      return { ok: true };
-    },
-    async openTeam(wsId) {
-      if (store.get(wsId)?.kind !== 'team') return { ok: false };
-      pendingInvite = null;
-      switchWorkspace(wsId);
-      return { ok: true };
-    },
-    async signOut(host) {
-      const origin = hubByHost(host);
-      if (!origin) return { ok: false };
-      for (const w of store.list()) if (w.kind === 'team' && w.hub === origin && devices.has(w.id)) await devices.get(w.id).remove();
-      await clientFor(origin).signOut();
-      signedOutOf(origin);
-      showAccount('account', { notice: `Signed out of ${host}.` });
-      return { ok: true };
-    },
-    async deleteStart(host) {
-      const origin = hubByHost(host);
-      if (!origin) return { ok: false };
-      const r = await clientFor(origin).startStepUp();
-      if (!r.ok) return r;
-      acct.hub = origin;
-      acct.deleting = true;
-      return { ok: true, email: r.email };
-    },
-    async deleteConfirm(code) {
-      const origin = acct.hub;
-      if (!origin || !acct.deleting) return { ok: false, error: 'Ask for a new code first.' };
-      const r = await clientFor(origin).deleteAccount(code);
-      if (!r.ok) return r.code === 'LAST_OWNER' ? { ok: false, error: `You’re the only owner of ${r.detail?.team ?? 'a team'}. Make someone else an owner first.` } : r;
-      acct.deleting = false;
-      for (const w of [...devices.keys()]) if (w.startsWith(`team:${hostOf(origin)}:`)) { await devices.get(w).stop(); devices.delete(w); }
-      signedOutOf(origin);
-      showAccount('account', { notice: 'Your account was deleted.' });
-      return { ok: true };
-    },
-    async cancelDelete() { acct.deleting = false; return { ok: true }; },
-    async runner(wsId, on) {
-      const ws = store.get(wsId);
-      if (ws?.kind !== 'team') return { ok: false };
-      const d = deviceFor(ws);
-      if (on && !d.status().enrolled) return d.enroll({ name: defaultDeviceName(os.userInfo().username, os.hostname()) });
-      return d.setEnabled(on);
-    },
-    async presence(host, on) {
-      const origin = hubByHost(host);
-      if (!origin || !store.setSharesPresence(origin, on)) return { ok: false };
-      for (const [id, d] of devices) if (id.startsWith(`team:${hostOf(origin)}:`)) d.setPresence(on, lastSessions);
-      return { ok: true };
-    },
-  };
-  // Argument types per action; anything else is refused before it runs.
-  const ACCT_ARGS = {
-    state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
-    invite: ['string', 'string'], resendInvite: ['string'], revokeInvite: ['string'], setRole: ['string', 'string'], removeMember: ['string'],
-    joinCode: ['string'], accept: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
-    deleteConfirm: ['string'], cancelDelete: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'],
-  };
-
-  async function joined(origin, r) {
-    if (r.ok) {
-      pendingInvite = null;
-      await refreshAccount(origin);
-      const ws = store.list().find((w) => w.kind === 'team' && w.hub === origin && w.teamId === String(r.team?.id));
-      if (ws) switchWorkspace(ws.id); else select('board');
-      return { ok: true };
-    }
-    if (r.code === 'WRONG_ACCOUNT') return { ok: false, wrongAccount: true, error: `This invite is for ${r.detail?.email_masked ?? maskEmail('')}. Switch account?` };
-    if (r.code === 'ALREADY_MEMBER') {
-      pendingInvite = null;
-      await refreshAccount(origin);
-      const ws = store.list().find((w) => w.kind === 'team' && w.hub === origin && w.teamId === String(r.detail?.team?.id));
-      return { ok: false, alreadyIn: ws?.id ?? null, error: `You’re already in ${r.detail?.team?.name ?? 'this team'}.` };
-    }
-    if (inviteGone(r)) pendingInvite = null;
-    return r;
+  // The team hub's storage after sign-out; its live page and connect window close first.
+  async function hubSignedOut(origin) {
+    if (hubInfo?.origin === origin) forgetHub();
+    if (connectWin && !connectWin.isDestroyed() && connectWin.hubOrigin === origin) connectWin.close();
+    await clearHubSessions(origin, (p) => session.fromPartition(p));
   }
 
-  /**
-   * A hub the member typed: an accounts hub goes to email sign-in; one still
-   * behind Access (the hidden fallback) becomes an Access workspace and signs
-   * in inside the board view as before.
-   */
-  async function connectHub(origin) {
+  const flow = createAccountFlow({
+    store, clientFor, signedIn, userOf, normHub: norm, normLink,
     // A throwaway, in-memory session: a signed-in partition would answer 200
     // and hide the Access team we must pin.
-    const probe = await probeHub(origin, `board-probe-${crypto.randomUUID()}`);
-    if (!probe.ok) return probe;
-    if (probe.accessTeam || probe.auth === 'access') {
-      store.addAccess({ url: origin, name: hostOf(origin), accessTeam: probe.accessTeam ?? null });
-      log('connected team hub (access)', { host: hostOf(origin) });
-      forgetHub();
-      select('board');
-      return { ok: true };
-    }
-    trustedHub = origin;
-    acct.hub = origin;
-    if (signedIn(origin)) { await afterSignIn(origin); return { ok: true }; }
-    showAccount('email');
-    return { ok: true };
-  }
+    probe: (origin) => probeHub(origin, `board-probe-${crypto.randomUUID()}`),
+    makeDevice, hasDeviceFile: (ws) => fs.existsSync(deviceFile(ws.hub, ws.teamId)), discardDeviceFiles,
+    deviceInfo: () => ({ deviceName: defaultDeviceName(os.userInfo().username, os.hostname()), platform: `${process.platform}-${process.arch}` }),
+    log,
+    ui: {
+      show: showScreen,
+      select: (id) => select(id),
+      switchWorkspace: (id, opts) => switchWorkspace(id, opts),
+      pushState: () => pushState(),
+      forgetHub: () => forgetHub(),
+      hubSignedOut,
+      isOpen: () => !!win,
+      onHubPage: () => isHubPage(selected),
+      devicesChanged: () => {
+        pushState();
+        if (flow.acct.screen === 'thismac' && content === accountView) accountView?.webContents.send('buddy:acct:changed');
+      },
+    },
+  });
 
   // ── hub view ────────────────────────────────────────────────────────────
 
   // Once per hub partition: the device token rides as a header on requests to
   // that hub's exact origin (and its WebSocket), so the page never holds it.
   const bearerSessions = new Set();
-  const unauthorized = new Map(); // origin → pending check
   function installBearer(origin) {
     const partition = teamPartition(origin);
     if (bearerSessions.has(partition)) return;
     bearerSessions.add(partition);
     const ses = session.fromPartition(partition);
     const scope = bearerScope(origin);
-    ses.webRequest.onBeforeSendHeaders({ urls: scope.urls }, (d, cb) => {
-      const headers = { ...d.requestHeaders };
-      for (const k of Object.keys(headers)) if (k.toLowerCase() === 'authorization') delete headers[k];
-      const tok = scope.matches(d.url) ? tokenFor(origin) : null;
-      if (tok) headers.Authorization = `Bearer ${tok}`;
-      cb({ requestHeaders: headers });
-    });
-    ses.webRequest.onCompleted({ urls: scope.urls }, (d) => {
-      if (d.statusCode !== 401 || !scope.matches(d.url) || unauthorized.has(origin)) return;
-      // Revoked elsewhere? Ask the hub once; the client wipes the token and
-      // signedOutOf() shows sign-in if so.
-      unauthorized.set(origin, clientFor(origin).me().finally(() => unauthorized.delete(origin)));
-    });
+    // Every URL, not just the hub's: a redirect off the hub must lose our header here.
+    ses.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'] }, (d, cb) => cb({ requestHeaders: bearerHeaders(d.requestHeaders, d.url, { scope, token: tokenFor(origin) }) })); // privacy-flow: team-hub-account
+    // A 401 from the hub (the board web re-checks after its socket closes
+    // 4401 on session.revoked): ask the hub once whether we're signed out.
+    ses.webRequest.onCompleted({ urls: scope.urls }, (d) => { if (d.statusCode === 401 && scope.matches(d.url)) flow.checkSignedIn(origin); });
   }
 
   async function resolveHub() {
@@ -696,10 +377,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     // Set before the first load: in local mode the hub gates everything,
     // /api/health and static files included, on this cookie.
     if (info.localSecret) {
-      await ses.cookies.set({ url: info.url, name: 'board_local', value: info.localSecret, httpOnly: true, sameSite: 'strict', path: '/' });
+      await ses.cookies.set({ url: info.url, name: 'board_local', value: info.localSecret, httpOnly: true, sameSite: 'strict', path: '/' }); // privacy-flow: local-board-hub
     } else if (info.devSecret) {
-      const value = await devLogin(info.url, info.devSecret);
-      await ses.cookies.set({ url: info.url, name: 'board_dev', value, httpOnly: true, sameSite: 'strict', path: '/' });
+      const value = await devLogin(info.url, info.devSecret); // privacy-flow: local-board-hub
+      await ses.cookies.set({ url: info.url, name: 'board_dev', value, httpOnly: true, sameSite: 'strict', path: '/' }); // privacy-flow: local-board-hub
     }
     return { url: info.url, origin: new URL(info.url).origin, accessTeam: null, partition, team: false };
   }
@@ -715,7 +396,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     wc.setWindowOpenHandler(({ url, frameName }) => {
       const d = openDecision({ url, frameName }, { hubOrigin: h.origin, accessTeam: h.accessTeam });
       if (d === 'connect') openConnect(url, h);
-      else if (d === 'external') shell.openExternal(url);
+      else if (d === 'external') shell.openExternal(url); // privacy-flow: open-link-in-browser
       return { action: 'deny' };
     });
     const guard = (e, url) => {
@@ -750,40 +431,52 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   }
 
   // The Integrations page's provider sign-in (GitHub, Slack…), in an app
-  // window on its own partition: never the hub's, so the bearer header can't
-  // reach a provider, and the provider's cookies stay out of the board.
+  // window on its own per-hub partition: never the hub's, so the bearer
+  // header can't reach a provider, and the provider's cookies stay out of the
+  // board and go when that hub signs out.
   let connectWin = null;
   function openConnect(url, h) {
-    if (connectWin && !connectWin.isDestroyed()) { connectWin.loadURL(url).catch(() => {}); connectWin.focus(); return; }
-    const ses = session.fromPartition('persist:integration-auth');
+    // Only a signed-in account hub's page may open it, and only on https.
+    if (!h.bearer || !signedIn(h.origin) || hubInfo?.origin !== h.origin) { log('connect window refused: not a signed-in team hub'); return; }
+    try { if (new URL(url).protocol !== 'https:') return; } catch { return; }
+    if (connectWin && !connectWin.isDestroyed()) {
+      if (connectWin.hubOrigin === h.origin) { connectWin.loadURL(url).catch(() => {}); connectWin.focus(); return; } // privacy-flow: integration-connect
+      // Another hub's window: its guards and partition belong to that hub.
+      connectWin.close();
+    }
+    const ses = session.fromPartition(integrationPartitionFor(h.origin));
     hardenSession(ses);
     const w = new BrowserWindow({
       width: 560, height: 720, title: 'Connect', autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
       webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
     });
+    w.hubOrigin = h.origin;
     connectWin = w;
     const wc = w.webContents;
-    wc.setWindowOpenHandler(({ url: u }) => { if (/^https:/.test(u)) shell.openExternal(u); return { action: 'deny' }; });
+    wc.setWindowOpenHandler(({ url: u }) => { if (/^https:/.test(u)) shell.openExternal(u); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
     // Provider logins hop between https hosts freely; the callback is on the hub.
-    const ok = (u) => /^https:/.test(u) || isConnectCallback(u, h.origin);
+    const ok = (u) => /^https:/.test(u) || isConnectCallback(u, w.hubOrigin);
     const guard = (e, u) => { if (!ok(u)) e.preventDefault(); };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
     wc.on('will-attach-webview', (e) => e.preventDefault());
+    // The title names the site on screen, so a person can see who is asking for their password.
+    w.on('page-title-updated', (e) => e.preventDefault());
+    wc.on('did-navigate', (_e, u) => { try { if (!w.isDestroyed()) w.setTitle(`Connect · ${new URL(u).host}`); } catch { /* not a URL */ } });
     let closing = false;
     wc.on('did-finish-load', () => {
-      if (closing || !isConnectCallback(wc.getURL(), h.origin)) return;
+      if (closing || !isConnectCallback(wc.getURL(), w.hubOrigin)) return;
       closing = true;
       // Long enough to read "Connected" (or the error) on the callback page.
       setTimeout(() => {
         if (!w.isDestroyed()) w.close();
-        if (selected === 'integrations' && hubInfo?.origin === h.origin && hubView && !hubView.webContents.isDestroyed()) {
-          hubView.webContents.loadURL(hubPageUrl(hubInfo.url, pageById('integrations'), { org: hubInfo.org })).catch(() => {});
+        if (selected === 'integrations' && hubInfo?.origin === w.hubOrigin && hubView && !hubView.webContents.isDestroyed()) {
+          hubView.webContents.loadURL(hubPageUrl(hubInfo.url, pageById('integrations'), { org: hubInfo.org })).catch(() => {}); // privacy-flow: team-hub-account
         }
       }, 1500);
     });
     w.on('closed', () => { if (connectWin === w) connectWin = null; });
-    w.loadURL(url).catch(() => {});
+    w.loadURL(url).catch(() => {}); // privacy-flow: integration-connect
   }
 
   async function showHubPage(page) {
@@ -816,7 +509,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const cur = view.webContents.getURL();
     if (!cur || !cur.startsWith(hubInfo.origin) || pageForHubUrl(cur) !== page.id || (orgOfUrl(cur) ?? null) !== (hubInfo.org ?? null)) {
       viewError = null;
-      await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: board-view
+      await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: team-hub-account
     }
     if (win && selected === page.id && view === hubView && !viewError) attach(view);
   }
@@ -827,7 +520,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const page = pageById(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
-    if (page.kind === 'local') { showAccount(page.screen); return; }
+    if (page.kind === 'local') { flow.show(page.screen); return; }
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);
@@ -881,20 +574,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     select('board');
   }
 
-  const FLOWS = { signin: 'hub', join: 'join', 'create-team': 'create-team' };
   ipcMain.on('buddy:workspace', (e, id) => {
     if (!fromSidebar(e) || typeof id !== 'string') return;
-    if (FLOWS[id]) {
-      if (id === 'signin') { pendingInvite = null; acct.hub = null; }
-      if (id === 'join') { pendingInvite = null; acct.hub = null; }
-      showAccount(FLOWS[id]);
-    } else switchWorkspace(id);
+    if (['signin', 'join', 'create-team'].includes(id)) flow.startFlow(id); else switchWorkspace(id);
   });
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
   ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS } : null));
-  for (const [op, fn] of Object.entries(ACCT)) {
+  for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
       const types = ACCT_ARGS[op];
@@ -934,34 +622,29 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       onClosed();
     });
     layout();
-    if (!pageId && selected.startsWith('flow:')) showAccount(selected.slice(5)); else select(pageId ?? selected);
+    if (!pageId && selected.startsWith('flow:')) showScreen(selected.slice(5)); else select(pageId ?? selected);
     // Keep each signed-in hub's team list current (added to a team elsewhere).
-    for (const h of store.hubs()) if (signedIn(h)) refreshAccount(h).catch(() => {});
+    for (const h of store.hubs()) if (signedIn(h)) flow.refreshAccount(h).catch(() => {});
   }
 
   return {
     open,
     isOpen: () => !!win,
     select,
-    openInvite,
+    openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
-    resumeDevices() {
-      for (const w of store.list()) if (w.kind === 'team' && deviceFileExists(w)) deviceFor(w).resume();
-    },
+    resumeDevices: () => flow.resumeDevices(),
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
-    sessionsChanged(sessions) {
-      lastSessions = Array.isArray(sessions) ? sessions : [];
-      for (const [id, d] of devices) { const ws = store.get(id); if (ws) d.setPresence(store.sharesPresence(ws.hub), lastSessions); }
-    },
+    sessionsChanged: (sessions) => flow.sessionsChanged(sessions),
     async stop() {
       const url = localUrl();
-      await Promise.all([supervisor.stop({ final: true }), ...[...devices.values()].map((d) => d.stop())]);
+      await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);
       // The secret dies with this hub; don't leave it in the cookie store.
-      if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {});
+      if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {}); // privacy-flow: local-board-hub
     },
-    status: () => ({ selected, hub: hubStatus, viewError, workspace: store.active().id, screen: acct.screen, url: content === hubView ? (hubView?.webContents.getURL() ?? null) : null }),
+    status: () => ({ selected, hub: hubStatus, viewError, workspace: store.active().id, screen: flow.acct.screen, url: content === hubView ? (hubView?.webContents.getURL() ?? null) : null }),
     // Dev only (main.js gates it on !app.isPackaged): the hub-address step without the form.
-    devConnect: (url) => ACCT.hub(url),
+    devConnect: (url) => flow.ACCT.hub(url),
     // Dev only: drive the account page as a person would (fills and clicks in the page).
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
     // Dev hook: capture what's on screen.

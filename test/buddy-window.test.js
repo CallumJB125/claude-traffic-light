@@ -271,7 +271,7 @@ test('dev mode never logs the dev login secret from the hub stderr', async () =>
 
 // ── workspaces ─────────────────────────────────────────────────────────────
 
-const { createWorkspaceStore, buildWorkspaceList, teamsFromAccount, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition } = require('../buddy-window/workspaces');
+const { createWorkspaceStore, buildWorkspaceList, teamsFromAccount, normalizeHubUrl, normalizeLinkHub, isPrivateHost, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey } = require('../buddy-window/workspaces');
 
 test('team hub URLs: https origins only, bare hosts become https, junk refused', () => {
   assert.equal(normalizeHubUrl('buddy.bondly.co.za'), 'https://buddy.bondly.co.za');
@@ -282,7 +282,35 @@ test('team hub URLs: https origins only, bare hosts become https, junk refused',
   assert.throws(() => normalizeHubUrl('https://127.0.0.1'), /public address/);
   assert.throws(() => normalizeHubUrl(''), /Enter/);
   assert.throws(() => normalizeHubUrl('javascript:alert(1)'), /web address|https/);
-  assert.equal(teamPartition('https://buddy.bondly.co.za'), 'persist:board-buddy.bondly.co.za');
+  assert.match(teamPartition('https://buddy.bondly.co.za'), /^persist:board-[0-9a-f]{16}$/);
+});
+
+test('hub files and partitions are named by sha256(origin)[0:16], never by the host spelling', () => {
+  const crypto = require('node:crypto');
+  const o = 'https://buddy.bondly.co.za';
+  const key = crypto.createHash('sha256').update(o).digest('hex').slice(0, 16);
+  assert.equal(hubKey(o), key);
+  assert.equal(teamPartition(o), `persist:board-${key}`);
+  assert.equal(integrationPartitionFor(o), `persist:integration-auth-${key}`);
+  // The old host-derived names collided (a.b_c vs a.b:c); hashes of distinct origins don't.
+  assert.notEqual(hubKey('http://127.0.0.1:5123'), hubKey('http://127.0.0.1:5124'));
+  assert.notEqual(teamPartition(o), integrationPartitionFor(o));
+});
+
+test('link hubs: no private, link-local, CGNAT or loopback addresses (the dev mock origin excepted)', () => {
+  for (const h of ['10.0.0.5', '172.16.0.1', '172.31.255.255', '192.168.1.10', '169.254.169.254', '100.64.0.1', '100.127.255.254', '127.0.0.1', '0.0.0.0']) {
+    assert.equal(isPrivateHost(h), true, h);
+    assert.throws(() => normalizeLinkHub(`https://${h}`), /public address/, h);
+  }
+  for (const h of ['172.15.0.1', '172.32.0.1', '100.63.0.1', '100.128.0.1', '8.8.8.8', 'buddy.example.com']) assert.equal(isPrivateHost(h), false, h);
+  assert.equal(normalizeLinkHub('https://8.8.8.8'), 'https://8.8.8.8');
+  assert.equal(normalizeLinkHub('buddy.example.com'), 'https://buddy.example.com');
+  // Typed hubs keep today's rule: a private address the member typed is their call.
+  assert.equal(normalizeHubUrl('https://10.0.0.5'), 'https://10.0.0.5');
+  assert.equal(normalizeLinkHub('http://127.0.0.1:5000', { allowOrigins: ['http://127.0.0.1:5000'] }), 'http://127.0.0.1:5000');
+  const { parseInvite: parse } = require('../buddy-window/accounts');
+  assert.equal(parse('claudebuddy://join?hub=https://192.168.1.10&t=inv_x', { normalizeHub: (u) => normalizeLinkHub(u) }), null);
+  assert.equal(parse('https://10.1.2.3/invite#inv_x', { normalizeHub: (u) => normalizeLinkHub(u) }), null);
 });
 
 test('the Access team comes only from a *.cloudflareaccess.com redirect', () => {
@@ -307,8 +335,7 @@ test('workspace list from /api/account: this Mac, then each signed-in hub’s te
   assert.deepEqual(one.map((w) => w.id), ['local', 'team:a.example.com:team_1', 'team:a.example.com:team_2'], 'a signed-out hub shows no teams');
   assert.equal(one[1].group, null);
   // Every team on one hub shares that hub's partition.
-  assert.equal(teamPartition(A), 'persist:board-a.example.com');
-  assert.equal(teamPartition('http://127.0.0.1:5123'), 'persist:board-127.0.0.1_5123');
+  assert.equal(teamPartition(A), `persist:board-${hubKey(A)}`);
 });
 
 test('workspace store: hubs, teams from the account, active team, persisted without secrets, 0600', () => {
@@ -341,19 +368,22 @@ test('workspace store: hubs, teams from the account, active team, persisted with
   assert.equal(createWorkspaceStore(file).sharesPresence(hub), true);
 });
 
-test('workspace store: v1 files migrate: Access hubs stay as the fallback, bare hubs become hubs to sign in to', () => {
+test('workspace store: v1 files migrate: every entry the old probe accepted stays an Access workspace', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
   const file = path.join(dir, 'ws.json');
-  fs.writeFileSync(file, JSON.stringify({ active: 'team:old.example.com', teams: [
+  fs.writeFileSync(file, JSON.stringify({ active: 'team:signedin.example.com', teams: [
     { name: 'Old', url: 'https://old.example.com', accessTeam: 'restless-hall' },
-    { name: 'New', url: 'https://new.example.com', accessTeam: null },
+    // Saved while already signed in to Access: the probe got a 200 and no team.
+    { name: 'Signed in', url: 'https://signedin.example.com', accessTeam: null },
+    { name: 'Bad team', url: 'https://bad.example.com', accessTeam: 'evil.example.com/..' },
   ] }));
   const s = createWorkspaceStore(file);
-  assert.deepEqual(s.list().map((w) => w.id), ['local', 'access:old.example.com']);
-  assert.equal(s.active().id, 'access:old.example.com');
-  assert.equal(s.active().accessTeam, 'restless-hall');
-  assert.deepEqual(s.hubs(), ['https://new.example.com']);
-  assert.equal(s.lastHub(), 'https://new.example.com');
+  assert.deepEqual(s.list().map((w) => w.id), ['local', 'access:old.example.com', 'access:signedin.example.com', 'access:bad.example.com']);
+  assert.equal(s.active().id, 'access:signedin.example.com');
+  assert.equal(s.get('access:old.example.com').accessTeam, 'restless-hall');
+  assert.equal(s.get('access:bad.example.com').accessTeam, null);
+  assert.deepEqual(s.hubs(), [], 'nothing became an account hub to sign in to');
+  assert.equal(s.lastHub(), null);
   s.setActive('local');
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 2);
   assert.equal(s.removeAccess('access:old.example.com'), true);
@@ -378,7 +408,7 @@ test('workspace store: a tampered file cannot smuggle in a non-https hub, a loop
 
 // ── this Mac as a runner ──────────────────────────────────────────────────
 
-const { createDeviceController, defaultDeviceName, presenceSessions, NO_RUNNER } = require('../buddy-window/device');
+const { createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, NO_RUNNER } = require('../buddy-window/device');
 
 const HUB = 'https://buddy.bondly.co.za';
 
@@ -391,12 +421,13 @@ function deviceHarness(over = {}) {
   let t = 0;
   const account = over.account ?? {
     origin: HUB,
-    enrol: async (team, name) => { calls.push({ op: 'enrol', team, name }); return over.enrol ? over.enrol() : { ok: true, enrollment_id: 'enr-1', device_token: 'bdt_secret_token_value' }; },
-    unenrol: async (team, id) => { calls.push({ op: 'unenrol', team, id }); return { ok: true }; },
+    enrol: async (team) => { calls.push({ op: 'enrol', team }); return over.enrol ? over.enrol() : { ok: true, enrollment_id: 'enr-1', team_id: team }; },
+    unenrol: async (team) => { calls.push({ op: 'unenrol', team }); return { ok: true }; },
+    accessToken: async () => ('token' in over ? over.token : 'bdt_account_token_value'),
   };
   const make = (teamId = 'team-1') => createDeviceController({
-    account, teamId, credsFile: path.join(dir, 'device.bin'),
-    seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`),
+    account, teamId, credsFile: path.join(dir, 'device.bin'), canSeal: () => over.canSeal ?? true,
+    seal: over.seal ?? ((s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`)),
     unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
     fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.args = args; c.opts = opts; c.sent = []; c.postMessage = (m) => c.sent.push(m); children.push(c); return c; },
     runnerEntry: '/app/board/runner/app-entry.js', entryExists: () => over.entryExists ?? true, dataDir: path.join(dir, 'runner'),
@@ -410,23 +441,23 @@ test('device name reads like a person made it', () => {
   assert.equal(defaultDeviceName('', ''), 'My’s Mac');
 });
 
-test('enroll: with the account (no service tokens), seals the device token 0600, starts the runner over parentPort', async () => {
+test('enroll: with the account (no service tokens), seals the enrolment 0600, starts the runner with the account token over parentPort', async () => {
   const h = deviceHarness();
   const d = h.make();
   assert.match((await d.enroll({ name: '  ' })).error, /name/);
   assert.equal(h.calls.length, 0);
   const r = await d.enroll({ name: 'Callum’s Mac' });
   assert.equal(r.ok, true);
-  assert.deepEqual(h.calls[0], { op: 'enrol', team: 'team-1', name: 'Callum’s Mac' });
+  assert.deepEqual(h.calls[0], { op: 'enrol', team: 'team-1' });
   const raw = fs.readFileSync(h.credsFile, 'utf8');
   assert.ok(raw.startsWith('SEALED:'));
-  assert.ok(!raw.includes('bdt_secret'));
+  assert.ok(!raw.includes('bdt_'), 'the account token is not copied into the runner file');
   assert.equal(fs.statSync(h.credsFile).mode & 0o777, 0o600);
   const c = h.children[0];
   assert.deepEqual(c.args, [], 'app-entry takes no args');
   assert.equal(c.opts.cwd, undefined);
   assert.ok(!JSON.stringify(c.opts.env).includes('bdt_'));
-  assert.deepEqual(c.sent[0], { type: 'runner.config', hub_url: HUB, device_id: 'enr-1', device_token: 'bdt_secret_token_value', data_dir: path.join(h.dir, 'runner') });
+  assert.deepEqual(c.sent[0], { type: 'runner.config', hub_url: HUB, device_token: 'bdt_account_token_value', team_id: 'team-1', data_dir: path.join(h.dir, 'runner') });
   c.emit('message', { type: 'runner.ready' });
   c.emit('message', { type: 'runner.status', state: 'connected' });
   assert.equal(d.status().runner.state, 'connected');
@@ -446,11 +477,65 @@ test('device enrol via the account against the mock hub', async () => withHub(as
   assert.equal((await d.enroll({ name: 'Mac' })).ok, true);
   assert.equal(hub.enrolments().length, 1);
   assert.equal(hub.enrolments()[0].team_id, team.id);
-  assert.match(sent[0].device_token, /^bdt_/);
-  assert.equal(sent[0].device_id, hub.enrolments()[0].enrollment_id);
+  assert.deepEqual(Object.keys(sent[0]).sort(), ['data_dir', 'device_token', 'hub_url', 'team_id', 'type']);
+  assert.equal(sent[0].device_token, await c.accessToken(), 'the account’s own bdt_ token');
+  assert.equal(sent[0].team_id, team.id);
   await d.remove();
-  assert.equal(hub.enrolments()[0].revoked, true);
+  assert.equal(hub.enrolments()[0].revoked, true, 'DELETE /api/teams/:id/enrol');
 }));
+
+test('enrol: a runner-only brt_ token from the hub wins over the account token and is sealed', async () => {
+  const brt = `brt_${'x'.repeat(20)}`;
+  assert.equal(runnerTokenFrom({ enrollment_id: 'e', runner_token: brt }), brt);
+  assert.equal(runnerTokenFrom({ enrollment_id: 'e', device_token: brt }), brt);
+  assert.equal(runnerTokenFrom({ enrollment_id: 'e', device_token: 'bdt_nope' }), null);
+  assert.equal(runnerTokenFrom({ enrollment_id: 'e' }), null);
+  const h = deviceHarness({ enrol: () => ({ ok: true, enrollment_id: 'enr-9', team_id: 'team-1', runner_token: brt }) });
+  await h.make().enroll({ name: 'Mac' });
+  assert.equal(h.children[0].sent[0].device_token, brt);
+  assert.ok(!fs.readFileSync(h.credsFile, 'utf8').includes('brt_'), 'sealed, not plain');
+  // A new controller (next launch) starts with the sealed brt_.
+  const d2 = h.make();
+  await d2.resume();
+  assert.equal(h.children[1].sent[0].device_token, brt);
+});
+
+test('enrol: no Keychain, no enrolment; a sealing failure after the hub enrolled undoes it on the hub', async () => {
+  const no = deviceHarness({ canSeal: false });
+  assert.match((await no.make().enroll({ name: 'Mac' })).error, /securely/);
+  assert.equal(no.calls.length, 0, 'the hub was never asked');
+  const bad = deviceHarness({ seal: () => { throw new Error('keychain locked'); } });
+  const d = bad.make();
+  const r = await d.enroll({ name: 'Mac' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /securely/);
+  assert.deepEqual(bad.calls.map((c) => c.op), ['enrol', 'unenrol']);
+  assert.equal(d.status().enrolled, false);
+  assert.equal(bad.children.length, 0, 'no runner started');
+  assert.equal(fs.existsSync(bad.credsFile), false);
+});
+
+test('signed out (no account token): the runner is not started and says why', async () => {
+  const h = deviceHarness({ token: null });
+  const d = h.make();
+  assert.equal((await d.enroll({ name: 'Mac' })).ok, true);
+  assert.equal(h.children.length, 0);
+  assert.equal(d.status().runner.state, 'unauthenticated');
+});
+
+test('discard: stops the runner and deletes the sealed file without asking the hub', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  h.children[0].emit('message', { type: 'runner.ready' });
+  h.children[0].emit('message', { type: 'runner.status', state: 'connected' });
+  assert.equal(d.running(), true);
+  await d.discard();
+  assert.equal(h.children[0].killed, 1);
+  assert.equal(fs.existsSync(h.credsFile), false);
+  assert.deepEqual(h.calls.map((c) => c.op), ['enrol'], 'no unenrol');
+  assert.equal(d.running(), false);
+});
 
 test('enroll: signed out or refused says so in words; nothing is stored', async () => {
   const h = deviceHarness({ enrol: () => ({ ok: false, signedOut: true, error: 'x' }) });
@@ -468,14 +553,14 @@ test('off → SIGTERM, stays off across restarts; on again restarts; remove revo
   assert.equal(h.children[0].killed, 1);
   assert.equal(d.status().enabled, false);
   const d2 = h.make();
-  d2.resume();
+  await d2.resume();
   assert.equal(h.children.length, 1, 'left off: not started at launch');
   await d2.setEnabled(true);
   assert.equal(h.children.length, 2);
   await d2.remove();
   assert.equal(h.children[1].killed, 1);
   assert.equal(fs.existsSync(h.credsFile), false);
-  assert.deepEqual(h.calls.at(-1), { op: 'unenrol', team: 'team-1', id: 'enr-1' });
+  assert.deepEqual(h.calls.at(-1), { op: 'unenrol', team: 'team-1' });
 });
 
 test('runner crash restarts with backoff; revoked/unauthenticated does not loop', async () => {
@@ -486,7 +571,7 @@ test('runner crash restarts with backoff; revoked/unauthenticated does not loop'
   h.tick(60_000);
   h.children[0].emit('exit', 1);
   assert.equal(d.status().runner.state, 'restarting');
-  h.pending.shift()();
+  await h.pending.shift()();
   assert.equal(h.children.length, 2);
   h.children[1].emit('message', { type: 'runner.ready' });
   h.children[1].emit('message', { type: 'runner.status', state: 'revoked', detail: 'device revoked' });
@@ -533,11 +618,12 @@ test('presence: off by default; on sends the minimal session fields once ready; 
   const d = h.make();
   await d.enroll({ name: 'Mac' });
   const c = h.children[0];
-  const sessions = [{ sessionId: 's1', via: 'claude', cwd: '/Users/c/proj', signal: 'tool-use', signalSince: '2026-09-30T10:00:00.000Z', model: 'secret-ish', tasks: [{ title: 'x' }] }];
+  const sessions = [{ sessionId: 's1', via: 'claude', cwd: '/Users/callum/Development/secret-client/proj', signal: 'tool-use', signalSince: '2026-09-30T10:00:00.000Z', model: 'secret-ish', tasks: [{ title: 'x' }] }];
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 1, 'nothing before ready');
   c.emit('message', { type: 'runner.ready' });
-  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, sessions: [{ session_id: 's1', agent: 'claude', cwd: '/Users/c/proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
+  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, sessions: [{ session_id: 's1', agent: 'claude', project: 'proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
+  assert.ok(!JSON.stringify(c.sent).includes('/Users/'), 'never an absolute path');
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 2, 'unchanged: not resent');
   d.setPresence(false, sessions);
@@ -560,7 +646,7 @@ test('creds for another hub or team are ignored', async () => {
 // ── Buddy accounts (client against the mock hub) ─────────────────────────
 
 const { createAccountClient, ROUTES, parseInvite, routeInvite, bearerScope, maskEmail } = require('../buddy-window/accounts');
-const { createMockAccountsHub, MAX_ATTEMPTS } = require('../buddy-window/mock-accounts-hub');
+const { createMockAccountsHub, VERIFY_PER_ADDRESS } = require('../buddy-window/mock-accounts-hub');
 
 function memStore() {
   let v = null;
@@ -610,17 +696,36 @@ test('accounts: email + 6-digit code signs in; the device token is sealed in the
   assert.deepEqual(me.teams, []);
 }));
 
-test('accounts: wrong codes are counted; the flow dies after the limit; codes expire after 10 minutes', async () => withHub(async (hub, origin) => {
+test('accounts: start names the client, device and platform; wrong, used and expired codes are one message with tries left', async () => withHub(async (hub, origin) => {
   const c = createAccountClient({ origin, store: memStore() });
-  await c.startEmail('a@example.com');
+  await c.startEmail('a@example.com', { deviceName: 'Jo’s MacBook Pro', platform: 'darwin-arm64' });
+  assert.deepEqual(hub.starts().at(-1), { email: 'a@example.com', client: 'buddy_desktop', purpose: 'signin', device_name: 'Jo’s MacBook Pro', platform: 'darwin-arm64' });
   const good = hub.lastCode('a@example.com');
   const wrong = good === '000000' ? '111111' : '000000';
-  for (let i = 1; i < MAX_ATTEMPTS; i += 1) assert.match((await c.verifyCode(wrong)).error, /isn’t right/);
-  assert.match((await c.verifyCode(wrong)).error, /Too many wrong codes/);
-  assert.match((await c.verifyCode(good)).error, /Start again/, 'the flow is gone');
+  assert.equal((await c.verifyCode(wrong)).error, 'That code didn’t work. 4 tries left.');
+  for (let left = 3; left >= 1; left -= 1) assert.equal((await c.verifyCode(wrong)).error, `That code didn’t work. ${left} ${left === 1 ? 'try' : 'tries'} left.`);
+  assert.equal((await c.verifyCode(wrong)).error, 'That code didn’t work. Send a new code.', 'the flow died');
+  assert.equal((await c.verifyCode(good)).error, 'That code didn’t work. Send a new code.', 'even the right code: same words');
+  assert.equal(c.pendingEmail(), 'a@example.com', '"Send a new code" still knows the address');
   await c.startEmail('a@example.com');
   hub.setNow(Date.now() + 10 * 60_000 + 1);
-  assert.match((await c.verifyCode(hub.lastCode('a@example.com'))).error, /expired/);
+  assert.equal((await c.verifyCode(hub.lastCode('a@example.com'))).error, 'That code didn’t work. Send a new code.', 'expired');
+}));
+
+test('accounts: too many tries (429 RATE_LIMITED) says to wait, whatever the code', async () => withHub(async (hub, origin) => {
+  const c = createAccountClient({ origin, store: memStore() });
+  let r;
+  for (let i = 0; i <= VERIFY_PER_ADDRESS; i += 1) {
+    if (i % 5 === 0) await c.startEmail('rl@example.com');
+    r = await c.verifyCode('000000');
+  }
+  assert.equal(r.status, 429);
+  assert.match(r.error, /^Too many tries\. Wait (a minute|\d+ minutes) and try again\.$/);
+  await c.startEmail('rl@example.com');
+  assert.match((await c.verifyCode(hub.lastCode('rl@example.com'))).error, /Too many tries/, 'locked out even with the right code');
+  const { humanError } = require('../buddy-window/accounts');
+  assert.equal(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 30 } }, 'h'), 'Too many tries. Wait a minute and try again.');
+  assert.equal(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 600 } }, 'h'), 'Too many tries. Wait 10 minutes and try again.');
 }));
 
 test('accounts: a 401 means the token was revoked: wiped, signed-out callback, plain error', async () => withHub(async (hub, origin) => {
@@ -654,72 +759,99 @@ test('accounts: network failure is a sentence, not a thrown fetch error', async 
   assert.deepEqual(r, { ok: false, error: 'Couldn’t reach buddy.example.com. Check the address and your connection.' });
 });
 
-test('accounts: create a team, invite by email, second user previews and accepts; wrong account and reuse are refused', async () => withHub(async (hub, origin) => {
+test('accounts: create a team, invite by email (link shown once), preview without auth, accept; wrong account and reuse refused', async () => withHub(async (hub, origin) => {
   const owner = await signIn(hub, origin, 'owner@example.com');
   const t = await owner.c.createTeam('Bondly');
   assert.equal(t.ok, true);
-  assert.equal(t.team.role, 'owner');
+  assert.equal(t.team.slug, 'bondly');
   assert.equal(t.board.name, 'Bondly');
   const teamId = t.team.id;
   const inv = await owner.c.invite(teamId, 'Sam@Example.com', 'member');
   assert.equal(inv.ok, true);
   assert.equal(inv.invite.email, 'sam@example.com');
-  assert.match(inv.code, /^inv_/);
-  assert.equal((await owner.c.listInvites(teamId)).invites.length, 1);
+  assert.ok(inv.link.startsWith(`${origin}/invite#`), inv.link);
+  const token = inv.link.split('#')[1];
+  const listed = (await owner.c.listInvites(teamId)).invites;
+  assert.equal(listed.length, 1);
+  assert.ok(!JSON.stringify(listed).includes(token), 'the list never carries tokens');
+
+  const seen = [];
+  const anon = createAccountClient({ origin, store: memStore(), fetchImpl: async (u, init) => { seen.push(init.headers); return fetch(u, init); } });
+  const pv = await anon.previewInvite(token);
+  assert.deepEqual({ team: pv.team_name, role: pv.role, inviter: pv.inviter_first_name }, { team: 'Bondly', role: 'member', inviter: 'owner' });
+  assert.equal(pv.email_masked, undefined, 'preview never names the invitee');
+  assert.equal(seen[0].Authorization, undefined);
 
   const other = await signIn(hub, origin, 'other@example.com');
-  const pv = await other.c.previewInvite(inv.code);
-  assert.deepEqual({ team: pv.team_name, role: pv.role, inviter: pv.inviter_name }, { team: 'Bondly', role: 'member', inviter: 'Owner' });
-  const wrong = await other.c.acceptInvite({ t: inv.code });
-  assert.equal(wrong.code, 'WRONG_ACCOUNT');
-  assert.equal(wrong.detail.email_masked, 's…@example.com');
+  const wrong = await other.c.acceptInvite({ t: token });
+  assert.equal(wrong.wrongAccount, true);
+  assert.equal(wrong.error, 'This invite is for s…@example.com. Switch account?');
 
   const sam = await signIn(hub, origin, 'sam@example.com');
-  assert.equal(sam.r.ok, true);
   const pending = (await sam.c.me()).pending_invites;
   assert.equal(pending.length, 1);
-  assert.equal(pending[0].team_name, 'Bondly');
+  assert.deepEqual(Object.keys(pending[0]).sort(), ['expires_at', 'id', 'inviter_first_name', 'role', 'team_name']);
   const acc = await sam.c.acceptInvite({ inviteId: pending[0].id });
   assert.equal(acc.ok, true);
   assert.equal(acc.team.id, teamId);
+  assert.equal(acc.member.role, 'member');
   assert.deepEqual((await sam.c.me()).teams.map((x) => [x.name, x.role]), [['Bondly', 'member']]);
-  assert.match((await sam.c.acceptInvite({ t: inv.code })).error, /isn’t valid any more/);
+  const again = await sam.c.acceptInvite({ t: token });
+  assert.equal(again.gone, true);
+  assert.equal(again.error, 'This invite link isn’t valid any more. Ask for a new one.');
   const members = (await owner.c.listMembers(teamId)).members;
   assert.deepEqual(members.map((m) => m.email).sort(), ['owner@example.com', 'sam@example.com']);
+  assert.ok(members.every((m) => m.member_id && m.user_id && m.joined_at));
+  assert.ok((await sam.c.listMembers(teamId)).members.every((m) => m.email === undefined), 'emails only for admins');
   assert.equal((await owner.c.listInvites(teamId)).invites.length, 0);
 }));
+
+test('accounts: the accept error codes are read in either encoding', () => {
+  const { createAccountClient: make } = require('../buddy-window/accounts');
+  const reply = (status, error) => async () => new Response(JSON.stringify({ error }), { status });
+  const run = (status, error) => make({ origin: 'https://h.example.com', store: { load: () => ({ hub: 'https://h.example.com', token: 'bdt_x' }), save() {}, clear() {} }, fetchImpl: reply(status, error) }).acceptInvite({ t: 'tok' });
+  return Promise.all([
+    run(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }).then((r) => assert.equal(r.error, 'This invite is for c…@example.com. Switch account?')),
+    run(403, { code: 'FORBIDDEN', reason: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }).then((r) => assert.equal(r.wrongAccount, true)),
+    run(409, { code: 'ALREADY_MEMBER', team: { id: 't1', name: 'Bondly' } }).then((r) => assert.deepEqual([r.alreadyMember, r.team, r.error], [true, { id: 't1', name: 'Bondly' }, 'You’re already in Bondly.'])),
+    run(409, { code: 'CONFLICT', reason: 'ALREADY_MEMBER', team: { id: 't1', name: 'Bondly' } }).then((r) => assert.equal(r.alreadyMember, true)),
+    run(400, { code: 'INVALID_TOKEN' }).then((r) => assert.equal(r.error, 'This invite link isn’t valid any more. Ask for a new one.')),
+    run(403, { code: 'FORBIDDEN' }).then((r) => assert.equal(r.wrongAccount, undefined)),
+  ]);
+});
 
 test('accounts: roles: members cannot manage; the last owner cannot be demoted or removed', async () => withHub(async (hub, origin) => {
   const owner = await signIn(hub, origin, 'o@example.com');
   const teamId = (await owner.c.createTeam('T')).team.id;
   const inv = await owner.c.invite(teamId, 'm@example.com', 'member');
   const m = await signIn(hub, origin, 'm@example.com');
-  await m.c.acceptInvite({ t: inv.code });
+  await m.c.acceptInvite({ t: inv.link.split('#')[1] });
   const list = (await owner.c.listMembers(teamId)).members;
   const me = list.find((x) => x.email === 'o@example.com');
   const them = list.find((x) => x.email === 'm@example.com');
-  const r = await owner.c.setRole(teamId, me.id, 'admin');
+  const r = await owner.c.setRole(teamId, me.member_id, 'admin');
   assert.equal(r.code, 'LAST_OWNER');
   assert.match(r.error, /at least one owner/);
-  assert.equal((await owner.c.removeMember(teamId, me.id)).code, 'LAST_OWNER');
-  assert.match((await m.c.setRole(teamId, them.id, 'admin')).error, /permission/);
+  assert.equal((await owner.c.removeMember(teamId, me.member_id)).code, 'LAST_OWNER');
+  assert.match((await m.c.setRole(teamId, them.member_id, 'admin')).error, /permission/);
   assert.match((await m.c.invite(teamId, 'x@example.com', 'member')).error, /permission/);
-  assert.equal((await owner.c.setRole(teamId, them.id, 'owner')).ok, true);
-  assert.equal((await owner.c.setRole(teamId, me.id, 'admin')).ok, true, 'fine once there is another owner');
-  assert.match((await owner.c.setRole(teamId, them.id, 'boss')).error, /Pick a role/);
+  assert.equal((await owner.c.setRole(teamId, them.member_id, 'owner')).ok, true);
+  assert.equal((await owner.c.setRole(teamId, me.member_id, 'admin')).ok, true, 'fine once there is another owner');
+  assert.match((await owner.c.setRole(teamId, them.member_id, 'boss')).error, /Pick a role/);
 }));
 
-test('accounts: revoke and resend invites; a revoked code is refused with a plain sentence', async () => withHub(async (hub, origin) => {
+test('accounts: resend mints a new link and the old one dies; a revoked link is refused with a plain sentence', async () => withHub(async (hub, origin) => {
   const owner = await signIn(hub, origin, 'o@example.com');
   const teamId = (await owner.c.createTeam('T')).team.id;
   const a = await owner.c.invite(teamId, 'x@example.com', 'guest');
-  const b = await owner.c.invite(teamId, 'x@example.com', 'guest'); // resend replaces
+  const b = await owner.c.invite(teamId, 'x@example.com', 'guest');
+  assert.notEqual(a.link, b.link);
   const live = (await owner.c.listInvites(teamId)).invites;
   assert.deepEqual(live.map((i) => i.id), [b.invite.id]);
-  assert.match((await owner.c.previewInvite(a.code)).error, /isn’t valid any more/);
+  assert.match((await owner.c.previewInvite(a.link.split('#')[1])).error, /isn’t valid any more/);
   assert.equal((await owner.c.revokeInvite(teamId, b.invite.id)).ok, true);
   assert.equal((await owner.c.listInvites(teamId)).invites.length, 0);
-  assert.match((await owner.c.previewInvite(b.code)).error, /isn’t valid any more/);
+  assert.match((await owner.c.previewInvite(b.link.split('#')[1])).error, /isn’t valid any more/);
   assert.match((await owner.c.previewInvite('inv_nope')).error, /isn’t valid any more/);
 }));
 
@@ -728,29 +860,62 @@ test('accounts: already a member gets a clear answer with the team', async () =>
   const team = (await owner.c.createTeam('T')).team;
   const inv = await owner.c.invite(team.id, 'o2@example.com', 'member');
   const o2 = await signIn(hub, origin, 'o2@example.com');
-  await o2.c.acceptInvite({ t: inv.code });
+  await o2.c.acceptInvite({ t: inv.link.split('#')[1] });
   const again = await owner.c.invite(team.id, 'o2@example.com', 'member');
-  const r = await o2.c.acceptInvite({ t: again.code });
-  assert.equal(r.code, 'ALREADY_MEMBER');
-  assert.equal(r.detail.team.id, team.id);
+  const r = await o2.c.acceptInvite({ t: again.link.split('#')[1] });
+  assert.equal(r.alreadyMember, true);
+  assert.deepEqual(r.team, { id: team.id, name: 'T' });
+  assert.equal(r.error, 'You’re already in T.');
 }));
 
-test('accounts: sign out revokes on the hub and forgets locally; delete account needs a fresh emailed code', async () => withHub(async (hub, origin) => {
+test('accounts: sign out revokes on the hub and forgets locally', async () => withHub(async (hub, origin) => {
   const a = await signIn(hub, origin, 'a@example.com');
   const token = a.store.peek().token;
   assert.equal((await a.c.signOut()).revoked, true);
   assert.equal(a.store.peek(), null);
   const res = await fetch(`${origin}/api/account`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(res.status, 401, 'the old token is dead on the hub');
+}));
 
+test('accounts: delete = start {purpose:delete} (Bearer) → verify {flow_id, code} → DELETE /api/account {flow_id}', async () => withHub(async (hub, origin) => {
   const d = await signIn(hub, origin, 'd@example.com');
   assert.match((await d.c.deleteAccount('123456')).error, /new code/);
-  assert.equal((await d.c.startStepUp()).ok, true);
+  assert.deepEqual(await d.c.startDelete(), { ok: true, email: 'd@example.com' });
+  assert.deepEqual(hub.starts().at(-1), { purpose: 'delete', client: 'buddy_desktop' });
   const code = hub.lastCode('d@example.com');
+  const wrong = code === '000000' ? '111111' : '000000';
+  assert.equal((await d.c.deleteAccount(wrong)).error, 'That code didn’t work. 4 tries left.');
+  assert.equal(d.store.peek() !== null, true, 'a bad code is not a sign-out');
   assert.equal((await d.c.deleteAccount(code)).ok, true);
   assert.equal(d.store.peek(), null);
   const again = await signIn(hub, origin, 'd@example.com');
   assert.deepEqual((await again.c.me()).teams, [], 'a fresh account');
+  // The old route is gone from the client.
+  assert.deepEqual(ROUTES.deleteAccount, ['DELETE', '/api/account']);
+  assert.ok(!Object.values(ROUTES).some(([, p]) => p === '/api/account/delete'));
+}));
+
+test('accounts: delete is refused while sole owner (names the team); a stale check asks to do it again', async () => withHub(async (hub, origin) => {
+  const o = await signIn(hub, origin, 'solo@example.com');
+  const team = (await o.c.createTeam('Bondly')).team;
+  const inv = await o.c.invite(team.id, 'mate@example.com', 'member');
+  const mate = await signIn(hub, origin, 'mate@example.com');
+  await mate.c.acceptInvite({ t: inv.link.split('#')[1] });
+  await o.c.startDelete();
+  const r = await o.c.deleteAccount(hub.lastCode('solo@example.com'));
+  assert.deepEqual([r.ok, r.soleOwner, r.error], [false, true, 'Transfer ownership of Bondly first.']);
+  assert.ok(o.store.peek(), 'still signed in');
+  // Ownership handed over within the 5 minutes: the verified check is reused.
+  const list = (await o.c.listMembers(team.id)).members;
+  await o.c.setRole(team.id, list.find((m) => m.email === 'mate@example.com').member_id, 'owner');
+  hub.setNow(Date.now() + 6 * 60_000);
+  const late = await o.c.deleteAccount('');
+  assert.deepEqual([late.ok, late.stepUp, late.error], [false, true, 'That check timed out. Send a new code and do the check again.']);
+  assert.ok(o.store.peek(), 'STEP_UP_REQUIRED is a 401 that must not sign anyone out');
+  await o.c.startDelete();
+  assert.equal((await o.c.deleteAccount(hub.lastCode('solo@example.com'))).ok, true);
+  const { humanError } = require('../buddy-window/accounts');
+  assert.equal(humanError(409, { error: { code: 'CONFLICT' } }, 'h').length > 0, true);
 }));
 
 // ── invite links ───────────────────────────────────────────────────────────
@@ -781,17 +946,25 @@ test('invite links: anything else is ignored', () => {
   for (const s of bad) assert.equal(parseInvite(s, { normalizeHub: httpsOnly }), null, s);
 });
 
+test('invite links: malformed percent-encoding is null, never a thrown URIError', () => {
+  for (const s of ['claudebuddy://invite/%E0%A4%A', 'claudebuddy://invite/%', 'https://buddy.example.com/invite#%E0%A4%A', 'https://buddy.example.com/invite/%ZZ%']) {
+    assert.doesNotThrow(() => parseInvite(s, { normalizeHub: httpsOnly }), s);
+    assert.equal(parseInvite(s, { normalizeHub: httpsOnly }), null, s);
+  }
+});
+
 test('invite routing: unknown hub → confirm; known + signed out → sign in; known + signed in → preview', () => {
   const known = ['https://buddy.example.com'];
   const signedIn = (h) => h === 'https://buddy.example.com';
   assert.deepEqual(routeInvite({ hub: 'https://evil.example.com', token: 't' }, { knownHubs: known, signedIn }), { action: 'confirm', hub: 'https://evil.example.com' });
   assert.deepEqual(routeInvite({ hub: 'https://buddy.example.com', token: 't' }, { knownHubs: known, signedIn: () => false }), { action: 'signin', hub: 'https://buddy.example.com' });
   assert.deepEqual(routeInvite({ hub: 'https://buddy.example.com', token: 't' }, { knownHubs: known, signedIn }), { action: 'preview', hub: 'https://buddy.example.com' });
-  // No hub in the link: the last known hub, else ask.
-  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: known, signedIn, lastHub: 'https://buddy.example.com' }), { action: 'preview', hub: 'https://buddy.example.com' });
+  // No hub in the link: the one known hub, else ask.
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: known, signedIn }), { action: 'preview', hub: 'https://buddy.example.com' });
   assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: [], signedIn }), { action: 'need-hub' });
-  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: ['https://a.example.com', 'https://b.example.com'], signedIn }), { action: 'need-hub' });
-  // A stale lastHub that isn't known any more is not trusted.
+  // Several known hubs: ask, never guess the last one used (it would get a token minted elsewhere).
+  const two = ['https://a.example.com', 'https://b.example.com'];
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: two, signedIn, lastHub: 'https://b.example.com' }), { action: 'need-hub' });
   assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: [], lastHub: 'https://evil.example.com', signedIn }), { action: 'need-hub' });
   assert.equal(maskEmail('callum@example.com'), 'c…@example.com');
 });
@@ -811,3 +984,4 @@ test('bearer scope: the exact hub origin and its WebSocket twin, never another h
   assert.equal(l.matches('http://localhost:5123/api'), false);
   assert.throws(() => bearerScope('https://buddy.example.com/path'));
 });
+

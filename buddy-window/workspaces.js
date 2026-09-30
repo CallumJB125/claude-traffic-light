@@ -10,6 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const LOCAL = Object.freeze({ id: 'local', name: 'My board', kind: 'local' });
 const TEAM_ID_RE = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -33,12 +34,39 @@ function normalizeHubUrl(input, { allowOrigins = [] } = {}) {
   return u.origin;
 }
 
+// Loopback, RFC 1918, link-local and CGNAT (RFC 6598) IPv4 literals. IPv6
+// literals never pass normalizeHubUrl (their host has no dot).
+function isPrivateHost(hostname) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 0 || a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
+ * A hub named by a link (deep link, pasted invite) rather than typed: also
+ * never a private or local address, so a link can't point the app at a
+ * service on the member's own network. Checked on the literal only; a public
+ * name that resolves privately is left to the member's confirm step.
+ */
+function normalizeLinkHub(input, { allowOrigins = [] } = {}) {
+  const origin = normalizeHubUrl(input, { allowOrigins });
+  if (!allowOrigins.includes(origin) && isPrivateHost(new URL(origin).hostname)) throw new Error('Use the team hub’s public address.');
+  return origin;
+}
+
 const hostOf = (origin) => new URL(origin).host;
 const teamWsId = (origin, teamId) => `team:${hostOf(origin)}:${teamId}`;
 const accessWsId = (origin) => `access:${hostOf(origin)}`;
+// Names for a hub's files and partitions: a hash, so no host spelling (ports,
+// IDNs, look-alike punctuation) can collide with another hub's.
+const hubKey = (origin) => crypto.createHash('sha256').update(String(origin)).digest('hex').slice(0, 16);
 // One partition per hub, whatever team is showing: switching team is the same
 // page with a different ?org=, and the bearer header is set per partition.
-const partitionFor = (origin) => `persist:board-${hostOf(origin).replace(/[^a-z0-9.-]/gi, '_')}`;
+const partitionFor = (origin) => `persist:board-${hubKey(origin)}`;
+// The Integrations sign-in window's partition, per hub, so signing out of one
+// hub clears only its provider cookies.
+const integrationPartitionFor = (origin) => `persist:integration-auth-${hubKey(origin)}`;
 
 // The Access login pages for a hub: <team>.cloudflareaccess.com, learned from
 // the hub's own redirect when connecting.
@@ -90,14 +118,14 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
       for (const h of hubs) if (raw.presence?.[h] === true) presence[h] = true;
       data = { hubs, teams, access, presence, active: raw.active, lastHub: hubs.includes(raw.lastHub) ? raw.lastHub : (hubs.at(-1) ?? null) };
     } else if (Array.isArray(raw.teams)) {
-      // v1: [{name, url, accessTeam}], one entry per hub. Access hubs stay as
-      // they were; a bare hub becomes a hub to sign in to with an account.
+      // v1: [{name, url, accessTeam}], one entry per hub, from before accounts
+      // existed: every entry passed the old probe as an Access hub, including
+      // those saved with no Access team (it answered 200 while signed in), so
+      // all of them stay Access workspaces.
       const v1 = raw.teams.filter((t) => isOrigin(t?.url) && typeof t.name === 'string');
-      const access = v1.filter((t) => t.accessTeam && /^[a-z0-9-]+$/.test(t.accessTeam)).map((t) => ({ url: t.url, name: t.name.slice(0, 60), accessTeam: t.accessTeam }));
-      const hubs = v1.filter((t) => !access.some((a) => a.url === t.url)).map((t) => t.url);
+      const access = v1.map((t) => ({ url: t.url, name: t.name.slice(0, 60), accessTeam: t.accessTeam && /^[a-z0-9-]+$/.test(t.accessTeam) ? t.accessTeam : null }));
       const was = v1.find((t) => `team:${hostOf(t.url)}` === raw.active);
-      const active = was && access.some((a) => a.url === was.url) ? accessWsId(was.url) : 'local';
-      data = { hubs, teams: {}, access, presence: {}, active, lastHub: hubs.at(-1) ?? null };
+      data = { hubs: [], teams: {}, access, presence: {}, active: was ? accessWsId(was.url) : 'local', lastHub: null };
     }
   } catch { /* first run or unreadable: local only */ }
 
@@ -117,6 +145,8 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
     list,
     get,
     active: () => get(data.active) ?? LOCAL,
+    // The stored id even while its hub is signed out (and so missing from list()).
+    activeId: () => data.active,
     hubs: () => data.hubs.slice(),
     lastHub: () => data.lastHub,
     knows: (origin) => data.hubs.includes(origin),
@@ -180,4 +210,4 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
   };
 }
 
-module.exports = { createWorkspaceStore, buildWorkspaceList, teamsFromAccount, normalizeHubUrl, accessTeamFromLocation, partitionFor, teamWsId, accessWsId, hostOf, LOCAL };
+module.exports = { createWorkspaceStore, buildWorkspaceList, teamsFromAccount, normalizeHubUrl, normalizeLinkHub, isPrivateHost, accessTeamFromLocation, partitionFor, integrationPartitionFor, hubKey, teamWsId, accessWsId, hostOf, LOCAL };
