@@ -379,8 +379,8 @@ function envRoute() {
 }
 
 const prevOnEntry = readPrev();
-// A background subagent's own tool hooks carry its agent_id.
-const fromSubagent = /^tool-/.test(resolved) && !!(data && data.agent_id);
+// A background subagent's own tool hooks (and its denied calls) carry its agent_id.
+const fromSubagent = (/^tool-/.test(resolved) || resolved === 'permission-denied') && !!(data && data.agent_id);
 
 // Which signal this write leaves, and the clocks that go with it, is the
 // session state machine's call (session-machine.js TRANSITIONS): task events

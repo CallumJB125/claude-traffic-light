@@ -26,7 +26,7 @@ function matrix(writer) {
 function render() {
   const eventRows = M.EVENTS.map((e) => {
     const sigs = Object.keys(M.EVENT_OF_SIGNAL).filter((s) => M.EVENT_OF_SIGNAL[s] === e);
-    if (e === 'agent') sigs.push('tool-* carrying an agent_id');
+    if (e === 'agent') sigs.push('tool-* or permission-denied carrying an agent_id');
     return `| \`${e}\` | ${sigs.map((s) => (s.includes(' ') ? s : `\`${s}\``)).join(', ')} |`;
   });
   const stateRows = M.STATES.map((s) => {
@@ -109,7 +109,7 @@ stateDiagram-v2
   [*] --> stored
   stored --> dropped: no-signal / gone
   stored --> held: young notification ask
-  stored --> promoted: stop / idle-nudge / permission-denied + working agent
+  stored --> promoted: stop / idle-nudge + working agent
   stored --> shown: otherwise
   held --> shown: after ${M.TRANSIENT_ASK_MS} ms, or a pending request
   promoted --> dropped: stale-agents

@@ -22,7 +22,7 @@
     { id: 'tool-failed', label: 'A tool fails', hook: 'PostToolUseFailure', kind: 'working', tool: true },
     { id: 'subagent-start', label: 'A subagent starts', hook: 'SubagentStart', kind: 'working' },
     { id: 'subagent-done', label: 'A subagent finishes', hook: 'SubagentStop', kind: 'working' },
-    { id: 'permission-denied', label: 'You deny a permission', hook: 'PermissionDenied', kind: 'working' },
+    { id: 'permission-denied', label: 'A permission is denied', hook: 'PermissionDenied', kind: 'working' },
     { id: 'turn-failed', label: 'A turn fails', hook: 'StopFailure', kind: 'working' },
     { id: 'stop', label: 'Claude finishes a task', hook: 'Stop', kind: 'working' },
     { id: 'idle-nudge', label: 'Claude is waiting for you', hook: 'Notification', kind: 'working' },
@@ -286,7 +286,7 @@
       },
       {
         id: 'working', name: 'Claude is working', enabled: true,
-        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'session-start', 'compact'] },
+        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'session-start', 'compact'] },
         then: { lamp: 'green', pose: 'think' },
       },
       {
@@ -320,7 +320,7 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 4;
+  const RULES_VERSION = 5;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -347,6 +347,11 @@
         const lamps = V4_LAMPS[out[i].id];
         if (lamps && out[i].then && out[i].then.lamp === lamps[0] && !out[i].then.lampColor) out[i] = { ...out[i], then: { ...out[i].then, lamp: lamps[1] } };
       }
+    }
+    // v5: a denied tool call is mid-turn (auto mode's classifier said no and
+    // Claude carries on), so it stays green instead of dropping the lamp.
+    if (version < 5 && w >= 0 && !out[w].when.signal.includes('permission-denied')) {
+      out[w] = { ...out[w], when: { ...out[w].when, signal: out[w].when.signal.concat('permission-denied') } };
     }
     return out;
   }

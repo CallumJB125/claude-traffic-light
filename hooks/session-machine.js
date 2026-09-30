@@ -17,7 +17,9 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   // ── Signal sets ─────────────────────────────────────────────────────────
   // Signals that close a turn: the working-since clock stops on any of them.
-  const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
+  // Not a permission denial: auto mode's classifier denies a tool call and
+  // Claude carries on with the same turn, so a denial is mid-turn work.
+  const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed']);
   // Blocked until you act.
   const WAITING = new Set(['permission-ask', 'limit-hit']);
   // Waiting on the person: a permission ask, a limit, a finished turn, the
@@ -27,9 +29,8 @@
   const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 'turn-failed']);
   // A turn that has ended while its subagents are still working hasn't
   // really ended; only a finished/idle turn is promoted — a permission ask or
-  // a limit still needs the person whatever the agents are doing. A denial
-  // has had its answer, so it doesn't.
-  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge', 'permission-denied']);
+  // a limit still needs the person whatever the agents are doing.
+  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge']);
   // A permission ask that only came from a Notification can be resolved by
   // auto mode's classifier within a second, so the widget sits it out for
   // this long first. A blocking PermissionRequest (askKind 'request' or still
@@ -51,7 +52,7 @@
   // ── Writer machine ──────────────────────────────────────────────────────
   // States: where a session file's stored signal puts it. Everything not a
   // turn end is mid-turn ('working'), including files from older hooks.
-  const STATES = ['absent', 'working', 'started', 'asking', 'limited', 'finished', 'nudged', 'failed', 'denied'];
+  const STATES = ['absent', 'working', 'started', 'asking', 'limited', 'finished', 'nudged', 'failed'];
   const STATE_OF_TURN_END = {
     'session-start': 'started',
     'permission-ask': 'asking',
@@ -59,7 +60,6 @@
     stop: 'finished',
     'idle-nudge': 'nudged',
     'turn-failed': 'failed',
-    'permission-denied': 'denied',
   };
   // The turn is over in every state but these two.
   const CLOSED = STATES.filter((s) => s !== 'absent' && s !== 'working');
@@ -70,14 +70,16 @@
   }
 
   // Events: the resolved hook signal, grouped by what it does to the machine.
-  // A tool hook carrying an agent_id is a background subagent's own tool use.
-  const EVENTS = ['prompt', 'work', 'agent', 'task', 'start', 'stop', 'nudge', 'fail', 'ask', 'limit', 'deny', 'end'];
+  // A tool hook (or a denied tool call) carrying an agent_id is a background
+  // subagent's own tool use. A denied call is work: the turn goes on.
+  const EVENTS = ['prompt', 'work', 'agent', 'task', 'start', 'stop', 'nudge', 'fail', 'ask', 'limit', 'end'];
   const EVENT_OF_SIGNAL = {
     'prompt-submit': 'prompt',
     'tool-use': 'work',
     'tool-done': 'work',
     'tool-failed': 'work',
     compact: 'work',
+    'permission-denied': 'work',
     'subagent-start': 'agent',
     'subagent-done': 'agent',
     'task-created': 'task',
@@ -88,12 +90,11 @@
     'turn-failed': 'fail',
     'permission-ask': 'ask',
     'limit-hit': 'limit',
-    'permission-denied': 'deny',
     'session-end': 'end',
   };
 
   function eventOf(signal, { fromSubagent = false } = {}) {
-    if (fromSubagent && /^tool-/.test(signal)) return 'agent';
+    if (fromSubagent && (/^tool-/.test(signal) || signal === 'permission-denied')) return 'agent';
     return EVENT_OF_SIGNAL[signal] || 'work';
   }
 
@@ -138,10 +139,12 @@
   // "ignored for N minutes" signals count from the last such touch, so a
   // session working on its own (a ralph loop, a background agent) must not
   // reset them. A touch is: sending a prompt, opening or resuming a session,
-  // denying a permission, or Claude carrying on after an ask you answered.
+  // or Claude carrying on after an ask you answered (a denial included). A
+  // denial on its own is not: PermissionDenied is auto mode's classifier, and
+  // its payload doesn't say whether a person was involved.
   function userTouched(prev, signal, { sessionSource = null, bookkeeping = false, now = Date.now() } = {}) {
     if (bookkeeping) return false;
-    if (signal === 'prompt-submit' || signal === 'permission-denied') return true;
+    if (signal === 'prompt-submit') return true;
     if (signal === 'session-start') return sessionSource !== 'compact';
     if (prev && prev.signal === 'permission-ask' && !TURN_END.has(signal)) {
       if (prev.askKind === 'request' || prev.askKind === 'question') return true;
@@ -242,7 +245,7 @@
     { id: 'no-signal', shows: 'nothing', why: 'no signal (and no legacy colour) in the file' },
     { id: 'gone', shows: 'nothing', why: 'its local Claude process exited without a SessionEnd' },
     { id: 'held', shows: 'prevSignal (or tool-use)', why: `a notification ask younger than ${TRANSIENT_ASK_MS} ms that no pending request or real ask backs` },
-    { id: 'promoted', shows: 'tool-use / Agent', why: 'a finished, idle or denied turn with a subagent still working' },
+    { id: 'promoted', shows: 'tool-use / Agent', why: 'a finished or idle turn with a subagent still working' },
     { id: 'stale-agents', shows: 'nothing', why: 'promoted, but its working agents went quiet past the working window and keepalive' },
     { id: 'stale', shows: 'nothing', why: 'no update within the working window (or the waiting window for a waiting-on-you signal)' },
     { id: 'shown', shows: 'the stored signal', why: 'otherwise' },
@@ -285,7 +288,7 @@
     return out;
   }
   // A representative signal per event, to name the state it leads to.
-  const EVENT_SIGNAL = { prompt: 'prompt-submit', work: 'tool-use', agent: 'subagent-start', task: 'task-created', start: 'session-start', stop: 'stop', nudge: 'idle-nudge', fail: 'turn-failed', ask: 'permission-ask', limit: 'limit-hit', deny: 'permission-denied', end: 'session-end' };
+  const EVENT_SIGNAL = { prompt: 'prompt-submit', work: 'tool-use', agent: 'subagent-start', task: 'task-created', start: 'session-start', stop: 'stop', nudge: 'idle-nudge', fail: 'turn-failed', ask: 'permission-ask', limit: 'limit-hit', end: 'session-end' };
 
   function mermaid() {
     const edges = new Map();

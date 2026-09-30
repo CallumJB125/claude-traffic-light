@@ -22,7 +22,6 @@ for a stored session right now — is `classify()`. Both live in
 | `finished` | `stop` |
 | `nudged` | `idle-nudge` |
 | `failed` | `turn-failed` |
-| `denied` | `permission-denied` |
 
 Every state but `absent` and `working` has closed the turn (`TURN_END`):
 the working-since clock stops there.
@@ -32,8 +31,8 @@ the working-since clock stops there.
 | event | resolved hook signals |
 |---|---|
 | `prompt` | `prompt-submit` |
-| `work` | `tool-use`, `tool-done`, `tool-failed`, `compact` |
-| `agent` | `subagent-start`, `subagent-done`, tool-* carrying an agent_id |
+| `work` | `tool-use`, `tool-done`, `tool-failed`, `compact`, `permission-denied` |
+| `agent` | `subagent-start`, `subagent-done`, tool-* or permission-denied carrying an agent_id |
 | `task` | `task-created`, `task-done` |
 | `start` | `session-start` |
 | `stop` | `stop` |
@@ -41,7 +40,6 @@ the working-since clock stops there.
 | `fail` | `turn-failed` |
 | `ask` | `permission-ask` |
 | `limit` | `limit-hit` |
-| `deny` | `permission-denied` |
 | `end` | `session-end` |
 
 A Notification is resolved first: `permission_prompt` / elicitation →
@@ -57,7 +55,7 @@ First matching rule wins.
 |---|---|---|---|---|---|
 | `end` | any | `end` | absent | all | SessionEnd removes the file |
 | `task-bookkeeping` | any | `task` | keep (bookkeeping) | hook only | task events only count; they never change what the session is doing |
-| `agent-after-turn` | started, asking, limited, finished, nudged, failed, denied | `agent` | keep (bookkeeping) | hook only | a background agent working after the turn ended must not look like the turn restarted |
+| `agent-after-turn` | started, asking, limited, finished, nudged, failed | `agent` | keep (bookkeeping) | hook only | a background agent working after the turn ended must not look like the turn restarted |
 | `nudge-keeps-failure` | failed | `nudge` | keep | hook only | the idle nudge ~60 s after a failed turn must not turn "the network dropped" into "waiting for you" |
 | `signal` | any | any | signal | all | anything else is what the session is now doing |
 
@@ -72,17 +70,16 @@ skips the hook-only rows and always lands as sent.
 Target state for every (state, event) pair. **Bold¹** marks a guarded
 `keep`: the event did not change what the session shows.
 
-| from \ event | prompt | work | agent | task | start | stop | nudge | fail | ask | limit | deny | end |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **absent** | working | working | working | **working**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **working** | working | working | working | **working**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **started** | working | working | **started**¹ | **started**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **asking** | working | working | **asking**¹ | **asking**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **limited** | working | working | **limited**¹ | **limited**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **finished** | working | working | **finished**¹ | **finished**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **nudged** | working | working | **nudged**¹ | **nudged**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
-| **failed** | working | working | **failed**¹ | **failed**¹ | started | finished | **failed**¹ | failed | asking | limited | denied | absent |
-| **denied** | working | working | **denied**¹ | **denied**¹ | started | finished | nudged | failed | asking | limited | denied | absent |
+| from \ event | prompt | work | agent | task | start | stop | nudge | fail | ask | limit | end |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **absent** | working | working | working | **working**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **working** | working | working | working | **working**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **started** | working | working | **started**¹ | **started**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **asking** | working | working | **asking**¹ | **asking**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **limited** | working | working | **limited**¹ | **limited**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **finished** | working | working | **finished**¹ | **finished**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **nudged** | working | working | **nudged**¹ | **nudged**¹ | started | finished | nudged | failed | asking | limited | absent |
+| **failed** | working | working | **failed**¹ | **failed**¹ | started | finished | **failed**¹ | failed | asking | limited | absent |
 
 ## Diagram
 
@@ -96,7 +93,6 @@ stateDiagram-v2
   absent --> failed: fail
   absent --> asking: ask
   absent --> limited: limit
-  absent --> denied: deny
   absent --> absent: end
   working --> working: prompt, work, agent, task [task-bookkeeping]
   working --> started: start
@@ -105,7 +101,6 @@ stateDiagram-v2
   working --> failed: fail
   working --> asking: ask
   working --> limited: limit
-  working --> denied: deny
   working --> absent: end
   started --> working: prompt, work
   started --> started: agent [agent-after-turn], task [task-bookkeeping], start
@@ -114,7 +109,6 @@ stateDiagram-v2
   started --> failed: fail
   started --> asking: ask
   started --> limited: limit
-  started --> denied: deny
   started --> absent: end
   asking --> working: prompt, work
   asking --> asking: agent [agent-after-turn], task [task-bookkeeping], ask
@@ -123,7 +117,6 @@ stateDiagram-v2
   asking --> nudged: nudge
   asking --> failed: fail
   asking --> limited: limit
-  asking --> denied: deny
   asking --> absent: end
   limited --> working: prompt, work
   limited --> limited: agent [agent-after-turn], task [task-bookkeeping], limit
@@ -132,7 +125,6 @@ stateDiagram-v2
   limited --> nudged: nudge
   limited --> failed: fail
   limited --> asking: ask
-  limited --> denied: deny
   limited --> absent: end
   finished --> working: prompt, work
   finished --> finished: agent [agent-after-turn], task [task-bookkeeping], stop
@@ -141,7 +133,6 @@ stateDiagram-v2
   finished --> failed: fail
   finished --> asking: ask
   finished --> limited: limit
-  finished --> denied: deny
   finished --> absent: end
   nudged --> working: prompt, work
   nudged --> nudged: agent [agent-after-turn], task [task-bookkeeping], nudge
@@ -150,7 +141,6 @@ stateDiagram-v2
   nudged --> failed: fail
   nudged --> asking: ask
   nudged --> limited: limit
-  nudged --> denied: deny
   nudged --> absent: end
   failed --> working: prompt, work
   failed --> failed: agent [agent-after-turn], task [task-bookkeeping], nudge [nudge-keeps-failure], fail
@@ -158,17 +148,7 @@ stateDiagram-v2
   failed --> finished: stop
   failed --> asking: ask
   failed --> limited: limit
-  failed --> denied: deny
   failed --> absent: end
-  denied --> working: prompt, work
-  denied --> denied: agent [agent-after-turn], task [task-bookkeeping], deny
-  denied --> started: start
-  denied --> finished: stop
-  denied --> nudged: nudge
-  denied --> failed: fail
-  denied --> asking: ask
-  denied --> limited: limit
-  denied --> absent: end
 ```
 
 ## Reading a session (what the widget shows)
@@ -182,7 +162,7 @@ front of the rules engine.
 | 1 | `no-signal` | nothing | no signal (and no legacy colour) in the file |
 | 2 | `gone` | nothing | its local Claude process exited without a SessionEnd |
 | 3 | `held` | prevSignal (or tool-use) | a notification ask younger than 1200 ms that no pending request or real ask backs |
-| 4 | `promoted` | tool-use / Agent | a finished, idle or denied turn with a subagent still working |
+| 4 | `promoted` | tool-use / Agent | a finished or idle turn with a subagent still working |
 | 5 | `stale-agents` | nothing | promoted, but its working agents went quiet past the working window and keepalive |
 | 6 | `stale` | nothing | no update within the working window (or the waiting window for a waiting-on-you signal) |
 | 7 | `shown` | the stored signal | otherwise |
@@ -192,7 +172,7 @@ stateDiagram-v2
   [*] --> stored
   stored --> dropped: no-signal / gone
   stored --> held: young notification ask
-  stored --> promoted: stop / idle-nudge / permission-denied + working agent
+  stored --> promoted: stop / idle-nudge + working agent
   stored --> shown: otherwise
   held --> shown: after 1200 ms, or a pending request
   promoted --> dropped: stale-agents

@@ -806,7 +806,7 @@ test('effectiveSignal: a finished turn with a working subagent reads as that age
 });
 
 test('TURN_END is the one list of turn-closing signals', () => {
-  assert.deepEqual([...R.TURN_END].sort(), ['idle-nudge', 'limit-hit', 'permission-ask', 'permission-denied', 'session-start', 'stop', 'turn-failed']);
+  assert.deepEqual([...R.TURN_END].sort(), ['idle-nudge', 'limit-hit', 'permission-ask', 'session-start', 'stop', 'turn-failed']);
 });
 
 test('a finished turn waits on you: ignored-N and waitMinutes run from stop', () => {
@@ -908,11 +908,20 @@ for (const signal of ['subagent-start', 'tool-failed']) {
   });
 }
 
-test('effectiveSignal: a denied permission with a subagent still working reads as that agent working', () => {
-  assert.deepEqual(R.effectiveSignal({ signal: 'permission-denied', agents: agentWorking }), { signal: 'tool-use', tool: 'Agent', turnSignal: 'permission-denied' });
-  assert.equal(R.effectiveSignal({ signal: 'permission-denied', agents: [] }).signal, 'permission-denied');
-  const two = R.resolve(rules(), [{ ...R.effectiveSignal({ signal: 'permission-denied', agents: agentWorking }), cwd: '/a', agents: agentWorking }, { signal: 'stop', cwd: '/b' }]);
-  assert.notEqual(two.owned.lamp, 'done');
+test('resolve: a denied tool call is mid-turn — green, and outranks another session\'s "Task finished"', () => {
+  assert.equal(R.effectiveSignal({ signal: 'permission-denied', tool: 'Bash', agents: agentWorking }).signal, 'permission-denied', 'not a turn end, so nothing to promote');
+  const one = R.resolve(rules(), [{ signal: 'permission-denied', tool: 'Bash', cwd: '/a' }]);
+  assert.deepEqual([one.owned.lamp, one.look.lamp], ['working', 'green']);
+  const two = R.resolve(rules(), [{ signal: 'permission-denied', tool: 'Bash', cwd: '/a' }, { signal: 'stop', cwd: '/b' }]);
+  assert.equal(two.owned.lamp, 'working');
+});
+
+test('migrateRules: a v4 config’s working rule gains permission-denied once; a customised one keeps its other signals', () => {
+  const v4 = rules().map((r) => (r.id === 'working' ? { ...r, when: { signal: r.when.signal.filter((x) => x !== 'permission-denied') } } : r)).map(R.normalizeRule);
+  const m = R.migrateRules(v4, 4);
+  assert.ok(m.find((r) => r.id === 'working').when.signal.includes('permission-denied'));
+  assert.deepEqual(R.migrateRules(m, 4), m, 'never duplicated');
+  assert.deepEqual(R.migrateRules(v4, 5), v4, 'a current config is left alone');
 });
 
 test('migrateRules: a v2 config’s working rule gains subagent-start and tool-failed once; a deleted one stays deleted', () => {
@@ -958,5 +967,5 @@ test('migrateRules v4: old default lamp colours follow, customised ones stay', (
   const mc = R.migrateRules(custom, 3);
   assert.equal(mc.find((r) => r.id === 'done').then.lamp, 'red', 'a colour you chose stays');
   assert.equal(mc.find((r) => r.id === 'nudge').then.lamp, 'green', 'a custom lampColor means the slot was chosen too');
-  assert.equal(R.migrateRules(v3, 4), v3, 'already on v4: untouched, so switching back sticks');
+  assert.deepEqual(R.migrateRules(v3, 4), v3, 'already on v4: untouched, so switching back sticks');
 });

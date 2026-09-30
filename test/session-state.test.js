@@ -181,16 +181,27 @@ test('set-status: after the turn ends, agent and task events are bookkeeping, no
   assert.equal(read(home, 'late').signal, 'tool-use', 'a main-thread event (no agent_id) is real again');
 });
 
-test('set-status: turn-failed and permission-denied end the turn\'s working clock', () => {
-  for (const end of ['turn-failed', 'permission-denied']) {
-    const home = tmpHome();
-    run(home, 'prompt-submit', { session_id: 'f' });
-    assert.ok(read(home, 'f').workingSince);
-    run(home, end, { session_id: 'f' });
-    assert.equal(read(home, 'f').workingSince, null, end);
-    run(home, 'subagent-done', { session_id: 'f', agent_id: 'x' });
-    assert.equal(read(home, 'f').signal, end, `${end} is a turn end for bookkeeping too`);
-  }
+test('set-status: turn-failed ends the turn\'s working clock', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'f' });
+  assert.ok(read(home, 'f').workingSince);
+  run(home, 'turn-failed', { session_id: 'f' });
+  assert.equal(read(home, 'f').workingSince, null);
+  run(home, 'subagent-done', { session_id: 'f', agent_id: 'x' });
+  assert.equal(read(home, 'f').signal, 'turn-failed', 'a turn end for bookkeeping too');
+});
+
+test('set-status: a permission denial mid-turn keeps the turn, its clock and the ignored timer', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'pd' });
+  run(home, 'tool-use', { session_id: 'pd', tool_name: 'Bash' });
+  const before = read(home, 'pd');
+  run(home, 'permission-denied', { session_id: 'pd', tool_name: 'Bash' });
+  const d = read(home, 'pd');
+  assert.deepEqual([d.signal, d.tool, d.workingSince, d.touchedAt], ['permission-denied', 'Bash', before.workingSince, before.touchedAt]);
+  run(home, 'stop', { session_id: 'pd' });
+  run(home, 'permission-denied', { session_id: 'pd', tool_name: 'Bash', agent_id: 'ag-9' });
+  assert.equal(read(home, 'pd').signal, 'stop', 'a background agent\'s denial after the turn is bookkeeping');
 });
 
 test('set-status: a failed turn stays failed through the idle nudge, keeping why it failed', () => {

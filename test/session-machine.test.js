@@ -11,16 +11,17 @@ const T0 = Date.parse('2026-09-30T10:00:00.000Z');
 const iso = (ms) => new Date(T0 + ms).toISOString();
 
 // A representative stored session per state.
-const SIGNAL_OF_STATE = { working: 'tool-use', started: 'session-start', asking: 'permission-ask', limited: 'limit-hit', finished: 'stop', nudged: 'idle-nudge', failed: 'turn-failed', denied: 'permission-denied' };
+const SIGNAL_OF_STATE = { working: 'tool-use', started: 'session-start', asking: 'permission-ask', limited: 'limit-hit', finished: 'stop', nudged: 'idle-nudge', failed: 'turn-failed' };
 const prevFor = (state) => (state === 'absent' ? null : {
   signal: SIGNAL_OF_STATE[state], prevSignal: 'prompt-submit', signalSince: iso(-5000), updatedAt: iso(-5000),
   agentsAt: iso(-9000), workingSince: state === 'working' ? iso(-60000) : null, touchedAt: iso(-60000),
 });
-// Every signal each event stands for; `agent` also covers a subagent's own tool use.
+// Every signal each event stands for; `agent` also covers a subagent's own
+// tool use (and its denied calls).
 const EVENT_INPUTS = {
   prompt: [{ signal: 'prompt-submit' }],
-  work: ['tool-use', 'tool-done', 'tool-failed', 'compact'].map((signal) => ({ signal })),
-  agent: [{ signal: 'subagent-start' }, { signal: 'subagent-done' }, { signal: 'tool-use', fromSubagent: true }, { signal: 'tool-done', fromSubagent: true }, { signal: 'tool-failed', fromSubagent: true }],
+  work: ['tool-use', 'tool-done', 'tool-failed', 'compact', 'permission-denied'].map((signal) => ({ signal })),
+  agent: [{ signal: 'subagent-start' }, { signal: 'subagent-done' }, { signal: 'tool-use', fromSubagent: true }, { signal: 'tool-done', fromSubagent: true }, { signal: 'tool-failed', fromSubagent: true }, { signal: 'permission-denied', fromSubagent: true }],
   task: [{ signal: 'task-created' }, { signal: 'task-done' }],
   start: [{ signal: 'session-start' }],
   stop: [{ signal: 'stop' }],
@@ -28,28 +29,27 @@ const EVENT_INPUTS = {
   fail: [{ signal: 'turn-failed' }],
   ask: [{ signal: 'permission-ask' }],
   limit: [{ signal: 'limit-hit' }],
-  deny: [{ signal: 'permission-denied' }],
   end: [{ signal: 'session-end' }],
 };
 
 // The expected machine, written out by hand (not derived from the code).
 // w working, s started, a asking, l limited, f finished, n nudged, x failed,
-// d denied, - absent; UPPER CASE = the stored signal was kept (a guard held).
-const COLS = ['prompt', 'work', 'agent', 'task', 'start', 'stop', 'nudge', 'fail', 'ask', 'limit', 'deny', 'end'];
+// - absent; UPPER CASE = the stored signal was kept (a guard held).
+// A denied tool call is `work`: the turn carries on, so there is no denied state.
+const COLS = ['prompt', 'work', 'agent', 'task', 'start', 'stop', 'nudge', 'fail', 'ask', 'limit', 'end'];
 const HOOK = {
-  absent: 'w w w W s f n x a l d -',
-  working: 'w w w W s f n x a l d -',
-  started: 'w w S S s f n x a l d -',
-  asking: 'w w A A s f n x a l d -',
-  limited: 'w w L L s f n x a l d -',
-  finished: 'w w F F s f n x a l d -',
-  nudged: 'w w N N s f n x a l d -',
-  failed: 'w w X X s f X x a l d -',
-  denied: 'w w D D s f n x a l d -',
+  absent: 'w w w W s f n x a l -',
+  working: 'w w w W s f n x a l -',
+  started: 'w w S S s f n x a l -',
+  asking: 'w w A A s f n x a l -',
+  limited: 'w w L L s f n x a l -',
+  finished: 'w w F F s f n x a l -',
+  nudged: 'w w N N s f n x a l -',
+  failed: 'w w X X s f X x a l -',
 };
 // A bare signal (emit.js, /signal) has no hook-only guards: it always lands.
-const BARE = Object.fromEntries(Object.keys(HOOK).map((s) => [s, 'w w w w s f n x a l d -']));
-const LETTER = { w: 'working', s: 'started', a: 'asking', l: 'limited', f: 'finished', n: 'nudged', x: 'failed', d: 'denied', '-': 'absent' };
+const BARE = Object.fromEntries(Object.keys(HOOK).map((s) => [s, 'w w w w s f n x a l -']));
+const LETTER = { w: 'working', s: 'started', a: 'asking', l: 'limited', f: 'finished', n: 'nudged', x: 'failed', '-': 'absent' };
 
 test('machine: the spec covers every state and event the machine has', () => {
   assert.deepEqual(Object.keys(HOOK), M.STATES);
@@ -98,6 +98,14 @@ test('machine clocks: a prompt starts the working clock, a turn end stops it, wo
   for (const end of M.TURN_END) assert.equal(M.step(prevFor('working'), { signal: end }, iso(0)).workingSince, null, end);
 });
 
+test('machine clocks: a denied tool call mid-turn keeps the turn and its clock (auto-mode classifier)', () => {
+  const t = M.step(prevFor('working'), { signal: 'permission-denied' }, iso(0));
+  assert.deepEqual([t.to, t.signal, t.workingSince], ['working', 'permission-denied', iso(-60000)], 'no green→off→green, no clock reset');
+  assert.equal(t.touchedAt, prevFor('working').touchedAt, 'the classifier denying is not you');
+  const back = M.step({ ...prevFor('working'), ...t }, { signal: 'tool-use' }, iso(1000));
+  assert.equal(back.workingSince, iso(-60000), 'Claude carrying on is the same turn');
+});
+
 test('machine clocks: signalSince moves only when the stored signal changes', () => {
   const ask = M.step(prevFor('working'), { signal: 'permission-ask' }, iso(0));
   assert.equal(ask.signalSince, iso(0));
@@ -144,7 +152,9 @@ test('flicker: a young notification ask shows what came before it; real asks sho
 test('touches: only you acting resets the ignored clock (10fe889)', () => {
   const cases = [
     [null, 'prompt-submit', {}, true],
-    [null, 'permission-denied', {}, true],
+    [null, 'permission-denied', {}, false],
+    [{ signal: 'permission-ask', askKind: 'request', signalSince: iso(-5000) }, 'permission-denied', {}, true],
+    [{ signal: 'permission-ask', askKind: 'notification', signalSince: iso(-300) }, 'permission-denied', {}, false],
     [null, 'session-start', { sessionSource: 'startup' }, true],
     [null, 'session-start', { sessionSource: 'compact' }, false],
     [null, 'prompt-submit', { bookkeeping: true }, false],
@@ -169,7 +179,7 @@ const PRESENT_CASES = [
   ['held', { sessionId: 's', signal: 'permission-ask', askKind: 'notification', prevSignal: 'tool-done', signalSince: iso(-100), updatedAt: iso(-100) }, {}, 'tool-done', 'hysteresis-held'],
   ['promoted', { signal: 'stop', updatedAt: iso(-60000), agents: working(-60000) }, {}, 'tool-use', 'promoted-agents'],
   ['promoted', { signal: 'idle-nudge', updatedAt: iso(-60000), agents: working(-60000) }, {}, 'tool-use', 'promoted-agents'],
-  ['promoted', { signal: 'permission-denied', updatedAt: iso(-60000), agents: [{ id: 'b' }] }, {}, 'tool-use', 'promoted-agents'],
+  ['shown', { signal: 'permission-denied', tool: 'Bash', updatedAt: iso(-60000), agents: [{ id: 'b' }] }, {}, 'permission-denied', 'hook signal'],
   ['stale-agents', { signal: 'stop', updatedAt: iso(-7 * 3600000), agents: working(-7 * 3600000) }, {}, 'tool-use', 'promoted-agents'],
   ['promoted', { signal: 'stop', updatedAt: iso(-7 * 3600000), agentsAt: iso(-60000), agents: working(-7 * 3600000) }, {}, 'tool-use', 'promoted-agents'],
   ['stale', { signal: 'tool-use', updatedAt: iso(-11 * 60000) }, {}, 'tool-use', 'hook signal'],
