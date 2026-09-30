@@ -16,6 +16,8 @@ CREATE TABLE lessons (
 CREATE INDEX lessons_by_repo ON lessons (org_id, repo_id, created_at);
 CREATE TRIGGER lessons_no_update BEFORE UPDATE ON lessons BEGIN SELECT RAISE(ABORT, 'lessons are append-only'); END;
 CREATE TRIGGER lessons_no_delete BEFORE DELETE ON lessons BEGIN SELECT RAISE(ABORT, 'lessons are append-only'); END;
+-- INSERT OR REPLACE deletes the old row without firing DELETE triggers (recursive_triggers is off).
+CREATE TRIGGER lessons_no_replace BEFORE INSERT ON lessons WHEN EXISTS (SELECT 1 FROM lessons WHERE id = NEW.id) BEGIN SELECT RAISE(ABORT, 'lessons are append-only'); END;
 
 -- D31: the run that created a card (board_create_card), so the board can mark
 -- it agent-suggested. NULL for every human-created card.
