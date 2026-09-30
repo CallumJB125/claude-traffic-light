@@ -30,6 +30,7 @@
     "files": [
       "main.js",
       "src/**/*",
+      "board/shared/secret-patterns.mjs",
       "preload.js",
       "index.html",
       "settings.html",
