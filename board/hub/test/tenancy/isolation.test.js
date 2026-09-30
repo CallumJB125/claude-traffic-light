@@ -230,3 +230,25 @@ test('T-PRESENCE: team presence stays in its team over WS and HTTP; a revoked de
     await fx.h.close();
   }
 });
+
+test('L1: request_changes with a foreign or unknown target_member_id is a 400, never a 500, and changes nothing', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, A, B, db } = fx;
+    db.raw.exec('PRAGMA ignore_check_constraints = ON');
+    db.run("UPDATE cards SET run_state = 'in_review' WHERE id = ?", A.card);
+    db.raw.exec('PRAGMA ignore_check_constraints = OFF');
+    const before = JSON.stringify(db.get('SELECT * FROM cards WHERE id = ?', A.card));
+    for (const target of [B.owner, 'nonexistent']) {
+      const r = await as(users.ua, 'POST', `/api/cards/${A.card}/actions/request_changes`, { request_id: rid(), comment: 'x', target_member_id: target });
+      assert.equal(r.status, 400, r.text);
+      assert.equal(r.body.error.code, 'VALIDATION');
+      assert.ok(!r.text.includes(MARK));
+    }
+    assert.equal(JSON.stringify(db.get('SELECT * FROM cards WHERE id = ?', A.card)), before);
+    const ok = await as(users.ua, 'POST', `/api/cards/${A.card}/actions/request_changes`, { request_id: rid(), comment: 'x', target_member_id: A.member });
+    assert.equal(ok.status, 200, ok.text);
+  } finally {
+    await fx.h.close();
+  }
+});

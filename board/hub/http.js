@@ -15,13 +15,13 @@ import { publicMember } from './api.js';
 import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
-import { clientIp, limitOrThrow } from './ratelimit.js';
+import { clientIp, ipKey, limitOrThrow } from './ratelimit.js';
 import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
-const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
+const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
 // Dev auth trusts a loopback peer. A request that passed through a proxy or
@@ -101,6 +101,9 @@ async function readBody(req) {
 
 export function createHttpHandler({ hub, api, config }) {
   const etags = new Map();
+  // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
+  const hsts = (() => { try { return new URL(config.publicUrl).protocol === 'https:'; } catch { return false; } })();
+
 
   const authMember = makeAuthMember({ hub, config });
   // The org a request's resource lives in: decides which member row answers
@@ -256,6 +259,9 @@ export function createHttpHandler({ hub, api, config }) {
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://hub');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('content-security-policy', "frame-ancestors 'none'");
+    if (hsts) res.setHeader('strict-transport-security', 'max-age=31536000');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
@@ -281,7 +287,7 @@ export function createHttpHandler({ hub, api, config }) {
       if (!match) throw new HubError('NOT_FOUND', 'no such route');
       const { r, params } = match;
       const ip = clientIp(req, config);
-      if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ip);
+      if (r.mutating) limitOrThrow(hub, r.auth === 'none' ? 'login_ip' : 'mutate_ip', ipKey(ip));
       if (r.mutating) {
         if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');

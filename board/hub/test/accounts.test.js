@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { startAccounts, dumpDb } from './accounts-helpers.js';
 import { settle } from './helpers.js';
 import { FailureBudget } from '../ratelimit.js';
@@ -627,6 +628,81 @@ test('M2: device name and platform in the mail are plain and link-free; a hub-wi
     h.clock.advance(DAY);
     await h.start('q@example.com');
     assert.equal(h.mailer.sent.length, n + 1, 'the cap refills');
+  } finally {
+    await h.close();
+  }
+});
+
+test('L2: per-IP limits key IPv6 clients by their /64 (login_ip, mutate_ip, invite preview)', async () => {
+  const two = { capacity: 2, per_ms: 60 * MIN };
+  const h = await startAccounts({ config: { trustCfIp: true, rateLimits: { login_ip: two, invite_preview_ip: { capacity: 100, per_ms: MIN } } } });
+  try {
+    const from = (ip) => h.call('POST', '/api/invites/preview', { body: { t: 'x' }, headers: { 'cf-connecting-ip': ip } });
+    assert.equal((await from('2001:db8:1:2::1')).status, 400);
+    assert.equal((await from('2001:db8:1:2:ffff::9')).status, 400);
+    assert.equal((await from('2001:db8:1:2:0:0:0:3')).status, 429, 'same /64: one bucket');
+    assert.equal((await from('2001:db8:1:3::1')).status, 400, 'another /64');
+  } finally {
+    await h.close();
+  }
+});
+
+test('L3: a restore (BOARD_RESTORE) kills desktop device tokens as well as cookie sessions', async () => {
+  const h = await startAccounts();
+  const dir = h.hub.config.dataDir;
+  const r = await h.signIn('jo@example.com');
+  const tok = r.body.device_token;
+  assert.equal((await h.call('GET', '/api/account', { token: tok })).status, 200);
+  await h.close();
+  const h2 = await startAccounts({ config: { dataDir: dir, dbPath: join(dir, 'board.db'), restore: true } });
+  try {
+    assert.equal((await h2.call('GET', '/api/account', { token: tok })).status, 401, 'a token from before the restore is dead');
+    assert.equal(h2.hub.accounts.credValid({ kind: 'device', id: r.body.device_id }), false, 'and its sockets go on the next reaper pass');
+    const again = await h2.signIn('jo@example.com');
+    assert.equal(again.body.user.id, r.body.user.id, 'same account');
+    assert.equal((await h2.call('GET', '/api/account', { token: again.body.device_token })).status, 200, 'a new sign-in works');
+  } finally {
+    await h2.close();
+  }
+});
+
+test('L5: every response forbids framing; HSTS once the public URL is https', async () => {
+  const h = await startAccounts({ config: { webDir: new URL('../../web', import.meta.url).pathname } });
+  try {
+    for (const path of ['/api/health', '/api/account', '/invite', '/nope', '/api/nope']) {
+      const r = await fetch(`${h.base}${path}`);
+      assert.equal(r.headers.get('x-frame-options'), 'DENY', path);
+      assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/, path);
+      assert.equal(r.headers.get('strict-transport-security'), null, `${path}: no HSTS over http`);
+    }
+  } finally {
+    await h.close();
+  }
+  const s = await startAccounts({ config: { publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
+  try {
+    assert.equal((await fetch(`${s.base}/api/health`)).headers.get('strict-transport-security'), 'max-age=31536000');
+  } finally {
+    await s.close();
+  }
+});
+
+test('L7: addresses are matched in one canonical (JS) form: a mixed-case, non-ASCII member row links on sign-in; stored data is canonicalised', async () => {
+  const h = await startAccounts();
+  try {
+    const now = h.hub.iso();
+    h.db.insert('members', { id: 'm-elodie', org_id: h.ids.org, role: 'member', display_name: 'Élodie', email: ' ÉLODIE@Example.COM ', github_login: '~email:elodie', github_id: -424242, created_at: now });
+    const r = await h.signIn('élodie@example.com');
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.body.teams.map((t) => t.id), [h.ids.org], 'linked, though SQLite lower() would not fold É');
+    assert.equal(h.db.get("SELECT email FROM members WHERE id = 'm-elodie'").email, 'élodie@example.com');
+    // Rows written before (migration 009 used SQLite lower()) are rewritten at start.
+    h.db.insert('users', { id: 'u-old', display_name: 'Old', primary_email: 'ÅSA@x.test', primary_email_verified_at: now, created_at: now });
+    h.db.insert('identities', { id: 'i-old', user_id: 'u-old', provider: 'email', subject: 'ÅSA@x.test', email: 'ÅSA@x.test', email_verified: 1, created_at: now });
+    h.hub.accounts.canonicaliseStored();
+    assert.equal(h.db.get("SELECT primary_email FROM users WHERE id = 'u-old'").primary_email, 'åsa@x.test');
+    assert.deepEqual({ ...h.db.get("SELECT subject, email FROM identities WHERE id = 'i-old'") }, { subject: 'åsa@x.test', email: 'åsa@x.test' });
+    const old = await h.signIn('åsa@x.test');
+    assert.equal(old.body?.user?.id, 'u-old', old.text);
   } finally {
     await h.close();
   }

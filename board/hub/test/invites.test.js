@@ -331,7 +331,7 @@ test('removing an inviter withdraws the invites they sent that nobody used', asy
   }
 });
 
-test('the /invite page: served with no-referrer, reads the fragment, tries plexiform:// then claudebuddy://; /download follows BOARD_DOWNLOAD_URL', async () => {
+test('the /invite page: served with no-referrer, reads the fragment, tries plexiform://, claudebuddy:// only on a click; /download follows BOARD_DOWNLOAD_URL', async () => {
   const fx = await setup({ config: { webDir: new URL('../../web', import.meta.url).pathname, downloadUrl: 'https://downloads.example.com/Plexiform.dmg' } });
   try {
     const { h } = fx;
@@ -344,17 +344,63 @@ test('the /invite page: served with no-referrer, reads the fragment, tries plexi
     assert.match(html, /href="\/download"/);
     assert.match(html, /right-click/);
     assert.match(html, /click your invite link in the email again/);
-    assert.ok(!/Buddy/.test(html));
+    assert.ok(!/Buddy/.test(html.replace('Open with older Buddy', '')), 'the old name only on the button for older builds');
     const js = await (await fetch(`${h.base}/web/js/invite.js`)).text();
     assert.match(js, /location\.hash/);
     assert.match(js, /replaceState/);
     assert.match(js, /\/api\/invites\/preview/);
     assert.match(js, /deepLinkScheme[\s\S]*legacyDeepLinkScheme/);
+    assert.match(html, /id="open-legacy"/);
     const brand = await (await fetch(`${h.base}/shared/brand.js`)).text();
     assert.match(brand, /deepLinkScheme: 'plexiform'/);
     assert.match(brand, /legacyDeepLinkScheme: 'claudebuddy'/);
     const dl = await fetch(`${h.base}/download`, { redirect: 'manual' });
     assert.deepEqual([dl.status, dl.headers.get('location')], [302, 'https://downloads.example.com/Plexiform.dmg']);
+  } finally {
+    await fx.h.close();
+  }
+});
+
+test('L4: an invite stops working when its inviter may no longer invite as that role (demoted or removed)', async () => {
+  const fx = await setup();
+  try {
+    const { users, A } = fx;
+    const inv = await fx.invite(users.aadmin, 'late@example.com', 'admin');
+    assert.equal(inv.status, 200, inv.text);
+    assert.equal((await fx.as(users.ua, 'PATCH', `/api/teams/${A.team}/members/${A.admin}`, { role: 'member' })).status, 200);
+    const t = tokenOf(inv.body.link);
+    assert.equal((await fx.preview(t)).body.error.code, 'INVALID_TOKEN');
+    const late = await fx.newUser('late@example.com');
+    const r = await fx.accept(late, { t });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error.code, 'INVALID_TOKEN');
+    assert.equal(fx.db.get('SELECT 1 AS x FROM members WHERE org_id = ? AND user_id = ?', A.team, late.id), null);
+    // Restored to admin: the invite works again (it was never withdrawn).
+    assert.equal((await fx.as(users.ua, 'PATCH', `/api/teams/${A.team}/members/${A.admin}`, { role: 'admin' })).status, 200);
+    assert.equal((await fx.accept(late, { t })).status, 200);
+  } finally {
+    await fx.h.close();
+  }
+});
+
+test('L8: a GitHub identity never proves an address, even with its email_verified flag set', async () => {
+  const fx = await setup();
+  try {
+    const { users, db, h } = fx;
+    const x = await fx.newUser('x@example.com');
+    db.insert('identities', { id: randomUUID(), user_id: x.id, provider: 'github', subject: '987654', email: 'victim@example.com', email_verified: 1, created_at: h.hub.iso() });
+    const inv = await fx.invite(users.ua, 'victim@example.com', 'member');
+    assert.equal((await fx.accept(x, { invite_id: inv.body.invite.id })).body.error.code, 'INVALID_TOKEN');
+    assert.equal((await fx.accept(x, { t: tokenOf(inv.body.link) })).body.error.code, 'WRONG_ACCOUNT');
+    assert.deepEqual((await fx.as(x, 'GET', '/api/account')).body.pending_invites, []);
+    // Signing in as that address is someone else (a new user), never x.
+    const v = await fx.newUser('victim@example.com');
+    assert.notEqual(v.id, x.id);
+    // An Access-era member row with that address links to the prover, not to x.
+    const m = randomUUID();
+    db.insert('members', { id: m, org_id: fx.A.team, role: 'member', display_name: 'V', email: 'victim@example.com', github_login: '~email:v', github_id: -777, created_at: h.hub.iso() });
+    h.hub.accounts.linkMembers(v.id, 'victim@example.com');
+    assert.equal(db.get('SELECT user_id FROM members WHERE id = ?', m).user_id, v.id);
   } finally {
     await fx.h.close();
   }

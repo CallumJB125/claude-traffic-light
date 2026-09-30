@@ -38,9 +38,15 @@ export function ipPrefix(ip) {
   return null;
 }
 
+/**
+ * The one form an address is compared and stored in (L7): trimmed, lower-cased
+ * by JS (full Unicode), never by SQLite's ASCII-only lower().
+ */
+export const canonEmail = (v) => String(v).trim().toLowerCase();
+
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
-  const e = v.trim().toLowerCase();
+  const e = canonEmail(v);
   if (e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new HubError('VALIDATION', 'email is not an address');
   return e;
 }
@@ -79,6 +85,7 @@ export class Accounts {
     this.kCode = key('email-code');
     this.kCsrf = key('csrf');
     this.kRef = key('audit-email');
+    this.canonicaliseStored();
     // Wrong codes per address, every network together (H2).
     this.failures = new FailureBudget({ now: () => hub.mono(), budget: hub.config.authFailBudget ?? 20 });
   }
@@ -255,7 +262,7 @@ export class Accounts {
         const id = randomUUID();
         this.db.insert('user_devices', {
           id, user_id: user.id, name: device.name, client: 'buddy_desktop', platform: device.platform, form_factor: device.form_factor,
-          token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip),
+          token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip), session_epoch: this.epoch(),
         });
         this.audit('auth.signin', { user: user.id, target: id, detail: { method: 'email', client: 'buddy_desktop' }, ip });
         out = { ...base, device_token: token, device_id: id };
@@ -316,8 +323,32 @@ export class Accounts {
 
   // Member rows an admin added with this address before accounts (Access
   // mode, BOARD_BOOTSTRAP) join the user who just proved the address (§14).
+  // Compared in JS (canonEmail), like every other address check; the row
+  // keeps the canonical form from then on.
   linkMembers(userId, email) {
-    this.db.run('UPDATE members SET user_id = ? WHERE user_id IS NULL AND email IS NOT NULL AND lower(trim(email)) = ?', userId, email);
+    for (const m of this.db.all('SELECT id, email FROM members WHERE user_id IS NULL AND email IS NOT NULL')) {
+      if (canonEmail(m.email) === email) this.db.run('UPDATE members SET user_id = ?, email = ? WHERE id = ?', userId, email, m.id);
+    }
+  }
+
+  // Addresses written before L7 (migration 009 used SQLite's ASCII-only
+  // lower(); an Access-era member row may keep its case): rewritten once in
+  // canonical form. A row whose canonical form is already taken is left alone.
+  canonicaliseStored() {
+    const fix = (table, col, key = 'id') => {
+      for (const r of this.db.all(`SELECT ${key} AS k, ${col} AS v FROM ${table} WHERE ${col} IS NOT NULL`)) {
+        const c = canonEmail(r.v);
+        if (c === r.v) continue;
+        try { this.db.run(`UPDATE ${table} SET ${col} = ? WHERE ${key} = ?`, c, r.k); } catch { /* the canonical form exists already */ }
+      }
+    };
+    fix('members', 'email');
+    fix('users', 'primary_email');
+    fix('identities', 'email');
+    for (const r of this.db.all("SELECT id, subject FROM identities WHERE provider = 'email'")) {
+      const c = canonEmail(r.subject);
+      if (c !== r.subject) try { this.db.run('UPDATE identities SET subject = ? WHERE id = ?', c, r.id); } catch { /* taken */ }
+    }
   }
 
   // ── credentials ───────────────────────────────────────────────────────────
@@ -347,7 +378,8 @@ export class Accounts {
     if (req.headers.authorization != null) {
       const tok = bearer(req);
       const d = tok ? this.db.get('SELECT * FROM user_devices WHERE token_hash = ? AND revoked_at IS NULL', sha256hex(tok)) : null;
-      const user = d && this.liveUser(d.user_id);
+      // A restore bumps the epoch: tokens from before it may have been revoked since the backup (L3).
+      const user = d && d.session_epoch === this.epoch() && this.liveUser(d.user_id);
       if (!user) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
       if (this.hub.ageOf(d.last_seen_at) == null || this.hub.ageOf(d.last_seen_at) >= TOUCH_MS) {
         this.db.run('UPDATE user_devices SET last_seen_at = ?, last_ip_prefix = COALESCE(?, last_ip_prefix) WHERE id = ?', this.now(), ipPrefix(ip), d.id);
@@ -378,8 +410,8 @@ export class Accounts {
   /** Still good? (the per-tick backstop for open browser sockets) */
   credValid(cred) {
     if (cred.kind === 'device') {
-      const d = this.db.get('SELECT user_id FROM user_devices WHERE id = ? AND revoked_at IS NULL AND token_hash IS NOT NULL', cred.id);
-      return !!(d && this.liveUser(d.user_id));
+      const d = this.db.get('SELECT user_id, session_epoch FROM user_devices WHERE id = ? AND revoked_at IS NULL AND token_hash IS NOT NULL', cred.id);
+      return !!(d && d.session_epoch === this.epoch() && this.liveUser(d.user_id));
     }
     const s = this.db.get('SELECT * FROM sessions WHERE id = ?', cred.id);
     return !!(s && this.sessionLive(s) && this.liveUser(s.user_id));

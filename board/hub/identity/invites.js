@@ -10,11 +10,11 @@
 import { createHmac, hkdfSync, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { HubError } from '../db.js';
 import { sha256hex } from '../auth.js';
-import { limitOrThrow } from '../ratelimit.js';
+import { ipKey, limitOrThrow } from '../ratelimit.js';
 import { emailOnlyIdentity } from '../views.js';
 import { can, canInviteAs, INVITABLE_ROLES } from '../permissions.js';
 import { BRAND } from '../../shared/brand.js';
-import { ipPrefix, mailName, maskEmail, normalizeEmail } from './accounts.js';
+import { canonEmail, ipPrefix, mailName, maskEmail, normalizeEmail } from './accounts.js';
 
 export { mailName };
 import { publicTeam, quotaFor } from './teams.js';
@@ -58,19 +58,27 @@ export class Invites {
     return this.db.get('SELECT COUNT(*) AS n FROM invites WHERE org_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', orgId, this.now()).n;
   }
 
-  /** Live, pending, unexpired, in a team that isn't deleted. */
+  /**
+   * Live, pending, unexpired, in a team that isn't deleted, and its inviter
+   * may still invite as that role today (a demoted or removed inviter's
+   * invites stop working, L4).
+   */
   usable(inv) {
     if (!inv || inv.accepted_at || inv.revoked_at || inv.expires_at <= this.now()) return false;
-    return !!this.teams.org(inv.org_id);
+    return !!this.teams.org(inv.org_id) && canInviteAs(this.hub.activeMember(inv.created_by), inv.role);
   }
 
   view(inv) { return { id: inv.id, email: inv.email, role: inv.role, expires_at: inv.expires_at }; }
 
-  // Every verified address the user holds: the primary one, and verified sign-in identities.
+  // Every verified address the user holds: the primary one, and email
+  // identities (a code sent to that address proved it). Nothing else counts:
+  // the GitHub identities migration 009 made from member github_ids carry no
+  // proof of any address (email_verified = 0), and even a flag set on one is
+  // ignored here (L8). OAuth providers add their own rule when they land.
   verifiedEmails(user) {
     const set = new Set();
-    if (user.primary_email && user.primary_email_verified_at) set.add(user.primary_email.toLowerCase());
-    for (const r of this.db.all('SELECT email FROM identities WHERE user_id = ? AND email_verified = 1 AND email IS NOT NULL', user.id)) set.add(r.email.toLowerCase());
+    if (user.primary_email && user.primary_email_verified_at) set.add(canonEmail(user.primary_email));
+    for (const r of this.db.all("SELECT email FROM identities WHERE user_id = ? AND provider = 'email' AND email_verified = 1 AND email IS NOT NULL", user.id)) set.add(canonEmail(r.email));
     return [...set];
   }
 
@@ -90,8 +98,8 @@ export class Invites {
     const inviter = this.accounts.liveUser(member.user_id);
     if (!inviter?.primary_email_verified_at) throw new HubError('EMAIL_UNVERIFIED', 'verify your email address before inviting');
     const org = this.teams.org(member.org_id);
-    const already = this.db.get(`SELECT 1 AS x FROM members m LEFT JOIN users u ON u.id = m.user_id
-      WHERE m.org_id = ? AND m.removed_at IS NULL AND (lower(m.email) = ? OR u.primary_email = ?)`, org.id, email, email);
+    const already = this.db.all(`SELECT m.email, u.primary_email FROM members m LEFT JOIN users u ON u.id = m.user_id
+      WHERE m.org_id = ? AND m.removed_at IS NULL`, org.id).some((r) => [r.email, r.primary_email].some((e) => e != null && canonEmail(e) === email));
     if (already) throw new HubError('ALREADY_MEMBER', 'that address is already in the team', { team: { id: org.id, name: org.name } });
     const open = this.db.get('SELECT id FROM invites WHERE org_id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', org.id, email, this.now());
     if (open) throw new HubError('CONFLICT', 'that address already has a pending invite: resend it instead', { invite_id: open.id });
@@ -111,7 +119,7 @@ export class Invites {
   limits(member, ip) {
     limitOrThrow(this.hub, 'invite_team', member.org_id);
     limitOrThrow(this.hub, 'invite_user', member.user_id);
-    limitOrThrow(this.hub, 'invite_ip', ip);
+    limitOrThrow(this.hub, 'invite_ip', ipKey(ip));
   }
 
   issue(member, org, { email, role, replaces = null }, { ip, req, action }) {
@@ -187,7 +195,7 @@ export class Invites {
 
   /** POST /api/invites/preview {t} (no auth): {team_name, inviter_first_name, role}; never the address. */
   preview(body, { ip }) {
-    limitOrThrow(this.hub, 'invite_preview_ip', ip);
+    limitOrThrow(this.hub, 'invite_preview_ip', ipKey(ip));
     const inv = typeof body.t === 'string' && TOKEN_RE.test(body.t) ? this.db.get('SELECT * FROM invites WHERE token_hash = ?', sha256hex(body.t)) : null;
     if (!this.usable(inv)) throw invalid();
     const org = this.teams.org(inv.org_id);
@@ -204,7 +212,7 @@ export class Invites {
    * Accepting again as the same user answers the same {team, member}.
    */
   accept(ident, body, { ip }) {
-    limitOrThrow(this.hub, 'invite_accept_ip', ip);
+    limitOrThrow(this.hub, 'invite_accept_ip', ipKey(ip));
     limitOrThrow(this.hub, 'invite_accept_user', ident.user.id);
     const user = ident.user;
     const emails = this.verifiedEmails(user);
@@ -263,7 +271,7 @@ export class Invites {
   // legacy row with this address) comes back, so history keeps pointing at it.
   join(org, user, inv, now) {
     const prev = this.db.get('SELECT * FROM members WHERE org_id = ? AND user_id = ?', org.id, user.id)
-      ?? this.db.get('SELECT * FROM members WHERE org_id = ? AND user_id IS NULL AND lower(email) = ?', org.id, inv.email);
+      ?? this.db.all('SELECT * FROM members WHERE org_id = ? AND user_id IS NULL AND email IS NOT NULL ORDER BY created_at', org.id).find((m) => canonEmail(m.email) === inv.email);
     if (prev) {
       this.db.run('UPDATE members SET removed_at = NULL, user_id = ?, role = ?, email = ?, display_name = ?, joined_via = ? WHERE id = ?',
         user.id, inv.role, inv.email, user.display_name, inv.id, prev.id);

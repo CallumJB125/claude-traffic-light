@@ -35,7 +35,7 @@ There are two, and only two, credentials.
 - `POST /api/auth/email/verify` with `client:'buddy_desktop'` returns `device_token` (`bdt_` + 43 base64url characters) **once**. The hub stores only its sha256. Keep it in the macOS Keychain.
 - **Electron main injects `Authorization: Bearer <device_token>` into every request the in-app web view makes to the hub origin (via `session.webRequest.onBeforeSendHeaders`), including the `/ws/board` WebSocket upgrade. The page never sees the token.** Main's own calls (`/api/account`, sign-out, …) send the same header.
 - Bearer requests need **no CSRF token**, because no ambient credential exists. The hub still checks `Origin`: when an `Origin` header is present it must be the hub's own origin (`BOARD_PUBLIC_URL`), or the request gets `403`. The web view's requests carry the page's own origin, so they pass. Main's Node requests send no `Origin`, and those pass too.
-- The token does not expire. It stops working when the user signs out on that device, revokes it from another device, or deletes the account. After that every call returns `401 UNAUTHENTICATED`, and open sockets get `session.revoked` then close `4401`. On `401`, drop the token from the Keychain and show sign-in.
+- The token does not expire. It stops working when the user signs out on that device, revokes it from another device, or deletes the account, and after a hub restore from backup (which signs every device and browser out, since the backup can't know about revocations made after it). After that every call returns `401 UNAUTHENTICATED`, and open sockets get `session.revoked` then close `4401`. On `401`, drop the token from the Keychain and show sign-in.
 - A request with an `Authorization` header that doesn't name a live device is `401`. It never falls back to a cookie.
 - These tokens are `user_devices` rows, the same kind the design's device flow (§6) uses. Runners will reuse them in P4 (rotation arrives then).
 
@@ -117,6 +117,7 @@ No auth for sign-in. A delete flow needs the same user's credential.
 → delete flow: `{"ok": true, "flow_id": "…", "step_up_expires_in": 300}`. A delete flow never signs anyone in.
 
 - Sign-up = sign-in. The first verify for an address creates the user, with a verified email and `display_name` = the part of the address before `@` (editable later). Any member row an admin added with that address earlier (Access era, `BOARD_BOOTSTRAP`) joins the user, so its team shows up in `teams`.
+- **The linking trade-off.** An address is the only thing that ties such a pre-made member row (or an invite) to a person. If an admin typed the wrong address, whoever proves that address (by a code sent to it, or later by a Google/GitHub account verified for it) gets that membership. Addresses are compared in one canonical form (trimmed, lower-cased with full Unicode). Only an email identity (a code sent to the address) or the account's own verified primary address proves an address; a GitHub identity carried over from the Access era never does.
 - Magic link (web only): the page at `/auth/email` reads the fragment and POSTs `{flow_id, code, via:'link'}`. A browser without the matching `__Host-buddy_flow` cookie gets `428 CONFIRM_REQUIRED {email_masked:"j•••@example.com"}`, and the page asks "Sign in as j•••@example.com?" before re-POSTing with `confirm:true`. A link scanner's GET only loads the page, because the fragment never reaches the server, so it consumes nothing.
 - Errors:
   - `400 INVALID_TOKEN`: one generic answer for an unknown, wrong, used, expired or dead flow. After a wrong code it includes `attempts_left`.
@@ -220,7 +221,7 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 | `GET /invite` | the invite landing page (see Invites) |
 | `GET /download` | `302` to `BOARD_DOWNLOAD_URL` (the app download), or `404` when none is configured |
 
-All static pages send `Referrer-Policy: no-referrer`.
+All static pages send `Referrer-Policy: no-referrer`. Every hub response forbids framing (`X-Frame-Options: DENY`, CSP `frame-ancestors 'none'`), and with an https `BOARD_PUBLIC_URL` it sends `Strict-Transport-Security: max-age=31536000`.
 
 ## Routes built in P2: teams and members
 
@@ -314,8 +315,8 @@ One universal link per invite: **`https://<hub>/invite#<token>`**, with `token` 
 
 The hub serves `/invite` as a static page (`Referrer-Policy: no-referrer`). Its script reads the fragment, removes it from the address bar, POSTs `/api/invites/preview {t}`, and shows "*Jo* invited you to join *Acme* as a member". It then tries the desktop app:
 
-1. **`plexiform://invite/<token>`** first,
-2. then the legacy alias **`claudebuddy://invite/<token>`** if the page is still in front 1.2 s later (older builds register only that scheme),
+1. **`plexiform://invite/<token>`** at once,
+2. if the page is still in front 1.5 s later, it shows **"Open with older Buddy"**; only a click on it sends the token to the legacy scheme **`claudebuddy://invite/<token>`** (older builds register only that one, and any app could claim it, so the token never goes there on its own). A malformed fragment shows the generic "not valid" message,
 
 and always shows **"Open in Plexiform"** (the `plexiform://` link) and **"Download Plexiform for Mac"** (`/download`, which redirects to `BOARD_DOWNLOAD_URL`), with the steps: install, open (the app isn't signed by Apple yet: right-click or Control-click it in Applications, choose Open, then Open again), sign in with the invited address, then click the invite link in the email again.
 
@@ -328,6 +329,7 @@ The invite mail (plain text) carries the team and inviter names, the link, an 8-
 - Only owners and admins invite, as `admin`, `member` or `viewer`, **never above their own role and never as `owner`** (`403 FORBIDDEN`; make someone owner after they join). The inviter's email must be verified (`403 EMAIL_UNVERIFIED`).
 - One invite per address per team at a time: a second → `409 CONFLICT {invite_id}` (resend the first instead). An address already in the team → `409 ALREADY_MEMBER {team:{id, name}}`.
 - 7 days, single use. Acceptance needs a signed-in user whose **verified** email is the invite's.
+- The inviter's role is checked again at preview and accept: if they have since been removed or demoted below the invite's role, the invite answers `INVALID_TOKEN` (it works again if the role comes back).
 - Removing the inviter, deleting the team, or deleting the inviter's account withdraws their unused invites.
 - Quotas: active members **plus pending invites** ≤ 25 per team (free), pending invites ≤ 100 (`403 QUOTA_EXCEEDED`). Rate limits: invites sent (create + resend) 20 a day per team, 50 a day per user, 50 an hour per IP; preview 30 per 10 min per IP; accept 30 per 10 min per IP and per user (`429`).
 - Every step is audited: `invite.create`, `invite.resend`, `invite.revoke`, `invite.accept`, `invite.accept.wrong_account`.
