@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const http = require('http');
+const http = require('http'); // privacy-flow: local-mcp
 const Rules = require('./rules.js');
 const SessionState = require('./hooks/session-state.js');
 const GitSignals = require('./src/github-signals.js');
@@ -162,7 +162,7 @@ const ruleName = (rules, id) => (rules.find((r) => r.id === id) || {}).name || n
 
 function fetchLive(port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172), timeoutMs = 400) {
   return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/status', timeout: timeoutMs }, (res) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/status', timeout: timeoutMs }, (res) => { // privacy-flow: local-mcp
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });

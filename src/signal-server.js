@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const http = require('http');
+const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const { app } = require('electron');
 const Rules = require('../rules.js');

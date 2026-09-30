@@ -21,7 +21,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const http = require('http');
+const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
@@ -415,11 +415,15 @@ const AGENT_KEEPALIVE_MS = Rules.AGENT_KEEPALIVE_MS;
 // could show them any more (a file's mtime is never older than the times it
 // holds), with half a day's margin on top.
 const SESSION_SWEEP_MARGIN_MS = 12 * 60 * 60 * 1000;
+const REQUEST_SWEEP_MS = 24 * 60 * 60 * 1000;
 function sweepSessionFiles() {
   const c = loadConfig();
   const maxAge = Math.max(c.waitingStaleHours * 3600000 || 0, c.workingStaleMinutes * 60000 || 0, AGENT_KEEPALIVE_MS) + SESSION_SWEEP_MARGIN_MS;
   const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
   if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
+  // Permission requests (and answers) whose hook died before cleaning up; a live one lasts under a minute.
+  const orphans = Agents.sweepStaleFiles(REQUESTS_DIR, REQUEST_SWEEP_MS, Date.now(), ['.json', '.answer', '.tmp']);
+  if (orphans.length) console.log(`[sweep] removed ${orphans.length} orphaned request file(s)`);
 }
 
 // Every change in what a session presents is logged, so a flicker report can
@@ -747,6 +751,7 @@ function createWindow() {
     fullscreenable: false,
     show: false,
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       backgroundThrottling: false,
@@ -801,6 +806,7 @@ function createSettingsWindow() {
     maximizable: false,
     title: 'Claude Buddy Preferences',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
       contextIsolation: true,
     },
@@ -850,6 +856,7 @@ function createLightsWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'lights-preload.js'),
       contextIsolation: true,
       // The live preview must keep animating when this window sits behind
@@ -970,6 +977,7 @@ function createHelpWindow() {
     title: 'What is Claude doing?',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'help-preload.js'),
       contextIsolation: true,
     },
@@ -1198,7 +1206,7 @@ function updateOverlay(look) {
     skipTaskbar: true,
     fullscreenable: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setIgnoreMouseEvents(true);
   overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1260,7 +1268,7 @@ function ensureTrayRenderer() {
     show: false,
     transparent: true,
     frame: false,
-    webPreferences: { preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
@@ -2093,12 +2101,12 @@ ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: t
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-ipcMain.handle('export-stats', async (_e, format, days) => {
+ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
   const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
-  const r = await dialog.showSaveDialog(lightsWin || undefined, {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
     filters: [csv ? { name: 'CSV', extensions: ['csv'] } : { name: 'JSON', extensions: ['json'] }],
@@ -2485,7 +2493,7 @@ async function runAction(action, st) {
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
-    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
+    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' }; // privacy-flow: rule-url
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
@@ -2769,8 +2777,8 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-ipcMain.handle('setup-export', async () => {
-  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+ipcMain.handle('setup-export', async (e) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
