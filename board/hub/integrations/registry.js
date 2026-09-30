@@ -89,7 +89,7 @@ function auditJson(v) {
 }
 
 export function createIntegrations({
-  hub, api, bus = null, log, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  hub, api, bus = null, log, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), // privacy-flow: integrations-hub
   handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random,
 }) {
   const connectors = new Map();
@@ -191,7 +191,7 @@ export function createIntegrations({
       let opts = { ...init };
       for (let hop = 0; ; hop += 1) {
         const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-        const res = await fetchImpl(url.href, { ...opts, redirect: 'manual', signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout });
+        const res = await fetchImpl(url.href, { ...opts, redirect: 'manual', signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout }); // privacy-flow: integrations-hub
         const loc = res.status >= 300 && res.status < 400 ? res.headers?.get?.('location') : null;
         if (!loc) return res;
         if (hop >= 1) throw tagged(`${url.host}: too many redirects`, 'provider_error');

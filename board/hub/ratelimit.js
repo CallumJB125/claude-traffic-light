@@ -2,7 +2,7 @@
 // client IP for logins and mutations, and per connection for WS frames. They
 // run on the hub monotonic clock, so tests drive them with the fake clock.
 
-import { isIPv6 } from 'node:net';
+import { isIPv6 } from 'node:net'; // privacy-flow: hub-server
 import { isLoopback } from './config.js';
 import { HubError } from './db.js';
 
