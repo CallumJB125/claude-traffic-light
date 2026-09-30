@@ -242,7 +242,7 @@ export function connectionBanner(conn) {
     h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'reconnect' }, 'Retry now'));
 }
 
-const THEME_NEXT = { system: 'dark', dark: 'light', light: 'system' };
+export const THEME_NEXT = { system: 'dark', dark: 'light', light: 'system' };
 const THEME_ICON = { system: 'auto', dark: 'moon', light: 'sun' };
 const THEME_LABEL = { system: 'Theme: match system', dark: 'Theme: dark', light: 'Theme: light' };
 
@@ -264,6 +264,7 @@ export function topBar(model, lamps) {
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
       h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'theme', 'data-next': THEME_NEXT[model.theme], 'aria-label': `${THEME_LABEL[model.theme]}. Switch to ${THEME_NEXT[model.theme]}.`, title: THEME_LABEL[model.theme] }, icon(THEME_ICON[model.theme])),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),
       model.readOnly ? null : h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-action': 'new-card', 'aria-keyshortcuts': 'n' }, icon('plus', 'icon-lead'), 'New card'),
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
 }

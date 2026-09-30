@@ -9,7 +9,8 @@ import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, ids
 import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
-import { boardScreen, loadingScreen } from './render-board.js';
+import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
+import { paletteResults } from './palette.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
@@ -749,6 +750,66 @@ async function submitDialogForm(form, submitter) {
   return undefined;
 }
 
+// ── command palette ──────────────────────────────────────────────────────────
+// Opening is instant and unanimated: it is a keyboard shortcut people press
+// hundreds of times a day.
+
+function togglePalette() {
+  if (state.auth !== 'ok' || !state.board) return;
+  if (state.dialog?.kind === 'palette') { closePalette(); return; }
+  if (root.querySelector('dialog[open]:not([data-dialog="drawer"])')) return;
+  state.dialog = { kind: 'palette', query: '', index: 0, scope: null };
+  renderNow();
+}
+
+function closePalette() {
+  state.dialog = null;
+  renderNow();
+}
+
+function paletteNow() {
+  const m = buildModel();
+  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters });
+}
+
+function runPalette(item, { give = false } = {}) {
+  const run = give ? { type: 'give', ...item.give } : item.run;
+  if (!run) return;
+  if (run.type === 'scope-give') { state.dialog = { ...state.dialog, scope: 'give', query: '', index: 0 }; renderNow(); return; }
+  closePalette();
+  switch (run.type) {
+    case 'open-card': openDetail(run.id); break;
+    case 'view': setView(run.view); break;
+    case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
+    case 'new-card': openNewCard(); break;
+    case 'give': openGive(run.id, run.mode); break;
+    case 'filter':
+      if (state.view === 'dashboard') setView('board');
+      setFilters({ ...emptyFilters(), chips: [run.chip] });
+      break;
+    case 'filter-clear': setFilters(emptyFilters()); break;
+    default:
+  }
+}
+
+function paletteKeydown(e) {
+  const d = state.dialog;
+  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: state.me?.member?.role === 'viewer', filters: state.filters }).length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!n) return;
+    state.dialog = { ...d, index: (Math.min(d.index, n - 1) + (e.key === 'ArrowDown' ? 1 : -1) + n) % n };
+    renderNow();
+    root.querySelector('.pal-opt[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const hit = paletteNow()[Math.min(d.index, n - 1)];
+    if (hit) runPalette(hit.item, { give: (e.metaKey || e.ctrlKey) && !!hit.item.give });
+  } else if (e.key === 'Tab') {
+    e.preventDefault(); // the field is the only stop: Tab must not leave the dialog
+  }
+}
+
 // ── quick add ────────────────────────────────────────────────────────────────
 
 let pendingSeq = 0;
@@ -938,6 +999,8 @@ function onClick(e) {
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
+    case 'palette': togglePalette(); return;
+    case 'palette-run': { const hit = paletteNow()[Number(el.dataset.index)]; if (hit) runPalette(hit.item); return; }
     case 'quick-add': openQuickAdd(); return;
     case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
     case 'quick-add-cancel': closeQuickAdd(); return;
@@ -981,6 +1044,7 @@ function onSubmit(e) {
 function onInput(e) {
   const el = e.target.closest?.('[data-input]');
   if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
+  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') { state.dialog = { ...state.dialog, query: el.value, index: 0 }; update(); }
 }
 
 function onChange(e) {
@@ -1060,6 +1124,8 @@ function onFocusout(e) {
 }
 
 function onKeydown(e) {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); togglePalette(); return; }
+  if (e.target.dataset?.input === 'palette-q') { paletteKeydown(e); return; }
   if (kbdKeydown(e)) return;
   if (e.target.dataset?.input === 'quickadd') {
     if (e.key === 'Escape') { e.preventDefault(); closeQuickAdd(); }
