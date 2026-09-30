@@ -1,0 +1,135 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 4400000001,
+    "node_id": "CS_kwDOHx4400000001",
+    "head_branch": "board/BDL-9001-r1",
+    "head_sha": "3f1c2a9b8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://api.github.com/repos/acme/app/check-suites/4400000001",
+    "before": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+    "after": "3f1c2a9b8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+    "pull_requests": [
+      {
+        "url": "https://api.github.com/repos/acme/app/pulls/12",
+        "id": 2100000012,
+        "number": 12,
+        "head": {
+          "ref": "board/BDL-9001-r1",
+          "sha": "3f1c2a9b8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+          "repo": {
+            "id": 700100200,
+            "url": "https://api.github.com/repos/acme/app",
+            "name": "app"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+          "repo": {
+            "id": 700100200,
+            "url": "https://api.github.com/repos/acme/app",
+            "name": "app"
+          }
+        }
+      }
+    ],
+    "app": {
+      "id": 15368,
+      "slug": "github-actions",
+      "node_id": "MDM6QXBwMTUzNjg=",
+      "owner": {
+        "login": "github",
+        "id": 9919,
+        "node_id": "MDQ6VXNlcj9919",
+        "avatar_url": "https://avatars.githubusercontent.com/u/9919?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/github",
+        "html_url": "https://github.com/github",
+        "type": "Organization",
+        "site_admin": false
+      },
+      "name": "GitHub Actions",
+      "description": "Automate your workflow from idea to production",
+      "external_url": "https://help.github.com/en/actions",
+      "html_url": "https://github.com/apps/github-actions",
+      "created_at": "2018-07-30T09:30:17Z",
+      "updated_at": "2024-04-10T20:33:16Z",
+      "events": [
+        "check_run",
+        "check_suite",
+        "pull_request",
+        "push"
+      ]
+    },
+    "created_at": "2026-10-01T10:00:05Z",
+    "updated_at": "2026-10-01T10:04:41Z",
+    "rerequestable": true,
+    "runs_rerequestable": false,
+    "latest_check_runs_count": 2,
+    "check_runs_url": "https://api.github.com/repos/acme/app/check-suites/4400000001/check-runs",
+    "head_commit": {
+      "id": "3f1c2a9b8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+      "tree_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6",
+      "message": "Add retry to the ingest worker",
+      "timestamp": "2026-10-01T09:58:03Z",
+      "author": {
+        "name": "Callum",
+        "email": "callum@example.com"
+      },
+      "committer": {
+        "name": "Callum",
+        "email": "callum@example.com"
+      }
+    }
+  },
+  "repository": {
+    "id": 700100200,
+    "node_id": "R_kgDOHx700100200",
+    "name": "app",
+    "full_name": "acme/app",
+    "private": false,
+    "owner": {
+      "login": "acme",
+      "id": 9100001,
+      "node_id": "MDQ6VXNlcj9100001",
+      "avatar_url": "https://avatars.githubusercontent.com/u/9100001?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/acme",
+      "html_url": "https://github.com/acme",
+      "type": "Organization",
+      "site_admin": false
+    },
+    "html_url": "https://github.com/acme/app",
+    "description": "Plexiform test app",
+    "fork": false,
+    "url": "https://api.github.com/repos/acme/app",
+    "created_at": "2025-03-02T09:14:11Z",
+    "updated_at": "2026-09-30T16:02:40Z",
+    "pushed_at": "2026-10-01T09:58:03Z",
+    "git_url": "git://github.com/acme/app.git",
+    "ssh_url": "git@github.com:acme/app.git",
+    "clone_url": "https://github.com/acme/app.git",
+    "default_branch": "main",
+    "visibility": "public",
+    "allow_forking": true,
+    "archived": false,
+    "disabled": false
+  },
+  "sender": {
+    "login": "callum-b",
+    "id": 9100003,
+    "node_id": "MDQ6VXNlcj9100003",
+    "avatar_url": "https://avatars.githubusercontent.com/u/9100003?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/callum-b",
+    "html_url": "https://github.com/callum-b",
+    "type": "User",
+    "site_admin": false
+  },
+  "installation": {
+    "id": 55000111,
+    "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNTUwMDAxMTE="
+  }
+}
