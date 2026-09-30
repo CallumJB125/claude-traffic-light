@@ -21,15 +21,15 @@ async function setup() {
 }
 
 // A card with one recorded run: the rows a real dispatch + claim leave behind.
-function addRun(h, { boardId = h.ids.board, repoId = h.ids.repo, member = h.ids.alice, fence = 1, branch = null, key = null } = {}) {
+function addRun(h, { boardId = h.ids.board, repoId = h.ids.repo, member = h.ids.alice, fence = 1, branch = null, key = null, baseRef = 'main' } = {}) {
   const t = h.hub.iso();
   const cardId = randomUUID();
   const cardKey = key ?? `BDL-${Math.floor(Math.random() * 1e6)}`;
   h.db.run("INSERT INTO cards (id, board_id, key, title, repo_id, created_by, created_at, updated_at) VALUES (?, ?, ?, 'T', ?, ?, ?, ?)", cardId, boardId, cardKey, repoId, member, t, t);
   const rid = randomUUID();
   h.db.run("INSERT INTO dispatches (request_id, card_id, dispatched_by, state, created_at) VALUES (?, ?, ?, 'claimed', ?)", rid, cardId, member, t);
-  h.db.run("INSERT INTO runs (id, card_id, fence, on_behalf_of, dispatched_by, dispatch_request_id, backend, repo_id, base_ref, branch, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, 'claude_cli', ?, 'main', ?, ?, ?)",
-    randomUUID(), cardId, fence, member, member, rid, repoId, branch ?? branchName(cardKey, fence), t, t);
+  h.db.run("INSERT INTO runs (id, card_id, fence, on_behalf_of, dispatched_by, dispatch_request_id, backend, repo_id, base_ref, branch, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, 'claude_cli', ?, ?, ?, ?, ?)",
+    randomUUID(), cardId, fence, member, member, rid, repoId, baseRef, branch ?? branchName(cardKey, fence), t, t);
   return { cardId, key: cardKey, branch: branch ?? branchName(cardKey, fence) };
 }
 
@@ -52,11 +52,12 @@ test('cardForBranch: a recorded run branch of this org, in the named repo, maps 
   const { h, reg, conn } = await setup();
   try {
     const ctx = reg.ctxFor(conn.id);
-    const r = addRun(h, { key: 'BDL-41', fence: 3 });
+    const r = addRun(h, { key: 'BDL-41', fence: 3, baseRef: 'release/2' });
     assert.equal(r.branch, 'board/BDL-41-r3');
-    assert.equal(ctx.cardForBranch('acme/app', 'board/BDL-41-r3'), r.cardId);
-    assert.equal(ctx.cardForBranch('Acme/App', 'board/BDL-41-r3'), r.cardId);
-    assert.equal(ctx.cardForBranch('github.com/ACME/app', 'board/BDL-41-r3'), r.cardId);
+    const want = { card_id: r.cardId, base_ref: 'release/2' };
+    assert.deepEqual(ctx.cardForBranch('acme/app', 'board/BDL-41-r3'), want, 'base_ref is the run\'s recorded base, not the repo default');
+    assert.deepEqual(ctx.cardForBranch('Acme/App', 'board/BDL-41-r3'), want);
+    assert.deepEqual(ctx.cardForBranch('github.com/ACME/app', 'board/BDL-41-r3'), want);
   } finally { await h.close(); }
 });
 
@@ -91,7 +92,7 @@ test('cardForBranch: the right branch in the wrong repo, or a repo on no board o
     const l = addRun(h, { key: 'BDL-3', repoId: lone });
     assert.equal(ctx.cardForBranch('acme/lone', l.branch), null);
     h.db.run('INSERT INTO board_repos (board_id, repo_id) VALUES (?, ?)', h.ids.board, lone);
-    assert.equal(ctx.cardForBranch('acme/lone', l.branch), l.cardId);
+    assert.deepEqual(ctx.cardForBranch('acme/lone', l.branch), { card_id: l.cardId, base_ref: 'main' });
     // The run's repo decides, not the card's: a run in acme/app is not found under acme/lone.
     assert.equal(ctx.cardForBranch('acme/lone', r.branch), null);
   } finally { await h.close(); }
@@ -108,7 +109,7 @@ test('cardForBranch: another org\'s card on the same repo and branch is null; du
     const cross = addRun(h, { boardId: o.board, repoId: h.ids.repo, member: o.admin, key: 'OTH-2', fence: 1 });
     assert.equal(ctx.cardForBranch('acme/app', cross.branch), null);
     const a = addRun(h, { key: 'BDL-5', fence: 1 });
-    assert.equal(ctx.cardForBranch('acme/app', a.branch), a.cardId);
+    assert.deepEqual(ctx.cardForBranch('acme/app', a.branch), { card_id: a.cardId, base_ref: 'main' });
     addRun(h, { key: 'BDL-6', branch: a.branch });
     assert.equal(ctx.cardForBranch('acme/app', a.branch), null, 'two cards recorded the same branch: ambiguous');
   } finally { await h.close(); }
@@ -125,7 +126,9 @@ test('cardForBranch: consults cards.self_driven_branch only when that column exi
     assert.equal(ctx.cardForBranch('acme/app', 'feature/login'), null);
     h.db.exec('ALTER TABLE cards ADD COLUMN self_driven_branch TEXT');
     h.db.run("UPDATE cards SET self_driven_branch = 'feature/login' WHERE id = ?", selfDriven);
-    assert.equal(ctx.cardForBranch('acme/app', 'feature/login'), selfDriven);
+    assert.deepEqual(ctx.cardForBranch('acme/app', 'feature/login'), { card_id: selfDriven, base_ref: 'main' }, 'no run: the card\'s base, else the repo default');
+    h.db.run("UPDATE cards SET base_ref = 'develop' WHERE id = ?", selfDriven);
+    assert.deepEqual(ctx.cardForBranch('acme/app', 'feature/login'), { card_id: selfDriven, base_ref: 'develop' });
     assert.equal(ctx.cardForBranch('acme/other', 'feature/login'), null);
     assert.equal(ctx.cardForBranch('acme/app', 'Feature/login'), null);
     h.db.run('UPDATE cards SET self_driven_branch = ? WHERE id = ?', r.branch, selfDriven);

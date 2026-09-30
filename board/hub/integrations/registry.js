@@ -54,6 +54,11 @@ function urlOn(u, hosts) {
   try { url = new URL(String(u)); } catch { return null; }
   return url.protocol === 'https:' && !url.port && !url.username && !url.password && hosts.includes(url.hostname) ? url : null;
 }
+// 'owner/name' (github.com) or 'host/owner/name' → canonical 'host/owner/name', else null.
+function canonRepo(repo) {
+  if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
+  return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
+}
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
@@ -342,8 +347,7 @@ export function createIntegrations({
      */
     function cardForBranch(repo, branch) {
       if (typeof branch !== 'string' || !branch || branch.length > BRANCH_MAX || BRANCH_BAD.test(branch)) return null;
-      if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
-      const canon = normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
+      const canon = canonRepo(repo);
       if (!canon) return null;
       const repoIds = db.all(`SELECT DISTINCT r.id AS repo_id, r.canonical_url, r.aliases FROM repos r
         JOIN board_repos br ON br.repo_id = r.id JOIN boards b ON b.id = br.board_id WHERE b.org_id = ? AND r.org_id = ?`, c.org_id, c.org_id)
@@ -351,16 +355,21 @@ export function createIntegrations({
         .map((r) => r.repo_id);
       if (!repoIds.length) return null;
       const inRepos = repoIds.map(() => '?').join(',');
-      const found = new Set(db.all(`SELECT DISTINCT cards.id FROM runs JOIN cards ON cards.id = runs.card_id JOIN boards ON boards.id = cards.board_id
-        WHERE runs.branch = ? AND boards.org_id = ? AND runs.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds).map((r) => r.id));
+      // card id → the base branch its run recorded (a PR into any other base is not the card's).
+      const found = new Map(db.all(`SELECT cards.id, runs.base_ref FROM runs JOIN cards ON cards.id = runs.card_id JOIN boards ON boards.id = cards.board_id
+        WHERE runs.branch = ? AND boards.org_id = ? AND runs.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds).map((r) => [r.id, r.base_ref]));
       // Extension point for self-driven (auto-tracked) cards, owned by that
       // work: a branch a card claims without a run. Consulted only once such a
       // column exists; the same exact-match, same-org, same-repo rules apply.
       if (db.get("SELECT 1 AS x FROM pragma_table_info('cards') WHERE name = 'self_driven_branch'")) {
-        for (const r of db.all(`SELECT cards.id FROM cards JOIN boards ON boards.id = cards.board_id
-          WHERE cards.self_driven_branch = ? AND boards.org_id = ? AND cards.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds)) found.add(r.id);
+        for (const r of db.all(`SELECT cards.id, COALESCE(cards.base_ref, repos.default_branch) AS base_ref FROM cards JOIN boards ON boards.id = cards.board_id
+          JOIN repos ON repos.id = cards.repo_id WHERE cards.self_driven_branch = ? AND boards.org_id = ? AND cards.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds)) {
+          if (!found.has(r.id)) found.set(r.id, r.base_ref);
+        }
       }
-      return found.size === 1 ? [...found][0] : null;
+      if (found.size !== 1) return null;
+      const [[cardId, baseRef]] = found;
+      return { card_id: cardId, base_ref: baseRef ?? null };
     }
 
     const cardInOrg = (cardId) => {
