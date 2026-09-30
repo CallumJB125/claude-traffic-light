@@ -1,6 +1,6 @@
-# Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P3)
+# Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P4)
 
-For the desktop app builder. What exists today (P1 sign-in, P2 teams and members, P3 invites), and the P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D66; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
+For the desktop app builder. What exists today: P1 sign-in (email codes, and Google/GitHub through the desktop loopback), P2 teams and members, P3 invites, P4 runner enrolment. Decisions: CONTRACT.md D50–D82; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
 
 The product name is **Plexiform** (`shared/brand.js`). Only user-facing text uses it; technical names keep `buddy` for now (the `__Host-buddy_*` cookies, the `bdt_` token prefix, `BOARD_*` env vars, route paths).
 
@@ -13,18 +13,18 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 
 ## Sign-in methods and mail (D66)
 
-The hub sends **no mail unless a mailer is configured**, and none is required. Sign-in is meant to be Google or GitHub (the OAuth phase comes next); the email one-time code exists only on a hub with a mailer (`BOARD_RESEND_API_KEY` + `BOARD_MAIL_FROM`).
+The hub sends **no mail unless a mailer is configured**, and none is required. Sign-in is meant to be Google or GitHub (see "OAuth sign-in" below); the email one-time code exists only on a hub with a mailer (`BOARD_RESEND_API_KEY` + `BOARD_MAIL_FROM`).
 
 ### `GET /api/auth/methods`
 
-**No auth**, rate limited (60 a minute per IP). → `{"google": false, "github": false, "email": true}`: booleans only, so the app shows the right sign-in buttons. `google`/`github` follow `BOARD_SIGNIN_METHODS`; `email` is true only when the hub has a mailer.
+**No auth**, rate limited (60 a minute per IP). → `{"google": true, "github": true, "email": false}`: booleans only, so the app shows the right sign-in buttons. `google`/`github` are true when the hub has that provider's client id **and** secret (`BOARD_GOOGLE_CLIENT_ID`/`_SECRET`, `BOARD_GITHUB_CLIENT_ID`/`_SECRET`); `email` is true only when the hub has a mailer.
 
 Without a mailer:
 
-- `POST /api/auth/email/start` and `/verify` answer `404 METHOD_DISABLED` (nothing is written, nothing printed, no code exists). The email step-up for deleting an account or a team is then unavailable too, until the OAuth phase adds a re-authentication step-up.
+- `POST /api/auth/email/start` and `/verify` answer `404 METHOD_DISABLED` (nothing is written, nothing printed, no code exists). Deleting an account or a team then needs the Google/GitHub re-authentication step-up (below); with neither a mailer nor a provider, only the operator can erase (`hub/admin.js`).
 - Invites are still created and still bound to the invited address, but the hub sends nothing: the inviter gets the link and the code once and shares them (copy, or a prefilled `mailto:` draft in their own mail client). See `POST /api/teams/:id/invites`.
 
-An exposed hub (a `BOARD_PUBLIC_URL` off loopback, or a tunnel probe) must be https, behind cloudflared with `BOARD_TRUST_CF_IP=1`, and have at least one sign-in method (`BOARD_SIGNIN_METHODS` or a mailer); it never uses the console mailer.
+An exposed hub (a `BOARD_PUBLIC_URL` off loopback, or a tunnel probe) must be https, behind cloudflared with `BOARD_TRUST_CF_IP=1`, and have at least one sign-in method (a configured Google or GitHub client, `BOARD_SIGNIN_METHODS`, or a mailer); it never uses the console mailer.
 
 ## Credentials
 
@@ -37,7 +37,7 @@ There are two, and only two, credentials.
 - Bearer requests need **no CSRF token**, because no ambient credential exists. The hub still checks `Origin`: when an `Origin` header is present it must be the hub's own origin (`BOARD_PUBLIC_URL`), or the request gets `403`. The web view's requests carry the page's own origin, so they pass. Main's Node requests send no `Origin`, and those pass too.
 - The token does not expire. It stops working when the user signs out on that device, revokes it from another device, or deletes the account, and after a hub restore from backup (which signs every device and browser out, since the backup can't know about revocations made after it). After that every call returns `401 UNAUTHENTICATED`, and open sockets get `session.revoked` then close `4401`. On `401`, drop the token from the Keychain and show sign-in.
 - A request with an `Authorization` header that doesn't name a live device is `401`. It never falls back to a cookie.
-- These tokens are `user_devices` rows, the same kind the design's device flow (§6) uses. Runners will reuse them in P4 (rotation arrives then).
+- These tokens are `user_devices` rows, the same kind the design's device flow (§6) uses. Runners don't use them: an install enrols as a runner per team and gets a separate runner token (P4, below). Google/GitHub sign-in returns the same device token.
 
 ### Plain browser: a cookie session (`client:'web'`)
 
@@ -66,6 +66,11 @@ There are two, and only two, credentials.
 | new users, per IP | 10 / day | `429` on the verify that would create the user |
 | any mutation, per IP | 300 / min | `429` |
 | any mutation, per signed-in user or member | 120 / min | `429` |
+| OAuth start, per IP (IPv6 /64) | 20 / h | `429` |
+| OAuth flows open at once, per network (/24, IPv6 /48) | 5 | `429` (`retry_after_s` = until the oldest expires) |
+| OAuth exchange, per IP (IPv6 /64) | 30 / h | `429` |
+| failed OAuth exchanges (`INVALID_TOKEN`, `PROVIDER_ERROR`) per IP (/64) | the failure budget (`BOARD_AUTH_FAIL_BUDGET`, 20 a day, then locks that double) | `429` on every exchange from there, before anything is checked |
+| runner enrolments, per user | 30 / h | `429` |
 
 A **mailbox** is the address with any `+tag` removed (`jo+1@example.com` and `jo@example.com` share the start limits and the lockout notice); the failure budget and the account stay per address. Keeping half the daily mail cap for addresses that already have an account means a flood of made-up addresses can stop new sign-ups for the day but not existing users signing in or confirming a deletion.
 
@@ -138,7 +143,9 @@ No auth for sign-in. A delete flow needs the same user's credential.
 
 Bearer or cookie.
 
-→ `{"user": {…}, "teams": [ {id, name, slug, plan, role, member_id, boards:[{id, name, key_prefix}]} ], "pending_invites": [ {id, team_name, inviter_first_name, role, expires_at} ]}`, plus `csrf_token` for cookie sessions.
+→ `{"user": {…}, "identities": [{"provider": "google"}], "teams": [ {id, name, slug, plan, role, member_id, boards:[{id, name, key_prefix}]} ], "pending_invites": [ {id, team_name, inviter_first_name, role, expires_at} ]}`, plus `csrf_token` for cookie sessions.
+
+- `identities`: the sign-in methods this account has proven (`email`, `google`, `github`), provider names only, sorted, no subjects or addresses. Offer only these for a step-up.
 
 - `teams` has one entry per live membership in a team that isn't deleted, sorted by name: `{id, name, slug, plan, role, member_id, boards}`.
 - Every team has a `slug` (teams made by the legacy seed/bootstrap paths get one the first time they're listed).
@@ -183,14 +190,12 @@ Bearer or cookie + CSRF. Body `{}`.
 
 Bearer or cookie + CSRF.
 
-Body `{"flow_id": "…"}`: a `purpose:'delete'` flow this user started **and verified within the last 5 minutes**, not used before.
+Body `{"flow_id": "…"}`: a step-up this user completed **within the last 5 minutes**, not used before. Either:
 
-The app flow:
+- an email flow: `start {purpose:'delete'}`, the code from the mail, `verify {flow_id, code}`, then `DELETE /api/account {flow_id}`; or
+- a Google/GitHub re-authentication **from this same device token**: `POST /api/auth/oauth/start {purpose:'delete', …}` with the Bearer, the provider, `exchange` (→ `{stepup_until}`), then `DELETE /api/account {flow_id}` with the OAuth `flow_id` (or no `flow_id`: the newest open OAuth step-up of this device is used).
 
-1. `start {purpose:'delete'}`
-2. the user reads the code from their email
-3. `verify {flow_id, code}`
-4. `DELETE /api/account {flow_id}`
+The step-up is spent in the deletion's own transaction: a refused deletion (`409 CONFLICT` below) leaves it unspent until `stepup_until`.
 
 → `{"ok": true}`. In one transaction the hub:
 
@@ -210,14 +215,14 @@ Errors:
 
 Teams where the user was the only member are soft-deleted with the account (see `DELETE /api/teams/:id`), and their integrations are revoked.
 
-**Without a mailer** the hub can't send the step-up code, so a user can't delete their account or team from the app; the hub logs a warning at start when it has users, no mailer and no OAuth sign-in method. The operator erases on the hub host, with the hub's environment:
+**Without a mailer** the step-up is the Google/GitHub re-authentication. With neither a mailer nor a configured provider a user can't delete their account or team from the app; the hub logs a warning at start when it has users and neither. The operator erases on the hub host, with the hub's environment:
 
 ```sh
 node hub/admin.js delete-user <email>   # the same transaction as DELETE /api/account, no step-up
 node hub/admin.js delete-team <slug>    # the same as DELETE /api/teams/:id
 ```
 
-It opens the database file directly and refuses when there is none (not the hub host) or the hub isn't `BOARD_AUTH=accounts`. Stop the hub first, or rely on its 5 s SQLite `busy_timeout`; a running hub's open sockets close at their next credential check. Audit rows record `by: "operator"`. The OAuth re-auth step-up (next phase) lets a user without a mailer confirm in the app, and removes the need for the CLI. Not yet (P5): stopping the user's active runs, purging those teams, and "also erase my comments".
+It opens the database file directly and refuses when there is none (not the hub host) or the hub isn't `BOARD_AUTH=accounts`. Stop the hub first, or rely on its 5 s SQLite `busy_timeout`; a running hub's open sockets close at their next credential check. Audit rows record `by: "operator"`. Not yet (P5): stopping the user's active runs, purging those teams, and "also erase my comments".
 
 ### `/ws/board` (WebSocket)
 
@@ -239,6 +244,49 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 | `GET /download` | `302` to `BOARD_DOWNLOAD_URL` (the app download), or `404` when none is configured |
 
 All static pages send `Referrer-Policy: no-referrer`. Every hub response forbids framing (`X-Frame-Options: DENY`, CSP `frame-ancestors 'none'`), and with an https `BOARD_PUBLIC_URL` it sends `Strict-Transport-Security: max-age=31536000`.
+
+## OAuth sign-in: Google and GitHub (desktop loopback + PKCE)
+
+For the desktop app. The app listens on `http://127.0.0.1:<port>/callback` (any port 1024–65535), makes a PKCE verifier (43–128 characters) and its S256 challenge, and:
+
+1. `POST /api/auth/oauth/start` (no auth for sign-in):
+
+   ```json
+   { "provider": "google", "code_challenge": "<base64url sha256, 43 chars>", "redirect_uri": "http://127.0.0.1:53682/callback",
+     "device_name": "Jo's MacBook Pro", "platform": "darwin-arm64", "client": "buddy_desktop", "purpose": "signin" }
+   ```
+
+   → `{"flow_id": "…", "url": "https://accounts.google.com/…", "state": "<43 chars>", "expires_in": 600}`. `provider`: `'google'` or `'github'`. `redirect_uri` must match `^http://127\.0\.0\.1:(\d{4,5})/callback$` with port 1024–65535, exactly (no query, no other host, not `localhost`); anything else `400 VALIDATION`. `client` is `'buddy_desktop'` (the default). `device_name` (≤ 100) and `platform` (≤ 50) are optional and name the device token a sign-in makes; step-ups need neither. `purpose`: `'signin'` (default), `'delete'` or `'delete_team'` (the step-ups: they need the Bearer, `401 UNAUTHENTICATED` without one).
+2. Open `url` in the browser. The provider sends the browser to the loopback listener with `?code&state`. **Compare `state` with the one `start` returned (constant time)**; on a mismatch, stop.
+3. `POST /api/auth/oauth/exchange` (a step-up sends the same Bearer as its start):
+
+   ```json
+   { "flow_id": "…", "code": "<from the redirect>", "state": "<from the redirect>", "code_verifier": "<the PKCE verifier>", "form_factor": "laptop" }
+   ```
+
+   → sign-in: the same body as email verify, `{"user": {…}, "teams": […], "device_token": "bdt_…", "device_id": "…"}`. → step-up: exactly `{"stepup_until": "2026-10-01T12:05:00.000Z"}` (no token, user or teams); then `DELETE /api/account` or `DELETE /api/teams/:id` with this `flow_id` (see those routes).
+
+Rules:
+
+- **One attempt per flow.** The hub checks everything it holds (the flow exists, unused, unexpired (10 minutes), from the same network (/24, IPv6 /48) as its start, `state`, the verifier against the challenge, and for a step-up the same user and device token) and then burns the flow before it calls the provider, whether the checks passed or not. A provider failure never reopens it: start again.
+- Google: the hub exchanges the code with the stored `redirect_uri` and the verifier, and verifies the `id_token` (signature against Google's keys, issuer, audience, expiry, the nonce it minted, `email_verified: true`). GitHub: the hub exchanges the code, then reads `/user` and `/user/emails` and uses the address that is **primary and verified**. The provider's tokens are thrown away at once: never stored, logged or audited, and no refresh token is ever asked for.
+- Accounts: the same Google/GitHub account always signs in to the same user (keyed by the provider's account id, never the address; a GitHub login rename changes nothing). A first sign-in whose verified address already belongs to an account (an email-code sign-in, the other provider, or the account's address) **joins that account**; otherwise it creates one (sign-up = sign-in). Member rows an admin added with that address join too (as for email codes). A GitHub id an admin typed in the Access era never counts as proof of anything.
+- A step-up must be the account's **own** Google/GitHub identity (one listed in `GET /api/account` `identities`), from the device token that started it. Anything else is the generic `400 INVALID_TOKEN`, never a `401` (a `401` means only a bad or missing Bearer, and the app signs out on it).
+
+Errors:
+
+| Answer | When |
+|---|---|
+| `400 VALIDATION` | bad `provider`, `purpose`, `client`, `code_challenge` or `redirect_uri` (start); bad `form_factor` (exchange) |
+| `400 INVALID_TOKEN` | any flow problem (unknown, used, expired, another network, wrong `state` or verifier, a `redirect_uri` or `provider` in the body that differs), an id_token that fails a check, a step-up by another identity or device. One generic answer |
+| `401 UNAUTHENTICATED` | a step-up start without a valid Bearer |
+| `403 EMAIL_UNVERIFIED` | the Google account's address isn't verified, or the GitHub account has no primary verified address |
+| `404 METHOD_DISABLED` | that provider isn't configured on this hub |
+| `429 RATE_LIMITED` | see Rate limits (starts, open flows, exchanges, failure budget) |
+| `502 PROVIDER_ERROR` | the provider refused the code (reused, expired, or the verifier didn't match at the provider) |
+| `503 PROVIDER_UNAVAILABLE` | the provider (or Google's signing keys) couldn't be reached; start again later |
+
+Audit rows: `auth.oauth.start`, `auth.oauth.failed` (`reason`), `auth.signin` (`method`, and `subject_ref`, a keyed hash of the provider account id), `identity.link`, `user.create`, `auth.stepup`. Never the code, state, verifier, tokens or an address.
 
 ## Routes built in P2: teams and members
 
@@ -302,7 +350,7 @@ Admin. `{name}` → `{team}`.
 
 ### `DELETE /api/teams/:id`
 
-Owner. `{"confirm_slug": "<the team's slug>", "flow_id": "…"}` → `{ok:true, purge_after}`. Like `DELETE /api/account`, it needs a **step-up**: a `purpose:'delete_team'` flow this user started and verified within the last 5 minutes (`start {purpose:'delete_team'}`, the code from the mail, `verify {flow_id, code}`), which this spends (single use). A `'delete'` (account) step-up is refused. A wrong slug → `400 VALIDATION`; no fresh, unused step-up → `401 STEP_UP_REQUIRED {max_age_s: 300, purpose: 'delete_team'}`.
+Owner. `{"confirm_slug": "<the team's slug>", "flow_id": "…"}` → `{ok:true, purge_after}`. Like `DELETE /api/account`, it needs a **step-up**, which this spends (single use, in the deletion's transaction): either a `purpose:'delete_team'` email flow this user started and verified within the last 5 minutes (`start {purpose:'delete_team'}`, the code from the mail, `verify {flow_id, code}`; an email `'delete'` (account) step-up is refused), or a Google/GitHub re-authentication from this device token (`purpose:'delete'` or `'delete_team'`; no mail is involved, so one purpose serves both deletions), with its OAuth `flow_id` or none. A wrong slug → `400 VALIDATION`; no fresh, unused step-up → `401 STEP_UP_REQUIRED {max_age_s: 300, purpose: 'delete_team'}`.
 
 Soft delete: from that moment every route for the team, its boards and cards answers `404`, it drops out of `/api/account`, runner devices enrolled in it are revoked (their sockets close `4403`), browser sockets subscribed to its boards close `4403`, and its integrations are revoked with their stored secrets erased (their webhooks answer `404`). The hard purge 7 days later is P5 (not built); there is no restore route yet.
 
@@ -391,34 +439,57 @@ Bearer or cookie + CSRF. One of:
 
 `POST /api/account/invites/:invite_id/accept` (body `{}`) is the same as `{invite_id}` in the body.
 
-## Planned, not built (P4): devices as runners
+## Routes built in P4: runner enrolment
 
-Agreed with the app builder; nothing here exists on the hub yet.
+An install of the desktop app (its device token) enrols as a runner in one team at a time and gets a **runner token** for that team only. Revoking the runner never signs the app out; signing the app out (or revoking the install from another device) ends its runner enrolments.
 
-| Method + path | Who | Body | Response |
-|---|---|---|---|
-| `POST /api/teams/:id/enrol` | member+ (not viewer), Bearer | `{}` | `{enrollment_id, team_id, runner_token}`: enrols this install as a runner in that team |
-| `DELETE /api/teams/:id/enrol` | the same install, Bearer | `{}` | `{ok}`: revokes the enrolment and closes that runner socket (`4403`) |
+### `POST /api/teams/:id/enrol`
 
-- **Preferred design:** enrolling returns a separate **runner token** bound to one team and one device (stored as a hash, shown once). Revoking the runner never signs the app out, and signing out revokes its runner tokens. Runner sockets authenticate with `Authorization: Bearer <runner_token>` plus `Board-Team: <team_id>`, one socket per team.
-- The runner's config becomes `{hub_url, runner_token, team_id, data_dir}` (one per enrolled team), handed over on stdin, never argv or env.
-- Token rotation (`prev_token_hash`, the old token valid 5 min) arrives with P4.
+Bearer (the desktop device token; a cookie session gets `403`). Role member or above (a viewer gets `403 FORBIDDEN`). `{"device_name": "Jo's MacBook Pro"}` (optional, ≤ 100; defaults to the install's name).
+
+→ `{"enrollment_id": "…", "team_id": "…", "runner_token": "brt_…"}`. `runner_token` is `brt_` + 43 base64url characters, **shown once** (the hub keeps only its sha256). Enrolling the same install in the same team again **rotates**: a new token, and the old one stops working at once (its runner socket closes `4403`); the runner keeps its hub-side device and outbox sequence.
+
+Caps: 5 active enrolments per person per team, 20 per person (`403 QUOTA_EXCEEDED {resource:'runner_enrollments', limit}`); 30 enrolments an hour per person (`429`).
+
+### `DELETE /api/teams/:id/enrol`
+
+Bearer. `{}` → `{ok:true}`: this install stops being a runner in this team; its runner socket closes `4403`. The app stays signed in. `404` when this install isn't enrolled there.
+
+### `GET /api/teams/:id/enrolments`
+
+Any member: admins and owners see the team's enrolments, others their own. → `{"enrolments": [ {id, user:{id, display_name}, name, created_at, last_seen_at, revoked_at, online, current} ]}`, newest first (at most 200), revoked ones included (`revoked_at` set). `current` marks the caller's own install; tokens are never shown again.
+
+### `DELETE /api/teams/:id/enrolments/:enrollment_id`
+
+An admin or owner, or the enrolment's own user. `{}` → `{ok:true}`; its socket closes `4403`. Unknown, revoked or another team's → `404`; someone else's as a member → `403`.
+
+### The runner socket
+
+`/ws/runner` with `Authorization: Bearer brt_…` and `Board-Team: <team_id>`, one socket per enrolled team:
+
+- An unknown token, no `Board-Team`, or a `Board-Team` that isn't the enrolment's team: close `4401`, all with the same reason (a token for team A never reveals anything about B).
+- The install signed out or revoked, the account deleted, or a hub restore: close `4401`. Enrolment revoked (by the user, an admin or rotation), removed from the team, demoted to viewer, or the team deleted: close `4403`. These are re-checked on every reaper pass (≈ 1 s) as well as when they happen, so a live socket closes within a second; a runner that gets `4401`/`4403` does not reconnect.
+- `hello` may send `device_id: ""`; `welcome` names the runner device (`device_id`) and member (`member_id`). The socket is bound to its team for life: offers, allowlist and commands are that team's only, and frames that name another team's card, run or repo are refused.
+
+The app's runner process gets `{"type": "runner.config", "hub_url": "https://…", "runner_token": "brt_…", "team_id": "…", "data_dir": "/abs/path"}` over its parent port (one runner process per enrolled team; no `device_id`, `device_token` or `cf_*` fields with it). It sends the two headers on the WebSocket connect only: never in argv, the environment, a log line or a file. Under Electron the hook shim and the board MCP server it hands to Claude run with `ELECTRON_RUN_AS_NODE=1` (CONTRACT D82).
 
 ## Error codes used here
 
 | Code | HTTP | When |
 |---|---|---|
 | `VALIDATION` | 400 | bad body |
-| `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code); an invite token, id or code that is unknown, used, expired, withdrawn or not yours |
+| `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code); an OAuth flow or id_token that fails a check, or a step-up by another identity; an invite token, id or code that is unknown, used, expired, withdrawn or not yours |
 | `UNAUTHENTICATED` | 401 | no, unknown or revoked credential |
-| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused verified step-up of its purpose (`max_age_s`, `purpose`: `'delete'` / `'delete_team'`) |
+| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused step-up: an email flow of its purpose, or a Google/GitHub re-authentication from this device (`max_age_s`, `purpose`: `'delete'` / `'delete_team'`) |
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |
-| `QUOTA_EXCEEDED` | 403 | a plan limit (`resource`, `limit`) |
+| `QUOTA_EXCEEDED` | 403 | a plan limit, or the runner enrolment caps (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
-| `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66) |
+| `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66), or an OAuth route for a provider this hub hasn't configured |
 | `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug; a second pending invite for one address (`invite_id`) |
 | `ALREADY_MEMBER` | 409 | inviting, or accepting an invite, for someone already in the team (`team`) |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |
 | `RATE_LIMITED` | 429 | see Rate limits (`retry_after_s`) |
+| `PROVIDER_ERROR` | 502 | Google or GitHub refused the sign-in code |
+| `PROVIDER_UNAVAILABLE` | 503 | Google or GitHub (or Google's signing keys) couldn't be reached |
