@@ -118,3 +118,14 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.ok(fs.statSync(config.deb.fpm[at + 1]).mode & 0o111, 'prerm is executable');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')), 'shipped in extraResources hooks/');
 });
+
+test('Linux has its own icon set: square PNGs named by size', () => {
+  const dir = path.join(__dirname, '..', config.linux.icon);
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png'));
+  for (const s of [16, 32, 48, 64, 128, 256, 512]) assert.ok(files.includes(`${s}x${s}.png`), `${s}x${s}.png`);
+  for (const f of files) {
+    const buf = fs.readFileSync(path.join(dir, f));
+    const [w, h] = [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+    assert.equal(`${w}x${h}.png`, f, 'the name says the real size');
+  }
+});
