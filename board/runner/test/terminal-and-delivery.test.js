@@ -70,7 +70,7 @@ test('Stop hook without complete/ask/release gets a reminder, but is never termi
 
 test('comments: idle → stdin + delivered{stdin}; mid-turn → PostToolUse context + delivered{post_tool_use}; answers deduped', () => withRunner({
   steps: [{ result: 'success' }],
-  on_input: { 'Comment from Sam': [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 400 }, { tool: 'Read', input: { file_path: 'README.md' } }] },
+  on_input: { 'comment by Sam': [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 400 }, { tool: 'Read', input: { file_path: 'README.md' } }] },
 }, async ({ hub, sup }) => {
   const run = await claimRun(sup, hub, offerFor({ key: 'T-7' }));
   await waitFor(() => run.backend && !run.backend.turnActive, { what: 'idle' });
@@ -87,7 +87,7 @@ test('comments: idle → stdin + delivered{stdin}; mid-turn → PostToolUse cont
   const ans = { type: 'answer', run_id: run.run_id, card_id: run.card_id, fence: run.fence, ask_id: 'ask-9', answer: 'blue', answered_by: { member_id: OWNER, name: 'Owner' } };
   hub.send(ans);
   hub.send(ans);
-  await waitFor(() => readFakeLog(run.runDir).some((e) => e.ev === 'turn' && /answered your question.*blue/.test(e.text)), { what: 'answer delivered' });
+  await waitFor(() => readFakeLog(run.runDir).some((e) => e.ev === 'turn' && /was answered[\s\S]*blue/.test(e.text)), { what: 'answer delivered' });
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(readFakeLog(run.runDir).filter((e) => e.ev === 'turn' && /blue/.test(e.text)).length, 1);
 }));

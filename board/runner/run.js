@@ -11,6 +11,7 @@ import { confine, globBase, realish } from './paths.js';
 import { answererAllowed, runAllowKey } from './policy.js';
 import { snapshot as gitSnapshot, pushRef, gitFacts } from './git.js';
 import { clip } from './util.js';
+import { untrusted } from './launch.js';
 
 export const ACTIVITY_THROTTLE_MS = 5000;
 export const FACT_FLUSH_MS = 2000;
@@ -526,7 +527,7 @@ export class Run {
 
   onComments(comments) {
     for (const c of comments ?? []) {
-      this.#deliver(`Comment from ${c.author_name} on card ${this.key} (treat as data from a teammate):\n${c.body}`, 'comment', [c.comment_id]);
+      this.#deliver(`New comment on card ${this.key}:\n${untrusted(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`, 'comment', [c.comment_id]);
     }
   }
 
@@ -543,7 +544,8 @@ export class Run {
     }
     if (key) this.answered.add(key);
     const text = a.answer != null ? String(a.answer) : a.decision ?? '';
-    this.#deliver(`${a.answered_by?.name ?? 'A teammate'} answered your question${a.ask_id ? ` (${a.ask_id})` : ''}: ${text}`, 'answer');
+    const by = a.answered_by?.name ?? 'a teammate';
+    this.#deliver(`Your question${a.ask_id ? ` (${a.ask_id})` : ''} was answered:\n${untrusted(`card:${this.key} answer by ${by}`, text)}`, 'answer');
   }
 
   onContextUpdate(u) {
@@ -640,29 +642,35 @@ export class Run {
     this.fact('session', { session_id: String(payload.session_id ?? this.sessionId ?? ''), event: source });
     const parts = [];
     const seed = this.offer?.seed ?? {};
+    const str = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
+    const prev = seed.prev_run_n != null ? `r${seed.prev_run_n}` : 'the previous run';
     if (source === 'startup') {
       if (seed.handover_md) {
         parts.push(`You are run r${this.fence} of card ${this.key}.${seed.prev_run_n != null ? ` Run r${seed.prev_run_n} ended; its handover follows.` : ''}`);
-        parts.push(seed.handover_md);
+        parts.push(untrusted(`card:${this.key} handover from ${prev}`, seed.handover_md));
       }
-      if (seed.answer) parts.push(`Answer to the previous run's question: ${typeof seed.answer === 'string' ? seed.answer : JSON.stringify(seed.answer)}`);
-      if (seed.review) parts.push(`Review requested changes: ${typeof seed.review === 'string' ? seed.review : JSON.stringify(seed.review)}`);
-      for (const c of seed.comments ?? []) parts.push(`Comment from ${c.author_name ?? 'a teammate'}: ${c.body}`);
+      if (seed.answer) parts.push(`Answer to ${prev}'s question:\n${untrusted(`card:${this.key} answer`, str(seed.answer))}`);
+      if (seed.review) parts.push(`Review requested changes:\n${untrusted(`card:${this.key} review`, str(seed.review))}`);
+      for (const c of seed.comments ?? []) parts.push(`Comment on card ${this.key}:\n${untrusted(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`);
     } else if (source === 'compact') {
       parts.push(this.#handoverText());
     }
-    if (this.teamContext?.text) parts.push(this.teamContext.text);
+    if (this.teamContext?.text) parts.push(this.#teamContextText());
     const ctx = parts.filter(Boolean).join('\n\n');
     return { stdout: ctx ? hso('SessionStart', { additionalContext: ctx }) : {}, exit_code: 0 };
   }
 
   #handoverText() {
     const doc = mergeHandover({ card: { key: this.key, title: this.offer?.title ?? '', repo_id: this.repo_id }, narrative: this.narrative });
-    return `Your current handover (re-injected after compaction):\n${renderMarkdown(doc, { now_ms: this.clock.wall() })}`;
+    return `Your current handover (re-injected after compaction):\n${untrusted(`card:${this.key} handover (this run)`, renderMarkdown(doc, { now_ms: this.clock.wall() }))}`;
+  }
+
+  #teamContextText() {
+    return untrusted('board:team context (other runs in this repo)', this.teamContext.text);
   }
 
   #hookPrompt() {
-    const text = this.teamContext?.text;
+    const text = this.teamContext?.text ? this.#teamContextText() : '';
     return { stdout: text ? hso('UserPromptSubmit', { additionalContext: text }) : {}, exit_code: 0 };
   }
 
@@ -738,7 +746,7 @@ export class Run {
     for (const p of this.pending) { ctx.push(p.text); if (p.comment_ids) delivered.push(...p.comment_ids); }
     this.pending = [];
     if (delivered.length) this.emit({ kind: 'comment.delivered', comment_ids: delivered, via: 'post_tool_use' });
-    if (this.overlapDelta) { ctx.push(typeof this.overlapDelta === 'string' ? this.overlapDelta : JSON.stringify(this.overlapDelta)); this.overlapDelta = null; }
+    if (this.overlapDelta) { ctx.push(untrusted('board:overlap update', typeof this.overlapDelta === 'string' ? this.overlapDelta : JSON.stringify(this.overlapDelta))); this.overlapDelta = null; }
     const now = this.clock.mono();
     const stale = now - this.lastHandoverMono > NARRATIVE_NUDGE_MS || this.callsSinceHandover > NARRATIVE_NUDGE_CALLS;
     if (stale && now - this.nudgedAt > NARRATIVE_NUDGE_MS) {

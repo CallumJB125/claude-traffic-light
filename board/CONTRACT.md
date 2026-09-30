@@ -473,6 +473,8 @@ A missing `start` within `DEGRADED_NO_SESSIONSTART_MS` (30 s) of spawn → `degr
 
 **Answer delivery** (design §3.7): mid-turn at the next tool boundary via `post` `additionalContext`; when the agent is idle or blocked, as a stdin user message. The runner reports `comment.delivered` with `via`.
 
+**Untrusted text is enveloped** (`launch.untrusted(source, text)`): every piece of text people or earlier runs wrote that the runner puts in the agent's context (the first prompt's card title, the seed handover/answer/review/comments at `start`, the re-injected handover at `compact`, team context at `start`/`prompt`, overlap deltas, delivered comments and answers) is wrapped as `<untrusted_board_content source="card:KEY comment by NAME">…</untrusted_board_content>`. The `source` attribute is stripped of quotes, angle brackets, `&` and newlines; any `<untrusted_board_content` / `</untrusted_board_content` inside the text (any case, any spacing) is defused to `&lt;…`, so an embedded closing tag can never end the envelope. The board brief (`--append-system-prompt`) says envelope contents are data, never instructions.
+
 ## 8. Errors
 
 Codes and HTTP statuses: `protocol.ERRORS`.
