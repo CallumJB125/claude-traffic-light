@@ -89,7 +89,7 @@ p { margin: 0; text-wrap: pretty; }
 .btn-ghost-light { --bg: transparent; --fg: #eceee9; border-color: rgba(236, 238, 233, 0.5); box-shadow: 0 3px 0 rgba(0, 0, 0, 0.5); }
 /* the stage bleeds off the right edge of the page, like a product window you are looking into */
 .hero-stage { position: relative; margin-right: calc((min(var(--wrap), 100vw - 48px) - 100vw) / 2); perspective: 1800px; }
-@media (max-width: 980px) { .hero-grid { grid-template-columns: 1fr; } .hero-stage { margin-right: 0; margin-bottom: 26px; } }
+@media (max-width: 980px) { .hero-grid { grid-template-columns: 1fr; } .hero-stage { margin-right: 0; margin-bottom: 34px; } .widget { right: 4px; bottom: -14px; width: clamp(96px, 26%, 150px); } .widget-cap { bottom: -30px; padding: 5px 11px; } .widget-cap span { display: none; } .widget-story { right: 4px; } }
 
 /* a product window: the REAL app, captured, in a frame */
 .frame { position: relative; border-radius: 14px; background: #1c1a1f; overflow: hidden; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 50px 90px -34px rgba(0, 0, 0, 0.75), 0 14px 34px -14px rgba(0, 0, 0, 0.55); will-change: transform; }
@@ -111,7 +111,7 @@ picture.shot-layer img { width: 100%; height: 100%; display: block; }
 .widget[data-lamp="working"], .lamp-stage[data-lamp="working"] { --gl: rgba(47, 174, 62, 0.42); }
 .widget[data-lamp="ready"], .lamp-stage[data-lamp="ready"] { --gl: rgba(242, 162, 0, 0.44); }
 .widget[data-lamp="approve"], .lamp-stage[data-lamp="approve"] { --gl: rgba(226, 35, 26, 0.42); }
-.widget-cap { position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; background: #1c1a1f; border: 1px solid rgba(255, 255, 255, 0.11); border-radius: 999px; padding: 6px 13px; font: 600 12px var(--pixel); color: #eceee9; white-space: nowrap; box-shadow: 0 12px 26px -8px rgba(0, 0, 0, 0.65); z-index: 2; }
+.widget-cap { position: absolute; right: 0; bottom: -16px; display: flex; gap: 8px; align-items: center; background: #1c1a1f; border: 1px solid rgba(255, 255, 255, 0.11); border-radius: 999px; padding: 6px 13px; font: 600 12px var(--pixel); color: #eceee9; white-space: nowrap; box-shadow: 0 12px 26px -8px rgba(0, 0, 0, 0.65); z-index: 2; }
 .widget-cap span { color: #8d8896; }
 .desk-lamp { width: 9px; height: 9px; border-radius: 3px; background: #46414f; transition: background-color 300ms var(--ease); }
 [data-lamp="working"] .desk-lamp { background: var(--green); } [data-lamp="ready"] .desk-lamp { background: var(--amber); } [data-lamp="approve"] .desk-lamp { background: var(--red); }
@@ -236,6 +236,8 @@ picture.shot-layer img { width: 100%; height: 100%; display: block; }
 @media (scripting: enabled) {
   .rv { opacity: 0; transform: translateY(16px); transition: opacity 650ms var(--ease), transform 750ms var(--ease); transition-delay: var(--rd, 0ms); animation: rv-failsafe 1ms linear 3s forwards; }
   .rv.in { opacity: 1; transform: none; animation: none; }
+  /* the first screen paints at once (it is the LCP): it slides into place but is never hidden */
+  .hero .rv { opacity: 1; transition: transform 800ms var(--ease); transition-delay: var(--rd, 0ms); }
   h1.lines .ln { display: block; overflow: clip; padding-bottom: 0.1em; margin-bottom: -0.1em; }
   h1.lines .ln > span { display: block; transform: translateY(108%); transition: transform 850ms var(--ease); transition-delay: var(--rd, 0ms); animation: rv-failsafe 1ms linear 3s forwards; }
   h1.lines.in .ln > span { transform: none; animation: none; }
