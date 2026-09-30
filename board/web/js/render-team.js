@@ -95,7 +95,7 @@ function memberCard(m, model, loaded) {
       h('div', { class: 'team-member-id' },
         h('h3', { class: 'team-name', id: `tm-${m.member_id}` }, m.name, m.is_me ? h('span', { class: 'team-you' }, 'you') : null),
         m.role ? h('span', { class: 'team-role' }, m.role) : null),
-      h('span', { class: `team-online${online ? ' is-on' : ''}` }, icon(online ? 'lamp' : 'ring', 'icon-xs'), online ? 'Online' : 'Not online')),
+      h('span', { class: `team-online${online ? ' is-on' : ''}` }, icon(online ? 'lamp' : 'ring', 'icon-xs'), online ? 'Online' : 'Not sharing')),
     online
       ? h('ul', { class: 'team-sessions', 'aria-label': `${m.name}'s live sessions` }, m.sessions.map((s, i) => sessionRow(s, i, model.board?.name ?? 'this board')))
       : h('p', { class: 'team-empty' }, loaded ? 'Not sharing live sessions right now' : 'Checking for live sessions…'),
