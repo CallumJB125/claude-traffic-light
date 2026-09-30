@@ -31,6 +31,7 @@
 // See docs/git-ci-signals.md.
 const fs = require('fs');
 const path = require('path');
+const { toolEnv } = require('./tool-path.js');
 const { execFile } = require('child_process');
 
 const SIGNALS = ['pr-review-requested', 'pr-changes-requested', 'ci-failed', 'ci-passed', 'deploy-finished', 'deploy-failed'];
@@ -187,14 +188,14 @@ function defaultRunGh(args) {
     execFile(bin, args, { // privacy-flow: gh-poll
       timeout: 20000,
       maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin`, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1' },
+      env: toolEnv({ GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1' }),
     }, (err, stdout, stderr) => resolve({ notFound: !!(err && err.code === 'ENOENT'), stdout: String(stdout || ''), stderr: String(stderr || '') }));
   });
 }
 
 function defaultGit(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, ...args], { timeout: 5000, env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin`, GIT_OPTIONAL_LOCKS: '0' } }, (err, stdout) => resolve(err ? null : String(stdout).trim()));
+    execFile('git', ['-C', cwd, ...args], { timeout: 5000, env: toolEnv({ GIT_OPTIONAL_LOCKS: '0' }) }, (err, stdout) => resolve(err ? null : String(stdout).trim()));
   });
 }
 
