@@ -150,8 +150,65 @@ test('installer: adds Edit(~/.claude-traffic-light/**) to permissions.deny, keep
 
   // A settings file with nothing else: uninstall removes the permissions block it added.
   const home2 = tmp();
-  Claude.install({ home: home2, runtime });
+  Claude.install({ home: home2, runtime: { ...runtime, dataDir: path.join(home2, '.claude-traffic-light') } });
   assert.equal(fs.existsSync(path.join(home2, '.claude', 'settings.json.buddy-backup')), false, 'nothing to back up');
   Claude.uninstall({ home: home2 });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home2, '.claude', 'settings.json'), 'utf8')), {});
+});
+
+test('L3: the deny rule follows the state dir; uninstall removes only a rule Buddy added; a malformed permissions block is left alone', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const hooksDir = path.join(__dirname, '..', '..', 'hooks');
+  const rt = (home, dataDir = path.join(home, '.claude-traffic-light')) => Runtime.make({ execPath: null, hooksDir, dataDir });
+  const settingsOf = (home) => JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const writeSettings = (home, s, mode = 0o644) => { fs.mkdirSync(path.join(home, '.claude'), { recursive: true }); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify(s), { mode }); fs.chmodSync(path.join(home, '.claude', 'settings.json'), mode); };
+
+  // Derived from the state dir: inside home → ~/…, outside → //absolute.
+  const h = tmp();
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h)), ['Edit(~/.claude-traffic-light/**)']);
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h, path.join(h, 'state', 'buddy'))), ['Edit(~/state/buddy/**)']);
+  const outside = tmp();
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h, outside)), [`Edit(/${path.resolve(outside)}/**)`]);
+  Claude.install({ home: h, runtime: rt(h, outside) });
+  assert.deepEqual(settingsOf(h).permissions.deny, [`Edit(/${path.resolve(outside)}/**)`]);
+  assert.equal(Claude.isInstalled({ home: h, runtime: rt(h, outside) }), true);
+
+  // The person's own identical rule, there before Buddy: kept on uninstall, with a note.
+  const mine = tmp();
+  writeSettings(mine, { permissions: { deny: ['Edit(~/.claude-traffic-light/**)'] } }, 0o600);
+  Claude.install({ home: mine, runtime: rt(mine) });
+  assert.equal(fs.statSync(path.join(mine, '.claude', 'settings.json')).mode & 0o777, 0o600, 'atomic write keeps the mode');
+  assert.deepEqual(fs.readdirSync(path.join(mine, '.claude')).filter((f) => f.includes('buddy-tmp')), [], 'no temp file left');
+  Claude.uninstall({ home: mine });
+  assert.deepEqual(settingsOf(mine).permissions, { deny: ['Edit(~/.claude-traffic-light/**)'] });
+  assert.ok(warn.mock.calls.some((c) => /no record of adding/.test(c.arguments[0])));
+
+  // No record (an install from before the record existed): left in place.
+  const old = tmp();
+  writeSettings(old, { permissions: { deny: ['Edit(~/.claude-traffic-light/**)'] } });
+  Claude.uninstall({ home: old });
+  assert.deepEqual(settingsOf(old).permissions.deny, ['Edit(~/.claude-traffic-light/**)']);
+
+  // Malformed permissions or deny: nothing added, nothing replaced, a warning; still counts as installed.
+  for (const bad of [{ permissions: ['Edit(x)'] }, { permissions: { deny: 'Edit(x)' } }, { permissions: 'nope' }]) {
+    const hb = tmp();
+    writeSettings(hb, bad);
+    warn.mock.resetCalls();
+    Claude.install({ home: hb, runtime: rt(hb) });
+    assert.deepEqual(settingsOf(hb).permissions, bad.permissions, JSON.stringify(bad));
+    assert.ok(warn.mock.calls.some((c) => /was not added/.test(c.arguments[0])), JSON.stringify(bad));
+    assert.equal(Claude.isInstalled({ home: hb, runtime: rt(hb) }), true, 'no reinstall loop');
+    Claude.uninstall({ home: hb });
+    assert.deepEqual(settingsOf(hb).permissions, bad.permissions);
+  }
+
+  // A symlinked settings file is written through, not replaced.
+  const hl = tmp();
+  const real = path.join(tmp(), 'dotfiles-settings.json');
+  fs.writeFileSync(real, '{}');
+  fs.mkdirSync(path.join(hl, '.claude'));
+  fs.symlinkSync(real, path.join(hl, '.claude', 'settings.json'));
+  Claude.install({ home: hl, runtime: rt(hl) });
+  assert.equal(fs.lstatSync(path.join(hl, '.claude', 'settings.json')).isSymbolicLink(), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(real, 'utf8')).permissions.deny, ['Edit(~/.claude-traffic-light/**)']);
 });

@@ -178,9 +178,13 @@ otherwise `unknown` ("not applied — check at your desk").
     session, host), so
     editing it only gets the request dropped; and the
     deny rule the hook installer adds to `~/.claude/settings.json`,
-    `Edit(~/.claude-traffic-light/**)` (Edit rules cover every built-in file
+    `Edit(<state dir>/**)` (`~/.claude-traffic-light` unless
+    `CLAUDE_TRAFFIC_LIGHT_HOME` moves it; Edit rules cover every built-in file
     editing tool, Write included), keeps its file tools out of Buddy's state
-    altogether.
+    altogether. The settings file is written atomically; a malformed
+    `permissions` block is left alone with a warning (no rule added); and
+    uninstall removes the rule only if Buddy recorded adding it, so a
+    person's identical rule stays.
   - **Not protected: unsandboxed Bash or any other arbitrary code execution
     as the user.** Such an agent can read `token` and talk to the app like
     the app's own hook, or rewrite `port` and run a listener that holds the
@@ -242,7 +246,7 @@ otherwise `unknown` ("not applied — check at your desk").
 | T3 | Tampering | Hub alters what the phone displays | Desktop-signed `buddy.request`; phone recomputes the hash from the displayed input before signing |
 | T4 | Tampering | Parser differentials (duplicate keys, number forms) | Canonical round-trip check; strict JCS subset; schema with exact key set |
 | T5 | Tampering | Registry / identity files edited | 0600 files in 0700 dir; a corrupt registry fails loudly. Local same-user attacker out of scope |
-| T6 | Tampering | The agent forges `<id>.answer`, edits `<id>.json` to change what the answer applies, or rewrites `port` to collect the key | Covers agents limited to file tools or sandboxed Bash (§4 B4): per-request key held only in the app's memory; HMAC-SHA256 over the whole answer, timing-safe verify in the hook; `decisionHash` binds kind, channel, tool, input, suggestions, cwd, session and host (so the allow-list's cwd is the hook's); a suggestion index is bound to that suggestion's hash; the key goes only to a listener that proves the token for its own port (challenge, §1); port file 0600; installer deny rule `Edit(~/.claude-traffic-light/**)`. **Not covered:** an agent with unsandboxed Bash or other code execution can read the token (or be the listener), so it can forge an allow; it could equally run the tool itself |
+| T6 | Tampering | The agent forges `<id>.answer`, edits `<id>.json` to change what the answer applies, or rewrites `port` to collect the key | Covers agents limited to file tools or sandboxed Bash (§4 B4): per-request key held only in the app's memory; HMAC-SHA256 over the whole answer, timing-safe verify in the hook; `decisionHash` binds kind, channel, tool, input, suggestions, cwd, session and host (so the allow-list's cwd is the hook's); a suggestion index is bound to that suggestion's hash; the key goes only to a listener that proves the token for its own port (challenge, §1); port file 0600; installer deny rule `Edit(<state dir>/**)`. **Not covered:** an agent with unsandboxed Bash or other code execution can read the token (or be the listener), so it can forge an allow; it could equally run the tool itself |
 | R1 | Repudiation | "I never approved that" / who approved; log tampering | Audit event per outcome with deviceId, device name, owner, requestId, card, tool, input **hash**, reason, rule, and the signed decision envelope as evidence; events are hash-chained (`seq`, `prevHash`, `hash`); unauthenticated junk is rate-limited (20/min, overflow counted) |
 | I1 | Info disclosure | Request content visible to the hub | Accepted for v1 (R3); audit logs carry only the hash |
 | I2 | Info disclosure | Pairing secret leaks via the hub | Secret never sent; only HMAC tags cross the hub (tested) |

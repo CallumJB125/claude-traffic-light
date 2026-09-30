@@ -9,6 +9,7 @@
 // applyBareSignal, which records less than set-status.js (no host app, model,
 // subagent list, cost, or PermissionRequest answer). Nothing installs either
 // route for Claude Code; the installed hooks always run set-status.js.
+const fs = require('fs');
 const path = require('path');
 const Runtime = require('./runtime.js');
 
@@ -48,29 +49,71 @@ const isOurs = (command) => Runtime.runsScript(command, [SCRIPT, 'delegate.js'])
 // `Edit(path)` rule covers every built-in file-editing tool (Write, MultiEdit,
 // NotebookEdit): Claude Code only consults Edit/Read path rules and ignores a
 // `Write(path)` one (code.claude.com/docs/en/permissions#read-and-edit);
-// `~/path` is the documented home-relative form.
+// `~/path` is the documented home-relative form, `//path` the absolute one.
+// The state dir is the app's (runtime.dataDir = CLAUDE_TRAFFIC_LIGHT_HOME or
+// ~/.claude-traffic-light); DENY_RULES is the default install's.
 const DENY_RULES = ['Edit(~/.claude-traffic-light/**)'];
+function denyRulesFor(home, runtime) {
+  const root = path.resolve(runtime?.dataDir || process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(home, '.claude-traffic-light'));
+  const rel = path.relative(path.resolve(home), root);
+  const inHome = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  return [`Edit(${inHome ? `~/${rel.split(path.sep).join('/')}` : `/${root.split(path.sep).join('/')}`}/**)`];
+}
+const rulesOf = (opts) => (opts?.home ? denyRulesFor(opts.home, opts.runtime) : DENY_RULES);
 
-function withDenyRules(settings) {
+// A permissions block or deny list that isn't the documented shape (object,
+// array) is the person's to fix: Buddy adds nothing rather than replace it.
+function denyShapeProblem(settings) {
+  const p = settings?.permissions;
+  if (p === undefined) return null;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return 'permissions is not an object';
+  if (p.deny !== undefined && !Array.isArray(p.deny)) return 'permissions.deny is not a list';
+  return null;
+}
+
+function withDenyRules(settings, rules = DENY_RULES) {
   const out = { ...(settings || {}) };
-  const perms = out.permissions && typeof out.permissions === 'object' && !Array.isArray(out.permissions) ? { ...out.permissions } : {};
+  const problem = denyShapeProblem(out);
+  if (problem) {
+    console.warn(`[claude-code] ${problem}: Buddy's deny rule ${rules.join(', ')} was not added; fix the settings file to protect Buddy's state from the agent's file tools.`);
+    return out;
+  }
+  const perms = { ...(out.permissions || {}) };
   const deny = Array.isArray(perms.deny) ? perms.deny.slice() : [];
-  for (const r of DENY_RULES) if (!deny.includes(r)) deny.push(r);
+  for (const r of rules) if (!deny.includes(r)) deny.push(r);
   out.permissions = { ...perms, deny };
   return out;
 }
 
-function withoutDenyRules(settings) {
+// Removes exactly `rules` (the ones Buddy recorded adding), nothing else.
+function withoutDenyRules(settings, rules = DENY_RULES) {
   const out = { ...(settings || {}) };
-  if (!out.permissions || typeof out.permissions !== 'object' || !Array.isArray(out.permissions.deny)) return out;
-  const perms = { ...out.permissions, deny: out.permissions.deny.filter((r) => !DENY_RULES.includes(r)) };
+  if (denyShapeProblem(out) || !out.permissions || !Array.isArray(out.permissions.deny)) return out;
+  const perms = { ...out.permissions, deny: out.permissions.deny.filter((r) => !rules.includes(r)) };
   if (!perms.deny.length) delete perms.deny;
   if (Object.keys(perms).length) out.permissions = perms;
   else delete out.permissions;
   return out;
 }
 
-const hasDenyRules = (settings) => DENY_RULES.every((r) => Array.isArray(settings?.permissions?.deny) && settings.permissions.deny.includes(r));
+const hasDenyRules = (settings, rules = DENY_RULES) => rules.every((r) => Array.isArray(settings?.permissions?.deny) && settings.permissions.deny.includes(r));
+
+// Which deny rules Buddy itself added to which settings file, so uninstall
+// never removes the same rule the person had written first. Kept in Buddy's
+// state dir (which the rule protects).
+function addedRecord(home, runtime, fsImpl = fs) {
+  const file = path.join(runtime?.dataDir || process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(home, '.claude-traffic-light'), 'claude-deny-rules.json');
+  let all = {};
+  try { all = JSON.parse(fsImpl.readFileSync(file, 'utf8')) || {}; } catch {}
+  return {
+    get: (settingsFile) => (Array.isArray(all[settingsFile]) ? all[settingsFile].filter((r) => typeof r === 'string') : []),
+    set(settingsFile, rules) {
+      if (rules.length) all[settingsFile] = rules; else delete all[settingsFile];
+      fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+      fsImpl.writeFileSync(file, JSON.stringify(all, null, 2), { mode: 0o600 });
+    },
+  };
+}
 
 // Claude Code tags each Notification with notification_type. Types not listed
 // (auth_success, elicitation_complete, …) are bookkeeping and leave the
@@ -141,7 +184,7 @@ const eventsFor = (opts = {}) => (opts.askFromWidget ? HOOK_EVENTS.concat(OPTION
 // Pure: settings object in, settings object out, with exactly one current set
 // of our hooks and every foreign one kept.
 function apply(settings, runtime, opts = {}) {
-  const out = withDenyRules(settings);
+  const out = withDenyRules(settings, rulesOf({ ...opts, runtime }));
   out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
   for (const [event, , timeout] of eventsFor(opts)) {
     const hook = { type: 'command', command: commandFor(event, runtime) };
@@ -151,8 +194,10 @@ function apply(settings, runtime, opts = {}) {
   return out;
 }
 
-function strip(settings) {
-  const out = withoutDenyRules(settings);
+// opts.denyRules: the deny rules to remove (uninstall passes the ones Buddy
+// recorded adding).
+function strip(settings, opts = {}) {
+  const out = withoutDenyRules(settings, opts.denyRules || DENY_RULES);
   out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
   if (!Object.keys(out.hooks).length) delete out.hooks;
   return out;
@@ -160,7 +205,8 @@ function strip(settings) {
 
 function check(settings, runtime, opts = {}) {
   const has = (event) => (settings?.hooks?.[event] || []).some((h) => h.hooks?.some((hh) => hh.command === commandFor(event, runtime)));
-  return HOOK_EVENTS.every(([e]) => has(e)) && OPTIONAL_EVENTS.every(([e]) => has(e) === !!opts.askFromWidget) && hasDenyRules(settings);
+  return HOOK_EVENTS.every(([e]) => has(e)) && OPTIONAL_EVENTS.every(([e]) => has(e) === !!opts.askFromWidget)
+    && (hasDenyRules(settings, rulesOf({ ...opts, runtime })) || !!denyShapeProblem(settings));
 }
 
 const configPath = (home) => path.join(home, '.claude', 'settings.json');
@@ -172,6 +218,7 @@ module.exports = {
   transport: 'command',
   SCRIPT,
   DENY_RULES,
+  denyRulesFor,
   HOOK_EVENTS,
   OPTIONAL_EVENTS,
   configPath,
@@ -188,20 +235,36 @@ module.exports = {
     const file = configPath(home);
     if (Runtime.shellNeedsWrapper(runtime)) Runtime.ensureWrapper(runtime, fsImpl);
     const cur = Runtime.readJsonConfig(file, fsImpl);
+    const rules = denyRulesFor(home, runtime);
     // First time Buddy adds its deny rules to an existing settings file, keep
     // a copy of the file as it was.
-    if (!hasDenyRules(cur) && Object.keys(cur).length) Runtime.backupOnce(file, fsImpl);
-    Runtime.writeJsonConfig(file, apply(cur, runtime, { askFromWidget }), fsImpl);
+    if (!hasDenyRules(cur, rules) && Object.keys(cur).length) Runtime.backupOnce(file, fsImpl);
+    const next = apply(cur, runtime, { askFromWidget, home });
+    Runtime.writeJsonConfig(file, next, fsImpl);
+    // Only a rule that wasn't there before is Buddy's to remove later.
+    const had = Array.isArray(cur.permissions?.deny) ? cur.permissions.deny : [];
+    const added = rules.filter((r) => !had.includes(r) && hasDenyRules(next, [r]));
+    if (added.length) {
+      const rec = addedRecord(home, runtime, fsImpl || fs);
+      rec.set(file, [...new Set(rec.get(file).concat(added))]);
+    }
     return { ok: true, file };
   },
   uninstall({ home, fs: fsImpl }) {
     const file = configPath(home);
     const cur = Runtime.readJsonConfig(file, fsImpl);
-    if (!cur.hooks && !hasDenyRules(cur)) return { ok: true, file, changed: false };
-    Runtime.writeJsonConfig(file, strip(cur), fsImpl);
+    const rec = addedRecord(home, null, fsImpl || fs);
+    const ours = rec.get(file).filter((r) => hasDenyRules(cur, [r]));
+    // A deny rule Buddy has no record of adding may be the person's own (or
+    // from an install before the record existed): it stays, and we say so.
+    const unsure = [...new Set(DENY_RULES.concat(denyRulesFor(home)))].filter((r) => hasDenyRules(cur, [r]) && !ours.includes(r));
+    if (unsure.length) console.warn(`[claude-code] left ${unsure.join(', ')} in ${file}: Buddy has no record of adding it; remove it by hand if it was Buddy's.`);
+    if (!cur.hooks && !ours.length) return { ok: true, file, changed: false };
+    Runtime.writeJsonConfig(file, strip(cur, { denyRules: ours }), fsImpl);
+    try { rec.set(file, []); } catch {}
     return { ok: true, file, changed: true };
   },
   isInstalled({ home, runtime, askFromWidget = false, fs: fsImpl }) {
-    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime, { askFromWidget }) && Runtime.wrapperPresent(runtime, {}, fsImpl || undefined); } catch { return false; }
+    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime, { askFromWidget, home }) && Runtime.wrapperPresent(runtime, {}, fsImpl || undefined); } catch { return false; }
   },
 };
