@@ -620,3 +620,30 @@ test('a session killed mid-question is dropped, not shown as "Needs your input"'
   assert.equal(gone.live, false);
   assert.match(gone.dropped, /exited without a SessionEnd/);
 });
+
+test('retryTransient: Windows retries EPERM/EACCES/EBUSY a few times; other OSes and other errors fail at once', () => {
+  const failing = (codes) => { let n = 0; return () => { const c = codes[n++]; if (c) { const e = new Error(c); e.code = c; throw e; } return 'ok'; }; };
+  const sleeps = [];
+  const sleep = (ms) => sleeps.push(ms);
+  assert.equal(SessionState.retryTransient(failing(['EPERM', 'EBUSY', 'EACCES']), { platform: 'win32', sleep }), 'ok');
+  assert.equal(sleeps.length, 3);
+  assert.throws(() => SessionState.retryTransient(failing(['EPERM', 'EPERM', 'EPERM', 'EPERM', 'EPERM']), { platform: 'win32', sleep }), { code: 'EPERM' }, 'gives up after 5 tries');
+  assert.throws(() => SessionState.retryTransient(failing(['ENOENT']), { platform: 'win32', sleep }), { code: 'ENOENT' });
+  const before = sleeps.length;
+  assert.throws(() => SessionState.retryTransient(failing(['EPERM']), { platform: 'darwin', sleep }), { code: 'EPERM' });
+  assert.equal(sleeps.length, before, 'macOS never sleeps or retries');
+});
+
+test('tryLock: on Windows a lock that cannot be created for EPERM is contention, elsewhere an error', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-lock-'));
+  const lock = path.join(dir, 'missing-dir', 'x.lock');
+  // ENOENT (no directory) stays an error everywhere.
+  assert.throws(() => SessionState.tryLock(lock, 't', 'win32'), { code: 'ENOENT' });
+  const real = fs.writeFileSync;
+  fs.writeFileSync = () => { const e = new Error('EPERM'); e.code = 'EPERM'; throw e; };
+  try {
+    assert.equal(SessionState.tryLock(path.join(dir, 'y.lock'), 't', 'win32'), false);
+    assert.throws(() => SessionState.tryLock(path.join(dir, 'y.lock'), 't', 'darwin'), { code: 'EPERM' });
+  } finally { fs.writeFileSync = real; }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
