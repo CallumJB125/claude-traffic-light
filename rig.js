@@ -381,9 +381,11 @@
     <g class="eyefx eyefx-laser">
       <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
     </g>
-    <!-- loading: spinner rings where the eyes are -->
-    <g class="eyefx eyefx-loading" fill="none" stroke="#211f1c" stroke-width="1.2" stroke-linecap="round">
-      <path class="spin-eye" d="M24.25 43.4 a2.35 2.35 0 1 1 -2.05 1.2" /><path class="spin-eye" d="M39.75 43.4 a2.35 2.35 0 1 1 -2.05 1.2" />
+    <!-- loading: an activity spinner in each eye, eight cream spokes with a
+         fading tail stepping round on a dark disc -->
+    <g class="eyefx eyefx-loading">
+      <circle cx="24.25" cy="45.75" r="3.6" fill="#211f1c" /><circle cx="39.75" cy="45.75" r="3.6" fill="#211f1c" />
+      <g fill="#f2efe8"><g class="spin-eye"><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="1" transform="rotate(0 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.85" transform="rotate(45 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.7" transform="rotate(90 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.56" transform="rotate(135 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.45" transform="rotate(180 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.36" transform="rotate(225 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.28" transform="rotate(270 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.2" transform="rotate(315 24.25 45.75)" /></g><g class="spin-eye"><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="1" transform="rotate(0 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.85" transform="rotate(45 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.7" transform="rotate(90 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.56" transform="rotate(135 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.45" transform="rotate(180 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.36" transform="rotate(225 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.28" transform="rotate(270 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.2" transform="rotate(315 39.75 45.75)" /></g></g>
     </g>
     <!-- scan: dark robotic eyes with a sweeping bar -->
     <g class="eyefx eyefx-scan">
@@ -552,12 +554,16 @@
     <rect x="21" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="22.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
     <rect x="38" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="39.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
   </g>
-  <!-- headphones: over-ear cups on a band, a focus LED that pulses -->
+  <!-- headphones: a band over the top and big over-ear cups hugging the head,
+       cream shells outlined in ink so they read on the body and the dark desk;
+       a focus LED on the left cup breathes -->
   <g class="costume costume-headphones">
-    <path d="M16 46 q0 -15 16 -15 q16 0 16 15" fill="none" stroke="#2a2a33" stroke-width="3" stroke-linecap="round" />
-    <rect x="12" y="42" width="6" height="10" rx="2" fill="#2a2a33" stroke="#211f1c" stroke-width="0.4" /><rect x="13.4" y="44" width="3.2" height="6" rx="1.4" fill="#5a5a6a" />
-    <rect x="46" y="42" width="6" height="10" rx="2" fill="#2a2a33" stroke="#211f1c" stroke-width="0.4" /><rect x="47.4" y="44" width="3.2" height="6" rx="1.4" fill="#5a5a6a" />
-    <circle class="hp-led" cx="15" cy="50.4" r="0.9" fill="#2fae3e" />
+    <path d="M14 45 q0 -17 18 -17 q18 0 18 17" fill="none" stroke="#211f1c" stroke-width="4.4" stroke-linecap="round" />
+    <path d="M14 45 q0 -17 18 -17 q18 0 18 17" fill="none" stroke="#f2efe8" stroke-width="2.6" stroke-linecap="round" />
+    <rect x="9" y="39" width="9" height="14" rx="3" fill="#f2efe8" stroke="#211f1c" stroke-width="0.7" /><rect x="15" y="41" width="3" height="10" rx="1" fill="#3a3a46" />
+    <rect x="46" y="39" width="9" height="14" rx="3" fill="#f2efe8" stroke="#211f1c" stroke-width="0.7" /><rect x="46" y="41" width="3" height="10" rx="1" fill="#3a3a46" />
+    <rect x="10" y="44" width="2" height="4" rx="1" fill="#38bdf8" /><rect x="52" y="44" width="2" height="4" rx="1" fill="#38bdf8" />
+    <circle class="hp-led" cx="13" cy="50.5" r="1" fill="#2fae3e" />
   </g>
   <!-- graduate: mortarboard with a swinging tassel -->
   <g class="costume costume-graduate">
@@ -680,33 +686,78 @@
     <g class="twinkle sx4"><rect x="53" y="6" width="1" height="1" /><rect x="52.2" y="6.4" width="2.6" height="0.2" /><rect x="53.4" y="5.6" width="0.2" height="2.6" /></g>
     <g class="twinkle sx5"><rect x="31" y="8" width="0.8" height="0.8" /></g><g class="twinkle sx2"><rect x="15" y="9" width="0.8" height="0.8" /></g><g class="twinkle sx4"><rect x="47" y="10" width="0.8" height="0.8" /></g>
   </g>
-  <!-- bubbles: soap bubbles drifting up -->
-  <g class="effect effect-bubbles" fill="#9fd3ff" fill-opacity="0.25" stroke="#7dc0f5" stroke-width="0.5">
-    <circle class="bubble bu1" cx="14" cy="72" r="2.4" /><circle class="bubble bu2" cx="30" cy="72" r="1.6" /><circle class="bubble bu3" cx="46" cy="72" r="3" /><circle class="bubble bu4" cx="22" cy="72" r="1.9" /><circle class="bubble bu5" cx="52" cy="72" r="1.4" />
+  <!-- particle shapes for the effects below, each centred on its origin -->
+  <defs>
+    <g id="fx-leaf"><path d="M-4 0 Q0 -4 4 0 Q0 4 -4 0 Z" /><path d="M-4 0h7" stroke="#6b3412" stroke-width="0.6" /></g>
+    <path id="fx-petal" d="M0 3 Q-3 0 -1.5 -3 L0 -2 L1.5 -3 Q3 0 0 3 Z" />
+    <path id="fx-heart" d="M0 3 L-3.4 -0.4 A1.8 1.8 0 0 1 0 -2.2 A1.8 1.8 0 0 1 3.4 -0.4 Z" />
+  </defs>
+  <!-- bubbles: soap bubbles drifting up; eight in flight at staggered points -->
+  <g class="effect effect-bubbles">
+    <g class="bubble" style="--x:7px;--ry:60px;--d:0s;--s:2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:15px;--ry:30px;--d:-2.5s;--s:-2px"><circle r="3" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.5" y="-1.5" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:23px;--ry:48px;--d:-1.25s;--s:2px"><circle r="2.5" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.25" y="-1.25" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:30px;--ry:18px;--d:-3.75s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:38px;--ry:66px;--d:-0.625s;--s:2px"><circle r="3" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.5" y="-1.5" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:46px;--ry:38px;--d:-3.125s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:53px;--ry:24px;--d:-1.875s;--s:2px"><circle r="2.5" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.25" y="-1.25" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:59px;--ry:52px;--d:-4.375s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
   </g>
   <!-- leaves: autumn leaves tumbling down -->
   <g class="effect effect-leaves">
-    <path class="leaf lf1" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#d97a2b" /><path class="leaf lf2" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#c8202a" /><path class="leaf lf3" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#f2a200" /><path class="leaf lf4" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#b8571f" />
+    <use class="leaf" href="#fx-leaf" fill="#d97a2b" style="--x:6px;--ry:20px;--d:0s;--s:5px;--r:300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#c8202a" style="--x:14px;--ry:50px;--d:-3s;--s:-4px;--r:-320deg" />
+    <use class="leaf" href="#fx-leaf" fill="#f2a200" style="--x:22px;--ry:8px;--d:-1.5s;--s:6px;--r:280deg" />
+    <use class="leaf" href="#fx-leaf" fill="#b8571f" style="--x:31px;--ry:64px;--d:-4.5s;--s:-5px;--r:-300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#d97a2b" style="--x:39px;--ry:34px;--d:-0.75s;--s:4px;--r:320deg" />
+    <use class="leaf" href="#fx-leaf" fill="#c8202a" style="--x:47px;--ry:14px;--d:-3.75s;--s:-6px;--r:-280deg" />
+    <use class="leaf" href="#fx-leaf" fill="#f2a200" style="--x:55px;--ry:56px;--d:-2.25s;--s:5px;--r:300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#b8571f" style="--x:60px;--ry:40px;--d:-5.25s;--s:-4px;--r:-320deg" />
   </g>
-  <!-- matrix: a thin rain of green code -->
-  <g class="effect effect-matrix" fill="#2fae3e" font-family="ui-monospace, Menlo, monospace" font-size="4" font-weight="700">
-    <text class="glyph gm1" x="10" y="0">1</text><text class="glyph gm2" x="20" y="0">0</text><text class="glyph gm3" x="31" y="0">1</text><text class="glyph gm4" x="42" y="0">0</text><text class="glyph gm5" x="52" y="0">1</text>
+  <!-- matrix: columns of green code falling, a bright head and a fading trail -->
+  <g class="effect effect-matrix" font-family="ui-monospace, Menlo, monospace" font-size="5" font-weight="700">
+    <g class="glyph" style="--x:5px;--ry:20px;--d:0s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:15px;--ry:50px;--d:-1.7s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">0</text></g>
+    <g class="glyph" style="--x:25px;--ry:34px;--d:-0.85s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:39px;--ry:12px;--d:-2.55s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:49px;--ry:60px;--d:-0.425s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:58px;--ry:28px;--d:-2.125s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
   </g>
   <!-- hearts: little hearts floating up -->
-  <g class="effect effect-hearts" fill="#f472b6">
-    <path class="floatheart fh1" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" /><path class="floatheart fh2" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" /><path class="floatheart fh3" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" />
+  <g class="effect effect-hearts">
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:8px;--ry:50px;--d:0s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:17px;--ry:26px;--d:-2.571s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:26px;--ry:62px;--d:-0.643s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:35px;--ry:14px;--d:-3.214s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:44px;--ry:40px;--d:-1.286s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:52px;--ry:58px;--d:-3.857s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:58px;--ry:22px;--d:-1.929s;--s:3px" />
   </g>
-  <!-- fireflies: warm glowing dots drifting -->
-  <g class="effect effect-fireflies" fill="#f2d16b">
-    <circle class="firefly ffa" cx="12" cy="30" r="1.1" /><circle class="firefly ffb" cx="50" cy="26" r="1.1" /><circle class="firefly ffc" cx="34" cy="20" r="1" /><circle class="firefly ffd" cx="20" cy="16" r="1" />
+  <!-- fireflies: warm glowing dots drifting, always a few bright -->
+  <g class="effect effect-fireflies">
+    <g class="firefly" style="--x:7px;--ry:30px;--d:0s;--s:4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:16px;--ry:10px;--d:-2.1s;--s:-4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:27px;--ry:22px;--d:-0.7s;--s:3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:41px;--ry:6px;--d:-2.8s;--s:-3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:52px;--ry:26px;--d:-1.4s;--s:4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:58px;--ry:58px;--d:-3.5s;--s:-4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:9px;--ry:62px;--d:-4.2s;--s:3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
   </g>
   <!-- rainbow: a still arc over Claude -->
   <g class="effect effect-rainbow" fill="none" stroke-width="1.5">
     <path stroke="#e2231a" d="M4 34 a28 28 0 0 1 56 0" /><path stroke="#f28c28" d="M6 34 a26 26 0 0 1 52 0" /><path stroke="#f2d16b" d="M8 34 a24 24 0 0 1 48 0" /><path stroke="#2fae3e" d="M10 34 a22 22 0 0 1 44 0" /><path stroke="#38bdf8" d="M12 34 a20 20 0 0 1 40 0" /><path stroke="#8b5cf6" d="M14 34 a18 18 0 0 1 36 0" />
   </g>
   <!-- petals: cherry blossom drifting down -->
-  <g class="effect effect-petals" fill="#f4a7c0">
-    <path class="petal pt1" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /><path class="petal pt2" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" fill="#f7c3d6" /><path class="petal pt3" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /><path class="petal pt4" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" fill="#f7c3d6" /><path class="petal pt5" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /></g>
+  <g class="effect effect-petals">
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:5px;--ry:44px;--d:0s;--s:4px;--r:220deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:13px;--ry:12px;--d:-3.25s;--s:-4px;--r:-240deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:21px;--ry:58px;--d:-1.625s;--s:5px;--r:200deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:29px;--ry:26px;--d:-4.875s;--s:-5px;--r:-220deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:37px;--ry:4px;--d:-0.8125s;--s:4px;--r:240deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:45px;--ry:36px;--d:-4.0625s;--s:-4px;--r:-200deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:53px;--ry:64px;--d:-2.4375s;--s:5px;--r:220deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:60px;--ry:18px;--d:-5.6875s;--s:-5px;--r:-240deg" />
+  </g>
   <!-- speech bubble pose -->
   <g class="prop prop-bubble">
     <rect x="30" y="0" width="34" height="13" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" />

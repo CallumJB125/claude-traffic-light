@@ -303,9 +303,10 @@
 .rig.eyes-heart .eye-open, .rig.eyes-dizzy .eye-open, .rig.eyes-x .eye-open, .rig.eyes-happy .eye-open, .rig.eyes-surprised .eye-open, .rig.eyes-wink .eye-open,
 .rig.eyes-star .eye-open, .rig.eyes-money .eye-open, .rig.eyes-sleepy .eye-open, .rig.eyes-suspicious .eye-open, .rig.eyes-roll .eye-open, .rig.eyes-googly .eye-open,
 .rig.eyes-loading .eye-open, .rig.eyes-scan .eye-open, .rig.eyes-wide .eye-open, .rig.eyes-content .eye-open, .rig.eyes-side .eye-open, .rig.eyes-glow .eye-open { opacity: 0; }
-/* loading: two spinner arcs turning (agent thinking) */
-.rig .spin-eye { transform-box: fill-box; }
-.rig.eyes-loading .spin-eye { animation: rig-spin 1s linear infinite; }
+/* loading: the activity spinner steps round an eighth at a time (agent thinking) */
+.rig .spin-eye { transform-origin: 24.25px 45.75px; }
+.rig .spin-eye + .spin-eye { transform-origin: 39.75px 45.75px; }
+.rig.eyes-loading .spin-eye { animation: rig-spin 1.2s steps(8) infinite; }
 /* scan: a bar sweeps down each eye */
 .rig.eyes-scan .scanbar { animation: rig-scanbar 1.6s ease-in-out infinite; }
 @keyframes rig-scanbar { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3.4px); } }
@@ -441,49 +442,44 @@
 .rig.effect-stars .twinkle.sx2 { animation-delay: 0.6s; } .rig.effect-stars .twinkle.sx3 { animation-delay: 1.2s; }
 .rig.effect-stars .twinkle.sx4 { animation-delay: 1.8s; } .rig.effect-stars .twinkle.sx5 { animation-delay: 2.4s; }
 @keyframes rig-twinkle-star { 0%, 100% { opacity: 0.25; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
-/* bubbles: rise from the floor, wobble, pop near the top */
-.rig .bubble { opacity: 0; }
-.rig.effect-bubbles .bubble { animation: rig-bubble-rise 4.5s ease-in infinite; }
-.rig.effect-bubbles .bubble.bu2 { animation-delay: 0.9s; } .rig.effect-bubbles .bubble.bu3 { animation-delay: 1.8s; }
-.rig.effect-bubbles .bubble.bu4 { animation-delay: 2.7s; } .rig.effect-bubbles .bubble.bu5 { animation-delay: 3.6s; }
-@keyframes rig-bubble-rise { 0% { opacity: 0; transform: translate(0, 0); } 12% { opacity: 1; } 55% { transform: translate(3px, -38px); } 85% { opacity: 1; transform: translate(-2px, -62px); } 100% { opacity: 0; transform: translate(0, -70px) scale(1.3); } }
-/* leaves: tumble down while spinning */
-.rig .leaf { opacity: 0; }
-.rig.effect-leaves .leaf.lf1 { animation: rig-leaf-a 4.2s linear infinite; }
-.rig.effect-leaves .leaf.lf2 { animation: rig-leaf-b 4.6s linear infinite 1.1s; }
-.rig.effect-leaves .leaf.lf3 { animation: rig-leaf-a 5s linear infinite 2.2s; }
-.rig.effect-leaves .leaf.lf4 { animation: rig-leaf-b 4.4s linear infinite 3.1s; }
-@keyframes rig-leaf-a { 0% { opacity: 0; transform: translate(12px, -4px) rotate(0); } 10% { opacity: 1; } 100% { opacity: 0; transform: translate(6px, 84px) rotate(300deg); } }
-@keyframes rig-leaf-b { 0% { opacity: 0; transform: translate(44px, -4px) rotate(0); } 10% { opacity: 1; } 100% { opacity: 0; transform: translate(52px, 84px) rotate(-320deg); } }
-/* matrix: a thin fall of green code (smooth translate, no flashing) */
-.rig .glyph { opacity: 0; }
-.rig.effect-matrix .glyph { animation: rig-matrix 2.6s linear infinite; }
-.rig.effect-matrix .glyph.gm2 { animation-delay: 0.9s; } .rig.effect-matrix .glyph.gm3 { animation-delay: 0.4s; }
-.rig.effect-matrix .glyph.gm4 { animation-delay: 1.6s; } .rig.effect-matrix .glyph.gm5 { animation-delay: 2.1s; }
-@keyframes rig-matrix { 0% { opacity: 0; transform: translateY(0); } 10% { opacity: 0.9; } 90% { opacity: 0.9; } 100% { opacity: 0; transform: translateY(84px); } }
-/* hearts: float up and fade */
-.rig .floatheart { opacity: 0; }
-.rig.effect-hearts .floatheart.fh1 { animation: rig-floatheart 3.4s ease-out infinite; }
-.rig.effect-hearts .floatheart.fh2 { animation: rig-floatheart 3.4s ease-out infinite 1.1s; }
-.rig.effect-hearts .floatheart.fh3 { animation: rig-floatheart 3.4s ease-out infinite 2.2s; }
-@keyframes rig-floatheart { 0% { opacity: 0; transform: translate(18px, 60px) scale(0.6); } 15% { opacity: 1; } 60% { transform: translate(26px, 26px) scale(1); } 100% { opacity: 0; transform: translate(20px, 4px) scale(1.2); } }
-/* fireflies: drift and glow */
-.rig .firefly { opacity: 0; }
-.rig.effect-fireflies .firefly.ffa { animation: rig-firefly-a 5s ease-in-out infinite; }
-.rig.effect-fireflies .firefly.ffb { animation: rig-firefly-b 6s ease-in-out infinite 1s; }
-.rig.effect-fireflies .firefly.ffc { animation: rig-firefly-a 5.5s ease-in-out infinite 2s; }
-.rig.effect-fireflies .firefly.ffd { animation: rig-firefly-b 6.5s ease-in-out infinite 3s; }
-@keyframes rig-firefly-a { 0%, 100% { opacity: 0.2; transform: translate(0, 0); } 25% { opacity: 1; } 50% { opacity: 0.4; transform: translate(6px, -5px); } 75% { opacity: 1; } }
-@keyframes rig-firefly-b { 0%, 100% { opacity: 0.2; transform: translate(0, 0); } 30% { opacity: 1; } 55% { opacity: 0.4; transform: translate(-7px, 4px); } 80% { opacity: 1; } }
-/* petals: cherry blossom drifting down */
-.rig .petal { opacity: 0; }
-.rig.effect-petals .petal.pt1 { animation: rig-petal-a 4.4s linear infinite; }
-.rig.effect-petals .petal.pt2 { animation: rig-petal-b 4.8s linear infinite 0.9s; }
-.rig.effect-petals .petal.pt3 { animation: rig-petal-a 5.2s linear infinite 1.8s; }
-.rig.effect-petals .petal.pt4 { animation: rig-petal-b 4.6s linear infinite 2.6s; }
-.rig.effect-petals .petal.pt5 { animation: rig-petal-a 5s linear infinite 3.4s; }
-@keyframes rig-petal-a { 0% { opacity: 0; transform: translate(8px, -4px) rotate(0); } 12% { opacity: 1; } 100% { opacity: 0; transform: translate(20px, 84px) rotate(240deg); } }
-@keyframes rig-petal-b { 0% { opacity: 0; transform: translate(48px, -4px) rotate(0); } 12% { opacity: 1; } 100% { opacity: 0; transform: translate(36px, 84px) rotate(-260deg); } }
+/* Particle effects (bubbles, leaves, matrix, hearts, fireflies, petals): each
+   particle is drawn at its origin and placed by --x/--ry, so at rest (reduced
+   motion) it sits still at a scattered spot and the effect still reads. In
+   motion a negative --d spreads the particles through the cycle, so any single
+   frame shows most of them; transform/opacity only, on smooth loops the
+   ambient clock samples. */
+.rig :is(.bubble, .leaf, .glyph, .floatheart, .firefly, .petal) { transform: translate(var(--x, 0px), var(--ry, 0px)); }
+.rig.effect-bubbles .bubble { animation: rig-fx-rise 5s linear var(--d, 0s) infinite; }
+.rig.effect-hearts .floatheart { animation: rig-fx-rise 4.5s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-rise {
+  0% { opacity: 0; transform: translate(var(--x), 76px) scale(0.8); }
+  10% { opacity: 1; }
+  40% { transform: translate(calc(var(--x) + var(--s, 0px)), 50px) scale(1); }
+  70% { transform: translate(calc(var(--x) - var(--s, 0px)), 28px) scale(1); }
+  88% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 8px) scale(1.15); }
+}
+.rig.effect-leaves .leaf { animation: rig-fx-fall 6s linear var(--d, 0s) infinite; }
+.rig.effect-petals .petal { animation: rig-fx-fall 6.5s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-fall {
+  0% { opacity: 0; transform: translate(var(--x), -6px) rotate(0deg); }
+  8% { opacity: 1; }
+  50% { transform: translate(calc(var(--x) + var(--s, 0px)), 40px) rotate(calc(var(--r, 0deg) * 0.5)); }
+  92% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 86px) rotate(var(--r, 0deg)); }
+}
+.rig.effect-matrix .glyph { animation: rig-fx-code 3.4s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-code {
+  0% { opacity: 0; transform: translate(var(--x), -2px); }
+  6%, 90% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 90px); }
+}
+.rig.effect-fireflies .firefly { animation: rig-fx-drift 5s ease-in-out var(--d, 0s) infinite; }
+@keyframes rig-fx-drift {
+  0%, 100% { opacity: 0.5; transform: translate(var(--x), var(--ry)); }
+  25%, 75% { opacity: 1; }
+  50% { opacity: 0.7; transform: translate(calc(var(--x) + var(--s, 0px)), calc(var(--ry) - 4px)); }
+}
 .rig .drop { opacity: 0; }
 .rig.effect-rain .drop { animation: rig-drop 1s linear infinite; }
 .rig.effect-rain .drop.d2 { animation-delay: 0.33s; } .rig.effect-rain .drop.d3 { animation-delay: 0.66s; }
