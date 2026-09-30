@@ -921,7 +921,15 @@ function createLightsWindow() {
   lightsWin.on('hide', () => lightsMotion.set('hidden', true));
   lightsWin.on('restore', () => lightsMotion.set('minimized', false));
   lightsWin.on('minimize', () => lightsMotion.set('minimized', true));
-  lightsWin.webContents.on('did-finish-load', () => { if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', lightsMotion.paused); });
+  lightsWin.webContents.on('did-finish-load', () => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsWin.webContents.send('motion-paused', lightsMotion.paused);
+    lightsWin.webContents.send('window-focus', lightsWin.isFocused());
+  });
+  // The page's own focus state can't be trusted in every host (automation
+  // pins document.hasFocus()), so the window's is sent in.
+  lightsWin.on('focus', () => lightsWin?.webContents.send('window-focus', true));
+  lightsWin.on('blur', () => lightsWin?.webContents.send('window-focus', false));
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');

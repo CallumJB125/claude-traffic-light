@@ -44,10 +44,7 @@
   // open behind other windows it drops to the widget's own ambient clock
   // (a full-rate stage alone cost ~35% of a core).
   const stage = mountRig($('stage-rig'), { ambient: true });
-  const stageRate = () => stage.setAmbient(!document.hasFocus());
-  window.addEventListener('focus', stageRate);
-  window.addEventListener('blur', stageRate);
-  stageRate();
+  window.lightsApi.onWindowFocus((focused) => stage.setAmbient(!focused));
   let motionPaused = false;
   let stageConfetti = null;
   // ── Stage gun demo: tracers / a scoped shot drawn over the stage, aimed at
