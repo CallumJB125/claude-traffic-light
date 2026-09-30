@@ -9,10 +9,43 @@
 // a fork (webhook.js drops a fork PR's branch). Connect is a GitHub App made
 // from a manifest (connect.manifestForm), so Callum approves one screen.
 
+import { randomBytes } from 'node:crypto';
 import { defineConnector } from '../connector.js';
 import { verify as verifyWebhook, factsOf, EVENTS } from './webhook.js';
 
 const API = 'https://api.github.com';
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+const PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' };
+const APP_EVENTS = ['pull_request', 'pull_request_review', 'check_suite'];
+const PEM = /^-----BEGIN (RSA )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END \1PRIVATE KEY-----\r?\n?$/;
+const validLogin = (v) => (typeof v === 'string' && LOGIN.test(v) ? v : null);
+const posInt = (v) => Number.isSafeInteger(v) && v > 0;
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// GitHub App names are global and at most 34 characters: a fixed name
+// collides with every other team's app, and with this team's previous one.
+function appName(owner) {
+  const suffix = [...randomBytes(4)].map((b) => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+  return owner ? `Plexiform-${owner.slice(0, 34 - 15)}-${suffix}` : `Plexiform-${suffix}`;
+}
+
+// The manifest conversion's answer becomes sealed secrets and stored
+// settings: every field is checked, and an app with any other permission or
+// event than the manifest asked for is refused.
+function checkApp(app) {
+  const bad = (what) => { throw new Error(`manifest conversion returned ${what}`); };
+  if (!isObj(app)) bad('no app');
+  if (!posInt(app.id)) bad('a bad app id');
+  if (!isObj(app.owner) || !posInt(app.owner.id) || !validLogin(app.owner.login)) bad('a bad owner');
+  if (typeof app.slug !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,32}[a-z0-9])?$/.test(app.slug)) bad('a bad slug');
+  if (typeof app.pem !== 'string' || app.pem.length > 8192 || !PEM.test(app.pem)) bad('a bad private key');
+  if (typeof app.webhook_secret !== 'string' || app.webhook_secret.length < 16 || app.webhook_secret.length > 256) bad('a bad webhook secret');
+  const perms = isObj(app.permissions) ? app.permissions : bad('no permissions');
+  const keys = Object.keys(perms);
+  if (keys.length !== Object.keys(PERMISSIONS).length || !keys.every((k) => Object.hasOwn(PERMISSIONS, k) && perms[k] === PERMISSIONS[k])) bad('permissions other than read on pull requests, checks and metadata');
+  if (!Array.isArray(app.events) || !app.events.every((e) => APP_EVENTS.includes(e))) bad('events other than pull_request, pull_request_review and check_suite');
+  return app;
+}
 
 // What the card face shows, in the registry's allowlisted words.
 const STATE = (f) => (f.kind === 'pr.merged' ? 'merged' : f.kind === 'pr.closed' ? 'closed' : f.draft ? 'draft' : 'open');
@@ -115,25 +148,27 @@ export default defineConnector({
     // auto-submit. Reconnecting goes through the same form.
     formHost: 'github.com',
     manifestForm({ state, redirectUri, webhookUrl, config }) {
-      const org = typeof config?.org === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(config.org) ? config.org : null;
+      const org = validLogin(config?.org);
       const action = org ? `https://github.com/organizations/${org}/settings/apps/new?state=${encodeURIComponent(state)}` : `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`;
-      const name = String(config?.appName ?? 'Plexiform').slice(0, 34);
+      const name = appName(org ?? validLogin(config?.login));
       return { action, fields: { manifest: JSON.stringify(manifest({ redirectUri, webhookUrl, name })) } };
     },
     // The manifest callback: trade the one-time code for the app's credentials.
-    async exchange({ query, fetch }) {
+    async exchange({ query, fetch, config }) {
       const code = String(query?.code ?? '');
       if (!/^[A-Za-z0-9]{1,100}$/.test(code)) throw new Error('bad manifest code');
       const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } });
       if (!res.ok) throw new Error(`manifest conversion failed: ${res.status}`);
-      const app = await res.json();
-      if (!app?.id || !app?.pem || !app?.webhook_secret || !/^[a-z0-9-]{1,34}$/.test(app?.slug ?? '')) throw new Error('manifest conversion returned an incomplete app');
+      const app = checkApp(await res.json());
+      const org = validLogin(config?.org) ?? (app.owner.type === 'Organization' ? app.owner.login : null);
       return {
-        external_id: String(app.owner?.id ?? app.id),
-        display_name: String(app.owner?.login ?? app.name ?? 'GitHub').slice(0, 80),
+        // Each app is its own connection: a reconnect makes a new app, and
+        // keying by owner collided with the old one (CONFLICT, orphaned app).
+        external_id: String(app.id),
+        display_name: app.owner.login,
         scopes: ['pull_requests:read', 'checks:read', 'metadata:read'],
         secrets: { app_private_key: app.pem, webhook_secret: app.webhook_secret },
-        settings: { app_id: app.id, app_slug: app.slug },
+        settings: { app_id: app.id, app_slug: app.slug, login: app.owner.login, ...(org ? { org } : {}) },
         next_url: `https://github.com/apps/${app.slug}/installations/new`,
       };
     },

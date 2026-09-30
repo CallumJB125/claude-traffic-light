@@ -2,6 +2,7 @@
 // s.linkStatus are builder-5's feat/integrations-ctx; stubbed here until it lands).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import github, { apply, manifest } from '../integrations/github/index.js';
 import { factsOf } from '../integrations/github/webhook.js';
 
@@ -208,14 +209,81 @@ test('the manifest form posts to github.com with the state, and never auto-submi
   assert.equal(github.connect.manifestForm({ state: 's', redirectUri: 'r', config: { org: '../evil' } }).action, 'https://github.com/settings/apps/new?state=s');
 });
 
+// Assembled at run time: no key- or secret-shaped literal in the source.
+const PEM_LINE = (w) => ['-----' + w, 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
+const pem = () => `${PEM_LINE('BEGIN')}\n${'M'.repeat(64)}\n${'Q'.repeat(40)}==\n${PEM_LINE('END')}\n`;
+const hookSecret = () => randomBytes(20).toString('hex');
+const conversion = (over = {}) => ({ id: 77, slug: 'plexiform-acme-x1y2', name: 'Plexiform-acme-x1y2', owner: { id: 5, login: 'acme', type: 'Organization' }, pem: pem(), webhook_secret: hookSecret(),
+  permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' }, events: ['pull_request', 'pull_request_review', 'check_suite'], ...over });
+const exchangeWith = (body, config = {}) => github.connect.exchange({ query: { code: 'abc123' }, config, fetch: async () => ({ ok: true, json: async () => body }) });
+
 test('the manifest exchange seals the key and webhook secret and points at the install step', async () => {
   const fetch = async (url, init) => {
     assert.equal(url, 'https://api.github.com/app-manifests/abc123/conversions');
     assert.equal(init.method, 'POST');
-    return { ok: true, json: async () => ({ id: 77, slug: 'plexiform-acme', name: 'Plexiform', owner: { id: 5, login: 'acme' }, pem: '-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----', webhook_secret: 'whsec_0123456789abcdef' }) };
+    return { ok: true, json: async () => conversion() };
   };
-  const r = await github.connect.exchange({ query: { code: 'abc123' }, fetch });
+  const r = await github.connect.exchange({ query: { code: 'abc123' }, fetch, config: {} });
   assert.deepEqual(Object.keys(r.secrets).sort(), ['app_private_key', 'webhook_secret']);
-  assert.equal(r.next_url, 'https://github.com/apps/plexiform-acme/installations/new');
+  assert.equal(r.next_url, 'https://github.com/apps/plexiform-acme-x1y2/installations/new');
   await assert.rejects(github.connect.exchange({ query: { code: '../x' }, fetch }), /bad manifest code/);
+});
+
+test('M3: a malformed or over-permissioned manifest conversion is refused', async () => {
+  const cases = {
+    'pem object': { pem: { a: 1 } },
+    'pem not a key': { pem: 'nope' },
+    'pem too long': { pem: `${PEM_LINE('BEGIN')}\n${'M'.repeat(8200)}\n${PEM_LINE('END')}\n` },
+    'pem with trailing text': { pem: `${pem()}<script>` },
+    'short webhook secret': { webhook_secret: 'abc' },
+    'long webhook secret': { webhook_secret: 'a'.repeat(257) },
+    'webhook secret object': { webhook_secret: { x: 1 } },
+    'string id': { id: 'x' },
+    'float id': { id: 7.5 },
+    'zero id': { id: 0 },
+    'owner id object': { owner: { id: { x: 1 }, login: 'acme' } },
+    'owner login markup': { owner: { id: 5, login: ['<b>'] } },
+    'owner login bad': { owner: { id: 5, login: '-acme' } },
+    'no owner': { owner: null },
+    'bad slug': { slug: 'Plexiform Acme' },
+    'long slug': { slug: 'a'.repeat(35) },
+    'write permission': { permissions: { pull_requests: 'write', checks: 'read', metadata: 'read' } },
+    'extra permission': { permissions: { pull_requests: 'read', checks: 'read', metadata: 'read', contents: 'write' } },
+    'missing permission': { permissions: { pull_requests: 'read', metadata: 'read' } },
+    'no permissions': { permissions: undefined },
+    'extra event': { events: ['pull_request', 'push'] },
+    'no events': { events: undefined },
+  };
+  for (const [name, over] of Object.entries(cases)) await assert.rejects(exchangeWith(conversion(over)), /manifest conversion returned/, name);
+  await assert.rejects(exchangeWith(null), /manifest conversion returned/);
+  await assert.rejects(exchangeWith([conversion()]), /manifest conversion returned/);
+});
+
+test('M4: each app is its own connection, shown under its owner, and a validated org is kept', async () => {
+  const a = await exchangeWith(conversion());
+  const b = await exchangeWith(conversion({ id: 78, slug: 'plexiform-acme-z9w8' }));
+  assert.deepEqual([a.external_id, b.external_id], ['77', '78']);
+  assert.deepEqual([a.display_name, b.display_name], ['acme', 'acme']);
+  assert.deepEqual(a.settings, { app_id: 77, app_slug: 'plexiform-acme-x1y2', login: 'acme', org: 'acme' });
+  const user = await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }));
+  assert.equal(user.settings.org, undefined);
+  assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: 'plexi-team' })).settings.org, 'plexi-team');
+  assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: '../evil' })).settings.org, undefined);
+});
+
+test('M4: the default app name is unique per connect and fits GitHub\'s 34 characters', () => {
+  const nameOf = (config) => JSON.parse(github.connect.manifestForm({ state: 's', redirectUri: 'https://x/cb', webhookUrl: 'https://x/wh', config }).fields.manifest).name;
+  const names = new Set();
+  for (let i = 0; i < 50; i++) {
+    const n = nameOf({ org: 'acme' });
+    assert.match(n, /^Plexiform-acme-[a-z0-9]{4}$/);
+    names.add(n);
+  }
+  assert.ok(names.size > 40);
+  assert.match(nameOf({ login: 'callum' }), /^Plexiform-callum-[a-z0-9]{4}$/);
+  assert.match(nameOf({}), /^Plexiform-[a-z0-9]{4}$/);
+  const long = nameOf({ org: 'a'.repeat(39) });
+  assert.ok(long.length <= 34, long);
+  assert.match(long, /^Plexiform-a{19}-[a-z0-9]{4}$/);
+  assert.match(nameOf({ org: '<script>', appName: 'Plexiform' }), /^Plexiform-[a-z0-9]{4}$/);
 });
