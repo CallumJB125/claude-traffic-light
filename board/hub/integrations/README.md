@@ -11,18 +11,30 @@ these in a connector:**
 | Concern | Where it lives |
 |---|---|
 | Sealing tokens/secrets | `createConnection({secrets})` → vault (AES-256-GCM, key never in the DB, D41). Read them with `ctx.secret(kind)`. Declare every kind in `secrets: [...]`. |
-| Webhook ingress | `POST /integrations/<connection id>/webhook` (raw body ≤ 1 MiB, IP rate limit). Your `verify()` must check the provider signature over the **raw bytes** in constant time and return `{ok, dedupe_key}`. Bad signature → 401 + a warning log; nothing runs. |
-| Replay protection | `inbound_dedupe` on `(connection, dedupe_key)`, recorded only after your handler succeeds (a failed handler lets the provider's retry run again). |
-| Board events | `consumes: [journal kinds]` + `onEvent(row, ctx)`, via the bus (at-least-once, in order, retried with backoff, dead-lettered after 8 failures). Only rows of the connection's own team reach it. Be idempotent. |
-| Acting on the board | `ctx.actAs(memberId)` → `createCard / comment / action / answerPermission`, the same Api methods, rate limit and D8 `request_id` replay cache as the web. Use a stable `request_id` derived from the external id so retries don't duplicate. |
-| Autonomy + audit | Wrap every side effect in `ctx.act(action, {card_id?, external_ref?, detail?, undo?}, run)`. Declare each action with its default in `actions` (`auto` for facts; `ask` for anything that speaks for a person, writes externally or touches production). Admins can change it per connection. Everything is audited. |
-| Links | `ctx.link(cardId, kind, externalId, url)` / `ctx.linked(kind, externalId)`: dedupe cards by external id. |
-| HTTP out | `ctx.fetch(url, init)`: 10 s timeout, retries 5xx/429 honouring `Retry-After`, records health. |
-| Health | Recorded from webhook and fetch outcomes; `health(ctx)` for an active check. |
+| Webhook ingress | `POST /integrations/<connection id>/webhook`: unknown/inactive connection → 404 before the body is read; per-connection rate limit; raw body ≤ 1 MiB. Your `verify()` must check the provider signature over the **raw bytes** in constant time and return `{ok, dedupe_key}`. Bad signature → 401 + a warning log (and the caller's IP spends a small failure budget); nothing runs. |
+| Timestamps | If the provider signs a timestamp, `verify()` **must** enforce a window (Slack: `X-Slack-Request-Timestamp` within ±5 min of `now`) so a captured request can't be replayed after its dedupe row is swept. |
+| Replay protection | `inbound_dedupe` leases the `(connection, dedupe_key)` while your handler runs: a concurrent duplicate gets `in_progress`, a finished one `duplicate`; a failed handler releases it so the provider's retry runs. Rows are kept 30 days. |
+| Idempotency | Neither the dedupe row nor the D8 `request_id` cache (in memory, 10 minutes, lost on restart) is durable idempotency. Handlers **must** be idempotent through links: check `ctx.linked(kind, externalId)` before creating, and link what you create. |
+| Board events | `consumes: [journal kinds]` + `onEvent(row, ctx)`, via the bus: one consumer per connection (a failing connection never blocks another team's), at-least-once, in order, retried with backoff, dead-lettered after 8 failures (≈ 3 min). Only rows of boards of the connection's own team reach it (never hub-wide rows). Be idempotent. |
+| Timeouts | `handleWebhook` and `onEvent` fail after 60 s. |
+| Acting on the board | Only inside `ctx.act(action, meta, async (s) => …)`: `s.actAs(memberId)` → `createCard / comment / action`, the same Api methods, rate limit and D8 `request_id` replay cache as the web (ids are namespaced per connection). Use a stable `request_id` derived from the external id. `s.link(cardId, kind, externalId, url)` links a card of your team. The scope stops working once `run` returns. An integration can **never** dispatch, retry, take over with Claude or answer a permission request: that stays a person's action. |
+| Autonomy + audit | Declare each action with its default in `actions` (`auto` for facts; `ask` for anything that speaks for a person, writes externally or touches production). Admins can change it per connection. `auto` is audited `attempted` → `auto` or `failed` (+ short code). `detail`/`undo` keep scalars and ids only (≤ 2 KB). |
+| Who did it | Permission checks use the member you act as (usually `ctx.connection.created_by`); the journal records `actor_kind: 'integration'` with your connection id, and the feed names your connector. If that member is removed or becomes a viewer, the webhook answers 200 and health says `actor_unavailable` until an admin reconnects. |
+| PR ↔ card links | Only from branches or PRs the board created (`shared/fence.js` `branchName()` → `board/<KEY>-r<fence>`), matched exactly. **Never** from free text such as "Fixes BDL-12" in a title or body: anyone who can open a PR could then move any card. |
+| System facts | `systemEvents` + `ctx.system.event(type, {kind, external_id, pr, by})` for a card linked to this connection. `pr` must be an integer, `by` a GitHub login (else dropped). **Never call it from inside a `withBoard` callback on the same board** (it waits on that queue: deadlock; the hub throws instead). |
+| HTTP out | Declare `hosts: ['api.example.com']` (exact hostnames, https only). `ctx.fetch(url, init)` refuses any other host, follows one same-host redirect at most, 10 s timeout, retries 5xx/429 honouring `Retry-After`, records health. `connect.exchange` / `verifyToken` get the same restricted fetch. |
+| Health and errors | Health keeps a short code (members can read it). Your error messages are logged redacted and never shown to users, so don't bother making them friendly — and never put secrets in them. |
 
 **Never** journal or audit secrets, tokens or external message text (D41): ids and short
 labels only. **Never** trust identity from a payload field: map external users to
 members only through a verified link (`external_identities`) or a rule approved in review.
 
-Tests: follow `hub/test/integrations-registry.test.js`. Every connector needs a
-forged-signature test and recorded-fixture tests for each webhook it handles.
+**Connections** are per team: two teams may connect the same external workspace, each with
+its own secrets and webhook URL (whether the provider allows a second install is up to
+the provider). OAuth `state` is bound to whoever started it: a cookie in the same browser,
+or the `complete_token` the desktop app sends to `POST /api/integrations/:provider/complete`.
+
+Tests: follow `hub/test/integrations-registry.test.js` and
+`hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,
+a stale-timestamp test where the provider signs one, and recorded-fixture tests for each
+webhook it handles.

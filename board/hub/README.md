@@ -88,6 +88,10 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 
 - Browsers: the hub verifies `Cf-Access-Jwt-Assertion` on every request and WS
   upgrade (RS256, `aud`, `exp`, `iss`) and maps the `email` claim to `members.email`.
+- Integrations (D42): give exactly `POST /integrations/*/webhook` and
+  `GET /integrations/*/callback` an Access **Bypass** policy. Providers can't sign
+  in; the webhook signature and the signed OAuth `state` are their auth. Nothing
+  else under `/integrations/` or `/api/` may bypass.
 - Runners: a device is created with `POST /api/devices {name, cf_service_token_id}`.
   `cf_service_token_id` is the Access service token's Client ID. Connections must carry
   `Authorization: Bearer <device_token>` and an Access assertion whose `common_name`
