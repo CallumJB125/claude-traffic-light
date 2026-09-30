@@ -57,6 +57,7 @@
       "overlay-preload.js",
       "stats.js",
       "usage.js",
+      "usage-history.js",
       "spend.js",
       "mcp-server.js",
       "mcp-install.js",

@@ -251,13 +251,10 @@ function baselineOf(turns, baselineDays, startOf, now) {
 const tokensOf = (b) => b.input + b.output + b.cacheRead + b.cacheWrite;
 
 // The Stats page's Spend block (the shape ccusage used to fill): the last
-// `days` days per day, project and session, plus `history`, each day's cost
-// over `historyDays` for stats.json. Days with no transcripts are left out:
-// Claude Code deletes old transcripts, and an empty day there must not
-// overwrite the cost stats.json already recorded for it.
-function spend(turns, { days = 7, historyDays = 60, now = Date.now() } = {}) {
+// `days` days per day, project and session. Per-day history for stats.json
+// comes from the permanent record (usage-history.js), not from here.
+function spend(turns, { days = 7, now = Date.now() } = {}) {
   const week = summarise(turns, { days, now });
-  const hist = summarise(turns, { days: historyDays, now });
   const byDay = {};
   for (const d of week.byDay) byDay[d.key] = { cost: d.cost, tokens: tokensOf(d), models: [] };
   const sessions = {};
@@ -277,7 +274,6 @@ function spend(turns, { days = 7, historyDays = 60, now = Date.now() } = {}) {
     available: true,
     source: 'transcripts',
     days: byDay,
-    history: Object.fromEntries(hist.byDay.filter((d) => d.turns).map((d) => [d.key, d.cost])),
     totals: { totalCost: week.total.cost },
     projects: week.byProject.map((p) => ({ name: p.name, cost: p.cost, tokens: tokensOf(p) })),
     sessions: Object.values(sessions).sort((a, b) => b.cost - a.cost).slice(0, 8),

@@ -193,3 +193,43 @@ test('history: catch-up reads transcripts into the record in yielding batches, a
   const again = await History.catchUp(History.open({ root }), { root: projects });
   assert.equal(again.added, 0);
 });
+
+test('history: the spend worker folds turns into the record and backfills once, answering spend reads meanwhile', async () => {
+  const { Worker } = require('worker_threads');
+  const projects = tmp();
+  const dataDir = tmp();
+  const dir = path.join(projects, '-work-p');
+  fs.mkdirSync(dir, { recursive: true });
+  const line = (id, ts, out) => JSON.stringify({ type: 'assistant', uuid: `u-${id}`, requestId: `r-${id}`, sessionId: 's', cwd: '/work/p', timestamp: ts, message: { id: `m-${id}`, model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: out, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+  const old = new Date(Date.now() - 40 * 86400000).toISOString();
+  fs.writeFileSync(path.join(dir, 's.jsonl'), [line('a', old, 100), line('b', new Date().toISOString(), 200), ''].join('\n'));
+  const statsFile = path.join(dataDir, 'stats.json');
+  fs.writeFileSync(statsFile, JSON.stringify({ days: { '2026-01-05': { cost: 7.5 } } }));
+  const w = new Worker(path.join(__dirname, '..', 'src', 'usage-worker.js'));
+  const inbox = [];
+  w.on('message', (m) => inbox.push(m));
+  const next = (pred) => new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const tick = () => { const m = inbox.find(pred); if (m) resolve(m); else if (Date.now() - t0 > 8000) reject(new Error('timeout')); else setTimeout(tick, 10); };
+    tick();
+  });
+  try {
+    w.postMessage({ id: 1, root: projects, since: Date.now() - 7 * 86400000 });
+    w.postMessage({ type: 'history.tick', root: projects, dataDir, statsFile });
+    w.postMessage({ id: 2, root: projects, since: Date.now() - 7 * 86400000 });
+    const spend2 = await next((m) => m.id === 2);
+    assert.ok(!spend2.error, 'spend reads are answered during the backfill');
+    const done = await next((m) => m.type === 'history.done');
+    assert.equal(done.first, true);
+    assert.equal(done.added, 2, 'the backfill reads the 40-day-old turn too');
+    assert.equal(done.imported, 1);
+    const store = History.open({ root: dataDir });
+    assert.equal(History.query(store, { from: '2020-01-01', to: '2030-01-01', groupBy: 'none' }).total.turns, 2);
+    assert.ok(fs.existsSync(path.join(dataDir, 'usage', '.backfilled')));
+    inbox.length = 0;
+    w.postMessage({ type: 'history.tick', root: projects, dataDir, statsFile });
+    const again = await next((m) => m.type === 'history.done');
+    assert.equal(again.first, false);
+    assert.equal(again.added, 0, 'folding again adds nothing');
+  } finally { await w.terminate(); }
+});
