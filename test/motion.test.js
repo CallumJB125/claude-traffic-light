@@ -242,15 +242,15 @@ test('ambientPlan: stepped loops wake at their frame changes, smooth ones on the
   assert.equal(M.ambientPlan([], 1000, 'normal', 1000), null);
 });
 
-test('ambientPlan: quick smooth loops (the fire flicker) take the fast grid; too quick stays on the display clock', () => {
+test('ambientPlan: only allow-listed quick loops take the fast grid; the rest keep the display clock', () => {
   const smooth = [{ offset: 0, easing: 'ease-in-out' }, { offset: 1, easing: 'ease-in-out' }];
-  assert.deepEqual(M.ambientPlan(smooth, 400, 'alternate', 1000, 300), { stepped: false, fast: true });
-  assert.deepEqual(M.ambientPlan(smooth, 1800, 'normal', 1000, 300), { stepped: false }, 'slow loops keep the slow grid');
-  assert.equal(M.ambientPlan(smooth, 250, 'normal', 1000, 300), null);
-  assert.equal(M.ambientPlan(smooth, 400, 'normal', 1000), null, 'no fast floor: as before');
+  assert.deepEqual(M.ambientPlan(smooth, 400, 'alternate', 1000, true), { stepped: false, fast: true });
+  assert.equal(M.ambientPlan(smooth, 400, 'alternate', 1000, false), null, 'not listed: display clock, as before');
+  assert.equal(M.ambientPlan(smooth, 300, 'alternate', 1000), null);
+  assert.deepEqual(M.ambientPlan(smooth, 1800, 'normal', 1000, true), { stepped: false }, 'slow loops keep the slow grid, listed or not');
   const A = M.MOTION.ambient;
-  assert.deepEqual(M.ambientPlan(smooth, 400, 'alternate', A.minMs, A.fastMinMs), { stepped: false, fast: true }, 'the fire flicker');
-  assert.deepEqual(M.ambientPlan(smooth, 350, 'alternate', A.minMs, A.fastMinMs), { stepped: false, fast: true }, "the dog's wag");
+  assert.deepEqual(M.AMBIENT_FAST, ['rig-flame', 'rig-wag'], 'the fire flicker and the tail wags, nothing else');
+  for (const moving of ['rig-leg-a', 'rig-leg-b', 'rig-run-bob', 'rig-knock-lean', 'rig-cheer-hop', 'rig-party-dot', 'rig-munch']) assert.ok(!M.AMBIENT_FAST.includes(moving), `${moving} stays on the display clock`);
   assert.equal(A.fastFps % A.fps, 0, 'every slow frame is also a fast frame, so the two grids share wake-ups');
 });
 

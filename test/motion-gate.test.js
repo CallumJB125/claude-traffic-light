@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createMotionGate } = require('../src/motion-gate.js');
+const { createMotionGate, staleMachineReasons } = require('../src/motion-gate.js');
 
 function gate() {
   const calls = [];
@@ -48,4 +48,12 @@ test('onChange is optional', () => {
   const g = createMotionGate();
   g.set('menu-bar', true);
   assert.equal(g.paused, true);
+});
+
+test('stale lock/displays-off reasons clear once the system is plainly back', () => {
+  assert.deepEqual(staleMachineReasons(['locked', 'screens-asleep', 'hidden'], 'active', 5), ['locked', 'screens-asleep'], 'never touches window reasons');
+  assert.deepEqual(staleMachineReasons(['locked'], 'locked', 5), [], 'still locked');
+  assert.deepEqual(staleMachineReasons(['screens-asleep'], 'idle', 900), [], 'nobody has touched it: displays may really be off');
+  assert.deepEqual(staleMachineReasons(['suspended'], 'active', 1), [], 'sleep has its own resume');
+  assert.deepEqual(staleMachineReasons([], 'active', 1), []);
 });

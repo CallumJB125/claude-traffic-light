@@ -1291,7 +1291,8 @@
         const t = a.effect && typeof a.effect.getTiming === 'function' ? a.effect.getTiming() : null;
         if (!t || t.iterations !== Infinity || !(t.duration > 0)) return null;
         const kfs = a.effect.getKeyframes().map((k) => ({ offset: k.computedOffset ?? k.offset, easing: k.easing && k.easing !== 'linear' ? k.easing : t.easing }));
-        return Mo().ambientPlan(kfs, t.duration, t.direction, cfg('ambient').minMs || 1000, cfg('ambient').fastMinMs);
+        const A = cfg('ambient');
+        return Mo().ambientPlan(kfs, t.duration, t.direction, A.minMs || 1000, (Mo().AMBIENT_FAST || []).includes(a.animationName));
       }
       // Smooth loops share one frame grid, so however many there are, they
       // cost one wake-up (and one style/paint pass) per ambient frame.
@@ -1329,10 +1330,7 @@
       }
       function scan() {
         scanQueued = false;
-        // Travelling (a run to the Dock, a garden walk): the legs' quick
-        // swing is the motion itself, so what starts now keeps the display
-        // clock; the next scan after arriving takes loops over again.
-        if (!enabled || !Mo() || svg.matches('.walking, .pose-run')) return;
+        if (!enabled || !Mo()) return;
         const t = now();
         for (const a of frozen) {
           const el = a.effect && a.effect.target;

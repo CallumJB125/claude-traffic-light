@@ -484,9 +484,12 @@
     font-size: 10px;
     transition: border-color var(--t), background var(--t), color var(--t);
     /* Each tile holds a whole rig (~1k SVG nodes, ~165 tiles): off screen,
-       skip them entirely, or every stage frame pays for all of them. */
+       skip them entirely, or every stage frame pays for all of them. The
+       tile's fixed size above doubles as its size while skipped. That
+       containment clips paint to the tile, and some rigs draw past it (a
+       laser gaze, a gun's tracer), so it may paint a rig's width beyond. */
     content-visibility: auto;
-    contain-intrinsic-size: 40px 46px;
+    overflow-clip-margin: 64px;
   }
   .posebtn:hover { border-color: #544f5e; color: var(--text); }
   .posebtn.on { border-color: var(--text); background: var(--bg); color: var(--text); }

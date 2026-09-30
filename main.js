@@ -21,7 +21,8 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const { createMotionGate } = require('./src/motion-gate.js');
+const { createMotionGate, staleMachineReasons } = require('./src/motion-gate.js');
+const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
@@ -727,9 +728,10 @@ ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempref
 // ── Motion gate ────────────────────────────────────────────────────────────
 // backgroundThrottling is off, so Chromium never tells a page nobody can see
 // it. Every reason the widget can't be seen (hidden, minimised, screen locked,
-// asleep, displays off — and menu-bar-only mode, through setMotionPaused)
-// feeds one gate; while it holds, the renderer stops its clocks and main
-// stops the cursor poll, the overlay, the garden, roaming and status pushes.
+// asleep, displays off) feeds one gate — menu-bar-only mode (item 10) will
+// call setMotionPaused('menu-bar', …); while it holds, the renderer stops its
+// clocks and main stops the cursor poll, the overlay, the garden, roaming and
+// status pushes.
 const widgetMotion = createMotionGate((paused) => {
   if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
   syncEyePoll();
@@ -744,21 +746,36 @@ const lightsMotion = createMotionGate((paused) => {
   if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
 });
 
-// Nobody at the machine at all (locked, asleep, displays off) — unlike a
-// hidden widget or menu-bar mode, where the person is still working and the
-// spend, GitHub and busy/Focus alerts must keep coming. Those feeds hold
-// while away and catch up the moment someone is back.
-let feedsTick = () => {};
-const machineAway = createMotionGate((away) => {
-  if (away) { BusyWatch.stop(); return; }
-  BusyWatch.start();
-  feedsTick();
+// Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
+// only while the machine sleeps.
+let gitTick = null;
+const awayFeeds = createAwayFeeds({
+  busyWatch: BusyWatch,
+  feeds: () => [refreshSpend, ...(gitTick ? [gitTick] : [])],
 });
 
+// Machine-wide reasons (locked, asleep, displays off) apply to every gate.
+const machineReasons = new Set();
 function pauseEverywhere(reason, on) {
+  if (on) machineReasons.add(reason); else machineReasons.delete(reason);
   setMotionPaused(reason, on);
   lightsMotion.set(reason, on);
-  machineAway.set(reason, on);
+  awayFeeds.power(reason, on);
+  syncMachineReconcile();
+}
+
+// A missed unlock or wake notification would leave the widget frozen for
+// good. While a lock or displays-off reason stands, check once a minute
+// whether someone is plainly back.
+let machineReconcileTimer = null;
+function syncMachineReconcile() {
+  const want = machineReasons.has('locked') || machineReasons.has('screens-asleep');
+  if (want && !machineReconcileTimer) {
+    machineReconcileTimer = every(60 * 1000, () => {
+      const stale = staleMachineReasons([...machineReasons], powerMonitor.getSystemIdleState(60), powerMonitor.getSystemIdleTime());
+      for (const r of stale) { console.log(`[motion] clearing a stale '${r}'`); pauseEverywhere(r, false); }
+    }, 'motion-reconcile');
+  } else if (!want) machineReconcileTimer = stopTimer(machineReconcileTimer);
 }
 
 function watchPowerForMotion() {
@@ -770,6 +787,9 @@ function watchPowerForMotion() {
     // Displays asleep without a lock (energy saver, a closed lid on a dock).
     systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidSleepNotification', () => pauseEverywhere('screens-asleep', true));
     systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidWakeNotification', () => pauseEverywhere('screens-asleep', false));
+    // An app launching or coming to the front may be the terminal gaining its
+    // Dock icon (or leaving the front): the roam probe looks again soon.
+    for (const n of ['NSWorkspaceDidLaunchApplicationNotification', 'NSWorkspaceDidActivateApplicationNotification']) systemPreferences.subscribeWorkspaceNotification(n, () => roamProbe.wake());
   }
 }
 
@@ -829,16 +849,22 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', () => { if (!glideTimer) saveBounds(); });
-  win.on('show', () => setMotionPaused('hidden', false));
-  win.on('hide', () => setMotionPaused('hidden', true));
-  win.on('restore', () => setMotionPaused('minimized', false));
-  win.on('minimize', () => setMotionPaused('minimized', true));
+  // Each event re-reads both from the window: a restore can bring back a
+  // window that was hidden before it was minimised, with no 'show' at all.
+  const syncVisibility = (visible = win.isVisible()) => {
+    if (!win || win.isDestroyed()) return;
+    setMotionPaused('minimized', win.isMinimized());
+    setMotionPaused('hidden', !visible && !win.isMinimized());
+  };
+  win.on('show', () => syncVisibility(true));
+  win.on('hide', () => syncVisibility(false));
+  win.on('restore', () => syncVisibility());
+  win.on('minimize', () => syncVisibility());
   // Those only fire on a change; a widget that loads hidden (showWidget off),
   // or reloads while paused, must still start in the right state.
   win.webContents.on('did-finish-load', () => {
     if (!win || win.isDestroyed()) return;
-    setMotionPaused('hidden', !win.isVisible());
-    setMotionPaused('minimized', win.isMinimized());
+    syncVisibility();
     win.webContents.send('motion-paused', widgetMotion.paused);
   });
   win.on('closed', () => {
@@ -922,10 +948,15 @@ function createLightsWindow() {
     },
   });
   lightsWin.setMenuBarVisibility(false);
-  lightsWin.on('show', () => lightsMotion.set('hidden', false));
-  lightsWin.on('hide', () => lightsMotion.set('hidden', true));
-  lightsWin.on('restore', () => lightsMotion.set('minimized', false));
-  lightsWin.on('minimize', () => lightsMotion.set('minimized', true));
+  const syncLightsVisibility = (visible = lightsWin?.isVisible()) => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsMotion.set('minimized', lightsWin.isMinimized());
+    lightsMotion.set('hidden', !visible && !lightsWin.isMinimized());
+  };
+  lightsWin.on('show', () => syncLightsVisibility(true));
+  lightsWin.on('hide', () => syncLightsVisibility(false));
+  lightsWin.on('restore', () => syncLightsVisibility());
+  lightsWin.on('minimize', () => syncLightsVisibility());
   lightsWin.webContents.on('did-finish-load', () => {
     if (!lightsWin || lightsWin.isDestroyed()) return;
     lightsWin.webContents.send('motion-paused', lightsMotion.paused);
@@ -1697,10 +1728,16 @@ function broadcastStatus() {
 // When something needs you and the terminal isn't the front app, Claude runs
 // along the screen to that app's Dock icon, knocks, and runs home. Once per
 // waiting episode, then every 10 minutes while still ignored.
-let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
+let roamState = { lastKnock: 0, probing: false, waitingSince: null, busy: false, home: null };
 // A probe that keeps failing the same way (no Dock icon for the terminal)
 // backs off to 10 min; the terminal being in front must still be seen at once.
-const roamProbe = createProbeBackoff({ base: 20000, max: 10 * 60 * 1000, steady: (why) => why === 'already the front app' });
+const roamProbe = createProbeBackoff({
+  base: 20000,
+  max: 10 * 60 * 1000,
+  // A terminal that isn't running yet is worth checking for again soon.
+  caps: { 'no terminal app running': 60 * 1000 },
+  steady: (why) => why === 'already the front app',
+});
 
 // The renderer reports prefers-reduced-motion; while it holds, travel snaps
 // to its destination (keeping the pacing) and nothing roams, hops or glides.
@@ -1776,17 +1813,17 @@ async function roamAndKnock(st, { force = false } = {}) {
   // status tick start another round while the previous one was still waiting —
   // thousands of hung osascript processes, and an exhausted process table.
   roamState.busy = true;
-  const giveUp = (why) => { roamState.busy = false; return { ok: false, why }; };
+  const giveUp = (why, situation) => { roamState.busy = false; return { ok: false, why, situation }; };
   let appName = null;
   let icon = null;
   try {
     appName = await terminalForSessions(st.sessions);
-    if (!appName) return giveUp('no terminal app running');
-    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app');
+    if (!appName) return giveUp('no terminal app running', { app: null, running: false });
+    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app', { app: appName, running: true, frontmost: true });
     icon = await dockIconRect(appName);
-    if (!icon) return giveUp(`no Dock icon for ${appName}`);
+    if (!icon) return giveUp(`no Dock icon for ${appName}`, { app: appName, running: true, frontmost: false, dockIcon: false });
   } catch (e) {
-    return giveUp(`could not locate the Dock icon: ${e.message}`);
+    return giveUp(`could not locate the Dock icon: ${e.message}`, { app: appName, running: !!appName });
   }
   roamState.lastKnock = Date.now();
   const wasVisible = win.isVisible();
@@ -1860,17 +1897,19 @@ function maybeRoam(st) {
   // processes every 4 seconds (and on every session-file write), which is what
   // made the machine crawl while a permission prompt sat unanswered.
   if (roamState.probing) return;
-  roamProbe.setKey([...(st.pending || []).map((p) => p.id), ...st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).map((s) => `${s.sessionId}:${s.signal}`)].sort().join('|'));
-  if (Date.now() - roamState.lastProbe < roamProbe.gap) return;
+  // Who is waiting, and in which terminal: a change there is a new situation.
+  roamProbe.setKey([...(st.pending || []).map((p) => p.id), ...st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).map((s) => `${s.sessionId}:${s.signal}:${s.hostApp || ''}`)].sort().join('|'));
+  if (!roamProbe.due(Date.now())) return;
   roamState.probing = true;
-  roamState.lastProbe = Date.now();
+  let result = null;
   roamAndKnock(st)
-    .then((r) => {
-      roamProbe.record(r);
-      if (!r.ok) console.log(`[roam] skipped: ${r.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
-    })
-    .catch((e) => console.log('[roam]', e.message))
-    .finally(() => { roamState.probing = false; });
+    .then((r) => { result = r; })
+    .catch((e) => { result = { ok: false, why: e.message }; console.log('[roam]', e.message); })
+    .finally(() => {
+      roamState.probing = false;
+      roamProbe.probed(result, Date.now());
+      if (result && !result.ok) console.log(`[roam] skipped: ${result.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+    });
 }
 
 // ── Rare events ────────────────────────────────────────────────────────────
@@ -3070,7 +3109,6 @@ app.whenReady().then(() => {
   every(30000, flushStats, 'stats-flush');
   // GitHub is asked at most once a poll interval (github-signals decides);
   // dev runs never call gh, but still show saved events.
-  let gitTick = null;
   if (IS_DEV_RUN) git.pause('dev-run');
   else {
     gitTick = () => {
@@ -3085,14 +3123,8 @@ app.whenReady().then(() => {
     };
     setTimeout(gitTick, 5000);
   }
-  // Spend and GitHub share one 15 s tick instead of two timers.
-  feedsTick = () => {
-    if (machineAway.paused) return;
-    refreshSpend();
-    gitTick?.();
-  };
   refreshSpend();
-  every(SPEND_POLL_MS, feedsTick, 'feeds');
+  every(SPEND_POLL_MS, awayFeeds.tick, 'feeds');
   syncEyePoll();
   watchPowerForMotion();
   sweepSessionFiles();

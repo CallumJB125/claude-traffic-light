@@ -38,6 +38,45 @@ async function loopsHeld() {
   });
 }
 
+// Every loop is back under the ambient clock: held by it (paused as far as
+// the page is concerned), and the clock is moving them — a stepped loop may
+// not change frame inside the window, but the smooth ones must.
+async function ambientOwned() {
+  return widget.evaluate(async () => {
+    const loops = () => document.querySelector('svg.rig').getAnimations({ subtree: true }).filter((a) => a.effect.getTiming().iterations === Infinity);
+    const before = loops().map((a) => [a, a.currentTime]);
+    await new Promise((r) => setTimeout(r, 700));
+    return before.length > 0 && before.every(([a]) => a.playState === 'paused') && before.some(([a, t]) => a.currentTime !== t);
+  });
+}
+
+// How often an animation's frame changes, per second: ~60 on the display
+// clock, 12 on the fast ambient grid, 6 on the slow one.
+async function framesPerSecond(name) {
+  return widget.evaluate(async (n) => {
+    const a = document.querySelector('svg.rig').getAnimations({ subtree: true }).find((x) => x.animationName === n);
+    if (!a) return null;
+    const seen = new Set();
+    const end = performance.now() + 1000;
+    while (performance.now() < end) { seen.add(a.currentTime); await new Promise((r) => requestAnimationFrame(r)); }
+    return seen.size;
+  }, name);
+}
+
+// Try a look on the widget through the editor's preview.
+async function preview(look) {
+  let lights = h.app.windows().find((p) => !p.isClosed() && p.url().endsWith('lights.html'));
+  if (!lights) {
+    await widget.evaluate(() => window.trafficLight.openLights());
+    lights = await windowByFile(h.app, 'lights.html');
+    await lights.waitForLoadState('load');
+  }
+  await lights.evaluate((l) => window.lightsApi.previewOnWidget(l, 20000), { lamp: 'green', eyes: 'default', pose: 'none', ...look });
+  await widget.waitForTimeout(600);
+}
+
+const widgetState = ({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')); return { visible: w.isVisible(), minimized: w.isMinimized() }; };
+
 test('the working widget runs until something hides it', async () => {
   await expect.poll(paused).toBe(false);
   expect(await loopsHeld()).toBe(false);
@@ -49,7 +88,34 @@ test('hiding the widget pauses it; showing it resumes', async () => {
   expect(await loopsHeld()).toBe(true);
   await main(showWidget);
   await expect.poll(paused).toBe(false);
-  expect(await loopsHeld()).toBe(false);
+  expect(await ambientOwned()).toBe(true);
+});
+
+test('hidden, then minimised, then restored: paused exactly while it cannot be seen', async () => {
+  const step = async (fn) => {
+    await main(fn);
+    await widget.waitForTimeout(400);
+    const w = await main(widgetState);
+    expect(await paused()).toBe(!w.visible || w.minimized);
+  };
+  await step(hideWidget);
+  await step(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')).minimize());
+  await step(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')).restore());
+  await step(showWidget);
+  await expect.poll(paused).toBe(false);
+  expect(await ambientOwned()).toBe(true);
+});
+
+test('a reload while minimised comes back paused, and resumes on restore', async () => {
+  await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')).minimize());
+  await expect.poll(paused).toBe(true);
+  await widget.reload();
+  await widget.waitForLoadState('load');
+  await expect.poll(paused).toBe(true);
+  await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')).restore());
+  await main(showWidget);
+  await expect.poll(paused).toBe(false);
+  expect(await ambientOwned()).toBe(true);
 });
 
 test('a locked screen pauses it, and an unlock does not resume a widget that is still hidden', async () => {
@@ -68,6 +134,7 @@ test('sleep pauses it until resume', async () => {
   await expect.poll(paused).toBe(true);
   await main(({ powerMonitor }) => powerMonitor.emit('resume'));
   await expect.poll(paused).toBe(false);
+  expect(await ambientOwned()).toBe(true);
 });
 
 test('a state that changed while paused is on the widget the moment it resumes', async () => {
@@ -98,8 +165,43 @@ test('a non-default character: its layer loops ride the ambient clock and hold w
   expect(await loopsHeld()).toBe(true);
   await main(showWidget);
   await expect.poll(paused).toBe(false);
-  expect(await loopsHeld()).toBe(false);
-  await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).close());
+  expect(await ambientOwned()).toBe(true);
+});
+
+test('clocks: the flame and the wag on the fast ambient grid; legs and a knock on the display clock', async () => {
+  await preview({ effect: 'fire' });
+  expect(await framesPerSecond('rig-flame')).toBeLessThanOrEqual(14);
+  expect(await framesPerSecond('rig-flame')).toBeGreaterThanOrEqual(9);
+  await preview({ body: 'dog' });
+  const wag = await framesPerSecond('rig-wag');
+  expect(wag).toBeGreaterThanOrEqual(9);
+  expect(wag).toBeLessThanOrEqual(14);
+  await preview({ pose: 'run' });
+  expect(await framesPerSecond('rig-leg-a')).toBeGreaterThan(30);
+  await preview({ pose: 'knock' });
+  const knock = await widget.evaluate(() => document.querySelector('svg.rig').getAnimations({ subtree: true }).filter((a) => a.effect.getTiming().iterations === Infinity && a.effect.getTiming().duration < 1000 && !['rig-flame', 'rig-wag'].includes(a.animationName)).map((a) => a.animationName));
+  expect(knock.length).toBeGreaterThan(0);
+  for (const name of knock) expect(await framesPerSecond(name), name).toBeGreaterThan(30);
+});
+
+// The editor's stage runs at full rate while the editor has focus, and on the
+// ambient clock when it doesn't — decided by the window's focus, which main
+// sends in (the page's own hasFocus() can't be trusted under automation).
+test('the editor stage follows its window focus: display clock focused, ambient clock not', async () => {
+  let lights = h.app.windows().find((p) => !p.isClosed() && p.url().endsWith('lights.html'));
+  if (!lights) {
+    await widget.evaluate(() => window.trafficLight.openLights());
+    lights = await windowByFile(h.app, 'lights.html');
+    await lights.waitForLoadState('load');
+  }
+  const stageLoops = () => lights.evaluate(() => [...new Set(document.querySelector('#stage-rig svg').getAnimations({ subtree: true }).filter((a) => a.effect.getTiming().iterations === Infinity).map((a) => a.playState))]);
+  const emit = (ev) => main(({ BrowserWindow }, e) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).emit(e), ev);
+  await emit('focus');
+  await expect.poll(stageLoops).toEqual(['running']);
+  await emit('blur');
+  await expect.poll(stageLoops).toEqual(['paused']);
+  await emit('focus');
+  await expect.poll(stageLoops).toEqual(['running']);
 });
 
 // The editor mounts a live rig per picker tile (~165); only the few in view
@@ -116,4 +218,15 @@ test('the Lights editor animates only what is in view, and holds while minimised
   await expect.poll(lightsPaused).toBe(true);
   await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).restore());
   await expect.poll(lightsPaused).toBe(false);
+});
+
+test('a widget that launches hidden (Floating Widget off) starts paused', async () => {
+  const hh = await launchApp({ config: { showWidget: false } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    await w.waitForLoadState('load');
+    await expect.poll(() => w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
+    await w.waitForTimeout(1800);
+    expect(await w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
+  } finally { await hh.cleanup(); }
 });
