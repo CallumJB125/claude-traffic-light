@@ -62,6 +62,13 @@ function ensureWrapper(rt, fsImpl = fs) {
 // Whether a shell-string install needs the wrapper file on disk.
 const shellNeedsWrapper = (rt) => !rt.node && isWin(rt);
 
+// False when the installed command form runs through a wrapper that is no
+// longer on disk (argv forms always do; shell strings only on Windows).
+function wrapperPresent(rt, { argv = false } = {}, fsImpl = fs) {
+  if (!(argv ? !rt.node : shellNeedsWrapper(rt))) return true;
+  try { return fsImpl.existsSync(wrapperPath(rt)); } catch { return false; }
+}
+
 function shellCommand(rt, scriptPath, args = []) {
   const tail = args.length ? ` ${args.join(' ')}` : '';
   if (rt.node) return `node "${scriptPath}"${tail}`;
@@ -111,4 +118,4 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, shellCommand, argvCommand, runsScript, pathFor };
+module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

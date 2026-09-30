@@ -54,3 +54,27 @@ test('runtime: the dev fallback is plain node, and needs no wrapper', () => {
   assert.equal(Runtime.shellCommand(rt, '/h/emit.js', ['x']), 'node "/h/emit.js" x');
   assert.deepEqual(Runtime.argvCommand(rt, '/h/emit.js', ['x']), ['node', '/h/emit.js', 'x']);
 });
+
+test('isInstalled is false when the wrapper an installed command runs through is gone', () => {
+  const Gemini = require('../../adapters/gemini.js');
+  const wrapped = (platform, adapter) => {
+    const home = tmp();
+    const rt = Runtime.make({ execPath: '/App/Buddy', platform, hooksDir: '/h', dataDir: path.join(home, 'data') });
+    assert.equal(adapter.install({ home, runtime: rt }).ok, true);
+    return { home, rt };
+  };
+  // Codex: argv notify always runs through the wrapper.
+  let { home, rt } = wrapped('linux', Codex);
+  assert.equal(Codex.isInstalled({ home, runtime: rt }), true);
+  fs.rmSync(Runtime.wrapperPath(rt));
+  assert.equal(Codex.isInstalled({ home, runtime: rt }), false);
+  // Windows shell strings (Cursor, Gemini) too; macOS/Linux shell strings need none.
+  for (const adapter of [Cursor, Gemini]) {
+    ({ home, rt } = wrapped('win32', adapter));
+    assert.equal(adapter.isInstalled({ home, runtime: rt }), true);
+    fs.rmSync(Runtime.wrapperPath(rt));
+    assert.equal(adapter.isInstalled({ home, runtime: rt }), false, adapter.id);
+    ({ home, rt } = wrapped('linux', adapter));
+    assert.equal(adapter.isInstalled({ home, runtime: rt }), true);
+  }
+});

@@ -161,6 +161,6 @@ module.exports = {
     return { ok: true, file, changed: true };
   },
   isInstalled({ home, runtime, askFromWidget = false, fs: fsImpl }) {
-    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime, { askFromWidget }); } catch { return false; }
+    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime, { askFromWidget }) && Runtime.wrapperPresent(runtime, {}, fsImpl || undefined); } catch { return false; }
   },
 };

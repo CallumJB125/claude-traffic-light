@@ -93,6 +93,6 @@ module.exports = {
     return { ok: true, file, changed: next !== cur };
   },
   isInstalled({ home, runtime, fs: fsImpl = fs }) {
-    try { return check(readText(configPath(home), fsImpl), runtime); } catch { return false; }
+    try { return check(readText(configPath(home), fsImpl), runtime) && Runtime.wrapperPresent(runtime, { argv: true }, fsImpl); } catch { return false; }
   },
 };

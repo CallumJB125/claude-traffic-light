@@ -67,6 +67,6 @@ module.exports = {
     return { ok: true, file };
   },
   isInstalled({ home, runtime, fs: fsImpl }) {
-    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime); } catch { return false; }
+    try { return check(Runtime.readJsonConfig(configPath(home), fsImpl), runtime) && Runtime.wrapperPresent(runtime, {}, fsImpl || undefined); } catch { return false; }
   },
 };
