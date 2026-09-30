@@ -49,6 +49,7 @@ export class RunnerConn {
     this.pendingOut = new Map();
     this.ackVersions = [];          // [{seq, version}] of handover.write entries, carried by the next ack
     this.lastSeqAcked = device.last_seq_acked;
+    this.seqBase = device.seq_base ?? 0;
     this.chain = Promise.resolve();
     this.closed = false;
     ws.on('message', (data) => this.onMessage(data));
@@ -144,8 +145,8 @@ export class RunnerConn {
     const old = hub.runners.get(this.device_id);
     if (old && old !== this) old.close(WS_CLOSE.REPLACED, 'replaced by a newer connection');
     hub.runners.set(this.device_id, this);
-    const dev = hub.device(this.device_id);
-    this.lastSeqAcked = dev.last_seq_acked;
+    this.syncOutbox(msg);
+    this.outSeen = false;
     this.repos = new Map(hub.db.all('SELECT repo_id FROM runner_repos WHERE device_id = ?', this.device_id).map((r) => [r.repo_id, { approvals_from: [], auto_accept_from: [] }]));
     hub.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', hub.iso(), this.device_id);
     if (msg.form_factor === 'laptop' || msg.form_factor === 'desktop') hub.db.run('UPDATE devices SET form_factor = ? WHERE id = ?', msg.form_factor, this.device_id);
@@ -175,6 +176,44 @@ export class RunnerConn {
       hub.deliverComments(run.card_id);
     }
     hub.sendOffersForDevice(this.device_id);
+  }
+
+  // The runner's outbox and the hub's last_seq_acked can disagree: a hub
+  // restored from backup is behind the runner's acked seq (entries past it
+  // would wait forever for a gap to fill), and a wiped runner outbox restarts
+  // at seq 1 under a new outbox_id (its entries would be dropped as already
+  // acked). Settle both from hello, journal every move.
+  syncOutbox(msg) {
+    const hub = this.hub;
+    const dev = hub.device(this.device_id);
+    let acked = dev.last_seq_acked;
+    let base = dev.seq_base ?? 0;
+    const moves = [];
+    const newId = typeof msg.outbox_id === 'string' && msg.outbox_id && msg.outbox_id !== dev.outbox_id ? msg.outbox_id : null;
+    if (newId && dev.outbox_id != null) {
+      const maxEv = hub.db.get('SELECT MAX(seq) AS m FROM events WHERE device_id = ?', this.device_id)?.m ?? 0;
+      base = Math.max(base + acked, maxEv);
+      moves.push({ reason: 'reset', from: acked, to: 0, outbox_id: newId, outbox_id_before: dev.outbox_id });
+      acked = 0;
+    }
+    if (Number.isSafeInteger(msg.outbox_acked_seq) && msg.outbox_acked_seq > acked) {
+      moves.push({ reason: 'runner_acked', from: acked, to: msg.outbox_acked_seq });
+      acked = msg.outbox_acked_seq;
+    }
+    if (newId || moves.length) {
+      hub.txn(() => {
+        hub.db.run('UPDATE devices SET last_seq_acked = ?, seq_base = ?, outbox_id = COALESCE(?, outbox_id) WHERE id = ?', acked, base, newId, this.device_id);
+        for (const payload of moves) this.journalOutbox(payload);
+      });
+      if (moves.length) hub.log.warn('runner outbox resynced', { device_id: this.device_id, moves });
+    }
+    this.lastSeqAcked = acked;
+    this.seqBase = base;
+    this.pendingOut.clear();
+  }
+
+  journalOutbox(payload) {
+    this.hub.journal({ board_id: null, actor_kind: 'runner', actor_id: this.device_id, kind: 'device.outbox', payload });
   }
 
   onAdvertise(msg) {
@@ -319,6 +358,18 @@ export class RunnerConn {
       this.send({ type: 'ack', seq: this.lastSeqAcked });
       return;
     }
+    // The runner replays contiguously from its oldest unacked entry, so a gap
+    // before the first frame of a connection can never fill (entries the runner
+    // lost): skip it, on the record.
+    if (!this.outSeen && msg.seq > this.lastSeqAcked + 1 && this.pendingOut.size === 0) {
+      const from = this.lastSeqAcked;
+      this.hub.txn(() => {
+        this.consumeSeq(msg.seq - 1);
+        this.journalOutbox({ reason: 'gap', from, to: msg.seq - 1 });
+      });
+      this.hub.log.warn('runner outbox gap skipped', { device_id: this.device_id, from, to: msg.seq - 1 });
+    }
+    this.outSeen = true;
     if (msg.seq > this.lastSeqAcked + 1) {
       this.pendingOut.set(msg.seq, msg);
       return;
@@ -355,7 +406,7 @@ export class RunnerConn {
       hub.txn(() => {
         const cur = hub.card(row.id);
         if (cur.fence !== m.fence) {
-          hub.feed(row.id, 'salvage', { note: 'stale outbox entry dropped', kind: m.kind, reason: 'FENCED', held_fence: m.fence }, { run, device: this.device_id, seq, delayed });
+          hub.feed(row.id, 'salvage', { note: 'stale outbox entry dropped', kind: m.kind, reason: 'FENCED', held_fence: m.fence }, { run, device: this.device_id, seq: this.seqBase + seq, delayed });
           this.consumeSeq(seq);
           return;
         }
@@ -364,7 +415,7 @@ export class RunnerConn {
         } catch (e) {
           // A poison entry must never block the outbox: record it, ack it.
           hub.log.warn('outbox entry rejected', { device_id: this.device_id, seq, kind: m.kind, err: e });
-          hub.feed(row.id, 'error', { first_line: `runner ${m.kind} rejected: ${clip(e.message, 200)}` }, { run, device: this.device_id, seq, delayed });
+          hub.feed(row.id, 'error', { first_line: `runner ${m.kind} rejected: ${clip(e.message, 200)}` }, { run, device: this.device_id, seq: this.seqBase + seq, delayed });
         }
         this.consumeSeq(seq);
       });
@@ -373,7 +424,7 @@ export class RunnerConn {
 
   applyKind(row, run, m, seq, delayed) {
     const hub = this.hub;
-    const rec = (kind, data = {}) => hub.feed(row.id, kind, data, { run, device: this.device_id, seq, delayed });
+    const rec = (kind, data = {}) => hub.feed(row.id, kind, data, { run, device: this.device_id, seq: this.seqBase + seq, delayed });
     const stepOr = (event) => {
       const res = hub.apply(row.id, { ...event, fence: m.fence }, { device: hub.device(this.device_id) });
       if (!res.ok) hub.log.info('outbox step rejected', { card_id: row.id, kind: m.kind, code: res.error.code });

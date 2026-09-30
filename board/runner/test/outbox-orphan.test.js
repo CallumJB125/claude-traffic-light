@@ -13,6 +13,29 @@ import { startFakeHub, startRunner, makeRepo, tmpDir, rm, waitFor, alive, REPO_I
 const scope = { repo_id: REPO_ID, toplevel: '/x' };
 const msg = (i) => serializeOutbound({ kind: 'progress.append', run_id: 'r', card_id: 'c', fence: 1, repo_id: REPO_ID, text: `p${i}` }, scope, { requireRepoId: true });
 
+test('outbox identity: a stable outbox_id across restarts, a new one after a wipe; hello carries it and the acked seq', async () => {
+  const dir = tmpDir();
+  try {
+    const ob = new Outbox(dir, 'dev-1');
+    ob.append(msg(1));
+    ob.ack(1);
+    assert.match(ob.id, /^[0-9a-f-]{36}$/);
+    assert.equal(new Outbox(dir, 'dev-1').id, ob.id);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const fresh = new Outbox(dir, 'dev-1');
+    assert.notEqual(fresh.id, ob.id);
+    assert.equal(fresh.head, 0);
+  } finally { rm(dir); }
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const sup = await startRunner({ hub, home: path.join(root, 'home'), repo: makeRepo(root) });
+  try {
+    const hello = hub.of('hello')[0];
+    assert.equal(hello.outbox_id, sup.outbox.id);
+    assert.equal(hello.outbox_acked_seq, sup.outbox.acked);
+  } finally { await sup.shutdown(); await hub.close(); rm(root); }
+});
+
 test('outbox: seq strictly increasing and persisted; acked entries dropped; torn tail ignored; frames carry the exact bytes', () => {
   const dir = tmpDir();
   try {

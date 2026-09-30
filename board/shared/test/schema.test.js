@@ -37,6 +37,7 @@ test('migrate: applies 001 and the shipped migrations once, records them, is ide
   assert.deepEqual(migrate(db), []);
   assert.equal(currentVersion(db), shipped.at(-1));
   assert.ok(db.prepare('PRAGMA table_info(devices)').all().some((c) => c.name === 'form_factor'), '002 device form factor');
+  assert.ok(db.prepare('PRAGMA table_info(devices)').all().some((c) => c.name === 'outbox_id'), '004 outbox identity');
   assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
   for (const t of ['orgs', 'hub_meta', 'members', 'devices', 'repos', 'boards', 'board_repos', 'runner_repos', 'cards', 'card_assignees', 'dispatches', 'runs', 'leases', 'events', 'handovers', 'comments', 'evidence', 'asks', 'permission_requests', 'memories', 'path_locks', 'plan_steps', 'budgets', 'trust_policy', 'overlaps', 'audit', 'schema_migrations']) {

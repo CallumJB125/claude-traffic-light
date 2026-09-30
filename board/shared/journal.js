@@ -18,6 +18,7 @@ export const JOURNAL_KINDS = Object.freeze([
   'comment.create',     // {comment_id, source, for_agent}
   'feed.relabel',       // {event_id, relabel}: replaces the old in-place events UPDATE
   'hub.restore_bump',   // {bump}: every card fence += bump (Litestream restore, D10)
+  'device.outbox',      // {reason:'runner_acked'|'gap'|'reset', from, to, outbox_id?}: a device's last_seq_acked moved other than by an ack (board_id NULL)
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

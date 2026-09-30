@@ -6,6 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHub, fakeGitHub, runMsg, runHb } from './helpers.js';
 import { createGitHub } from '../github.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 function hangingGitHub() {
   const gh = fakeGitHub();
@@ -50,5 +54,80 @@ test('merge polls never overlap', async () => {
     h.hub.pollMerges();
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(gh.calls, 1);
+  } finally { await h.destroy(); }
+});
+
+test('restore from backup: the runner\'s acked seq wins over the older DB, so the outbox never jams', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'board-restore-'));
+  const h1 = await startHub({ dataDir });
+  let dev;
+  let seq;
+  try {
+    const alice = await h1.login('alice');
+    dev = await h1.enroll(alice);
+    const r = await h1.runner(dev);
+    const run = await h1.startRun(alice, r);
+    for (let i = 0; i < 3; i++) await r.out({ kind: 'status.update', ...runMsg(run), summary: `s${i}` });
+    seq = r.seq;
+  } finally { await h1.close(); }
+  // The backup is older than the runner's acks.
+  const db = new DatabaseSync(join(dataDir, 'board.db'));
+  db.prepare('UPDATE devices SET last_seq_acked = ? WHERE id = ?').run(seq - 3, dev.device_id);
+  db.close();
+  writeFileSync(join(dataDir, 'board.db.restored'), '');
+  const h2 = await startHub({ dataDir });
+  try {
+    const alice = await h2.login('alice');
+    const r = await h2.runner(dev, { hello: false });
+    const w = await r.hello([], { outbox_acked_seq: seq });
+    assert.equal(w.last_seq_acked, seq);
+    assert.ok(h2.db.get("SELECT 1 AS x FROM journal WHERE kind = 'device.outbox' AND json_extract(payload, '$.reason') = 'runner_acked'"));
+    await r.advertise([{ repo_id: h2.ids.repo, approvals_from: [], auto_accept_from: [] }]);
+    const run = await h2.startRun(alice, r);   // its activity is seq + 1: applied, card goes running
+    assert.equal(h2.card(run.card_id).run_state, 'running');
+  } finally { await h2.destroy(); }
+});
+
+test('a wiped runner outbox (new outbox_id, seq back at 1) is applied, not dropped as already acked', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const dev = await h.enroll(alice);
+    const r1 = await h.runner(dev, { hello: false });
+    await r1.hello([], { outbox_id: 'box-1' });
+    await r1.advertise([{ repo_id: h.ids.repo, approvals_from: [], auto_accept_from: [] }]);
+    const run = await h.startRun(alice, r1);
+    for (let i = 0; i < 4; i++) await r1.out({ kind: 'status.update', ...runMsg(run), summary: `old ${i}` });
+    const before = r1.seq;
+    r1.terminate();
+    const r2 = await h.runner(dev, { hello: false });
+    const w = await r2.hello([], { outbox_id: 'box-2', outbox_acked_seq: 0, outbox_head_seq: 0 });
+    assert.equal(w.last_seq_acked, 0);
+    r2.seq = 0;
+    const ack = await r2.out({ kind: 'status.update', ...runMsg(run), summary: 'after the wipe' });
+    assert.equal(ack.seq, 1);
+    assert.equal(h.db.get('SELECT status_summary FROM runs WHERE id = ?', run.run_id).status_summary, 'after the wipe');
+    const j = JSON.parse(h.db.get("SELECT payload FROM journal WHERE kind = 'device.outbox' AND json_extract(payload, '$.reason') = 'reset'").payload);
+    assert.deepEqual([j.from, j.to, j.outbox_id, j.outbox_id_before], [before, 0, 'box-2', 'box-1']);
+    assert.ok(h.db.get('SELECT seq FROM events WHERE device_id = ? ORDER BY id DESC LIMIT 1', dev.device_id).seq > before, 'events keep UNIQUE(device_id, seq)');
+  } finally { await h.destroy(); }
+});
+
+test('a gap before the first replayed entry can never fill: skipped on the record, the rest applied', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const dev = await h.enroll(alice);
+    const r = await h.runner(dev);
+    const run = await h.startRun(alice, r);
+    r.terminate();
+    const r2 = await h.runner(dev, { hello: false });
+    await r2.hello([]);
+    const acked = r2.welcome.last_seq_acked;
+    const ack = await r2.out({ kind: 'status.update', ...runMsg(run), summary: 'after lost entries' }, { seq: acked + 3 });
+    assert.equal(ack.seq, acked + 3);
+    assert.equal(h.db.get('SELECT status_summary FROM runs WHERE id = ?', run.run_id).status_summary, 'after lost entries');
+    const j = JSON.parse(h.db.get("SELECT payload FROM journal WHERE kind = 'device.outbox' AND json_extract(payload, '$.reason') = 'gap'").payload);
+    assert.deepEqual([j.from, j.to], [acked, acked + 2]);
   } finally { await h.destroy(); }
 });

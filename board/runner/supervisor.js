@@ -184,7 +184,7 @@ export class Supervisor extends EventEmitter {
   #sendHello() {
     this.#sendDevice({
       type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.device.device_id, runner_version: RUNNER_VERSION,
-      outbox_head_seq: this.outbox.head,
+      outbox_head_seq: this.outbox.head, outbox_id: this.outbox.id, outbox_acked_seq: this.outbox.acked,
       ...(this.formFactor ? { form_factor: this.formFactor } : {}),
       runs: [...this.runs.values()].map((r) => ({ run_id: r.run_id, card_id: r.card_id, fence: r.fence, local_state: r.ending ? 'ending' : r.localState })),
     });

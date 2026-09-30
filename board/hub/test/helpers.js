@@ -224,8 +224,8 @@ export class FakeRunner extends Peer {
     return this.attach(new WebSocket(this.url, { headers: { authorization: `Bearer ${this.dev.device_token}` } }));
   }
 
-  async hello(runs = [], { outbox_head_seq = this.seq } = {}) {
-    this.send({ type: 'hello', protocol: 1, device_id: this.dev.device_id, runner_version: 'test', outbox_head_seq, runs });
+  async hello(runs = [], { outbox_head_seq = this.seq, outbox_id, outbox_acked_seq } = {}) {
+    this.send({ type: 'hello', protocol: 1, device_id: this.dev.device_id, runner_version: 'test', outbox_head_seq, runs, ...(outbox_id ? { outbox_id } : {}), ...(outbox_acked_seq != null ? { outbox_acked_seq } : {}) });
     this.welcome = await this.next('welcome', () => true, { fresh: true });
     // A real runner persists its outbox head; resume after what the hub acked.
     this.seq = Math.max(this.seq, this.welcome.last_seq_acked);

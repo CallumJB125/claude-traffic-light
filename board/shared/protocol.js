@@ -132,7 +132,7 @@ export const SHAPES = Object.freeze({
   },
   // runner → hub
   'runner→hub': {
-    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?' },
+    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?' },
     advertise: { repos: 'array' },
     claim: { id: 'string', card_id: 'string', request_id: 'string', expected_fence: 'int' },
     decline: { card_id: 'string', request_id: 'string', reason: 'string?' },
