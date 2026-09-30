@@ -24,6 +24,7 @@ const PAGES = [
       { id: 'board:calendar', title: 'Calendar', kind: 'soon' },
       { id: 'board:timeline', title: 'Timeline', kind: 'soon' },
     ] },
+  { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: `Standalone Claude tasks you started from ${NAME}, with their messages. Being built by buddy-builder-2.` },
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', group: 'team' },

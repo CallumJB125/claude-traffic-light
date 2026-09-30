@@ -283,7 +283,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);
-      v.webContents.loadFile(path.join(DIR, '..', page.file)).catch(() => {});
+      v.webContents.loadFile(path.join(DIR, '..', page.file), { query: page.query || {} }).catch(() => {});
     }
     attach(v);
   }

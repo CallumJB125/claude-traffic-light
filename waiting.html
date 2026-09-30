@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+<title>Waiting on you</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="input-bubble.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.4 var(--font); -webkit-font-smoothing: antialiased; }
+  #top { -webkit-app-region: drag; padding: 14px 20px 10px 20px; border-bottom: 1px solid var(--line); }
+  body.standalone #top { padding-left: 84px; }
+  h1 { margin: 0; font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+  #sub { margin-top: 2px; color: var(--muted); font-size: var(--text-xs); }
+  #off { display: none; margin: 12px 20px 0; padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); color: var(--muted); font-size: var(--text-xs); }
+  body.answering-off #off { display: block; }
+  #list { padding: 14px 20px 24px; }
+  #keys { padding: 0 20px 20px; color: var(--faint); font-size: var(--text-xs); }
+  kbd { font: inherit; padding: 0 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
+</style>
+</head>
+<body>
+  <header id="top">
+    <h1 id="heading">Waiting on you</h1>
+    <div id="sub" role="status" aria-live="polite"></div>
+  </header>
+  <div id="off">Answering from here is off, so tool permissions show only in their terminal. Turn on “Answer permission prompts from the widget” in Preferences to answer them here too.</div>
+  <main id="list"></main>
+  <p id="keys"><kbd>Enter</kbd> answers with the safe choice of the open item (never a risky allow) · <kbd>⌘.</kbd> denies · <kbd>Esc</kbd> closes it</p>
+  <script src="brand.js"></script>
+  <script src="src/input-view.js"></script>
+  <script src="input-bubble.js"></script>
+  <script src="waiting.js"></script>
+</body>
+</html>

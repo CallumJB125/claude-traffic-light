@@ -49,10 +49,12 @@
   #titlebar .tools { -webkit-app-region: no-drag; display: flex; gap: 6px; }
   #titlebar .view-seg { -webkit-app-region: no-drag; margin-left: 6px; }
   #main[data-view="stats"] #rules, #main[data-view="stats"] #right,
-  #main[data-view="mix"] #rules, #main[data-view="mix"] #right { display: none; }
+  #main[data-view="mix"] #rules, #main[data-view="mix"] #right,
+  #main[data-view="auto"] #rules, #main[data-view="auto"] #right { display: none; }
   #main:not([data-view="stats"]) #stats { display: none; }
   #main:not([data-view="mix"]) #mix { display: none; }
-  #main[data-view="stats"], #main[data-view="mix"] { grid-template-columns: 1fr; }
+  #main:not([data-view="auto"]) #auto { display: none; }
+  #main[data-view="stats"], #main[data-view="mix"], #main[data-view="auto"] { grid-template-columns: 1fr; }
 
   #main {
     display: grid;
@@ -847,6 +849,35 @@
   @keyframes face-fade { from { opacity: 0; } }
   @keyframes face-rise { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
   @media (prefers-reduced-motion: reduce) { #face-modal, #face-modal .sheet { animation: none; } }
+  /* ── Auto-answer view (lights-auto.js) ───────────────────────────────── */
+  #auto { padding: 14px 18px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #auto .auto-status { margin: 0; padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); color: var(--muted); font-size: 12px; }
+  #auto-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #auto-list li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  #auto-list li.off { opacity: 0.55; }
+  #auto-list .pill { flex: none; padding: 1px 8px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 700; }
+  #auto-list .pill.allow { background: rgba(47, 174, 62, 0.2); color: #8fe39a; }
+  #auto-list .pill.deny { background: rgba(184, 68, 58, 0.25); color: var(--danger-text); }
+  #auto-list .what { flex: 1; min-width: 0; font: 12px ui-monospace, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #auto-list .where { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%; }
+  #auto-list .empty { color: var(--muted); border-style: dashed; background: none; }
+  #auto-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+  #auto-form h3 { margin: 0; font-size: 13px; }
+  #auto-form .frow { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: start; }
+  #auto-form .frow[hidden] { display: none; }
+  /* The footer's Save belongs to the rules editor; a rule here has its own. */
+  #frame[data-view="auto"] #save-btn { display: none; }
+  #auto-form .flbl { color: var(--muted); padding-top: 4px; }
+  #auto-form input[type=text] { width: 100%; height: 26px; padding: 0 8px; border: 1px solid var(--line-input); border-radius: var(--radius); background: var(--bg); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  #auto-form .tools { display: flex; flex-wrap: wrap; gap: 6px; }
+  #auto-form .tools label { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-size: 12px; cursor: pointer; }
+  #auto-form .tools label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  #auto-form .hint { margin-top: 3px; color: var(--muted); font-size: 11px; }
+  #auto-why { min-height: 18px; font-size: 12px; font-weight: 600; }
+  #auto-why.refused { color: var(--danger-text); }
+  #auto-why.ok { color: #8fe39a; }
+  #auto-form .actions { display: flex; gap: 8px; }
+
   /* Nobody can see the editor: every preview holds its frame. */
   body.motion-paused * { animation-play-state: paused !important; }
 </style>
@@ -859,6 +890,7 @@
       <button id="view-rules" class="on" role="tab" aria-controls="rules right">Rules</button>
       <button id="view-stats" role="tab" aria-controls="stats">Stats</button>
       <button id="view-mix" role="tab" aria-controls="mix">Usage</button>
+      <button id="view-auto" role="tab" aria-controls="auto">Auto-answer</button>
     </div>
     <span class="spacer"></span>
     <div class="tools">
@@ -1201,6 +1233,57 @@
       </div>
     </section>
 
+    <section id="auto" role="tabpanel" aria-labelledby="view-auto">
+      <div>
+        <div class="stats-title">Auto-answer</div>
+        <div class="stats-sub">Answer a permission prompt the moment it matches a rule, so a session never sits waiting on something you always allow. Commands on the deny-list and destructive ones always wait for you, whatever a rule says.</div>
+      </div>
+      <p class="auto-status" role="note">Not switched on yet: rules are saved here, but nothing is answered from them until the hook side is ready.</p>
+      <ul id="auto-list" aria-label="Auto-answer rules"></ul>
+      <form id="auto-form" novalidate>
+        <h3 id="auto-form-title">New rule</h3>
+        <div class="frow">
+          <div class="flbl" id="auto-action-lbl">Answer</div>
+          <div class="seg" role="radiogroup" aria-labelledby="auto-action-lbl">
+            <button type="button" id="auto-allow" role="radio" class="on" aria-checked="true">Allow</button>
+            <button type="button" id="auto-deny" role="radio" aria-checked="false">Deny</button>
+          </div>
+        </div>
+        <div class="frow">
+          <div class="flbl" id="auto-tools-lbl">Tools</div>
+          <div>
+            <div class="tools" id="auto-tools" role="group" aria-labelledby="auto-tools-lbl"></div>
+            <input type="text" id="auto-mcp" placeholder="or an MCP tool: mcp__server__tool" spellcheck="false" aria-label="MCP tool name" style="margin-top:6px" />
+          </div>
+        </div>
+        <div class="frow" id="auto-command-row">
+          <label class="flbl" for="auto-command">Command</label>
+          <div>
+            <input type="text" id="auto-command" placeholder="npm test *" spellcheck="false" />
+            <div class="hint">One plain command. A trailing <code>*</code> allows any arguments after it.</div>
+          </div>
+        </div>
+        <div class="frow" id="auto-path-row">
+          <label class="flbl" for="auto-path">Path</label>
+          <div>
+            <input type="text" id="auto-path" placeholder="~/Development/my-app/**" spellcheck="false" />
+            <div class="hint"><code>*</code> is one folder level, <code>**</code> any depth. Starts with <code>/</code> or <code>~/</code>.</div>
+          </div>
+        </div>
+        <div class="frow">
+          <label class="flbl" for="auto-cwd">Only project</label>
+          <div>
+            <input type="text" id="auto-cwd" placeholder="any project, or ~/Development/my-app/**" spellcheck="false" />
+          </div>
+        </div>
+        <div id="auto-why" role="alert" aria-live="assertive"></div>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="auto-save" disabled>Save rule</button>
+          <button type="button" class="btn ghost" id="auto-cancel">Clear</button>
+        </div>
+      </form>
+    </section>
+
     <section id="mix" role="tabpanel" aria-labelledby="view-mix">
       <div>
         <div class="stats-title">Usage</div>
@@ -1349,5 +1432,6 @@
 <script src="usage-insights.js"></script>
 <script src="usage-view.js"></script>
 <script src="lights-view.js"></script>
+<script src="lights-auto.js"></script>
 </body>
 </html>

@@ -71,3 +71,12 @@ test('a paused widget still hears every change to its waiting inputs', () => {
   assert.equal(statusPushWanted(true, none, two), true, 'answered elsewhere: it hears that too');
   assert.equal(statusPushWanted(true, two, two), false);
 });
+
+test('a session-derived input keeps its id but a changed text or time still reaches a paused widget', () => {
+  const q = (text, at) => askKey({ inputs: [{ id: 'ask-host-s1', kind: 'question', created_at: at, title: 'Framework', text }] });
+  const first = q('Which framework?', '2026-10-01T10:00:00Z');
+  assert.equal(q('Which framework?', '2026-10-01T10:00:00Z'), first, 'same ask, same key');
+  assert.notEqual(q('Which database?', '2026-10-01T10:00:00Z'), first, 'new text');
+  assert.notEqual(q('Which framework?', '2026-10-01T10:05:00Z'), first, 'asked again later');
+  assert.equal(statusPushWanted(true, q('Which database?', '2026-10-01T10:00:00Z'), first), true);
+});

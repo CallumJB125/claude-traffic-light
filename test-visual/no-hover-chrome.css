@@ -1,0 +1,2 @@
+/* Screenshots after a click: the widget's hover-only buttons stay hidden. */
+#gear, #help { opacity: 0 !important; }

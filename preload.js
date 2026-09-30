@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('trafficLight', {
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
+  // The bubble's height: main grows the window by it so Claude keeps his size.
+  setBubbleHeight: (px) => ipcRenderer.send('set-bubble-height', px),
+  openWaiting: () => ipcRenderer.invoke('open-waiting'),
+  // Lights → Auto-answer, prefilled from an input ({inputId}) or a nudge ({nudgeKey}).
+  openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
+  nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
   // In-app update row (src/update-view.js). The widget may read the state and ask
   // for an install (never forced); nothing else of the updater reaches it.

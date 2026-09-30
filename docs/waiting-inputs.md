@@ -210,8 +210,18 @@ launchers.
   run inside the blocking hook before it waits. Its input is the request
   record (`kind`, `tool`, `toolInput`, `cwd`), and it answers through the same
   `answerOutput`. Destructive commands and the deny list always need a human.
+  The rules editor (Lights → Auto-answer) and storage exist:
+  `config.autoAnswer = { v: 1, rules: [{ id, enabled, action: 'allow'|'deny',
+  tools: [...], command?, path?, cwd?, note, createdAt }] }`, validated on
+  every read and save by `src/auto-rules.js` (`refusal`, `sanitize`), which
+  also holds a reference `matchRule`. **Nothing evaluates them yet**: the
+  shape and where it runs are still to be agreed with the hook core.
 - **Escalation push**: a consumer of `state.inputs` that pushes any item
   still present after about 5 minutes. For answerable kinds it uses the same
   option ids via `answerInput`. The phone path already exists for
   `permission`/`plan` (remote/).
-- **Bubble UI**: builder-2 renders `state.inputs` using the schema above.
+- **Bubble UI** (built): `input-bubble.js` renders `state.inputs` in the
+  widget (two rows, then "+N more") and on the "Waiting on you" page
+  (`waiting.html`, standalone and in the Plexiform window). main adds
+  `danger` (a reason string or null) to hook permission inputs: the deny-list
+  or a destructive command, so Enter never allows them.

@@ -23,6 +23,17 @@ test('every page has a unique id, a title and a known kind', () => {
   assert.equal(PAGES[0].id, 'board');
 });
 
+test('local pages name an app file and its preload, and both exist', () => {
+  const local = flat().filter((p) => p.kind === 'local');
+  assert.ok(local.some((p) => p.id === 'waiting'), 'Waiting on you is a local page');
+  for (const p of local) {
+    for (const f of [p.file, p.preload]) {
+      assert.ok(typeof f === 'string' && !f.includes('..') && !path.isAbsolute(f), `${p.id}: ${f}`);
+      assert.ok(fs.existsSync(path.join(__dirname, '..', f)), `${p.id}: ${f} exists`);
+    }
+  }
+});
+
 test('hub page URLs carry ?view= for every view but the board itself', () => {
   assert.equal(hubPageUrl('http://127.0.0.1:5000', pageById('board')), 'http://127.0.0.1:5000/');
   assert.equal(hubPageUrl('http://127.0.0.1:5000/', pageById('board:table')), 'http://127.0.0.1:5000/?view=table');

@@ -28,12 +28,21 @@ function staleMachineReasons(reasons, idleState, idleSeconds, recentSeconds = 60
   return reasons.filter((r) => RECONCILED.includes(r));
 }
 
-// What the widget is being asked to show: every waiting request and input,
-// by id. A paused widget skips status pushes, but never a change to this —
-// a stuck prompt must be answerable (and a gone one gone) the moment the
-// widget is back, and main answers them while it's hidden or in menu-bar mode.
+// What the widget is being asked to show: every waiting request and input.
+// A paused widget skips status pushes, but never a change to this — a stuck
+// prompt must be answerable (and a gone one gone) the moment the widget is
+// back, and main answers them while it's hidden or in menu-bar mode.
+// Session-derived inputs keep one id per session (ask-<host>-<session>), so
+// the key carries their time and a hash of what they say as well: a new
+// question in the same session must reach a paused widget too.
+function fingerprint(i) {
+  const s = JSON.stringify([i.created_at ?? null, i.title ?? '', i.text ?? '', (i.options || []).map((o) => o && o.label), i.expires_at ?? null]);
+  let h = 5381;
+  for (let k = 0; k < s.length; k++) h = ((h * 33) ^ s.charCodeAt(k)) >>> 0;
+  return h.toString(36);
+}
 function askKey(st) {
-  const ids = [...(st?.pending || []).map((p) => `r:${p.id}`), ...(st?.inputs || []).map((i) => `i:${i.id}`)];
+  const ids = [...(st?.pending || []).map((p) => `r:${p.id}`), ...(st?.inputs || []).map((i) => `i:${i.id}:${fingerprint(i)}`)];
   return ids.sort().join('|');
 }
 function statusPushWanted(paused, key, lastKey) {

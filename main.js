@@ -16,6 +16,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { Worker } = require('worker_threads');
 const Rules = require('./rules.js');
+const Brand = require('./brand.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
@@ -123,7 +124,8 @@ const MIN_WIDTH = 80;
 const MAX_WIDTH = 320;
 
 function resizeBy(factor) {
-  if (!win) return;
+  // The bubble or the recap has grown the window past the widget's shape.
+  if (!win || stripPx) return;
   const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
   const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
   const newHeight = Math.round(newWidth / WIDGET_ASPECT);
@@ -183,6 +185,9 @@ const DEFAULT_CONFIG = {
   // Accept paired devices' events on the Tailscale address too (loopback
   // only otherwise, which an ssh -R tunnel reaches).
   remoteTailscale: false,
+  // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
+  // answers from them until the hook side evaluates them.
+  autoAnswer: { v: 1, rules: [] },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -229,6 +234,8 @@ function buildConfig() {
   }
   if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0, saved.template);
   config.rulesVersion = Rules.RULES_VERSION;
+  // Re-checked on every read: config.json is a file anyone running as you can edit.
+  config.autoAnswer = { v: 1, rules: AutoRules.sanitize(saved.autoAnswer && saved.autoAnswer.rules).rules };
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
     .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: Rules.migrateRules(p.rules.map(Rules.normalizeRule), Rules.rulesVersionOf(p)), rulesVersion: Rules.RULES_VERSION }));
@@ -242,6 +249,8 @@ function saveConfig(partial) {
   if (partial.rules && !('template' in partial)) next.template = null;
   // Presets reach here from loadConfig or Lights, so their rules are current.
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
+  // A renderer can't save a rule the UI would refuse.
+  if (partial.autoAnswer) next.autoAnswer = { v: 1, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   configCache = { key: null, value: null }; // two writes inside one ms would share an mtime
@@ -348,6 +357,20 @@ const { localSessions } = require('./src/remote-devices.js');
 // (state.inputs; schema in docs/waiting-inputs.md). Dialogs no hook can see
 // are read off the session's tmux pane, read-only and rate-limited.
 const PendingInputs = require('./src/pending-inputs.js');
+const AutoRules = require('./src/auto-rules.js');
+const ApprovalNudge = require('./src/approval-nudge.js');
+const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json') });
+// Why Enter must not allow a permission request (deny-list or destructive):
+// the widget still shows Allow, it just never makes it the default.
+function withDanger(inputs, requests) {
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  return inputs.map((i) => {
+    if (i.kind !== 'permission' || !byId.has(i.id)) return i;
+    let danger;
+    try { danger = AutoRules.danger(byId.get(i.id)); } catch { danger = 'it could not be checked'; }
+    return { ...i, danger };
+  });
+}
 const PaneDialogs = require('./src/pane-dialogs.js');
 const Owned = require('./hooks/owned.js');
 const AnswerFile = require('./hooks/answer-file.js');
@@ -398,7 +421,9 @@ function readBounds() {
 let gardenRun = null;
 function saveBounds() {
   if (!win || gardenRun || roamState.busy) return;
-  fs.writeFileSync(BOUNDS_FILE, JSON.stringify(win.getBounds(), null, 2));
+  // The widget's own size, without the bubble or the recap under it.
+  const b = win.getBounds();
+  fs.writeFileSync(BOUNDS_FILE, JSON.stringify({ x: b.x + stripDx, y: b.y, width: b.width - stripW, height: b.height - stripPx }, null, 2));
 }
 
 function readManualOverride() {
@@ -674,7 +699,7 @@ function computeState(opts = {}) {
   const sessions = readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
-  const inputs = PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs });
+  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs }), pending);
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
@@ -1108,6 +1133,36 @@ app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
 app.on('web-contents-created', (_e, wc) => Updater.guardNavigation(wc));
 // Only an installed app may claim the scheme: a dev run would steal it from it.
 if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
+// Open Lights on a view, then hand it one event (a prefill) once it can hear it.
+function showLightsView(view, then = null) {
+  const fresh = !lightsWin;
+  createLightsWindow();
+  const go = () => { lightsWin?.webContents.send('show-view', view); if (then) lightsWin?.webContents.send(then.event, then.data); };
+  if (fresh || lightsWin?.webContents.isLoading()) lightsWin?.webContents.once('did-finish-load', go); else go();
+}
+
+// "Waiting on you" on its own (the same page sits in the Plexiform window).
+let waitingWin = null;
+function createWaitingWindow() {
+  if (waitingWin) { waitingWin.show(); waitingWin.focus(); return; }
+  waitingWin = new BrowserWindow({
+    width: 560, height: 640, minWidth: 380, minHeight: 320,
+    title: `Waiting on you — ${Brand.name}`,
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#1c1a1f',
+    webPreferences: { preload: path.join(__dirname, 'waiting-preload.js'), contextIsolation: true, sandbox: true, spellcheck: false },
+  });
+  waitingWin.setMenuBarVisibility(false);
+  waitingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  waitingWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  waitingWin.loadFile('waiting.html');
+  if (IS_MAC) app.dock.show();
+  waitingWin.on('closed', () => {
+    waitingWin = null;
+    if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+
 let lightsWin = null;
 
 function createLightsWindow() {
@@ -1901,6 +1956,7 @@ function broadcastStatus() {
   }
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
+  waitingWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
     // A paused widget catches up when the gate lifts (it broadcasts then),
@@ -1912,7 +1968,8 @@ function broadcastStatus() {
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
-    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook, updateRowShown);
+    stripAway = !!st.away && !travelLook;
+    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -2182,6 +2239,7 @@ function createTray() {
     },
     { type: 'separator' },
     { label: 'What does this mean?…', click: createHelpWindow },
+    { label: 'Waiting on you…', click: createWaitingWindow },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
@@ -3012,8 +3070,49 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
-  return w.ok ? { ok: true } : { ok: false, error: w.error };
+  if (!w.ok) return { ok: false, error: w.error };
+  // "Allow once" only: a session-wide allow was already a broader choice.
+  const n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null;
+  return n && n.nudge ? { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } } : { ok: true };
 });
+
+// The Waiting page (waiting.html, standalone or in the Plexiform window).
+ipcMain.handle('get-inputs', () => {
+  const st = aggregateState();
+  return { inputs: st.reason === 'travel' ? [] : (st.inputs || []), askFromWidget: !!loadConfig().askFromWidget };
+});
+ipcMain.handle('open-waiting', () => { createWaitingWindow(); return true; });
+ipcMain.handle('nudge-mute', (e, key) => nudger.mute(String(key)));
+
+// Lights → Auto-answer, prefilled. From a nudge the rule is the one main
+// remembered for that key; from an input it is rebuilt from the request or
+// the session's recorded denial. The renderer only names which.
+function autoRulePrefill(from) {
+  const f = from && typeof from === 'object' ? from : {};
+  if (typeof f.nudgeKey === 'string') return nudger.take(f.nudgeKey);
+  if (typeof f.inputId !== 'string') return null;
+  const st = aggregateState();
+  const input = (st.inputs || []).find((i) => i.id === f.inputId);
+  if (!input) return null;
+  if (input.source === 'hook') {
+    const req = readRequests().find((r) => r.id === input.id);
+    const s = req && ApprovalNudge.suggestionFor(req);
+    return s ? s.rule : (input.tool ? { action: 'allow', tools: [input.tool] } : null);
+  }
+  const b = (st.sessions || []).find((x) => x.sessionId === input.session)?.blocked;
+  if (input.kind !== 'blocked' || !b || typeof b.tool !== 'string') return input.tool ? { action: 'allow', tools: [input.tool] } : null;
+  const summary = typeof b.summary === 'string' ? b.summary : '';
+  const toolInput = AutoRules.FILE_TOOLS.has(b.tool) ? { file_path: summary } : { command: summary };
+  const s = ApprovalNudge.suggestionFor({ kind: 'permission', tool: b.tool, toolInput });
+  if (s) return s.rule;
+  return AutoRules.SHELL_TOOLS.has(b.tool) && summary ? { action: 'allow', tools: [b.tool], command: summary.slice(0, 500) } : { action: 'allow', tools: [b.tool] };
+}
+ipcMain.handle('open-auto-rule', (e, from) => {
+  const prefill = autoRulePrefill(from);
+  showLightsView('auto', prefill ? { event: 'auto-rule-prefill', data: prefill } : null);
+  return !!prefill;
+});
+ipcMain.handle('check-auto-rule', (e, rule) => ({ reason: AutoRules.refusal(rule) }));
 
 // "Open it": jump to the pane or tab the input is waiting in. Never types.
 ipcMain.handle('open-input', async (e, id) => {
@@ -3026,13 +3125,14 @@ ipcMain.handle('open-input', async (e, id) => {
   return { ok: !!r, app: r ? r.app : null };
 });
 
-// The widget grows a strip of Allow / Deny buttons while a request waits,
-// or the "While you were away" recap once a busy spell ends. The ask wins:
-// it is the one that blocks a session.
-// The quiet "Update ready" row comes last: it never hides either of those.
-const STRIP_PX = 46;
+// The widget grows by the waiting-input bubble's height (the renderer
+// measures it) or the "While you were away" recap once a busy spell ends.
+// The bubble wins: it is what blocks a session. The quiet "Update ready"
+// row comes last: it never hides either of those.
 const AWAY_PX = 64;
 const UPDATE_PX = 72;
+const BUBBLE_MAX_PX = 300;
+const BUBBLE_MIN_W = 230;
 let stripPx = 0;
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
@@ -3040,14 +3140,34 @@ ipcMain.on('update-row', (e, on) => {
   updateRowShown = !!on;
   broadcastStatus();
 });
+let stripW = 0;
+let stripDx = 0;
+let bubblePx = 0;
+let stripAway = false;
+ipcMain.on('set-bubble-height', (e, px) => {
+  if (!win || e.sender !== win.webContents) return;
+  bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, Math.round(Number(px) || 0)));
+  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+});
+// The widget's size is the base; the strip adds height (and width, so the
+// bubble is readable on a small widget, split evenly so Claude doesn't move).
+// Computed from the base every time, never by adding deltas, so a clamp
+// can't make the widget creep.
 function applyStrip(asking, away = false, update = false) {
-  const px = asking ? STRIP_PX : away ? AWAY_PX : update ? UPDATE_PX : 0;
+  const px = asking ? Math.min(BUBBLE_MAX_PX, asking) : away ? AWAY_PX : update ? UPDATE_PX : 0;
   if (!win || px === stripPx) return;
   const b = win.getBounds();
+  const base = { x: b.x + stripDx, width: b.width - stripW, height: b.height - stripPx };
+  const extra = asking ? Math.max(0, BUBBLE_MIN_W - base.width) : 0;
+  const dx = Math.round(extra / 2);
+  const maxH = Math.round(MAX_WIDTH / WIDGET_ASPECT);
   win.setAspectRatio(0);
-  win.setBounds({ ...b, height: b.height + px - stripPx });
+  win.setMaximumSize(Math.max(MAX_WIDTH, base.width + extra), maxH + px);
+  win.setBounds({ x: base.x - dx, y: b.y, width: base.width + extra, height: base.height + px });
   stripPx = px;
-  if (!px) win.setAspectRatio(WIDGET_ASPECT);
+  stripW = extra;
+  stripDx = dx;
+  if (!px) { win.setMaximumSize(MAX_WIDTH, maxH); win.setAspectRatio(WIDGET_ASPECT); }
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));
