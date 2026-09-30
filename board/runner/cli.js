@@ -6,7 +6,7 @@
 // BOARD_HOME overrides ~/.board.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 import { fileURLToPath } from 'node:url';
 import { boardHome, initHome, writeDevice, readPolicy, writePolicy } from './config.js';
 import { Supervisor } from './supervisor.js';
@@ -26,7 +26,7 @@ function flags(argv) {
 
 function control(l, msg) {
   return new Promise((resolve, reject) => {
-    const c = net.createConnection(l.controlSock);
+    const c = net.createConnection(l.controlSock); // privacy-flow: local-board-sockets
     let buf = '';
     c.setEncoding('utf8');
     c.on('connect', () => c.write(`${JSON.stringify({ id: '1', ...msg })}\n`));
@@ -49,7 +49,7 @@ async function main() {
     case 'start': {
       if (!f.foreground) {
         const log = fs.openSync(l.log, 'a', 0o600);
-        const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--foreground'], { detached: true, stdio: ['ignore', log, log], env: process.env });
+        const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--foreground'], { detached: true, stdio: ['ignore', log, log], env: process.env }); // privacy-flow: runner-local
         child.unref();
         process.stdout.write(`board runner started (pid ${child.pid}); log ${l.log}\n`);
         return;

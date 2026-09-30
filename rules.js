@@ -92,7 +92,11 @@
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'runaway', label: 'A session is burning money fast', hook: null, kind: 'virtual' },
     { id: 'budget-warning', label: 'Spend is nearing your budget', hook: null, kind: 'virtual' },
-    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' });
+    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' },
+    // Today's spend so far is far above your own usual for this hour (needs a
+    // week of history). Optional: no default rule, so it never lights a lamp
+    // unless you add one.
+    { id: 'above-usual-pace', label: 'Today is well above your usual spend', hook: null, kind: 'virtual' });
   const SPEND_RULES = [
     { id: 'runaway', name: 'Runaway session', enabled: true, when: { signal: ['runaway'] }, then: { lamp: 'red', lampFx: 'pulse', eyes: 'wide' } },
     { id: 'budget-exceeded', name: 'Over budget', enabled: true, when: { signal: ['budget-exceeded'] }, then: { lamp: 'red', eyes: 'money' } },
@@ -108,9 +112,10 @@
     const out = list.slice();
     const at = (ids) => { for (const id of ids) { const i = out.findIndex((r) => r.id === id); if (i >= 0) return i; } return -1; };
     const put = (id, i) => {
-      if (out.some((r) => r.id === id)) return;
+      const rule = spendRules.find((r) => r.id === id);
+      if (!rule || out.some((r) => r.id === id)) return; // a quiet template may have left it out
       // A copy: callers (Lights presets) edit the rules they get back.
-      out.splice(i < 0 ? out.length : i, 0, JSON.parse(JSON.stringify(spendRules.find((r) => r.id === id))));
+      out.splice(i < 0 ? out.length : i, 0, JSON.parse(JSON.stringify(rule)));
     };
     const offline = at(['offline']);
     put('runaway', offline >= 0 ? offline + 1 : out.findIndex((r) => !r.locked));
@@ -131,6 +136,7 @@
       if (!s || TURN_END.has(sessionSignal(s))) continue;
       out.push({ signal: 'runaway', sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, source: s.source, hostApp: s.hostApp, virtual: true, burn: r.burn });
     }
+    if (sp.pace && sp.pace.firing) for (const s of sessions) out.push({ signal: 'above-usual-pace', cwd: s.cwd, virtual: true, pace: sp.pace.text || '' });
     const level = sp.budget && sp.budget.level;
     if (level === 'warning' || level === 'exceeded') for (const s of sessions) out.push({ signal: `budget-${level}`, cwd: s.cwd, virtual: true, budget: sp.budgetText || '' });
     return out;
@@ -453,13 +459,14 @@
   // v6: the router's signals went with the router.
   const DEAD_SIGNALS = ['routed-cheap', 'escalated', 'delegated-read'];
   const DEAD_DEFAULT_IDS = ['routed', 'delegated'];
-  function migrateRules(rules, version) {
+  function migrateRules(rules, version, template) {
     if (version >= RULES_VERSION) return rules;
     const out = rules.slice();
     const defaults = defaultRules();
     const add = (id, at) => {
       if (out.some((r) => r.id === id)) return;
-      out.splice(at < 0 ? out.length : at, 0, normalizeRule(defaults.find((r) => r.id === id)));
+      const rule = fitForTemplate(template, normalizeRule(defaults.find((r) => r.id === id)));
+      if (rule) out.splice(at < 0 ? out.length : at, 0, rule);
     };
     // v2: a lost network and a failed turn got their own rules.
     if (version < 2) {
@@ -505,7 +512,7 @@
     }
     if (version < 7) addGitRules(add, out); // F2 git/ci
     // v8 (F1 spend): runaway and budget rules.
-    if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule)));
+    if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule).map((r) => fitForTemplate(template, r)).filter(Boolean)));
     return out;
   }
 
@@ -518,6 +525,90 @@
   function rulesVersionOf(carrier) {
     const v = carrier && typeof carrier === 'object' ? carrier.rulesVersion : undefined;
     return v != null && Number.isFinite(Number(v)) ? Number(v) : LEGACY_RULES_VERSION;
+  }
+
+  // Starting points by role. Plain rule sets, built on the defaults, so they
+  // validate, share and import like any other set, and need no migration: they
+  // always carry the current RULES_VERSION. Applying one only hands the caller
+  // the rules (plus `prefs`, the settings it implies, for the caller to save
+  // with them); the Lights tab stages both unsaved until Save.
+  const lampOnly = (r) => ({ ...r, then: Object.fromEntries(['lamp', 'lampColor'].filter((k) => r.then[k]).map((k) => [k, r.then[k]])) });
+  // A quiet template reshapes every default rule; one left with no lamp has
+  // nothing to show, so it goes (fit returns null for it).
+  const quietFit = (keepRed) => (r) => {
+    const q = keepRed && r.then.lamp === 'red' && r.id !== 'offline' ? r : lampOnly(r);
+    return q.then.lamp ? q : null;
+  };
+  const TEMPLATE_DEFS = [
+    {
+      id: 'solo-dev', name: 'Solo dev', description: 'The everyday defaults: a lamp, a pose, and a sound when Claude needs you.',
+      build: () => defaultRules(),
+    },
+    {
+      id: 'team-lead', name: 'Team lead', description: 'Teammates and agents stay front and centre, with a banner counting them.',
+      build: () => {
+        const d = defaultRules();
+        const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
+        set('team', { pose: 'banner', text: 'TEAM {agents}', number: 'agents', eyes: 'star', costume: 'crown', pet: null, agents: 'duck' });
+        set('swarm', { number: 'agents', eyes: '#f2a200', agents: 'duck' });
+        set('subagent', { eyes: '#8b5cf6', agents: 'duck' });
+        // Below team, so a teammate's banner and crown win over the plain agent count.
+        d.splice(d.findIndex((x) => x.id === 'team') + 1, 0,
+          { id: 'subagents', name: 'Agents running', enabled: true, when: { signal: ['subagents'] }, then: { pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'duck' } });
+        return d;
+      },
+    },
+    {
+      id: 'pair', name: 'Pair with Claude all day', description: 'Quiet: lamp colours only. Sounds, effects and notifications only for red, when you are blocked.',
+      fit: quietFit(true),
+      prefs: { seasonal: false, notifyStates: { 'turn-failed': false, offline: false }, spend: { notifyBudgetWarning: false } },
+      prefsNote: 'amber and offline notifications off, seasonal looks off',
+    },
+    {
+      id: 'minimal', name: 'Minimal', description: 'Lamp only: no poses, costumes, effects, sounds or notifications.',
+      fit: quietFit(false),
+      prefs: { seasonal: false, notifyOnStates: false },
+      prefsNote: 'notifications off, seasonal looks off',
+    },
+    {
+      id: 'show-off', name: 'Show-off', description: 'Everything on: costumes, pets, effects, sounds, confetti and a dragon.',
+      build: () => {
+        const d = defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
+        const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
+        set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Hero', screenFx: 'vignette', eyes: 'laser' });
+        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', body: 'robot', screenFx: 'vignette' });
+        set('working', { pose: 'run', lampFx: 'chase', pet: 'dragon', effect: 'fire' });
+        set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Glass' });
+        set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
+        set('idle', { pose: 'kickflip', pet: 'duck' });
+        return d;
+      },
+    },
+  ];
+  const buildTemplate = (t) => (t.build ? t.build() : defaultRules().map(t.fit).filter(Boolean)).map(normalizeRule);
+  // Runs a rule added by a later migration through the template the set came
+  // from, so a saved Minimal stays lamp-only. null: nothing left of it.
+  const fitForTemplate = (id, rule) => {
+    const t = TEMPLATE_DEFS.find((x) => x.id === id);
+    return t && t.fit ? t.fit(rule) : rule;
+  };
+  function templates() {
+    return TEMPLATE_DEFS.map((t) => ({ id: t.id, name: t.name, description: t.description, rulesVersion: RULES_VERSION, rules: buildTemplate(t), prefs: templatePrefs(t.id), prefsNote: t.prefsNote || null }));
+  }
+  // Fresh rules for a template, or null for an unknown id.
+  function applyTemplate(id) {
+    const t = TEMPLATE_DEFS.find((x) => x.id === id);
+    return t ? buildTemplate(t) : null;
+  }
+  // The config settings a template implies on top of its rules, as a partial
+  // config; notifyStates is a partial of the saved one, for the caller to merge.
+  function templatePrefs(id) {
+    const t = TEMPLATE_DEFS.find((x) => x.id === id);
+    return t && t.prefs ? JSON.parse(JSON.stringify(t.prefs)) : {};
+  }
+  // The file Export and share codes carry, so its shape lives in one place.
+  function shareFile(rules) {
+    return { v: 1, app: 'claude-traffic-light', rulesVersion: RULES_VERSION, rules: rules.map(normalizeRule) };
   }
 
   function normalizeRule(r) {
@@ -720,5 +811,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
 });

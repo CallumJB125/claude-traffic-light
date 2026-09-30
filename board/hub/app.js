@@ -3,9 +3,13 @@
 // self-probe) → graceful shutdown. Tests build this with a fake clock and
 // drive hub.tick() themselves (timers: false).
 
-import { createServer } from 'node:http';
+import { loadKey, loadPreviousKey } from './vault.js';
+import { createBus } from './bus.js';
+import { createIntegrations } from './integrations/registry.js';
+import { connectorsFor } from './integrations/index.js';
+import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
 import { WS_CLOSE } from '../shared/protocol.js';
 import { REAPER_MS, TIME_SCALE } from '../shared/liveness.js';
 import { openDb } from './db.js';
@@ -16,8 +20,12 @@ import { createGitHub, noGitHub } from './github.js';
 import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './http.js';
 import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
+import { Accounts } from './identity/accounts.js';
+import { createMailer } from './identity/mailer.js';
+import { Teams } from './identity/teams.js';
+import { Invites } from './identity/invites.js';
 
-export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) {
+export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
@@ -35,13 +43,36 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // board_local cookie; never logged or printed.
   hub.localSecret = config.auth === 'local' ? (config.localSecret ?? randomBytes(32).toString('hex')) : null;
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
+  // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
+  // to whoever first proves that email address.
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl }) }) : null;
+  hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
+  hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
+  // Deleting an account or a team needs a step-up the hub can't send without
+  // a mailer (or, next, an OAuth re-auth): say so, and how an operator erases.
+  if (hub.accounts && !hub.accounts.mailer && !config.signinMethods?.length && db.get('SELECT 1 AS x FROM users WHERE deleted_at IS NULL LIMIT 1')) {
+    log.warn('account and team deletion is unavailable: no mailer and no OAuth sign-in method for the step-up; an operator can erase with `node hub/admin.js delete-user <email>` or `delete-team <slug>`');
+  }
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();
+  // D41: a hub outside the desktop app loads its integrations key from
+  // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
+  if (config.auth !== 'local') {
+    const key = loadKey({ dataDir: config.dataDir, hasParentPort: !!process.parentPort });
+    const previous = loadPreviousKey({ hasParentPort: !!process.parentPort });
+    if (key) hub.setVaultKey(key, previous);
+  }
 
   const api = new Api(hub);
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const server = createServer(createHttpHandler({ hub, api, config }));
+  // Integrations (D40/D41): consumers read the journal through the bus.
+  const bus = createBus({ db, log });
+  hub.on('journal', () => bus.poke());
+  const integrations = createIntegrations({ hub, api, bus, log, fetchImpl });
+  for (const c of connectorsFor(config)) integrations.register(c);
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
+  const handler = createHttpHandler({ hub, api, config, integrations });
+  const server = createServer(handler);
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
   if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
@@ -62,7 +93,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
         try {
           // Healthy only when the answer came from this hub through the edge
           // (an Access login page or a 530 from Cloudflare is not the origin).
-          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
+          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000), redirect: 'manual' }); // privacy-flow: hub-server
           hub.noteTunnel(res.ok && res.headers.get('board-protocol') != null);
         } catch {
           hub.noteTunnel(false);
@@ -72,10 +103,11 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       intervals.push(setInterval(probe, config.tunnelProbeMs));
     }
     for (const i of intervals) i.unref?.();
+    bus.start();
   }
 
   return {
-    hub, api, server, db, config, devLoginSecret: hub.devLoginSecret,
+    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -93,6 +125,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
       const grace = () => new Promise((r) => setTimeout(r, graceMs).unref());

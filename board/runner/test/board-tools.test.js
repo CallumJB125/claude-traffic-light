@@ -27,6 +27,19 @@ async function withRun(key, fn) {
   }
 }
 
+test('board_get_card: a card an integration created says so in its envelope source', async () => {
+  await withRun('APP-91', async (run, hub) => {
+    hub.rpcReply = (f) => (f.method === 'board_get_card' ? { ok: true, result: {
+      card: { key: 'APP-91', title: 'From Slack', column: 'todo', run_state: 'running', body: 'text', labels: ['bug', 'via:slack'] },
+      comments: [],
+    } } : { ok: true, result: {} });
+    const r = await run.tool('board_get_card', {});
+    const tag = `untrusted_board_content_${run.nonce}`;
+    assert.ok(r.card.title.startsWith(`<${tag} source="card:APP-91 title via slack">`), r.card.title);
+    assert.ok(r.card.body.startsWith(`<${tag} source="card:APP-91 body via slack">`), r.card.body);
+  });
+});
+
 test('board_get_card: title, body, acceptance, handover, asks and comments come back enveloped', async () => {
   await withRun('APP-90', async (run, hub) => {
     hub.rpcReply = (f) => (f.method === 'board_get_card' ? { ok: true, result: {

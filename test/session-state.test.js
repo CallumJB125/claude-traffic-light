@@ -271,12 +271,12 @@ test('set-status: a StopFailure is classified network / limit / error; asks and 
   assert.equal(read(home, 'b').signal, 'tool-use', 'a tool use clears it');
 });
 
-const listening = () => new Promise((res) => { const s = require('net').createServer(); s.listen(0, '127.0.0.1', () => res(s)); });
+const { fakeApp } = require('./fake-app.js');
 
 test('set-status: a PermissionRequest marks the session as asking, still passing through unanswered', async () => {
   const home = tmpHome();
-  const srv = await listening();
-  const port = String(srv.address().port);
+  const srv = await fakeApp(home);
+  const port = String(srv.port);
   try {
     run(home, 'prompt-submit', { session_id: 'pr', cwd: '/x/p' });
     const r = run(home, 'permission-request', { session_id: 'pr', cwd: '/x/p', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '200', CLAUDE_TRAFFIC_LIGHT_PORT: port });
@@ -300,9 +300,9 @@ test('set-status: a PermissionRequest with the app down still marks asking, but 
 
 test('set-status: the app\'s port file wins over the env port when probing', async () => {
   const home = tmpHome();
-  const srv = await listening();
+  const srv = await fakeApp(home);
   try {
-    fs.writeFileSync(path.join(home, 'port'), String(srv.address().port));
+    fs.writeFileSync(path.join(home, 'port'), String(srv.port));
     run(home, 'permission-request', { session_id: 'pf', tool_name: 'Bash', tool_input: { command: 'ls' } }, { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: '1' });
     assert.ok(fs.existsSync(path.join(home, 'requests')), 'probe reached the port from the file, so the request was written');
   } finally { srv.close(); }

@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onSway: (cb) => ipcRenderer.on('sway', (e, degPerSec) => cb(degPerSec)),
   onLean: (cb) => ipcRenderer.on('lean', (e, vx) => cb(vx)),
   onEyes: (cb) => ipcRenderer.on('eyes', (e, x, y) => cb(x, y)),
-  onVisibility: (cb) => ipcRenderer.on('visibility', (e, visible) => cb(visible)),
+  onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
   setReducedMotion: (on) => ipcRenderer.send('reduced-motion', on),
   setClickThrough: (ignore) => ipcRenderer.send('set-click-through', ignore),
   resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),
@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
   answerRequest: (id, decision) => ipcRenderer.invoke('answer-request', id, decision),
+  // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
+  answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
+  openInput: (id) => ipcRenderer.invoke('open-input', id),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),

@@ -37,7 +37,7 @@ export class ClaudeBackend extends EventEmitter {
   }
 
   start(firstPromptText) {
-    const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); // privacy-flow: runner-claude
     this.child = child;
     this.pid = child.pid;
     this.lstart = lstartOf(child.pid);

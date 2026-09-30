@@ -16,6 +16,7 @@
 //   POST /__mock/script?interval run the whole story on a timer
 //   POST /__mock/drop?ms=8000    drop every board socket and refuse reconnects
 //   POST /__mock/reset           reload fixtures
+//   POST /__mock/presence        set team presence to the JSON body {members:[{member_id, name, sessions:[{…, since | since_ago_ms}]}]} and push it
 //   POST /__mock/login?as=alice  set the dev cookie without the form (tests)
 
 import http from 'node:http';
@@ -28,13 +29,13 @@ import { step, ACTIVE, DARK, columnOf, PLAN_APPROVAL_LABEL } from '../../shared/
 import { isGreen } from '../../shared/liveness.js';
 import { mergeHandover, syncAges, renderMarkdown as handoverMarkdown } from '../../shared/handover.js';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, WS_CLOSE, validate, compatible, httpStatus } from '../../shared/protocol.js';
-import { BOARD, ORG, MEMBERS, REPOS, ONLINE, buildCards } from './fixtures.js';
+import { BOARD, ORG, MEMBERS, REPOS, ONLINE, PRESENCE, buildCards } from './fixtures.js';
 import { buildJournal, historyCards } from './journal.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..');
 const SHARED = path.resolve(HERE, '../../shared');
-const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
+const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const PLAN_LABEL = PLAN_APPROVAL_LABEL;
@@ -55,6 +56,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
   let scriptTimer = null;
   const timers = new Set();
   let seq = 0;
+  let presence = PRESENCE;
 
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
   const member = (id) => MEMBERS.find((m) => m.member_id === id);
@@ -69,6 +71,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
     cards = new Map([...fixtures, ...past.map((x) => x.card)].map((c) => [c.id, c]));
     journal = buildJournal({ boardId: BOARD.id, epoch, cards: fixtures, history: past, now });
     scriptStep = 0;
+    presence = PRESENCE;
   }
   reset();
 
@@ -175,6 +178,17 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
     const ev = { id: `ev-${++seq}-${randomUUID().slice(0, 8)}`, kind, at: clock(), run_n: c.run ? c.fence : undefined, ...extra };
     (c.detail.feed ??= []).push(ev);
     for (const s of subscribed()) send(s, { type: 'event.append', card_id: c.id, event: feedEvent(ev, clock()) });
+  }
+  // Only members of the board, like the hub's view; `since_ago_ms` is a mock
+  // convenience so fixtures stay relative to now.
+  function presenceFrame() {
+    const now = clock();
+    const members = presence.filter((p) => member(p.member_id)).map((p) => ({
+      member_id: p.member_id,
+      name: nameOf(p.member_id),
+      sessions: p.sessions.map(({ since_ago_ms, ...sess }) => ({ ...sess, since: sess.since ?? new Date(now - (since_ago_ms ?? 0)).toISOString() })),
+    }));
+    return { type: 'team.presence', members };
   }
   function snapshotFor(memberId) {
     return { type: 'snapshot', board_id: BOARD.id, board: BOARD, cards: [...cards.values()].map((c) => toView(c, memberId)), members: MEMBERS.map(pub) };
@@ -434,7 +448,15 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       if (p === '/__mock/step') return json(res, 200, stepScript());
       if (p === '/__mock/script') { runScript(Number(url.searchParams.get('interval')) || 4000); return json(res, 200, { ok: true }); }
       if (p === '/__mock/drop') { drop(Number(url.searchParams.get('ms')) || 8000); return json(res, 200, { ok: true }); }
-      if (p === '/__mock/reset') { reset(); for (const s of subscribed()) send(s, snapshotFor(s.memberId)); return json(res, 200, { ok: true }); }
+      if (p === '/__mock/reset') { reset(); for (const s of subscribed()) { send(s, snapshotFor(s.memberId)); send(s, presenceFrame()); } return json(res, 200, { ok: true }); }
+      if (p === '/__mock/presence') {
+        const body = await readJson(req);
+        if (!Array.isArray(body.members)) throw new HttpError('VALIDATION', 'members must be an array');
+        presence = body.members;
+        const frame = presenceFrame();
+        for (const s of subscribed()) send(s, frame);
+        return json(res, 200, { ok: true, members: frame.members.length });
+      }
       if (p === '/__mock/login') {
         const m = MEMBERS.find((x) => x.login === url.searchParams.get('as'));
         if (!m) return json(res, 404, { error: { code: 'NOT_FOUND', message: 'no such member' } });
@@ -470,6 +492,11 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
       if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
       const { type, ...snap } = snapshotFor(me.member_id);
       return json(res, 200, snap);
+    }
+    if ((m = /^\/api\/boards\/([^/]+)\/presence$/.exec(p)) && method === 'GET') {
+      if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
+      const { type, ...body } = presenceFrame();
+      return json(res, 200, body);
     }
     if ((m = /^\/api\/boards\/([^/]+)\/journal$/.exec(p)) && method === 'GET') {
       if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
@@ -614,6 +641,7 @@ export function createMockHub({ login = null, clock = () => Date.now(), history 
           if (msg.board_id !== BOARD.id) return send(ws, { type: 'error', code: 'NOT_FOUND', message: 'no such board' });
           ws.boardId = msg.board_id;
           send(ws, snapshotFor(me.member_id));
+          send(ws, presenceFrame());
         }
         if (msg.type === 'unsubscribe') ws.boardId = null;
         if (msg.type === 'ping') send(ws, { type: 'pong' });

@@ -99,9 +99,30 @@ function readJsonConfig(file, fsImpl = fs) {
   return data;
 }
 
-function writeJsonConfig(file, data, fsImpl = fs) {
-  fsImpl.mkdirSync(path.dirname(file), { recursive: true });
-  fsImpl.writeFileSync(file, JSON.stringify(data, null, 2));
+// Atomic: a temp file beside it with the same mode, renamed over it, so an
+// agent reading its settings mid-write never sees half a file. A symlinked
+// config (dotfiles) is written through, never replaced by a plain file.
+function writeJsonConfig(link, data, fsImpl = fs) {
+  fsImpl.mkdirSync(path.dirname(link), { recursive: true });
+  let file = link;
+  try { file = fsImpl.realpathSync(link); } catch { /* new file */ }
+  let mode;
+  try { mode = fsImpl.statSync(file).mode & 0o777; } catch { /* new file: default mode */ }
+  const tmp = `${file}.buddy-tmp.${process.pid}.${Date.now().toString(36)}`;
+  fsImpl.writeFileSync(tmp, JSON.stringify(data, null, 2), mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
+  try {
+    if (mode !== undefined) fsImpl.chmodSync(tmp, mode);
+    fsImpl.renameSync(tmp, file);
+  } catch (err) {
+    try { fsImpl.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
+// `<file>.buddy-backup`, once: never replaced, so it stays the file as it was
+// before Buddy first changed it.
+function backupOnce(file, fsImpl = fs) {
+  try { fsImpl.copyFileSync(file, `${file}.buddy-backup`, fs.constants.COPYFILE_EXCL); } catch {}
 }
 
 // Claude Code and Gemini share one hooks shape:
@@ -118,4 +139,4 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

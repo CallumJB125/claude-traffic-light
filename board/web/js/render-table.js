@@ -34,14 +34,11 @@ function row(r, model) {
 
 export function tableScreen(model) {
   const t = model.table;
-  const rows = tableRows(model.entries, { members: model.members, sort: t.sort, filter: t.filter });
+  const rows = tableRows(model.visible ?? model.entries, { members: model.members, sort: t.sort, filter: t.filter ?? '' });
   const s = summary(rows);
   const total = model.entries.length;
   return h('main', { class: 'tableview', id: 'board', 'aria-label': 'Cards as a table' },
     h('div', { class: 'tableview-bar' },
-      h('label', { class: 'tableview-filter' },
-        h('span', { class: 'sr-only' }, 'Filter cards'),
-        h('input', { class: 'input input-sm', type: 'search', placeholder: 'Filter by key, title, label, person…', value: t.filter, 'data-input': 'table-filter', 'aria-keyshortcuts': '/' })),
       h('p', { class: 'tableview-sum', role: 'status', 'aria-live': 'polite' },
         h('span', { class: 'num' }, s.count === total ? `${total} cards` : `${s.count} of ${total} cards`),
         s.needs ? h('span', { class: 'tableview-needs' }, icon('dot', 'icon-xs'), `${s.needs} need attention`) : null,
@@ -50,5 +47,5 @@ export function tableScreen(model) {
       h('table', { class: 'cardtable' },
         h('thead', null, h('tr', null, TABLE_COLUMNS.map((c) => headerCell(c, t.sort)))),
         h('tbody', null, rows.map((r) => row(r, model)))),
-      rows.length ? null : h('p', { class: 'tableview-empty' }, total ? 'No cards match that filter.' : 'No cards yet. New cards show up here.')));
+      rows.length ? null : h('p', { class: 'tableview-empty' }, total ? 'No cards match that filter. Esc clears it.' : 'No cards yet. New cards show up here.')));
 }

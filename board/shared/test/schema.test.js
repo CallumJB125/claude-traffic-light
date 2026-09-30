@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrate, loadMigrations, currentVersion, applyRestoreBump } from '../migrate.js';
+import { migrate, loadMigrations, currentVersion, applyRestoreBump, directives } from '../migrate.js';
 import { step, toDb, STATES, DARK } from '../states.js';
 
 const NOW = '2026-09-30T10:00:00.000Z';
@@ -13,7 +13,7 @@ function fresh() {
   const db = new DatabaseSync(':memory:');
   migrate(db, { now: () => NOW });
   db.exec(`
-    INSERT INTO orgs VALUES ('o1','Org','${NOW}');
+    INSERT INTO orgs (id, name, created_at) VALUES ('o1','Org','${NOW}');
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at)
       VALUES ('m1','o1',1,'callum','c@x.io','Callum','owner','${NOW}'), ('m2','o1',2,'james','j@x.io','James','member','${NOW}');
     INSERT INTO devices (id, member_id, name, kind, token_hash, created_at) VALUES ('d1','m1','MacBook','runner','h1','${NOW}');
@@ -55,8 +55,110 @@ test('migrate: later files apply in order in their own transaction; a failing on
     assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /003_bad failed/);
     assert.equal(currentVersion(db), 2);
     assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='y'").get().n, 0);
-    writeFileSync(join(dir, '005_gap.sql'), 'SELECT 1;');
-    assert.throws(() => loadMigrations(dir), /gap/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: gaps are allowed and a reserved lower version landing later is still applied (D50)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_a.sql'), 'CREATE TABLE a (x INTEGER);');
+    writeFileSync(join(dir, '005_c.sql'), 'CREATE TABLE c (x INTEGER);');
+    const db = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [1, 2, 5]);
+    writeFileSync(join(dir, '003_b.sql'), 'CREATE TABLE b (x INTEGER);');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [3]);
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), []);
+    writeFileSync(join(dir, '003_dup.sql'), 'SELECT 1;');
+    assert.throws(() => loadMigrations(dir), /two migrations with version 3/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: `-- migrate: foreign_keys=off` rebuilds a referenced table with ids intact; a broken reference rolls back', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), `
+      CREATE TABLE people (id TEXT PRIMARY KEY, login TEXT NOT NULL);
+      CREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL REFERENCES people);
+      INSERT INTO people VALUES ('p1','a'), ('p2','b');
+      INSERT INTO posts VALUES ('x1','p1'), ('x2','p2');`);
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: loadMigrations(dir) });
+    // Without the directive, DROP TABLE people fails (posts refer to it).
+    writeFileSync(join(dir, '003_rebuild.sql'), `-- migrate: foreign_keys=off
+      CREATE TABLE people_new (id TEXT PRIMARY KEY, login TEXT);
+      INSERT INTO people_new SELECT id, login FROM people;
+      DROP TABLE people;
+      ALTER TABLE people_new RENAME TO people;`);
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [3]);
+    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'foreign keys back on');
+    assert.deepEqual(db.prepare('SELECT p.id FROM posts x JOIN people p ON p.id = x.author ORDER BY p.id').all().map((r) => r.id), ['p1', 'p2']);
+    assert.equal(db.prepare("SELECT * FROM pragma_table_info('people') WHERE name = 'login'").get().notnull, 0, 'NOT NULL dropped');
+    writeFileSync(join(dir, '004_breaks.sql'), `-- migrate: foreign_keys=off
+      DELETE FROM people WHERE id = 'p2';`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /004_breaks failed: foreign key check failed: posts→people/);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM people').get().n, 2, 'rolled back');
+    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+    // The directive counts only on the first line.
+    writeFileSync(join(dir, '004_breaks.sql'), `SELECT 1;
+      -- migrate: foreign_keys=off
+      DELETE FROM people WHERE id = 'p2';`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /FOREIGN KEY/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: `-- migrate: rebuilds` is refused after a higher version, applies in order, and plain gap-fills still land', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
+    writeFileSync(join(dir, '009_trig.sql'), "CREATE TRIGGER t_guard BEFORE DELETE ON t BEGIN SELECT RAISE(ABORT, 'kept'); END;");
+    const db = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [1, 2, 9]);
+    // A gap-filling rebuild would drop 009's trigger: refused, nothing applied.
+    writeFileSync(join(dir, '008_rebuild.sql'), `-- migrate: foreign_keys=off rebuilds
+      CREATE TABLE t_new (x INTEGER); INSERT INTO t_new SELECT x FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /migration 008_rebuild rebuilds tables and cannot be applied after version 9; apply migrations in order/);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 't_guard'").get().n, 1);
+    assert.equal(currentVersion(db), 9);
+    // The directive alone works too.
+    writeFileSync(join(dir, '008_rebuild.sql'), '-- migrate: rebuilds\nSELECT 1;');
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /cannot be applied after version 9/);
+    // A plain gap-fill still lands.
+    rmSync(join(dir, '008_rebuild.sql'));
+    writeFileSync(join(dir, '005_plain.sql'), 'CREATE TABLE p (x INTEGER);');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [5]);
+    // In order (a fresh DB), the same rebuild applies before 009.
+    writeFileSync(join(dir, '008_rebuild.sql'), `-- migrate: foreign_keys=off, rebuilds
+      CREATE TABLE t_new (x INTEGER); INSERT INTO t_new SELECT x FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;`);
+    const db2 = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db2, { migrations: loadMigrations(dir) }), [1, 2, 5, 8, 9]);
+    assert.equal(db2.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 't_guard'").get().n, 1);
+    assert.equal(db2.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: directives are read from the whole leading comment block, past a BOM and blank lines (L-E)', () => {
+  assert.deepEqual([...directives('\uFEFF-- migrate: rebuilds\nSELECT 1;')], ['rebuilds']);
+  assert.deepEqual([...directives('\n\r\n-- 014: a note first\n--\n-- migrate: foreign_keys=off, rebuilds\r\nSELECT 1;')], ['foreign_keys=off', 'rebuilds']);
+  assert.deepEqual([...directives('SELECT 1;\n-- migrate: rebuilds\n')], [], 'after the first SQL line it is just a comment');
+  assert.deepEqual([...directives('/* block */\n-- migrate: rebuilds')], [], 'only -- comments open the block');
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
+    writeFileSync(join(dir, '009_later.sql'), 'CREATE TABLE u (x INTEGER);');
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: loadMigrations(dir) });
+    writeFileSync(join(dir, '008_bom.sql'), '\uFEFF\n-- A rebuild saved with a BOM by an editor.\n-- migrate: rebuilds\nCREATE TABLE t_new (x INTEGER);');
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /008_bom rebuilds tables and cannot be applied after version 9/);
+    const db2 = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db2, { migrations: loadMigrations(dir) }), [1, 2, 8, 9], 'in order the BOM file applies (the BOM is stripped)');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

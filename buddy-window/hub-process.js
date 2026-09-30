@@ -11,9 +11,11 @@
 //           lands. We pick the port and poll /api/health for readiness.
 'use strict';
 
+const { HUB_SERVICE } = require('./brand');
+
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const net = require('node:net');
+const net = require('node:net'); // privacy-flow: local-board-hub
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -33,7 +35,7 @@ async function waitForHealth(port, { fetchImpl = fetch, timeoutMs = READY_TIMEOU
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     try {
-      const res = await fetchImpl(`http://127.0.0.1:${port}/api/health`);
+      const res = await fetchImpl(`http://127.0.0.1:${port}/api/health`); // privacy-flow: local-board-hub
       if (res.ok) return await res.json();
     } catch { /* not listening yet */ }
     await sleep(150);
@@ -107,7 +109,7 @@ function createHubSupervisor(opts) {
       const env = hubEnv({ mode, dataDir, port, devSecret });
       // No cwd: in a packaged app the hub lives inside app.asar, which is not a
       // real directory, and a cwd there makes the fork fail without a word.
-      c = fork(hubEntry, [], { env, serviceName: 'Buddy Board Hub', stdio: 'pipe' });
+      c = fork(hubEntry, [], { env, serviceName: HUB_SERVICE, stdio: 'pipe' });
       child = c;
       c.stderr?.on?.('data', (d) => log('stderr', scrub(d)));
       c.stdout?.on?.('data', (d) => log('stdout', scrub(d)));

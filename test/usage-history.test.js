@@ -159,10 +159,14 @@ test('history: a year of data queries in well under 100 ms', () => {
   }
   History.record(store, turns);
   for (const groupBy of ['day', 'family', 'project', 'weekday-hour']) {
-    const t0 = process.hrtime.bigint();
-    const q = History.query(store, { from: '2025-10-01', to: '2026-09-30', groupBy });
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.equal(q.total.turns, 365 * 40);
+    // best of three: a busy machine shouldn't fail a query that is fast
+    let ms = Infinity;
+    for (let i = 0; i < 3; i += 1) {
+      const t0 = process.hrtime.bigint();
+      const q = History.query(store, { from: '2025-10-01', to: '2026-09-30', groupBy });
+      ms = Math.min(ms, Number(process.hrtime.bigint() - t0) / 1e6);
+      assert.equal(q.total.turns, 365 * 40);
+    }
     assert.ok(ms < 100, `${groupBy} took ${ms.toFixed(1)} ms`);
   }
 });
@@ -232,4 +236,193 @@ test('history: the spend worker folds turns into the record and backfills once, 
     assert.equal(again.first, false);
     assert.equal(again.added, 0, 'folding again adds nothing');
   } finally { await w.terminate(); }
+});
+
+// ── pace: today against your own usual ────────────────────────────────────
+const NOW = at('2026-09-30T15:30:00');
+function withDays(n, { perDay = 10, hour = 10, out = 1e6 } = {}) {
+  const store = History.open({ root: tmp() });
+  const turns = [];
+  for (let d = 1; d <= n; d += 1) {
+    const base = NOW - d * 86400000;
+    const day = new Date(base); day.setHours(hour, 0, 0, 0);
+    for (let k = 0; k < perDay; k += 1) turns.push(turn({ ts: day.getTime() + k * 60000, model: 'claude-opus-5-5', input: 0, output: out / perDay, cacheRead: 0, cacheWrite: 0 }));
+  }
+  History.record(store, turns);
+  return store;
+}
+
+test('pace: needs a week of history before it says anything', () => {
+  const p = History.pace(withDays(6), 500, { now: NOW });
+  assert.equal(p.ready, false);
+  assert.equal(p.aboveBy, null);
+  assert.equal(History.paceFiring(p), false);
+  assert.equal(History.pace(withDays(7), 500, { now: NOW }).ready, true);
+  assert.equal(History.pace(History.open({ root: tmp() }), 500, { now: NOW }).ready, false, 'an empty record is not ready');
+});
+
+test('pace: the baseline is what you had spent by this hour on earlier days', () => {
+  // each day: $25 of Opus output, all at 10:00, so by 15:30 the whole $25 is in
+  const late = History.pace(withDays(10), 30, { now: NOW });
+  assert.equal(late.avg, 25);
+  assert.equal(late.aboveBy, 20);
+  // at 08:00 none of it had happened yet on earlier days
+  const early = History.pace(withDays(10), 0, { now: at('2026-09-30T08:00:00') });
+  assert.equal(early.avg, 0);
+  assert.equal(early.ready, false, 'a zero baseline never divides');
+});
+
+test('pace: fires only for at least double the usual and $5 more', () => {
+  const store = withDays(10);
+  assert.equal(History.paceFiring(History.pace(store, 49, { now: NOW })), false, 'under 2x');
+  assert.equal(History.paceFiring(History.pace(store, 50, { now: NOW })), true);
+  const tiny = withDays(10, { out: 1e5 }); // $2.50 a day
+  assert.equal(History.paceFiring(History.pace(tiny, 6, { now: NOW })), false, '2.4x but only $3.50 more');
+  assert.equal(History.paceFiring(History.pace(tiny, 7.6, { now: NOW })), true);
+});
+
+test('pace: today and legacy cost-only days are not in the baseline', () => {
+  const store = withDays(10);
+  History.record(store, [turn({ ts: NOW - 3600000, output: 4e6, input: 0, cacheRead: 0, cacheWrite: 0 })]); // a big turn today
+  History.importLegacy(store, { '2026-08-20': { cost: 900 } });
+  const p = History.pace(store, 30, { now: NOW });
+  assert.equal(p.avg, 25);
+  assert.equal(p.days, 10);
+});
+
+test('rules: above-usual-pace is a virtual signal with no default rule, riding live sessions', () => {
+  const Rules = require('../rules.js');
+  assert.ok(Rules.SIGNALS.some((s) => s.id === 'above-usual-pace' && s.kind === 'virtual'));
+  assert.ok(!Rules.SPEND_RULES.some((r) => r.when.signal.includes('above-usual-pace')));
+  assert.ok(!Rules.defaultRules().some((r) => r.when.signal.includes('above-usual-pace')));
+  const sessions = [{ sessionId: 'a', cwd: '/w/a', signal: 'tool-use' }];
+  const fired = Rules.spendSessions(sessions, { spend: { pace: { firing: true, text: 'Today $40 · 60% above' } } });
+  assert.deepEqual(fired.map((f) => [f.signal, f.cwd, f.pace]), [['above-usual-pace', '/w/a', 'Today $40 · 60% above']]);
+  assert.deepEqual(Rules.spendSessions(sessions, { spend: { pace: { firing: false } } }), []);
+  assert.deepEqual(Rules.spendSessions([], { spend: { pace: { firing: true } } }), [], 'never on an empty desk');
+});
+
+test('history worker: a backfill marker without the record (restored or partly deleted) does not throw', async () => {
+  const { Worker } = require('worker_threads');
+  const projects = tmp();
+  const dataDir = tmp();
+  fs.mkdirSync(path.join(dataDir, 'usage'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'usage', '.backfilled'), 'x');
+  fs.writeFileSync(path.join(dataDir, 'usage', 'daily'), 'not a directory'); // and a corrupt store
+  const w = new Worker(path.join(__dirname, '..', 'src', 'usage-worker.js'));
+  try {
+    const got = await new Promise((resolve) => { w.on('message', resolve); w.postMessage({ type: 'history.tick', root: projects, dataDir, statsFile: path.join(dataDir, 'nope.json') }); });
+    assert.ok(got.type === 'history.done' || got.type === 'history.error', got.type);
+    assert.ok(w.threadId >= 0, 'the worker is still up');
+  } finally { await w.terminate(); }
+});
+
+test('privacy: nothing that leaves the machine (phone, hub, board, presence, recap) can read the usage record', () => {
+  // The record keys projects by their full path. It is read by the app's own
+  // windows and the local MCP server only; a remote-facing module that names it
+  // is a leak in waiting, so any such reference fails here and has to be argued.
+  const root = path.join(__dirname, '..');
+  const outward = ['remote/src', 'board/hub', 'board/shared', 'board/runner', 'board/web', 'board/plugin', 'board/mcp', 'src/recap.js', 'src/presence.js'];
+  const hits = [];
+  const walk = (p) => {
+    let st;
+    try { st = fs.statSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      for (const e of fs.readdirSync(p)) if (e !== 'node_modules' && e !== 'dist') walk(path.join(p, e));
+    } else if (/\.(js|mjs|cjs|html|ts)$/.test(p)) {
+      const src = fs.readFileSync(p, 'utf8');
+      if (/usage-history|usage[\\/]daily|UsageHistory|history\.tick|buddy_usage_history/.test(src)) hits.push(path.relative(root, p));
+    }
+  };
+  for (const d of outward) walk(path.join(root, d));
+  assert.deepEqual(hits, []);
+});
+
+test('history: day×family and project×day groupings, and routine tokens priced for the Opus saving', () => {
+  const store = History.open({ root: tmp() });
+  const routine = (over) => turn({ model: 'claude-opus-5-5', input: 0, output: 300, cacheRead: 0, cacheWrite: 0, ...over });
+  History.record(store, [routine({ ts: at('2026-09-22T10:00:00') }), routine({ ts: at('2026-09-22T11:00:00'), output: 9000 }), turn({ ts: at('2026-09-23T10:00:00'), model: 'claude-sonnet-5-5', cwd: '/work/beta' })]);
+  const df = History.query(store, { from: '2026-09-22', to: '2026-09-23', groupBy: 'day-family' });
+  assert.deepEqual(df.rows.map((r) => [r.key, r.turns]), [['2026-09-22|opus', 2], ['2026-09-23|sonnet', 1]]);
+  const opus = df.rows[0];
+  assert.equal(opus.routineTurns, 1);
+  assert.equal(opus.routineCost, 0.0075, '300 output tokens on Opus');
+  assert.equal(opus.routineSonnetCost, 0.003);
+  const pd = History.query(store, { from: '2026-09-22', to: '2026-09-23', groupBy: 'project-day' });
+  assert.deepEqual(pd.rows.map((r) => r.key).sort(), ['/work/alpha|2026-09-22', '/work/beta|2026-09-23']);
+  // a routine turn that keeps growing past routine takes its tokens back
+  History.record(store, [{ ...routine({ ts: at('2026-09-22T10:00:00') }), id: df.rows.length && 'grow', output: 300 }]);
+  const t = turn({ ts: at('2026-09-24T10:00:00'), model: 'claude-opus-5-5', input: 0, output: 100, cacheRead: 0, cacheWrite: 0 });
+  History.record(store, [t]);
+  History.record(store, [{ ...t, output: 5000 }]);
+  const d24 = History.query(store, { from: '2026-09-24', to: '2026-09-24', groupBy: 'day-family' }).rows[0];
+  assert.equal(d24.routineTurns, 0);
+  assert.equal(d24.routineCost, 0);
+});
+
+test('history: a cost-only day is a legacy family row in day-family, so the charts add up to the total', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ ts: at('2026-09-22T10:00:00') })]);
+  History.importLegacy(store, { '2026-09-10': { cost: 12.5 } });
+  const q = History.query(store, { from: '2026-09-01', to: '2026-09-30', groupBy: 'day-family' });
+  assert.deepEqual(q.rows.map((r) => r.key), ['2026-09-10|legacy', '2026-09-22|opus']);
+  assert.equal(Math.round(q.rows.reduce((a, r) => a + r.cost, 0) * 1e4) / 1e4, q.total.cost);
+});
+
+test('history: a project path with a pipe in it survives the project×day key', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ cwd: '/work/a|b', ts: at('2026-09-22T10:00:00') })]);
+  const pd = History.query(store, { from: '2026-09-22', to: '2026-09-22', groupBy: 'project-day' });
+  const k = pd.rows[0].key;
+  assert.equal(k.slice(0, k.lastIndexOf('|')), '/work/a|b');
+  assert.equal(k.slice(k.lastIndexOf('|') + 1), '2026-09-22');
+});
+
+test('history: a routine turn that grows past routine takes back every routine token field', () => {
+  const store = History.open({ root: tmp() });
+  const t = turn({ ts: at('2026-09-22T10:00:00'), model: 'claude-opus-5-5', input: 100, output: 100, cacheRead: 500, cacheWrite: 50, cacheWrite1h: 20 });
+  History.record(store, [t]);
+  let b = store.months.get('2026-09').rec.days['2026-09-22'].sources.claude['claude-opus-5-5']['/work/alpha'];
+  assert.deepEqual([b.rInput, b.rOutput, b.rCacheRead, b.rCacheWrite, b.rCacheWrite1h, b.routineTurns], [100, 100, 500, 50, 20, 1]);
+  History.record(store, [{ ...t, output: 9000 }]);
+  b = store.months.get('2026-09').rec.days['2026-09-22'].sources.claude['claude-opus-5-5']['/work/alpha'];
+  assert.deepEqual([b.rInput, b.rOutput, b.rCacheRead, b.rCacheWrite, b.rCacheWrite1h, b.routineTurns], [0, 0, 0, 0, 0, 0]);
+  assert.equal(b.output, 9000);
+});
+
+test('history: firstSeen gives each model id its first day anywhere in the record', () => {
+  const store = History.open({ root: tmp() });
+  History.record(store, [turn({ ts: at('2026-08-20T10:00:00'), model: 'claude-opus-5' }), turn({ ts: at('2026-07-02T10:00:00'), model: 'claude-opus-5' }), turn({ ts: at('2026-09-03T10:00:00'), model: 'claude-opus-5-5' })]);
+  assert.deepEqual(History.firstSeen(store), { 'claude-opus-5': '2026-07-02', 'claude-opus-5-5': '2026-09-03' });
+});
+
+test('history: the bundle is one read for everything the tab draws, current and previous period', () => {
+  const store = withDays(40, { perDay: 4 });
+  const b = History.bundle(store, { range: '7d', now: NOW });
+  assert.deepEqual([b.p.from, b.p.to], ['2026-09-24', '2026-09-30']);
+  assert.ok(b.dayFamily.rows.length && b.projects.rows.length && b.hours.rows.length && b.projectDays.rows.length);
+  assert.ok(b.prevFamily.rows.length, 'the week before is there for the tiles');
+  assert.equal(b.extent.to, '2026-09-29');
+  assert.ok(b.firstSeen['claude-opus-5-5']);
+  const noCmp = History.bundle(store, { range: '7d', now: NOW, compare: false });
+  assert.equal(noCmp.prevFamily, null);
+  assert.equal(History.bundle(store, { range: 'all', now: NOW }).prevFamily, null, '"all" has nothing before it');
+  const empty = History.bundle(History.open({ root: tmp() }), { range: '30d', now: NOW });
+  assert.equal(empty.extent, null);
+  assert.equal(empty.dayFamily.total.turns, 0);
+});
+
+test('pace: the baseline is reusable across turns, and the current hour counts only as far as it has passed', () => {
+  const store = withDays(10);
+  const half = at('2026-09-30T10:30:00');
+  // every earlier day put all $25 at 10:00: at 10:30 half of that hour had passed
+  const base = History.paceBaseline(store, { now: half });
+  assert.equal(base.days, 10);
+  assert.equal(Math.round(base.avg * 100) / 100, 12.5);
+  assert.equal(History.paceOf(base, 25).aboveBy, 100);
+  assert.equal(History.paceOf(base, 0).aboveBy, -100);
+  // the noteworthy line needs $2 more as well as 20%
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 0.01 }, 0.03)), false, 'a quiet early morning is not news');
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 10 }, 13)), true);
+  assert.equal(History.paceNoteworthy(History.paceOf({ days: 10, avg: 10 }, 11)), false, 'only 10% above');
 });

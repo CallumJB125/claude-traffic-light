@@ -197,12 +197,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes exactly the nine buddy_ tools, all read-only', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_pending_requests']);
+test('the server exposes exactly the eleven buddy_ tools, all read-only', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests']);
   assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), []);
 });
 
-test('stdio: the server starts, lists nine tools and answers buddy_status end to end', async () => {
+test('stdio: the server starts, lists eleven tools and answers buddy_status and buddy_health end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -216,7 +216,11 @@ test('stdio: the server starts, lists nine tools and answers buddy_status end to
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 9);
+    assert.equal(tools.length, 11);
+    // Read-only against the real home: only its shape is predictable here.
+    const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
+    assert.equal(health.checks.length, 8);
+    assert.equal(health.checks.find((c) => c.id === 'signal').status, 'fail');
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);
     assert.equal(st.sessionCount, 1);
@@ -278,4 +282,109 @@ test('mcp-install: creates the file when missing; never clobbers an unparsable f
   assert.throws(() => McpInstall.install({ home: taken, entry }), /isn't Claude Buddy's/);
   assert.equal(McpInstall.uninstall({ home: taken }).changed, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taken, '.claude.json'), 'utf8')), theirs);
+});
+
+test('buddy_usage_history answers from the permanent record, by range and group, with folder names only', async () => {
+  const History = require('../usage-history.js');
+  const root = fixture({ config: { ...base, spend: { mode: 'api' } } });
+  const at = (t) => new Date(t).getTime();
+  const turn = (id, ts, model, cwd, out) => ({ id, ts: at(ts), sessionId: 's', cwd, project: cwd.split('/').pop(), model, input: 0, output: out, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 });
+  const store = History.open({ root });
+  History.record(store, [
+    turn('a', '2026-08-10T10:00:00', 'claude-opus-5-5', '/Users/me/secret-client/alpha', 1e6),
+    turn('b', '2026-08-20T10:00:00', 'claude-sonnet-5-5', '/Users/me/other/alpha', 1e6),
+    turn('c', '2026-09-02T10:00:00', 'claude-opus-5-5', '/Users/me/secret-client/beta', 1e6),
+    turn('d', '2026-08-11T10:00:00', 'mystery-9', '/Users/me/x/gamma', 1000),
+  ]);
+  History.flush(store);
+  const now = at('2026-09-30T12:00:00');
+  const aug = await M.buddyUsageHistory({ root, range: '2026-08', groupBy: 'family', now });
+  assert.deepEqual(aug.range, { from: '2026-08-01', to: '2026-08-31' });
+  assert.deepEqual(aug.rows.map((r) => [r.key, r.turns, r.cost]), [['opus', 1, 25], ['sonnet', 1, 10], ['unpriced', 1, 0]]);
+  assert.match(aug.summary, /^\$35\.00 across 3 turns from 2026-08-01 to 2026-08-31\. 1 turn on unpriced models \(mystery-9\)/);
+  const byProject = await M.buddyUsageHistory({ root, range: 'all', groupBy: 'project', now });
+  assert.deepEqual(byProject.rows.map((r) => r.key).sort(), ['alpha', 'beta', 'gamma']);
+  assert.equal(byProject.rows.find((r) => r.key === 'alpha').turns, 2, 'same folder name merges');
+  assert.doesNotMatch(JSON.stringify(byProject), /\/Users\/me|secret-client/);
+  assert.equal((await M.buddyUsageHistory({ root, range: '2026-09-01..2026-09-30', now })).total.turns, 1);
+  await assert.rejects(M.buddyUsageHistory({ root, range: '2020-01-01..2026-09-30', now }), /between 1 and 400 days/);
+  await assert.rejects(M.buddyUsageHistory({ root, range: 'last week', now }), /range is/);
+  await assert.rejects(M.buddyUsageHistory({ root, groupBy: 'cwd', now }), /groupBy is/);
+  const empty = await M.buddyUsageHistory({ root: fixture({ config: base }), now });
+  assert.match(empty.summary, /Nothing is recorded yet/);
+});
+
+test('buddy_usage_history: "all" starts at the first recorded day and says when the cap cut it short; day maths survives DST', async () => {
+  const History = require('../usage-history.js');
+  const root = fixture({ config: base });
+  const store = History.open({ root });
+  const t = (id, iso) => ({ id, ts: new Date(iso).getTime(), sessionId: 's', cwd: '/w/a', project: 'a', model: 'claude-opus-5-5', input: 0, output: 1e5, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 });
+  History.record(store, [t('a', '2026-08-01T10:00:00'), t('b', '2026-09-20T10:00:00')]);
+  History.flush(store);
+  const now = new Date('2026-09-30T12:00:00').getTime();
+  const all = await M.buddyUsageHistory({ root, range: 'all', now });
+  assert.equal(all.range.from, '2026-08-01', 'all starts where the record does');
+  assert.doesNotMatch(all.summary, /last 400 days/);
+  const old = History.open({ root: fixture({ config: base }) });
+  History.record(old, [t('c', '2024-01-05T10:00:00'), t('d', '2026-09-20T10:00:00')]);
+  History.flush(old);
+  const capped = await M.buddyUsageHistory({ root: old.dir.replace(/[\\/]usage[\\/]daily$/, ''), range: 'all', now });
+  assert.match(capped.summary, /the last 400 days/);
+  assert.equal(capped.total.turns, 1, 'only what is inside the cap is counted');
+  // 7d around a DST change: 7 calendar days, not 6 or 8
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath, ['-e', `const M = require(${JSON.stringify(require.resolve('../mcp-server.js'))}); M.buddyUsageHistory({ root: ${JSON.stringify(root)}, range: '7d', now: new Date('2026-11-03T00:30:00').getTime() }).then((x) => console.log(JSON.stringify(x.range)));`], { env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { from: '2026-10-28', to: '2026-11-03' });
+});
+
+test('buddy_health: hooks from this copy, the app answering, MCP registered — all ok', async () => {
+  const Claude = require('../adapters/claude-code.js');
+  const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: iso(90000) }) } });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  fs.mkdirSync(path.join(home, '.claude', 'projects', '-w-a'), { recursive: true });
+  fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, M.hookRuntime(root), { home })));
+  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) });
+  const statfs = () => ({ bavail: 1e6, bsize: 1e6 });
+  const h = await M.buddyHealth({ root, home, now: NOW, live: { look: {} }, statfs, mcpConnected: true });
+  const by = (id) => h.checks.find((c) => c.id === id);
+  assert.equal(h.ok, true, JSON.stringify(h.checks, null, 1));
+  assert.equal(h.problems, 0);
+  assert.equal(by('hooks').status, 'ok');
+  assert.equal(by('last-hook').detail, '2 min ago.');
+  assert.equal(by('signal').status, 'ok');
+  assert.equal(by('mcp').detail, 'Registered, and this answer came through it.');
+  assert.equal(by('version').detail, `Version ${require('../package.json').version}. Updates: not set up yet.`);
+  assert.equal(h.likelyCause, undefined);
+});
+
+test('buddy_health: an app that moved, not running, no hook yet — each with its fix and a likely cause', async () => {
+  const Claude = require('../adapters/claude-code.js');
+  const Runtime = require('../adapters/runtime.js');
+  const root = fixture({ config: base });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const gone = Runtime.make({ execPath: '/Applications/Old Buddy.app/Contents/MacOS/Claude Buddy', hooksDir: '/Applications/Old Buddy.app/Contents/Resources/hooks', dataDir: root, platform: 'darwin' });
+  fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, gone)));
+  const h = await M.buddyHealth({ root, home, now: NOW, live: null, statfs: () => ({ bavail: 1e6, bsize: 1e6 }) });
+  const by = (id) => h.checks.find((c) => c.id === id);
+  assert.equal(h.ok, false);
+  assert.equal(by('hooks').status, 'fail');
+  assert.equal(by('hooks').fix, 'reinstall-hooks');
+  assert.match(by('hooks').detail, /^Points at a copy of Buddy that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
+  assert.equal(by('signal').status, 'fail');
+  assert.equal(by('mcp').fix, 'enable-mcp');
+  assert.equal(by('last-hook').status, 'warn');
+  assert.match(h.likelyCause, /^Hooks: Points at a copy of Buddy that was moved or deleted/);
+  assert.match(h.note, /Nothing here is fixed for you/);
+});
+
+test('buddy_health: hookRuntime matches what main.js installs, packaged or not', () => {
+  const dev = M.hookRuntime('/data', '/src/buddy');
+  assert.equal(dev.node, true);
+  assert.equal(dev.hooksDir, '/src/buddy/hooks');
+  const app = M.hookRuntime('/data', '/A/Claude Buddy.app/Contents/Resources/app.asar', '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
+  assert.equal(app.execPath, '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
+  assert.equal(app.hooksDir, '/A/Claude Buddy.app/Contents/Resources/hooks');
+  assert.equal(app.dataDir, '/data');
 });

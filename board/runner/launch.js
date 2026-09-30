@@ -1,5 +1,6 @@
 // The exact CLI launch profile (CONTRACT §7.1): argv, allowlisted env,
 // settings.json and mcp.json. Pure builders so exit-j can snapshot them.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,8 +8,11 @@ import { untrusted, envelopeTag } from '../shared/untrusted.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BOARD_DIR = path.resolve(HERE, '..');
-export const HOOK_SHIM = path.join(HERE, 'hook-shim.js');
-export const MCP_SERVER = path.join(BOARD_DIR, 'mcp', 'server.js');
+// The shim and the MCP server run as their own processes, which can't read
+// inside a packaged app's app.asar: point them at the unpacked copies.
+export const onDisk = (p) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+export const HOOK_SHIM = onDisk(path.join(HERE, 'hook-shim.js'));
+export const MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'server.js'));
 
 // CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
 // task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.
@@ -78,6 +82,11 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
     permissions: {
       defaultMode: 'acceptEdits',
+      // The worktree root is a working directory by settings, not --add-dir:
+      // settings-file directories grant file access only, while --add-dir
+      // also loads plugins/marketplaces from the (agent-editable) worktree's
+      // .claude/settings.json (docs/waiting-inputs.md).
+      additionalDirectories: [worktree],
       allow: [...TOOL_ALLOW, ...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))],
     },
     sandbox: {
@@ -115,7 +124,7 @@ export function buildMcpConfig({ socket, token, node = process.execPath, server 
 }
 
 /** Allowlisted child env (D15). parentEnv is the supervisor's env. */
-export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorLstart }) {
+export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorLstart, buddyOwned = null }) {
   const env = {};
   for (const k of ENV_KEEP) if (parentEnv[k] != null && parentEnv[k] !== '') env[k] = parentEnv[k];
   for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
@@ -129,7 +138,39 @@ export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorL
     BOARD_SUPERVISOR_PID: String(supervisorPid),
     BOARD_SUPERVISOR_LSTART: supervisorLstart ?? '',
   });
+  // Claude Buddy's ownership marker (hooks/owned.js): only set when a launch
+  // record was written for it, so the id always has a record behind it.
+  if (buddyOwned) env.BUDDY_OWNED = buddyOwned;
   return env;
+}
+
+// Claude Buddy's home, when Buddy is installed on this machine.
+export function buddyHomeOf(env) {
+  return env.CLAUDE_TRAFFIC_LIGHT_HOME || (env.HOME ? path.join(env.HOME, '.claude-traffic-light') : null);
+}
+
+/**
+ * Record a Buddy-owned launch: the same format hooks/owned.js recordLaunch
+ * writes (<home>/owned/<launchId>.json, 0600 in 0700, created whole before
+ * its name appears). Returns the launch id for BUDDY_OWNED, or null when
+ * Buddy isn't installed (no home) or the record can't be written.
+ */
+export function recordBuddyLaunch(buddyHome, { cwd, now = Date.now(), claimWindowMs = 10 * 60 * 1000 } = {}) {
+  if (!buddyHome || !fs.existsSync(buddyHome) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  try {
+    const dir = path.join(buddyHome, 'owned');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
+    const launchId = crypto.randomBytes(18).toString('base64url');
+    const record = { v: 1, launchId, launcher: 'board', cwd, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + claimWindowMs).toISOString() };
+    const file = path.join(dir, `${launchId}.json`);
+    const tmp = `${file}.tmp.${crypto.randomBytes(8).toString('hex')}`;
+    fs.writeFileSync(tmp, JSON.stringify(record), { flag: 'wx', mode: 0o600 }); // privacy-flow: launch-record
+    try { fs.linkSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
+    return launchId;
+  } catch {
+    return null;
+  }
 }
 
 /** argv after the binary. Resume keeps every isolation flag (spike 5a). */

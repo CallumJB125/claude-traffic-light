@@ -195,7 +195,9 @@
     document.querySelector('#presets [data-preset="party"]').click();
     ok(rows().some((r) => r.querySelector('.chip[title="pet: duck"]')), 'Party preset applies pets');
     $('presets-btn').click();
-    document.querySelector('#presets [data-preset="minimal"]').click();
+    document.querySelector('#presets [data-template="minimal"]').click();
+    ok(!$('rules-choice').hidden, 'a template asks before replacing unsaved edits');
+    document.querySelector('#rules-choice [data-rules=load]').click();
     ok($('presets').hidden, 'menu closes after picking');
     ok(rows().every((r) => !r.querySelector('.chip.pose-chip')), 'Minimal preset has no poses');
     $('presets-btn').click();
@@ -214,7 +216,8 @@
     await sleep(150);
     cfg = await window.lightsApi.getConfig();
     ok(cfg.presets.filter((p) => p.name.toLowerCase() === 'playtest set').length === 1, 'saving the same name overwrites instead of duplicating');
-    document.querySelector('#presets [data-preset="classic"]').click();
+    document.querySelector('#presets [data-template="solo-dev"]').click();
+    if (!$('rules-choice').hidden) document.querySelector('#rules-choice [data-rules=load]').click();
     $('presets-btn').click();
     mine().click();
     ok(rows().every((r) => !r.querySelector('.chip.pose-chip')), 'applying the user preset restores its rules');

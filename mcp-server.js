@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const http = require('http');
+const http = require('http'); // privacy-flow: local-mcp
 const Rules = require('./rules.js');
 const SessionState = require('./hooks/session-state.js');
 const GitSignals = require('./src/github-signals.js');
@@ -162,7 +162,7 @@ const ruleName = (rules, id) => (rules.find((r) => r.id === id) || {}).name || n
 
 function fetchLive(port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172), timeoutMs = 400) {
   return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/status', timeout: timeoutMs }, (res) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/status', timeout: timeoutMs }, (res) => { // privacy-flow: local-mcp
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
@@ -428,6 +428,105 @@ async function buddySpend({ root, now = Date.now(), projectsDir } = {}) {
   };
 }
 
+// From the permanent daily record (usage-history.js), so it reaches past the
+// ~30 days Claude Code keeps transcripts. Answers "how much did I spend on
+// Opus in August?". Project paths are reduced to their folder name: an MCP
+// client can be remote-ish, so full paths never leave the record.
+const HISTORY_MAX_DAYS = 400;
+function historyRange(range, now, first) {
+  // noon-anchored day arithmetic (usage-insights.js), so a DST change near
+  // midnight never moves a range by a day
+  const I = require('./usage-insights.js');
+  const r = String(range || '30d').trim().toLowerCase();
+  const today = I.key(now);
+  let m;
+  if (r === 'today') return { from: today, to: today };
+  if ((m = /^(\d{1,3})d$/.exec(r))) return { from: I.addDays(today, -(Number(m[1]) - 1)), to: today };
+  if (r === '1y') return { from: I.addDays(today, -364), to: today };
+  if (r === 'all') {
+    // everything recorded, up to the cap; `capped` says when that cut it short
+    const floor = I.addDays(today, -(HISTORY_MAX_DAYS - 1));
+    const from = first && first > floor ? first : floor;
+    return { from, to: today, capped: !!first && first < floor };
+  }
+  if ((m = /^(\d{4})-(\d{2})$/.exec(r))) {
+    const last = new Date(Number(m[1]), Number(m[2]), 0).getDate();
+    return { from: `${m[1]}-${m[2]}-01`, to: `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}` };
+  }
+  if ((m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(r))) return { from: m[1], to: m[2] };
+  throw new Error('range is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD');
+}
+async function buddyUsageHistory({ root, range = '30d', groupBy = 'day', now = Date.now() } = {}) {
+  const History = require('./usage-history.js');
+  const Spend = require('./spend.js');
+  const first = History.extent(History.open({ root }));
+  const r = historyRange(range, now, first && first.from);
+  const span = (Date.parse(`${r.to}T12:00:00`) - Date.parse(`${r.from}T12:00:00`)) / 86400000 + 1;
+  if (!(span >= 1) || span > HISTORY_MAX_DAYS) throw new Error(`range must cover between 1 and ${HISTORY_MAX_DAYS} days`);
+  if (!['day', 'model', 'family', 'project', 'source'].includes(groupBy)) throw new Error('groupBy is day, model, family, project or source');
+  const store = History.open({ root });
+  const q = History.query(store, { from: r.from, to: r.to, groupBy });
+  const name = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || 'unknown';
+  let rows = q.rows;
+  if (groupBy === 'project') {
+    const by = new Map();
+    for (const row of rows) {
+      const k = name(row.key);
+      const a = by.get(k) || { ...row, key: k };
+      if (by.has(k)) for (const f of ['turns', 'input', 'output', 'cacheRead', 'cacheWrite', 'cost', 'unpricedTurns', 'unpricedTokens', 'routineTurns', 'sessions']) a[f] += row[f];
+      by.set(k, a);
+    }
+    rows = [...by.values()].sort((a, b) => b.cost - a.cost);
+  }
+  const t = q.total;
+  const ext = History.extent(store);
+  const cfg = Spend.normalize((readJson(path.join(root, 'config.json')) || {}).spend);
+  return {
+    summary: `${Spend.money(t.cost)} across ${t.turns} turns from ${r.from} to ${r.to}${r.capped ? ` (the last ${HISTORY_MAX_DAYS} days: this tool answers at most that far back)` : ''}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${t.unpricedTurns ? ` ${t.unpricedTurns} turn${t.unpricedTurns === 1 ? '' : 's'} on unpriced models (${q.unpricedModels.join(', ')}) not in the cost.` : ''}${q.legacyDays ? ` ${q.legacyDays} early day${q.legacyDays === 1 ? '' : 's'} are cost-only estimates.` : ''}${ext ? '' : ' Nothing is recorded yet: Claude Buddy has to have run once.'}`,
+    range: { from: r.from, to: r.to }, groupBy, mode: cfg.mode,
+    total: t,
+    rows: rows.map(({ key, turns, input, output, cacheRead, cacheWrite, cost, unpricedTurns, routineTurns, sessions, legacyCost }) => ({ key, turns, cost, input, output, cacheRead, cacheWrite, unpricedTurns, routineTurns, sessions, ...(legacyCost ? { approximate: true } : {}) })),
+    unpricedModels: q.unpricedModels,
+    recorded: ext,
+    note: 'From the permanent daily record, priced at read time with the current price table, so it reaches back past the transcripts Claude Code still keeps. Project names are folder names only.',
+  };
+}
+
+// The Health panel's checks, run from here. What only the running app knows
+// (is its signal server up?) comes from GET /status; the hooks are compared
+// with what this copy of Buddy would install.
+function hookRuntime(root, dir = __dirname, execPath = process.execPath) {
+  const Runtime = require('./adapters/runtime.js');
+  // Packaged, this file sits in Resources/app.asar and the hooks in Resources/hooks.
+  const packaged = /\.asar$/.test(dir);
+  return Runtime.make({ execPath: packaged ? execPath : null, hooksDir: path.join(packaged ? path.dirname(dir) : dir, 'hooks'), dataDir: root });
+}
+
+async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, runtime = hookRuntime(root), projectsDir, statfs, mcpConnected = false } = {}) {
+  const Health = require('./src/health.js');
+  const McpInstall = require('./mcp-install.js');
+  const port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+  const liveStatus = live === undefined ? await fetchLive(port) : live;
+  const packaged = /\.asar$/.test(__dirname);
+  const report = Health.runChecks({
+    now, home, root, runtime, projectsDir, statfs, mcpConnected,
+    askFromWidget: !!loadConfig(root).askFromWidget,
+    version: require('./package.json').version,
+    mcp: McpInstall.status({ home, entry: McpInstall.launch({ packaged, execPath: process.execPath, appPath: __dirname, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) }),
+    signal: liveStatus ? { listening: true, port } : { running: false, port },
+  });
+  const lastHook = report.checks.find((c) => c.id === 'last-hook');
+  // The answer lands in a transcript: paths and names are scrubbed like a bug report's.
+  const { scrub } = require('./src/scrub.js');
+  const clean = (x) => (x ? scrub(x, { home }) : x);
+  return {
+    ...report,
+    checks: report.checks.map((c) => ({ ...c, detail: clean(c.detail), ...(c.next ? { next: clean(c.next) } : {}) })),
+    ...(lastHook.status === 'ok' ? {} : { likelyCause: clean(Health.likelyCause(report.checks)) }),
+    note: 'status is ok, warn, fail or info. `fix` names a one-click fix in Buddy Preferences → Health (the tray menu\'s Health…); `next` is what to do by hand. Nothing here is fixed for you.',
+  };
+}
+
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Claude Buddy widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
@@ -437,6 +536,8 @@ const TOOLS = [
   { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Buddy, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
+  { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
+  { name: 'buddy_health', description: 'Is Buddy set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Buddy offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
 ];
 
@@ -462,7 +563,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, hookRuntime };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

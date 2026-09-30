@@ -17,7 +17,7 @@ test('a fence landing mid-quit: parkForQuit does not count it parked and the han
     const quit = run.parkForQuit(600);
     hub.send({ type: 'fenced', run_id: run.run_id, card_id: run.card_id, held_fence: run.fence, current_fence: run.fence + 1 });
     await waitFor(() => run.fenced && run.ended, { what: 'fenced and ended', timeout: 15000 });
-    assert.equal(await quit, undefined, 'the fence path ended the run; not parked');
+    assert.ok(!(await quit), 'the fence path ended the run; not parked');
     const snaps = hub.outs('snapshot').length;
     await new Promise((r) => setTimeout(r, 900));   // past the handover window
     assert.equal(run.handover.done, true);

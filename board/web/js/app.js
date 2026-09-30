@@ -2,19 +2,28 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { api, errorText, setOrg, currentOrg } from './api.js';
+import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, isHumanOwned, agedView } from './view.js';
-import { boardScreen, loadingScreen } from './render-board.js';
+import { displayFace, alertsForViewer, agedView } from './view.js';
+import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
+import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
+import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
+import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
+import { paletteResults } from './palette.js';
+import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
+import { integrationsScreen, connectWindowTarget } from './render-integrations.js';
+import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
+import { BRAND } from '../../shared/brand.js';
 
 const root = document.getElementById('root');
 const perf = () => performance.now();
@@ -36,12 +45,23 @@ const state = {
   busy: new Set(),
   toasts: [],
   theme: 'system',
+  bg: 'none', // board background (themes.js), per browser
+  themeMenu: false,
   showAllDone: false,
   repos: null,
   view: 'board',
-  table: { sort: DEFAULT_SORT, filter: '' },
+  table: { sort: DEFAULT_SORT },
+  filters: emptyFilters(), // shared by Board and Table; lives in ?q= &f= and sessionStorage
   dash: null, // set below: freshDash(), status idle | loading | ok | error
+  integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, confirmDisconnect: null },
   cardsRev: 0,
+  selection: new Set(), // card ids picked with Shift/⌘-click
+  drag: null, // pointer drag in flight: {ids, over, mode}
+  kbd: null, // keyboard pick-up: {ids, from, over}
+  announce: '',
+  quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
+  // team.presence (D37b). `stale` from a socket drop until the next frame.
+  presence: { members: [], loaded: false, stale: false },
 };
 
 let socket = null;
@@ -49,18 +69,32 @@ let socket = null;
 // ── theme ────────────────────────────────────────────────────────────────────
 
 function loadTheme() {
-  try { state.theme = localStorage.getItem('board-theme') ?? 'system'; } catch { state.theme = 'system'; }
+  try { state.theme = normalizeTheme(localStorage.getItem('board-theme')); } catch { state.theme = 'system'; }
+  try { state.bg = normalizeBg(localStorage.getItem('board-bg')); } catch { state.bg = 'none'; }
   applyTheme();
 }
 function applyTheme() {
-  if (state.theme === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = state.theme;
+  const d = document.documentElement.dataset;
+  if (state.theme === 'system') delete d.theme; else d.theme = state.theme;
+  if (state.bg === 'none') delete d.boardBg; else d.boardBg = state.bg;
 }
 function setTheme(t) {
-  state.theme = ['dark', 'light'].includes(t) ? t : 'system';
+  state.theme = normalizeTheme(t);
   try { localStorage.setItem('board-theme', state.theme); } catch { /* private mode */ }
   applyTheme();
   update();
+}
+function setBg(b) {
+  state.bg = normalizeBg(b);
+  try { localStorage.setItem('board-bg', state.bg); } catch { /* private mode */ }
+  applyTheme();
+  update();
+}
+function closeThemeMenu({ refocus = false } = {}) {
+  if (!state.themeMenu) return;
+  state.themeMenu = false;
+  renderNow();
+  if (refocus) root.querySelector('[data-action="theme-menu"]')?.focus();
 }
 
 // ── views ───────────────────────────────────────────────────────────────────
@@ -77,7 +111,10 @@ function setView(v) {
   if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
   state.view = v;
   if (v === 'dashboard') loadJournal();
-  try { localStorage.setItem('board-view', v); } catch { /* private mode */ }
+  if (v === 'integrations') loadIntegrations();
+  if (v === 'team' && state.board) presenceFallbackSoon();
+  // Team pages are opened from the app sidebar; only board views are remembered.
+  if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
     const q = new URLSearchParams(location.search);
     q.set('view', v);
@@ -86,6 +123,84 @@ function setView(v) {
   update();
 }
 
+// ── filters ──────────────────────────────────────────────────────────────────
+// The URL wins (a shared link shows the same cards); otherwise this tab's last
+// filters come back after a reload.
+
+function loadFilters() {
+  const q = new URLSearchParams(location.search);
+  if (q.has('q') || q.has('f')) { state.filters = parseFilters(location.search); return; }
+  try { state.filters = parseFilters(sessionStorage.getItem('board-filters') ?? ''); } catch { /* storage off */ }
+}
+function setFilters(next) {
+  state.filters = next;
+  try {
+    const q = writeFilters(next, new URLSearchParams(location.search));
+    history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}${location.hash}`);
+  } catch { /* sandboxed */ }
+  try { sessionStorage.setItem('board-filters', writeFilters(next, new URLSearchParams()).toString()); } catch { /* storage off */ }
+  update();
+}
+
+// ── integrations ─────────────────────────────────────────────────────────────
+
+async function loadIntegrations() {
+  state.integ = { ...state.integ, status: 'loading' };
+  update();
+  try {
+    state.integ = { ...state.integ, status: 'ok', data: await api.integrations(), error: null };
+  } catch (err) {
+    state.integ = { ...state.integ, status: 'error', error: errorText(err) };
+  }
+  update();
+}
+
+async function connectIntegration(provider, kind) {
+  if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
+  const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
+  if (!res?.url || !res.bind) return;
+  window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
+  update();
+}
+
+async function submitIntegrationToken(form) {
+  const provider = form.dataset.provider;
+  const token = String(new FormData(form).get('token') ?? '').trim();
+  if (!token) return;
+  const res = await withBusy(`integ-connect:${provider}`, () => api.connectToken(provider, token));
+  if (res) { state.integ = { ...state.integ, tokenFor: null }; toast('Connected.'); loadIntegrations(); }
+}
+
+async function toggleActivity(id) {
+  const open = state.integ.open === id ? null : id;
+  state.integ = { ...state.integ, open };
+  update();
+  if (!open) return;
+  try {
+    const res = await api.integrationAudit(id);
+    state.integ = { ...state.integ, audit: { ...state.integ.audit, [id]: res.entries ?? [] } };
+  } catch (err) {
+    state.integ = { ...state.integ, audit: { ...state.integ.audit, [id]: [] }, error: errorText(err) };
+  }
+  update();
+}
+
+async function setAutonomy(id, action, mode) {
+  const conn = state.integ.data?.connections?.find((c) => c.id === id);
+  if (!conn) return;
+  const autonomy = { ...(conn.settings?.autonomy ?? {}), [action]: mode };
+  const res = await withBusy(`integ:${id}`, () => api.patchIntegration(id, { autonomy }));
+  if (res?.connection) {
+    state.integ = { ...state.integ, data: { ...state.integ.data, connections: state.integ.data.connections.map((c) => (c.id === id ? res.connection : c)) } };
+    update();
+  }
+}
+
+async function disconnectIntegration(id) {
+  const res = await withBusy(`integ:${id}`, () => api.disconnectIntegration(id));
+  state.integ = { ...state.integ, confirmDisconnect: null };
+  if (res) { toast('Disconnected.'); loadIntegrations(); } else update();
+}
 // ── toasts ───────────────────────────────────────────────────────────────────
 
 let toastSeq = 0;
@@ -114,23 +229,39 @@ function buildModel() {
     const data = d.data ? { ...d.data, feed: (d.data.feed ?? []).map((ev) => ({ ...ev, at_age_ms: ev.at_age_ms == null ? null : ev.at_age_ms + Math.max(0, clockNow - (ev._rx ?? d.rx)) })) } : null;
     detail = { ...d, data, elapsed_ms };
   }
+  const fctx = { viewerId: state.me?.member?.id, members: state.members };
+  const filtered = applyFilters(entries, state.filters, fctx);
   return {
     me: state.me,
     board: state.board,
     members: state.members,
     entries,
+    visible: filtered.entries,
+    filters: state.filters,
+    filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx) },
     alerts: alertsForViewer(state.me?.member?.id, entries),
     conn: { ...state.conn, retryInMs: state.conn.retryAt != null ? state.conn.retryAt - Date.now() : null },
     detail,
     dialog: state.dialog,
     busy: state.busy,
     theme: state.theme,
+    bg: state.bg,
+    themeMenu: state.themeMenu,
     showAllDone: state.showAllDone,
+    selection: state.selection,
+    kbd: state.kbd,
+    announce: state.announce,
+    quickAdd: state.quickAdd,
+    drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
     readOnly: state.me?.member?.role === 'viewer',
     view: state.view,
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
+    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now() } : null,
+    presence: { ...state.presence, stale: state.presence.stale || lost },
+    // Presence ages freeze at the drop, like card ages.
+    nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
   };
 }
 
@@ -220,12 +351,12 @@ function toasts() {
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : null;
+  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -233,11 +364,13 @@ let queued = false;
 function update() {
   if (queued) return;
   queued = true;
-  queueMicrotask(() => {
-    queued = false;
-    render(root, screen());
-    syncDialogs();
-  });
+  queueMicrotask(() => { if (queued) renderNow(); });
+}
+// Synchronous render, for callers that measure the DOM right after (FLIP).
+function renderNow() {
+  queued = false;
+  render(root, screen());
+  syncDialogs();
 }
 
 function syncDialogs() {
@@ -281,12 +414,14 @@ async function boot() {
     return;
   }
   state.auth = 'ok';
+  setCsrf(state.me.csrf_token);
   const wanted = new URLSearchParams(location.search).get('board');
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
-  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · Claude Buddy`;
+  document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
   resetDashboard();
+  state.presence = { members: [], loaded: false, stale: false };
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
   update();
@@ -300,6 +435,7 @@ function onStatus({ status, retryAt }) {
     state.conn.lostAt = new Date();
     state.conn.lostPerf = perf();
   }
+  if (status === 'lost') state.presence.stale = true;
   if (status === 'open') { state.conn.lostAt = null; state.conn.lostPerf = null; }
   state.conn.status = status;
   state.conn.retryAt = retryAt ?? null;
@@ -316,10 +452,16 @@ function onMessage(msg) {
       state.members = new Map(msg.members.map((m) => [m.member_id, m]));
       state.cards = new Map(msg.cards.map((c) => [c.id, { view: c, rx: now }]));
       state.cardsRev += 1;
+      state.selection = pruneSelection(state.selection, state.cards.keys());
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
+      if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
+      presenceFallbackSoon();
       break;
     }
+    case 'team.presence':
+      state.presence = { members: msg.members, loaded: true, stale: false };
+      break;
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
       state.cards.set(msg.card.id, { view: msg.card, rx: now });
@@ -331,6 +473,7 @@ function onMessage(msg) {
     case 'card.remove': {
       state.cards.delete(msg.card_id);
       state.cardsRev += 1;
+      state.selection = pruneSelection(state.selection, state.cards.keys());
       if (state.detail?.cardId === msg.card_id) closeDrawer();
       break;
     }
@@ -352,6 +495,23 @@ function onMessage(msg) {
     default: break;
   }
   update();
+}
+
+// The socket sends presence right after every snapshot; this is only the
+// fallback for a frame that never comes (the endpoint is rate limited), tried
+// once per board, never on a timer.
+let presenceFallbackFor = null;
+function presenceFallbackSoon() {
+  if (state.view !== 'team' || presenceFallbackFor === state.boardId) return;
+  const boardId = state.boardId;
+  presenceFallbackFor = boardId;
+  setTimeout(async () => {
+    if (state.presence.loaded || state.boardId !== boardId) return;
+    try {
+      const res = await api.presence(boardId);
+      if (!state.presence.loaded && state.boardId === boardId) { state.presence = { members: res.members ?? [], loaded: true, stale: false }; update(); }
+    } catch { /* the socket frame or the next snapshot will fill it */ }
+  }, 2000);
 }
 
 // ── detail drawer ────────────────────────────────────────────────────────────
@@ -563,6 +723,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if (kind === 'integ-token') return submitIntegrationToken(form);
   const d = state.dialog;
   const cardId = form.dataset.card;
   const fd = new FormData(form);
@@ -640,6 +801,138 @@ async function submitDialogForm(form, submitter) {
   return undefined;
 }
 
+// ── command palette ──────────────────────────────────────────────────────────
+// Opening is instant and unanimated: it is a keyboard shortcut people press
+// hundreds of times a day.
+
+function togglePalette() {
+  if (state.auth !== 'ok' || !state.board) return;
+  if (state.dialog?.kind === 'palette') { closePalette(); return; }
+  if (root.querySelector('dialog[open]:not([data-dialog="drawer"])')) return;
+  state.dialog = { kind: 'palette', query: '', index: 0, scope: null };
+  renderNow();
+}
+
+function closePalette() {
+  state.dialog = null;
+  renderNow();
+}
+
+function paletteNow() {
+  const m = buildModel();
+  return paletteResults(state.dialog, { entries: m.entries, view: state.view, readOnly: m.readOnly, filters: state.filters });
+}
+
+function runPalette(item, { give = false } = {}) {
+  const run = give ? { type: 'give', ...item.give } : item.run;
+  if (!run) return;
+  if (run.type === 'scope-give') { state.dialog = { ...state.dialog, scope: 'give', query: '', index: 0 }; renderNow(); return; }
+  closePalette();
+  switch (run.type) {
+    case 'open-card': openDetail(run.id); break;
+    case 'view': setView(run.view); break;
+    case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
+    case 'new-card': openNewCard(); break;
+    case 'give': openGive(run.id, run.mode); break;
+    case 'filter':
+      if (state.view === 'dashboard') setView('board');
+      setFilters({ ...emptyFilters(), chips: [run.chip] });
+      break;
+    case 'filter-clear': setFilters(emptyFilters()); break;
+    default:
+  }
+}
+
+function paletteKeydown(e) {
+  const d = state.dialog;
+  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: state.me?.member?.role === 'viewer', filters: state.filters }).length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!n) return;
+    state.dialog = { ...d, index: (Math.min(d.index, n - 1) + (e.key === 'ArrowDown' ? 1 : -1) + n) % n };
+    renderNow();
+    root.querySelector('.pal-opt[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const hit = paletteNow()[Math.min(d.index, n - 1)];
+    if (hit) runPalette(hit.item, { give: (e.metaKey || e.ctrlKey) && !!hit.item.give });
+  } else if (e.key === 'Tab') {
+    e.preventDefault(); // the field is the only stop: Tab must not leave the dialog
+  }
+}
+
+// ── quick add ────────────────────────────────────────────────────────────────
+
+let pendingSeq = 0;
+
+function openQuickAdd() {
+  if (state.me?.member?.role === 'viewer' || state.view !== 'board') return false;
+  state.quickAdd = { open: true, seed: '', confirm: null, keep: false };
+  renderNow();
+  const ta = root.querySelector('.quickadd-input');
+  ta?.focus();
+  ta?.scrollIntoView({ block: 'nearest' });
+  return true;
+}
+
+function closeQuickAdd() {
+  state.quickAdd = null;
+  update();
+}
+
+// Optimistic: the cards are on the board before the request leaves; the hub's
+// card then replaces each placeholder. A failure removes it and hands the text
+// back in the field.
+async function createQuick(titles, keep) {
+  const prefix = state.board?.key_prefix ?? null;
+  const memberId = state.me?.member?.id ?? null;
+  const temps = titles.map((t) => pendingCard(t, ++pendingSeq, { prefix, memberId }));
+  for (const v of temps) state.cards.set(v.id, { view: v, rx: perf() });
+  state.cardsRev += 1;
+  state.quickAdd = keep ? { open: true, seed: '', confirm: null, keep } : null;
+  update();
+  const failed = [];
+  for (const v of temps) {
+    try {
+      const res = await api.createCard(state.boardId, { title: v.title });
+      state.cards.delete(v.id);
+      applyCard(res);
+    } catch (err) {
+      state.cards.delete(v.id);
+      failed.push(v.title);
+      toast(`Couldn't add “${v.title}”: ${errorText(err)}`, 'error');
+      if (err.code === 'UNAUTHENTICATED') boot();
+    }
+    state.cardsRev += 1;
+    update();
+  }
+  if (failed.length) {
+    state.quickAdd = { open: true, seed: failed.join('\n'), confirm: null, keep };
+    renderNow();
+    root.querySelector('.quickadd-input')?.focus();
+  }
+}
+
+function commitTitles(titles, keep) {
+  if (!titles.length) { if (!keep) closeQuickAdd(); return; }
+  const ta = root.querySelector('.quickadd-input');
+  if (needsConfirm(titles)) {
+    state.quickAdd = { ...state.quickAdd, confirm: titles, keep };
+    update();
+    return;
+  }
+  if (ta) ta.value = '';
+  createQuick(titles, keep);
+}
+
+function onPaste(e) {
+  const ta = e.target.closest?.('[data-input="quickadd"]');
+  const text = e.clipboardData?.getData('text') ?? '';
+  if (!ta || !/\r?\n/.test(text.trim())) return;
+  e.preventDefault();
+  commitTitles(parseTitles(ta.value.slice(0, ta.selectionStart) + text + ta.value.slice(ta.selectionEnd)), true);
+}
+
 async function openNewCard() {
   state.dialog = { kind: 'new', repos: state.repos };
   update();
@@ -647,26 +940,84 @@ async function openNewCard() {
   if (state.dialog?.kind === 'new') { state.dialog = { ...state.dialog, repos }; update(); }
 }
 
-async function moveCard(cardId, column) {
-  const v = viewOf(cardId);
-  if (!v || !isHumanOwned(v) || v.column === column) return;
-  // Optimistic: human-owned cards move immediately, the hub confirms.
-  state.cards.set(cardId, { view: { ...v, column }, rx: state.cards.get(cardId).rx });
-  update();
-  const res = await withBusy(`${cardId}:move`, () => api.patchCard(cardId, { version: v.version, column }));
-  if (res) applyCard(res);
-  else state.cards.set(cardId, { view: v, rx: state.cards.get(cardId)?.rx ?? perf() });
+// Optimistic: the column changes now (and the cards settle into place), the hub
+// confirms per card. Each card's PATCHes run one after another so a second
+// quick move sends the version the first one returned; a failure rolls that
+// card back and says why.
+const moveChains = new Map();
+
+function say(text) {
+  state.announce = state.announce === text ? `${text}\u200b` : text;
+}
+
+function moveCards(ids, column, { flipFrom = null } = {}) {
+  const plan = planMoves(ids, viewOf, column);
+  const summary = moveSummary(plan, column);
+  say(summary);
+  if (!plan.moves.length) {
+    if (plan.skipped.length) toast(summary);
+    update();
+    return plan;
+  }
+  const before = snapshotRects(root);
+  for (const m of plan.moves) {
+    const c = state.cards.get(m.id);
+    state.cards.set(m.id, { view: { ...c.view, column }, rx: c.rx });
+  }
+  state.cardsRev += 1;
+  state.drag = null;
+  renderNow();
+  playFlip(root, before, flipFrom && new Map(plan.moves.map((m) => [m.id, flipFrom])));
+  if (plan.skipped.length) toast(summary);
+  for (const m of plan.moves) queueMove(m, column);
+  return plan;
+}
+
+function queueMove(m, column) {
+  const next = (moveChains.get(m.id) ?? Promise.resolve()).then(async () => {
+    const v = viewOf(m.id);
+    if (!v) return;
+    try {
+      applyCard(await api.patchCard(m.id, { version: v.version, column }));
+    } catch (err) {
+      toast(`Couldn't move ${m.key}: ${errorText(err)}`, 'error');
+      if (err.code === 'VERSION_CONFLICT' || err.code === 'ILLEGAL_TRANSITION') refreshBoardCard();
+      if (err.code === 'UNAUTHENTICATED') boot();
+      const cur = state.cards.get(m.id);
+      if (cur && cur.view.column === column) {
+        const before = snapshotRects(root);
+        state.cards.set(m.id, { view: { ...cur.view, column: m.from }, rx: cur.rx });
+        state.cardsRev += 1;
+        renderNow();
+        playFlip(root, before);
+      }
+    }
+    update();
+  });
+  moveChains.set(m.id, next);
+  next.finally(() => { if (moveChains.get(m.id) === next) moveChains.delete(m.id); });
+}
+
+function setSelection(next) {
+  state.selection = next;
   update();
 }
 
 // ── DOM events ───────────────────────────────────────────────────────────────
 
 function onClick(e) {
+  if (state.themeMenu && !e.target.closest?.('.menu-wrap')) closeThemeMenu();
   const dlg = e.target.closest?.('dialog[data-dialog]');
   if (dlg && e.target === dlg) {
     // Backdrop click closes (the dialog element itself only receives clicks outside its content box).
     const r = dlg.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dlg.close();
+    return;
+  }
+  const picked = (e.shiftKey || e.metaKey || e.ctrlKey) && !e.target.closest?.('a, .card-actions') ? e.target.closest?.('.card[data-card-id]') : null;
+  if (picked) {
+    e.preventDefault();
+    setSelection(toggleSelection(state.selection, picked.dataset.cardId));
     return;
   }
   const el = e.target.closest?.('[data-action]');
@@ -700,10 +1051,40 @@ function onClick(e) {
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
+    case 'palette': togglePalette(); return;
+    case 'palette-run': { const hit = paletteNow()[Number(el.dataset.index)]; if (hit) runPalette(hit.item); return; }
+    case 'quick-add': openQuickAdd(); return;
+    case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
+    case 'quick-add-cancel': closeQuickAdd(); return;
+    case 'quick-add-confirm': {
+      const { confirm, keep } = state.quickAdd;
+      const ta = root.querySelector('.quickadd-input');
+      if (ta) { ta.value = ''; ta.focus(); }
+      createQuick(confirm, keep);
+      return;
+    }
+    case 'quick-add-decline': state.quickAdd = { ...state.quickAdd, confirm: null }; update(); root.querySelector('.quickadd-input')?.focus(); return;
     case 'theme': setTheme(el.dataset.next); return;
+    case 'board-bg': setBg(el.dataset.bg); return;
+    case 'theme-menu':
+      state.themeMenu = !state.themeMenu;
+      renderNow();
+      if (state.themeMenu) root.querySelector('.theme-menu [aria-checked="true"]')?.focus();
+      return;
     case 'reconnect': socket?.reconnectNow(); return;
+    case 'clear-selection': setSelection(new Set()); return;
+    case 'filter-chip': setFilters({ ...state.filters, chips: toggleIn(state.filters.chips, el.dataset.chip) }); return;
+    case 'filter-label-off': setFilters({ ...state.filters, labels: state.filters.labels.filter((l) => l !== el.dataset.label) }); return;
+    case 'filter-clear': setFilters(emptyFilters()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'view': setView(el.dataset.view); return;
+    case 'integ-reload': loadIntegrations(); return;
+    case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
+    case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
+    case 'integ-activity': toggleActivity(el.dataset.conn); return;
+    case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
+    case 'integ-disconnect-cancel': state.integ = { ...state.integ, confirmDisconnect: null }; update(); return;
+    case 'integ-disconnect': disconnectIntegration(el.dataset.conn); return;
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
@@ -720,7 +1101,8 @@ function onSubmit(e) {
 
 function onInput(e) {
   const el = e.target.closest?.('[data-input]');
-  if (el?.dataset.input === 'table-filter') { state.table = { ...state.table, filter: el.value }; update(); }
+  if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
+  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') { state.dialog = { ...state.dialog, query: el.value, index: 0 }; update(); }
 }
 
 function onChange(e) {
@@ -735,7 +1117,11 @@ function onChange(e) {
     update();
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
-  if (what === 'move') moveCard(el.dataset.card, el.value);
+  if (what === 'move') moveCards([el.dataset.card], el.value);
+  if (what === 'filter-label' && el.value) { setFilters({ ...state.filters, labels: [...state.filters.labels, el.value] }); el.value = ''; }
+  if (what === 'filter-assignee') setFilters({ ...state.filters, assignee: el.value || null });
+  if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
+  if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
 }
 
 // Dialog close (Escape, backdrop, close buttons) is the one path back to state.
@@ -745,23 +1131,98 @@ function onDialogClose(e) {
   if (el.dataset.dialog === 'drawer') { if (state.detail) closeDrawer(); } else if (state.dialog) { state.dialog = null; update(); }
 }
 
+// Keyboard drag: Space lifts the focused card, ←/→ pick a column, Space/Enter
+// drops, Esc cancels. Space would also "click" the card open, so its keyup is
+// swallowed whenever a keydown was ours.
+let swallowSpaceUp = false;
+
+function kbdKeydown(e) {
+  if (state.kbd) {
+    if (!['ArrowLeft', 'ArrowRight', ' ', 'Enter', 'Escape'].includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.key === ' ') swallowSpaceUp = true;
+    const held = state.kbd;
+    const { state: next, effect } = kbdKey(held, e.key);
+    state.kbd = next;
+    const count = held.ids.length;
+    const key = viewOf(held.ids[0])?.key ?? 'Card';
+    if (effect.type === 'drop') {
+      moveCards(held.ids, effect.column);
+      root.querySelector(`[data-card-id="${CSS.escape(held.ids[0])}"] .card-open`)?.focus();
+    } else {
+      say(announcement(effect, { key, count, from: held.from, over: (next ?? held).over }));
+      update();
+    }
+    return true;
+  }
+  const open = e.key === ' ' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey ? e.target.closest?.('.card-open') : null;
+  const cardEl = open?.closest('.card[data-draggable="true"]');
+  if (!cardEl) return false;
+  e.preventDefault();
+  swallowSpaceUp = true;
+  const id = cardEl.dataset.cardId;
+  const ids = idsToDrag(state.selection, id);
+  state.kbd = kbdStart(ids, viewOf(id).column);
+  say(announcement({ type: 'pickup' }, { key: viewOf(id).key, count: ids.length }));
+  update();
+  return true;
+}
+
+function onKeyup(e) {
+  if (e.key === ' ' && swallowSpaceUp) { swallowSpaceUp = false; e.preventDefault(); }
+}
+
+function onFocusout(e) {
+  if (!state.kbd || !e.target.closest?.('.card-open') || e.relatedTarget === e.target) return;
+  const held = state.kbd;
+  state.kbd = null;
+  say(announcement({ type: 'cancel' }, { key: viewOf(held.ids[0])?.key, count: held.ids.length, from: held.from }));
+  update();
+}
+
+function themeMenuKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeThemeMenu({ refocus: true }); return true; }
+  const items = [...root.querySelectorAll('.theme-menu [role="menuitemradio"]')];
+  const i = items.indexOf(e.target.closest('[role="menuitemradio"]'));
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (step == null && e.key !== 'Home' && e.key !== 'End') return false;
+  e.preventDefault();
+  items[e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (i + step + items.length) % items.length]?.focus();
+  return true;
+}
+
 function onKeydown(e) {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); togglePalette(); return; }
+  if (e.target.dataset?.input === 'palette-q') { paletteKeydown(e); return; }
+  if (kbdKeydown(e)) return;
+  if (e.target.closest?.('.theme-menu') && themeMenuKey(e)) return;
+  if (e.target.dataset?.input === 'quickadd') {
+    if (e.key === 'Escape') { e.preventDefault(); closeQuickAdd(); }
+    else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); commitTitles(parseTitles(e.target.value), e.shiftKey); }
+    return;
+  }
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    openNewCard();
+    if (state.me?.member?.role !== 'viewer' && !openQuickAdd()) openNewCard();
     return;
   }
-  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !state.detail && state.view === 'table' && !root.querySelector('dialog[open]')) {
+  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'dashboard' && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    root.querySelector('[data-input="table-filter"]')?.focus();
+    root.querySelector('[data-input="filter-q"]')?.focus();
     return;
   }
-  if (typing && e.key === 'Escape' && e.target.dataset?.input === 'table-filter' && e.target.value) {
+  if (e.key === 'Escape' && e.target.dataset?.input === 'filter-q') {
     e.preventDefault();
-    state.table = { ...state.table, filter: '' };
-    update();
+    if (e.target.value) setFilters({ ...state.filters, q: '' }); else e.target.blur();
     return;
+  }
+  if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !root.querySelector('dialog[open]')) {
+    const cardEl = e.key === 'x' ? e.target.closest?.('.card-open')?.closest('.card[data-card-id]') : null;
+    if (cardEl) { e.preventDefault(); setSelection(toggleSelection(state.selection, cardEl.dataset.cardId)); return; }
+    if (e.key === 'Escape' && state.selection.size) { setSelection(new Set()); return; }
+    if (e.key === 'Escape' && state.view !== 'dashboard' && isFiltering(state.filters)) { setFilters(emptyFilters()); return; }
   }
   const tab = e.target.closest?.('[role="tab"]');
   if (tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
@@ -775,34 +1236,15 @@ function onKeydown(e) {
   }
 }
 
-// Drag and drop: human-owned cards only. Agent-driven cards move by run state.
-let dragId = null;
-function onDragStart(e) {
-  const cardEl = e.target.closest?.('[data-card-id][draggable="true"]');
-  if (!cardEl) return;
-  dragId = cardEl.dataset.cardId;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', dragId);
-  cardEl.classList.add('is-dragging');
-}
-function onDragOver(e) {
-  if (!dragId) return;
-  const zone = e.target.closest?.('[data-drop]');
-  if (!zone) return;
-  e.preventDefault();
-  for (const z of root.querySelectorAll('.column.is-drop')) if (z !== zone.parentElement) z.classList.remove('is-drop');
-  zone.parentElement.classList.add('is-drop');
-}
-function onDrop(e) {
-  const zone = e.target.closest?.('[data-drop]');
-  if (!zone || !dragId) return;
-  e.preventDefault();
-  moveCard(dragId, zone.dataset.drop);
-}
-function onDragEnd() {
-  dragId = null;
-  for (const z of root.querySelectorAll('.is-drop, .is-dragging')) z.classList.remove('is-drop', 'is-dragging');
-}
+// Pointer drag: human-owned cards only. Agent-driven cards move by run state.
+installDnd({
+  root,
+  dragIds: (el) => idsToDrag(state.selection, el.dataset.cardId),
+  start: (ids) => { state.drag = { ids, over: null, mode: 'pointer' }; update(); },
+  hover: (over) => { if (state.drag) { state.drag = { ...state.drag, over }; update(); } },
+  drop: (ids, column, rect) => moveCards(ids, column, { flipFrom: rect }).moves.length > 0,
+  end: () => { state.drag = null; update(); },
+});
 
 function onImgError(e) {
   if (e.target instanceof HTMLImageElement && e.target.hasAttribute('data-avatar')) e.target.remove();
@@ -814,10 +1256,9 @@ document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
 document.addEventListener('close', onDialogClose, true);
-document.addEventListener('dragstart', onDragStart);
-document.addEventListener('dragover', onDragOver);
-document.addEventListener('drop', onDrop);
-document.addEventListener('dragend', onDragEnd);
+document.addEventListener('keyup', onKeyup);
+document.addEventListener('paste', onPaste);
+document.addEventListener('focusout', onFocusout);
 document.addEventListener('error', onImgError, true);
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => update());
 
@@ -827,5 +1268,6 @@ setInterval(() => { if (state.view === 'dashboard' && state.board && document.vi
 
 loadTheme();
 loadView();
+loadFilters();
 takeDevSecretFromHash();
 boot();

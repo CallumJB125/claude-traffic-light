@@ -45,7 +45,9 @@ test('ws: hello → welcome, subscribe → snapshot; every frame validates', () 
     ws.on('error', reject);
   });
   ws.close();
-  assert.deepEqual(frames.map((f) => f.type), ['welcome', 'snapshot']);
+  // team.presence follows the snapshot at once; it has its own test below.
+  const pushed = frames.filter((f) => f.type !== 'team.presence');
+  assert.deepEqual(pushed.map((f) => f.type), ['welcome', 'snapshot']);
   for (const f of frames) assert.equal(validate('hub→browser', f), null);
   const snap = frames[1];
   assert.ok(snap.cards.length >= 15);
@@ -147,3 +149,39 @@ test('journal with history: a month of finished cards on the board and in the jo
   const replayed = replay(rows);
   for (const c of snap.cards) assert.equal(replayed.get(c.id)?.run_state ?? 'todo', c.run_state, c.key);
 }, { history: true }));
+
+test('presence: team.presence follows the snapshot, /__mock/presence pushes a change, GET serves the same body', () => withHub(async ({ base, port, login }) => {
+  const cookie = await login('alice');
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/board`, { headers: { Cookie: cookie } });
+  const frames = [];
+  const got = (type) => new Promise((resolve) => { const t = setInterval(() => { if (frames.some((f) => f.type === type)) { clearInterval(t); resolve(); } }, 10); });
+  ws.on('message', (d) => frames.push(JSON.parse(d)));
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ type: 'hello', protocol: 1 }));
+  ws.send(JSON.stringify({ type: 'subscribe', board_id: 'board-bdl' }));
+  await got('team.presence');
+  assert.deepEqual(frames.map((f) => f.type), ['welcome', 'snapshot', 'team.presence']);
+  const first = frames[2];
+  assert.equal(validate('hub→browser', first), null);
+  assert.ok(first.members.length >= 3);
+  const all = first.members.flatMap((m) => m.sessions);
+  assert.ok(new Set(all.map((s) => s.agent)).size >= 3);
+  assert.ok(all.some((s) => s.state === 'waiting') && all.some((s) => s.state === 'working') && all.some((s) => s.state === 'idle'));
+  assert.ok(all.every((s) => Number.isFinite(Date.parse(s.since))));
+
+  const res = await post(base, '/__mock/presence', cookie, { members: [{ member_id: 'm-sam', sessions: [{ agent: 'hermes', repo_short: 'bondly', state: 'idle', since_ago_ms: 5000 }] }, { member_id: 'm-ghost', sessions: [] }] });
+  assert.equal(res.status, 200);
+  await new Promise((r) => { const t = setInterval(() => { if (frames.filter((f) => f.type === 'team.presence').length === 2) { clearInterval(t); r(); } }, 10); });
+  const next = frames.at(-1);
+  assert.equal(validate('hub→browser', next), null);
+  assert.deepEqual(next.members.map((m) => m.member_id), ['m-sam'], 'non-members are dropped');
+  assert.equal(next.members[0].name, 'Sam');
+
+  const http = await fetch(`${base}/api/boards/board-bdl/presence`, { headers: { Cookie: cookie } });
+  assert.equal(http.status, 200);
+  const body = await http.json();
+  assert.deepEqual(body.members.map((m) => m.member_id), ['m-sam']);
+  assert.equal((await fetch(`${base}/api/boards/nope/presence`, { headers: { Cookie: cookie } })).status, 404);
+  assert.equal((await fetch(`${base}/api/boards/board-bdl/presence`)).status, 401);
+  ws.close();
+}));

@@ -3,10 +3,10 @@
 // ledger + orphan recovery, and the local control socket for Buddy.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import WebSocket from 'ws';
+import WebSocket from 'ws'; // privacy-flow: team-hub
 import { PROTOCOL_VERSION, validate, MCP_TOOLS, WS_CLOSE } from '../shared/protocol.js';
 import { serializeOutbound, assertNoForeignBytes, scopeOf } from '../shared/scope.js';
 import { HB_MS, SLEEP_TICK_MS, STOP_GRACE_MS, INTERRUPT_WAIT_MS, TIME_SCALE, reconnectDelay, sleptEstimate } from '../shared/liveness.js';
@@ -16,7 +16,7 @@ import { Outbox } from './outbox.js';
 import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
 import { startIpcServer } from './ipc.js';
-import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
+import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, buddyHomeOf, recordBuddyLaunch, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
 import { createWorktree, sessionOf, snapshot as gitSnapshot, git } from './git.js';
 import { decideOffer, advertisable } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
@@ -133,7 +133,7 @@ export class Supervisor extends EventEmitter {
       headers['CF-Access-Client-Secret'] = this.device.cf_client_secret;
     }
     const WS = this.opts.WebSocketImpl ?? WebSocket;
-    const ws = new WS(url, { headers, handshakeTimeout: 15000 });
+    const ws = new WS(url, { headers, handshakeTimeout: 15000 }); // privacy-flow: team-hub
     this.ws = ws;
     ws.on('open', () => { if (this.ws === ws) this.#sendHello(); });
     ws.on('message', (data) => { if (this.ws === ws) this.#onFrame(String(data)); });
@@ -513,7 +513,10 @@ export class Supervisor extends EventEmitter {
     writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
     writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     writeFileAtomic(path.join(run.runDir, HOOK_TOKEN_FILE), run.run_token);
-    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart });
+    // opts.buddyHome: null = don't mark runs as Buddy-owned; undefined = Buddy's own home, if installed.
+    const buddyHome = this.opts.buddyHome === undefined ? buddyHomeOf(this.env) : this.opts.buddyHome;
+    const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
+    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
     const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path) });
     const Backend = this.opts.Backend ?? ClaudeBackend;
     const backend = new Backend({

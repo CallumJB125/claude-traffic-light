@@ -11,13 +11,20 @@ export const PROTOCOL_HEADER = 'Board-Protocol';
 // from the hub; the runner/board-mcp return them to the CLI.
 export const ERRORS = Object.freeze({
   VALIDATION: 400,
+  INVALID_TOKEN: 400,       // accounts: sign-in code/flow wrong, used, expired or dead (one generic code; D53)
   UNAUTHENTICATED: 401,
+  STEP_UP_REQUIRED: 401,    // accounts: needs a fresh email code first (D56)
   FORBIDDEN: 403,
   POLICY_DENIED: 403,
+  QUOTA_EXCEEDED: 403,      // accounts: a free-plan limit (extra: resource, limit; D62)
+  EMAIL_UNVERIFIED: 403,    // accounts: team create / invite needs a verified email
+  WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (extra: email_masked; D64)
   NOT_FOUND: 404,
+  METHOD_DISABLED: 404,     // accounts: that sign-in method is not configured on this hub (D66)
   ILLEGAL_TRANSITION: 409,
   FENCED: 409,
   CONFLICT: 409,
+  ALREADY_MEMBER: 409,      // accounts: inviting / accepting for someone already in the team (extra: team)
   VERSION_CONFLICT: 409,
   ALREADY_ANSWERED: 409,
   CLAIM_LOST: 409,
@@ -180,7 +187,8 @@ export const SHAPES = Object.freeze({
   },
   // hub → browser
   'hub→browser': {
-    welcome: { protocol: 'int', hub_epoch: 'string', member: 'object' },
+    welcome: { protocol: 'int', hub_epoch: 'string', member: 'object?', user: 'object?' },
+    'session.revoked': {},
     snapshot: { board_id: 'string', board: 'object', cards: 'array', members: 'array' },
     'card.upsert': { board_id: 'string', card: 'object' },
     'card.remove': { board_id: 'string', card_id: 'string' },

@@ -37,9 +37,14 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   // Pre-mark the first-run help so it never pops up unasked.
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ ...FIXED_CONFIG, ...config }));
-  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(home, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    // a name may be a path below the data dir (usage/daily/2026-09.json)
+    fs.mkdirSync(path.dirname(path.join(home, name)), { recursive: true });
+    fs.writeFileSync(path.join(home, name), content);
+  }
   fs.writeFileSync(path.join(home, 'window-bounds.json'), JSON.stringify({ x: 200, y: 200, width: 200, height: 200 }));
   const port = await freePort();
+  const remotePort = await freePort();
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
   // run (no hook installs, no login item, no background pollers) without
   // overriding CLAUDE_TRAFFIC_LIGHT_HOME/PORT.
@@ -49,6 +54,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       ...process.env,
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
+      CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
       ...env,
     },
@@ -58,7 +64,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
   };
-  return { app, home, port, projects, cleanup };
+  return { app, home, port, remotePort, projects, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.
@@ -75,7 +81,7 @@ async function status(port) {
 async function windowByFile(app, file, timeout = 15000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const w = app.windows().find((p) => p.url().endsWith(file));
+    const w = app.windows().find((p) => p.url().split('?')[0].endsWith(file));
     if (w) return w;
     await new Promise((r) => setTimeout(r, 100));
   }

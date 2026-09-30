@@ -45,7 +45,7 @@ function startServer(home) {
   const s = factory({ rootDir: home, sessionsDir, requestsDir: path.join(home, 'requests'), aggregateState: () => ({ look: {}, sessions: [] }), broadcastStatus: () => { broadcasts += 1; } });
   const http = s.startSignalServer();
   after(() => { http.closeAllConnections(); http.close(); });
-  server = { home, broadcasts: () => broadcasts };
+  server = { home, broadcasts: () => broadcasts, api: s };
   return server;
 }
 
@@ -114,4 +114,4 @@ function suite(adapter) {
   });
 }
 
-module.exports = { suite, tmp, fixtures };
+module.exports = { suite, tmp, fixtures, startServer, post };

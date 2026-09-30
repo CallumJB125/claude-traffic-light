@@ -75,3 +75,12 @@ test('4426 stops reconnecting; 4401 asks for sign-in', () => {
   b.ws().drop(WS_CLOSE.UNAUTHENTICATED);
   assert.equal(b.statuses.at(-1), 'signed_out');
 });
+
+test('team.presence frames are surfaced to the app', () => {
+  const h = harness();
+  h.ws().open();
+  h.ws().push(snapshot);
+  const frame = { type: 'team.presence', members: [{ member_id: 'm1', name: 'Alice', sessions: [{ agent: 'claude', repo_short: 'bondly', state: 'working', since: '2026-10-01T12:00:00Z' }] }] };
+  h.ws().push(frame);
+  assert.deepEqual(h.messages.at(-1), frame);
+});
