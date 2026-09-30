@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { startHub, FakeRunner } from './helpers.js';
-import { DEFAULT_LIMITS, RateLimiter } from '../ratelimit.js';
+import { DEFAULT_LIMITS, RateLimiter, clientIp } from '../ratelimit.js';
 
 const limits = (over) => ({ config: { rateLimits: { ...DEFAULT_LIMITS, ...over } } });
 
@@ -21,6 +21,16 @@ test('token bucket: capacity, then retry_after, then refill', () => {
   assert.equal(rl.take('mutate_member', 'b').ok, true, 'per key');
   now += 500;
   assert.equal(rl.take('mutate_member', 'a').ok, true);
+});
+
+test('clientIp: CF-Connecting-IP only under Access and only from a loopback peer (cloudflared)', () => {
+  const req = (remoteAddress, cf) => ({ socket: { remoteAddress }, headers: cf ? { 'cf-connecting-ip': cf } : {} });
+  const access = { auth: 'access' };
+  assert.equal(clientIp(req('127.0.0.1', '9.9.9.9'), access), '9.9.9.9');
+  assert.equal(clientIp(req('::ffff:127.0.0.1', '9.9.9.9'), access), '9.9.9.9');
+  assert.equal(clientIp(req('::1', '9.9.9.9'), access), '9.9.9.9');
+  assert.equal(clientIp(req('203.0.113.7', '9.9.9.9'), access), '203.0.113.7', 'a direct peer cannot pick its own bucket');
+  assert.equal(clientIp(req('127.0.0.1', '9.9.9.9'), { auth: 'dev' }), '127.0.0.1');
 });
 
 test('per-member mutation limit: 429 with Retry-After, cached replays are free, refills with time', async () => {

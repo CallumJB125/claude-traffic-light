@@ -2,6 +2,8 @@
 // client IP for logins and mutations, and per connection for WS frames. They
 // run on the hub monotonic clock, so tests drive them with the fake clock.
 
+import { isLoopback } from './config.js';
+
 // {capacity, per_ms}: at most `capacity` at once, refilled at capacity/per_ms.
 export const DEFAULT_LIMITS = Object.freeze({
   login_ip: { capacity: 10, per_ms: 60_000 },
@@ -43,8 +45,10 @@ export class RateLimiter {
 }
 
 // Behind Cloudflare Tunnel every request comes from cloudflared on loopback;
-// the edge's CF-Connecting-IP is the client. Only trusted with Access in front.
+// the edge's CF-Connecting-IP is the client. Only trusted with Access in front
+// and from a loopback peer (cloudflared), never from a direct connection.
 export function clientIp(req, config) {
-  const cf = config.auth === 'access' ? req.headers['cf-connecting-ip'] : null;
-  return typeof cf === 'string' && cf ? cf : String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
+  const peer = String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
+  const cf = config.auth === 'access' && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
+  return typeof cf === 'string' && cf ? cf : peer;
 }
