@@ -2484,12 +2484,16 @@ app.whenReady().then(() => {
   // dev runs never call gh, but still show saved events.
   if (IS_DEV_RUN) git.pause('dev-run');
   else {
-    const gitTick = () => git.tick({ sessions: readSessions(loadConfig()), config: loadConfig() }).then((fired) => {
-      if (!fired.length) return;
-      stateMemo = { at: 0, key: null, value: null };
-      broadcastStatus();
-      maybePlayAlertSound();
-    }).catch((e) => console.log('[git]', e.message));
+    const gitTick = () => {
+      const config = loadConfig();
+      if (!git.due(config)) return;
+      git.tick({ sessions: readSessions(config), config }).then((fired) => {
+        if (!fired.length) return;
+        stateMemo = { at: 0, key: null, value: null };
+        broadcastStatus();
+        maybePlayAlertSound();
+      }).catch((e) => console.log('[git]', e.message));
+    };
     setTimeout(gitTick, 5000);
     every(15000, gitTick, 'git');
   }

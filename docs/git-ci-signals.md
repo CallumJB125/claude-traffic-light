@@ -48,6 +48,11 @@ credentials) in the app's data folder. gh's own config is never touched.
 - Errors: `Retry-After` is obeyed; `X-RateLimit-Remaining: 0` waits for `X-RateLimit-Reset`;
   anything else backs off 1, 2, 4… minutes up to 30. A 403/404 on one repo marks only that
   repo and the rest carry on.
+- The next poll is timed from the end of the last one. The app checks `due()` before it
+  gathers sessions, so an idle tick costs nothing. No login from gh means no polling at all
+  (there is no "yours" without one).
+- The state file is rewritten only when something other than poll times and the rate count
+  changed, or every 10 minutes, so `lastPollAt` / `nextPollAt` there can be up to 10 minutes old.
 - Dev runs (demos, shots, visual tests) never call gh; they still show events saved in the state file.
 
 Budget: only changed responses cost anything. Worst case (every response changed on every

@@ -353,6 +353,55 @@ test('poll: switched off → no gh calls and nothing showing; on again → polls
   assert.ok(gh.calls.length > 0);
 });
 
+test('due(): false between polls, while paused or once disabled; true when a poll or the switch-off is pending', async () => {
+  const { p, advance } = poller();
+  assert.equal(p.due({}), true);
+  await p.tick({ sessions: SESSIONS, config: {} });
+  assert.equal(p.due({}), false);
+  advance(G.ACTIVE_MS);
+  assert.equal(p.due({}), true);
+  assert.equal(p.due({ gitSignals: false }), true, 'so tick can record the switch-off');
+  await p.tick({ sessions: SESSIONS, config: { gitSignals: false } });
+  assert.equal(p.due({ gitSignals: false }), false);
+  assert.equal(p.due({}), true, 'switched back on: poll straight away');
+  p.pause('dev-run');
+  assert.equal(p.due({}), false);
+});
+
+test('the next poll is scheduled from the end of a slow poll, not its start', async () => {
+  let t = NOW;
+  const gh = fakeGh();
+  const p = G.create({ stateFile: null, git: fakeGit(), now: () => t, runGh: async (args) => { t += 5000; return gh.runGh(args); } });
+  await p.tick({ sessions: SESSIONS, config: {} });
+  assert.equal(Date.parse(p.status().lastPollAt), NOW);
+  assert.equal(Date.parse(p.status().nextPollAt), t + G.ACTIVE_MS);
+  assert.ok(t > NOW + 15000);
+});
+
+test('the state file is only rewritten when something in it changed (or every 10 minutes)', async () => {
+  const { p, stateFile, advance } = poller();
+  await p.tick({ sessions: SESSIONS, config: {} });
+  const first = fs.readFileSync(stateFile, 'utf8');
+  advance(G.ACTIVE_MS);
+  await p.tick({ sessions: SESSIONS, config: {} });
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), first, 'all 304s: no write');
+  for (let i = 0; i < 7; i += 1) { advance(G.ACTIVE_MS); await p.tick({ sessions: SESSIONS, config: {} }); }
+  assert.notEqual(fs.readFileSync(stateFile, 'utf8'), first, 'heartbeat after 10 minutes');
+  const beat = fs.readFileSync(stateFile, 'utf8');
+  await p.tick({ sessions: SESSIONS, config: { gitSignals: false } });
+  assert.notEqual(fs.readFileSync(stateFile, 'utf8'), beat, 'switching off is a change');
+});
+
+test('no login from gh → no repo is polled (no actor filter without one), and it backs off', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'user-empty.txt'), raw('user.200.txt').replace(/\r\n\r\n[\s\S]*$/, '\r\n\r\n{"id":1}'));
+  const { p, gh } = poller({ routes: { user: path.relative(FIX, path.join(dir, 'user-empty.txt')) } });
+  assert.deepEqual(await p.tick({ sessions: SESSIONS, config: {} }), []);
+  assert.deepEqual(gh.calls.map((c) => c.apiPath), ['user']);
+  assert.equal(p.status().state, 'backoff');
+  assert.equal(p.status().login, null);
+});
+
 test('dev runs never call gh but still show saved events', async () => {
   const { p, gh } = poller();
   p.pause('dev-run');

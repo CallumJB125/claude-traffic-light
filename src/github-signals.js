@@ -10,8 +10,9 @@
 //     workflow's latest run on a branch a session is on; deploy = a workflow
 //     whose name is in config.gitDeployWorkflows (default: name says deploy,
 //     release or publish), on any branch;
-//   - PRs: review requests addressed to you, and "changes requested" reviews
-//     on PRs you opened.
+//   - PRs: review requests addressed to you personally (requests to a team
+//     you're on — requested_teams — are ignored in v1), and "changes
+//     requested" reviews on PRs you opened.
 //
 // Rate budget: every GET carries the last ETag as If-None-Match, and a 304
 // does not count against the primary rate limit (GitHub REST best practices,
@@ -43,6 +44,8 @@ const LOW_RATE = 100;
 const MAX_OWN_PRS = 5;
 const PULLS_PAGE = 100;
 const REPO_SKIP_MS = 30 * 60 * 1000;
+// The state file is rewritten when something in it changes, or this often.
+const SAVE_HEARTBEAT_MS = 10 * 60 * 1000;
 const HOLD_MS = {
   'pr-review-requested': 10 * 60 * 1000,
   'pr-changes-requested': 10 * 60 * 1000,
@@ -219,17 +222,25 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   } catch { /* first run */ }
   let polling = null;
   let pausedFor = null;
+  let savedKey = null;
+  let savedAt = 0;
 
   function save() {
     if (!stateFile) return;
     const t = now();
     for (const [id, at] of Object.entries(st.seen)) if (t - at > 2 * 86400000) delete st.seen[id];
     const out = { ...status(), seen: st.seen, events: st.events.slice(-30) };
+    // Poll times and the rate count move every poll; they alone don't earn a write.
+    const { updatedAt, lastPollAt, nextPollAt, rate, active: shown, ...meaningful } = out;
+    const key = JSON.stringify(meaningful);
+    if (key === savedKey && t - savedAt < SAVE_HEARTBEAT_MS) return;
     try {
       fs.mkdirSync(path.dirname(stateFile), { recursive: true });
       const tmp = `${stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
       fs.renameSync(tmp, stateFile);
+      savedKey = key;
+      savedAt = t;
     } catch (e) { log(`[git] could not save state: ${e.message}`); }
   }
 
@@ -332,6 +343,13 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     return list.concat(Array.isArray(tail) ? tail : []);
   }
 
+  // Whether tick() would do anything, so the caller can skip gathering sessions.
+  function due(config = {}, t = now()) {
+    if (pausedFor || polling) return false;
+    if (config.gitSignals === false) return st.state !== 'disabled';
+    return st.state === 'disabled' || t >= st.nextPollAt;
+  }
+
   // One poll if it is due. opts: { sessions, config }.
   async function tick({ sessions = [], config = {} } = {}) {
     const t = now();
@@ -349,7 +367,10 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
       try {
         if (!st.login || t - st.loginAt > 3600000) {
           const user = await request('user');
-          st.login = user && user.login;
+          const login = user && typeof user.login === 'string' && /^[A-Za-z0-9][\w-]*(?:\[bot\])?$/.test(user.login) ? user.login : null;
+          // Without a login there is no actor filter and no "yours": don't poll.
+          if (!login) throw new GhError('error', 'gh did not say who is logged in');
+          st.login = login;
           st.loginAt = t;
         }
         const deployWorkflows = Array.isArray(config.gitDeployWorkflows) ? config.gitDeployWorkflows : [];
@@ -377,8 +398,10 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
         retryAfterMs = e.retryAfterMs || 0;
         log(`[git] ${st.state}: ${e.message}`);
       }
+      // From the end of the poll: a slow poll mustn't eat into the next interval.
+      const end = now();
       st.lastPollAt = t;
-      st.nextPollAt = t + nextDelay({ state: st.state, active, failures: st.failures, rate: st.rate, retryAfterMs, now: t });
+      st.nextPollAt = end + nextDelay({ state: st.state, active, failures: st.failures, rate: st.rate, retryAfterMs, now: end });
       save();
       return fired;
     })();
@@ -420,7 +443,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     st.state = reason;
   }
 
-  return { tick, ingest, active, status, pause, request };
+  return { tick, due, ingest, active, status, pause, request };
 }
 
 // For readers without the poller (mcp-server.js): the state file main.js writes.
