@@ -16,3 +16,7 @@ CREATE TABLE lessons (
 CREATE INDEX lessons_by_repo ON lessons (org_id, repo_id, created_at);
 CREATE TRIGGER lessons_no_update BEFORE UPDATE ON lessons BEGIN SELECT RAISE(ABORT, 'lessons are append-only'); END;
 CREATE TRIGGER lessons_no_delete BEFORE DELETE ON lessons BEGIN SELECT RAISE(ABORT, 'lessons are append-only'); END;
+
+-- D31: the run that created a card (board_create_card), so the board can mark
+-- it agent-suggested. NULL for every human-created card.
+ALTER TABLE cards ADD COLUMN created_by_run_id TEXT;

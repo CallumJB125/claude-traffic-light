@@ -125,6 +125,7 @@ export function card({ view, face }, model) {
   },
   h('div', { class: 'card-top' },
     h('span', { class: 'card-key num' }, view.key),
+    view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },

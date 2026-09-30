@@ -41,6 +41,26 @@ test('board_create_card: a todo child of the run\'s card, same board and repo, j
     assert.ok(h.db.get("SELECT 1 AS x FROM events WHERE card_id = ? AND kind = 'created'", c.id));
     const back = await r.rpc(run, 'board_get_card', { key: c.key });
     assert.equal(back.result.card.key, c.key, 'the child is readable from the parent run (card:read)');
+    assert.equal(c.created_by_run_id, run.run_id);
+    const alice = await h.login('alice');
+    const detail = await h.api(alice, 'GET', `/api/cards/${c.id}`);
+    assert.deepEqual([detail.body.card.agent_suggested, detail.body.card.parent_card_id], [true, parent.id], 'cardDetail marks it agent-suggested');
+    const parentView = await h.api(alice, 'GET', `/api/cards/${parent.id}`);
+    assert.equal(parentView.body.card.agent_suggested, false, 'a human-created card is not');
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('board_create_card: the child inherits the parent\'s policy labels (never_auto, plan-approval) and no others', async () => {
+  const { h, r, run } = await setup();
+  try {
+    h.db.run('UPDATE cards SET labels = ? WHERE id = ?', JSON.stringify(['never_auto', 'plan-approval', 'bug']), run.card_id);
+    const res = await r.rpc(run, 'board_create_card', { title: 'follow-up', labels: [] });
+    const c = h.card(res.result.card_id);
+    assert.deepEqual(JSON.parse(c.labels), ['never_auto', 'plan-approval']);
+    const j = h.db.get("SELECT payload FROM journal WHERE kind = 'card.create' AND card_id = ?", c.id);
+    assert.deepEqual(JSON.parse(JSON.parse(j.payload).labels), ['never_auto', 'plan-approval'], 'the journal carries the same labels');
   } finally {
     await h.destroy();
   }
