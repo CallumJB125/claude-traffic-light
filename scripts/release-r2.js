@@ -3,14 +3,24 @@
 //   stage <version> <dir>   upload every file in <dir> under <version>/
 //   stage-beta <version> <dir>  the same under beta/<version>/ (dry runs; the
 //                           live feed and beta/ feed files are never touched)
-//   promote <version>       make <version> what the apps update to: copy its
-//                           files to the bucket root, the feed files last
+//   promote <version> [--manifest-dir <dir>]
+//                           make <version> what the apps update to: copy its
+//                           files to the bucket root, installers first, then
+//                           the latest*.yml feed files, then release.json and
+//                           its .sig. --manifest-dir uploads a re-signed
+//                           release.json(.sig) from <dir> instead of the
+//                           staged ones (a rollback: release-sign.js resign)
+//   promote-beta <version> [--manifest-dir <dir>]
+//                           the same from beta/<version>/ to beta/
+//   fetch-manifest <version> <dir> [--beta]
+//                           download the staged release.json, to re-sign it
 //
-// electron-updater's generic provider reads latest.yml / latest-mac.yml /
-// latest-linux.yml at the root and fetches the file each one names from the
-// root too. Installer names carry the version, so copying a release to the
-// root never overwrites another one; only the three feed files change. So
-// rolling back is promoting the older version (the app allows downgrades).
+// The apps read release.json first and install only what its signature
+// covers (src/updater/). A version with no signed release.json staged is
+// refused here rather than promoted into a feed every app would reject.
+// Installer names carry the version, so copying a release to the root never
+// overwrites another one; only the feed files and the manifest change. A
+// rollback is promoting the older version with a manifest re-signed as one.
 //
 // Uses the aws CLI (on every GitHub runner) against R2's S3 endpoint. With no
 // R2 secrets set it says so and exits 0, so the GitHub Release still stages.
@@ -19,6 +29,9 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const FEED = /^latest(?:-mac|-linux)?\.yml$/;
+const MANIFEST = ['release.json', 'release.json.sig'];
+// 0 installers, 1 feed files, 2 the manifest, then its signature
+const rank = (name) => (FEED.test(name) ? 1 : MANIFEST.includes(name) ? 2 + MANIFEST.indexOf(name) : 0);
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 function config(env = process.env) {
@@ -32,7 +45,7 @@ function config(env = process.env) {
 }
 
 // Feed files must never be cached past a promote; installers never change.
-const cacheControl = (name) => (FEED.test(name) ? 'no-cache, max-age=0' : 'public, max-age=31536000, immutable');
+const cacheControl = (name) => (rank(name) > 0 ? 'no-cache, max-age=0' : 'public, max-age=31536000, immutable');
 
 function aws(cfg, args, run = execFileSync) {
   return run('aws', ['s3', ...args, '--endpoint-url', cfg.endpoint], { env: cfg.env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }); // privacy-flow: release-upload (CI only, never in the app)
@@ -40,20 +53,28 @@ function aws(cfg, args, run = execFileSync) {
 
 function stagePlan(version, files, prefix = '') {
   if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
-  return files.filter((f) => !f.startsWith('.')).sort((a, b) => FEED.test(a) - FEED.test(b)).map((name) => ({ name, key: `${prefix}${version}/${name}`, cache: cacheControl(name) }));
+  return files.filter((f) => !f.startsWith('.')).sort((a, b) => rank(a) - rank(b)).map((name) => ({ name, key: `${prefix}${version}/${name}`, cache: cacheControl(name) }));
 }
 
-function promotePlan(version, keys) {
+function promotePlan(version, keys, prefix = '') {
   if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
-  const names = keys.filter((k) => k.startsWith(`${version}/`)).map((k) => k.slice(version.length + 1)).filter((n) => n && !n.includes('/'));
-  const feed = names.filter((n) => FEED.test(n));
-  if (!feed.length) throw new Error(`${version} has no latest*.yml staged; stage it first`);
-  // Installers first, feed files last: an app never reads a feed that names
-  // a file not there yet.
-  return [...names.filter((n) => !FEED.test(n)), ...feed].map((name) => ({ from: `${version}/${name}`, to: name, cache: cacheControl(name) }));
+  const from = `${prefix}${version}/`;
+  const names = keys.filter((k) => k.startsWith(from)).map((k) => k.slice(from.length)).filter((n) => n && !n.includes('/'));
+  if (!names.some((n) => FEED.test(n))) throw new Error(`${from} has no latest*.yml staged; stage it first`);
+  const missing = MANIFEST.filter((n) => !names.includes(n));
+  if (missing.length) throw new Error(`${from} has no ${missing.join(' or ')}: the apps would refuse it (sign it with PLEXIFORM_UPDATE_SIGNING_KEY and stage again)`);
+  // Installers, then feed files, then the manifest: an app never reads a
+  // feed or a manifest that names a file not there yet.
+  return names.sort((a, b) => rank(a) - rank(b)).map((name) => ({ from: `${from}${name}`, to: `${prefix}${name}`, cache: cacheControl(name) }));
 }
 
-function main([cmd, version, dir], run) {
+function flag(argv, name) {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] || true : null;
+}
+
+function main(argv, run) {
+  const [cmd, version, dir] = argv;
   const cfg = config();
   if (cfg.missing) {
     console.log(`R2: skipped (${cfg.missing.join(', ')} not set); the GitHub Release is the feed.`);
@@ -64,15 +85,27 @@ function main([cmd, version, dir], run) {
       console.log(`R2: ${f.key}`);
       aws(cfg, ['cp', path.join(dir, f.name), `s3://${cfg.bucket}/${f.key}`, '--cache-control', f.cache, '--only-show-errors'], run);
     }
-  } else if (cmd === 'promote') {
-    const listing = aws(cfg, ['ls', `s3://${cfg.bucket}/${version}/`], run);
-    const keys = listing.split('\n').map((l) => l.trim().split(/\s+/).pop()).filter(Boolean).map((n) => `${version}/${n}`);
-    for (const c of promotePlan(version, keys)) {
-      console.log(`R2: ${c.from} → ${c.to}`);
-      aws(cfg, ['cp', `s3://${cfg.bucket}/${c.from}`, `s3://${cfg.bucket}/${c.to}`, '--cache-control', c.cache, '--metadata-directive', 'REPLACE', '--only-show-errors'], run);
+  } else if (cmd === 'promote' || cmd === 'promote-beta') {
+    const prefix = cmd === 'promote-beta' ? 'beta/' : '';
+    const local = flag(argv, '--manifest-dir');
+    const listing = aws(cfg, ['ls', `s3://${cfg.bucket}/${prefix}${version}/`], run);
+    const keys = listing.split('\n').map((l) => l.trim().split(/\s+/).pop()).filter(Boolean).map((n) => `${prefix}${version}/${n}`);
+    for (const c of promotePlan(version, keys, prefix)) {
+      const name = c.to.slice(prefix.length);
+      if (local && MANIFEST.includes(name)) {
+        console.log(`R2: ${path.join(local, name)} → ${c.to} (re-signed)`);
+        aws(cfg, ['cp', path.join(local, name), `s3://${cfg.bucket}/${c.to}`, '--cache-control', c.cache, '--only-show-errors'], run);
+      } else {
+        console.log(`R2: ${c.from} → ${c.to}`);
+        aws(cfg, ['cp', `s3://${cfg.bucket}/${c.from}`, `s3://${cfg.bucket}/${c.to}`, '--cache-control', c.cache, '--metadata-directive', 'REPLACE', '--only-show-errors'], run);
+      }
     }
+  } else if (cmd === 'fetch-manifest') {
+    if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
+    const prefix = argv.includes('--beta') ? 'beta/' : '';
+    for (const name of MANIFEST) aws(cfg, ['cp', `s3://${cfg.bucket}/${prefix}${version}/${name}`, path.join(dir, name), '--only-show-errors'], run);
   } else {
-    throw new Error('usage: release-r2.js stage <version> <dir> | stage-beta <version> <dir> | promote <version>');
+    throw new Error('usage: release-r2.js stage|stage-beta <version> <dir> | promote|promote-beta <version> [--manifest-dir <dir>] | fetch-manifest <version> <dir> [--beta]');
   }
 }
 

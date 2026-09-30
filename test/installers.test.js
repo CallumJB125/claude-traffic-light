@@ -49,11 +49,38 @@ test('R2 beta staging goes under beta/ only', () => {
   assert.ok(plan.every((p) => /^beta\/[^/]+\/[^/]+$/.test(p.key)), 'never the bucket root or beta/ root');
 });
 
-test('R2 promote copies installers before the feed, and refuses an unstaged version', () => {
-  const keys = ['1.2.0/Plexiform-1.2.0-mac-arm64.zip', '1.2.0/latest-mac.yml', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/latest.yml', '1.2.0/nested/x'];
+test('R2 promote copies installers, then the feed, then the signed manifest; it refuses an unstaged or unsigned version', () => {
+  const keys = ['1.2.0/release.json.sig', '1.2.0/release.json', '1.2.0/Plexiform-1.2.0-mac-arm64.zip', '1.2.0/latest-mac.yml', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/latest.yml', '1.2.0/nested/x'];
   const plan = R2.promotePlan('1.2.0', keys);
-  assert.deepEqual(plan.map((p) => p.to), ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-win-x64.exe', 'latest-mac.yml', 'latest.yml']);
+  assert.deepEqual(plan.map((p) => p.to), ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-win-x64.exe', 'latest-mac.yml', 'latest.yml', 'release.json', 'release.json.sig']);
+  assert.equal(R2.cacheControl('release.json'), 'no-cache, max-age=0');
+  assert.equal(R2.cacheControl('release.json.sig'), 'no-cache, max-age=0');
   assert.throws(() => R2.promotePlan('1.3.0', keys), /no latest\*\.yml staged/);
+  assert.throws(() => R2.promotePlan('1.2.0', keys.filter((k) => !k.endsWith('.sig'))), /no release\.json\.sig: the apps would refuse it/);
+  const beta = R2.promotePlan('1.2.0-beta.3', keys.map((k) => `beta/${k.replace('1.2.0/', '1.2.0-beta.3/')}`), 'beta/');
+  assert.ok(beta.every((p) => /^beta\/[^/]+$/.test(p.to)), 'beta promotes to beta/ only');
+  assert.equal(beta.at(-1).to, 'beta/release.json.sig');
+});
+
+test('R2 staging puts the signed manifest after the feed files', () => {
+  const plan = R2.stagePlan('1.2.0', ['release.json.sig', 'latest.yml', 'release.json', 'Plexiform-1.2.0-win-x64.exe']);
+  assert.deepEqual(plan.map((p) => p.name), ['Plexiform-1.2.0-win-x64.exe', 'latest.yml', 'release.json', 'release.json.sig']);
+});
+
+test('R2 promote --manifest-dir uploads the re-signed manifest instead of the staged one', () => {
+  const saved = { ...process.env };
+  Object.assign(process.env, { R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'bk' });
+  const calls = [];
+  const run = (_bin, args) => { calls.push(args.slice(1, 4)); return ['latest.yml', 'Plexiform-1.1.0-win-x64.exe', 'release.json', 'release.json.sig'].map((n) => `2026-10-01 00:00:00 1 ${n}`).join('\n'); };
+  const log = console.log;
+  console.log = () => {};
+  try { R2.main(['promote', '1.1.0', '--manifest-dir', 'resigned'], run); } finally { console.log = log; process.env = saved; }
+  assert.deepEqual(calls.slice(1).map((c) => [c[1], c[2]]), [
+    ['s3://bk/1.1.0/Plexiform-1.1.0-win-x64.exe', 's3://bk/Plexiform-1.1.0-win-x64.exe'],
+    ['s3://bk/1.1.0/latest.yml', 's3://bk/latest.yml'],
+    ['resigned/release.json', 's3://bk/release.json'],
+    ['resigned/release.json.sig', 's3://bk/release.json.sig'],
+  ]);
 });
 
 test('R2 is skipped cleanly when its secrets are not set', () => {
