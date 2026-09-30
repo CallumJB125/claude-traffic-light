@@ -96,14 +96,31 @@
   <script src="motion.js"></script>
   <script src="rig.js"></script>
   <script>
-    const rig = mountRig(document.getElementById('housing'));
+    // ambient: the idle loops tick on a slow clock, not every display frame
+    const rig = mountRig(document.getElementById('housing'), { ambient: true });
     rig.svg.classList.add('breathes');
     // Main does the window travel (roam, knock hops, garden, drag glide), so
     // it has to hear about reduced motion from here, now and on every change.
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     window.trafficLight.setReducedMotion(reducedMotion.matches);
-    reducedMotion.addEventListener('change', (e) => window.trafficLight.setReducedMotion(e.matches));
-    window.trafficLight.onLand((strength) => { rig.squash(strength); retestUnderCursor().catch(() => {}); });
+    rig.blinks(!reducedMotion.matches);
+    reducedMotion.addEventListener('change', (e) => {
+      window.trafficLight.setReducedMotion(e.matches);
+      rig.blinks(!e.matches);
+      if (e.matches) rig.lookAt(0, 0);
+    });
+    const kick = () => window.BuddyMotion.MOTION.pendulum.kick;
+    window.trafficLight.onLand((strength) => { rig.squash(strength); rig.swing(kick() * strength); retestUnderCursor().catch(() => {}); });
+    // A glide hit a work-area edge: squash against that wall; the sign carries
+    // on toward it and swings back.
+    window.trafficLight.onImpact((side, strength) => {
+      rig.squash(strength, side);
+      rig.swing(kick() * 1.5 * strength * (side === 'left' || side === 'top' ? -1 : 1));
+    });
+    window.trafficLight.onSway((v) => rig.swing(v));
+    window.trafficLight.onLean((vx) => rig.lean(vx));
+    window.trafficLight.onEyes((x, y) => rig.lookAt(x, y));
+    window.trafficLight.onVisibility((visible) => rig.setHidden(!visible));
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
@@ -212,6 +229,14 @@
       window.trafficLight.dragStart();
       rig.squash(0.6);
     });
+    // While dragging, the sign trails the pointer's velocity; when the pointer
+    // pauses (no more moves arrive) it swings back upright.
+    let leanTimer = 0;
+    const dragLean = (vx) => {
+      rig.lean(vx);
+      clearTimeout(leanTimer);
+      leanTimer = vx ? setTimeout(() => rig.lean(0), 70) : 0;
+    };
 
     // Only what is actually drawn should catch the mouse: over the empty
     // corners of the transparent window, clicks fall through to whatever is
@@ -247,6 +272,7 @@
       if (drag.samples.length > 12) drag.samples.shift();
       dragTo = { x: e.screenX - drag.grabX, y: e.screenY - drag.grabY };
       if (!dragFrame) dragFrame = requestAnimationFrame(flushDrag);
+      dragLean(window.BuddyMotion.releaseVelocity(drag.samples, e.timeStamp).vx);
     });
 
     // A click (no drag) never glides; a drag throws with whatever velocity
@@ -255,6 +281,7 @@
       const d = drag;
       drag = null;
       if (!d || !didDrag) return;
+      dragLean(0);
       if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
       if (released) d.samples.push({ x: e.screenX, y: e.screenY, t: e.timeStamp });
       const x = e.screenX - d.grabX;

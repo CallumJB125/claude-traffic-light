@@ -14,7 +14,8 @@
     "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac",
     "test:visual": "playwright test",
-    "test:visual:update": "playwright test --update-snapshots"
+    "test:visual:update": "playwright test --update-snapshots",
+    "tune": "electron tools/tuning-main.js"
   },
   "author": "",
   "license": "MIT",
