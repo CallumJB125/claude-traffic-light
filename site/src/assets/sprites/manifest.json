@@ -1,0 +1,36 @@
+{
+ "width": 608,
+ "height": 784,
+ "unit": 8,
+ "canvas": {
+  "w": 76,
+  "h": 98
+ },
+ "origin": {
+  "x": 6,
+  "y": 10
+ },
+ "frame": {
+  "w": 64,
+  "h": 82
+ },
+ "sprites": {
+  "rig-off": 512,
+  "rig-working": 15936,
+  "rig-approve": 20746,
+  "rig-ready": 14150,
+  "rig-agents": 17836,
+  "char-claude": 11850,
+  "char-claude-hit": 22050,
+  "char-dog": 13408,
+  "char-dog-hit": 24346,
+  "char-cat": 13840,
+  "char-cat-hit": 24400,
+  "char-frog": 12822,
+  "char-frog-hit": 24280,
+  "char-robot": 12640,
+  "char-robot-hit": 24348,
+  "char-ghost": 12190,
+  "char-ghost-hit": 13948
+ }
+}
