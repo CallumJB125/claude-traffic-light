@@ -259,7 +259,8 @@
         if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }
         text += ` · ${n}`;
       }
-      tooltip.textContent = text + suffix;
+      // Usage history: today against your own usual, when it is clearly above.
+      tooltip.textContent = text + suffix + (data.paceLine ? ` — ${data.paceLine}` : '');
     }
 
     // The recap: needs-you first, then failures, then finished. Three lines

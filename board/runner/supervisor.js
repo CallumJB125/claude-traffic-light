@@ -68,6 +68,7 @@ export class Supervisor extends EventEmitter {
     this.originDown = false;
     this.attempt = 0;
     this.stopped = false;
+    this.quitting = false;
     this.memberId = this.device.member_id ?? null;
     this.allowlist = [];
     this.hubEpoch = null;
@@ -161,6 +162,7 @@ export class Supervisor extends EventEmitter {
     this.pendingRpc.clear();
     if (wasConnected) this.emit('disconnected', { code });
     if (this.stopped) return;
+    this.emit('hub_closed', { code });   // every failed or dropped connection (the app's runner.status, D37a)
     if (code === WS_CLOSE.PROTOCOL_UNSUPPORTED || code === WS_CLOSE.REVOKED || code === WS_CLOSE.UNAUTHENTICATED) {
       this.log.error('hub refused this runner; not reconnecting', { code });
       this.notifyLocal({ event: 'hub_refused', code });
@@ -403,6 +405,7 @@ export class Supervisor extends EventEmitter {
   }
 
   async handleOffer(offer) {
+    if (this.quitting) return;   // the app is parking its runs (D37a): claim nothing new
     if ([...this.runs.values()].some((r) => r.card_id === offer.card_id && !r.ended)) return;
     // The hub re-sends pending offers on every hello: one decision per request_id at a time.
     if (this.inFlightOffers.has(offer.request_id)) return;
@@ -629,6 +632,8 @@ export class Supervisor extends EventEmitter {
 
   async #startControl() {
     const sock = this.l.controlSock;
+    const dir = fs.statSync(path.dirname(sock));
+    if ((dir.mode & 0o077) !== 0) throw new Error('the control socket directory must be a private (0700) directory');
     try { fs.unlinkSync(sock); } catch { /* none */ }
     this.control = net.createServer((c) => {
       c.setEncoding('utf8');
@@ -661,7 +666,13 @@ export class Supervisor extends EventEmitter {
         } catch (e) { return reply({ ok: false, error: { code: e.code ?? 'INTERNAL', message: e.message } }); }
       }));
     });
-    await new Promise((resolve, reject) => { this.control.once('error', reject); this.control.listen(sock, resolve); });
+    // umask 0o177 around listen() (which binds synchronously), restored before
+    // any other await: the socket is created 0600, never briefly wider.
+    await new Promise((resolve, reject) => {
+      this.control.once('error', reject);
+      const umask = process.umask(0o177);
+      try { this.control.listen(sock, resolve); } finally { process.umask(umask); }
+    });
     fs.chmodSync(sock, 0o600);
   }
 }

@@ -102,6 +102,7 @@ export class BrowserConn {
         this.boardId = board.id;
         this.ticks.clear();
         this.send({ type: 'snapshot', ...boardSnapshot(this.hub, board.id, this.member.id) });
+        this.hub.presence.subscribed(this);
         return;
       }
       case 'unsubscribe':

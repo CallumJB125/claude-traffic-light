@@ -119,6 +119,7 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
       return;
     }
     hub.lastAuth = req.headers.authorization;
+    hub.lastHeaders = req.headers;
     hub.upgrades = (hub.upgrades ?? 0) + 1;
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (hub.closeWith) { ws.close(hub.closeWith, 'test close'); return; }
