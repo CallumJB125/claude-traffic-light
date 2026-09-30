@@ -16,7 +16,9 @@ import { HubError } from '../db.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
-import { AUTONOMY } from './connector.js';
+import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
+import { AUTONOMY, cleanLinkStatus } from './connector.js';
+import { prNumberOf } from '../github.js';
 
 const MAX_BODY = 1024 * 1024;
 const STATE_TTL_MS = 10 * 60_000;
@@ -30,6 +32,9 @@ const CONFIG_MAX_BYTES = 8 * 1024;
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
+const BRANCH_MAX = 255;
+// Unicode spaces, controls and invisible format characters: never in a board branch.
+const BRANCH_BAD = /[\s\p{Cc}\p{Cf}]/u;
 // An allowlist, not a denylist: anything that starts a paid run, hands work
 // on, answers an agent or feeds it text stays a person's action.
 const ALLOWED_ACTIONS = new Set(['cancel', 'stop', 'approve_done']);
@@ -37,8 +42,25 @@ const ALLOWED_ACTIONS = new Set(['cancel', 'stop', 'approve_done']);
 // connector declared 'ask', so it runs only once an admin switched it to auto.
 const ASK_GATED_ACTIONS = new Set(['approve_done']);
 
+const LINK_STATUS_MAX = 512;
+const EXCHANGE_SETTINGS_MAX = 2048;
+const FORM_MAX = 64 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+// An https URL on one of `hosts`, no port or credentials; else null.
+function urlOn(u, hosts) {
+  let url;
+  try { url = new URL(String(u)); } catch { return null; }
+  return url.protocol === 'https:' && !url.port && !url.username && !url.password && hosts.includes(url.hostname) ? url : null;
+}
+// 'owner/name' (github.com) or 'host/owner/name' → canonical 'host/owner/name', else null.
+function canonRepo(repo) {
+  if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
+  return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
+}
+const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
@@ -112,7 +134,7 @@ export function createIntegrations({
   });
   const consumerName = (c) => `integration:${c.provider}:${c.id}`;
 
-  function createConnection({ orgId, memberId, provider, external_id, display_name, scopes = [], secrets = {}, settings = {} }) {
+  function createConnection({ orgId, memberId, provider, external_id, display_name, scopes = [], secrets = {}, settings = {}, id = randomUUID() }) {
     const conn = connectors.get(provider);
     if (!conn) throw new HubError('VALIDATION', `unknown integration ${provider}`);
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
@@ -120,7 +142,6 @@ export function createIntegrations({
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
     for (const k of Object.keys(secrets)) if (!conn.secrets.includes(k)) throw new HubError('VALIDATION', `${provider} does not declare secret ${k}`);
-    const id = randomUUID();
     hub.txn(() => {
       // Unique per org among live rows (partial index); revoked rows stay for their audit history.
       if (db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext)) {
@@ -318,15 +339,94 @@ export function createIntegrations({
       };
     }
 
+    /**
+     * The only way a PR finds its card. `repo` ('owner/name' on github.com, or
+     * 'host/owner/name') and `branch` come from a payload any PR author
+     * controls, forks included, so nothing is parsed out of them: the branch
+     * must equal a branch the board recorded for a run (runs.branch, from
+     * fence.js branchName) in that repo, on a board of this connection's org,
+     * linked to that repo. Anything ambiguous is null.
+     */
+    function cardForBranch(repo, branch) {
+      if (typeof branch !== 'string' || !branch || branch.length > BRANCH_MAX || BRANCH_BAD.test(branch)) return null;
+      const canon = canonRepo(repo);
+      if (!canon) return null;
+      const repoIds = db.all(`SELECT DISTINCT r.id AS repo_id, r.canonical_url, r.aliases FROM repos r
+        JOIN board_repos br ON br.repo_id = r.id JOIN boards b ON b.id = br.board_id WHERE b.org_id = ? AND r.org_id = ?`, c.org_id, c.org_id)
+        .filter((r) => matchRepo(`https://${canon}`, [{ ...r, aliases: safeJson(r.aliases, []) }]))
+        .map((r) => r.repo_id);
+      if (!repoIds.length) return null;
+      const inRepos = repoIds.map(() => '?').join(',');
+      // card id → the base branch its run recorded (a PR into any other base is not the card's).
+      const found = new Map(db.all(`SELECT cards.id, runs.base_ref FROM runs JOIN cards ON cards.id = runs.card_id JOIN boards ON boards.id = cards.board_id
+        WHERE runs.branch = ? AND boards.org_id = ? AND runs.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds).map((r) => [r.id, r.base_ref]));
+      // Extension point for self-driven (auto-tracked) cards, owned by that
+      // work: a branch a card claims without a run. Consulted only once such a
+      // column exists; the same exact-match, same-org, same-repo rules apply.
+      if (db.get("SELECT 1 AS x FROM pragma_table_info('cards') WHERE name = 'self_driven_branch'")) {
+        for (const r of db.all(`SELECT cards.id, COALESCE(cards.base_ref, repos.default_branch) AS base_ref FROM cards JOIN boards ON boards.id = cards.board_id
+          JOIN repos ON repos.id = cards.repo_id WHERE cards.self_driven_branch = ? AND boards.org_id = ? AND cards.repo_id IN (${inRepos})`, branch, c.org_id, ...repoIds)) {
+          if (!found.has(r.id)) found.set(r.id, r.base_ref);
+        }
+      }
+      if (found.size !== 1) return null;
+      const [[cardId, baseRef]] = found;
+      return { card_id: cardId, base_ref: baseRef ?? null };
+    }
+
     const cardInOrg = (cardId) => {
       const card = cardId ? hub.card(cardId) : null;
       return card && hub.board(card.board_id)?.org_id === c.org_id ? card : null;
     };
 
+    // The newest link of `kind` this connection has on a card of its org.
+    const linkedByCard = (cardId, kind) => (cardInOrg(cardId)
+      ? db.get('SELECT external_id FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind))?.external_id ?? null
+      : null);
+
+    /**
+     * The card's newest hub_verified PR evidence (what the merge poll acts
+     * on): {number, repo?, url?} | null. `repo` ('owner/name' on github.com,
+     * else 'host/owner/name') only when the evidence ref names one.
+     */
+    function verifiedPr(cardId) {
+      if (!cardInOrg(cardId)) return null;
+      const ref = String(db.get("SELECT ref FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", cardId)?.ref ?? '').trim();
+      const number = prNumberOf(ref);
+      if (number == null) return null;
+      const at = ref.lastIndexOf('/pull/');
+      if (at === -1) return { number };
+      const canon = normalizeRemoteUrl(ref.slice(0, at));
+      // A ref that names a repo we cannot read binds to nothing.
+      if (!canon) return null;
+      return { number, repo: shortRepo(canon), ...(/^https:\/\//i.test(ref) ? { url: ref } : {}) };
+    }
+
     function link(cardId, kind, externalId, url = null) {
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      // One PR per card per connection: a second one (a decoy from the same
+      // branch into another base) must not become a handle on the card.
+      if (String(kind) === 'pr') {
+        const have = linkedByCard(cardId, 'pr');
+        if (have === String(externalId)) return;
+        if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
+      }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         cardId, c.id, String(kind), String(externalId), url == null ? null : String(url).slice(0, 500), now());
+    }
+
+    // Partial updates merge: a PR event knows the state, a check suite the
+    // checks, a review the review; none may clobber the others.
+    function linkStatus(cardId, kind, externalId, patch) {
+      if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
+      if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
+      const next = cleanLinkStatus(patch);
+      if (!Object.keys(next).length) throw new HubError('VALIDATION', 'no valid status field');
+      const merged = JSON.stringify({ ...cleanLinkStatus(safeJson(link.status, null)), ...next });
+      if (Buffer.byteLength(merged) > LINK_STATUS_MAX) throw new HubError('VALIDATION', 'status over 512 bytes');
+      db.run('UPDATE external_links SET status = ? WHERE connection_id = ? AND kind = ? AND external_id = ?', merged, c.id, String(kind), String(externalId));
+      hub.later(() => hub.broadcastCard(cardId));
     }
 
     function autonomyOf(action) {
@@ -342,7 +442,7 @@ export function createIntegrations({
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
-     * ({actAs, link}) and every handle actAs returns work only while run()
+     * ({actAs, link, linkStatus}) and every handle actAs returns work only while run()
      * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
@@ -364,7 +464,7 @@ export function createIntegrations({
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link) };
+      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), linkStatus: guard(linkStatus) };
       let decision = 'failed';
       let error = 'handler_failed';
       try {
@@ -393,7 +493,7 @@ export function createIntegrations({
      * link. Applied like the merge poll, audited in the same transaction.
      * Never call it from inside a withBoard callback on the same board.
      */
-    async function systemEvent(type, { kind, external_id, pr = null, by = null, external_ref = null }) {
+    async function systemEvent(type, { kind, external_id, pr = null, by = null, repo = null, external_ref = null }) {
       if (signal?.aborted) throw handlerEnded();
       if (!conn.systemEvents.includes(type)) throw new Error(`${conn.id} may not raise ${type}`);
       const prN = Number.isSafeInteger(pr) && pr > 0 ? pr : null;
@@ -404,15 +504,33 @@ export function createIntegrations({
       if (hub.inBoard(card.board_id)) throw new Error('ctx.system.event was called inside the board queue of its own card (it would deadlock)');
       const action = `system.${type}`;
       const mode = autonomyOf(action);
-      const audit = (decision) => db.insert('integration_audit', {
-        id: randomUUID(), connection_id: c.id, action, decision, card_id: card.id,
+      const audit = (decision, error = null) => db.insert('integration_audit', {
+        id: randomUUID(), connection_id: c.id, action, decision, error, card_id: card.id,
         external_ref: String(external_ref ?? external_id).slice(0, 200), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
       });
+      // Bound to the PR the hub verified, like the merge poll: any other PR
+      // from the card's branch (another base, a decoy closed unmerged) is not
+      // the card's review.
+      const refusal = () => {
+        const v = verifiedPr(card.id);
+        if (!v) return 'no_verified_pr';
+        if (prN !== v.number) return 'not_the_verified_pr';
+        if (v.repo) {
+          const want = canonRepo(v.repo);
+          if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
+        }
+        return null;
+      };
+      const refused = refusal();
+      if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
       const via = { connection_id: c.id, member_id: null, name: conn.name };
       // hub.txn (not db.tx): the outermost transaction flushes apply()'s
       // after-commit work (broadcasts, notifies, the bus poke).
       return hub.withBoard(card.board_id, () => hub.actVia(via, () => hub.txn(() => {
+        // Evidence may have changed while this waited on the board queue.
+        const late = refusal();
+        if (late) { audit('failed', late); return { done: false, reason: late }; }
         const r = hub.apply(card.id, { type, pr: prN, by: byLogin }, { actor: c.id });
         if (!r.ok) return { done: false, reason: r.error.code };
         audit('auto');
@@ -428,6 +546,11 @@ export function createIntegrations({
       act,
       autonomyOf,
       signal,
+      // A pure read (writes nothing, links nothing), so it lives on ctx, not
+      // in an act() scope: the handler links what it finds inside act().
+      cardForBranch,
+      verifiedPr,
+      linkedByCard,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
@@ -545,6 +668,40 @@ export function createIntegrations({
 
   const mac = (payload) => createHmac('sha256', hub.secret).update(`integration-state|${payload}`).digest();
   const redirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/callback`;
+  const webhookFor = (publicUrl, id) => `${publicUrl}/integrations/${id}/webhook`;
+  // A reconnect hands the connector what it stored last time (app id, slug…):
+  // the non-secret config of the org's newest active connection of that provider.
+  const configFor = (orgId, provider) => {
+    const cfg = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {})?.config;
+    return isPlainObject(cfg) ? cfg : {};
+  };
+
+  // The web posts this form as a real <form>: its action may only be the
+  // connector's declared formHost (the CSP form-action names it too).
+  function manifestFormOf(conn, f) {
+    const refuse = () => new HubError('POLICY_DENIED', `${conn.name} gave a connect form this hub will not post`);
+    const url = isPlainObject(f) ? urlOn(f.action, [conn.connect.formHost]) : null;
+    if (!url || !isPlainObject(f.fields)) throw refuse();
+    const fields = {};
+    for (const [k, v] of Object.entries(f.fields)) {
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(k) || typeof v !== 'string') throw refuse();
+      fields[k] = v;
+    }
+    if (Buffer.byteLength(JSON.stringify(fields)) > FORM_MAX) throw refuse();
+    return { action: url.href, fields };
+  }
+
+  // exchange() may keep non-secret scalars (app id, slug) as settings.config;
+  // never autonomy, which stays an admin's. null: over the cap.
+  function exchangeConfig(v) {
+    const out = {};
+    if (!isPlainObject(v)) return out;
+    for (const [k, x] of Object.entries(v)) {
+      if (k === 'autonomy' || k.length > 64) continue;
+      if ((typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean' || x === null || typeof x === 'string') out[k] = x;
+    }
+    return Buffer.byteLength(JSON.stringify(out)) <= EXCHANGE_SETTINGS_MAX ? out : null;
+  }
   // https: a __Host- cookie (Secure, Path=/, no Domain), which neither plain
   // http nor a sibling host can set, so nobody can plant their own bind.
   const bindCookie = (provider, publicUrl) => (String(publicUrl).startsWith('https:')
@@ -556,18 +713,20 @@ export function createIntegrations({
     if (!conn || conn.connect.kind === 'token') throw new HubError('NOT_FOUND', 'no such integration');
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
     const bind = randomBytes(24).toString('base64url');
+    // The connection id is minted now: a manifest must name its webhook URL
+    // before the app (and so the connection) exists.
+    const id = randomUUID();
     const payload = b64(JSON.stringify({
-      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind),
+      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind), i: id,
     }));
     const state = `${payload}.${mac(payload).toString('base64url')}`;
-    return {
-      url: conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, provider), config: {} }),
-      bind,
-      cookie: { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 },
-    };
+    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), config: configFor(member.org_id, provider) };
+    const cookie = { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 };
+    if (conn.connect.manifestForm) return { form: manifestFormOf(conn, conn.connect.manifestForm(args)), bind, cookie };
+    return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
 
-  /** → {ok:true, connection} | {ok:false, error} (error is safe to show). */
+  /** → {ok:true, connection, provider_name, next_url} | {ok:false, error} (error is safe to show). */
   async function oauthCallback({ provider, query, publicUrl, bindCookie = null }) {
     const conn = connectors.get(provider);
     if (!conn || conn.connect.kind === 'token') return { ok: false, error: 'Unknown integration.' };
@@ -579,7 +738,7 @@ export function createIntegrations({
     const want = mac(payload);
     if (got.length !== want.length || !timingSafeEqual(got, want)) return invalid;
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
-    if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
     // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
     if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
@@ -589,13 +748,22 @@ export function createIntegrations({
     if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
     let v;
     try {
-      v = await conn.connect.exchange({ query, redirectUri: redirectFor(publicUrl, provider), config: {}, fetch: restrictedFetch(conn) });
+      v = await conn.connect.exchange({ query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i), config: configFor(member.org_id, provider), fetch: restrictedFetch(conn) });
     } catch (e) {
       warn('integration connect failed', conn, e);
       return { ok: false, error: 'The provider did not accept the connection. Try again.' };
     }
+    const config = v?.settings === undefined ? null : exchangeConfig(v.settings);
+    if (config === null && v?.settings !== undefined) return { ok: false, error: 'Could not save the connection.' };
+    const next = v?.next_url == null ? null : urlOn(v.next_url, conn.hosts);
+    if (v?.next_url != null && !next) warn('integration next_url refused', conn, 'not https on a declared host');
     try {
-      return { ok: true, connection: createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider }) };
+      // Named fields only: exchange() can't pick the id, org, member or autonomy.
+      const connection = createConnection({
+        external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {},
+        settings: config ? { config } : {}, id: st.i, orgId: member.org_id, memberId: member.id, provider,
+      });
+      return { ok: true, connection, provider_name: conn.name, next_url: next?.href ?? null };
     } catch (e) {
       return { ok: false, error: e instanceof HubError ? e.message : 'Could not save the connection.' };
     }
@@ -653,6 +821,8 @@ export function createIntegrations({
 
   return {
     register,
+    /** Hosts a manifest connect form may post to (the web's CSP form-action). */
+    formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
     connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },

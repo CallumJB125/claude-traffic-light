@@ -53,7 +53,7 @@ const state = {
   table: { sort: DEFAULT_SORT },
   filters: emptyFilters(), // shared by Board and Table; lives in ?q= &f= and sessionStorage
   dash: null, // set below: freshDash(), status idle | loading | ok | error
-  integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, confirmDisconnect: null },
+  integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, manifest: null, confirmDisconnect: null },
   cardsRev: 0,
   selection: new Set(), // card ids picked with Shift/⌘-click
   drag: null, // pointer drag in flight: {ids, over, mode}
@@ -158,6 +158,12 @@ async function loadIntegrations() {
 async function connectIntegration(provider, kind) {
   if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
   const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
+  if (res?.form && res.bind) {
+    // Submitted by the admin from the page; same window target as a link.
+    state.integ = { ...state.integ, manifest: { provider, ...res.form, target: connectWindowTarget(provider, res.bind, navigator.userAgent) } };
+    update();
+    return;
+  }
   if (!res?.url || !res.bind) return;
   window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
   update();

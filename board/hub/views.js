@@ -7,6 +7,7 @@ import { ACTIVE } from '../shared/states.js';
 import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
 import { json } from './db.js';
+import { cleanLinkStatus } from './integrations/connector.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -64,6 +65,16 @@ function prView(hub, row) {
     state: merged ? 'merged' : st?.state ?? 'open',
     ...(merged ? { merged_by: json(merged.payload, {}).by ?? st?.merged_by ?? null, merged_age_ms: hub.ageOf(merged.at_hub) } : {}),
   };
+}
+
+// The integration's own view of the card's newest PR link (D42), beside
+// `pr` (the merge poll's): additive, and only allowlisted values.
+function prLinkStatus(hub, row) {
+  const l = hub.db.get(`SELECT l.status FROM external_links l JOIN connections c ON c.id = l.connection_id
+    WHERE l.card_id = ? AND l.kind = 'pr' AND c.status != 'revoked' ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1`, row.id);
+  if (!l?.status) return null;
+  const s = cleanLinkStatus(json(l.status, null));
+  return Object.keys(s).length ? { state: s.state ?? null, checks: s.checks ?? null, review: s.review ?? null } : null;
 }
 
 function askView(hub, row) {
@@ -134,6 +145,7 @@ export function cardView(hub, row, viewerId) {
     overlaps: hub.overlapViews(row),
     budget: budgetCap != null ? { spent_usd: hub.cardSpentCents(row.id) / 100, cap_usd: budgetCap / 100 } : null,
     pr: prView(hub, row),
+    pr_link_status: prLinkStatus(hub, row),
     evidence: evidenceSummary(hub, row.id, runRow?.id),
   };
 }

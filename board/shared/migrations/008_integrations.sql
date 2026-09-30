@@ -135,6 +135,9 @@ CREATE TABLE external_links (
   kind TEXT NOT NULL,                 -- thread | issue | pr | alert
   external_id TEXT NOT NULL,
   url TEXT,
+  -- JSON ≤ 512 bytes, allowlisted keys and values only (registry linkStatus):
+  -- {state?, checks?, review?} for a 'pr' link, shown on the card face.
+  status TEXT,
   created_at TEXT NOT NULL,
   PRIMARY KEY (connection_id, kind, external_id)
 );

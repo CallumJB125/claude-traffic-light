@@ -104,9 +104,14 @@ async function readBody(req) {
 // The provider's redirect lands here in the connect window: text only, no
 // script, nothing from the query echoed back. kind: ok | error.
 const CONNECT_TITLE = { ok: 'Connected', error: 'Not connected' };
-function sendConnectPage(res, status, text, kind, headers = {}) {
+// `next`: {url, name}, a second step at the provider (an app install): the
+// registry checked it is https on one of the connector's hosts.
+function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p><p>You can close this window and go back to Buddy.</p></body></html>`;
+  const after = next
+    ? `<p><a href="${esc(next.url)}" rel="noopener noreferrer">Continue on ${esc(next.name)}</a></p>`
+    : '<p>You can close this window and go back to Buddy.</p>';
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p>${after}</body></html>`;
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
   res.end(body);
 }
@@ -120,6 +125,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     throw new HubError('POLICY_DENIED', 'set BOARD_PUBLIC_URL to connect integrations');
   };
   const etags = new Map();
+  // Without a form-action directive any form may post anywhere (it does not
+  // fall back to default-src): a hub with a manifest connector names exactly
+  // the hosts its connect forms post to.
+  const webCsp = () => {
+    const hosts = integrations?.formHosts() ?? [];
+    return hosts.length ? `${CSP}; form-action 'self' ${hosts.map((x) => `https://${x}`).join(' ')}` : CSP;
+  };
   const webhookReads = new Set(); // (connection|ip) pairs over their failure budget with a body read in flight
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
   const hsts = (() => { try { return new URL(config.publicUrl).protocol === 'https:'; } catch { return false; } })();
@@ -266,7 +278,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
         throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
       }
-      return { connection: integrations.createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
+      // A connection id is the hub's to mint, never the connector's.
+      return { connection: integrations.createConnection({ ...v, id: undefined, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
     });
     // OAuth / app install (D42): the callback needs this cookie back. A
     // browser tab has it already; the desktop app's connect window (its own
@@ -276,7 +289,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
       const { name, value, path, secure, max_age_s } = out.cookie;
       res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
-      return { url: out.url, bind: out.bind };
+      return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
     });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
@@ -311,7 +324,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     const headers = {
       'content-type': TYPES[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-cache', etag: entry.etag,
-      'content-security-policy': CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
+      'content-security-policy': webCsp(), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
     };
     if (req.headers['if-none-match'] === entry.etag) { res.writeHead(304, headers); res.end(); return undefined; }
     res.writeHead(200, headers);
@@ -357,7 +370,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: base, bindCookie: bind });
         const clear = bind != null ? { 'set-cookie': `${ck.name}=; HttpOnly; SameSite=Lax; Path=${ck.path}; Max-Age=0${ck.secure ? '; Secure' : ''}` } : {};
         if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
-        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear);
+        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear, out.next_url ? { url: out.next_url, name: out.provider_name } : null);
       } catch (e) {
         hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
         return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');

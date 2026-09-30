@@ -14,9 +14,16 @@
 //   // flow or a manual token. The registry makes and checks `state`.
 //   connect: {
 //     kind: 'oauth' | 'app_install' | 'token',
-//     authorizeUrl({ state, redirectUri, config }) → string,          // oauth/app_install
-//     async exchange({ query, redirectUri, config, fetch }) →          // oauth/app_install callback
-//       { external_id, display_name, scopes: [...], secrets: {kind: value}, settings? },
+//     authorizeUrl({ state, redirectUri, webhookUrl, config }) → string,   // oauth/app_install: a GET redirect
+//     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
+//     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
+//     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
+//     async exchange({ query, redirectUri, webhookUrl, config, fetch }) →   // oauth/app_install callback
+//       { external_id, display_name, scopes: [...], secrets: {kind: value},
+//         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored as settings.config),
+//         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link) },
+//     (`webhookUrl` is this connection's future webhook URL; `config` is the
+//     stored settings.config of the org's active connection of this provider, else {})
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
@@ -45,6 +52,7 @@
 //   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
 //   // declared as action `system.<event>`. Only for a card linked to this
 //   // connection (the act() scope's link); never from a card id or key in the payload.
+//   // Applied only for the card's hub-verified PR (ctx.verifiedPr): pass its `pr` and `repo`.
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
 //   async health(ctx) → { ok, detail? },
@@ -58,6 +66,20 @@ export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
 export const SYSTEM_EVENTS = Object.freeze(['pr_merged', 'pr_closed']);
 
+// What a link's status may say (the card face renders these, nothing else).
+export const LINK_STATUS = Object.freeze({
+  state: Object.freeze(['open', 'draft', 'merged', 'closed']),
+  checks: Object.freeze(['passing', 'failing', 'pending', 'none']),
+  review: Object.freeze(['none', 'requested', 'changes_requested', 'approved']),
+});
+/** Only allowlisted keys with allowlisted values; everything else is dropped. */
+export function cleanLinkStatus(v) {
+  const out = {};
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const [k, allowed] of Object.entries(LINK_STATUS)) if (Object.hasOwn(v, k) && allowed.includes(v[k])) out[k] = v[k];
+  return out;
+}
+
 export function defineConnector(spec) {
   const errs = [];
   if (!ID_RE.test(spec?.id ?? '')) errs.push('id must match /^[a-z][a-z0-9-]{1,31}$/');
@@ -67,7 +89,16 @@ export function defineConnector(spec) {
   if (!Array.isArray(spec?.hosts) || spec.hosts.some((x) => typeof x !== 'string' || !HOST_RE.test(x))) errs.push('hosts must list the exact lowercase hostnames it calls (https only; no wildcards, ports or schemes)');
   if (!spec?.connect || !CONNECT_KINDS.has(spec.connect.kind)) errs.push(`connect.kind must be one of ${[...CONNECT_KINDS].join(', ')}`);
   if (spec?.connect?.kind === 'token' && typeof spec.connect.verifyToken !== 'function') errs.push('connect.verifyToken is required for token connectors');
-  if (spec?.connect && spec.connect.kind !== 'token' && (typeof spec.connect.authorizeUrl !== 'function' || typeof spec.connect.exchange !== 'function')) errs.push('connect.authorizeUrl and connect.exchange are required for oauth/app_install');
+  const cn = spec?.connect;
+  if (cn && cn.kind !== 'token') {
+    if (typeof cn.exchange !== 'function') errs.push('connect.exchange is required for oauth/app_install');
+    if (cn.manifestForm !== undefined) {
+      if (cn.kind !== 'app_install' || typeof cn.manifestForm !== 'function') errs.push('connect.manifestForm is a function, for app_install only');
+      if (cn.authorizeUrl !== undefined) errs.push('connect: authorizeUrl or manifestForm, not both');
+      // The web's CSP form-action names this host, so it is static.
+      if (typeof cn.formHost !== 'string' || !spec.hosts?.includes?.(cn.formHost)) errs.push('connect.formHost (the host the manifest form posts to) must be one of hosts');
+    } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
+  }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
