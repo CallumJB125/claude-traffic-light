@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onSway: (cb) => ipcRenderer.on('sway', (e, degPerSec) => cb(degPerSec)),
   onLean: (cb) => ipcRenderer.on('lean', (e, vx) => cb(vx)),
   onEyes: (cb) => ipcRenderer.on('eyes', (e, x, y) => cb(x, y)),
-  onVisibility: (cb) => ipcRenderer.on('visibility', (e, visible) => cb(visible)),
+  onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
   setReducedMotion: (on) => ipcRenderer.send('reduced-motion', on),
   setClickThrough: (ignore) => ipcRenderer.send('set-click-through', ignore),
   resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),

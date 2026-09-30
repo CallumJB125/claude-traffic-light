@@ -40,7 +40,15 @@
   let live = null;
   let dirty = false;
 
-  const stage = mountRig($('stage-rig'));
+  // The stage plays at full rate while you're working in the editor; left
+  // open behind other windows it drops to the widget's own ambient clock
+  // (a full-rate stage alone cost ~35% of a core).
+  const stage = mountRig($('stage-rig'), { ambient: true });
+  const stageRate = () => stage.setAmbient(!document.hasFocus());
+  window.addEventListener('focus', stageRate);
+  window.addEventListener('blur', stageRate);
+  stageRate();
+  let motionPaused = false;
   let stageConfetti = null;
   // ── Stage gun demo: tracers / a scoped shot drawn over the stage, aimed at
   // a target on the stage's right, so the preview shows the real effect.
@@ -115,9 +123,9 @@
     fx.clear();
     if (pose === 'ak47') {
       const go = () => { stage.burst(1200); fx.burst(1200); };
-      go(); stageBurst = setInterval(go, 15000);
+      go(); stageBurst = setInterval(() => { if (!motionPaused) go(); }, 15000);
     } else if (pose === 'sniper') {
-      fx.snipe(); stageBurst = setInterval(() => fx.snipe(), 7000);
+      fx.snipe(); stageBurst = setInterval(() => { if (!motionPaused) fx.snipe(); }, 7000);
     }
   }
   function stageCelebrate(on) {
@@ -125,7 +133,7 @@
     stageConfetti = null;
     if (!on) return;
     stage.celebrate();
-    stageConfetti = setInterval(() => stage.celebrate(), 10000);
+    stageConfetti = setInterval(() => { if (!motionPaused) stage.celebrate(); }, 10000);
   }
 
   function selected() { return rules.find((r) => r.id === selectedId) || null; }
@@ -1244,6 +1252,10 @@
   }
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
+  window.lightsApi.onMotionPaused((paused) => {
+    motionPaused = !!paused;
+    document.body.classList.toggle('motion-paused', motionPaused);
+  });
   $('view-stats').addEventListener('click', () => setView('stats'));
   $('view-mix').addEventListener('click', () => setView('mix'));
 
@@ -1573,7 +1585,9 @@
     });
     $('sound-file').setAttribute('aria-label', 'Use your own audio file for this rule');
     $('sound-play').setAttribute('aria-label', 'Play the sound');
-    const mo = new MutationObserver(queueA11y);
+    // The live previews toggle classes on every animation frame and garden
+    // tick; none of that is a11y state, and a pass per toggle cost ~25 ms.
+    const mo = new MutationObserver((records) => { if (records.some((r) => !r.target.closest?.('svg.rig'))) queueA11y(); });
     mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
     document.addEventListener('keydown', (e) => {
       const tab = e.target.closest?.('[role="tab"]');

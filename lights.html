@@ -483,6 +483,10 @@
     color: var(--muted);
     font-size: 10px;
     transition: border-color var(--t), background var(--t), color var(--t);
+    /* Each tile holds a whole rig (~1k SVG nodes, ~165 tiles): off screen,
+       skip them entirely, or every stage frame pays for all of them. */
+    content-visibility: auto;
+    contain-intrinsic-size: 40px 46px;
   }
   .posebtn:hover { border-color: #544f5e; color: var(--text); }
   .posebtn.on { border-color: var(--text); background: var(--bg); color: var(--text); }
@@ -840,6 +844,8 @@
   @keyframes face-fade { from { opacity: 0; } }
   @keyframes face-rise { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
   @media (prefers-reduced-motion: reduce) { #face-modal, #face-modal .sheet { animation: none; } }
+  /* Nobody can see the editor: every preview holds its frame. */
+  body.motion-paused * { animation-play-state: paused !important; }
 </style>
 </head>
 <body>

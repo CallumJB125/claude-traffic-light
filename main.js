@@ -21,6 +21,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
+const { createMotionGate } = require('./src/motion-gate.js');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
@@ -722,6 +723,51 @@ ipcMain.handle('busy-status', () => BusyWatch.status());
 ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
 ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
+// ── Motion gate ────────────────────────────────────────────────────────────
+// backgroundThrottling is off, so Chromium never tells a page nobody can see
+// it. Every reason the widget can't be seen (hidden, minimised, screen locked,
+// asleep, displays off — and menu-bar-only mode, through setMotionPaused)
+// feeds one gate; while it holds, the renderer stops its clocks and main
+// stops the cursor poll, the overlay, the garden, roaming and status pushes.
+const widgetMotion = createMotionGate((paused) => {
+  if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
+  syncEyePoll();
+  // Whatever changed while paused lands the moment it's back.
+  if (!paused) broadcastStatus();
+});
+function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
+
+// The editor's previews run every animation the rules can pick, at full
+// rate; hidden, minimised or behind a locked screen that is pure waste.
+const lightsMotion = createMotionGate((paused) => {
+  if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
+});
+
+function pauseEverywhere(reason, on) {
+  setMotionPaused(reason, on);
+  lightsMotion.set(reason, on);
+}
+
+function watchPowerForMotion() {
+  powerMonitor.on('lock-screen', () => pauseEverywhere('locked', true));
+  powerMonitor.on('unlock-screen', () => pauseEverywhere('locked', false));
+  powerMonitor.on('suspend', () => pauseEverywhere('suspended', true));
+  powerMonitor.on('resume', () => pauseEverywhere('suspended', false));
+  if (IS_MAC) {
+    // Displays asleep without a lock (energy saver, a closed lid on a dock).
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidSleepNotification', () => pauseEverywhere('screens-asleep', true));
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidWakeNotification', () => pauseEverywhere('screens-asleep', false));
+  }
+}
+
+let eyeTimer = null;
+function syncEyePoll() {
+  // The visual tests screenshot a still face; a live cursor would shift it.
+  const want = DEMO !== 'visual' && app.isReady() && !widgetMotion.paused;
+  if (want && !eyeTimer) eyeTimer = every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  else if (!want) eyeTimer = stopTimer(eyeTimer);
+}
+
 function createWindow() {
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
@@ -770,16 +816,18 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', () => { if (!glideTimer) saveBounds(); });
-  // backgroundThrottling is off, so the page never learns it's hidden: tell
-  // it, so the rig's clocks (idle loops, blinks) stop while nobody can see.
-  const visibility = (on) => () => { if (win && !win.isDestroyed()) win.webContents.send('visibility', on); };
-  win.on('show', visibility(true));
-  win.on('restore', visibility(true));
-  win.on('hide', visibility(false));
-  win.on('minimize', visibility(false));
-  // Those only fire on a change; a widget that loads hidden (showWidget off)
-  // would otherwise run its clocks until its first hide.
-  win.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) visibility(win.isVisible() && !win.isMinimized())(); });
+  win.on('show', () => setMotionPaused('hidden', false));
+  win.on('hide', () => setMotionPaused('hidden', true));
+  win.on('restore', () => setMotionPaused('minimized', false));
+  win.on('minimize', () => setMotionPaused('minimized', true));
+  // Those only fire on a change; a widget that loads hidden (showWidget off),
+  // or reloads while paused, must still start in the right state.
+  win.webContents.on('did-finish-load', () => {
+    if (!win || win.isDestroyed()) return;
+    setMotionPaused('hidden', !win.isVisible());
+    setMotionPaused('minimized', win.isMinimized());
+    win.webContents.send('motion-paused', widgetMotion.paused);
+  });
   win.on('closed', () => {
     win = null;
   });
@@ -861,6 +909,11 @@ function createLightsWindow() {
     },
   });
   lightsWin.setMenuBarVisibility(false);
+  lightsWin.on('show', () => lightsMotion.set('hidden', false));
+  lightsWin.on('hide', () => lightsMotion.set('hidden', true));
+  lightsWin.on('restore', () => lightsMotion.set('minimized', false));
+  lightsWin.on('minimize', () => lightsMotion.set('minimized', true));
+  lightsWin.webContents.on('did-finish-load', () => { if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', lightsMotion.paused); });
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
@@ -939,6 +992,9 @@ function createLightsWindow() {
   if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
+    // The next editor opens shown; only the machine-wide reasons carry over.
+    lightsMotion.set('hidden', false);
+    lightsMotion.set('minimized', false);
     if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
@@ -1178,7 +1234,7 @@ async function pushScreenFx(fx) {
 function updateOverlay(look) {
   const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
   const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : (look.effect === 'garden' || gardenRun ? 'garden' : null);
-  const wants = (gun || fx) && win && win.isVisible() && !prefersReducedMotion();
+  const wants = (gun || fx) && win && win.isVisible() && !widgetMotion.paused && !prefersReducedMotion();
   if (!wants) { stopOverlay(); overlayFx = 'none'; return; }
   const m = widgetMuzzle();
   if (!m) return;
@@ -1571,7 +1627,7 @@ function updateGarden(st) {
   // Judge by the state underneath any travel override, or a state change
   // during gardening would never be seen.
   const real = gardenRun ? aggregateState({ ignoreTravel: true }) : st;
-  const wants = real.look.effect === 'garden' && win && win.isVisible() && real.reason !== 'preview';
+  const wants = real.look.effect === 'garden' && win && win.isVisible() && !widgetMotion.paused && real.reason !== 'preview';
   if (wants && !gardenRun && !roamState.busy) {
     runGarden(real.look).catch((e) => console.log('[garden]', e.message));
   } else if (!wants && gardenRun && !gardenRun.stop) {
@@ -1599,7 +1655,8 @@ function broadcastStatus() {
     win = null;
     createWindow();
   }
-  win?.webContents.send('status-changed');
+  // A paused widget catches up when the gate lifts (it broadcasts then).
+  if (!widgetMotion.paused) win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
   try {
@@ -1758,7 +1815,7 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -1795,7 +1852,7 @@ const seenSessions = new Set();
 let lastEventAt = 0;
 function maybeRandomEvent(st) {
   const config = loadConfig();
-  if (!config.randomEvents || !win || !win.isVisible() || previewLook || travelLook) return;
+  if (!config.randomEvents || !win || !win.isVisible() || widgetMotion.paused || previewLook || travelLook) return;
   let milestone = false;
   for (const s of st.sessions) {
     if (!seenSessions.has(s.sessionId)) {
@@ -3002,8 +3059,8 @@ app.whenReady().then(() => {
   }
   refreshSpend();
   every(SPEND_POLL_MS, refreshSpend, 'spend');
-  // The visual tests screenshot a still face; a live cursor would shift it.
-  if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  syncEyePoll();
+  watchPowerForMotion();
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
