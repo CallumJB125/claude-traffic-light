@@ -106,9 +106,21 @@
     return 'other';
   }
   const NAMES = { mac: 'Mac', win: 'Windows', linux: 'Linux' };
+  const FEEDFILE = { win: 'latest.yml', linux: 'latest-linux.yml' };
   const os = detectOS();
   window.__os = os;
-  if (NAMES[os]) for (const el of document.querySelectorAll('[data-os-label]')) el.firstChild.textContent = `${el.firstChild.textContent.replace(/ for (Mac|Windows|Linux)$/, '')} for ${NAMES[os]}`;
+  const label = (name) => { for (const el of document.querySelectorAll('[data-os-label]')) el.firstChild.textContent = `${el.firstChild.textContent.replace(/ for (Mac|Windows|Linux)$/, '')} for ${name}`; };
+  label('Mac');
+  // Windows and Linux are named only once the release feed lists that build; until then
+  // the button says Mac and "Other platforms" points at the download page
+  if (os === 'win' || os === 'linux') {
+    const base = (document.querySelector('meta[name="downloads"]') || {}).content;
+    const other = () => { for (const a of document.querySelectorAll('[data-other-platforms]')) a.hidden = false; };
+    if (!base) other();
+    else fetch(`${base}/${FEEDFILE[os]}`, { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : Promise.reject())).then((t) => { if (/^version:/m.test(t)) label(NAMES[os]); else other(); }).catch(other);
+  } else if (os === 'other') {
+    for (const a of document.querySelectorAll('[data-other-platforms]')) a.hidden = false;
+  }
 
   // waitlist
   const form = document.getElementById('wl-form');

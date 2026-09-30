@@ -81,6 +81,8 @@ p { margin: 0; text-wrap: pretty; }
 .hero-copy { position: relative; z-index: 2; }
 .hero h1 { color: #f6f4f0; max-width: none; font-size: clamp(2.5rem, 4.6vw, 4.5rem); line-height: 1.02; letter-spacing: -0.035em; }
 .hero .lede { margin-top: 26px; color: #b9bcc6; }
+.hero-other { color: #c9cdd6; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.hero-other[hidden] { display: none; }
 .hero-cta .btn { padding-inline: 20px; font-size: 1rem; white-space: nowrap; }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; align-items: center; }
 .hero-note { margin-top: 18px; font-size: 0.92rem; color: #8f93a0; max-width: 34em; }
@@ -253,7 +255,6 @@ h1.lines .ln { display: block; }
 /* the nav over the dark hero */
 .nav.on-dark { background: transparent; backdrop-filter: none; }
 .nav.on-dark .nav-brand, .nav.on-dark .nav-links a { color: #eceee9; }
-.nav.on-dark .nav-mark rect { fill: #eceee9; }
 .nav.on-dark .btn-small { --bg: #eceee9; --fg: #15171c; border-color: #eceee9; box-shadow: 0 2px 0 #000; }
 
 /* faq, forms */

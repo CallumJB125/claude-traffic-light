@@ -45,12 +45,7 @@ function build({ live } = {}) {
   for (const f of fs.readdirSync(path.join(SRC, 'partials'))) partials[f.replace(/\.html$/, '')] = fs.readFileSync(path.join(SRC, 'partials', f), 'utf8');
 
   const pages = [];
-  // PREVIEW=1 also builds the pages in src/preview (work for Callum to look at; never in production)
   const sources = fs.readdirSync(SRC).filter((n) => n.endsWith('.html')).map((f) => [f, path.join(SRC, f)]);
-  if (process.env.PREVIEW) {
-    for (const f of fs.readdirSync(path.join(SRC, 'preview')).filter((n) => n.endsWith('.html'))) sources.push([f, path.join(SRC, 'preview', f)]);
-    copyDir(path.join(SRC, 'preview', 'icons'), path.join(DIST, 'preview', 'icons'));
-  }
   for (const [f, source] of sources) {
     let html = fs.readFileSync(source, 'utf8');
     const m = /^<!--page (\{.*?\})-->\s*/s.exec(html);

@@ -114,7 +114,7 @@ test('build: every page builds from brand.js, links only to files that exist, an
     const html = fs.readFileSync(path.join(DIST, f), 'utf8');
     assert.ok(!/\{\{|\}\}/.test(html), `${f} has a leftover placeholder`);
     assert.ok(html.includes(Brand.name), `${f} says the name`);
-    assert.ok(!/Claude Buddy/.test(html.replace(/was called Claude Buddy[^<]*/g, '')), `${f} uses the old name`);
+    assert.ok(!/Claude Buddy/.test(html.replace(/Formerly Claude Buddy\./g, '')), `${f} uses the old name`);
     for (const m of html.matchAll(/(?:src|href)="(\/assets\/[^"?]+)/g)) assert.ok(fs.existsSync(path.join(DIST, m[1])), `${f} links ${m[1]}`);
   }
   assert.deepEqual(fs.readdirSync(path.join(DIST, 'assets', 'app')), ['brand.js'], 'the live rig and app tokens are not shipped');

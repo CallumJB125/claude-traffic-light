@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824" width="824" height="824">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.38"/></filter>
     <filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="18"/></filter>
@@ -6,9 +6,8 @@
     <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c3f6b"/><stop offset="1" stop-color="#131c33"/></linearGradient>
     <linearGradient id="mush" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#d5dff2"/></linearGradient>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#plate)"/>
-  
-  <ellipse cx="512" cy="400" rx="300" ry="240" fill="#7f9bd1" opacity="0.3" filter="url(#glow)"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#plate)"/>
+  <g transform="translate(512 512) scale(1.18) translate(-512 -512)"><ellipse cx="512" cy="400" rx="300" ry="240" fill="#7f9bd1" opacity="0.3" filter="url(#glow)"/>
   <path d="M222 500 C222 312 362 192 512 192 C662 192 802 312 802 500 C802 532 752 550 704 550 L320 550 C272 550 222 532 222 500 Z" fill="url(#mush)"/>
   <path d="M452 540 L572 540 C560 612 568 660 596 716 L428 716 C456 660 464 612 452 540 Z" fill="url(#mush)"/>
   <g fill="none" stroke="#eef3fb" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
@@ -18,4 +17,4 @@
   </g>
   <circle cx="512" cy="392" r="62" fill="#f2a200"/>
   <circle cx="512" cy="392" r="62" fill="none" stroke="#131c33" stroke-opacity="0.18" stroke-width="6"/>
-</svg>
+</g></svg>
