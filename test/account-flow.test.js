@@ -929,3 +929,31 @@ test('oauth: the listener refuses every callback until the hub’s state is know
     assert.deepEqual(await l.result, { ok: true, code: 'abcDEF123' });
   } finally { l.close(); }
 });
+
+// A draft opened in the inviter's own mail app: nothing the team name or the invite carries may add a
+// header (cc/bcc/to, a second subject) or a line break to the mailto: URL itself.
+test('mailto: a team name with newlines, %0d%0a and &cc= adds no header and no raw break', () => {
+  const { inviteMailto } = require('../buddy-window/accounts');
+  const nasty = ['Acme\r\nBcc: attacker@evil.example', 'Acme%0d%0aBcc:%20attacker@evil.example', 'Acme&cc=attacker@evil.example&bcc=x@y.z', 'Acme?subject=pwned', 'Acme\u2028Cc: a@b.c', 'Acme\u0000\u0007\u007f'];
+  for (const team of nasty) {
+    const url = inviteMailto({ to: 'sam@example.com', team, link: 'https://app.plexiform.dev/invite#tok_abc', code: 'ABCD-EFGH', brand: 'Plexiform' });
+    assert.ok(url.startsWith('mailto:sam@example.com?subject='), url);
+    const q = url.slice('mailto:sam@example.com?'.length);
+    // Exactly the two fields we built, in this order, and nothing else can open a new one.
+    assert.deepEqual([...new URLSearchParams(q).keys()], ['subject', 'body'], `only subject and body for ${JSON.stringify(team)}`);
+    assert.ok(!/[\r\n\u2028\u2029\u0000-\u001f\u007f]/.test(decodeURIComponent(q.split('&body=')[0].slice('subject='.length))), 'no control character in the subject');
+    // The body's own lines are ours; the team name must not add a single line break to it or to the subject.
+    const base = inviteMailto({ to: 'sam@example.com', team: 'Acme', link: 'https://app.plexiform.dev/invite#tok_abc', code: 'ABCD-EFGH', brand: 'Plexiform' });
+    const breaks = (u) => (u.match(/%0[da]/gi) ?? []).length;
+    assert.equal(breaks(url), breaks(base), `no extra line break for ${JSON.stringify(team)}`);
+    assert.ok(!/%0[da]/i.test(url.split('&body=')[0]), 'no break at all in the subject');
+    assert.ok(!/[\r\n\s]/.test(url), 'no raw whitespace in the URL');
+  }
+  // The address itself is validated: a header smuggled into `to` yields no draft at all.
+  for (const to of ['a@b.co\r\nBcc: x@y.z', 'a@b.co,c@d.ef', 'a@b.co?cc=x@y.z', 'a@b.co&bcc=x@y.z', '<a@b.co>', 'a b@c.de']) {
+    assert.equal(inviteMailto({ to, team: 'T', link: 'https://h/invite#t', code: 'ABCD-EFGH', brand: 'Plexiform' }), null, JSON.stringify(to));
+  }
+  // A long body is cut, never left half-encoded.
+  const long = inviteMailto({ to: 'sam@example.com', team: 'T', link: 'https://h/invite#' + 'x'.repeat(5000), code: 'ABCD-EFGH', brand: 'Plexiform' });
+  assert.doesNotThrow(() => decodeURIComponent(long.slice(long.indexOf('&body=') + 6)));
+});

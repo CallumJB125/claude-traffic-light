@@ -473,7 +473,9 @@ const MAILTO_TO_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$
 function inviteMailto({ to, team, link, code, brand }) {
   const email = String(to ?? '').trim().toLowerCase();
   if (!MAILTO_TO_RE.test(email) || (!link && !code)) return null;
-  const name = String(team ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) || 'my team';
+  // Not just ASCII controls: NEL, the Unicode line/paragraph separators and the text-direction controls can
+  // also split a header or disguise a name in some mail clients.
+  const name = String(team ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, 60) || 'my team';
   const lines = [`I invited you to join ${name} on ${brand}.`, ''];
   if (link) lines.push(`Open this link to join: ${link}`, '');
   if (code) lines.push(`Or enter this code in ${brand} (Join a team, Have a code?): ${code}`, '');
