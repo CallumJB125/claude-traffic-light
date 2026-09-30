@@ -41,6 +41,7 @@ const REPO_KEEP_MS = 60 * 60 * 1000;
 const FRESH_MS = 15 * 60 * 1000;
 const LOW_RATE = 100;
 const MAX_OWN_PRS = 5;
+const PULLS_PAGE = 100;
 const HOLD_MS = {
   'pr-review-requested': 10 * 60 * 1000,
   'pr-changes-requested': 10 * 60 * 1000,
@@ -106,6 +107,12 @@ function parseResponse(stdout) {
   let json = null;
   try { json = body.trim() ? JSON.parse(body) : null; } catch { /* not JSON */ }
   return { status: Number(m[1]), headers, body: json };
+}
+
+// The rel="last" page of a Link header, as a gh api path on api.github.com.
+function lastPagePath(link) {
+  const m = /<https:\/\/api\.github\.com\/([^>]+)>;\s*rel="last"/.exec(String(link || ''));
+  return m && /^(?:repos|repositories)\/[\w./-]+\?[\w=&%.-]+$/.test(m[1]) && !m[1].includes('..') ? m[1] : null;
 }
 
 const time = (s) => Date.parse(s || '') || 0;
@@ -230,6 +237,10 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   }
 
   async function request(apiPath) {
+    return (await requestWithLink(apiPath)).body;
+  }
+
+  async function requestWithLink(apiPath) {
     const cached = etags.get(apiPath);
     const args = ['api', '-i', ...(cached ? ['-H', `If-None-Match: ${cached.etag}`] : []), apiPath];
     const r = await runGh(args);
@@ -241,10 +252,10 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
     }
     const h = res.headers;
     if (h['x-ratelimit-remaining'] != null) st.rate = { limit: Number(h['x-ratelimit-limit']) || null, remaining: Number(h['x-ratelimit-remaining']), reset: Number(h['x-ratelimit-reset']) || null, used: Number(h['x-ratelimit-used']) || 0 };
-    if (res.status === 304 && cached) return cached.body;
+    if (res.status === 304 && cached) return { body: cached.body, link: cached.link };
     if (res.status >= 200 && res.status < 300) {
-      if (h.etag) etags.set(apiPath, { etag: h.etag, body: res.body });
-      return res.body;
+      if (h.etag) etags.set(apiPath, { etag: h.etag, body: res.body, link: h.link || null });
+      return { body: res.body, link: h.link || null };
     }
     if (res.status === 401) throw new GhError('no-auth', 'gh credentials were rejected');
     const retry = Number(h['retry-after']);
@@ -290,16 +301,34 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   async function pollRepo(repo, info, deployWorkflows) {
     // One at a time, as GitHub asks, to stay clear of secondary limits.
     const runs = await request(`repos/${repo}/actions/runs?actor=${encodeURIComponent(st.login)}&per_page=20`);
-    const pulls = await request(`repos/${repo}/pulls?state=open&per_page=50`);
-    const mine = (Array.isArray(pulls) ? pulls : []).filter((p) => p.user && p.user.login === st.login)
-      .sort((a, b) => time(b.updated_at) - time(a.updated_at)).slice(0, MAX_OWN_PRS);
+    // Most recently updated first: asking for a review, or reviewing, bumps
+    // a PR's updated_at, so anything fresh is on this page. (The search API
+    // would cover every repo in one call, but it sends no ETag, so every poll
+    // would cost a request; this page is free while nothing changes.)
+    const page = await request(`repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PULLS_PAGE}`);
+    const pulls = Array.isArray(page) ? page : [];
+    const mine = pulls.filter((p) => p.user && p.user.login === st.login).slice(0, MAX_OWN_PRS);
     const reviews = {};
-    for (const p of mine) reviews[p.number] = await request(`repos/${repo}/pulls/${p.number}/reviews?per_page=100`) || [];
-    const candidates = repoEvents({ repo, login: st.login, branches: info.branches, deployWorkflows, runs: (runs && runs.workflow_runs) || [], pulls: Array.isArray(pulls) ? pulls : [], reviews });
+    for (const p of mine) reviews[p.number] = await newestReviews(repo, p.number);
+    const candidates = repoEvents({ repo, login: st.login, branches: info.branches, deployWorkflows, runs: (runs && runs.workflow_runs) || [], pulls, reviews });
     // A review request that went away (answered or withdrawn) may come back.
-    const requested = new Set(candidates.filter((e) => e.signal === 'pr-review-requested').map((e) => e.id));
-    for (const id of Object.keys(st.seen)) if (id.startsWith(`rr:${repo}#`) && !requested.has(id)) delete st.seen[id];
+    // Only a complete list can say one went away.
+    if (pulls.length < PULLS_PAGE) {
+      const requested = new Set(candidates.filter((e) => e.signal === 'pr-review-requested').map((e) => e.id));
+      for (const id of Object.keys(st.seen)) if (id.startsWith(`rr:${repo}#`) && !requested.has(id)) delete st.seen[id];
+    }
     return candidates;
+  }
+
+  // Reviews come oldest first; on a PR with more than a page of them the
+  // newest are on the last page, which the Link header names.
+  async function newestReviews(repo, number) {
+    const first = await requestWithLink(`repos/${repo}/pulls/${number}/reviews?per_page=100`);
+    const list = Array.isArray(first.body) ? first.body : [];
+    const last = lastPagePath(first.link);
+    if (!last) return list;
+    const tail = await request(last);
+    return list.concat(Array.isArray(tail) ? tail : []);
   }
 
   // One poll if it is due. opts: { sessions, config }.
@@ -397,4 +426,4 @@ function readState(stateFile, t = Date.now()) {
   return { ...rest, active: saved.state === 'disabled' ? [] : activeEvents(events, t), recent: (Array.isArray(events) ? events : []).slice(-10).reverse() };
 }
 
-module.exports = { SIGNALS, validSegment, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
+module.exports = { SIGNALS, validSegment, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, lastPagePath, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };

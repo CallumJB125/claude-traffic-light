@@ -1,0 +1,15 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Type: application/json; charset=utf-8
+Date: Wed, 30 Sep 2026 12:00:00 GMT
+Etag: W/"etag-reviews-8-p2"
+Link: <https://api.github.com/repositories/4242/pulls/8/reviews?per_page=100&page=1>; rel="prev", <https://api.github.com/repositories/4242/pulls/8/reviews?per_page=100&page=1>; rel="first"
+X-Github-Api-Version-Selected: 2022-11-28
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4990
+X-Ratelimit-Reset: 1790773200
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 10
+
+[{"id": 601, "user": {"login": "octo-friend"}, "body": "", "state": "CHANGES_REQUESTED", "html_url": "https://github.com/acme/widget/pull/8#pullrequestreview-601", "submitted_at": "2026-09-30T11:57:00Z", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]

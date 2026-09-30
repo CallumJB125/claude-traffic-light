@@ -31,7 +31,7 @@ function fakeGh(routes = {}) {
     const apiPath = args[args.length - 1];
     const etag = args.includes('-H') ? args[args.indexOf('-H') + 1].replace(/^If-None-Match: /, '') : null;
     calls.push({ apiPath, etag });
-    const key = apiPath.split('?')[0];
+    const key = fixed[apiPath] !== undefined ? apiPath : apiPath.split('?')[0];
     const file = fixed[key];
     if (file === 'ENOENT') return { notFound: true, stdout: '', stderr: '' };
     if (file === 'NO-RESPONSE') return { notFound: false, stdout: '', stderr: 'error connecting to api.github.com' };
@@ -151,7 +151,7 @@ test('poll: discovers the repo from a session folder, fires each event once, the
   const fired = await p.tick({ sessions: SESSIONS, config: {} });
   assert.deepEqual(fired.map((e) => e.signal).sort(), ['ci-failed', 'deploy-finished', 'pr-changes-requested', 'pr-review-requested']);
   assert.ok(fired.every((e) => e.cwd === '/work/widget' && e.source === 'poll'));
-  assert.deepEqual(gh.calls.map((c) => c.apiPath), ['user', 'repos/acme/widget/actions/runs?actor=octo-me&per_page=20', 'repos/acme/widget/pulls?state=open&per_page=50', 'repos/acme/widget/pulls/8/reviews?per_page=100']);
+  assert.deepEqual(gh.calls.map((c) => c.apiPath), ['user', 'repos/acme/widget/actions/runs?actor=octo-me&per_page=20', 'repos/acme/widget/pulls?state=open&sort=updated&direction=desc&per_page=100', 'repos/acme/widget/pulls/8/reviews?per_page=100']);
   assert.ok(gh.calls.every((c) => c.etag === null), 'nothing cached yet');
   const st = p.status();
   assert.equal(st.state, 'ok');
@@ -176,6 +176,44 @@ test('poll: discovers the repo from a session folder, fires each event once, the
   assert.deepEqual(p.active().map((e) => e.signal).sort(), ['ci-failed', 'pr-changes-requested', 'pr-review-requested']);
   advance(G.HOLD_MS['ci-failed']);
   assert.deepEqual(p.active(), []);
+});
+
+test('lastPagePath: only a rel="last" page on api.github.com under repos/ or repositories/', () => {
+  assert.equal(G.lastPagePath(G.parseResponse(raw('reviews-8-page1.200.txt')).headers.link), 'repositories/4242/pulls/8/reviews?per_page=100&page=2');
+  assert.equal(G.lastPagePath(G.parseResponse(raw('reviews-8-page2.200.txt')).headers.link), null, 'no rel=last on the last page');
+  assert.equal(G.lastPagePath('<https://evil.example/repos/a/b?page=2>; rel="last"'), null);
+  assert.equal(G.lastPagePath('<https://api.github.com/user/../repos/x?page=2>; rel="last"'), null);
+  assert.equal(G.lastPagePath(null), null);
+});
+
+test('poll: on a PR with more than 100 reviews, changes requested on the last page still fire (and that page rides on its ETag)', async () => {
+  const { p, gh, advance } = poller({ routes: { 'repos/acme/widget/pulls/8/reviews': 'reviews-8-page1.200.txt', 'repositories/4242/pulls/8/reviews?per_page=100&page=2': 'reviews-8-page2.200.txt' } });
+  const fired = await p.tick({ sessions: SESSIONS, config: {} });
+  assert.ok(fired.some((e) => e.id === 'review:acme/widget:601' && e.signal === 'pr-changes-requested'));
+  gh.calls.length = 0;
+  advance(G.ACTIVE_MS);
+  await p.tick({ sessions: SESSIONS, config: {} });
+  assert.deepEqual(gh.calls.filter((c) => /reviews/.test(c.apiPath)).map((c) => c.etag), ['W/"etag-reviews-8-p1"', 'W/"etag-reviews-8-p2"']);
+});
+
+test('poll: with a full page of PRs a missing review request is not taken as withdrawn', async () => {
+  const pulls = G.parseResponse(raw('pulls.200.txt')).body;
+  const filler = Array.from({ length: 97 }, (_, i) => ({ ...pulls[2], number: 2000 + i }));
+  const dir = tmp();
+  const full = raw('pulls.200.txt').replace(/\r\n\r\n[\s\S]*$/, `\r\n\r\n${JSON.stringify(pulls.concat(filler))}`);
+  const fullNoReq = raw('pulls.200.txt').replace(/\r\n\r\n[\s\S]*$/, `\r\n\r\n${JSON.stringify(pulls.filter((x) => x.number !== 7).concat(filler, [{ ...pulls[2], number: 3000 }]))}`);
+  fs.writeFileSync(path.join(dir, 'full.txt'), full);
+  fs.writeFileSync(path.join(dir, 'full-no-req.txt'), fullNoReq);
+  const { p, gh, advance } = poller({ routes: { 'repos/acme/widget/pulls': path.relative(FIX, path.join(dir, 'full.txt')) } });
+  await p.tick({ sessions: SESSIONS, config: {} });
+  gh.fixed['repos/acme/widget/pulls'] = path.relative(FIX, path.join(dir, 'full-no-req.txt'));
+  gh.change('repos/acme/widget/pulls');
+  advance(G.ACTIVE_MS);
+  await p.tick({ sessions: SESSIONS, config: {} });
+  gh.fixed['repos/acme/widget/pulls'] = path.relative(FIX, path.join(dir, 'full.txt'));
+  gh.change('repos/acme/widget/pulls');
+  advance(G.ACTIVE_MS);
+  assert.deepEqual(await p.tick({ sessions: SESSIONS, config: {} }), [], 'still seen: #7 may just have dropped off the page');
 });
 
 test('poll: events older than the fresh window are recorded but never fired (no replay on start)', async () => {

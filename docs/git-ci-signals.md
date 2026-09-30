@@ -29,9 +29,17 @@ credentials) in the app's data folder. gh's own config is never touched.
 - Repos: the GitHub `origin` (else first GitHub) remote of each live session's folder,
   kept for an hour after its last session, plus the "Also watch" list. Manual repos with no
   session get no CI signals (no branch to watch).
-- Per repo per poll: `actions/runs?actor=<you>&per_page=20`, `pulls?state=open&per_page=50`,
-  and `pulls/<n>/reviews` for up to 5 of your most recently updated open PRs; `user` once an hour.
+- Per repo per poll: `actions/runs?actor=<you>&per_page=20`,
+  `pulls?state=open&sort=updated&direction=desc&per_page=100`, and `pulls/<n>/reviews?per_page=100`
+  for up to 5 of your most recently updated open PRs, plus the Link header's `rel="last"` page
+  when a PR has more than 100 reviews (they come oldest first); `user` once an hour.
   Requests go one at a time.
+- Review requests come from that PR page: asking for a review bumps a PR's `updated_at`, so a
+  fresh request is always on it. A request missing from a full page is not taken as withdrawn.
+  The search API (`user-review-requested:@me`) would cover every repo in one call, but it sends no
+  ETag (checked live), so it would cost a request every poll; the PR page is free while unchanged.
+- Only reviews requested from you personally count; requests to a team you're on
+  (`requested_teams`) are ignored in v1.
 - Every request sends the last ETag as `If-None-Match`. A 304 does not count against the
   primary rate limit (GitHub REST best practices; checked live: `X-RateLimit-Used` unchanged).
 - Cadence: every 90 s while any session is live, every 10 min otherwise; every 10 min
@@ -43,8 +51,8 @@ credentials) in the app's data folder. gh's own config is never touched.
 - Dev runs (demos, shots, visual tests) never call gh; they still show events saved in the state file.
 
 Budget: only changed responses cost anything. Worst case (every response changed on every
-poll) is about 40 polls/hour × (2 + your open PRs, max 5) requests per active repo, so
-≈280/hour for one busy repo against gh's 5,000/hour. In practice most polls are all 304s,
+poll) is about 40 polls/hour × (2 + your open PRs, max 5, ×2 past 100 reviews) requests per
+active repo, so ≈280/hour (≈480 in the extreme) for one busy repo against gh's 5,000/hour. In practice most polls are all 304s,
 and the runs list only changes while a run is in flight.
 
 ## Hub / GitHub App path (later)
