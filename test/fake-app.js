@@ -45,11 +45,20 @@ function fakeApp(home, { takeKeys = true } = {}) {
   const keyFor = (id) => {
     try { const hex = JSON.parse(fs.readFileSync(keysFile, 'utf8'))[id]; return hex ? Buffer.from(hex, 'hex') : null; } catch { return null; }
   };
+  // A test that fails before close() must not leave this server holding the
+  // test process open (node --test then waits for it until it cancels the
+  // whole file): once the port is read it no longer counts as keeping the
+  // process alive, and it dies with the process.
+  process.once('exit', () => { try { child.kill(); } catch {} });
   return new Promise((resolve) => {
     let out = '';
     child.stdout.on('data', (d) => {
       out += d;
-      if (out.includes('\n')) resolve({ port: Number(out.trim()), keyFor, close: () => child.kill() });
+      if (out.includes('\n')) {
+        child.unref();
+        child.stdout.unref();
+        resolve({ port: Number(out.trim()), keyFor, close: () => child.kill() });
+      }
     });
   });
 }

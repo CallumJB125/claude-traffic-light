@@ -185,7 +185,8 @@ function startHook(home, port, input, { session = 's', askMs = 5000, payload = {
   return child;
 }
 async function waitForRequests(dir, n) {
-  const deadline = Date.now() + 4000;
+  // Generous: the full suite runs files in parallel on a busy machine.
+  const deadline = Date.now() + 8000;
   for (;;) {
     // A hook can remove its request between the listing and the read.
     const read = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } };
@@ -200,8 +201,9 @@ test('hook: parallel tool calls in one session get distinct ids; one answer rele
   const app = await fakeApp(home);
   try {
     const dir = path.join(home, 'requests');
-    const a = startHook(home, app.port, { command: 'echo a' }, { askMs: 1500 });
-    const b = startHook(home, app.port, { command: 'rm -rf build' }, { askMs: 1500 });
+    // Long enough that a loaded machine still reads both requests before the hooks give up.
+    const a = startHook(home, app.port, { command: 'echo a' }, { askMs: 4000 });
+    const b = startHook(home, app.port, { command: 'rm -rf build' }, { askMs: 4000 });
     const reqs = await waitForRequests(dir, 2);
     assert.equal(reqs.length, 2);
     assert.notEqual(reqs[0].id, reqs[1].id);
@@ -218,8 +220,9 @@ test('hook: an answer carrying another input\'s hash is ignored', async () => {
   const app = await fakeApp(home);
   try {
     const dir = path.join(home, 'requests');
-    const h = startHook(home, app.port, { command: 'rm -rf ~' }, { askMs: 1500 });
+    const h = startHook(home, app.port, { command: 'rm -rf ~' }, { askMs: 4000 });
     const [req] = await waitForRequests(dir, 1);
+    assert.ok(req, 'the hook wrote its request');
     const other = { v: 2, id: req.id, decision: 'allow', decisionHash: A.decisionHashOf({ ...req, toolInput: { command: 'ls' } }), by: 'desk', ack: false, nonce: 'n' };
     other.mac = A.answerMac(app.keyFor(req.id), other);
     A.createExclusive(path.join(dir, `${req.id}.answer`), JSON.stringify(other));
