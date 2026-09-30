@@ -1,0 +1,88 @@
+<!--page {"title":"Download Plexiform","desc":"Download Plexiform for Mac, Windows or Linux. Private beta: the builds are unsigned for now, so the first open takes one extra step.","nav":"download"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Download {{brand.name}}</h1>
+    <p class="lede">The beta is for small teams. You can install it now; joining a team board needs an invite.</p>
+
+    <div class="dl-card" id="dl" data-feed="{{brand.urls.downloads}}" data-fallback="{{brand.urls.updates}}">
+      <p id="dl-status" role="status">Looking for the latest build…</p>
+      <div id="dl-primary"></div>
+      <p id="dl-meta"></p>
+    </div>
+
+    <h2 style="margin-top:56px;font-size:1.5rem">All downloads</h2>
+    <ul class="os-list" id="dl-all">
+      <li data-os="mac"><span><strong>macOS</strong> · Apple silicon and Intel</span><span class="muted">Checking…</span></li>
+      <li data-os="win"><span><strong>Windows</strong></span><span class="muted">Checking…</span></li>
+      <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
+    </ul>
+
+    <h2 id="phone" style="margin-top:64px;font-size:1.7rem">Phone companion<span class="tag tag-soon">{{notlive:phone}}Coming{{/notlive}}{{live:phone}}Web app{{/live}}</span></h2>
+    <p class="prose" style="margin-top:12px">This is a web app for your phone, not the desktop app. It lets you answer a permission prompt when you're away from your desk. There's no native iPhone or iPad app yet, so it installs from your browser, with no app store.</p>
+    {{live:phone}}
+    <div class="phone-grid" style="margin-top:26px">
+      <div class="qr">{{qr:phone}}</div>
+      <ol class="steps" style="margin:0">
+        <li><strong>Point your phone's camera at the code</strong> to open the page.</li>
+        <li><strong>On iPhone or iPad,</strong> open it in Safari, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</li>
+        <li><strong>On Android,</strong> open it in Chrome, tap the menu, then <strong>Install app</strong>.</li>
+        <li><strong>On your Mac,</strong> open {{brand.name}}, then Phone, then <strong>Pair this phone</strong>, and scan the code it shows.</li>
+      </ol>
+    </div>
+    {{/live}}
+    {{notlive:phone}}
+    <p class="prose" style="margin-top:14px">It isn't live yet. When it is, this page will show a code to scan, and the steps will be: open it in Safari, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong> (on Android, <strong>Install app</strong> from Chrome's menu), then pair it from the desktop app. It needs a {{brand.name}} account and your team's hub, because phones don't talk to your Mac directly.</p>
+    {{/notlive}}
+
+    <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
+    <p class="prose" style="margin-top:12px">The beta isn't signed with a developer certificate yet, so your system asks you to confirm once. It's a normal step for software that isn't from an app store, and it only happens the first time.</p>
+    <div class="grid-2" style="margin-top:28px">
+      <div>
+        <h3>On a Mac</h3>
+        <ol class="steps">
+          <li><strong>Open the download</strong> and drag {{brand.name}} into Applications.</li>
+          <li><strong>Open it.</strong> macOS says it can't check the app for malware. Choose <strong>Done</strong>.</li>
+          <li>Open <strong>System Settings</strong>, then <strong>Privacy &amp; Security</strong>. Scroll to <strong>Security</strong> and choose <strong>Open Anyway</strong> next to {{brand.name}}, then enter your password.</li>
+          <li>Open {{brand.name}} again and choose <strong>Open</strong>. You only do this once.</li>
+          <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries, and turns on Open at Login (switch it off from the tray menu and it stays off). <strong>Restart any Claude Code sessions</strong> that were already running.</li>
+        </ol>
+        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged", run <code>xattr -dr com.apple.quarantine /Applications/{{brand.name}}.app</code> in Terminal, then open it.</p>
+      </div>
+      <div>
+        <h3>On Windows</h3>
+        <ol class="steps">
+          <li><strong>Run the installer.</strong> If SmartScreen says it protected your PC, choose <strong>More info</strong>.</li>
+          <li>Then choose <strong>Run anyway</strong>.</li>
+          <li>Restart any Claude Code sessions that were already running.</li>
+        </ol>
+        <h3 style="margin-top:28px">On Linux</h3>
+        <ol class="steps"><li>Make the AppImage executable (<code>chmod +x</code>) and run it. On a recent Ubuntu it also needs <code>libfuse2</code>. Or install the .deb with your package manager.</li></ol>
+      </div>
+    </div>
+
+    <h2 style="margin-top:64px;font-size:1.7rem">Got an invite link?</h2>
+    <ol class="steps">
+      <li><strong>Install and open {{brand.name}}</strong> using the steps above.</li>
+      <li><strong>Sign in with Google</strong> when the app asks.</li>
+      <li><strong>Click your invite link again.</strong> It opens the app and puts you on your team.</li>
+    </ol>
+
+    <h2 style="margin-top:64px;font-size:1.7rem">Check your download</h2>
+    <p class="prose" style="margin-top:12px">Each build is listed with a SHA-512 checksum. To compare it on a Mac or Linux, run this and check it matches:</p>
+    <p style="margin-top:12px"><code class="mono" style="font:600 0.9rem ui-monospace,Menlo,monospace;background:var(--paper-2);padding:8px 12px;border-radius:8px;display:inline-block;overflow-wrap:anywhere">openssl dgst -sha512 -binary &lt;file&gt; | base64</code></p>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+<script src="{{asset:assets/feed.js}}" defer></script>
+<script src="{{asset:assets/download.js}}" defer></script>
+</body>
+</html>

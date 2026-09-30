@@ -1,0 +1,21 @@
+<!--page {"title":"Not found","desc":"That page doesn't exist.","nav":"none","noindex":true}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+<meta name="robots" content="noindex" />
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap" style="max-width:760px;margin-inline:0 auto">
+    <h1>Not found</h1>
+    <p class="lede" style="margin-top:18px">That page doesn't exist, or it moved. The home page has everything that's here.</p>
+    <p style="margin-top:28px"><a class="btn btn-os" href="/">Back to {{brand.name}}</a></p>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+</body>
+</html>

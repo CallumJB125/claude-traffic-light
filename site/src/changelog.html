@@ -1,0 +1,44 @@
+<!--page {"title":"Changelog · Plexiform","desc":"What has changed in Plexiform, newest first.","nav":"changelog"}-->
+<!doctype html>
+<html lang="en">
+<head>
+{{include:head}}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{include:nav}}
+<main id="main" class="page">
+  <div class="wrap">
+    <h1>Changelog</h1>
+    <p class="lede">What changed, newest first. The beta moves fast, so this is written in plain words rather than version numbers.</p>
+    <div class="log">
+      <article id="2026-09-30">
+        <time datetime="2026-09-30">30 September 2026</time>
+        <h2>The Usage tab, and a new name</h2>
+        <ul>
+          <li><strong>Usage history.</strong> {{brand.name}} now keeps its own daily record of your usage, so history reaches back past the month of transcripts Claude Code keeps. The Usage tab shows cost by model, model share over time, where the tokens go, cache hit rate, an activity calendar, when you work, projects, and routine Opus turns, with a table behind every chart and CSV and JSON export.</li>
+          <li><strong>Above your usual.</strong> A new optional signal fires when today's spend is well above your own usual for this time of day, and the widget tooltip can say so.</li>
+          <li><strong>Ask about your history.</strong> A new MCP tool, <code>buddy_usage_history</code>, lets a session ask things like "how much did I spend on Opus in August?".</li>
+          <li><strong>More than one shape.</strong> Characters are now modules with their own eyes, mouth, hands and head, so costumes, cameos and poses fit whatever shape a character has. The ghost now stands its sign on a post and hops instead of walking.</li>
+          <li><strong>Clicks fall through.</strong> Transparent pixels around the character no longer catch the mouse.</li>
+        </ul>
+      </article>
+      <article id="earlier">
+        <time datetime="2026-09">Earlier in September 2026</time>
+        <h2>Spend, pull requests, calendar and voice</h2>
+        <ul>
+          <li><strong>Spend guardrails.</strong> Daily and weekly budgets, a warning as you near one, and an alert for a runaway session burning money fast.</li>
+          <li><strong>Git and CI signals.</strong> Pull request reviews, failing builds and deploys can light the widget, through your own <code>gh</code> login.</li>
+          <li><strong>Busy and calendar aware.</strong> Non-urgent pings are held while you're in a meeting or in Focus, and a "while you were away" recap shows what happened. Calendar access is off until you turn it on.</li>
+          <li><strong>Push-to-talk.</strong> Ask a question out loud and hear the answer. Speech is turned into text on your device, and the feature is off by default.</li>
+          <li><strong>Team board views.</strong> A table view and a dashboard with flow metrics, on top of the board. Team presence is opt-in.</li>
+          <li><strong>Safer hand-offs.</strong> Runs park cleanly when you quit the app, and text is filtered for credentials and home-folder paths before it leaves your machine.</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</main>
+{{include:footer}}
+<script src="{{asset:assets/site.js}}" defer></script>
+</body>
+</html>

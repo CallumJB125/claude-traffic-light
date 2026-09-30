@@ -1,0 +1,179 @@
+{
+ "canvas": {
+  "w": 76,
+  "h": 98
+ },
+ "origin": {
+  "x": 6,
+  "y": 10
+ },
+ "frame": {
+  "w": 64,
+  "h": 82
+ },
+ "sprites": {
+  "rig-off": 512,
+  "rig-working": 15936,
+  "rig-approve": 20802,
+  "rig-ready": 14150,
+  "rig-agents": 17836,
+  "char-claude": 11850,
+  "char-claude-hit": 22050,
+  "char-dog": 13408,
+  "char-dog-hit": 24346,
+  "char-cat": 13892,
+  "char-cat-hit": 24400,
+  "char-frog": 12822,
+  "char-frog-hit": 24280,
+  "char-robot": 12640,
+  "char-robot-hit": 24348,
+  "char-ghost": 12190,
+  "char-ghost-hit": 13948
+ },
+ "sheets": {
+  "sheet-off": {
+   "frames": 16,
+   "ms": 1600,
+   "w": 456,
+   "h": 588,
+   "bytes": 1948,
+   "oneShot": false
+  },
+  "sheet-working": {
+   "frames": 16,
+   "ms": 1600,
+   "w": 456,
+   "h": 588,
+   "bytes": 107838,
+   "oneShot": false
+  },
+  "sheet-approve": {
+   "frames": 16,
+   "ms": 1600,
+   "w": 456,
+   "h": 588,
+   "bytes": 92920,
+   "oneShot": false
+  },
+  "sheet-ready": {
+   "frames": 16,
+   "ms": 1600,
+   "w": 456,
+   "h": 588,
+   "bytes": 12134,
+   "oneShot": false
+  },
+  "sheet-agents": {
+   "frames": 16,
+   "ms": 1600,
+   "w": 456,
+   "h": 588,
+   "bytes": 112050,
+   "oneShot": false
+  },
+  "sheet-celebrate": {
+   "frames": 20,
+   "ms": 1400,
+   "w": 456,
+   "h": 588,
+   "bytes": 27332,
+   "oneShot": true
+  },
+  "sheet-claude": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 31664,
+   "oneShot": false
+  },
+  "sheet-claude-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 65178,
+   "oneShot": false
+  },
+  "sheet-dog": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 34254,
+   "oneShot": false
+  },
+  "sheet-dog-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 73950,
+   "oneShot": false
+  },
+  "sheet-cat": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 36272,
+   "oneShot": false
+  },
+  "sheet-cat-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 76252,
+   "oneShot": false
+  },
+  "sheet-frog": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 32176,
+   "oneShot": false
+  },
+  "sheet-frog-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 73950,
+   "oneShot": false
+  },
+  "sheet-robot": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 32238,
+   "oneShot": false
+  },
+  "sheet-robot-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 72642,
+   "oneShot": false
+  },
+  "sheet-ghost": {
+   "frames": 8,
+   "ms": 1600,
+   "w": 304,
+   "h": 392,
+   "bytes": 32448,
+   "oneShot": false
+  },
+  "sheet-ghost-hit": {
+   "frames": 8,
+   "ms": 800,
+   "w": 304,
+   "h": 392,
+   "bytes": 39918,
+   "oneShot": false
+  }
+ }
+}

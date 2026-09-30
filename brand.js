@@ -34,6 +34,10 @@
       download: `${SITE}/download`,
       privacy: `${SITE}/privacy`,
       hub: HUB,
+      // the phone companion web app (installable PWA, served by the team hub)
+      phone: `${HUB}/phone`,
+      // where installers and the latest*.yml update feeds are published
+      downloads: 'https://download.plexiform.dev',
       // where the app looks for updates: the release host (electron-updater reads latest*.yml here)
       updates: 'https://download.plexiform.dev',
     }),

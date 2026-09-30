@@ -59,8 +59,9 @@ test('numbered lists render as <ol>, and HTML comments never show', () => {
 // line uses.
 const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add `<!-- flow:<slug> files=<path> -->` to the matching PRIVACY.md section.';
 // Directories whose files are scanned only if the app package actually includes them
-// (board/runner, board/mcp, board/web/mock and remote/ are dev or server-side tools).
-const BY_PACKAGING = new Set(['board', 'remote']);
+// (board/runner, board/mcp, board/web/mock and remote/ are dev or server-side tools; site/ is the
+// plexiform.dev website, whose own data flows are described on its /privacy page).
+const BY_PACKAGING = new Set(['board', 'remote', 'site']);
 const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git', 'dist', 'out', 'test-results', '.omc']);
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 function shipped(dir = ROOT, out = []) {
@@ -228,6 +229,11 @@ function packaged(pkg, file) {
   }
   return included;
 }
+test('the website (site/) stays out of the app package, so its fetches are not app flows', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  for (const f of ['site/src/assets/site.js', 'site/build.js', 'site/functions/api/waitlist.js']) assert.ok(!packaged(pkg, f), `${f} is being packaged: tag its network lines with privacy-flow and document them in PRIVACY.md`);
+  assert.ok(packaged({ build: { files: ['**/*'] } }, 'site/src/assets/site.js'), 'self-check: a catch-all glob covers site/');
+});
 test('the phone relay (remote/) stays out of the app package until it is documented', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   for (const f of ['remote/src/relay.js', 'remote/package.json', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged: remove remote from SKIP_DIRS and document its flows`);

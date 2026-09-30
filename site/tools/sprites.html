@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../tokens.css" />
+<link rel="stylesheet" href="../../rig.css" />
+<style>
+  html, body { margin: 0; background: #000; }
+  /* the capture frame: the rig's 64x82 frame plus room for what hangs outside it.
+     Units are rig units; 1 unit = --s px. Origin of the rig frame is (6, 10). */
+  #frame { --s: 8px; width: calc(76 * var(--s)); height: calc(98 * var(--s)); position: relative; }
+  #stage { position: absolute; left: calc(6 * var(--s)); top: calc(10 * var(--s)); width: calc(64 * var(--s)); height: calc(82 * var(--s)); }
+  #stage svg.rig { width: 100%; height: 100%; overflow: visible; }
+</style>
+</head>
+<body>
+<div id="frame"><div id="stage"></div></div>
+<script src="../../motion.js"></script>
+<script src="../../characters/contract.js"></script>
+<script src="../../characters/builtin/core.js"></script>
+<script src="../../rig.js"></script>
+<script>
+  // called by capture-sprites.js
+  window.showLook = (look, freezeMs) => {
+    const stage = document.getElementById('stage');
+    stage.innerHTML = '';
+    const rig = mountRig(stage);
+    rig.setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...look });
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
+      // pin every animation at the same moment, so the black and the white capture match
+      for (const a of rig.svg.getAnimations({ subtree: true })) { a.pause(); a.currentTime = freezeMs; }
+      resolve(true);
+    })));
+  };
+  window.setBg = (c) => { document.body.style.background = c; };
+  // Sprite sheets. Every looping animation is given one shared period, so a
+  // strip of frames taken across it repeats seamlessly; one-shot animations
+  // are pinned at their end.
+  let current = null;
+  window.prepLoop = (look, loopMs, celebrate) => {
+    const stage = document.getElementById('stage');
+    stage.innerHTML = '';
+    const rig = mountRig(stage);
+    rig.setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...look });
+    if (celebrate) rig.celebrate();
+    current = { rig, loopMs, celebrate };
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
+      const infinite = [];
+      for (const a of rig.svg.getAnimations({ subtree: true })) {
+        const t = a.effect && a.effect.getTiming();
+        a.pause();
+        if (t && t.iterations === Infinity && !celebrate) { a.effect.updateTiming({ duration: loopMs, delay: 0, iterationStart: 0, easing: t.easing }); infinite.push(a); }
+      }
+      current.infinite = infinite;
+      resolve(infinite.length);
+    })));
+  };
+  window.pinFrame = (t, blink) => {
+    const { rig, loopMs, celebrate } = current;
+    for (const a of rig.svg.getAnimations({ subtree: true })) {
+      if (celebrate) { a.currentTime = t; continue; }
+      const tm = a.effect && a.effect.getTiming();
+      a.currentTime = tm && tm.iterations === Infinity ? t % loopMs : 6000;
+    }
+    rig.svg.classList.toggle('blinking', !!blink);
+    return true;
+  };
+</script>
+</body>
+</html>

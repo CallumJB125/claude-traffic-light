@@ -8,6 +8,8 @@ test('brand: the name, the URLs and the deep-link scheme Callum chose', () => {
   assert.equal(Brand.name, 'Plexiform');
   assert.equal(Brand.urls.site, 'https://plexiform.dev');
   assert.equal(Brand.urls.hub, 'https://app.plexiform.dev');
+  assert.equal(Brand.urls.downloads, 'https://download.plexiform.dev');
+  assert.equal(Brand.urls.phone, 'https://app.plexiform.dev/phone');
   assert.match(Brand.urls.updates, /^https:\/\/[^/]+$/, 'the update feed is an https origin, with no trailing path');
   assert.equal(Brand.urls.updates, 'https://download.plexiform.dev');
   assert.equal(Brand.scheme, 'plexiform');
