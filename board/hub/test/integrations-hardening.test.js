@@ -293,3 +293,33 @@ test('M-3b: an integration’s card.create journal row, as a member reads it, ca
     assert.deepEqual((({ base_ref, request_id, labels, title }) => ({ base_ref, request_id, labels, title }))(JSON.parse(own.payload)), { base_ref: 'main', request_id: 'mine-1', labels: '["x"]', title: 'Mine' });
   } finally { await h.close(); }
 });
+
+// ── Low-a: migration 008's guard ────────────────────────────────────────
+
+test('Low-a: 008 aborts, changing nothing, for a trigger written ON JOURNAL / ON Comments, or a known name with another definition', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { migrate, loadMigrations, currentVersion } = await import('../../shared/migrate.js');
+  const upTo = (v) => loadMigrations().filter((m) => m.version <= v);
+  const master = (db) => db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name').all().map((r) => ({ ...r }));
+  for (const extra of [
+    "CREATE TRIGGER shout_upd BEFORE UPDATE ON JOURNAL BEGIN SELECT RAISE(ABORT, 'no'); END;",
+    "CREATE TRIGGER mixed_ins BEFORE INSERT ON Comments BEGIN SELECT RAISE(ABORT, 'no') WHERE 0; END;",
+    "DROP TRIGGER journal_no_delete; CREATE TRIGGER journal_no_delete BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT, 'audited delete'); END;",
+    'DROP INDEX journal_card_seq; CREATE INDEX journal_card_seq ON journal (card_id, seq, kind);',
+    'CREATE INDEX JOURNAL_BOARD_SEQ_2 ON JOURNAL (kind);',
+  ]) {
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: upTo(7) });
+    db.exec(extra);
+    const before = master(db);
+    assert.throws(() => migrate(db, { migrations: upTo(8) }), /would drop triggers or indexes/, extra);
+    assert.equal(currentVersion(db), 7);
+    assert.deepEqual(master(db), before);
+    db.close();
+  }
+  // The plain 007 schema still migrates.
+  const ok = new DatabaseSync(':memory:');
+  migrate(ok, { migrations: upTo(7) });
+  assert.deepEqual(migrate(ok, { migrations: upTo(8) }), [8]);
+  ok.close();
+});
