@@ -12,6 +12,7 @@ const Focus = require('./focus/index.js');
 const Permission = require('./focus/permission.js');
 const Jump = require('./focus/jump.js');
 const { writeJsonAtomic } = require('../hooks/session-state.js');
+const PowerShell = require('./powershell.js');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -35,8 +36,7 @@ function activateTerminalApp(folderHint, preferApp = null) {
     // falling back to a terminal's own name.
     return new Promise((resolve) => {
       const tries = [folderHint, 'Windows Terminal', 'PowerShell', 'Command Prompt'].filter(Boolean);
-      const ps = `$w = New-Object -ComObject WScript.Shell; foreach ($t in @(${tries.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})) { if ($w.AppActivate($t)) { Write-Output $t; exit } }; Write-Output NONE`;
-      execFile('powershell', ['-NoProfile', '-c', ps], (err, out) => { // privacy-flow: terminal-jump
+      PowerShell.run(PowerShell.SCRIPTS.appActivate, tries, {}, (err, out) => { // privacy-flow: terminal-jump
         const hit = (out || '').trim();
         resolve(!err && hit && hit !== 'NONE' ? { app: hit, exact: hit === folderHint } : null);
       });
