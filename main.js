@@ -972,7 +972,8 @@ let buddyWin = null;
 // Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
 // Buddy window reads its origin once, when created, so nothing may create the
 // window (a deep link, the tray, a second instance) until it is listening.
-const devMock = !app.isPackaged && process.argv.includes('--buddy-mock-accounts') ? require('./buddy-window/mock-accounts-hub').createMockAccountsHub({ log: (m) => console.log(m) }) : null;
+// `--buddy-mock-no-email` makes it a hub without a mailer (the Google/GitHub delete check).
+const devMock = !app.isPackaged && process.argv.includes('--buddy-mock-accounts') ? require('./buddy-window/mock-accounts-hub').createMockAccountsHub({ log: (m) => console.log(m), methods: process.argv.includes('--buddy-mock-no-email') ? { email: false } : {} }) : null;
 let devAccountsHub = null;
 let devMockReady = !devMock;
 function getBuddy() {
