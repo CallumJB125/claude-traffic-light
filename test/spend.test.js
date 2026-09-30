@@ -18,12 +18,13 @@ const sorted = (list) => list.sort((a, b) => a.ts - b.ts);
 test('normalize: defaults, clamps and a bad mode', () => {
   assert.deepEqual(S.normalize(undefined), S.DEFAULTS);
   const n = S.normalize({ mode: 'free', dailyBudget: -5, warnAt: 7, runawayMinutes: 0, runawayDollars: 'x', notifyBudget: false });
+  assert.equal(n.notifyBudgetWarning, false);
+  assert.equal(n.notifyBudgetExceeded, false);
   assert.equal(n.mode, 'api');
   assert.equal(n.dailyBudget, 0);
   assert.equal(n.warnAt, 1);
   assert.equal(n.runawayMinutes, 1);
   assert.equal(n.runawayDollars, 40);
-  assert.equal(n.notifyBudget, false);
   assert.equal(S.normalize({ mode: 'subscription' }).mode, 'subscription');
 });
 
@@ -331,4 +332,31 @@ test('help: the panel explains the spend rules', () => {
   const h = Help.explain({ look, fired, owned, firedNames: R.firedNames(rules, fired, owned), sessions: [live('a')] }, rules);
   assert.equal(h.headline, 'Runaway session');
   assert.match(h.meaning, /runaway threshold/);
+});
+
+test('spend: the split budget switches fall back to the old single one', () => {
+  assert.deepEqual([S.normalize({}).notifyBudgetWarning, S.normalize({}).notifyBudgetExceeded], [true, true]);
+  const split = S.normalize({ notifyBudget: false, notifyBudgetExceeded: true });
+  assert.deepEqual([split.notifyBudgetWarning, split.notifyBudgetExceeded], [false, true]);
+});
+
+test('help: the old notifyBudget mutes both budget notices; the split keys mute one', () => {
+  const at = (level) => ({ sessions: [], spend: env({ budget: { level, which: 'day', dayKey: 'd', weekKey: 'w' }, budgetText: 't' }).spend });
+  const first = (level, spend) => note(new Set(['x']), at(level), { spend }).fire.length;
+  assert.equal(first('warning', { notifyBudget: false }), 0);
+  assert.equal(first('exceeded', { notifyBudget: false }), 0);
+  assert.equal(first('warning', { notifyBudgetWarning: false }), 0);
+  assert.equal(first('exceeded', { notifyBudgetWarning: false }), 1);
+  assert.equal(first('exceeded', { notifyBudgetExceeded: false }), 0);
+  assert.equal(first('warning', { notifyBudgetExceeded: false }), 1);
+});
+
+test('help: Pair mutes the budget warning but not exceeded or runaway', () => {
+  const Rules = require('../rules.js');
+  const Spend = require('../spend.js');
+  const pair = Rules.templatePrefs('pair').spend;
+  const sp = Spend.normalize({ ...Spend.DEFAULTS, ...pair });
+  assert.equal(sp.notifyBudgetWarning, false);
+  assert.equal(sp.notifyBudgetExceeded, true);
+  assert.equal(sp.notifyRunaway, true);
 });

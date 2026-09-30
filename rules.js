@@ -561,9 +561,8 @@
     {
       id: 'pair', name: 'Pair with Claude all day', description: 'Quiet: lamp colours only. Sounds and effects are kept for red, when you are blocked.',
       fit: quietFit(true),
-      // Budget notices share one switch for warning and exceeded, so it is left as it is.
-      prefs: { seasonal: false, notifyStates: { 'turn-failed': false, offline: false } },
-      prefsNote: 'turn-failed and offline notifications off, seasonal looks off',
+      prefs: { seasonal: false, notifyStates: { 'turn-failed': false, offline: false }, spend: { notifyBudgetWarning: false } },
+      prefsNote: 'amber and offline notifications off, seasonal looks off',
     },
     {
       id: 'minimal', name: 'Minimal', description: 'Lamp only: no poses, costumes, effects, sounds or notifications.',

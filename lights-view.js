@@ -939,8 +939,8 @@
   // whole, so notifyStates starts from what is saved.
   function prefsToSave() {
     if (!stagedPrefs) return {};
-    const { notifyStates, ...rest } = stagedPrefs;
-    return notifyStates ? { ...rest, notifyStates: { ...config.notifyStates, ...notifyStates } } : rest;
+    const { notifyStates, spend, ...rest } = stagedPrefs;
+    return { ...rest, ...(notifyStates && { notifyStates: { ...config.notifyStates, ...notifyStates } }), ...(spend && { spend: { ...config.spend, ...spend } }) };
   }
 
   function applyRules(next, tpl) {
