@@ -187,7 +187,9 @@ function startHook(home, port, input, { session = 's', askMs = 5000, payload = {
 async function waitForRequests(dir, n) {
   const deadline = Date.now() + 4000;
   for (;;) {
-    const reqs = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))) : [];
+    // A hook can remove its request between the listing and the read.
+    const read = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } };
+    const reqs = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map(read).filter(Boolean) : [];
     if (reqs.length >= n || Date.now() > deadline) return reqs;
     await new Promise((r) => setTimeout(r, 30));
   }
@@ -236,8 +238,11 @@ test('hook: an ack-wanting answer is confirmed via .taken; after the deadline no
     assert.equal(await A.awaitTaken(dir, req.id, w.nonce, { timeoutMs: 3000 }), 'applied');
     assert.deepEqual(JSON.parse(await h.done).hookSpecificOutput.decision, { behavior: 'allow' });
 
-    const late = startHook(home, app.port, { command: 'npm test' }, { askMs: 200 });
+    // Long enough that a loaded machine still sees the request before the hook gives up;
+    // the late answer is only tried once the hook has exited.
+    const late = startHook(home, app.port, { command: 'npm test' }, { askMs: 1500 });
     const [req2] = await waitForRequests(dir, 1);
+    assert.ok(req2, 'the late hook wrote its request');
     assert.equal(await late.done, '');
     assert.equal(A.writeAnswer(dir, req2.id, 'allow', { key: app.keyFor(req2.id) }).ok, false, 'request is gone once the hook gave up');
     assert.deepEqual(fs.readdirSync(dir), [], 'nothing left behind');
