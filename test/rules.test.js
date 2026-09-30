@@ -589,7 +589,9 @@ test('set-status: permission-request blocks until answered, then prints the deci
   assert.ok(req, 'request file appears while the hook waits');
   assert.equal(req.tool, 'Bash');
   assert.equal(req.summary, 'git push origin main');
-  fs.writeFileSync(path.join(reqDir, `${req.id}.answer`), 'allow');
+  assert.deepEqual(req.toolInput, { command: 'git push origin main' }, 'the full input is recorded');
+  assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600);
+  assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow').ok, true);
   return new Promise((resolve) => child.on('exit', (code) => {
     assert.equal(code, 0);
     const parsed = JSON.parse(out);

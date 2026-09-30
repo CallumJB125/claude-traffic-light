@@ -394,27 +394,32 @@ if (signal === 'permission-request') {
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   // Nobody is listening for a request if the app is down: skip the 55s wait.
   if (waitMs > 0 && !appIsUp()) finish();
-  fs.mkdirSync(REQUESTS_DIR, { recursive: true });
-  const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
-  const reqFile = path.join(REQUESTS_DIR, `${id}.json`);
-  const ansFile = path.join(REQUESTS_DIR, `${id}.answer`);
+  const Answer = require('./answer-file.js');
+  fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
+  // Random, not a timestamp: parallel tool calls in one session would share
+  // a millisecond id, and one answer would release the other call.
+  const id = `${HOST_TAG}-${require('crypto').randomUUID()}`;
+  const { req: reqFile, ans: ansFile } = Answer.paths(REQUESTS_DIR, id);
   const input = data?.tool_input || {};
+  let toolInputHash = null;
+  try { toolInputHash = Answer.hashToolInput(input); } catch { finish(); }
   const summary = typeof input.command === 'string' ? input.command
     : typeof input.file_path === 'string' ? input.file_path
     : typeof input.url === 'string' ? input.url
     : Object.keys(input).length ? JSON.stringify(input) : '';
-  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), createdAt: new Date().toISOString() }, null, 2));
+  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), toolInput: input, toolInputHash, createdAt: new Date().toISOString() }, null, 2), { flag: 'wx', mode: 0o600 });
   const deadline = Date.now() + waitMs;
   let decision = null;
+  let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < deadline) {
-    try {
-      decision = fs.readFileSync(ansFile, 'utf8').trim();
-      break;
-    } catch {
-      Atomics.wait(sleeper, 0, 0, 150);
-    }
+    if (fs.existsSync(ansFile)) { decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash); answered = true; break; }
+    Atomics.wait(sleeper, 0, 0, 150);
   }
+  // The last word: either our timeout marker lands first, or an answer that
+  // raced the deadline is already there and is honoured.
+  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash);
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
   hookOutput = Claude.answer(decision);

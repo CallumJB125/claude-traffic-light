@@ -76,12 +76,8 @@ function readRequests(root, now = Date.now()) {
 function answerRequest(root, id, decision) {
   id = String(id || '');
   decision = String(decision || '');
-  if (!/^[\w.-]+$/.test(id)) return { ok: false, error: 'bad request id' };
-  if (!['allow', 'deny'].includes(decision)) return { ok: false, error: 'decision must be "allow" or "deny"' };
-  const dir = path.join(root, 'requests');
-  if (!fs.existsSync(path.join(dir, `${id}.json`))) return { ok: false, error: 'no such pending request (answered, timed out, or never existed)' };
-  fs.writeFileSync(path.join(dir, `${id}.answer`), decision);
-  return { ok: true, id, decision };
+  const r = require('./hooks/answer-file.js').writeAnswer(path.join(root, 'requests'), id, decision, { by: 'mcp' });
+  return r.ok ? { ok: true, id, decision } : { ok: false, error: r.error };
 }
 
 function readManualOverride(root, now = Date.now()) {

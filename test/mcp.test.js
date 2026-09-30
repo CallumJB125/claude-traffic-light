@@ -153,7 +153,7 @@ test('buddy_recent_transitions: parses [state] lines newest first, across the ro
 });
 
 test('buddy_pending_requests + buddy_answer_request: the widget\'s own answer file', () => {
-  const req = { id: 'h-a-1', sessionId: 'a', cwd: '/w/a', tool: 'Bash', summary: 'ls', createdAt: iso(5000) };
+  const req = { id: 'h-a-1', sessionId: 'a', cwd: '/w/a', tool: 'Bash', summary: 'ls', toolInput: { command: 'ls' }, toolInputHash: require('../hooks/answer-file.js').hashToolInput({ command: 'ls' }), createdAt: iso(5000) };
   const expired = { id: 'h-b-1', sessionId: 'b', cwd: '/w/b', tool: 'Bash', summary: 'ls', createdAt: iso(120000) };
   const root = fixture({ config: { askFromWidget: true }, requests: [req, expired] });
   const p = M.buddyPendingRequests({ root, now: NOW });
@@ -166,7 +166,9 @@ test('buddy_pending_requests + buddy_answer_request: the widget\'s own answer fi
   assert.equal(M.answerRequest(root, '../../etc', 'allow').ok, false);
   assert.equal(M.answerRequest(root, 'h-nope', 'allow').ok, false);
   assert.deepEqual(M.answerRequest(root, 'h-a-1', 'allow'), { ok: true, id: 'h-a-1', decision: 'allow' });
-  assert.equal(fs.readFileSync(path.join(root, 'requests', 'h-a-1.answer'), 'utf8'), 'allow');
+  const ans = JSON.parse(fs.readFileSync(path.join(root, 'requests', 'h-a-1.answer'), 'utf8'));
+  assert.deepEqual([ans.decision, ans.toolInputHash, ans.by], ['allow', req.toolInputHash, 'mcp']);
+  assert.equal(M.answerRequest(root, 'h-a-1', 'deny').ok, false, 'first answer wins');
   assert.equal(M.buddyPendingRequests({ root, now: NOW }).requests[0].answered, true);
 });
 
