@@ -12,13 +12,22 @@
 // SQLite's 12-step procedure) runs with foreign keys off, which only works
 // outside a transaction; a foreign_key_check before COMMIT rolls it back if the
 // rebuild broke a reference.
+//
+// `-- migrate: rebuilds` (alone or with foreign_keys=off, e.g.
+// `-- migrate: foreign_keys=off rebuilds`) marks a file that drops and
+// recreates tables: a later version's triggers or indexes on those tables would
+// be lost, so it is refused when any higher version is already applied.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const FK_OFF = /^--[ \t]*migrate:[ \t]*foreign_keys=off[ \t]*(\r?\n|$)/;
+// First-line directives: `-- migrate: foreign_keys=off rebuilds` (space or comma separated).
+function directives(sql) {
+  const m = /^--[ \t]*migrate:[ \t]*([^\r\n]*)/.exec(sql);
+  return new Set(m ? m[1].trim().split(/[\s,]+/).filter(Boolean) : []);
+}
 
 export function loadMigrations(dir = join(HERE, 'migrations')) {
   const list = [{ version: 1, name: 'init', sql: readFileSync(join(HERE, 'schema.sql'), 'utf8') }];
@@ -54,7 +63,12 @@ export function migrate(db, { migrations = loadMigrations(), wal = false, now = 
   const applied = [];
   for (const m of migrations) {
     if (have.has(m.version)) continue;
-    const fkOff = FK_OFF.test(m.sql);
+    const dir = directives(m.sql);
+    const fkOff = dir.has('foreign_keys=off');
+    const newest = Math.max(0, ...have);
+    if (dir.has('rebuilds') && newest > m.version) {
+      throw new Error(`migration ${String(m.version).padStart(3, '0')}_${m.name} rebuilds tables and cannot be applied after version ${newest}; apply migrations in order`);
+    }
     if (fkOff) db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     try {

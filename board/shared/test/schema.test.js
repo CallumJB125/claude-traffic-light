@@ -112,6 +112,38 @@ test('migrate: `-- migrate: foreign_keys=off` rebuilds a referenced table with i
   }
 });
 
+test('migrate: `-- migrate: rebuilds` is refused after a higher version, applies in order, and plain gap-fills still land', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
+    writeFileSync(join(dir, '009_trig.sql'), "CREATE TRIGGER t_guard BEFORE DELETE ON t BEGIN SELECT RAISE(ABORT, 'kept'); END;");
+    const db = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [1, 2, 9]);
+    // A gap-filling rebuild would drop 009's trigger: refused, nothing applied.
+    writeFileSync(join(dir, '008_rebuild.sql'), `-- migrate: foreign_keys=off rebuilds
+      CREATE TABLE t_new (x INTEGER); INSERT INTO t_new SELECT x FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /migration 008_rebuild rebuilds tables and cannot be applied after version 9; apply migrations in order/);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 't_guard'").get().n, 1);
+    assert.equal(currentVersion(db), 9);
+    // The directive alone works too.
+    writeFileSync(join(dir, '008_rebuild.sql'), '-- migrate: rebuilds\nSELECT 1;');
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /cannot be applied after version 9/);
+    // A plain gap-fill still lands.
+    rmSync(join(dir, '008_rebuild.sql'));
+    writeFileSync(join(dir, '005_plain.sql'), 'CREATE TABLE p (x INTEGER);');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [5]);
+    // In order (a fresh DB), the same rebuild applies before 009.
+    writeFileSync(join(dir, '008_rebuild.sql'), `-- migrate: foreign_keys=off, rebuilds
+      CREATE TABLE t_new (x INTEGER); INSERT INTO t_new SELECT x FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;`);
+    const db2 = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db2, { migrations: loadMigrations(dir) }), [1, 2, 5, 8, 9]);
+    assert.equal(db2.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 't_guard'").get().n, 1);
+    assert.equal(db2.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('fence is monotonic (trigger) and restore bumps +1000 with a new epoch', () => {
   const db = fresh();
   insertCard(db, 'c1', { fence: 3 });

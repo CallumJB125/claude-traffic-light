@@ -1,4 +1,4 @@
--- migrate: foreign_keys=off
+-- migrate: foreign_keys=off rebuilds
 -- Accounts security review fixes (CONTRACT D69, D70).
 -- 1. invites.revoke_reason gains 'account_deleted' (M3: deleting an account
 --    withdraws the pending invites addressed to it). A CHECK can't be altered
