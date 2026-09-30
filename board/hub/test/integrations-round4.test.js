@@ -6,10 +6,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { defineConnector } from '../integrations/connector.js';
 import { migrate, loadMigrations, currentVersion } from '../../shared/migrate.js';
+import { replay } from '../../shared/journal.js';
+import { dashboardMetrics } from '../../web/js/metrics.js';
 import { startHub } from './helpers.js';
 
 // ── H-1 ───────────────────────────────────────────────────────────────────
@@ -120,5 +122,56 @@ test('M-1: a flooding (connection, IP) pair gets one body read at a time; anothe
     assert.equal(held.status, null, 'the one read in flight goes on');
     assert.equal(other.status, null, 'another connection is read as usual');
     for (const x of [held, other, ...flood]) x.req.destroy();
+  } finally { await h.close(); }
+});
+
+// ── M-2 ───────────────────────────────────────────────────────────────────
+
+test('M-2: an integration’s card.create journals hashes and ids, never the title, body or acceptance; replay and the Dashboard still work', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('tracker2'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'tracker2', external_id: 'w1' });
+    const ctx = reg.ctxFor(conn.id);
+    const secret = 'Customer ACME-4471 cannot log in';
+    const { card } = (await ctx.act('card.create', { external_ref: 'ISS-9' }, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, {
+      request_id: randomUUID(), title: secret, body: `${secret}: full report`, acceptance: `${secret} fixed`,
+    }))).result;
+    const row = h.db.get("SELECT actor_kind, actor_id, payload FROM journal WHERE kind = 'card.create' AND card_id = ?", card.id);
+    assert.equal(row.actor_kind, 'integration');
+    assert.equal(row.actor_id, conn.id);
+    assert.ok(!row.payload.includes('ACME'), 'no external text in the journal');
+    const p = JSON.parse(row.payload);
+    for (const f of ['title', 'body', 'acceptance']) {
+      assert.equal(f in p, false, `${f} is not journaled`);
+      assert.match(p[`${f}_sha256`], /^[0-9a-f]{16}$/);
+    }
+    assert.equal(p.title_sha256, createHash('sha256').update(secret).digest('hex').slice(0, 16));
+    assert.equal(p.connection_id, conn.id);
+    assert.equal(p.external_ref, 'ISS-9');
+    assert.equal(p.key, card.key);
+    // Replay rebuilds the card (its title lives in `cards`), the Dashboard shows the live title.
+    const rows = h.db.all('SELECT * FROM journal ORDER BY seq');
+    const r = replay(rows).get(card.id);
+    assert.equal(r.key, card.key);
+    assert.equal(r.title, null);
+    assert.deepEqual(JSON.parse(r.labels), ['via:tracker2']);
+    // The Dashboard reads the title from the snapshot's card; a card no longer
+    // on the board shows its key (the title is null, rendered 'Removed card').
+    const t0 = Date.now() - 3 * 3_600_000;
+    const hist = [
+      { seq: 1, card_id: card.id, at_hub: t0, kind: 'card.create', payload: p },
+      { seq: 2, card_id: card.id, at_hub: t0 + 1000, kind: 'card.update', payload: { fields: { column_name: ['todo', 'in_progress'] } } },
+      { seq: 3, card_id: card.id, at_hub: t0 + 2000, kind: 'card.update', payload: { fields: { column_name: ['in_progress', 'done'] } } },
+    ];
+    const onBoard = dashboardMetrics({ rows: hist, cards: [{ id: card.id, key: card.key, title: card.title }], now: Date.now() });
+    assert.deepEqual(onBoard.cycle.items.map((i) => [i.key, i.title, i.on_board]), [[card.key, secret, true]]);
+    const gone = dashboardMetrics({ rows: hist, cards: [], now: Date.now() });
+    assert.deepEqual(gone.cycle.items.map((i) => [i.key, i.title, i.on_board]), [[card.key, null, false]]);
+    // A person's own card keeps its text in the journal.
+    const alice = await h.login('alice');
+    const mine = await h.api(alice, 'POST', `/api/boards/${h.ids.board}/cards`, { request_id: randomUUID(), title: 'Mine', body: 'b' });
+    assert.equal(JSON.parse(h.db.get("SELECT payload FROM journal WHERE kind = 'card.create' AND card_id = ?", mine.body.card.id).payload).title, 'Mine');
   } finally { await h.close(); }
 });

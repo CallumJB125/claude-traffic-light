@@ -262,9 +262,9 @@ export function createIntegrations({
       return { ...body, budget_usd: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track }) {
+    function actAs(memberId, { live, action: actName, track, external_ref }) {
       const first = actor(memberId);
-      const via = { connection_id: c.id, member_id: first.id, name: conn.name };
+      const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
       const call = (body, fn) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
         return track(callLive(body, fn));
@@ -355,7 +355,7 @@ export function createIntegrations({
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track })), link: guard(link) };
+      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link) };
       let decision = 'failed';
       let error = 'handler_failed';
       try {

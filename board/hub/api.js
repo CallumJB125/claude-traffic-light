@@ -2,7 +2,7 @@
 // change is hub.apply() → states.step() inside the board's queue; the rest are
 // plain row edits that never touch run state.
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
@@ -151,8 +151,15 @@ export class Api {
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
         const c = this.hub.card(id);
+        // An integration's card text is external text: the append-only
+        // journal can never erase it, so it keeps only hashes (D41); the
+        // text lives in `cards`, where replay and the Dashboard read it.
+        const via = this.hub.viaScope.getStore();
+        const texts = via?.member_id === member.id
+          ? { title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id, external_ref: via.external_ref ?? null }
+          : { title, body: text, acceptance };
         this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload: {
-          key: c.key, title, body: text, acceptance, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
+          key: c.key, ...texts, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
         } });
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
@@ -498,6 +505,8 @@ export class Api {
     this.db.insert('audit', { actor, action, target, detail, at: this.hub.iso() });
   }
 }
+
+const shortHash = (s) => (s == null ? null : createHash('sha256').update(s).digest('hex').slice(0, 16));
 
 function stripErr(e) {
   const { code, message, ...rest } = e;

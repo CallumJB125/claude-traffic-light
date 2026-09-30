@@ -26,7 +26,8 @@ these in a connector:**
 | Health and errors | Health keeps a short code (members can read it). Your error messages are logged redacted and never shown to users, so don't bother making them friendly — and never put secrets in them. |
 
 **Never** journal or audit secrets, tokens or external message text (D41): ids and short
-labels only. **Never** trust identity from a payload field: map external users to
+labels only. The registry already keeps a card you create out of the journal: its `card.create`
+row holds short sha256 hashes of the title, body and acceptance, never the text. **Never** trust identity from a payload field: map external users to
 members only through a verified link (`external_identities`) or a rule approved in review.
 
 **Connections** are per team: two teams may connect the same external workspace, each with
