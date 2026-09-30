@@ -126,7 +126,7 @@ PROPOSED, not built: let you choose how many days of stats to keep.
 
 Plexiform never deletes your data for you. To remove it yourself:
 
-1. Quit Plexiform (tray menu → Quit).
+1. Quit the app from its tray (menu-bar) icon → Quit.
 2. Remove the hooks it added to Claude Code (in `~/.claude/settings.json`, or `%USERPROFILE%\.claude\settings.json` on Windows), and the `claude-buddy` entry in `~/.claude.json` if you turned on the Claude integration. Hooks for Cursor, Codex and Gemini, if connected, are in those tools' own config.
 3. Delete the folder `~/.claude-traffic-light` (`%USERPROFILE%\.claude-traffic-light` on Windows), which includes `bin/buddy-hook`.
 4. Delete Electron's app data: `~/Library/Application Support/Claude Buddy` on macOS, `%APPDATA%\Claude Buddy` on Windows.
