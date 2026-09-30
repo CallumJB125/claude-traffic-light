@@ -237,6 +237,11 @@
     // Press and hold (without moving) = ask a question out loud; letting go
     // sends it. The release is not also a click.
     const LONG_PRESS_MS = 650;
+    // Known up front, so a hold where voice can't work stays a plain click.
+    let longPressOn = false;
+    const syncVoice = () => window.trafficLight.voiceEnabled().then((on) => { longPressOn = !!on; }).catch(() => { longPressOn = false; });
+    syncVoice();
+    window.trafficLight.onStatusChanged(syncVoice);
     let pressTimer = 0;
     let pressTalking = false;
     let swallowClick = false;
@@ -251,7 +256,7 @@
     app.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       clearTimeout(pressTimer);
-      pressTimer = setTimeout(() => {
+      if (longPressOn) pressTimer = setTimeout(() => {
         pressTimer = 0;
         if (!drag || didDrag) return;
         pressTalking = true;
@@ -377,6 +382,7 @@
       document.body.classList.toggle('listening', listening);
       rig.talking(st.state === 'talking');
       if (listening) showVoiceText(st.partial ? `“${st.partial}”` : 'Listening…');
+      else if (st.state === 'authorizing') showVoiceText('Allow Claude Buddy in the macOS prompt');
       else if (st.state === 'thinking') showVoiceText(st.heard ? `“${st.heard}”` : '…');
       else if (st.state === 'talking') showVoiceText(st.text || '');
       else if (st.state === 'error') showVoiceText(st.error || 'Could not listen', 6000);

@@ -2293,26 +2293,19 @@ ipcMain.handle('gesture', async (e, gesture) => {
 const VOICE_HELPER = app.isPackaged ? path.join(process.resourcesPath, 'voice', 'buddy-listen') : path.join(__dirname, 'native', 'voice', 'build', 'buddy-listen');
 const McpServer = require('./mcp-server.js');
 const sendVoice = (st) => win?.webContents.send('voice-state', st);
-const listener = require('./src/voice-helper.js').createListener({
-  spawn: require('child_process').spawn, helperPath: VOICE_HELPER, exists: fs.existsSync,
-  onState: sendVoice, onFinal: (text) => { answerVoice(text).catch((err) => console.warn('[voice]', err.message)); }, log: console.log,
+const VoiceHelper = require('./src/voice-helper.js');
+const { spawn } = require('child_process');
+const flow = VoiceHelper.createFlow({ reply: voiceReply, speak, send: sendVoice, speakable: Voice.speakable });
+const listener = VoiceHelper.createListener({
+  spawn, helperPath: VOICE_HELPER, exists: fs.existsSync,
+  onState: sendVoice, onFinal: (text) => { flow.question(text).catch((err) => console.warn('[voice]', err.message)); }, log: console.log,
 });
-let speaking = null;
 // The last stretch the screen was locked or the Mac asleep: "while I was out".
 let awayFrom = null;
 let lastAway = null;
 const AWAY_FRESH_MS = 12 * 3600000;
 
-async function answerVoice(text) {
-  sendVoice({ state: 'thinking', heard: text });
-  let reply;
-  try { reply = await voiceReply(text); } catch (err) { console.warn('[voice] answer failed:', err.message); reply = 'Sorry, I could not work that out.'; }
-  sendVoice({ state: 'talking', heard: text, text: reply });
-  const child = speak(reply, () => { if (speaking !== child) return; speaking = null; sendVoice({ state: 'idle' }); });
-  speaking = child;
-}
-
-async function voiceReply(text) {
+async function voiceReply(text, onCancel) {
   const intent = Voice.parseIntent(text);
   const cfg = Voice.normalizeConfig(loadConfig().voice);
   const free = intent.intent === 'unknown' && cfg.askClaude;
@@ -2329,26 +2322,19 @@ async function voiceReply(text) {
     ctx.awayKnown = !!away;
   }
   if (free) {
-    const said = await askClaude(text, Voice.snapshot(ctx));
+    const ask = VoiceHelper.askClaude({
+      spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
+      env: Voice.claudeEnv(process.env, `${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin`),
+    });
+    onCancel(ask.cancel);
+    const said = await ask.promise;
     if (said) return said;
   }
   return Voice.answer(intent, ctx);
 }
 
-// Free-form questions go to the user's own `claude` login, isolated (see
-// Voice.claudeArgs), from a scratch folder so no project CLAUDE.md loads.
-function askClaude(question, snapshot) {
-  return new Promise((resolve) => {
-    execFile('claude', Voice.claudeArgs(question, snapshot), {
-      cwd: os.tmpdir(),
-      env: { ...process.env, PATH: `${process.env.PATH || ''}:${path.join(os.homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin` },
-      timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 256 * 1024,
-    }, (err, out) => resolve(err ? null : String(out).trim().slice(0, 400) || null));
-  });
-}
-
 function startListening(holdKey) {
-  if (speaking) { try { speaking.kill(); } catch { /* done */ } speaking = null; }
+  flow.interrupt();
   const r = listener.start({ holdKey });
   if (!r.ok && r.reason !== 'already listening') sendVoice({ state: 'error', error: r.reason });
   return r;
@@ -2362,11 +2348,9 @@ function applyVoiceHotkey() {
   if (!IS_MAC || IS_DEV_RUN) return;
   const hk = Voice.hotkey(Voice.normalizeConfig(loadConfig().voice).hotkey);
   if (!hk) return;
-  // Held: the helper sees the key come up. If it can't read the key, a
-  // second press ends the question instead.
+  // Held: the helper sees the key come up (and gives up if it can't read it).
   const ok = globalShortcut.register(hk.accelerator, () => {
-    if (listener.listening) { if (!listener.holdSupported) listener.stop(); return; }
-    startListening(hk.keyCode);
+    if (!listener.listening) startListening(hk.keyCode);
   });
   if (ok) voiceHotkey = hk.accelerator;
   else { voiceHotkeyTaken = hk.accelerator; console.warn(`[voice] ${hk.accelerator} is already taken by another app`); }
@@ -2382,10 +2366,13 @@ function initVoice() {
   app.on('will-quit', () => { globalShortcut.unregisterAll(); listener.cancel(); });
 }
 
+// A long-press where voice can't work (not a Mac, helper not bundled) stays
+// an ordinary click: no tooltip, nothing swallowed.
 ipcMain.handle('voice-start', () => {
-  if (!Voice.normalizeConfig(loadConfig().voice).longPress) return { ok: false, reason: 'off' };
+  if (!listener.available() || !Voice.normalizeConfig(loadConfig().voice).longPress) return { ok: false, reason: 'off' };
   return startListening(null);
 });
+ipcMain.handle('voice-enabled', () => listener.available() && Voice.normalizeConfig(loadConfig().voice).longPress);
 ipcMain.handle('voice-stop', () => listener.stop());
 ipcMain.handle('voice-status', () => ({
   available: listener.available(),

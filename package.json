@@ -69,19 +69,23 @@
       {
         "from": "adapters",
         "to": "adapters"
-      },
-      {
-        "from": "native/voice/build",
-        "to": "voice",
-        "filter": [
-          "buddy-listen"
-        ]
       }
     ],
     "mac": {
       "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools",
       "target": "dmg",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [
+        {
+          "from": "native/voice/build",
+          "to": "voice",
+          "filter": [
+            "buddy-listen"
+          ]
+        }
+      ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Claude Buddy listens only while you hold the talk key or press and hold the widget, to answer your question.",
         "NSSpeechRecognitionUsageDescription": "Claude Buddy turns your question into text on this Mac. Audio is never stored or sent anywhere."

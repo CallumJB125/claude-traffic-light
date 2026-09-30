@@ -4,10 +4,17 @@
 //   buddy-listen listen [--hold-key N] [--max-ms MS] [--locale ID]
 //   buddy-listen file PATH [--locale ID]   transcribe an audio file (latency checks)
 //
-// Speaks JSON lines on stdout: {"event":"ready"}, {"event":"partial","text":…},
-// {"event":"final","text":…,"ms":…}, {"event":"hold-unsupported"},
-// {"event":"error","error":…}. `listen` stops on a "stop" line or EOF on
-// stdin, when the held key (a macOS virtual keycode) comes up, or at --max-ms.
+// Speaks JSON lines on stdout: {"event":"authorizing"} (a macOS permission
+// prompt is up), {"event":"ready"} (the mic is open, and only from here),
+// {"event":"partial","text":…}, {"event":"final","text":…,"ms":…},
+// {"event":"cancelled"} (let go before the mic opened), {"event":"error",…}.
+//
+// The mic is only ever open while the question is being held. `listen` stops
+// on a "stop" line or EOF on stdin (the widget's long-press ending), when the
+// held key (a macOS virtual keycode) comes up, or at --max-ms. The key is
+// watched from launch, before any permission prompt: let go during the prompt
+// and the mic never opens; if the key never reads as down within 300 ms, the
+// helper gives up ("hold-unsupported") instead of recording until --max-ms.
 //
 // Recognition is SFSpeechRecognizer with requiresOnDeviceRecognition: if the
 // locale has no on-device model it fails rather than falling back to Apple's
@@ -108,7 +115,42 @@ case "file":
 case "listen":
   let holdKey = option("--hold-key").flatMap { UInt16($0) }
   let maxMs = Int(option("--max-ms") ?? "") ?? 15000
+  let launched = Date()
+  // Set once the mic is open; until then a stop only marks the question as let go.
+  var stopNow: (() -> Void)? = nil
+  var letGo = false
+  func requestStop() {
+    if let stop = stopNow { stop() } else { letGo = true }
+  }
+
+  DispatchQueue.global().async {
+    while let line = readLine() {
+      if line.trimmingCharacters(in: .whitespaces) == "stop" { break }
+    }
+    DispatchQueue.main.async { requestStop() }
+  }
+
+  var keyTimer: DispatchSourceTimer? = nil
+  if let key = holdKey {
+    var seenDown = false
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now(), repeating: .milliseconds(30))
+    timer.setEventHandler {
+      let down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(key))
+      if down { seenDown = true; return }
+      if seenDown { timer.cancel(); requestStop(); return }
+      if Date().timeIntervalSince(launched) > 0.3 { timer.cancel(); fail("hold-unsupported", code: 4) }
+    }
+    timer.resume()
+    keyTimer = timer
+  }
+  _ = keyTimer
+
+  if SFSpeechRecognizer.authorizationStatus() == .notDetermined || AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+    emit(["event": "authorizing"])
+  }
   authorize(mic: true) {
+    if letGo { emit(["event": "cancelled"]); exit(0) }
     requireOnDevice()
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.requiresOnDeviceRecognition = true
@@ -149,33 +191,9 @@ case "listen":
         }
       }
     }
+    stopNow = stop
     emit(["event": "ready"])
-
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(maxMs)) { stop() }
-
-    // Hold-to-talk: poll the key. If it never reads as down (no key state
-    // for this key, or it was already up), say so and wait for "stop".
-    if let key = holdKey {
-      var seenDown = false
-      let begun = Date()
-      let timer = DispatchSource.makeTimerSource(queue: .main)
-      timer.schedule(deadline: .now(), repeating: .milliseconds(30))
-      timer.setEventHandler {
-        let down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(key))
-        if down { seenDown = true } else if seenDown { timer.cancel(); stop() } else if Date().timeIntervalSince(begun) > 0.3 {
-          timer.cancel()
-          emit(["event": "hold-unsupported"])
-        }
-      }
-      timer.resume()
-    }
-
-    DispatchQueue.global().async {
-      while let line = readLine() {
-        if line.trimmingCharacters(in: .whitespaces) == "stop" { break }
-      }
-      DispatchQueue.main.async { stop() }
-    }
   }
   dispatchMain()
 

@@ -26,7 +26,8 @@ module.exports = ({ getWin }) => {
   // Returns the child so a new question can cut an answer short.
   function speak(text, done = () => {}) {
     if (IS_WIN) return execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => done());
-    return execFile('say', [text], () => done());
+    // '--': a reply starting with '-' is words, never a `say` option.
+    return execFile('say', ['--', String(text)], () => done());
   }
 
   return { playSound, speak };

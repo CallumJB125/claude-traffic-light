@@ -247,13 +247,29 @@ function answer(intent, ctx = {}) {
 // ── Free-form, through the user's own Claude Code login ──────────────────
 // Only when voice.askClaude is on. The isolation profile from the board
 // spikes: no user/project settings, hooks, plugins or MCP servers, no tools,
-// nothing saved, a hard spend cap. Never another provider or key.
+// nothing saved, no auto-memory, a hard spend cap. The question goes in on
+// stdin, never argv. Never another provider or key.
 const CLAUDE_MAX_BUDGET_USD = '0.05';
 const CLAUDE_SYSTEM = 'You are Claude Buddy, a desk widget that watches the user\'s Claude Code sessions. Answer the spoken question in at most two short sentences, plain words for text-to-speech, using only the JSON snapshot given. If the snapshot cannot answer it, say so.';
-function claudeArgs(question, snapshot) {
-  const prompt = `Snapshot:\n${JSON.stringify(snapshot)}\n\nQuestion: ${String(question).slice(0, 500)}`;
-  return ['-p', prompt, '--model', 'haiku', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--no-session-persistence', '--max-budget-usd', CLAUDE_MAX_BUDGET_USD, '--output-format', 'text', '--system-prompt', CLAUDE_SYSTEM];
+function claudeArgs() {
+  return ['-p', '--model', 'haiku', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--no-session-persistence', '--max-budget-usd', CLAUDE_MAX_BUDGET_USD, '--output-format', 'text', '--system-prompt', CLAUDE_SYSTEM];
 }
+function claudePrompt(question, snap) {
+  return `Snapshot:\n${JSON.stringify(snap)}\n\nQuestion: ${String(question).slice(0, 500)}`;
+}
+// Only what the CLI needs to find the user's login; nothing that could point
+// it at another config dir, account, key or parent Claude Code session.
+const CLAUDE_ENV_KEYS = ['HOME', 'PATH', 'USER', 'LANG', 'TMPDIR'];
+function claudeEnv(env = process.env, extraPath = '') {
+  const out = {};
+  for (const k of CLAUDE_ENV_KEYS) if (env[k]) out[k] = env[k];
+  if (extraPath) out.PATH = out.PATH ? `${out.PATH}:${extraPath}` : extraPath;
+  out.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+  return out;
+}
+// `say` and the tooltip get plain words: nothing that reads as an option.
+const speakable = (text) => String(text || '').replace(/^[\s-]+/, '').trim();
+
 // What free-form sees: states and names, never file contents or transcripts.
 function snapshot(ctx = {}) {
   return {
@@ -263,4 +279,4 @@ function snapshot(ctx = {}) {
   };
 }
 
-module.exports = { HOTKEYS, hotkey, DEFAULTS, normalizeConfig, normalize, editDistance, parseIntent, answerBlocked, answerDoing, answerSpend, answerWhileOut, answer, HELP, claudeArgs, snapshot, CLAUDE_MAX_BUDGET_USD };
+module.exports = { HOTKEYS, hotkey, DEFAULTS, normalizeConfig, normalize, editDistance, parseIntent, answerBlocked, answerDoing, answerSpend, answerWhileOut, answer, HELP, claudeArgs, claudePrompt, claudeEnv, CLAUDE_ENV_KEYS, speakable, snapshot, CLAUDE_MAX_BUDGET_USD };
