@@ -197,12 +197,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes exactly the ten buddy_ tools, all read-only', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_pending_requests']);
+test('the server exposes exactly the eleven buddy_ tools, all read-only', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests']);
   assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), []);
 });
 
-test('stdio: the server starts, lists ten tools and answers buddy_status end to end', async () => {
+test('stdio: the server starts, lists eleven tools and answers buddy_status and buddy_health end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -216,7 +216,11 @@ test('stdio: the server starts, lists ten tools and answers buddy_status end to 
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 11);
+    // Read-only against the real home: only its shape is predictable here.
+    const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
+    assert.equal(health.checks.length, 8);
+    assert.equal(health.checks.find((c) => c.id === 'signal').status, 'fail');
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);
     assert.equal(st.sessionCount, 1);
@@ -332,4 +336,55 @@ test('buddy_usage_history: "all" starts at the first recorded day and says when 
   const r = spawnSync(process.execPath, ['-e', `const M = require(${JSON.stringify(require.resolve('../mcp-server.js'))}); M.buddyUsageHistory({ root: ${JSON.stringify(root)}, range: '7d', now: new Date('2026-11-03T00:30:00').getTime() }).then((x) => console.log(JSON.stringify(x.range)));`], { env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), { from: '2026-10-28', to: '2026-11-03' });
+});
+
+test('buddy_health: hooks from this copy, the app answering, MCP registered — all ok', async () => {
+  const Claude = require('../adapters/claude-code.js');
+  const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: iso(90000) }) } });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  fs.mkdirSync(path.join(home, '.claude', 'projects', '-w-a'), { recursive: true });
+  fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, M.hookRuntime(root), { home })));
+  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) });
+  const statfs = () => ({ bavail: 1e6, bsize: 1e6 });
+  const h = await M.buddyHealth({ root, home, now: NOW, live: { look: {} }, statfs, mcpConnected: true });
+  const by = (id) => h.checks.find((c) => c.id === id);
+  assert.equal(h.ok, true, JSON.stringify(h.checks, null, 1));
+  assert.equal(h.problems, 0);
+  assert.equal(by('hooks').status, 'ok');
+  assert.equal(by('last-hook').detail, '2 min ago.');
+  assert.equal(by('signal').status, 'ok');
+  assert.equal(by('mcp').detail, 'Registered, and this answer came through it.');
+  assert.equal(by('version').detail, `Version ${require('../package.json').version}. Updates: not set up yet.`);
+  assert.equal(h.likelyCause, undefined);
+});
+
+test('buddy_health: an app that moved, not running, no hook yet — each with its fix and a likely cause', async () => {
+  const Claude = require('../adapters/claude-code.js');
+  const Runtime = require('../adapters/runtime.js');
+  const root = fixture({ config: base });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const gone = Runtime.make({ execPath: '/Applications/Old Buddy.app/Contents/MacOS/Claude Buddy', hooksDir: '/Applications/Old Buddy.app/Contents/Resources/hooks', dataDir: root, platform: 'darwin' });
+  fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, gone)));
+  const h = await M.buddyHealth({ root, home, now: NOW, live: null, statfs: () => ({ bavail: 1e6, bsize: 1e6 }) });
+  const by = (id) => h.checks.find((c) => c.id === id);
+  assert.equal(h.ok, false);
+  assert.equal(by('hooks').status, 'fail');
+  assert.equal(by('hooks').fix, 'reinstall-hooks');
+  assert.match(by('hooks').detail, /^Points at a copy of Buddy that was moved or deleted \(\/Applications\/#[0-9a-f]{6} #[0-9a-f]{6}\/Contents\/Resources\/hooks\/set-status\.js\)\.$/);
+  assert.equal(by('signal').status, 'fail');
+  assert.equal(by('mcp').fix, 'enable-mcp');
+  assert.equal(by('last-hook').status, 'warn');
+  assert.match(h.likelyCause, /^Hooks: Points at a copy of Buddy that was moved or deleted/);
+  assert.match(h.note, /Nothing here is fixed for you/);
+});
+
+test('buddy_health: hookRuntime matches what main.js installs, packaged or not', () => {
+  const dev = M.hookRuntime('/data', '/src/buddy');
+  assert.equal(dev.node, true);
+  assert.equal(dev.hooksDir, '/src/buddy/hooks');
+  const app = M.hookRuntime('/data', '/A/Claude Buddy.app/Contents/Resources/app.asar', '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
+  assert.equal(app.execPath, '/A/Claude Buddy.app/Contents/MacOS/Claude Buddy');
+  assert.equal(app.hooksDir, '/A/Claude Buddy.app/Contents/Resources/hooks');
+  assert.equal(app.dataDir, '/data');
 });
