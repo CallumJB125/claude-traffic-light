@@ -195,7 +195,7 @@ module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
     load: () => JSON.parse(fs.readFileSync(explainedFile(), 'utf8')),
     save: (list) => { fs.mkdirSync(getRootDir(), { recursive: true }); writeJsonAtomic(explainedFile(), list); },
     notify: showNote,
-    openSettings: () => shell.openExternal(Permission.SETTINGS_URL),
+    openSettings: () => shell.openExternal(Permission.SETTINGS_URL), // privacy-flow: os-settings
   });
   let jumper = null;
   function jumpToSession(session, folderHint, preferApp = null) {

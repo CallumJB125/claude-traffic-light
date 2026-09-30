@@ -415,15 +415,11 @@ const AGENT_KEEPALIVE_MS = Rules.AGENT_KEEPALIVE_MS;
 // could show them any more (a file's mtime is never older than the times it
 // holds), with half a day's margin on top.
 const SESSION_SWEEP_MARGIN_MS = 12 * 60 * 60 * 1000;
-const REQUEST_SWEEP_MS = 24 * 60 * 60 * 1000;
 function sweepSessionFiles() {
   const c = loadConfig();
   const maxAge = Math.max(c.waitingStaleHours * 3600000 || 0, c.workingStaleMinutes * 60000 || 0, AGENT_KEEPALIVE_MS) + SESSION_SWEEP_MARGIN_MS;
   const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
   if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
-  // Permission requests (and answers) whose hook died before cleaning up; a live one lasts under a minute.
-  const orphans = Agents.sweepStaleFiles(REQUESTS_DIR, REQUEST_SWEEP_MS, Date.now(), ['.json', '.answer', '.tmp']);
-  if (orphans.length) console.log(`[sweep] removed ${orphans.length} orphaned request file(s)`);
 }
 
 // Every change in what a session presents is logged, so a flicker report can
@@ -663,12 +659,12 @@ const BusyWatch = require('./src/busy-watch.js')({
   isDevRun: IS_DEV_RUN,
   fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
   tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
-  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))), // privacy-flow: calendar-helper
   readFile: (f) => fs.readFileSync(f, 'utf8'),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
   removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
-  fetch: (url) => net.fetch(url),
+  fetch: (url) => net.fetch(url), // privacy-flow: ics-feed
   log: (...a) => console.log(...a),
   onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
 });

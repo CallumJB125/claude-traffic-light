@@ -33,7 +33,7 @@ const PROMPT_TIMEOUT_MS = 30000;
 function exec(file, args, { timeout = EXEC_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     try {
-      const child = execFile(file, args, { timeout, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
+      const child = execFile(file, args, { timeout, killSignal: 'SIGKILL' }, (err, stdout, stderr) => { // privacy-flow: terminal-jump
         resolve({ ok: !err, code: err ? err.code : 0, stdout: String(stdout || ''), stderr: String(stderr || '') });
       });
       child.on('error', (e) => resolve({ ok: false, stdout: '', stderr: e.message }));
@@ -88,7 +88,7 @@ async function focusSession(session, over = {}, adapters = ADAPTERS, clock = nul
     if (cancelled()) return Promise.resolve({ ok: false, stdout: '', stderr: 'superseded by a newer jump' });
     const left = deadline.at - ctx.now();
     if (left <= 0) return Promise.resolve({ ok: false, stdout: '', stderr: 'jump deadline passed' });
-    return ctx.exec(file, args, { timeout: Math.min(cap, left) });
+    return ctx.exec(file, args, { timeout: Math.min(cap, left) }); // privacy-flow: terminal-jump
   };
   ctx.focusOuter = (outer) => focusSession(outer, { ...over, outer: true }, adapters.filter((a) => a.id !== 'tmux'), deadline);
   // Inside tmux it is the pane or nothing: every other id the session holds

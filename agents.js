@@ -266,12 +266,12 @@ function mergeAgents(existing, found) {
 // doesn't parse. Temp files from a writer killed between write and rename go
 // the same way, and so do locks left by a writer that died holding one. →
 // the names removed.
-function sweepStaleFiles(dir, maxAgeMs, now = Date.now(), exts = ['.json', '.tmp', '.lock']) {
+function sweepStaleFiles(dir, maxAgeMs, now = Date.now()) {
   let names;
   try { names = fs.readdirSync(dir); } catch { return []; }
   const removed = [];
   for (const name of names) {
-    if (!exts.some((x) => name.endsWith(x))) continue;
+    if (!name.endsWith('.json') && !name.endsWith('.tmp') && !name.endsWith('.lock')) continue;
     const file = path.join(dir, name);
     try {
       if (now - fs.statSync(file).mtimeMs <= maxAgeMs) continue;

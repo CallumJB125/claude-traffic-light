@@ -177,7 +177,7 @@ module.exports = function busyWatch(deps) {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), ICS_TIMEOUT_MS);
     try {
-      const res = await fetchHttpsOnly(url, abort.signal, fetch);
+      const res = await fetchHttpsOnly(url, abort.signal, fetch); // privacy-flow: ics-feed
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await readCapped(res);
       if (!/BEGIN:VCALENDAR/.test(text)) throw new Error('not a calendar feed');

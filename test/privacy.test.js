@@ -6,7 +6,6 @@ const os = require('os');
 const net = require('net');
 const { spawn } = require('child_process');
 const { render } = require('../privacy-render.js');
-const Agents = require('../agents.js');
 
 const ROOT = path.join(__dirname, '..');
 const privacy = fs.readFileSync(path.join(ROOT, 'PRIVACY.md'), 'utf8');
@@ -50,12 +49,14 @@ test('numbered lists render as <ol>, and HTML comments never show', () => {
 
 // ── Outbound network guard ────────────────────────────────────────────────
 // HOW TO ADD A NEW OUTBOUND FLOW: put `// privacy-flow: <slug>` at the end of
-// the line that opens the channel, and add a section or bullet to PRIVACY.md
-// containing `<!-- flow:<slug> -->` that says who receives what, and whether
-// it is opt-in. Only that exact line is exempt. A marker without the matching
-// PRIVACY.md entry fails, and so does a PRIVACY.md entry no code line uses.
-const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add `<!-- flow:<slug> -->` to the matching PRIVACY.md section.';
-const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git']);
+// the line that opens the channel, and add `<!-- flow:<slug> files=<path>[,<path>] -->`
+// to the PRIVACY.md section that says who receives what, and whether it is
+// opt-in. Only that exact line, in one of those files, is exempt. A marker with
+// no matching PRIVACY.md entry fails, and so does a PRIVACY.md entry no code
+// line uses.
+const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add `<!-- flow:<slug> files=<path> -->` to the matching PRIVACY.md section.';
+// remote/ (phone relay) is not packaged or wired in; the package-files test below fails if that changes.
+const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git', 'remote']);
 function shipped(dir = ROOT, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(e.name)) continue;
@@ -68,57 +69,106 @@ function shipped(dir = ROOT, out = []) {
 const rel = (f) => path.relative(ROOT, f);
 const blank = (m) => m.replace(/[^\n]/g, ' ');
 // Raw lines (markers live in trailing comments) and code-only lines (no comments).
-function lines(f) {
-  const raw = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, blank).split('\n');
-  return raw.map((l) => ({ raw: l, code: /^\s*\/\//.test(l) ? '' : l }));
+function linesOf(text) {
+  return text.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, blank).split('\n').map((l) => ({ raw: l, code: /^\s*\/\//.test(l) ? '' : l }));
 }
-const MOD = '(?:node:)?(?:https?|http2|net|tls|dgram|undici)';
+const MOD = '(?:node:)?(?:https?|http2|net|tls|dgram|undici|ws)';
 const CHANNEL = new RegExp([
   `require\\(\\s*['"]${MOD}['"]\\s*\\)`, `\\bfrom\\s+['"]${MOD}['"]`, `\\bimport\\(\\s*['"]${MOD}['"]`,
+  '\\brequire\\(\\s*[^\'"`\\s)]', '\\brequire\\(\\s*`[^`]*\\$\\{', '\\bimport\\(\\s*[^\'"`\\s)]',
   '\\bnet\\.(?:request|fetch|connect|createConnection)\\b', '\\btls\\.connect\\b', '\\bhttps?\\.(?:request|get)\\b',
   'new ClientRequest', '\\bfetch\\(', 'new WebSocket', 'XMLHttpRequest', 'sendBeacon',
+  'globalThis\\s*\\[', '\\bglobal\\s*\\[', 'window\\s*\\[',
   'autoUpdater', 'electron-updater', 'update-electron-app', 'crashReporter', 'Sentry\\.init', '@sentry/',
   'loadURL\\(\\s*[`\'"]https?:', 'openExternal\\(\\s*[^\'"`\\s]',
+  // a shell told to run a network tool, or git talking to a remote
+  '\\b(?:sh|zsh|bash|cmd|powershell)[\'"`]\\s*,\\s*\\[[^\\]]*\\b(?:curl|wget|ssh|scp|nc|ncat|ftp|telnet|gh)\\b',
+  '[\'"`]git[\'"`]\\s*,\\s*\\[[^\\]]*[\'"`](?:fetch|pull|push|clone|ls-remote|remote\\s+update)[\'"`]',
+  // child_process reached through an alias: { execFile: ef } = require('child_process')
+  '\\{[^}]*\\b(?:exec|spawn)\\w*\\s*:\\s*\\w+[^}]*\\}\\s*=\\s*require\\(\\s*[\'"](?:node:)?child_process',
 ].join('|'));
+const EXEC_NAMES = 'execFile|execFileSync|exec|execSync|spawn|spawnSync|fork';
 // Binaries that only ever work on this machine. Anything else, or a computed
-// name, must carry a marker.
-const LOCAL_BINS = new Set(['afplay', 'say', 'powershell', 'osascript', 'tmux', '/bin/ps', 'git', 'open', 'cmd', '/bin/zsh', 'shortcuts', 'ccusage', 'sh', 'pbcopy']);
-const EXEC = /(?<![.\w])(?:execFile|execFileSync|exec|execSync|spawn|spawnSync)\(\s*(['"`])?([^'"`,)]*)/g;
-function opensChannel(code) {
+// name, must carry a marker. Absolute paths count only from system locations.
+const LOCAL_BINS = new Set(['afplay', 'say', 'powershell', 'osascript', 'tmux', 'ps', 'git', 'open', 'cmd', 'zsh', 'sh', 'shortcuts', 'ccusage', 'pbcopy', 'kitten', 'wezterm', 'tailscale', 'process.execPath']);
+const LOCAL_PATHS = new Set(['/Applications/Tailscale.app/Contents/MacOS/Tailscale']);
+const SYSTEM_DIRS = /^\/(?:usr\/(?:local\/)?bin|bin|usr\/sbin|sbin|opt\/homebrew\/bin)\//;
+function localBin(bin) {
+  if (LOCAL_PATHS.has(bin)) return true;
+  if (LOCAL_BINS.has(bin)) return true;
+  return SYSTEM_DIRS.test(bin) && LOCAL_BINS.has(bin.replace(SYSTEM_DIRS, ''));
+}
+// `x.exec(` is usually a RegExp; a regex literal or an obviously-regex name is exempt.
+const REGEXISH = /(?:\/[gimsuy]*|\b(?:re|rx|regex|regexp|pattern)\w*|[A-Z][A-Z0-9_]+)$/;
+function opensChannel(code, importsCp) {
   if (CHANNEL.test(code)) return true;
-  for (const m of code.matchAll(EXEC)) {
-    const bin = m[1] ? m[2].trim().split(/\s+/)[0] : null;
-    if (!bin || !LOCAL_BINS.has(bin)) return true;
+  const call = new RegExp(`(?:(^|[^\\w.])(${EXEC_NAMES})|(\\S*?)\\.(${EXEC_NAMES}))\\(\\s*(['"\`])?([^'"\`,)]*)`, 'g');
+  for (const m of code.matchAll(call)) {
+    const member = m[4] !== undefined;
+    // a bare exec( in a file with no child_process is an injected wrapper (its definition is what gets tagged),
+    // unless it names a literal binary: then the binary itself is checked.
+    if (!member && /function\s*$/.test(code.slice(0, m.index + (m[1] || '').length))) continue;
+    if (!member && !importsCp && !m[5]) continue;
+    if (member && m[4] === 'exec' && REGEXISH.test(m[3] || '')) continue;
+    const bin = m[5] ? m[6].trim().split(/\s+/)[0] : (m[6].trim() === 'process.execPath' ? 'process.execPath' : null);
+    if (!bin || !localBin(bin)) return true;
   }
   return false;
 }
-const flows = new Set([...privacy.matchAll(/<!-- flow:([\w-]+) -->/g)].map((m) => m[1]));
+const importsChildProcess = (text) => /(?:require\(\s*|from\s+)['"](?:node:)?child_process['"]/.test(text);
+// <!-- flow:slug files=a.js,b.js -->
+const flows = new Map([...privacy.matchAll(/<!-- flow:([\w-]+) files=([^\s>]+) -->/g)].map((m) => [m[1], new Set(m[2].split(','))]));
 const files = shipped();
-const used = new Set();
 
-test('every line that opens a network channel is tagged and documented in PRIVACY.md', () => {
-  for (const f of files) {
-    lines(f).forEach(({ raw, code }, i) => {
-      if (!code || !opensChannel(code)) return;
+// Every tagged line is checked; all failures are reported together.
+function audit(list) {
+  const problems = [];
+  const used = new Set();
+  for (const { file, text } of list) {
+    const cp = importsChildProcess(text);
+    linesOf(text).forEach(({ raw, code }, i) => {
+      if (!code || !opensChannel(code, cp)) return;
+      const where = `${file}:${i + 1}`;
       const slug = (raw.match(/privacy-flow:\s*([\w-]+)/) || [])[1];
-      assert.ok(slug, `${rel(f)}:${i + 1} opens a network or process channel without a privacy-flow marker. ${HOW}`);
-      assert.ok(flows.has(slug), `${rel(f)}:${i + 1} is tagged "${slug}" but PRIVACY.md has no <!-- flow:${slug} -->. ${HOW}`);
+      if (!slug) return problems.push(`${where} opens a network or process channel without a privacy-flow marker: ${code.trim().slice(0, 90)}`);
+      if (!flows.has(slug)) return problems.push(`${where} is tagged "${slug}" but PRIVACY.md has no <!-- flow:${slug} files=… -->`);
+      if (!flows.get(slug).has(file)) return problems.push(`${where} is tagged "${slug}" but PRIVACY.md documents that flow only for: ${[...flows.get(slug)].join(', ')}`);
       used.add(slug);
     });
   }
+  return { problems, used };
+}
+
+test('every line that opens a network channel is tagged and documented in PRIVACY.md', () => {
+  const { problems, used } = audit(files.map((f) => ({ file: rel(f), text: fs.readFileSync(f, 'utf8') })));
+  for (const slug of flows.keys()) if (!used.has(slug)) problems.push(`PRIVACY.md lists flow:${slug} but no code line is tagged with it`);
+  assert.deepEqual(problems, [], `\n${problems.join('\n')}\n${HOW}`);
 });
 
-test('PRIVACY.md documents no flow that the code no longer has', () => {
-  for (const slug of flows) assert.ok(used.has(slug), `PRIVACY.md lists flow:${slug} but no code line is tagged with it`);
+test('the phone relay (remote/) stays out of the app package until it is documented', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const listed = JSON.stringify([...(pkg.build.files || []), ...(pkg.build.extraResources || [])]);
+  assert.ok(!/remote/.test(listed), 'remote/ is being packaged: remove it from SKIP_DIRS and document its flows');
 });
 
 test('the guard catches what it should', () => {
-  for (const bad of ["require('node:https')", "import x from 'undici'", "fetch(u)", "net.connect(1)", "tls.connect(1)", "new ClientRequest(u)", "win.loadURL(`https://x`)", "Sentry.init({})", "require('electron-updater')", "execFile('curl', [u])", "execFile(bin, args)", "spawn(cmd)", "shell.openExternal(url)"]) {
-    assert.ok(opensChannel(bad), bad);
-  }
-  for (const ok of ["execFile('git', [])", "execFileSync('/bin/ps', [])", "shell.openExternal('https://claude.ai')", "re.exec(line)", "net.isOnline()", "win.loadFile('a.html')"]) {
-    assert.ok(!opensChannel(ok), ok);
-  }
+  const bad = ["require('node:https')", "require('ws')", "import x from 'undici'", "const m = await import(name)", "require(modName)", "fetch(u)", "globalThis['fe' + 'tch'](u)",
+    "net.connect(1)", "tls.connect(1)", "new ClientRequest(u)", "win.loadURL(`https://x`)", "Sentry.init({})", "require('electron-updater')",
+    "execFile('curl', [u])", "execFile(bin, args)", "cp.spawn(cmd)", "cp.spawn(cmd.execPath)", "child.execFile('x')", "util.exec('curl x')", "const { execFile: ef } = require('child_process')",
+    "execFile('/bin/zsh', ['-c', 'curl x'])", "execFile('sh', ['-c', 'wget x'])", "execFile('git', ['fetch'])", "shell.openExternal(url)", "spawn('/tmp/x/open', [])"];
+  for (const b of bad) assert.ok(opensChannel(b, true), b);
+  const ok = ["execFile('git', ['status'])", "execFileSync('/bin/ps', [])", "spawn(process.execPath, ['x'])", "execFile('/usr/bin/osascript', [])", "shell.openExternal('https://claude.ai')",
+    "HOOK.exec(line)", "/a/g.exec(s)", "re.exec(line)", "net.isOnline()", "win.loadFile('a.html')", "exec(file)", "execFile('/Applications/Tailscale.app/Contents/MacOS/Tailscale', ['status'])"];
+  for (const o of ok) assert.ok(!opensChannel(o, false), o);
+  assert.ok(!opensChannel("exec(file)", false) && opensChannel("exec(file)", true), 'bare exec( counts only where child_process is imported');
+  assert.ok(opensChannel("spawn('claude', args)", false), 'a literal non-local binary counts even when spawn is injected');
+});
+
+test('a flow slug cannot be reused in a file PRIVACY.md does not list for it', () => {
+  const r = audit([{ file: 'src/elsewhere.js', text: "fetch(u); // privacy-flow: gh-poll\n" }]);
+  assert.match(r.problems.join('\n'), /documents that flow only for/);
+  assert.match(audit([{ file: 'x.js', text: "fetch(u)\n" }]).problems.join('\n'), /without a privacy-flow marker/);
+  assert.match(audit([{ file: 'x.js', text: "fetch(u); // privacy-flow: nope\n" }]).problems.join('\n'), /no <!-- flow:nope/);
 });
 
 test('the local server only listens on loopback', () => {
@@ -133,7 +183,7 @@ test('the local server only listens on loopback', () => {
 test('every external hostname in shipped code is documented in PRIVACY.md', () => {
   const ignore = new Set(['127.0.0.1', 'localhost', 'www.w3.org']);
   for (const f of files) {
-    const code = lines(f).map((l) => l.code).join('\n');
+    const code = linesOf(fs.readFileSync(f, 'utf8')).map((l) => l.code).join('\n');
     for (const m of code.matchAll(/https?:\/\/([a-z0-9][a-z0-9.-]*[a-z0-9])/gi)) {
       const host = m[1].toLowerCase();
       if (ignore.has(host)) continue;
@@ -163,17 +213,6 @@ test('every window turns spellcheck off (it downloads dictionaries from Google o
 });
 
 // ── Permission previews ───────────────────────────────────────────────────
-test('sweepStaleFiles can clear orphaned request files of the given types', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-req-'));
-  const DAY = 86400000;
-  const now = Date.now();
-  const put = (name, age) => { const f = path.join(dir, name); fs.writeFileSync(f, '{}'); const t = new Date(now - age); fs.utimesSync(f, t, t); };
-  put('old.json', 2 * DAY); put('old.answer', 2 * DAY); put('young.json', DAY / 2); put('young.answer', 1000);
-  const removed = Agents.sweepStaleFiles(dir, DAY, now, ['.json', '.answer', '.tmp']).sort();
-  assert.deepEqual(removed, ['old.answer', 'old.json']);
-  assert.match(fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'), /REQUEST_SWEEP_MS = 24 \* 60 \* 60 \* 1000/);
-});
-
 test('a permission preview is written readable by its owner only', { skip: process.platform === 'win32' }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-perm-'));
   const server = net.createServer((s) => s.end());
