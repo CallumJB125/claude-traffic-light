@@ -1101,3 +1101,141 @@ test('clickCommands: every shell command, Shortcut, URL and app a set of rules w
   assert.deepEqual(R.clickCommands(rs), ['rm -rf ~', 'Pay Bill', 'https://x', 'open -a Evil App <session folder>']);
   assert.deepEqual(R.clickCommands(rules()), []);
 });
+
+// Templates by role
+const TEMPLATE_IDS = ['solo-dev', 'team-lead', 'pair', 'minimal', 'show-off'];
+const LAMP_KEYS = ['lamp', 'lampColor'];
+const nonLamp = (r) => Object.entries(r.then).filter(([k, v]) => !LAMP_KEYS.includes(k) && v && !(typeof v === 'object' && !Object.keys(v).length));
+
+test('templates: the five roles, each with id, name and description', () => {
+  assert.deepEqual(R.templates().map((t) => t.id), TEMPLATE_IDS);
+  for (const t of R.templates()) {
+    assert.ok(t.name && t.description, t.id);
+    assert.equal(t.rulesVersion, R.RULES_VERSION);
+  }
+  assert.equal(R.applyTemplate('nope'), null);
+});
+
+test('templates: every rule validates (nothing dropped by normalizeRule) and the locked rules stay', () => {
+  for (const id of TEMPLATE_IDS) {
+    const rs = R.applyTemplate(id);
+    assert.deepEqual(rs, rs.map(R.normalizeRule), id);
+    assert.ok(rs.some((r) => r.id === 'limit' && r.locked), id);
+    assert.ok(rs.some((r) => r.id === 'permission' && r.locked), id);
+    assert.equal(new Set(rs.map((r) => r.id)).size, rs.length, `${id} has unique ids`);
+  }
+});
+
+test('templates: authored values survive normalization (no typo silently dropped)', () => {
+  const sets = { 'show-off': ['sniper', 'ak47', 'dragon', 'partyhat', 'confetti', 'vignette', 'kickflip'], 'team-lead': ['crown', 'duck', 'TEAM {agents}'] };
+  for (const [id, wants] of Object.entries(sets)) {
+    const json = JSON.stringify(R.applyTemplate(id));
+    for (const w of wants) assert.ok(json.includes(w), `${id} keeps ${w}`);
+  }
+});
+
+test('templates: export then import round-trips through the share format', () => {
+  for (const id of TEMPLATE_IDS) {
+    const file = JSON.parse(JSON.stringify(R.shareFile(R.applyTemplate(id))));
+    assert.equal(file.app, 'claude-traffic-light');
+    const imported = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file), id);
+    assert.deepEqual(imported, R.applyTemplate(id), id);
+  }
+});
+
+test('templates: a file from an older rulesVersion migrates through the real path and stays in shape', () => {
+  for (const id of ['minimal', 'pair']) {
+    const file = JSON.parse(JSON.stringify(R.shareFile(R.applyTemplate(id))));
+    // As if exported at v4, before the git, spend and "session open" rules.
+    file.rulesVersion = 4;
+    file.rules = file.rules.filter((r) => !/^git-|^runaway$|^budget-|^started$/.test(r.id));
+    const back = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file), id);
+    assert.deepEqual(back.map((r) => r.id).sort(), R.applyTemplate(id).map((r) => r.id).sort(), id);
+    for (const r of back) if (id === 'minimal') assert.deepEqual(nonLamp(r), [], r.id);
+  }
+});
+
+test('templates: Minimal has no non-lamp outputs', () => {
+  const rs = R.applyTemplate('minimal');
+  assert.ok(rs.length > 3);
+  for (const r of rs) assert.deepEqual(nonLamp(r), [], r.id);
+  assert.equal(look([{ signal: 'stop' }], rs).pose, 'none');
+});
+
+test('templates: Pair only sounds or animates on red', () => {
+  const rs = R.applyTemplate('pair');
+  let loud = 0;
+  for (const r of rs) {
+    if (nonLamp(r).length) { loud += 1; assert.equal(r.then.lamp, 'red', r.id); }
+  }
+  assert.ok(loud > 0);
+  assert.equal(rs.find((r) => r.id === 'permission').then.sound, 'beep');
+  assert.equal(look([{ signal: 'stop' }], rs).pose, 'none');
+  assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).lamp, 'green');
+});
+
+test('templates: applying hands back fresh rules and never touches the current set', () => {
+  const current = R.defaultRules();
+  const snapshot = JSON.stringify(current);
+  const a = R.applyTemplate('show-off');
+  a[0].name = 'mutated';
+  assert.notEqual(R.applyTemplate('show-off')[0].name, 'mutated');
+  assert.equal(JSON.stringify(current), snapshot);
+});
+
+const lampIds = () => R.defaultRules().filter((r) => r.then.lamp).map((r) => r.id).sort();
+
+test('templates: Minimal and Pair keep exactly the rules that light the lamp', () => {
+  for (const id of ['minimal', 'pair']) assert.deepEqual(R.applyTemplate(id).map((r) => r.id).sort(), lampIds(), id);
+});
+
+test('templates: Solo dev is the defaults', () => {
+  assert.deepEqual(R.applyTemplate('solo-dev'), R.defaultRules().map(R.normalizeRule));
+});
+
+test('templates: Pair keeps Offline quiet but red rules that block you loud', () => {
+  const rs = R.applyTemplate('pair');
+  assert.deepEqual(nonLamp(rs.find((r) => r.id === 'offline')), []);
+  for (const id of ['limit', 'permission', 'runaway', 'budget-exceeded']) assert.ok(nonLamp(rs.find((r) => r.id === id)).length || id === 'budget-exceeded', id);
+});
+
+test('templates: Minimal is silent even on the locked rules', () => {
+  const rs = R.applyTemplate('minimal');
+  for (const id of ['limit', 'permission']) assert.equal(rs.find((r) => r.id === id).then.sound, null);
+});
+
+test('templates: Team lead shows the TEAM banner and crown with a subagent present', () => {
+  const l = look([
+    { signal: 'tool-use', tool: 'Bash', cwd: '/p', agents: [{ id: 'a', kind: 'teammate', status: 'running' }], mode: 'team' },
+  ], R.applyTemplate('team-lead'));
+  assert.equal(l.costume, 'crown');
+  assert.match(String(l.text), /TEAM/);
+  const rs = R.applyTemplate('team-lead').map((r) => r.id);
+  assert.ok(rs.indexOf('team') < rs.indexOf('subagents'));
+});
+
+test('templates: prefs overlays silence what rules cannot', () => {
+  const min = R.templatePrefs('minimal');
+  assert.equal(min.notifyOnStates, false);
+  assert.equal(min.seasonal, false);
+  const pair = R.templatePrefs('pair');
+  assert.equal(pair.seasonal, false);
+  assert.equal(pair.notifyStates['turn-failed'], false);
+  assert.equal(pair.notifyStates.offline, false);
+  assert.equal(pair.notifyStates['permission-ask'], undefined);
+  assert.deepEqual(R.templatePrefs('solo-dev'), {});
+  assert.deepEqual(R.templatePrefs('nope'), {});
+  R.templatePrefs('pair').notifyStates.offline = true;
+  assert.equal(R.templatePrefs('pair').notifyStates.offline, false);
+});
+
+test('templates: a rule added by a later migration follows the template it was saved with', () => {
+  const base = R.applyTemplate('minimal').filter((r) => !['offline', 'failed-turn', 'started'].includes(r.id));
+  const min = R.migrateRules(base, 1, 'minimal');
+  assert.ok(min.some((r) => r.id === 'offline'));
+  for (const r of min) assert.deepEqual(nonLamp(r), [], r.id);
+  const plain = R.migrateRules(base, 1);
+  assert.ok(nonLamp(plain.find((r) => r.id === 'offline')).length > 0);
+  // git rules have no lamp, so a lamp-only set never gets them
+  assert.ok(!R.migrateRules(base, 6, 'minimal').some((r) => r.id.startsWith('git-')));
+});

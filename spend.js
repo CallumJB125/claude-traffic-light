@@ -23,7 +23,8 @@ const DEFAULTS = {
   runawayMinutes: 20,
   runawayTokens: 0,
   notifyRunaway: true,
-  notifyBudget: true,
+  notifyBudgetWarning: true,
+  notifyBudgetExceeded: true,
 };
 
 const num = (v, lo, hi, dflt) => {
@@ -42,7 +43,9 @@ function normalize(saved) {
     runawayMinutes: num(s.runawayMinutes, 1, 240, DEFAULTS.runawayMinutes),
     runawayTokens: num(s.runawayTokens, 0, 1e10, DEFAULTS.runawayTokens),
     notifyRunaway: s.notifyRunaway !== false,
-    notifyBudget: s.notifyBudget !== false,
+    // notifyBudget was one switch for both; an old value still maps to each.
+    notifyBudgetWarning: (s.notifyBudgetWarning === undefined ? s.notifyBudget : s.notifyBudgetWarning) !== false,
+    notifyBudgetExceeded: (s.notifyBudgetExceeded === undefined ? s.notifyBudget : s.notifyBudgetExceeded) !== false,
   };
 }
 

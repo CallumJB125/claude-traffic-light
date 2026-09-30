@@ -218,7 +218,11 @@ function notifyConfig(config) {
 function spendMuted(kind, config) {
   const sp = (config && config.spend) || {};
   if (kind === 'runaway') return sp.notifyRunaway === false;
-  if (kind === 'budget-warning' || kind === 'budget-exceeded') return sp.notifyBudget === false;
+  // notifyBudget was one switch for both budget notices; it still mutes both
+  // unless a split key says otherwise.
+  const budget = (key) => (sp[key] === undefined ? sp.notifyBudget : sp[key]) === false;
+  if (kind === 'budget-warning') return budget('notifyBudgetWarning');
+  if (kind === 'budget-exceeded') return budget('notifyBudgetExceeded');
   return false;
 }
 

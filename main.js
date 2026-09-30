@@ -207,7 +207,7 @@ function buildConfig() {
     const at = config.rules.findIndex((r) => r.when.signal.includes('idle'));
     config.rules.splice(at < 0 ? config.rules.length : at, 0, Rules.normalizeRule(nudge));
   }
-  if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0);
+  if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0, saved.template);
   config.rulesVersion = Rules.RULES_VERSION;
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
@@ -218,6 +218,8 @@ function buildConfig() {
 function saveConfig(partial) {
   const next = Setup.dropRemovedKeys({ ...loadConfig(), ...partial });
   if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
+  // A template only describes the rules it saved them with.
+  if (partial.rules && !('template' in partial)) next.template = null;
   // Presets reach here from loadConfig or Lights, so their rules are current.
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   fs.mkdirSync(ROOT_DIR, { recursive: true });
@@ -2680,7 +2682,7 @@ ipcMain.handle('preview-sound', (e, name) => playSound(name));
 ipcMain.handle('export-rules', async (e, rules) => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
-  fs.writeFileSync(r.filePath, JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: Rules.RULES_VERSION, rules: (rules || []).map(Rules.normalizeRule) }, null, 2));
+  fs.writeFileSync(r.filePath, JSON.stringify(Rules.shareFile(rules || []), null, 2));
   return r.filePath;
 });
 

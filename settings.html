@@ -332,7 +332,8 @@
     </div>
     <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Buddy never stops or types into a session you started. 0 turns a limit off.</div>
     <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
-    <label class="row"><input type="checkbox" id="spend-notify-budget" /> Notify me near and over budget</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-warning" /> Notify me when spend nears a budget</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
   </div>
   <!-- end F1 spend -->
   <h2>Busy &amp; Focus</h2>
@@ -477,7 +478,8 @@
       spendEl('runaway-tokens').value = Math.round((sp.runawayTokens || 0) / 1000);
       spendEl('runaway-minutes').value = sp.runawayMinutes || 20;
       spendEl('notify-runaway').checked = sp.notifyRunaway !== false;
-      spendEl('notify-budget').checked = sp.notifyBudget !== false;
+      spendEl('notify-budget-warning').checked = sp.notifyBudgetWarning !== false;
+      spendEl('notify-budget-exceeded').checked = sp.notifyBudgetExceeded !== false;
     }
     function spendSettings() {
       const n = (id) => Math.max(0, Number(spendEl(id).value) || 0);
@@ -490,7 +492,8 @@
         runawayTokens: n('runaway-tokens') * 1000,
         runawayMinutes: Math.min(240, Math.max(1, n('runaway-minutes') || 20)),
         notifyRunaway: spendEl('notify-runaway').checked,
-        notifyBudget: spendEl('notify-budget').checked,
+        notifyBudgetWarning: spendEl('notify-budget-warning').checked,
+        notifyBudgetExceeded: spendEl('notify-budget-exceeded').checked,
       };
     }
     window.settingsApi.spend().then((sp) => {

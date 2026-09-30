@@ -133,8 +133,8 @@ Rage meter: *Ignored for 10 / 20 / 30 minutes* are signals you can rule on;
 the **Loud** preset escalates from foot-tapping to arms crossed and a beard
 to a banner with laser eyes.
 
-Presets: **Classic** (the original behaviour), **Minimal** (lamps only),
-**Tool-aware** (eye colours per tool), **Loud** (sounds, bullets, rage meter),
+Start from a template (**Solo dev**, **Team lead**, **Pair with Claude all day**,
+**Minimal**, **Show-off**), or a preset: **Tool-aware** (eye colours per tool), **Loud** (sounds, bullets, rage meter),
 **Party** (running, pets, costumes, hearts, fire) — plus your own: type a name at the
 bottom of the Presets menu to save the current rules, and pick or delete
 them there later. Everything is stored in `~/.claude-traffic-light/config.json`
