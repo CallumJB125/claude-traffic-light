@@ -10,6 +10,8 @@ const BINS = [
   '/opt/homebrew/bin/wezterm',
   '/usr/local/bin/wezterm',
   '/usr/bin/wezterm',
+  `${os.homedir()}/.nix-profile/bin/wezterm`,
+  '/run/current-system/sw/bin/wezterm',
 ];
 
 module.exports = {

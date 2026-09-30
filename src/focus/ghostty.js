@@ -1,6 +1,6 @@
 // Ghostty (1.3+ AppleScript): terminals expose id, name and working
 // directory, but no tty, and its child shells get no per-terminal id — so the
-// only handle is the session's folder. Focus only when exactly one terminal
+// only handle is the folder the session started in. Focus only when exactly one terminal
 // is in that folder; two tabs in the same repo would be a guess.
 const Ids = require('./ids.js');
 const { runScript } = require('./applescript.js');
@@ -23,7 +23,7 @@ module.exports = {
   id: 'ghostty',
   app: 'Ghostty',
   needs: { permission: 'automation', app: 'Ghostty', reason: 'so a click can switch to the exact Ghostty tab your session is running in' },
-  canHandle: (s, ctx) => ctx.platform === 'darwin' && isGhostty(s) && !!Ids.cwd(s),
-  focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.cwd(s)]),
+  canHandle: (s, ctx) => ctx.platform === 'darwin' && isGhostty(s) && !!Ids.launchCwd(s),
+  focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.launchCwd(s)]),
   SCRIPT,
 };

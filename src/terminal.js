@@ -10,6 +10,8 @@ const Rules = require('../rules.js');
 const HostApp = require('../hostapp.js');
 const Focus = require('./focus/index.js');
 const Permission = require('./focus/permission.js');
+const Jump = require('./focus/jump.js');
+const { writeJsonAtomic } = require('../hooks/session-state.js');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -94,44 +96,6 @@ function activateTerminalApp(folderHint, preferApp = null) {
   });
 }
 
-// ── Jump to the exact tab ───────────────────────────────────────────────────
-// The session file says where the session's tab is (hooks/terminal-id.js);
-// src/focus/ has one adapter per terminal. Anything short of a hit (an old
-// session with nothing recorded, another machine's session, a refused
-// permission, a timeout) falls back to activating the app, as before.
-const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
-const EXPLAINED_FILE = path.join(ROOT_DIR, 'automation-explained.json');
-const LOCAL_HOST = os.hostname().split('.')[0];
-const liveNotes = new Set(); // held so a click still reaches its handler after GC
-const explainer = Permission.createExplainer({
-  load: () => JSON.parse(fs.readFileSync(EXPLAINED_FILE, 'utf8')),
-  save: (list) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(EXPLAINED_FILE, JSON.stringify(list)); },
-  notify: ({ title, body, onClick }) => {
-    console.log(`[jump] ${title}`);
-    if (!Notification.isSupported()) return;
-    const note = new Notification({ title, body, silent: true });
-    liveNotes.add(note);
-    note.on('click', () => { liveNotes.delete(note); if (onClick) onClick(); });
-    note.on('close', () => liveNotes.delete(note));
-    note.show();
-  },
-  openSettings: () => shell.openExternal(Permission.SETTINGS_URL),
-});
-
-// Same shape as activateTerminalApp's answer: { app, exact } or null.
-async function jumpToSession(session, folderHint, preferApp = null) {
-  if (IS_MAC && session && session.terminal && session.host === LOCAL_HOST) {
-    const r = await Focus.focusSession(session, { onNeeds: (needs) => explainer.onNeeds(needs) });
-    if (r.ok) {
-      const adapter = Focus.ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
-      return { app: r.app || session.hostApp || adapter?.app || 'terminal', exact: !!r.exact };
-    }
-    console.log(`[jump] ${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; activating the app instead`);
-    if (r.denied) explainer.onDenied(r.needs);
-  }
-  return activateTerminalApp(folderHint, preferApp);
-}
-
 // Serialised, time-boxed AppleScript. System Events can stall for minutes
 // (Automation prompt, busy Dock), and an unbounded osascript per status tick
 // once piled up 1,750 processes and exhausted the machine's process table.
@@ -205,7 +169,47 @@ function bounceOwnDock() {
   try { app.dock.bounce('critical'); } catch { /* dock icon hidden */ }
 }
 
-module.exports = ({ getSessions }) => {
+// Held so a click still reaches its handler after GC.
+const liveNotes = new Set();
+function showNote({ title, body, onClick }) {
+  console.log(`[jump] ${title}`);
+  if (!Notification.isSupported()) return;
+  const note = new Notification({ title, body, silent: true });
+  liveNotes.add(note);
+  note.on('click', () => { liveNotes.delete(note); if (onClick) onClick(); });
+  note.on('close', () => liveNotes.delete(note));
+  note.show();
+}
+
+// Getters, because main.js requires this module before it has worked out its
+// home folder (a demo run moves it) or its host tag.
+module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
+  // ── Jump to the exact tab ─────────────────────────────────────────────────
+  // The session file says where the session's tab is (hooks/terminal-id.js);
+  // src/focus/ has one adapter per terminal. Anything short of a hit (an old
+  // session with nothing recorded, a refused permission, a timeout) falls
+  // back to activating the app, as before; another machine's session gets
+  // neither (src/focus/jump.js).
+  const explainedFile = () => path.join(getRootDir(), 'automation-explained.json');
+  const explainer = Permission.createExplainer({
+    load: () => JSON.parse(fs.readFileSync(explainedFile(), 'utf8')),
+    save: (list) => { fs.mkdirSync(getRootDir(), { recursive: true }); writeJsonAtomic(explainedFile(), list); },
+    notify: showNote,
+    openSettings: () => shell.openExternal(Permission.SETTINGS_URL),
+  });
+  let jumper = null;
+  function jumpToSession(session, folderHint, preferApp = null) {
+    jumper = jumper || Jump.createJumper({
+      localHost: getLocalHost(),
+      platform: process.platform,
+      focus: Focus.focusSession,
+      activate: activateTerminalApp,
+      explainer,
+      log: (msg) => console.log(`[jump] ${msg}`),
+    });
+    return jumper(session, folderHint, preferApp);
+  }
+
   // Which app should Claude knock on? The session that needs you knows, because
   // the hook recorded it (`hostApp`). Only if nothing recorded one — an old
   // session file, or another agent posting over the HTTP endpoint — do we fall
@@ -225,6 +229,7 @@ module.exports = ({ getSessions }) => {
     escapeForAppleScript,
     activateTerminalApp,
     jumpToSession,
+    isRemote: Jump.isRemote,
     osa,
     frontmostApp,
     dockIconRect,

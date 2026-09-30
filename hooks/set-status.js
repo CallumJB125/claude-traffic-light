@@ -458,18 +458,25 @@ if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done'
   if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }
 // Outside the lock: the host-app and pid lookups can shell out to ps. The
-// terminal lookup costs one more ps, so it runs at SessionStart only.
+// terminal lookup costs one more ps, so it runs at SessionStart only. A
+// SessionStart (a resume, say) may be in a different tab or app from the last
+// one, so the host is detected afresh and the old tab is always replaced —
+// by an empty record if capture fails, never left pointing at a stale tab.
 const pidNow = claudePid(prevOnEntry?.claudePid);
+const starting = signal === 'session-start';
 let terminal = null;
-if (signal === 'session-start') {
+if (starting) {
   try {
     const { execFileSync } = require('child_process');
     terminal = require('./terminal-id.js').captureTerminal({
       env: process.env,
       pid: pidNow || process.ppid,
+      cwd,
       run: (file, args) => execFileSync(file, args, { encoding: 'utf8', timeout: 1000 }),
     });
-  } catch { /* the jump falls back to activating the app */ }
+  } catch {
+    terminal = { env: {}, tty: null, cwd: null };
+  }
 }
-writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: pidNow, terminal });
+writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), pid: pidNow, terminal });
 finish();

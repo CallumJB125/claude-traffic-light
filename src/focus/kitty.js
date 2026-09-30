@@ -11,6 +11,8 @@ const BINS = [
   '/opt/homebrew/bin/kitten',
   '/usr/local/bin/kitten',
   '/usr/bin/kitten',
+  `${os.homedir()}/.nix-profile/bin/kitten`,
+  '/run/current-system/sw/bin/kitten',
 ];
 
 module.exports = {

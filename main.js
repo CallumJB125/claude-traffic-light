@@ -22,9 +22,9 @@ const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
 const http = require('http');
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions });
+const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
-  TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, osa, frontmostApp,
+  TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
   runningTerminal, bounceOwnDock,
 } = Terminal;
@@ -978,9 +978,11 @@ function maybeNotify(st) {
     note.on('click', () => {
       liveNotifications.delete(note);
       // A runaway's whole point is the jump, so it goes even without a known host app.
+      const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
+      // Another machine's session: nothing on this Mac to jump to.
+      if (isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
-        const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
-        jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
+        jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
       }
     });
     note.on('close', () => liveNotifications.delete(note));

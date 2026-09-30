@@ -6,7 +6,9 @@
 // Nothing here ever types into a terminal or fakes input: only
 // each terminal's own select/focus API.
 const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
+const Ids = require('./ids.js');
 
 // tmux first: inside tmux the outer terminal's ids describe the tab the tmux
 // server was started from, not this pane.
@@ -21,8 +23,11 @@ const ADAPTERS = [
 ];
 
 const EXEC_TIMEOUT_MS = 2500;
+// A whole jump, however many commands it takes; a click that hangs longer
+// than this is worse than landing on the app.
+const JUMP_DEADLINE_MS = 4000;
 // The first run against an app can sit behind macOS's Automation prompt;
-// killing it at 2.5 s would fall back while the user is still reading.
+// killing it early would fall back while the user is still reading.
 const PROMPT_TIMEOUT_MS = 30000;
 
 function exec(file, args, { timeout = EXEC_TIMEOUT_MS } = {}) {
@@ -49,22 +54,54 @@ function isDir(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
 
-function makeContext(over = {}) {
-  return { exec, which, isDir, platform: process.platform, onNeeds: async () => {}, ...over };
+// The socket named in a session file is only talked to if it is really this
+// user's tmux: a socket we own, in a directory we own that nobody else can
+// write to, with the server pid from TMUX alive and ours (kill 0 is refused
+// for another user's process).
+function tmuxServerOk(sock, pid) {
+  if (!sock || !pid || typeof process.getuid !== 'function') return false;
+  const uid = process.getuid();
+  try {
+    const st = fs.lstatSync(sock);
+    if (!st.isSocket() || st.uid !== uid) return false;
+    const dir = fs.statSync(path.dirname(sock));
+    if (dir.uid !== uid || (dir.mode & 0o022)) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-async function focusSession(session, over = {}, adapters = ADAPTERS) {
+function makeContext(over = {}) {
+  return { exec, which, isDir, tmuxServerOk, now: Date.now, platform: process.platform, onNeeds: async () => {}, ...over };
+}
+
+// `clock` is shared with the nested lookup of a tmux client's outer tab, so
+// the deadline covers the whole jump.
+async function focusSession(session, over = {}, adapters = ADAPTERS, clock = null) {
   const ctx = makeContext(over);
   if (!session || typeof session !== 'object') return { ok: false, reason: 'no session' };
-  ctx.focusOuter = (outer) => focusSession(outer, over, adapters.filter((a) => a.id !== 'tmux'));
-  let last = { ok: false, reason: 'no adapter for this terminal' };
-  for (const a of adapters) {
+  const deadline = clock || { at: ctx.now() + JUMP_DEADLINE_MS };
+  const bounded = (cap) => (file, args) => {
+    const left = deadline.at - ctx.now();
+    if (left <= 0) return Promise.resolve({ ok: false, stdout: '', stderr: 'jump deadline passed' });
+    return ctx.exec(file, args, { timeout: Math.min(cap, left) });
+  };
+  ctx.focusOuter = (outer) => focusSession(outer, { ...over, outer: true }, adapters.filter((a) => a.id !== 'tmux'), deadline);
+  // Inside tmux it is the pane or nothing: every other id the session holds
+  // belongs to some other tab, and landing there would be reported as exact.
+  const tried = Ids.inTmux(session) && !ctx.outer ? adapters.filter((a) => a.id === 'tmux') : adapters;
+  let last = { ok: false, reason: Ids.inTmux(session) ? 'tmux pane not reachable' : 'no adapter for this terminal' };
+  for (const a of tried) {
+    if (ctx.now() >= deadline.at) return { ...last, ok: false, reason: 'jump deadline passed' };
     let can = false;
     try { can = a.canHandle(session, ctx); } catch { can = false; }
     if (!can) continue;
     try {
       const hint = a.needs ? await ctx.onNeeds(a.needs) : null;
-      const run = hint && hint.patient ? { ...ctx, exec: (f, args) => ctx.exec(f, args, { timeout: PROMPT_TIMEOUT_MS }) } : ctx;
+      if (hint && hint.patient) deadline.at = Math.max(deadline.at, ctx.now() + PROMPT_TIMEOUT_MS);
+      const run = { ...ctx, exec: bounded(hint && hint.patient ? PROMPT_TIMEOUT_MS : EXEC_TIMEOUT_MS) };
       const r = await a.focus(session, run);
       if (r && r.ok) return { adapter: a.id, ...r };
       last = { adapter: a.id, ...(r || {}), ok: false, needs: (r && r.needs) || a.needs };
@@ -75,4 +112,4 @@ async function focusSession(session, over = {}, adapters = ADAPTERS) {
   return last;
 }
 
-module.exports = { ADAPTERS, focusSession, makeContext, exec, which, isDir, EXEC_TIMEOUT_MS, PROMPT_TIMEOUT_MS };
+module.exports = { ADAPTERS, focusSession, makeContext, exec, which, isDir, tmuxServerOk, EXEC_TIMEOUT_MS, JUMP_DEADLINE_MS, PROMPT_TIMEOUT_MS };

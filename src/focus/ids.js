@@ -4,7 +4,19 @@
 // adapters pass it as an argv entry, never spliced into a shell string or a
 // script's source.
 
-const envOf = (s) => (s && s.terminal && typeof s.terminal === 'object' && s.terminal.env && typeof s.terminal.env === 'object' ? s.terminal.env : {});
+const rawEnv = (s) => (s && s.terminal && typeof s.terminal === 'object' && s.terminal.env && typeof s.terminal.env === 'object' ? s.terminal.env : {});
+// A tmux pane inherits the tmux server's environment, so ITERM_SESSION_ID,
+// KITTY_* and WEZTERM_PANE there describe whichever tab started the server,
+// not this pane: inside tmux only tmux's own ids are believed.
+const OUTER_IDS = ['ITERM_SESSION_ID', 'KITTY_WINDOW_ID', 'KITTY_LISTEN_ON', 'WEZTERM_PANE'];
+function envOf(s) {
+  const env = rawEnv(s);
+  if (!inTmux(s)) return env;
+  const out = { ...env };
+  for (const k of OUTER_IDS) delete out[k];
+  return out;
+}
+const inTmux = (s) => rawEnv(s).TMUX_PANE !== undefined;
 const str = (v) => (typeof v === 'string' ? v : '');
 // No `..` segment, so a socket path can't climb out of where it claims to be.
 const safePath = (p) => /^\/[A-Za-z0-9._/-]{1,250}$/.test(p) && !p.split('/').includes('..');
@@ -29,7 +41,8 @@ function kittyWindow(s) {
 function kittyListen(s) {
   const v = str(envOf(s).KITTY_LISTEN_ON);
   if (v.startsWith('unix:') && safePath(v.slice(5))) return v;
-  return /^tcp:(localhost|127\.0\.0\.1):[1-9]\d{0,4}$/.test(v) ? v : null;
+  const m = /^tcp:(localhost|127\.0\.0\.1):([1-9]\d{0,4})$/.exec(v);
+  return m && Number(m[2]) <= 65535 ? v : null;
 }
 
 function weztermPane(s) {
@@ -48,11 +61,19 @@ function tmuxSocket(s) {
   return safePath(sock) ? sock : null;
 }
 
+function tmuxServerPid(s) {
+  const pid = str(envOf(s).TMUX).split(',')[1] || '';
+  return /^[1-9]\d{0,9}$/.test(pid) ? Number(pid) : null;
+}
+
 // Absolute, no control characters, no `..`; leading `/` also means `open`
 // can never read it as an option.
-function cwd(s) {
-  const c = str(s && s.cwd);
-  return c.startsWith('/') && c.length <= 1000 && !/[\0-\x1f\x7f]/.test(c) && !c.split('/').includes('..') ? c : null;
+const okPath = (c) => c.startsWith('/') && c.length <= 1000 && !/[\0-\x1f\x7f]/.test(c) && !c.split('/').includes('..');
+// The folder the session started in (the terminal's own), which the
+// session's live cwd can drift away from.
+function launchCwd(s) {
+  const c = str(s && s.terminal && s.terminal.cwd);
+  return okPath(c) ? c : null;
 }
 
 // Which terminal the session runs in: the hook's recorded host app wins
@@ -63,4 +84,4 @@ function hostIs(s, app, termProgram) {
   return !!termProgram && str(envOf(s).TERM_PROGRAM).toLowerCase() === termProgram.toLowerCase();
 }
 
-module.exports = { hostIs, envOf, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, cwd, safePath };
+module.exports = { hostIs, envOf, inTmux, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, tmuxServerPid, launchCwd, safePath };

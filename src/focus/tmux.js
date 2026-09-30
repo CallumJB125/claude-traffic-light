@@ -2,9 +2,10 @@
 // select-pane on the pane's %id, against the session's own server socket),
 // then focus the outer terminal tab that client is drawn in, found by the
 // client's tty.
+const os = require('os');
 const Ids = require('./ids.js');
 
-const BINS = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/opt/local/bin/tmux', '/usr/bin/tmux'];
+const BINS = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/opt/local/bin/tmux', '/usr/bin/tmux', `${os.homedir()}/.nix-profile/bin/tmux`, '/run/current-system/sw/bin/tmux'];
 
 // The client already on the pane's session, else the most recently active.
 function pickClient(listOut, sessionId) {
@@ -22,7 +23,7 @@ module.exports = {
   needs: null,
   BINS,
   pickClient,
-  canHandle: (s, ctx) => !!(Ids.tmuxPane(s) && Ids.tmuxSocket(s) && ctx.which(BINS)),
+  canHandle: (s, ctx) => !!(Ids.tmuxPane(s) && Ids.tmuxSocket(s) && ctx.which(BINS) && ctx.tmuxServerOk(Ids.tmuxSocket(s), Ids.tmuxServerPid(s))),
   async focus(s, ctx) {
     const { exec, which } = ctx;
     const pane = Ids.tmuxPane(s);

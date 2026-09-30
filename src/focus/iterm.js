@@ -31,7 +31,7 @@ module.exports = {
   id: 'iterm',
   app: 'iTerm2',
   needs: { permission: 'automation', app: 'iTerm2', reason: 'so a click can switch to the exact iTerm2 tab your session is running in' },
-  canHandle: (s, ctx) => ctx.platform === 'darwin' && isITerm(s) && !!(Ids.itermUuid(s) || Ids.tty(s)),
+  canHandle: (s, ctx) => ctx.platform === 'darwin' && (isITerm(s) || (!!ctx.outer && !s.hostApp)) && !!(Ids.itermUuid(s) || Ids.tty(s)),
   focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.itermUuid(s) || '', Ids.tty(s) || '']),
   SCRIPT,
 };

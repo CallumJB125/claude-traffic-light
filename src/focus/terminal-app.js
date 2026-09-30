@@ -26,7 +26,7 @@ module.exports = {
   id: 'terminal-app',
   app: 'Terminal',
   needs: { permission: 'automation', app: 'Terminal', reason: 'so a click can switch to the exact Terminal tab your session is running in' },
-  canHandle: (s, ctx) => ctx.platform === 'darwin' && isTerminal(s) && !!Ids.tty(s),
+  canHandle: (s, ctx) => ctx.platform === 'darwin' && (isTerminal(s) || (!!ctx.outer && !s.hostApp)) && !!Ids.tty(s),
   focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.tty(s)]),
   SCRIPT,
 };
