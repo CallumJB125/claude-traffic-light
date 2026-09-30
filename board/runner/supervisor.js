@@ -3,10 +3,10 @@
 // ledger + orphan recovery, and the local control socket for Buddy.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import WebSocket from 'ws';
+import WebSocket from 'ws'; // privacy-flow: team-hub
 import { PROTOCOL_VERSION, validate, MCP_TOOLS, WS_CLOSE } from '../shared/protocol.js';
 import { serializeOutbound, assertNoForeignBytes, scopeOf } from '../shared/scope.js';
 import { HB_MS, SLEEP_TICK_MS, STOP_GRACE_MS, INTERRUPT_WAIT_MS, TIME_SCALE, reconnectDelay, sleptEstimate } from '../shared/liveness.js';

@@ -97,7 +97,7 @@ export function killTree(pid, lstart) {
 // → "laptop asleep"). policy.json form_factor overrides; null when unknown.
 export function detectFormFactor(platform = process.platform) {
   try {
-    if (platform === 'darwin') return /InternalBattery/.test(execFileSync('pmset', ['-g', 'batt'], { encoding: 'utf8', timeout: 2000 })) ? 'laptop' : 'desktop';
+    if (platform === 'darwin') return /InternalBattery/.test(execFileSync('pmset', ['-g', 'batt'], { encoding: 'utf8', timeout: 2000 })) ? 'laptop' : 'desktop'; // privacy-flow: form-factor
     if (platform === 'linux') return fs.readdirSync('/sys/class/power_supply').some((n) => /^BAT/.test(n)) ? 'laptop' : 'desktop';
   } catch { /* unknown */ }
   return null;

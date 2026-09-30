@@ -20,10 +20,10 @@ let org = null;
 export const setOrg = (id) => { org = id ?? null; };
 export const currentOrg = () => org;
 
-async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {}, signal, onResponse } = {}) {
+async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {}, signal, onResponse } = {}) { // privacy-flow: board-view
   let res;
   try {
-    res = await fetchImpl(path, {
+    res = await fetchImpl(path, { // privacy-flow: board-view
       method,
       credentials: 'same-origin',
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...headers },

@@ -184,7 +184,7 @@ function nextDelay({ state, active, failures = 0, rate = null, retryAfterMs = 0,
 function defaultRunGh(args) {
   const bin = process.env.CLAUDE_BUDDY_GH || 'gh';
   return new Promise((resolve) => {
-    execFile(bin, args, {
+    execFile(bin, args, { // privacy-flow: gh-poll
       timeout: 20000,
       maxBuffer: 8 * 1024 * 1024,
       env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin`, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1' },

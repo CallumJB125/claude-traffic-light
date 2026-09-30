@@ -435,16 +435,16 @@ function registerKey(id, keyHex) {
       if (Number.isInteger(filePort) && filePort > 0 && filePort < 65536) port = filePort;
     } catch {}
     const token = fs.readFileSync(path.join(ROOT_DIR, 'token'), 'utf8').trim();
-    const post = `const http=require('http'),crypto=require('crypto');let i='';process.stdin.on('data',(d)=>{i+=d}).on('end',()=>{const a=JSON.parse(i);`
-      + `const send=(p,body,headers,cb)=>{const b=JSON.stringify(body);http.request({host:'127.0.0.1',port:a.port,path:p,method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(b),...headers}},`
+    const post = `const http=require('http'),crypto=require('crypto');let i='';process.stdin.on('data',(d)=>{i+=d}).on('end',()=>{const a=JSON.parse(i);` // privacy-flow: request-key
+      + `const send=(p,body,headers,cb)=>{const b=JSON.stringify(body);http.request({host:'127.0.0.1',port:a.port,path:p,method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(b),...headers}},` // privacy-flow: request-key
       + `(r)=>{let t='';r.on('data',(d)=>{if(t.length<4096)t+=d}).on('end',()=>cb(r.statusCode,t))}).on('error',()=>process.exit(1)).end(b)};`
       + `const nonce=crypto.randomBytes(32).toString('hex');`
       + `send('/request-key/challenge',{nonce},{},(code,t)=>{let proof='';try{proof=String(JSON.parse(t).proof)}catch{}`
-      + `const want=Buffer.from(require(a.lib).requestKeyProof(a.token,a.port,nonce),'hex');const got=Buffer.from(/^[0-9a-f]{64}$/.test(proof)?proof:'','hex');`
+      + `const want=Buffer.from(require(a.lib).requestKeyProof(a.token,a.port,nonce),'hex');const got=Buffer.from(/^[0-9a-f]{64}$/.test(proof)?proof:'','hex');` // privacy-flow: request-key
       + `if(code!==200||got.length!==want.length||!crypto.timingSafeEqual(want,got))process.exit(1);`
       + `send('/request-key',{id:a.id,key:a.key},{'x-buddy-token':a.token},(c)=>process.exit(c===200?0:1))})})`;
     const input = JSON.stringify({ port, token, id, key: keyHex, lib: path.join(__dirname, 'answer-file.js') });
-    return require('child_process').spawnSync(process.execPath, ['-e', post], { input, timeout: 1500, stdio: ['pipe', 'ignore', 'ignore'] }).status === 0;
+    return require('child_process').spawnSync(process.execPath, ['-e', post], { input, timeout: 1500, stdio: ['pipe', 'ignore', 'ignore'] }).status === 0; // privacy-flow: request-key
   } catch { return false; }
 }
 

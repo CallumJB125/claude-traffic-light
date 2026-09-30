@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -21,7 +21,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const http = require('http');
+const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
@@ -659,12 +659,12 @@ const BusyWatch = require('./src/busy-watch.js')({
   isDevRun: IS_DEV_RUN,
   fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
   tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
-  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))), // privacy-flow: calendar-helper
   readFile: (f) => fs.readFileSync(f, 'utf8'),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
   removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
-  fetch: (url) => net.fetch(url),
+  fetch: (url) => net.fetch(url), // privacy-flow: ics-feed
   log: (...a) => console.log(...a),
   onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
 });
@@ -747,6 +747,7 @@ function createWindow() {
     fullscreenable: false,
     show: false,
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       backgroundThrottling: false,
@@ -801,6 +802,7 @@ function createSettingsWindow() {
     maximizable: false,
     title: 'Claude Buddy Preferences',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
       contextIsolation: true,
     },
@@ -850,6 +852,7 @@ function createLightsWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'lights-preload.js'),
       contextIsolation: true,
       // The live preview must keep animating when this window sits behind
@@ -970,6 +973,7 @@ function createHelpWindow() {
     title: 'What is Claude doing?',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'help-preload.js'),
       contextIsolation: true,
     },
@@ -1198,7 +1202,7 @@ function updateOverlay(look) {
     skipTaskbar: true,
     fullscreenable: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setIgnoreMouseEvents(true);
   overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1260,7 +1264,7 @@ function ensureTrayRenderer() {
     show: false,
     transparent: true,
     frame: false,
-    webPreferences: { preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
@@ -2088,15 +2092,17 @@ function commitConfig(partial) {
   return next;
 }
 
+ipcMain.handle('get-privacy', () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-ipcMain.handle('export-stats', async (_e, format, days) => {
+ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
   const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
-  const r = await dialog.showSaveDialog(lightsWin || undefined, {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
     filters: [csv ? { name: 'CSV', extensions: ['csv'] } : { name: 'JSON', extensions: ['json'] }],
@@ -2293,7 +2299,7 @@ let spendReqId = 0;
 function spendRead(since) {
   if (spendWorker === null) {
     try {
-      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
+      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js')); // privacy-flow: local-worker
       spendWorker.unref();
       spendWorker.on('message', (m) => {
         if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
@@ -2483,12 +2489,12 @@ async function runAction(action, st) {
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
-    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
+    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' }; // privacy-flow: rule-url
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
-      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
     case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
@@ -2767,8 +2773,8 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-ipcMain.handle('setup-export', async () => {
-  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+ipcMain.handle('setup-export', async (e) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });

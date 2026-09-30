@@ -133,7 +133,7 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, se
   const timer = setTimer(cancel, timeoutMs);
   try {
     dir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-ask-`);
-    child = spawn('claude', args, { cwd: dir, env, stdio: ['pipe', 'pipe', 'ignore'] });
+    child = spawn('claude', args, { cwd: dir, env, stdio: ['pipe', 'pipe', 'ignore'] }); // privacy-flow: voice-ask
   } catch { done(null); return { promise, cancel }; }
   let out = '';
   child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });

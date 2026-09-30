@@ -27,7 +27,7 @@ const JWKS_TIMEOUT_MS = 10_000;
  * HubError('ACCESS_UNAVAILABLE') when the JWKS cannot be fetched.
  * JWKS cached; an unknown kid triggers a refetch (at most every 10 s).
  */
-export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
+export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, now = () => Date.now() }) { // privacy-flow: hub-server
   const certsUrl = `https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`;
   const issuer = `https://${team}.cloudflareaccess.com`;
   let keys = new Map();
@@ -40,7 +40,7 @@ export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, 
     lastFetch = now();
     inflight = (async () => {
       try {
-        const res = await fetchImpl(certsUrl, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
+        const res = await fetchImpl(certsUrl, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) }); // privacy-flow: hub-server
         if (!res.ok) throw new Error(`JWKS fetch ${res.status}`);
         const body = await res.json();
         const next = new Map();

@@ -54,7 +54,7 @@ function recordLaunch(root, { launcher, cwd, tmux = null, claimWindowMs = CLAIM_
     ...(tmux && /^%\d{1,9}$/.test(String(tmux.pane || '')) ? { tmux: { pane: tmux.pane, socket: tmux.socket || null, serverPid: tmux.serverPid || null } } : {}),
     createdAt: new Date(now).toISOString(), expiresAt: new Date(now + claimWindowMs).toISOString(),
   };
-  if (!createExclusive(path.join(dir, `${launchId}.json`), JSON.stringify(record))) throw new Error('launch id collision');
+  if (!createExclusive(path.join(dir, `${launchId}.json`), JSON.stringify(record))) throw new Error('launch id collision'); // privacy-flow: launch-record
   return { launchId, record, env: { BUDDY_OWNED: launchId } };
 }
 

@@ -3,9 +3,9 @@
 // self-probe) → graceful shutdown. Tests build this with a fake clock and
 // drive hub.tick() themselves (timers: false).
 
-import { createServer } from 'node:http';
+import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
 import { WS_CLOSE } from '../shared/protocol.js';
 import { REAPER_MS, TIME_SCALE } from '../shared/liveness.js';
 import { openDb } from './db.js';
@@ -17,7 +17,7 @@ import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './htt
 import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 
-export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) {
+export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
@@ -40,7 +40,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.boot();
 
   const api = new Api(hub);
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
   const server = createServer(createHttpHandler({ hub, api, config }));
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
@@ -62,7 +62,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
         try {
           // Healthy only when the answer came from this hub through the edge
           // (an Access login page or a 530 from Cloudflare is not the origin).
-          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
+          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000), redirect: 'manual' }); // privacy-flow: hub-server
           hub.noteTunnel(res.ok && res.headers.get('board-protocol') != null);
         } catch {
           hub.noteTunnel(false);
