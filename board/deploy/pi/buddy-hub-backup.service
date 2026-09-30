@@ -1,0 +1,14 @@
+[Unit]
+Description=Buddy board hub nightly DB snapshot
+
+[Service]
+Type=oneshot
+User=buddyhub
+Group=buddyhub
+EnvironmentFile=/etc/buddy-hub/hub.env
+ExecStart=/usr/bin/node /opt/buddy-hub/board/deploy/pi/backup.mjs
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/buddy-hub
+UMask=0077

@@ -1,0 +1,32 @@
+[Unit]
+Description=Buddy board hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=buddyhub
+Group=buddyhub
+WorkingDirectory=/opt/buddy-hub/board
+EnvironmentFile=/etc/buddy-hub/hub.env
+ExecStart=/usr/bin/node hub/server.js
+Restart=on-failure
+RestartSec=3
+# Hardening: the hub only needs its data dir and loopback networking.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/buddy-hub
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
