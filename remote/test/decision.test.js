@@ -33,7 +33,7 @@ test('happy path: phone allows a pending request; desktop applies it, signs the 
   assert.equal(ev.deviceName, 'Alice iPhone');
   assert.equal(ev.toolName, 'Bash');
   assert.match(ev.toolInputHash, /^[0-9a-f]{64}$/);
-  assert.ok(!JSON.stringify(ev).includes('npm test'), 'audit carries the hash, never the input');
+  assert.ok(!JSON.stringify(ev).includes('git status'), 'audit carries the hash, never the input');
   assert.equal((await desk.registry.get(paired.deviceId)).lastUsedAt, desk.clock());
 });
 
@@ -213,7 +213,7 @@ test('deny-listed command: allow → "approve at your desk"; deny still works', 
 
 test('deny-list: prod-labelled repo, and git push --force to main', async () => {
   const { desk, paired } = await setup();
-  const prod = desk.pending.add(bashRequest({ repoLabels: ['Prod'], toolInput: { command: 'npm test' } }));
+  const prod = desk.pending.add(bashRequest({ repoLabels: ['Prod'], toolInput: { command: 'git status' } }));
   assert.equal((await sendDecision(desk.hub, { paired, notice: prod, decision: 'allow', now: desk.clock() })).reason, 'approve-at-desk');
   const push = desk.pending.add(bashRequest({ toolInput: { command: 'git push --force-with-lease origin main' } }));
   assert.equal((await sendDecision(desk.hub, { paired, notice: push, decision: 'allow', now: desk.clock() })).reason, 'approve-at-desk');
@@ -333,7 +333,7 @@ test('rejections before the device is authenticated are never desktop-signed', a
 test('audit: hash-chained, keeps the signed decision, carries no tool input', async () => {
   const { desk, paired } = await setup();
   const { sha256Hex, canonicalize, GENESIS_HASH } = await import('../src/index.js');
-  const a = desk.pending.add(bashRequest({ toolInput: { command: 'npm test -- --secret=hunter2' } }));
+  const a = desk.pending.add(bashRequest({ toolInput: { command: 'grep -rn hunter2 src' } }));
   await sendDecision(desk.hub, { paired, notice: a, decision: 'allow', now: desk.clock() });
   await sendDecision(desk.hub, { paired, notice: a, decision: 'deny', now: desk.clock() });
   const events = desk.audit.filter((e) => e.type.startsWith('remote.decision'));
@@ -395,4 +395,22 @@ test('revealHidden makes bidi, zero-width and control characters visible', async
   assert.equal(revealHidden('git push‮ niam​\u0007'), 'git push⟨U+202E⟩ niam⟨U+200B⟩⟨U+0007⟩');
   assert.equal(revealHidden('plain text\nline two'), 'plain text\nline two');
   assert.equal(revealHidden('tag\u{E0041}'), 'tag⟨U+E0041⟩');
+});
+
+test('test commands: desk-only by default; approvable only in a repo that opted in', async () => {
+  const { desk, paired } = await setup();
+  const npmTest = () => desk.pending.add(bashRequest({ toolInput: { command: 'npm test' } }));
+  const before = await sendDecision(desk.hub, { paired, notice: npmTest(), decision: 'allow', now: desk.clock() });
+  assert.deepEqual([before.applied, before.reason], [false, 'approve-at-desk']);
+
+  desk.approvals.trustTestCommands = (p) => p.cwd === '/Users/alice/code/app';
+  const trusted = await sendDecision(desk.hub, { paired, notice: npmTest(), decision: 'allow', now: desk.clock() });
+  assert.equal(trusted.applied, true, trusted.message);
+  const elsewhere = desk.pending.add(bashRequest({ cwd: '/Users/alice/code/other', toolInput: { command: 'npm test' } }));
+  assert.equal((await sendDecision(desk.hub, { paired, notice: elsewhere, decision: 'allow', now: desk.clock() })).reason, 'approve-at-desk');
+  const commit = desk.pending.add(bashRequest({ toolInput: { command: 'git commit -m x' } }));
+  assert.equal((await sendDecision(desk.hub, { paired, notice: commit, decision: 'allow', now: desk.clock() })).reason, 'approve-at-desk', 'commit runs hooks: never trusted remotely');
+
+  desk.approvals.trustTestCommands = () => { throw new Error('config unreadable'); };
+  assert.equal((await sendDecision(desk.hub, { paired, notice: npmTest(), decision: 'allow', now: desk.clock() })).reason, 'approve-at-desk', 'fails closed');
 });

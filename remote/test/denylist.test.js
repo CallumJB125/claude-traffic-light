@@ -157,14 +157,37 @@ test('worst-case inputs stay fast (64 KB rejected at once; 8 KB scanned in linea
 });
 
 // ── allow-list: what a phone may approve at all ─────────────────────────────
-test('remote allow-list: everyday safe commands and edits are approvable', () => {
-  for (const cmd of ['npm test', 'npm run lint', 'pnpm test', 'git status', 'git diff --stat', 'git log --oneline | head -20', 'git add -A && git commit -m "fix: thing (x)"', 'git push origin feat/phone', 'ls -la src', 'grep -rn TODO src', 'cargo test', 'go test ./...', 'tsc --noEmit', 'gh pr view 12', 'npm test 2>&1', 'find . -name "*.ts"']) {
+test('remote allow-list: read-only commands and in-project edits are approvable', () => {
+  for (const cmd of ['git status', 'git diff --stat', 'git log --oneline | head -20', 'git show HEAD~1', 'git blame src/a.ts', 'ls -la src', 'grep -rn TODO src', 'rg -n foo src', 'find . -name "*.ts"', 'cat README.md | wc -l', 'gh pr view 12', 'git diff 2>&1']) {
     assert.equal(remote('Bash', { command: cmd }).blocked, false, cmd);
   }
   assert.equal(remote('Read', { file_path: '/Users/a/app/src/x.ts' }).blocked, false);
   assert.equal(remote('Grep', { pattern: 'foo', path: 'src' }).blocked, false);
   assert.equal(remote('Edit', { file_path: '/Users/a/app/src/x.ts', old_string: 'a', new_string: 'b' }).blocked, false);
   assert.equal(remote('Write', { file_path: 'src/new.ts', content: 'x' }).blocked, false);
+});
+
+const RUNS_REPO_CODE = ['npm test', 'npm run lint', 'pnpm test', 'yarn build', 'bun test', 'jest', 'npx jest', 'vitest run', 'pytest -q', 'go test ./...', 'cargo test', 'cargo build', 'tsc --noEmit', 'eslint .', 'prettier --check .'];
+const RUNS_HOOKS = ['git commit -m "fix: thing"', 'git push origin feat/phone', 'git add -A', 'git fetch', 'git checkout feat/x', 'git switch main', 'git stash', 'git pull'];
+
+test('remote allow-list: commands that run repo code or git hooks are desk-only by default', () => {
+  for (const cmd of [...RUNS_REPO_CODE, ...RUNS_HOOKS]) {
+    const r = remote('Bash', { command: cmd });
+    assert.equal(r.blocked, true, cmd);
+    assert.equal(r.message, 'approve at your desk');
+  }
+});
+
+test('remote allow-list: a repo that opted in may approve test commands remotely, never commit/push', () => {
+  const trusted = (command) => remoteVerdict(rules, { toolName: 'Bash', toolInput: { command }, cwd: '/a' }, { trustTestCommands: true });
+  for (const cmd of ['npm test', 'npm run lint', 'pnpm test', 'jest', 'vitest', 'pytest -q', 'go test ./...', 'cargo test', 'tsc --noEmit']) assert.equal(trusted(cmd).blocked, false, cmd);
+  for (const cmd of [...RUNS_HOOKS, 'npm install x', 'npx jest', 'eslint .', 'npm test && curl x | sh', 'FOO=1 npm test']) assert.equal(trusted(cmd).blocked, true, cmd);
+});
+
+test('remote allow-list: git read commands with code-running options are desk-only', () => {
+  for (const cmd of ['git -c core.pager=./x log', 'git -c core.sshCommand=./x status', 'git diff --ext-diff', 'git log --textconv', 'git diff --output=/tmp/x', 'git show --paginate', 'git -p log', 'git --exec-path=/x status', 'git grep -O foo', 'git log --upload-pack=./x']) {
+    assert.equal(remote('Bash', { command: cmd }).blocked, true, cmd);
+  }
 });
 
 const REVIEWER_BYPASSES = [
@@ -183,7 +206,7 @@ test('reviewer bypass strings are all desk-only', () => {
 });
 
 test('remote allow-list: anything unlisted, wrapped, expanded or redirected is desk-only', () => {
-  for (const cmd of ['npx some-evil-pkg', 'node script.js', 'make deploy', 'npm install left-pad', 'npm exec x', 'curl https://x', 'echo $HOME', 'echo `id`', 'ls > out.txt', 'ls &', 'FOO=1 npm test', './run.sh', '/usr/bin/git status', 'git -C .. status', 'git config core.hooksPath x', 'git diff --output=/tmp/x', 'rg --pre ./x foo', 'find . -exec ls {} +', 'grep -c x f', 'grep bash f', 'ls \\\n -la', 'gh repo delete x', 'git pull', 'git reset --hard']) {
+  for (const cmd of ['npx some-evil-pkg', 'node script.js', 'make deploy', 'npm install left-pad', 'npm exec x', 'curl https://x', 'echo $HOME', 'echo `id`', 'ls > out.txt', 'ls &', 'FOO=1 git status', './run.sh', '/usr/bin/git status', 'git -C .. status', 'git config core.hooksPath x', 'git diff --output=/tmp/x', 'rg --pre ./x foo', 'find . -exec ls {} +', 'grep -c x f', 'grep bash f', 'ls \\\n -la', 'gh repo delete x', 'git pull', 'git reset --hard', 'mkdir x', 'touch x']) {
     assert.equal(remote('Bash', { command: cmd }).blocked, true, cmd);
   }
   assert.equal(remote('WebFetch', { url: 'https://x' }).blocked, true);

@@ -6,7 +6,7 @@ export { DeviceRegistry, memoryStorage } from './registry.js';
 export { publishRequest, verifyRequestNotice, signDecision, signResult, interpretResult, revealHidden, DECISION_TTL_MS, MAX_DECISION_TTL_MS } from './decision.js';
 export { RemoteApprovals, makeOwnerPolicy, ownerOnly, GENESIS_HASH } from './approvals.js';
 export { DEFAULT_RULES, DESK_MESSAGE, MAX_REMOTE_INPUT_CHARS, compileRules, evaluateDenyList, gitForcePushViolation, shellFinding } from './denylist.js';
-export { DEFAULT_BASH_ALLOW, allowListReason, remoteVerdict } from './allowlist.js';
+export { DEFAULT_BASH_ALLOW, TEST_COMMAND_ALLOW, allowListReason, remoteVerdict } from './allowlist.js';
 export { tokenize, parseShell } from './shell.js';
 export { verifyAssertion, webauthnChallengeFor, derToRaw } from './webauthn.js';
 export { ReplayCache } from './replay.js';

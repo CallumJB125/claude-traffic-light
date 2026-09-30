@@ -47,7 +47,7 @@ export function bashRequest(overrides = {}) {
   return {
     requestId: `mac-s1-${Math.random().toString(36).slice(2)}`,
     sessionId: 's1', cardId: null, toolName: 'Bash',
-    toolInput: { command: 'npm test', description: 'Run tests' },
+    toolInput: { command: 'git status', description: 'Show status' },
     cwd: '/Users/alice/code/app', ownerId: 'alice', repoLabels: [], createdAt: new Date().toISOString(),
     ...overrides,
   };

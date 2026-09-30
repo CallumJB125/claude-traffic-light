@@ -144,7 +144,7 @@ async function approvalsOver(dir, opts = {}) {
 }
 
 test('end to end with the real hook: a phone allow is applied only after the hook confirms it took it', async () => {
-  await withHook({ command: 'npm test' }, 5000, async ({ dir, req, exited }) => {
+  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited }) => {
     const { approvals, pending, sign } = await approvalsOver(dir);
     const p = await pending.get(req.id);
     const out = await approvals.handleDecision((await sign(p)).envelope);
@@ -155,7 +155,7 @@ test('end to end with the real hook: a phone allow is applied only after the hoo
 });
 
 test('end to end: the hook times out first → the phone is told "not applied", not success', async () => {
-  await withHook({ command: 'npm test' }, 300, async ({ dir, req, exited }) => {
+  await withHook({ command: 'git status' }, 300, async ({ dir, req, exited }) => {
     const { approvals, pending, sign } = await approvalsOver(dir, { maxAgeMs: 60000 });
     const p = await pending.get(req.id);
     const { envelope } = await sign(p);
@@ -167,7 +167,7 @@ test('end to end: the hook times out first → the phone is told "not applied", 
 });
 
 test('end to end: the desk answered first → the phone is told already answered', async () => {
-  await withHook({ command: 'npm test' }, 5000, async ({ dir, req, exited }) => {
+  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited }) => {
     const { approvals, pending, sign } = await approvalsOver(dir);
     const p = await pending.get(req.id);
     const { envelope } = await sign(p, 'allow');

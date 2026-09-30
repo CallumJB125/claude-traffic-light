@@ -194,7 +194,7 @@ holding. The desktop reports `applied` only on seeing its own nonce in
 | I1 | Info disclosure | Request content visible to the hub | Accepted for v1 (R3); audit logs carry only the hash |
 | I2 | Info disclosure | Pairing secret leaks via the hub | Secret never sent; only HMAC tags cross the hub (tested) |
 | D1 | DoS | Hub drops/delays; burns pairings; floods desktop | Desk path unaffected; phone shows "desktop offline — not applied"/"unknown"; envelope ≤ 4 KB; replay cache bounded and fails closed when full; ≤ 4 open pairings |
-| E1 | Elevation | Remote approval of destructive actions | **Remote allow-list** (`allowlist.js`): Read/Grep/Glob (not credential paths), Edit/Write inside the session dir (not credentials, hooks, shell rc, CI, package.json), Bash only for allow-listed programs with no expansion/redirect/subshell/wrapper/interpreter; everything else → "approve at your desk". Deny-list (tokenised, `shell.js`) behind it: destructive shell, any force/delete push, `git -c alias`, interpreter `-c/-e`, writes to code-running paths, prod-labelled repos. Inputs > 8 KB desk-only |
+| E1 | Elevation | Remote approval of destructive actions, or of anything that runs repo-controlled code | **Remote allow-list** (`allowlist.js`): Read/Grep/Glob (not credential paths), Edit/Write inside the session dir (not credentials, hooks, shell rc, CI, package.json), Bash only for read-only programs (ls/cat/grep/rg/find/…, `git status/diff/log/show/blame/ls-files/rev-parse` with no `-c`/`-C`, `--ext-diff`, `--textconv`, `--output`, pager or upload-pack options, read-only `gh`) with no expansion/redirect/subshell/wrapper/interpreter. Package scripts, test runners, compilers, and `git commit/push/add/fetch/checkout` (hooks) are desk-only; a repo can opt in to remote *test* commands (`trustTestCommands`, off by default), never commit/push. Everything else → "approve at your desk". Deny-list (tokenised, `shell.js`) behind it: destructive shell, any force/delete push, `git -c alias`, interpreter `-c/-e`, writes to code-running paths, prod-labelled repos. Inputs > 8 KB desk-only |
 | E2 | Elevation | Replay of a captured approval | Per-device nonce cache until expiry+skew; requests single-use (first-wins); `aud` binding; TTL ≤ 120 s |
 | E3 | Elevation | Revoked/stolen device keeps acting | Revoke one / revoke all on the desktop, effective immediately and offline (local registry) |
 | E4 | Elevation | Concurrent answers (desk, phone, MCP) both applied; one answer releases a parallel call | Random request ids; link-based exclusive `.answer`; hash-bound answers; hook's deadline claim; `.taken` ack (§1) |
@@ -229,12 +229,13 @@ holding. The desktop reports `applied` only on seeing its own nonce in
   secrets. Next step specified in §12.2 (E2E encryption). Until then keep the
   hub Tailscale-only (ground rule).
 - **R4 — Shell judgement is heuristic.** The allow-list makes the default
-  "desk", and the tokeniser handles quoting, wrappers, `sh -c`, `$(…)` and
-  backticks, but allow-listed programs still run repo-controlled code
-  (`npm test` runs `package.json` scripts, `jest`/`eslint` load repo config).
-  Editing those files remotely is desk-only, but the agent may have changed
-  them earlier under a desk or auto-accepted approval. The real bound remains
-  Claude Code's own permission rules and the runner sandbox.
+  "desk" and admits only read-only programs; the tokeniser handles quoting,
+  wrappers, `sh -c`, `$(…)` and backticks. Remaining: `git diff/log/show` can
+  still run a diff/textconv driver that the repo's own `.git/config` +
+  `.gitattributes` define (writing those remotely is desk-only, but the agent
+  could have set them earlier); and a repo that opts in to
+  `trustTestCommands` accepts that `npm test` & co. run repo code. The real
+  bound remains Claude Code's own permission rules and the runner sandbox.
 - **R5 — Desktop restart forgets the replay cache.** Mitigated because a
   settled request is gone (single-use) and decisions expire in ≤ 120 s.
 - **R6 — Clock skew.** A phone clock more than ~2 min behind makes every
@@ -257,8 +258,13 @@ holding. The desktop reports `applied` only on seeing its own nonce in
 ## 9. Integration notes (for whoever wires this into the widget/hub)
 
 1. Done in the widget: random ids, full input + hash in the request file, the
-   link/ack answer protocol for widget buttons (`src/signal-server.js`) and
-   `buddy_answer_request` (`mcp-server.js`).
+   link/ack answer protocol for the widget buttons (`src/signal-server.js`);
+   no request at all for an unreadable payload; the hook's whole run fits in
+   the installed 60 s timeout minus a 5 s margin; request files older than any
+   live hook are swept. The widget strip shows the real command with a
+   "+N chars" marker and a full, scrollable view, and a diff summary for edits
+   (`src/request-view.js`). The MCP server is read-only: `buddy_answer_request`
+   was removed (it could only ever approve *another* session's call).
 2. The desktop identity key and registry: `node/file-store.js`
    (`~/.claude-traffic-light/remote/{identity,devices}.json`, 0600). macOS
    Keychain / Windows DPAPI for the identity key is a later hardening step.
