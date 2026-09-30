@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../tokens.css" />
+<link rel="stylesheet" href="../../rig.css" />
+<style>
+  html, body { margin: 0; background: #2a2833; font: 9px -apple-system, system-ui, sans-serif; color: #f2efe8; }
+  #grid { display: grid; grid-template-columns: repeat(8, 104px); gap: 6px; padding: 8px; width: max-content; }
+  .cell { width: 104px; }
+  .stage { width: 96px; height: 123px; margin: 0 auto; }
+  .stage svg.rig { width: 96px; height: 123px; display: block; }
+  .label { text-align: center; height: 12px; overflow: hidden; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script src="../../motion.js"></script>
+<script src="../../rig.js"></script>
+<script src="matrix.js"></script>
+</body>
+</html>
