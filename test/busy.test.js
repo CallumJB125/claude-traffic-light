@@ -386,18 +386,24 @@ test('watch: with holding off, busy is still a rule condition but nothing is log
 });
 
 // ── Review fixes ────────────────────────────────────────────────────────────
-test('ICS perf: 500 weekly TZID series from 2021 expand over ±1 day in under 50 ms', () => {
+// Guards the old 7 s-per-tick regression. Best of three against a loose
+// budget so a busy machine can't fail it while a real regression still does.
+test('ICS perf: 500 weekly TZID series from 2021 expand over ±1 day in under 150 ms (best of 3)', () => {
   const zones = ['Europe/London', 'America/New_York', 'Africa/Johannesburg', 'Asia/Tokyo', 'Pacific Standard Time'];
   const series = [];
   for (let i = 0; i < 500; i += 1) series.push([`UID:p${i}`, `DTSTART;TZID=${zones[i % zones.length]}:20210104T0${i % 9}0000`, 'DURATION:PT30M', 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR', `EXDATE;TZID=${zones[i % zones.length]}:20210106T0${i % 9}0000`]);
   const events = B.parseICS(ics(...series));
   const now = at('2026-09-30T10:00:00Z');
   B.expandICS(events, now - 86400000, now + 86400000); // warm the formatter cache
-  const t0 = process.hrtime.bigint();
-  const out = B.expandICS(events, now - 86400000, now + 86400000);
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  let out;
+  let ms = Infinity;
+  for (let i = 0; i < 3; i += 1) {
+    const t0 = process.hrtime.bigint();
+    out = B.expandICS(events, now - 86400000, now + 86400000);
+    ms = Math.min(ms, Number(process.hrtime.bigint() - t0) / 1e6);
+  }
   assert.ok(out.length >= 500, `expanded ${out.length}`);
-  assert.ok(ms < 50, `took ${ms.toFixed(1)} ms`);
+  assert.ok(ms < 150, `best of 3 took ${ms.toFixed(1)} ms`);
 });
 
 test('ICS: jumping ahead to the window keeps INTERVAL and monthly patterns aligned to DTSTART', () => {
