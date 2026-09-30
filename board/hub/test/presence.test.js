@@ -230,3 +230,27 @@ test('presence pushes: ≤ 1 per board per second, trailing edge carries the las
     await h.destroy();
   }
 });
+
+test('presence: DELETE /api/devices/:id and removing the member drop the device\'s presence at once', async () => {
+  const { h, alice, r, b } = await setup();
+  try {
+    r.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo })] });
+    await b.next('team.presence', (m) => m.members.length === 1, { fresh: true });
+    const dev = h.db.get('SELECT id FROM devices WHERE member_id = ?', h.ids.alice);
+    assert.equal((await h.api(alice, 'DELETE', `/api/devices/${dev.id}`, { request_id: randomUUID() })).status, 200);
+    assert.deepEqual((await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`)).body.members, [], 'gone before the TTL');
+    const gone = b.next('team.presence', (m) => m.members.length === 0, { fresh: true });
+    await h.tick(PRESENCE_PUSH_MS);
+    await gone;
+
+    const bob = await h.login('bob');
+    const rb = await h.runner(await h.enroll(bob));
+    rb.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo })] });
+    await settle(50);
+    assert.equal(h.hub.presence.byDevice.size, 1);
+    assert.equal((await h.api(alice, 'DELETE', `/api/members/${h.ids.bob}`, { request_id: randomUUID() })).status, 200);
+    assert.equal(h.hub.presence.byDevice.size, 0, 'the removed member\'s devices are dropped');
+  } finally {
+    await h.destroy();
+  }
+});

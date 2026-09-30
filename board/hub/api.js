@@ -407,6 +407,7 @@ export class Api {
     if (d.member_id !== member.id && !this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'not your device');
     this.db.run('UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?', this.hub.iso(), id);
     this.hub.runners.get(id)?.close(4403, 'device revoked');
+    this.hub.presence.dropDevice(id);
     this.audit(member.id, 'device.revoke', id);
     return { ok: true };
   }
@@ -481,7 +482,10 @@ export class Api {
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, m.id);
       this.audit(member.id, 'member.remove', m.id);
     });
-    for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'member removed');
+    for (const d of devices) {
+      this.hub.runners.get(d.id)?.close(4403, 'member removed');
+      this.hub.presence.dropDevice(d.id);
+    }
     this.hub.memberChanged(m.id);
     return { ok: true };
   }

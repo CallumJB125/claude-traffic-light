@@ -34,6 +34,14 @@ export class Presence {
     this.changed(conn.member.org_id);
   }
 
+  // A revoked device (or a removed member's) disappears at once, not at the TTL.
+  dropDevice(id) {
+    const e = this.byDevice.get(id);
+    if (!e) return;
+    this.byDevice.delete(id);
+    this.changed(e.org_id);
+  }
+
   // Reaper pass: expire silent devices.
   sweep() {
     const now = this.hub.mono();
