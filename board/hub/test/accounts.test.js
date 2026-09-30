@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { startAccounts, dumpDb } from './accounts-helpers.js';
 import { settle } from './helpers.js';
+import { FailureBudget } from '../ratelimit.js';
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 const MIN = 60_000;
@@ -150,7 +151,7 @@ test('rate limits: per address (silent, no mail), per IP (429), verify lockout p
     assert.equal(last.body.error.code, 'RATE_LIMITED');
     assert.ok(Number(last.headers.get('retry-after')) > 0);
 
-    // Lockout: 10 verify attempts per address per 15 min, even with the right code after.
+    // Throttle: 10 verify attempts per address per network per 15 min, even with the right code after.
     h.clock.advance(60 * MIN);
     const flows = [];
     for (let i = 0; i < 3; i++) flows.push([(await h.start('dave@example.com')).body.flow_id, h.codeFor('dave@example.com')]);
@@ -158,9 +159,119 @@ test('rate limits: per address (silent, no mail), per IP (429), verify lockout p
     for (let i = 0; i < 5; i++) await h.call('POST', '/api/auth/email/verify', { body: { flow_id: flows[1][0], code: 'abcdef' } });
     const locked = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: flows[2][0], code: flows[2][1] } });
     assert.equal(locked.status, 429);
-    assert.ok(h.db.get("SELECT 1 AS x FROM audit WHERE action = 'auth.lockout'"));
     h.clock.advance(15 * MIN);
     assert.equal((await h.call('POST', '/api/auth/email/verify', { body: { flow_id: flows[2][0], code: flows[2][1] } })).status, 400, 'flow expired meanwhile');
+  } finally {
+    await h.close();
+  }
+});
+
+// Many flows from one network, without the per-IP limits (their own tests are above).
+const ROOMY = { capacity: 1e9, per_ms: 60_000 };
+const roomy = (extra = {}) => ({ rateLimits: { auth_start_ip: ROOMY, auth_verify_ip: ROOMY, login_ip: ROOMY, auth_start_global: ROOMY, ...extra } });
+
+test('H2 failure budget: at most 20 wrong codes a day per address (case/space variants included), then a lockout the right code cannot pass; one notice mail', async () => {
+  const h = await startAccounts({ config: { trustCfIp: true, ...roomy() } });
+  try {
+    assert.equal((await h.signIn('victim@x.test')).status, 200, 'the address has an account');
+    let guesses = 0;
+    let flows = 0;
+    let lockedChecked = false;
+    const variants = ['victim@x.test', 'Victim@X.test', ' VICTIM@x.test '];
+    for (let minute = 0; minute < 24 * 60; minute += 5) {
+      for (const v of variants) {
+        const s = await h.call('POST', '/api/auth/email/start', { body: { email: v, client: 'buddy_desktop' } });
+        if (!h.db.get('SELECT id FROM login_flows WHERE id = ?', s.body.flow_id)) continue;
+        flows++;
+        for (let i = 0; i < 5; i++) {
+          const r = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: s.body.flow_id, code: String(100000 + guesses).padStart(6, '0') } });
+          if (r.status === 429) break;
+          assert.equal(r.body.error.code, 'INVALID_TOKEN');
+          guesses++;
+        }
+      }
+      if (minute === 12 * 60) {
+        // Locked: even the right code is refused without being checked.
+        // (from the owner's own network, which the attacker's limits don't touch)
+        const home = { 'cf-connecting-ip': '203.0.113.9' };
+        const s = await h.start('victim@x.test', {}, { headers: home });
+        assert.ok(h.db.get('SELECT id FROM login_flows WHERE id = ?', s.body.flow_id));
+        const r = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: s.body.flow_id, code: h.codeFor('victim@x.test') }, headers: home });
+        assert.equal(r.status, 429);
+        assert.ok(r.body.error.retry_after_s > 11 * 3600, 'until the rolling day frees a slot');
+        lockedChecked = true;
+      }
+      h.clock.advance(5 * MIN);
+    }
+    assert.ok(lockedChecked);
+    assert.ok(flows > 20, `flows kept coming (${flows}), only the guesses stopped`);
+    assert.ok(guesses <= 20, `${guesses} wrong guesses in 24 h`);
+    const notices = h.mailer.sent.filter((m) => m.to === 'victim@x.test' && /trying sign-in codes/.test(m.subject));
+    assert.equal(notices.length, 1, 'one notice a day, however long the attack');
+    assert.ok(!/\d{6}/.test(notices[0].text), 'the notice holds no code');
+    assert.ok(h.db.get("SELECT 1 AS x FROM audit WHERE action = 'auth.lockout'"));
+
+    // An address with no account gets no notice.
+    for (let i = 0; i < 5; i++) {
+      h.clock.advance(15 * MIN);
+      const f = await h.start('ghost@x.test');
+      for (let j = 0; j < 5; j++) await h.call('POST', '/api/auth/email/verify', { body: { flow_id: f.body.flow_id, code: '000000' } });
+    }
+    assert.equal(h.mailer.sent.filter((m) => m.to === 'ghost@x.test' && /trying/.test(m.subject)).length, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test('H2 failure budget: failures, not attempts; a right code resets it; lockouts double up to 24 h', () => {
+  let now = 0;
+  const HOUR = 3_600_000;
+  const fb = new FailureBudget({ now: () => now, budget: 2, windowMs: HOUR, lockBaseMs: HOUR, lockCapMs: 24 * HOUR });
+  assert.equal(fb.fail('a'), false);
+  fb.reset('a');
+  assert.equal(fb.fail('a'), false, 'a success in between starts over');
+  assert.equal(fb.fail('a'), true);
+  assert.equal(fb.lockedFor('a'), HOUR);
+  const locks = [HOUR];
+  for (let i = 0; i < 6; i++) {
+    now += fb.lockedFor('a');
+    assert.equal(fb.lockedFor('a'), 0);
+    fb.fail('a');
+    assert.equal(fb.fail('a'), true);
+    locks.push(fb.lockedFor('a'));
+  }
+  assert.deepEqual(locks.map((ms) => ms / HOUR), [1, 2, 4, 8, 16, 24, 24]);
+  assert.equal(fb.lockedFor('b'), 0, 'per key');
+});
+
+test('M1: an attacker exhausting the per-address start/verify limits from one network does not silence the owner on another', async () => {
+  const h = await startAccounts({ config: { trustCfIp: true, ...roomy() } });
+  try {
+    const from = (ip) => ({ 'cf-connecting-ip': ip });
+    const X = '198.51.100.7';
+    const Y = '203.0.113.9';
+    const xs = [];
+    for (let i = 0; i < 15; i++) xs.push((await h.start('owner@x.test', {}, { headers: from(X) })).body.flow_id);
+    const sent = h.mailer.sent.filter((m) => m.to === 'owner@x.test').length;
+    assert.equal(sent, 3, 'X is throttled to 3 mails per 15 min');
+    const real = xs.filter((id) => h.db.get('SELECT id FROM login_flows WHERE id = ?', id));
+    for (const id of real.slice(0, 2)) for (let i = 0; i < 5; i++) await h.call('POST', '/api/auth/email/verify', { body: { flow_id: id, code: 'zzzzzz' }, headers: from(X) });
+    assert.equal((await h.call('POST', '/api/auth/email/verify', { body: { flow_id: real[2], code: '000000' }, headers: from(X) })).status, 429, 'X is throttled');
+
+    const mine = await h.start('owner@x.test', {}, { headers: from(Y) });
+    assert.equal(mine.status, 200);
+    assert.ok(h.db.get('SELECT id FROM login_flows WHERE id = ?', mine.body.flow_id), 'Y gets a real flow');
+    assert.equal(h.mailer.sent.filter((m) => m.to === 'owner@x.test').length, sent + 1, 'and the mail');
+    const v = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: mine.body.flow_id, code: h.codeFor('owner@x.test') }, headers: from(Y) });
+    assert.equal(v.status, 200, v.text);
+
+    // The global per-address ceiling still bounds a spread-out attack.
+    let quiet = 0;
+    for (let i = 0; i < 60; i++) {
+      const r = await h.start('target@x.test', {}, { headers: from(`192.0.${i}.1`) });
+      if (!h.db.get('SELECT id FROM login_flows WHERE id = ?', r.body.flow_id)) quiet++;
+    }
+    assert.equal(quiet, 20, '40 an hour per address from every network together');
   } finally {
     await h.close();
   }

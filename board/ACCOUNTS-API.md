@@ -54,17 +54,19 @@ There are two, and only two, credentials.
 
 | Rule | Limit | Over the limit |
 |---|---|---|
-| start, per address | 3 / 15 min and 10 / h | **same `200 {flow_id}` answer**, no mail sent; verify on that flow_id → `INVALID_TOKEN` |
+| start, per address **and requesting network** (/24, IPv6 /64) | 3 / 15 min and 10 / h | **same `200 {flow_id}` answer**, no mail sent; verify on that flow_id → `INVALID_TOKEN` |
+| start, per address from every network together | 40 / h | the same silent answer |
 | start, per IP | 20 / h | `429` |
 | start, whole hub | 500 / h | `429` |
 | verify, per IP | 10 / 10 min | `429` |
-| verify, per address (every attempt, right or wrong) | 10 / 15 min | `429`: the address is locked out until the bucket refills, even with the right code |
+| verify, per address and requesting network (every attempt) | 10 / 15 min | `429` for that network only |
+| **wrong codes per address** (the failure budget, every network together) | 20 in any 24 h (`BOARD_AUTH_FAIL_BUDGET`) | `429` on every verify for that address, **even with the right code** (it isn't checked), until the rolling day frees a slot; each exhaustion also locks for 1 h, doubling per exhaustion up to 24 h. A right code resets it. When it runs out for an address that has an account, that address gets one mail a day: "Someone is trying sign-in codes for your account" |
 | wrong codes per flow | 5 | the flow dies; `INVALID_TOKEN` from then on |
 | new users, per IP | 10 / day | `429` on the verify that would create the user |
 | any mutation, per IP | 300 / min | `429` |
 | any mutation, per signed-in user or member | 120 / min | `429` |
 
-IPv6 clients are keyed by their /64. Behind cloudflared (`BOARD_TRUST_CF_IP=1`), the client IP is `CF-Connecting-IP`.
+IPv6 clients are keyed by their /64. Behind cloudflared (`BOARD_TRUST_CF_IP=1`, required once exposed), the client IP is `CF-Connecting-IP`. Pairing the per-address limits with the requesting network means someone else hammering your address from their network can't stop you from getting a code on yours; the lockout itself counts only wrong codes. (Anyone who knows your address can still spend its failure budget and pause email-code sign-in for it; the notice mail says so, and Google/GitHub sign-in is unaffected.)
 
 ## Routes built in P1
 

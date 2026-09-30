@@ -8,7 +8,7 @@ import { createHash, createHmac, hkdfSync, randomBytes, randomInt, randomUUID } 
 import { isIP } from 'node:net';
 import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
-import { limitOrThrow } from '../ratelimit.js';
+import { FailureBudget, ipKey, limitOrThrow, netKey, v6groups } from '../ratelimit.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
@@ -30,13 +30,6 @@ const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
-function v6groups(a) {
-  const [head, tail = ''] = a.split('::');
-  const h = head ? head.split(':') : [];
-  const t = a.includes('::') && tail ? tail.split(':') : [];
-  return [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
-}
-
 /** /24 for IPv4, /48 for IPv6: the only form an address is ever stored in. */
 export function ipPrefix(ip) {
   const a = String(ip ?? '').replace(/^::ffff:/, '');
@@ -44,12 +37,6 @@ export function ipPrefix(ip) {
   if (isIP(a) === 6) return `${v6groups(a).slice(0, 3).join(':')}::/48`;
   return null;
 }
-
-// Rate-limit key for an address: IPv6 by /64 (design §9.1), IPv4 whole.
-const ipKey = (ip) => {
-  const a = String(ip ?? '').replace(/^::ffff:/, '');
-  return isIP(a) === 6 ? `${v6groups(a).slice(0, 4).join(':')}::/64` : a;
-};
 
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
@@ -82,6 +69,8 @@ export class Accounts {
     this.kCode = key('email-code');
     this.kCsrf = key('csrf');
     this.kRef = key('audit-email');
+    // Wrong codes per address, every network together (H2).
+    this.failures = new FailureBudget({ now: () => hub.mono(), budget: hub.config.authFailBudget ?? 20 });
   }
 
   now() { return this.hub.iso(); }
@@ -148,7 +137,8 @@ export class Accounts {
     const flowId = b64url(randomBytes(18));
     const out = { flow_id: flowId, expires_in: FLOW_TTL_MS / 1000 };
     const lim = this.hub.limiter;
-    if (!lim.take('auth_start_email', email).ok || !lim.take('auth_start_email_hour', email).ok) {
+    const mine = `${email}|${netKey(ip)}`;
+    if (!lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', email).ok) {
       // Same answer, no mail, no row: a verify on this flow_id fails like a wrong code.
       this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'email_rate' }, ip });
       return out;
@@ -189,21 +179,26 @@ export class Accounts {
     const invalid = (msg = 'that code is wrong or has expired: ask for a new one', extra = {}) => new HubError('INVALID_TOKEN', msg, extra);
     const f = flowId ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     if (!f || f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
-    const lock = this.hub.limiter.take('auth_verify_email', f.email);
-    if (!lock.ok) {
-      const s = Math.max(1, Math.ceil(lock.retry_after_ms / 1000));
-      this.audit('auth.lockout', { user: f.user_id, detail: { email_ref: this.emailRef(f.email) }, ip });
-      throw new HubError('RATE_LIMITED', `too many attempts for this address; retry in ${s} s`, { retry_after_s: s });
+    // The address's failure budget (H2): locked means no code is even checked.
+    const locked = this.failures.lockedFor(f.email);
+    if (locked) {
+      const s = Math.max(1, Math.ceil(locked / 1000));
+      throw new HubError('RATE_LIMITED', `too many wrong codes for this address; retry in ${s} s`, { retry_after_s: s });
     }
+    limitOrThrow(this.hub, 'auth_verify_email', `${f.email}|${netKey(ip)}`);
     if (!/^\d{6}$/.test(code) || !safeEqual(this.codeHash(f.id, code), f.code_hash)) {
       const attempts = f.attempts + 1;
       const dead = attempts >= MAX_ATTEMPTS;
+      const exhausted = this.failures.fail(f.email);
       this.hub.txn(() => {
         this.db.run('UPDATE login_flows SET attempts = ?, dead_at = ? WHERE id = ?', attempts, dead ? now : null, f.id);
         this.audit('auth.code.failed', { user: f.user_id, target: f.id, detail: { attempts, dead }, ip });
+        if (exhausted) this.audit('auth.lockout', { user: f.user_id, detail: { email_ref: this.emailRef(f.email), retry_after_s: Math.ceil(this.failures.lockedFor(f.email) / 1000) }, ip });
       });
+      if (exhausted) this.lockNotice(f.email);
       throw invalid(dead ? 'too many wrong codes: ask for a new one' : undefined, { attempts_left: MAX_ATTEMPTS - attempts });
     }
+    this.failures.reset(f.email);
     if (f.purpose === 'delete') return this.stepUp(f, { ip, ident });
     // A magic link opened in another browser than the one that asked could be
     // someone mailing you their own link (login CSRF): ask first (design §4.3).
@@ -254,6 +249,20 @@ export class Accounts {
       appendCookie(res, `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
     }
     return out;
+  }
+
+  // An address with an account hears (at most once a day) that someone is
+  // guessing its codes; an address without one gets nothing.
+  lockNotice(email) {
+    if (!this.mailer) return;
+    const has = this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
+      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
+    if (!has || !this.hub.limiter.take('auth_lock_notice', email).ok) return;
+    this.mailer.send({
+      to: email,
+      subject: `Someone is trying sign-in codes for your ${BRAND.name} account`,
+      text: `Someone entered too many wrong ${BRAND.name} sign-in codes for this address, so signing in with an email code is paused for a while.\n\nIf this was you, wait and ask for a new code. If it wasn't, nobody got in: they would need a code from this mailbox. Never share a code with anyone.\n`,
+    }).catch((e) => this.hub.log.warn('lockout notice mail failed', { mailer: this.mailer.kind, err: e.message }));
   }
 
   stepUp(f, { ip, ident }) {
