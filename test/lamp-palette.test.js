@@ -31,9 +31,9 @@ test('lamp palette: every lit lamp clears 3:1 against the unlit lamp (WCAG 1.4.1
 });
 
 test('lamp palette: the Lights editor swatches use the same colours', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'lights.html'), 'utf8');
+  const src = fs.readFileSync(path.join(ROOT, 'lights-view.js'), 'utf8');
   const m = /const LAMP_COLORS = (\{[^}]+\});/.exec(src);
-  assert.ok(m, 'LAMP_COLORS in lights.html');
+  assert.ok(m, 'LAMP_COLORS in lights-view.js');
   const swatches = JSON.parse(m[1].replace(/'/g, '"').replace(/(\w+):/g, '"$1":'));
   for (const k of ['red', 'amber', 'green']) assert.equal(swatches[k], palette[k].hex, k);
 });

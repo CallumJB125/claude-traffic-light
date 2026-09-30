@@ -24,11 +24,13 @@
     "productName": "Claude Buddy",
     "files": [
       "main.js",
+      "src/**/*",
       "preload.js",
       "index.html",
       "settings.html",
       "settings-preload.js",
       "lights.html",
+      "lights-view.js",
       "lights-preload.js",
       "rig.js",
       "rig.css",
