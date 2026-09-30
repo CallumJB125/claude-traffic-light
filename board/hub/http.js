@@ -98,6 +98,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     throw new HubError('POLICY_DENIED', 'set BOARD_PUBLIC_URL to connect integrations');
   };
   const etags = new Map();
+  const webhookReads = new Set(); // (connection|ip) pairs over their failure budget with a body read in flight
 
   const authMember = makeAuthMember({ hub, config });
   // The org a request's resource lives in: decides which member row answers
@@ -280,25 +281,36 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
     if (hook) {
       try {
-        // Unknown or inactive → 404 before a byte of the body is read; so is
-        // an IP that keeps failing signatures (checked, not spent, here).
+        // Unknown or inactive → 404 before a byte of the body is read.
         if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
-        const ip = failBucketKey(clientIp(req, config));
-        const peek = hub.limiter.peek('webhook_fail_ip', ip);
-        if (!peek.ok) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: Math.max(1, Math.ceil(peek.retry_after_ms / 1000)) });
+        // Failures are counted per (connection, client IP) and never refuse a
+        // delivery before its signature is checked: a provider's shared egress
+        // IPs also carry anyone's forged posts. A pair over its failure budget
+        // gets one body read at a time instead, so a flood can't fan out reads.
+        const failKey = `${hook[1]}|${failBucketKey(clientIp(req, config))}`;
+        const overBudget = !hub.limiter.peek('webhook_fail_ip', failKey).ok;
+        if (overBudget && webhookReads.has(failKey)) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: 1 });
+        const failed = (status, body) => {
+          const t = hub.limiter.take('webhook_fail_ip', failKey);
+          if (t.ok || status === 413) return sendJson(res, status, body);
+          const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
+          return sendJson(res, 429, { error: { code: 'RATE_LIMITED', message: 'too many failed deliveries', retry_after_s: s } }, { 'retry-after': String(s) });
+        };
         const chunks = [];
-        let n = 0;
-        for await (const c of req) {
-          n += c.length;
-          if (n > MAX_BODY) {
-            hub.limiter.take('webhook_fail_ip', ip);
-            return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+        if (overBudget) webhookReads.add(failKey);
+        try {
+          let n = 0;
+          for await (const c of req) {
+            n += c.length;
+            if (n > MAX_BODY) return failed(413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+            chunks.push(c);
           }
-          chunks.push(c);
+        } finally {
+          if (overBudget) webhookReads.delete(failKey);
         }
         // webhook() spends webhook_conn only once the signature is verified.
         const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
-        if (out.status === 401) hub.limiter.take('webhook_fail_ip', ip);
+        if (out.status === 401) return failed(out.status, out.body);
         return sendJson(res, out.status, out.body);
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));

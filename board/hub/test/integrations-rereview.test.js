@@ -257,7 +257,7 @@ test('M-2: unauthenticated spam never spends the connection bucket; only verifie
   } finally { await h.close(); }
 });
 
-test('M-2: an IP that keeps failing gets 429 before its body is read', async () => {
+test('M-2: a (connection, IP) pair that keeps failing gets one body read at a time: a concurrent post gets 429 before its body is read', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
@@ -265,7 +265,12 @@ test('M-2: an IP that keeps failing gets 429 before its body is read', async () 
     const bad = () => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'x-fake-signature': 'sha256=00', 'x-fake-delivery': randomUUID() }, body: '{}' });
     assert.equal((await bad()).status, 401);
     assert.equal((await bad()).status, 401);
+    assert.equal((await bad()).status, 429);
     const u = new URL(`${h.base}/integrations/${conn.id}/webhook`);
+    const held = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } });
+    held.on('error', () => {});
+    held.write('{"partial":');
+    await new Promise((r) => setTimeout(r, 100));
     const status = await new Promise((resolve, reject) => {
       const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
       req.on('error', reject);
@@ -273,6 +278,7 @@ test('M-2: an IP that keeps failing gets 429 before its body is read', async () 
       setTimeout(() => reject(new Error('the hub waited for the body')), 2000).unref();
     });
     assert.equal(status, 429);
+    held.destroy();
   } finally { await h.close(); }
 });
 

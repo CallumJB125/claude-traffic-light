@@ -438,7 +438,7 @@ test('M8: an unknown webhook target is 404 before the body is read', async () =>
   } finally { await h.close(); }
 });
 
-test('M8: per-connection webhook bucket; failed signatures spend a per-IP bucket that then refuses that IP; mutate_ip is not used', async () => {
+test('M8: per-connection webhook bucket; failed signatures spend a per-(connection, IP) bucket that then refuses failures, never a verified delivery; mutate_ip is not used', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
@@ -454,7 +454,7 @@ test('M8: per-connection webhook bucket; failed signatures spend a per-IP bucket
     assert.equal((await hook(raw, 'sha256=00')).status, 401);
     assert.equal((await hook(raw, 'sha256=00')).status, 401);
     assert.equal((await hook(raw, 'sha256=00')).status, 429);
-    assert.equal((await hook(raw, good)).status, 429, 'this IP is refused before its body is read');
+    assert.equal((await hook(JSON.stringify({ event: 'noop', n: 2 }), sign('whsec_abcdef123456', Buffer.from(JSON.stringify({ event: 'noop', n: 2 }))))).status, 200, 'a verified delivery is never refused by the failure bucket (M-1, round 4)');
   } finally { await h.close(); }
 });
 

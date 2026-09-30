@@ -267,8 +267,9 @@ test('L-6: an oversized body (413) spends the failure bucket', async () => {
       setTimeout(() => reject(new Error('no answer')), 3000).unref();
     });
     assert.equal(status, 413);
-    const next = await fetch(u, { method: 'POST', headers: { 'x-ok': '1', 'x-id': 'd1' }, body: '{}' });
-    assert.equal(next.status, 429);
+    // Spent: the next failure is refused; a verified delivery never is (round 4, M-1).
+    assert.equal((await fetch(u, { method: 'POST', headers: { 'x-id': 'd0' }, body: '{}' })).status, 429);
+    assert.equal((await fetch(u, { method: 'POST', headers: { 'x-ok': '1', 'x-id': 'd1' }, body: '{}' })).status, 200);
   } finally { await h.close(); }
 });
 
