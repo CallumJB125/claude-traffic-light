@@ -290,7 +290,9 @@ const SCREENS = {
       out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Pending invites'), inv.length ? el('ul', { class: 'acct-list' }, inv) : el('p', { class: 'acct-hint' }, 'No invites waiting.')));
     }
 
-    if (s.isOwner && s.team.slug) {
+    if (s.isOwner && s.team.deleteNeedsEmail) {
+      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Delete team'), el('p', { class: 'acct-hint' }, s.team.deleteNeedsEmail)));
+    } else if (s.isOwner && s.team.slug) {
       const del = form({
         fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
         submit: 'Delete team', busy: 'Deleting…', fn: (v) => api.deleteTeam(team, v.slug),
@@ -365,7 +367,9 @@ const SCREENS = {
     for (const a of s.accounts) {
       const card = el('section', { class: 'acct-section' },
         el('div', { class: 'acct-who acct-who-lg' }, el('span', { class: 'acct-name' }, a.name || a.email), el('span', { class: 'acct-mail' }, a.email, ' · ', hostTag(a.host))));
-      if (s.deleting === a.host) {
+      if (s.deleting === a.host && s.deleteCheck) {
+        card.append(...deleteCheck(s.deleteCheck, a));
+      } else if (s.deleting === a.host) {
         card.append(
           el('p', { class: 'acct-hint' }, `We sent a code to ${a.email}. Enter it to delete your account on ${a.host}. You’ll leave every team there. This can’t be undone.`),
           form({
@@ -415,6 +419,54 @@ const SCREENS = {
   },
 };
 
+let tick = null; // the delete countdown's timer; each render starts fresh
+
+const cancelLink = () => link('Cancel', async () => { await api.cancelDelete(); render(); });
+
+// Deleting an account on a hub that can't email a code: Google or GitHub confirms it's you, then
+// the delete button works for the few minutes the hub allows. Provider names are text, never markup.
+function deleteCheck(c, a) {
+  const warn = `You’ll leave every team on ${a.host}. This can’t be undone.`;
+  if (c.phase === 'browser') {
+    return [
+      el('p', { class: 'acct-hint' }, `We opened ${c.provider} in your browser. Sign in there with the account you use for ${a.host}, then come back here.`),
+      el('p', { class: 'acct-hint', role: 'status' }, 'Waiting for your browser…'),
+      el('div', { class: 'acct-actions acct-actions-left' }, el('button', { type: 'button', class: 'btn', autofocus: true, onclick: async () => { await api.cancelDeleteOAuth(); render(); } }, 'Cancel')),
+    ];
+  }
+  if (c.phase === 'confirmed') {
+    const left = el('span', {}, clock(c.secondsLeft));
+    const end = Date.now() + c.secondsLeft * 1000;
+    tick = setInterval(() => {
+      const s = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+      left.textContent = clock(s);
+      if (s === 0) { clearInterval(tick); tick = null; render(); }
+    }, 1000);
+    const f = form({ fields: [], submit: 'Delete my account', busy: 'Deleting…', fn: () => api.deleteConfirm('') });
+    f.querySelector('.acct-go').classList.add('btn-danger');
+    f.addEventListener('failed', (e) => { if (e.detail?.stepUp) render().then(() => flash(e.detail.error, true)); });
+    return [
+      el('p', { class: 'acct-hint', role: 'status' }, `Confirmed with ${c.provider}. ${warn}`),
+      // The main area is a polite live region; a per-second tick there would be read out every second.
+      el('p', { class: 'acct-hint', 'aria-live': 'off' }, 'Delete within ', left, ', or confirm again.'),
+      f,
+      el('p', { class: 'acct-foot' }, cancelLink()),
+    ];
+  }
+  const buttons = c.providers.map((p) => {
+    const b = el('button', { type: 'button', class: `btn btn-provider btn-${p.id}` }, `Confirm it’s you with ${p.name}`);
+    b.addEventListener('click', async () => { b.disabled = true; const r = await api.deleteOAuth(p.id); if (r?.ok) render(); else { b.disabled = false; flash(r?.error ?? 'Something went wrong. Try again.', true); } });
+    return b;
+  });
+  return [
+    el('p', { class: 'acct-hint' }, `To delete your account on ${a.host}, confirm it’s you first. ${warn}`),
+    el('div', { class: 'acct-providers' }, buttons),
+    el('p', { class: 'acct-foot' }, cancelLink()),
+  ];
+}
+
+const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
 const RUNNER = {
   off: 'Off', starting: 'Starting…', connecting: 'Connecting…', connected: 'Running', backoff: 'Reconnecting…', restarting: 'Restarting…',
   unauthenticated: 'Signed out. Turn it off and on again.', revoked: 'This Mac was removed from the team.', unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
@@ -437,6 +489,7 @@ function expires(iso) {
 const WIDE = new Set(['team', 'account', 'thismac', 'invites']);
 
 async function render() {
+  if (tick) { clearInterval(tick); tick = null; }
   let s;
   try { s = await api.state(); } catch { s = null; }
   if (!s?.ok) return;

@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   deleteStart: (host) => call('deleteStart', str(host)),
   deleteConfirm: (code) => call('deleteConfirm', str(code)),
   cancelDelete: () => call('cancelDelete'),
+  deleteOAuth: (provider) => call('deleteOAuth', str(provider)),
+  cancelDeleteOAuth: () => call('cancelDeleteOAuth'),
   runner: (id, on) => call('runner', str(id), !!on),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),

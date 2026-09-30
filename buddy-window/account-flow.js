@@ -8,7 +8,7 @@
 const crypto = require('node:crypto');
 const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE } = require('./accounts');
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
-const { startProviderSignIn, PROVIDERS } = require('./oauth');
+const { startProviderSignIn, PROVIDERS, PROVIDER_NAME } = require('./oauth');
 const BRAND = require('./brand');
 
 // Screens the page itself may ask for; the rest (`confirm`, `code`, `browser`)
@@ -22,12 +22,21 @@ const ACCT_ARGS = {
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], deleteTeam: ['string', 'string'], addBoard: ['string', 'string'],
   joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
-  deleteConfirm: ['string'], cancelDelete: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
+  deleteConfirm: ['string'], cancelDelete: [], deleteOAuth: ['string'], cancelDeleteOAuth: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
 };
 
 const TEAM_CHANGED = { ok: false, error: 'The team changed while this page was open. Look again, then try once more.' };
 // Runner states that mean the hub stopped accepting this Mac's token.
 const TOKEN_TROUBLE = new Set(['unauthenticated', 'revoked']);
+const noTeamDelete = (host) => `Deleting a team needs a code sent by email, and ${host} can’t send email. Ask whoever runs ${host} to delete it.`;
+
+/** Providers that can confirm a deletion: those the hub offers, cut to the ones the account says it signs in with. */
+function deleteProviders(methods, account) {
+  const on = PROVIDERS.filter((p) => methods[p]);
+  const raw = Array.isArray(account?.identities) ? account.identities : [];
+  const linked = new Set(raw.map((i) => (typeof i === 'string' ? i : i?.provider)).filter((p) => PROVIDERS.includes(p)));
+  return linked.size ? on.filter((p) => linked.has(p)) : on;
+}
 
 /** A hub's storage after sign-out: its board partition and its Integrations sign-in partition. */
 async function clearHubSessions(origin, fromPartition) {
@@ -47,9 +56,13 @@ async function clearHubSessions(origin, fromPartition) {
  *        forgetHub(), hubSignedOut(origin), isOpen(), onHubPage(), devicesChanged(),
  *        openMail(mailtoUrl)}
  */
-function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {} }) {
+function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
   const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
   let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
+  // Deleting an account on a hub with no mailer: the Google/GitHub check. `confirmed` is held only
+  // here, in memory, and only the run that is still current may set it.
+  let delStep = null; // {hub, providers, confirmed: {provider, flowId, until} | null}
+  let delRun = null; // {hub, provider, run, done}: the check waiting on the browser
   let pendingInvite = null; // {hub|null, token, previewId?}
   // A hub named by an invite link must be confirmed by the member before any
   // request goes to it; a hub they typed themselves counts as confirmed.
@@ -82,6 +95,45 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     const r = oauthRun;
     oauthRun = null;
     r?.run.cancel();
+  }
+
+  function cancelDeleteRun() {
+    const r = delRun;
+    delRun = null;
+    r?.run.cancel();
+  }
+
+  function dropDeleteStep() {
+    cancelDeleteRun();
+    delStep = null;
+  }
+
+  /** "Confirm it's you with Google/GitHub" before deleting: one at a time; a new one replaces the old. */
+  function beginDeleteCheck(origin, provider) {
+    cancelDeleteRun();
+    delStep.confirmed = null;
+    const run = startProviderSignIn({ client: clientFor(origin), provider, purpose: 'delete', openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
+    const me = { hub: origin, provider, run };
+    me.done = run.done.then((r) => {
+      if (delRun !== me) return r;
+      delRun = null;
+      if (r.ok && delStep?.hub === origin) delStep.confirmed = { provider, flowId: r.flowId, until: r.stepupUntil };
+      if (acct.screen === 'account' && !r.cancelled) show('account', r.ok ? { notice: `Confirmed with ${PROVIDER_NAME[provider]}.` } : { alert: r.error });
+      return r;
+    });
+    delRun = me;
+    return me.done;
+  }
+
+  /** Where the provider check stands, for the account page; an expired confirmation is dropped here. */
+  function deleteCheckState() {
+    if (!delStep || delStep.hub !== acct.hub) return null;
+    const base = { providers: delStep.providers.map((p) => ({ id: p, name: PROVIDER_NAME[p] })) };
+    if (delRun?.hub === delStep.hub) return { ...base, phase: 'browser', provider: PROVIDER_NAME[delRun.provider] };
+    const c = delStep.confirmed;
+    if (c && now() < c.until) return { ...base, phase: 'confirmed', provider: PROVIDER_NAME[c.provider], secondsLeft: Math.ceil((c.until - now()) / 1000) };
+    if (c) { delStep.confirmed = null; return { ...base, phase: 'choose', expired: true }; }
+    return { ...base, phase: 'choose' };
   }
 
   /** "Continue with Google/GitHub": one at a time; a new one (or leaving the screen) cancels the old. */
@@ -150,6 +202,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (trustedHub === origin) trustedHub = null;
     if (awaitingConfirm === origin) awaitingConfirm = null;
     if (acct.hub === origin) acct.deleting = false;
+    if (delStep?.hub === origin) dropDeleteStep();
     for (const id of minted.keys()) if (id.startsWith(`team:${hostOf(origin)}:`)) minted.delete(id);
     await dropDevices(origin);
     await ui.hubSignedOut(origin);
@@ -296,12 +349,16 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const [m, t] = await Promise.all([c.listMembers(ws.teamId), c.getTeam(ws.teamId)]);
       const canManage = ['owner', 'admin'].includes(ws.role);
       const inv = canManage ? await c.listInvites(ws.teamId) : { ok: true, invites: [] };
+      // A team's delete check is an emailed code only: without a mailer the page offers no button.
+      const noMail = ws.role === 'owner' ? await c.methods().then((mm) => mm.ok && !mm.email) : false;
       const meId = userOf(ws.hub)?.id ?? null;
       const members = (m.members ?? []).map((x) => ({ id: String(x.member_id ?? x.id), name: String(x.display_name ?? ''), email: String(x.email ?? ''), role: String(x.role), you: meId != null && String(x.user_id) === String(meId) }));
-      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
+      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null, deleteNeedsEmail: noMail ? noTeamDelete(hostOf(ws.hub)) : null }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
     }
     if (screen === 'account') {
-      return { ...base, deleting: acct.deleting && acct.hub ? hostOf(acct.hub) : null, accounts: store.hubs().filter(signedIn).map((h) => { const u = userOf(h) ?? {}; return { host: hostOf(h), name: String(u.display_name ?? ''), email: String(u.email ?? '') }; }) };
+      const check = acct.deleting ? deleteCheckState() : null;
+      if (check?.expired) base.notice = 'That check ran out. Confirm it’s you again.';
+      return { ...base, deleting: acct.deleting && acct.hub ? hostOf(acct.hub) : null, deleteCheck: check, accounts: store.hubs().filter(signedIn).map((h) => { const u = userOf(h) ?? {}; return { host: hostOf(h), name: String(u.display_name ?? ''), email: String(u.email ?? '') }; }) };
     }
     if (screen === 'thismac') {
       const hubs = store.hubs().filter(signedIn).map((h) => ({
@@ -332,7 +389,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     go(screen) {
       if (!PAGE_SCREENS.has(screen)) return { ok: false };
       cancelOAuth();
-      if (screen === 'hub' || screen === 'email') acct.deleting = false;
+      cancelDeleteRun();
+      if (screen === 'hub' || screen === 'email') { acct.deleting = false; delStep = null; }
       if (screen === 'join') {
         if (pendingInvite && !hubTrusted(pendingInvite.hub)) pendingInvite = null;
         if (!pendingInvite) acct.hub = null;
@@ -440,6 +498,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     async deleteTeam(wsId, typed) {
       const ws = renderedTeam(wsId);
       if (!ws) return TEAM_CHANGED;
+      const m = await clientFor(ws.hub).methods();
+      if (m.ok && !m.email) return { ok: false, error: noTeamDelete(hostOf(ws.hub)) };
       const r = await clientFor(ws.hub).deleteTeam(ws.teamId, typed);
       if (!r.ok) return r;
       await refreshAccount(ws.hub);
@@ -542,23 +602,54 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     async deleteStart(host) {
       const origin = hubByHost(host);
       if (!origin || !signedIn(origin)) return { ok: false };
-      const r = await clientFor(origin).startDelete();
+      const c = clientFor(origin);
+      const m = await c.methods();
+      dropDeleteStep();
+      // No mailer, no emailed code: Google or GitHub confirms it's you instead. A hub that can't say
+      // keeps the emailed code, as before.
+      if (m.ok && !m.email) {
+        const a = await c.me();
+        if (!a.ok) return a;
+        const providers = deleteProviders(m, a);
+        if (!providers.length) return { ok: false, error: `${host} can’t check it’s you: it has no email, Google or GitHub sign-in. Ask whoever runs it to delete your account.` };
+        acct.hub = origin;
+        acct.deleting = true;
+        delStep = { hub: origin, providers, confirmed: null };
+        return { ok: true, via: 'provider' };
+      }
+      const r = await c.startDelete();
       if (!r.ok) return r;
       acct.hub = origin;
       acct.deleting = true;
       return { ok: true, email: r.email };
     },
+    async deleteOAuth(provider) {
+      const st = delStep;
+      if (!acct.deleting || !st || st.hub !== acct.hub || !signedIn(st.hub)) return { ok: false, error: 'Start again: choose Delete account.' };
+      if (!st.providers.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
+      beginDeleteCheck(st.hub, provider);
+      return { ok: true };
+    },
+    async cancelDeleteOAuth() { cancelDeleteRun(); return { ok: true }; },
     async deleteConfirm(code) {
       const origin = acct.hub;
       if (!origin || !acct.deleting) return { ok: false, error: 'Ask for a new code first.' };
-      const r = await clientFor(origin).deleteAccount(code);
+      let r;
+      if (delStep?.hub === origin) {
+        const c = delStep.confirmed;
+        if (!c || delRun) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+        if (now() >= c.until) { delStep.confirmed = null; return { ok: false, stepUp: true, error: 'That check ran out. Confirm it’s you again.' }; }
+        r = await clientFor(origin).deleteAccountWith(c.flowId);
+        if (!r.ok && r.stepUp && delStep?.hub === origin) delStep.confirmed = null;
+      } else r = await clientFor(origin).deleteAccount(code);
       if (!r.ok) return r;
       acct.deleting = false;
+      dropDeleteStep();
       await signedOutOf(origin);
       show('account', { notice: 'Your account was deleted.' });
       return { ok: true };
     },
-    async cancelDelete() { acct.deleting = false; return { ok: true }; },
+    async cancelDelete() { acct.deleting = false; dropDeleteStep(); return { ok: true }; },
     async runner(wsId, on) {
       const ws = store.get(wsId);
       if (ws?.kind !== 'team' || !signedIn(ws.hub)) return { ok: false };
@@ -594,9 +685,12 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     refreshAccount,
     /** Tests and the dev walk: the provider sign-in in progress (its result), or null. */
     pendingOAuth: () => oauthRun?.done ?? null,
+    /** Tests: the account-deletion check in progress (its result), or null. */
+    pendingDeleteCheck: () => delRun?.done ?? null,
     /** The sidebar's workspace-menu actions. */
     startFlow(which) {
       cancelOAuth();
+      cancelDeleteRun();
       if (which === 'signin' || which === 'join') { pendingInvite = null; acct.hub = null; }
       show(which === 'signin' ? 'hub' : which);
     },
@@ -611,7 +705,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     },
     /** Names of the teams this Mac is running cards for right now. */
     runningTeams: () => [...devices.entries()].filter(([, e]) => e.d.running()).map(([id, e]) => store.get(id)?.name ?? e.name),
-    stopDevices: () => { cancelOAuth(); return Promise.all([...devices.values()].map((e) => e.d.stop())); },
+    stopDevices: () => { cancelOAuth(); cancelDeleteRun(); return Promise.all([...devices.values()].map((e) => e.d.stop())); },
   };
 }
 

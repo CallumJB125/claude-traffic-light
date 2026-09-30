@@ -43,6 +43,8 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
   const devDir = path.join(dir, 'devices');
   fs.mkdirSync(devDir);
   const allowOrigins = [origin];
+  let skew = null;
+  const now = () => skew ?? Date.now();
   const vaults = new Map();
   const vault = (o) => {
     if (!vaults.has(o)) { let v = null; vaults.set(o, { load: () => v, save: (x) => { v = JSON.parse(JSON.stringify(x)); }, clear: () => { v = null; } }); }
@@ -67,7 +69,7 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
   const clients = new Map();
   let flow = null;
   const clientFor = (o) => {
-    if (!clients.has(o)) clients.set(o, createAccountClient({ origin: o, store: vault(o), fetchImpl, onSignedOut: () => { flow.signedOutOf(o, { tell: true }); } }));
+    if (!clients.has(o)) clients.set(o, createAccountClient({ origin: o, store: vault(o), fetchImpl, now, onSignedOut: () => { flow.signedOutOf(o, { tell: true }); } }));
     return clients.get(o);
   };
   const children = [];
@@ -97,6 +99,7 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
     openBrowser: (u) => { opened.push(u); Promise.resolve().then(() => browser(u)).catch(() => {}); },
     oauthAllowOrigins: allowOrigins,
     oauthTimeoutMs,
+    now,
     log: (...a) => logs.push(JSON.stringify(a)),
     ui: {
       show: (s) => shown.push(s),
@@ -127,7 +130,7 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
     await c.verifyCode(hub.lastCode(email));
     return c;
   };
-  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, setAfterHub: (f) => { afterHub = f; }, host: hostOf(origin) };
+  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, setAfterHub: (f) => { afterHub = f; }, setNow: (ms) => { skew = ms; }, host: hostOf(origin) };
   try { await fn(h); } finally { await flow.stopDevices(); await hub.close(); }
 }
 
@@ -956,4 +959,294 @@ test('mailto: a team name with newlines, %0d%0a and &cc= adds no header and no r
   // A long body is cut, never left half-encoded.
   const long = inviteMailto({ to: 'sam@example.com', team: 'T', link: 'https://h/invite#' + 'x'.repeat(5000), code: 'ABCD-EFGH', brand: 'Plexiform' });
   assert.doesNotThrow(() => decodeURIComponent(long.slice(long.indexOf('&body=') + 6)));
+});
+
+// ── deleting an account on a hub with no mailer: the Google/GitHub check ──
+
+// Signed in with a provider on a hub that can't send email: the account's only way to prove itself.
+async function providerAccount(h, { email = 'callum@example.com', provider = 'google' } = {}) {
+  h.hub.setMethods({ google: true, github: true, email: false });
+  h.hub.setOAuthIdentity(provider, { email });
+  await h.A.hub(h.origin);
+  await h.A.oauth(provider);
+  const r = await h.flow.pendingOAuth();
+  assert.equal(r.ok, true, r.error);
+}
+
+const deleteCalls = (h) => h.bodies.filter((b) => { try { const j = JSON.parse(b); return Object.keys(j).join() === 'flow_id'; } catch { return false; } });
+const exchangeBodies = (h) => h.bodies.filter((b) => b.includes('code_verifier')).map((b) => JSON.parse(b));
+
+test('delete via provider (email:false): choose, browser, confirmed with a countdown, delete; signed out and cleared as the email path; no token ever', async () => harness(async (h) => {
+  await providerAccount(h);
+  const { ws, child } = await runnerOn(h);
+  const before = h.vault(h.origin).load();
+  const live = h.hub.liveTokens();
+  await h.A.go('account');
+  assert.deepEqual(await h.A.deleteStart(h.host), { ok: true, via: 'provider' });
+  assert.ok(!h.requests.some((u) => u.pathname === '/api/auth/email/start'), 'no emailed code on a hub without a mailer');
+  let s = await h.A.state();
+  assert.equal(s.deleting, h.host);
+  assert.deepEqual(s.deleteCheck, { providers: [{ id: 'google', name: 'Google' }], phase: 'choose' }, 'only the provider the account signs in with');
+  assert.equal((await h.A.deleteOAuth('google')).ok, true);
+  const r = await h.flow.pendingDeleteCheck();
+  assert.deepEqual(Object.keys(r).sort(), ['flowId', 'ok', 'stepupUntil']);
+  const start = h.hub.oauthStarts().at(-1);
+  assert.deepEqual(Object.keys(start).sort(), ['client', 'code_challenge', 'provider', 'purpose', 'redirect_uri']);
+  assert.deepEqual([start.provider, start.client, start.purpose], ['google', 'buddy_desktop', 'delete']);
+  assert.match(start.code_challenge, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(start.redirect_uri, /^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+  const ex = exchangeBodies(h).at(-1);
+  assert.equal(ex.flow_id, r.flowId);
+  assert.equal(crypto.createHash('sha256').update(ex.code_verifier).digest('base64url'), start.code_challenge);
+  assert.deepEqual(h.vault(h.origin).load(), before, 'the vault is exactly as it was');
+  assert.equal(h.hub.liveTokens(), live, 'no new token on the hub either');
+  assert.equal(h.flow.acct.screen, 'account');
+  s = await h.A.state();
+  assert.equal(s.notice, 'Confirmed with Google.');
+  assert.equal(s.deleteCheck.phase, 'confirmed');
+  assert.equal(s.deleteCheck.provider, 'Google');
+  assert.ok(s.deleteCheck.secondsLeft > 290 && s.deleteCheck.secondsLeft <= 300, String(s.deleteCheck.secondsLeft));
+  assert.equal((await h.A.deleteConfirm('')).ok, true);
+  assert.deepEqual(deleteCalls(h).map((b) => JSON.parse(b).flow_id), [r.flowId], 'DELETE /api/account spends the check’s own flow_id');
+  assert.equal(child.killed, 1);
+  assert.equal(fs.existsSync(h.deviceFile(ws)), false);
+  assertHubCleared(h, h.origin);
+  assert.equal(h.vault(h.origin).load(), null);
+  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team'), []);
+  s = await h.A.state();
+  assert.equal(s.accounts.length, 0);
+  assert.equal(s.notice, 'Your account was deleted.');
+  const logged = h.logs.join('\n');
+  for (const secret of [ex.code, ex.code_verifier, ex.state, before.token]) assert.ok(!logged.includes(secret), 'never logged');
+}));
+
+test('delete via provider: the confirmation runs out after 5 minutes (injected clock) and a fresh check is needed; the hub’s own expiry resets it too', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.go('account');
+  await h.A.deleteStart(h.host);
+  await h.A.deleteOAuth('google');
+  assert.equal((await h.flow.pendingDeleteCheck()).ok, true);
+  assert.equal((await h.A.state()).deleteCheck.phase, 'confirmed');
+  h.setNow(Date.now() + 5 * 60_000 + 1000);
+  const s = await h.A.state();
+  assert.equal(s.deleteCheck.phase, 'choose');
+  assert.equal(s.notice, 'That check ran out. Confirm it’s you again.');
+  const r = await h.A.deleteConfirm('');
+  assert.deepEqual([r.ok, r.stepUp], [false, true]);
+  assert.equal(deleteCalls(h).length, 0, 'nothing sent with a lapsed check');
+  h.setNow(null);
+  // A fresh check works; if the hub's own window has closed meanwhile, its STEP_UP_REQUIRED sends us back to the start.
+  await h.A.deleteOAuth('google');
+  assert.equal((await h.flow.pendingDeleteCheck()).ok, true);
+  h.hub.setNow(Date.now() + 6 * 60_000);
+  const late = await h.A.deleteConfirm('');
+  assert.equal(late.error, 'That check timed out. Confirm it’s you again.');
+  assert.equal(late.stepUp, true);
+  assert.equal((await h.A.state()).deleteCheck.phase, 'choose');
+  assert.ok(h.vault(h.origin).load(), 'still signed in: nothing was deleted');
+}));
+
+test('delete via provider: Cancel (waiting on the browser, or with the exchange in flight) leaves the vault, the hub’s tokens and the workspaces unchanged', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.createTeam('Bondly');
+  await h.A.go('account');
+  await h.A.deleteStart(h.host);
+  const signIns = exchangeBodies(h).length;
+  const vault = JSON.stringify(h.vault(h.origin).load());
+  const list = JSON.stringify(h.store.list());
+  const live = h.hub.liveTokens();
+  const same = () => {
+    assert.equal(JSON.stringify(h.vault(h.origin).load()), vault);
+    assert.equal(JSON.stringify(h.store.list()), list);
+    assert.equal(h.hub.liveTokens(), live);
+  };
+  h.setBrowser(async () => {});
+  await h.A.deleteOAuth('google');
+  await until(() => h.hub.oauthStarts().some((b) => b.purpose === 'delete'));
+  assert.equal((await h.A.state()).deleteCheck.phase, 'browser');
+  const waiting = h.flow.pendingDeleteCheck();
+  assert.equal((await h.A.cancelDeleteOAuth()).ok, true);
+  assert.deepEqual(await waiting, { ok: false, cancelled: true });
+  await assert.rejects(fetch(h.hub.oauthStarts().at(-1).redirect_uri), 'the listener closed');
+  assert.equal((await h.A.state()).deleteCheck.phase, 'choose');
+  assert.equal(exchangeBodies(h).length, signIns);
+  same();
+  // Now cancel after the hub has answered the exchange: the confirmation it gave is dropped.
+  h.setBrowser(realBrowser);
+  h.setAfterHub(async (u) => { if (u.includes('/oauth/exchange')) await h.A.cancelDeleteOAuth(); });
+  await h.A.deleteOAuth('google');
+  assert.deepEqual(await h.flow.pendingDeleteCheck(), { ok: false, cancelled: true });
+  h.setAfterHub(null);
+  assert.equal(exchangeBodies(h).length, signIns + 1, 'the hub did answer');
+  assert.equal((await h.A.state()).deleteCheck.phase, 'choose');
+  assert.equal((await h.A.deleteConfirm('')).stepUp, true);
+  assert.equal(deleteCalls(h).length, 0);
+  same();
+  // Cancel on the whole delete drops it too.
+  assert.equal((await h.A.cancelDelete()).ok, true);
+  assert.equal((await h.A.state()).deleteCheck, null);
+  same();
+}));
+
+test('delete via provider: a check replaced by a newer one while its exchange is in flight can’t confirm the delete', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.go('account');
+  await h.A.deleteStart(h.host);
+  const vault = JSON.stringify(h.vault(h.origin).load());
+  h.setAfterHub(async (u) => {
+    if (!u.includes('/oauth/exchange')) return;
+    h.setAfterHub(null);
+    h.setBrowser(async () => {});
+    await h.A.deleteOAuth('google');
+  });
+  await h.A.deleteOAuth('google');
+  const first = h.flow.pendingDeleteCheck();
+  assert.deepEqual(await first, { ok: false, cancelled: true });
+  assert.equal((await h.A.state()).deleteCheck.phase, 'browser', 'the newer check still waits on the browser');
+  const r = await h.A.deleteConfirm('');
+  assert.deepEqual([r.ok, r.error], [false, 'Confirm it’s you first.']);
+  assert.equal(deleteCalls(h).length, 0, 'the replaced check’s flow_id is never sent');
+  assert.equal(JSON.stringify(h.vault(h.origin).load()), vault);
+  const second = h.flow.pendingDeleteCheck();
+  await h.A.cancelDeleteOAuth();
+  assert.equal((await second).cancelled, true);
+}));
+
+test('delete via provider: another account at the provider is refused (WRONG_ACCOUNT) in plain words; unlisted providers aren’t offered', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.go('account');
+  await h.A.deleteStart(h.host);
+  assert.equal((await h.A.deleteOAuth('github')).error, 'Pick Google or GitHub.', 'GitHub isn’t linked, so it isn’t offered');
+  const vault = JSON.stringify(h.vault(h.origin).load());
+  h.hub.setOAuthIdentity('google', { email: 'someone-else@example.com' });
+  await h.A.deleteOAuth('google');
+  const r = await h.flow.pendingDeleteCheck();
+  assert.equal(r.code, 'WRONG_ACCOUNT');
+  assert.equal(r.error, 'That isn’t the Google account you sign in with. Use that one.');
+  const s = await h.A.state();
+  assert.equal(s.alert, r.error);
+  assert.equal(s.deleteCheck.phase, 'choose');
+  assert.equal((await h.A.deleteConfirm('')).stepUp, true);
+  assert.equal(deleteCalls(h).length, 0);
+  assert.equal(JSON.stringify(h.vault(h.origin).load()), vault);
+  // The hub checks the provider too: a GitHub identity with the same address but never linked is refused.
+  const c = createAccountClient({ origin: h.origin, store: h.vault(h.origin) });
+  h.hub.setOAuthIdentity('github', { email: 'callum@example.com' });
+  const p = pkcePair();
+  const st = await c.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' }, {}, { purpose: 'delete' });
+  const code = new URL((await fetch(st.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
+  const x = await c.exchangeOAuth({ flowId: st.flow_id, code, state: st.state, verifier: p.verifier, provider: 'github', purpose: 'delete' });
+  assert.deepEqual([x.code, x.error], ['WRONG_ACCOUNT', 'That isn’t the GitHub account you sign in with. Use that one.']);
+  // An account the hub lists no identities for is offered every provider the hub has.
+  const { oauthOutcome } = require('../buddy-window/accounts');
+  assert.equal(oauthOutcome({ ok: false, code: 'STEP_UP_REQUIRED' }, 'google', 'h').error, 'That check timed out. Confirm it’s you again.');
+}));
+
+test('delete via provider: an account that lists no linked sign-in is offered both providers; a hub with none says so', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  h.hub.setMethods({ google: true, github: true, email: false });
+  await h.A.go('account');
+  await h.A.deleteStart(h.host);
+  assert.deepEqual((await h.A.state()).deleteCheck.providers.map((p) => p.id), ['google', 'github']);
+  h.hub.setMethods({ email: false });
+  const r = await h.A.deleteStart(h.host);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /can’t check it’s you/);
+  assert.equal((await h.A.state()).deleteCheck, null);
+}));
+
+test('delete via provider: single use: the exchange can’t be replayed and a spent flow_id can’t delete again', async () => harness(async (h) => {
+  await providerAccount(h);
+  const c = createAccountClient({ origin: h.origin, store: h.vault(h.origin) });
+  const p = pkcePair();
+  const st = await c.startOAuth('google', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' }, {}, { purpose: 'delete' });
+  assert.ok(st.state.length >= 16);
+  const code = new URL((await fetch(st.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
+  const args = { flowId: st.flow_id, code, state: st.state, verifier: p.verifier, provider: 'google', purpose: 'delete' };
+  assert.equal((await c.exchangeOAuth(args)).ok, true);
+  assert.equal((await c.exchangeOAuth(args)).error, 'That sign-in didn’t work. Try again.', 'replay');
+  // A sign-in flow is not a delete check.
+  const q = pkcePair();
+  const si = await c.startOAuth('google', { challenge: q.challenge, redirectUri: 'http://127.0.0.1:9/callback' });
+  assert.equal((await c.deleteAccountWith(si.flow_id)).stepUp, true);
+  assert.equal((await c.deleteAccountWith(st.flow_id)).ok, true);
+  // Signed in again (a new, empty account): the spent flow_id is dead.
+  await providerAccount(h);
+  const res = await fetch(`${h.origin}/api/account`, { method: 'DELETE', headers: { Authorization: `Bearer ${h.vault(h.origin).load().token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ flow_id: st.flow_id }) });
+  assert.equal(res.status, 401);
+  assert.deepEqual((await res.json()).error, { code: 'STEP_UP_REQUIRED', message: 'confirm it is you first', max_age_s: 300, purpose: 'delete' });
+  // Without the Bearer the hub won't even start a check.
+  const anon = createAccountClient({ origin: h.origin, store: { load: () => null, save() {}, clear() {} } });
+  assert.equal((await anon.startOAuth('google', { challenge: q.challenge, redirectUri: 'http://127.0.0.1:9/callback' }, {}, { purpose: 'delete' })).signedOut, true);
+}));
+
+test('delete with email:true is the emailed code as before: no provider check, no oauth start', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.go('account');
+  const r = await h.A.deleteStart(h.host);
+  assert.deepEqual(r, { ok: true, email: 'me@example.com' });
+  assert.deepEqual(h.hub.starts().at(-1), { purpose: 'delete', client: 'buddy_desktop' });
+  const s = await h.A.state();
+  assert.equal(s.deleting, h.host);
+  assert.equal(s.deleteCheck, null);
+  assert.equal((await h.A.deleteOAuth('google')).ok, false, 'no provider check on the email path');
+  assert.deepEqual(h.hub.oauthStarts(), []);
+  assert.equal((await h.A.deleteConfirm(h.hub.lastCode('me@example.com'))).ok, true);
+  assert.equal(h.vault(h.origin).load(), null);
+}));
+
+test('team deletion with email:false: a plain sentence, no button, no request; with email:true the slug form as before', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  let s = await h.A.state();
+  const msg = `Deleting a team needs a code sent by email, and ${h.host} can’t send email. Ask whoever runs ${h.host} to delete it.`;
+  assert.equal(s.team.deleteNeedsEmail, msg);
+  assert.equal((await h.A.deleteTeam(ws.id, s.team.slug)).error, msg);
+  assert.ok(!h.requests.some((u) => u.pathname === `/api/teams/${ws.teamId}` && h.bodies.some((b) => b.includes('confirm_slug'))), 'no delete sent');
+  assert.ok(!h.hub.oauthStarts().some((b) => b.purpose === 'delete'), 'no provider path for teams');
+  assert.ok(h.store.list().some((w) => w.id === ws.id));
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.match(page, /s\.isOwner && s\.team\.deleteNeedsEmail\) \{\n\s+out\.push\(el\('section', \{ class: 'acct-section' \}, el\('h2', \{\}, 'Delete team'\), el\('p', \{ class: 'acct-hint' \}, s\.team\.deleteNeedsEmail\)\)\);\n\s+\} else if/, 'text only, and no delete form in that branch');
+  h.hub.setMethods({ google: true, github: true, email: true });
+  s = await h.A.state();
+  assert.equal(s.team.deleteNeedsEmail, null);
+}));
+
+test('a step-up exchange never stores a token, even when a hub sends one; its expiry is capped at 5 minutes', async () => {
+  const mine = `bdt_${crypto.randomBytes(32).toString('base64url')}`;
+  const leaked = `bdt_${crypto.randomBytes(32).toString('base64url')}`;
+  let v = { hub: 'https://hub.example.com', token: mine, device_id: 'd1', user: { email: 'me@example.com' } };
+  let saves = 0;
+  let clears = 0;
+  const store = { load: () => v, save: (x) => { saves += 1; v = x; }, clear: () => { clears += 1; v = null; } };
+  const seen = [];
+  const t0 = Date.parse('2026-10-01T10:00:00Z');
+  const fetchImpl = async (u, init) => {
+    seen.push({ u, auth: init.headers.Authorization, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ stepup_until: new Date(t0 + 3600_000).toISOString(), device_token: leaked, device_id: 'd2', user: { email: 'x@example.com' } }), { status: 200 });
+  };
+  const c = createAccountClient({ origin: 'https://hub.example.com', store, fetchImpl, now: () => t0 });
+  const r = await c.exchangeOAuth({ flowId: 'f1', code: 'c', state: 's'.repeat(43), verifier: 'v', provider: 'google', purpose: 'delete' }, { deviceName: 'Mac' });
+  assert.deepEqual(r, { ok: true, flowId: 'f1', stepupUntil: t0 + 5 * 60_000 });
+  assert.deepEqual([saves, clears, v.token], [0, 0, mine]);
+  assert.equal(seen[0].auth, `Bearer ${mine}`);
+  assert.deepEqual(Object.keys(seen[0].body).sort(), ['code', 'code_verifier', 'flow_id', 'state'], 'no device named: no token comes of it');
+  const x = await c.exchangeOAuth({ flowId: 'f2', code: 'c', state: 's'.repeat(43), verifier: 'v', provider: 'google', purpose: 'delete' }, {}, { keep: () => false });
+  assert.deepEqual(x, { ok: false, cancelled: true });
+  assert.deepEqual([saves, clears, v.token], [0, 0, mine]);
+  assert.equal(seen.filter((q) => q.u.endsWith('/api/auth/signout')).length, 0, 'nothing to revoke: it was never ours');
+  assert.ok(!JSON.stringify(r).includes(leaked));
+});
+
+test('the delete check’s page: plain text, keyboard buttons, status announced, a countdown that isn’t read out every second', () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.ok(!/\.innerHTML|insertAdjacentHTML|outerHTML/.test(page));
+  for (const t of ['`Confirm it’s you with ${p.name}`', 'Waiting for your browser…', "'Delete my account'", 'confirm it’s you first']) assert.ok(page.includes(t), t);
+  assert.match(page, /'aria-live': 'off' \}, 'Delete within '/);
+  assert.match(page, /role: 'status' \}, `Confirmed with \$\{c\.provider\}/);
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account-preload.js'), 'utf8');
+  assert.match(preload, /deleteOAuth: \(provider\) => call\('deleteOAuth', str\(provider\)\)/);
+  assert.match(preload, /cancelDeleteOAuth: \(\) => call\('cancelDeleteOAuth'\)/);
+  assert.deepEqual([ACCT_ARGS.deleteOAuth, ACCT_ARGS.cancelDeleteOAuth], [['string'], []]);
 });
