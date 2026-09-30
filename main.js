@@ -21,7 +21,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const { createMotionGate, staleMachineReasons } = require('./src/motion-gate.js');
+const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const http = require('http'); // privacy-flow: local-server
@@ -1688,6 +1688,7 @@ function updateGarden(st) {
   }
 }
 
+let widgetAsksSent = null;
 function broadcastStatus() {
   // travelLook is only ever legitimate while the garden or a roam is running.
   // If one of those died (a throw, a crashed renderer, a closed window) the
@@ -1707,12 +1708,14 @@ function broadcastStatus() {
     win = null;
     createWindow();
   }
-  // A paused widget catches up when the gate lifts (it broadcasts then).
-  if (!widgetMotion.paused) win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    // A paused widget catches up when the gate lifts (it broadcasts then),
+    // except for its waiting inputs, which it always hears about.
+    const asks = askKey(st);
+    if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);

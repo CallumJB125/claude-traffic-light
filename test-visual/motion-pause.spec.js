@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, signal, status, windowByFile } = require('./app');
 
@@ -170,12 +172,14 @@ test('a non-default character: its layer loops ride the ambient clock and hold w
 
 test('clocks: the flame and the wag on the fast ambient grid; legs and a knock on the display clock', async () => {
   await preview({ effect: 'fire' });
-  expect(await framesPerSecond('rig-flame')).toBeLessThanOrEqual(14);
-  expect(await framesPerSecond('rig-flame')).toBeGreaterThanOrEqual(9);
+  // 12 on the grid (a little over under load), against ~60 on the display clock
+  const flame = await framesPerSecond('rig-flame');
+  expect(flame).toBeGreaterThanOrEqual(9);
+  expect(flame).toBeLessThan(25);
   await preview({ body: 'dog' });
   const wag = await framesPerSecond('rig-wag');
   expect(wag).toBeGreaterThanOrEqual(9);
-  expect(wag).toBeLessThanOrEqual(14);
+  expect(wag).toBeLessThan(25);
   await preview({ pose: 'run' });
   expect(await framesPerSecond('rig-leg-a')).toBeGreaterThan(30);
   await preview({ pose: 'knock' });
@@ -227,6 +231,35 @@ test('a widget that launches hidden (Floating Widget off) starts paused', async 
     await w.waitForLoadState('load');
     await expect.poll(() => w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
     await w.waitForTimeout(1800);
+    expect(await w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
+  } finally { await hh.cleanup(); }
+});
+
+// Main answers waiting inputs while the widget is hidden (menu-bar mode, a
+// snooze); the paused widget must still get them, and lose them once answered.
+test('a paused widget still gets its waiting inputs, and they can be answered while hidden', async () => {
+  const hh = await launchApp({ config: { askFromWidget: true } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    await w.waitForTimeout(1800);
+    await hh.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().endsWith('index.html')).hide());
+    await expect.poll(() => w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
+    const dir = path.join(hh.home, 'requests');
+    fs.mkdirSync(dir, { recursive: true });
+    const req = { id: 'paused-ask', sessionId: 'visual', cwd: '/visual/app', tool: 'Bash', summary: '', toolInput: { command: 'echo paused' }, toolInputHash: 'x', createdAt: new Date().toISOString() };
+    req.decisionHash = require('../hooks/answer-file.js').decisionHashOf(req);
+    fs.writeFileSync(path.join(dir, `${req.id}.json`), JSON.stringify(req));
+    await expect(w.locator('#ask-what')).toContainText('echo paused', { timeout: 10000 });
+    expect(await w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
+    const answered = await w.evaluate(async () => {
+      const st = await window.trafficLight.getAggregateStatus();
+      const input = st.inputs.find((i) => i.id === 'paused-ask');
+      return window.trafficLight.answerInput(input.id, input.options[0].id);
+    });
+    expect(answered).toBeTruthy();
+    // The hook takes its answer and removes the request, as the real one does.
+    fs.rmSync(path.join(dir, `${req.id}.json`), { force: true });
+    await expect.poll(() => w.evaluate(() => document.body.classList.contains('asking')), { timeout: 10000 }).toBe(false);
     expect(await w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
   } finally { await hh.cleanup(); }
 });

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createMotionGate, staleMachineReasons } = require('../src/motion-gate.js');
+const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('../src/motion-gate.js');
 
 function gate() {
   const calls = [];
@@ -56,4 +56,18 @@ test('stale lock/displays-off reasons clear once the system is plainly back', ()
   assert.deepEqual(staleMachineReasons(['screens-asleep'], 'idle', 900), [], 'nobody has touched it: displays may really be off');
   assert.deepEqual(staleMachineReasons(['suspended'], 'active', 1), [], 'sleep has its own resume');
   assert.deepEqual(staleMachineReasons([], 'active', 1), []);
+});
+
+test('a paused widget still hears every change to its waiting inputs', () => {
+  const none = askKey({ pending: [], inputs: [] });
+  const one = askKey({ pending: [{ id: 'r1' }], inputs: [{ id: 'r1' }] });
+  const two = askKey({ pending: [{ id: 'r1' }], inputs: [{ id: 'r1' }, { id: 'tmux-3' }] });
+  assert.equal(askKey({}), none);
+  assert.equal(askKey({ inputs: [{ id: 'b' }, { id: 'a' }] }), askKey({ inputs: [{ id: 'a' }, { id: 'b' }] }), 'order does not matter');
+  assert.equal(statusPushWanted(false, none, none), true, 'running: every broadcast');
+  assert.equal(statusPushWanted(true, none, none), false, 'paused, nothing new: skipped');
+  assert.equal(statusPushWanted(true, one, none), true, 'a new ask reaches a paused widget');
+  assert.equal(statusPushWanted(true, two, one), true, 'and another');
+  assert.equal(statusPushWanted(true, none, two), true, 'answered elsewhere: it hears that too');
+  assert.equal(statusPushWanted(true, two, two), false);
 });

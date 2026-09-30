@@ -28,4 +28,16 @@ function staleMachineReasons(reasons, idleState, idleSeconds, recentSeconds = 60
   return reasons.filter((r) => RECONCILED.includes(r));
 }
 
-module.exports = { createMotionGate, staleMachineReasons };
+// What the widget is being asked to show: every waiting request and input,
+// by id. A paused widget skips status pushes, but never a change to this —
+// a stuck prompt must be answerable (and a gone one gone) the moment the
+// widget is back, and main answers them while it's hidden or in menu-bar mode.
+function askKey(st) {
+  const ids = [...(st?.pending || []).map((p) => `r:${p.id}`), ...(st?.inputs || []).map((i) => `i:${i.id}`)];
+  return ids.sort().join('|');
+}
+function statusPushWanted(paused, key, lastKey) {
+  return !paused || key !== lastKey;
+}
+
+module.exports = { createMotionGate, staleMachineReasons, askKey, statusPushWanted };
