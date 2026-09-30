@@ -73,7 +73,11 @@ function dispose(view, win) {
  * Cloudflare Access answers 302 to <team>.cloudflareaccess.com (or 200 when
  * this app is already signed in); a bare hub answers /api/health itself.
  */
-function probeHub(origin, partition) {
+// One in-memory partition (no `persist:`) for every probe, emptied first: probes share no
+// cookies, and a session per probe would stay alive for the life of the app.
+const PROBE_PARTITION = 'board-probe';
+async function probeHub(origin, partition) {
+  await session.fromPartition(partition).clearStorageData();
   return new Promise((resolve) => {
     let done = false;
     const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
@@ -329,7 +333,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     oauthAllowOrigins: allowOrigins,
     // A throwaway, in-memory session: a signed-in partition would answer 200
     // and hide the Access team we must pin.
-    probe: (origin) => probeHub(origin, `board-probe-${crypto.randomUUID()}`),
+    probe: (origin) => probeHub(origin, PROBE_PARTITION),
     makeDevice, hasDeviceFile: (ws) => fs.existsSync(deviceFile(ws.hub, ws.teamId)), discardDeviceFiles,
     deviceInfo: () => ({ deviceName: defaultDeviceName(os.userInfo().username, os.hostname()), platform: `${process.platform}-${process.arch}` }),
     log,

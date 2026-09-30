@@ -1169,3 +1169,14 @@ test('bearer scope: the exact hub origin and its WebSocket twin, never another h
   assert.throws(() => bearerScope('https://buddy.example.com/path'));
 });
 
+
+test('hub probes reuse one in-memory partition, emptied before each probe', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const name = /const PROBE_PARTITION = '([^']+)';/.exec(src)?.[1];
+  assert.ok(name && !name.startsWith('persist:'), 'in memory only');
+  assert.match(src, /probe: \(origin\) => probeHub\(origin, PROBE_PARTITION\)/);
+  assert.ok(!/board-probe-\$\{/.test(src), 'no partition per probe');
+  const body = src.slice(src.indexOf('async function probeHub('));
+  const cleared = body.indexOf('session.fromPartition(partition).clearStorageData()');
+  assert.ok(cleared > 0 && cleared < body.indexOf('net.request('), 'cleared before the request');
+});
