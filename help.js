@@ -156,7 +156,7 @@ function explain(state, rules, extra = {}) {
 const NOTIFY_KINDS = ['permission-ask', 'turn-failed', 'offline'];
 const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: true };
 
-const folderOf = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
+const folderOf = Rules.folderOf;
 
 const periodKey = (b) => (b.which === 'week' ? b.weekKey : b.dayKey);
 

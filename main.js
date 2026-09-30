@@ -1163,7 +1163,7 @@ function maybeNotify(st) {
       // Another machine's session: nothing on this Mac to jump to.
       if (isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
-        jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
+        jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
       }
     });
     note.on('close', () => liveNotifications.delete(note));
@@ -2206,7 +2206,7 @@ ipcMain.handle('go-to-needing-session', async () => {
   cycleIndex += 1;
 
   clipboard.writeText(target.cwd);
-  const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
+  const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   return {
     opened: activated?.app || 'none-found',
@@ -2353,8 +2353,9 @@ async function computeCosts() {
     if (!f) return null;
     try {
       const fd = fs.openSync(f, 'r'); const buf = Buffer.alloc(4096); const n = fs.readSync(fd, buf, 0, 4096, 0); fs.closeSync(fd);
-      const m = /"cwd":"([^"]+)"/.exec(buf.toString('utf8', 0, n));
-      cwdById[id] = m ? m[1] : null;
+      // A JSON string match, decoded: a Windows cwd arrives as "C:\\Users\\…".
+      const m = /"cwd":("(?:[^"\\]|\\.)*")/.exec(buf.toString('utf8', 0, n));
+      cwdById[id] = m ? JSON.parse(m[1]) || null : null;
       return cwdById[id];
     } catch { return null; }
   };
@@ -2363,7 +2364,7 @@ async function computeCosts() {
   for (const sname of session?.session || []) {
     const id = sname.period;
     const cwd = cwdFromTranscript(id) || (sname.metadata && (sname.metadata.projectPath || sname.metadata.cwd)) || null;
-    const project = cwd ? String(cwd).split('/').filter(Boolean).pop() : (sname.metadata?.project || 'other');
+    const project = cwd ? Rules.folderOf(cwd) : (sname.metadata?.project || 'other');
     const tokens = sname.totalTokens || ((sname.inputTokens || 0) + (sname.outputTokens || 0) + (sname.cacheCreationTokens || 0) + (sname.cacheReadTokens || 0));
     if (!projects[project]) projects[project] = { cost: 0, tokens: 0 };
     projects[project].cost += sname.totalCost || 0;
@@ -2577,7 +2578,7 @@ function spendNote(rules, fired, sessions, spend) {
     const sig = rule ? rule.when.signal : [];
     if (sig.includes('runaway')) {
       const v = Rules.spendSessions(sessions, { spend }).find((x) => x.signal === 'runaway');
-      if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${v.cwd.split('/').filter(Boolean).pop()}` : ''}` };
+      if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${Rules.folderOf(v.cwd)}` : ''}` };
     }
     if ((sig.includes('budget-exceeded') || sig.includes('budget-warning')) && spend.budgetText) return { rule: rule.name, text: spend.budgetText };
     if (sig.includes('above-usual-pace') && spend.pace && spend.pace.text) return { rule: rule.name, text: spend.pace.text };
@@ -2602,7 +2603,7 @@ async function runAction(action, st) {
   const needing = st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
   const target = needing[0] || st.sessions[0] || null;
   const cwd = target?.cwd || null;
-  const folderHint = cwd ? cwd.split('/').filter(Boolean).pop() : '';
+  const folderHint = cwd ? Rules.folderOf(cwd) : '';
   switch (action.type) {
     case 'jump': {
       if (!needing.length) return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
@@ -2668,7 +2669,7 @@ async function jumpToNeeding() {
   const shownIndex = cycleIndex + 1;
   cycleIndex += 1;
   clipboard.writeText(target.cwd);
-  const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
+  const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
   return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;

@@ -36,8 +36,10 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
+  // Rules.folderOf, repeated because this file loads on its own (test/stats.test.js keeps them equal).
   function project(cwd) {
-    return (cwd || '').split('/').filter(Boolean).pop() || 'unknown';
+    const s = String(cwd || '');
+    return s.split(s.startsWith('/') ? '/' : /[\\/]+/).filter(Boolean).pop() || 'unknown';
   }
 
   // What the machine as a whole is doing, given every live session.
