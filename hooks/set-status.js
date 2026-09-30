@@ -448,8 +448,8 @@ function askFromWidgetOn() {
   try { return !!JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.json'), 'utf8')).askFromWidget; } catch { return false; }
 }
 
-function waitForAnswer(channel, hookTimeoutS) {
-  const askMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
+function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
+  const askMs = Math.min(Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000), maxAskMs);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
@@ -520,9 +520,12 @@ if (signal === 'permission-request') {
   waitForAnswer('PermissionRequest', optionalTimeout('PermissionRequest'));
 }
 if (signal === 'elicitation') waitForAnswer('Elicitation', optionalTimeout('Elicitation'));
-// PreToolUse has Claude Code's 600 s default timeout (none is installed), so
-// the same 55 s wait fits. Only with the widget's answering switched on.
-if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && askFromWidgetOn()) waitForAnswer('PreToolUse', 600);
+// PreToolUse has Claude Code's 600 s default timeout (none is installed).
+// Only with the widget's answering switched on, and for 20 s at most: the
+// terminal doesn't draw the question until this hook returns, so every second
+// here is a second the person at the keyboard waits (docs/waiting-inputs.md).
+const QUESTION_WAIT_MS = 20000;
+if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && askFromWidgetOn()) waitForAnswer('PreToolUse', 600, QUESTION_WAIT_MS);
 
 // PreToolUse fires many times a second during a busy turn. Skip the write if
 // nothing changed in the last second — the app polls anyway, and this keeps

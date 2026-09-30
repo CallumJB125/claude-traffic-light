@@ -30,7 +30,11 @@ Anything the docs don't state is marked **UNVERIFIED**.
 
 Timeouts and fall-back (verified): command hooks default to **600 s** on most
 events. UserPromptSubmit gets 30 s, and SessionEnd gets 1.5 s ([hooks](https://code.claude.com/docs/en/hooks)).
-Buddy's blocking hooks wait at most `min(55 s, hook timeout − 5 s)`. When nobody
+Buddy's blocking hooks wait at most `min(55 s, hook timeout − 5 s)`, except
+AskUserQuestion's PreToolUse (askFromWidget on), which waits at most **20 s**:
+Claude Code only draws the question in the terminal once that hook returns, so
+with the widget's answering on, a question shows up in the terminal up to 20 s
+late if nobody answers it from the widget first. When nobody
 answers, the hook claims the answer slot with a timeout marker, deletes the
 request and prints nothing. The docs say only the `decision` object can grant
 or deny a PermissionRequest. They say PreToolUse with no decision leaves "the

@@ -287,3 +287,17 @@ test('M2: answerOutput re-checks the suggestion before building updatedPermissio
   for (const i of [0, 1]) assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: i, suggestionHash: A.hashToolInput(sugg[i]) } }), null, `index ${i}`);
   assert.deepEqual(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 2, suggestionHash: A.hashToolInput(sugg[2]) } }).hookSpecificOutput.decision.updatedPermissions, [{ type: 'addDirectories', directories: ['/work'], destination: 'session' }]);
 });
+
+test('L3: with askFromWidget on, AskUserQuestion waits in PreToolUse for 20 s at most', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ askFromWidget: true }));
+    const h = hook('tool-use', home, app.port, { session_id: 'q', cwd: '/x', tool_name: 'AskUserQuestion', tool_input: QUESTION_INPUT }, { askMs: 55000 });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
+    assert.ok(window <= 20000 && window > 15000, `waits ${window} ms`);
+    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, 'deny', { key: app.keyFor(req.id) }).ok, true);
+    assert.equal(JSON.parse((await h.done).out).hookSpecificOutput.permissionDecision, 'deny');
+  } finally { app.close(); }
+});
