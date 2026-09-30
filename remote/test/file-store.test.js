@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +11,8 @@ import { DeviceRegistry, generateSigningKey, exportPublicRaw, RemoteApprovals, s
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const Answer = createRequire(import.meta.url)('../../hooks/answer-file.js');
+const { fakeApp } = createRequire(import.meta.url)('../../test/fake-app.js');
+const KEY = Buffer.alloc(32, 7);
 const SET_STATUS = path.join(HERE, '..', '..', 'hooks', 'set-status.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-remote-'));
 const mode = (f) => fs.statSync(f).mode & 0o777;
@@ -53,6 +54,7 @@ test('audit log is JSONL 0600 and its head can be recovered', () => {
 function writeReq(dir, id, extra = {}) {
   const toolInput = 'toolInput' in extra ? extra.toolInput : { command: 'ls' };
   const r = { id, sessionId: 's1', host: 'mac', cwd: '/repo', tool: 'Bash', summary: 'ls', createdAt: new Date().toISOString(), toolInput, toolInputHash: toolInput ? Answer.hashToolInput(toolInput) : undefined, ...extra };
+  if (!('decisionHash' in extra)) r.decisionHash = Answer.decisionHashOf(r);
   fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(r));
   return r;
 }
@@ -81,8 +83,10 @@ test('widget request store: no input, no hash, a hash that does not match, or a 
   writeReq(dir, 'junk-date', { createdAt: 'yesterday' });
   writeReq(dir, 'future', { createdAt: new Date(Date.now() + 60000).toISOString() });
   writeReq(dir, 'old', { createdAt: new Date(Date.now() - 50000).toISOString() });
+  writeReq(dir, 'no-decision-hash', { decisionHash: undefined });
+  writeReq(dir, 'edited', { decisionHash: 'f'.repeat(64) });
   const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice' });
-  for (const id of ['no-input', 'no-hash', 'bad-hash', 'no-date', 'junk-date', 'future', 'old']) assert.equal(await store.get(id), null, id);
+  for (const id of ['no-input', 'no-hash', 'bad-hash', 'no-date', 'junk-date', 'future', 'old', 'no-decision-hash', 'edited']) assert.equal(await store.get(id), null, id);
 });
 
 test('widget request store: only permission and plan requests are answerable remotely', async () => {
@@ -112,19 +116,17 @@ test('widget request store: path tricks are refused', async () => {
 test('widget request store: first answer wins; without a hook ack it is "unconfirmed", never applied', async () => {
   const dir = tmp();
   writeReq(dir, 'mac-2');
-  const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice', ackTimeoutMs: 100 });
+  const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice', ackTimeoutMs: 100, keyFor: () => KEY });
   const [a, b] = await Promise.all([store.settle('mac-2', 'allow'), store.settle('mac-2', 'deny')]);
   assert.deepEqual([a, b].sort(), ['already-answered', 'unconfirmed']);
   assert.equal(await store.get('mac-2'), null, 'answered requests are no longer pending');
 });
 
-const listening = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => res(s)); });
-
 async function withHook(input, askMs, fn) {
   const home = tmp();
-  const srv = await listening();
+  const srv = await fakeApp(home);
   const dir = path.join(home, 'requests');
-  const child = spawn(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: String(askMs), CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.address().port) } });
+  const child = spawn(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: String(askMs), CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.port) } });
   child.stdin.end(JSON.stringify({ session_id: 's1', cwd: '/repo', tool_name: 'Bash', tool_input: input }));
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
@@ -137,11 +139,12 @@ async function withHook(input, askMs, fn) {
       if (f) req = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       else await new Promise((r) => setTimeout(r, 20));
     }
-    return await fn({ dir, req, exited });
+    return await fn({ dir, req, exited, keyFor: srv.keyFor });
   } finally { srv.close(); }
 }
 
 async function approvalsOver(dir, opts = {}) {
+  // The app's own key store (the fake app's, here): the phone never sees a key.
   const identity = await createIdentity();
   const registry = new DeviceRegistry();
   const kp = await generateSigningKey();
@@ -153,8 +156,8 @@ async function approvalsOver(dir, opts = {}) {
 }
 
 test('end to end with the real hook: a phone allow is applied only after the hook confirms it took it', async () => {
-  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited }) => {
-    const { approvals, pending, sign } = await approvalsOver(dir);
+  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited, keyFor }) => {
+    const { approvals, pending, sign } = await approvalsOver(dir, { keyFor });
     const p = await pending.get(req.id);
     const out = await approvals.handleDecision((await sign(p)).envelope);
     assert.equal(out.status, 'applied', out.reason);
@@ -164,8 +167,8 @@ test('end to end with the real hook: a phone allow is applied only after the hoo
 });
 
 test('end to end: the hook times out first → the phone is told "not applied", not success', async () => {
-  await withHook({ command: 'git status' }, 300, async ({ dir, req, exited }) => {
-    const { approvals, pending, sign } = await approvalsOver(dir, { maxAgeMs: 60000 });
+  await withHook({ command: 'git status' }, 300, async ({ dir, req, exited, keyFor }) => {
+    const { approvals, pending, sign } = await approvalsOver(dir, { maxAgeMs: 60000, keyFor });
     const p = await pending.get(req.id);
     const { envelope } = await sign(p);
     assert.equal(await exited, '', 'hook gave up with no decision');
@@ -176,14 +179,24 @@ test('end to end: the hook times out first → the phone is told "not applied", 
 });
 
 test('end to end: the desk answered first → the phone is told already answered', async () => {
-  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited }) => {
-    const { approvals, pending, sign } = await approvalsOver(dir);
+  await withHook({ command: 'git status' }, 5000, async ({ dir, req, exited, keyFor }) => {
+    const { approvals, pending, sign } = await approvalsOver(dir, { keyFor });
     const p = await pending.get(req.id);
     const { envelope } = await sign(p, 'allow');
-    assert.equal(Answer.writeAnswer(dir, req.id, 'deny', { by: 'desk' }).ok, true);
+    assert.equal(Answer.writeAnswer(dir, req.id, 'deny', { by: 'desk', key: keyFor(req.id) }).ok, true);
     const out = await approvals.handleDecision(envelope);
     assert.equal(out.status, 'rejected');
     assert.ok(['already-answered', 'no-such-request'].includes(out.reason), out.reason);
     assert.equal(JSON.parse(await exited).hookSpecificOutput.decision.behavior, 'deny');
+  });
+});
+
+test('end to end: a store without the app\'s key cannot answer; the hook keeps waiting for a real answer', async () => {
+  await withHook({ command: 'git status' }, 1500, async ({ dir, req, exited }) => {
+    const { approvals, pending, sign } = await approvalsOver(dir, { ackTimeoutMs: 200 });
+    const p = await pending.get(req.id);
+    const out = await approvals.handleDecision((await sign(p)).envelope);
+    assert.notEqual(out.status, 'applied');
+    assert.equal(await exited, '', 'no decision reached Claude Code');
   });
 });

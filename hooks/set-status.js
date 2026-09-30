@@ -418,9 +418,12 @@ function writeSession(proc) {
   withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), proc)));
 }
 
-// The app's signal server is the liveness signal (no pid file exists). A
-// synchronous connect probe in a child keeps this script's flow linear.
-function appIsUp() {
+// Hand the app this request's answer key over its signal server (POST
+// /request-key with the per-install token). This is also the liveness check:
+// no app, or an app that won't take the key, means nobody can answer, so the
+// hook doesn't wait. A child keeps this script's flow synchronous; the key
+// and token go over its stdin, never argv.
+function registerKey(id, keyHex) {
   try {
     // The app records the port it actually bound (demo modes use others).
     let port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
@@ -428,9 +431,13 @@ function appIsUp() {
       const filePort = Number(fs.readFileSync(path.join(ROOT_DIR, 'port'), 'utf8'));
       if (Number.isInteger(filePort) && filePort > 0 && filePort < 65536) port = filePort;
     } catch {}
-    const probe = `require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))`;
-    return require('child_process').spawnSync(process.execPath, ['-e', probe], { timeout: 1000, stdio: 'ignore' }).status === 0;
-  } catch { return true; }
+    const token = fs.readFileSync(path.join(ROOT_DIR, 'token'), 'utf8').trim();
+    const post = `let i='';process.stdin.on('data',(d)=>{i+=d}).on('end',()=>{const a=JSON.parse(i);const b=JSON.stringify({id:a.id,key:a.key});`
+      + `require('http').request({host:'127.0.0.1',port:a.port,path:'/request-key',method:'POST',headers:{'content-type':'application/json','x-buddy-token':a.token,'content-length':Buffer.byteLength(b)}},`
+      + `(r)=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1)).end(b)})`;
+    const input = JSON.stringify({ port, token, id, key: keyHex });
+    return require('child_process').spawnSync(process.execPath, ['-e', post], { input, timeout: 1500, stdio: ['pipe', 'ignore', 'ignore'] }).status === 0;
+  } catch { return false; }
 }
 
 // ── Blocking asks: PermissionRequest, Elicitation, and AskUserQuestion's
@@ -449,21 +456,15 @@ function waitForAnswer(channel, hookTimeoutS) {
   // request whose Allow would release some other input.
   const input = described.toolInput;
   if (!input || typeof input !== 'object' || Array.isArray(input)) finish();
-  // Nobody is listening for a request if the app is down: skip the wait.
-  if (askMs > 0 && !appIsUp()) finish();
   const Answer = require('./answer-file.js');
   // Stop waiting early enough to answer before Claude Code's own timeout
   // (the installed hook timeout) kills this hook.
   const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || hookTimeoutS * 1000;
   const waitUntil = Math.min(Date.now() + askMs, HOOK_START + hookTimeoutMs - Answer.HOOK_MARGIN_MS);
-  fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
   // Random, not a timestamp: parallel tool calls in one session would share
   // a millisecond id, and one answer would release the other call.
   const id = `${HOST_TAG}-${require('crypto').randomUUID()}`;
   const { req: reqFile, ans: ansFile } = Answer.paths(REQUESTS_DIR, id);
-  let toolInputHash = null;
-  try { toolInputHash = Answer.hashToolInput(input); } catch { finish(); }
   const summary = typeof input.command === 'string' ? input.command
     : typeof input.file_path === 'string' ? input.file_path
     : typeof input.url === 'string' ? input.url
@@ -471,10 +472,21 @@ function waitForAnswer(channel, hookTimeoutS) {
     : Object.keys(input).length ? JSON.stringify(input) : '';
   const request = {
     id, sessionId, host: HOST_TAG, cwd, tool: described.tool, kind: described.kind, channel,
-    summary: summary.slice(0, 200), toolInput: input, toolInputHash,
+    summary: summary.slice(0, 200), toolInput: input,
     ...(described.permissionSuggestions ? { permissionSuggestions: described.permissionSuggestions } : {}),
     createdAt: new Date().toISOString(), expiresAt: new Date(waitUntil).toISOString(),
   };
+  let decisionHash = null;
+  try {
+    request.toolInputHash = Answer.hashToolInput(input);
+    decisionHash = request.decisionHash = Answer.decisionHashOf(request);
+  } catch { finish(); }
+  // Only the app gets the key, and before the id is visible anywhere. No app
+  // (or no key taken) → nobody could answer: skip the wait.
+  const key = require('crypto').randomBytes(32);
+  if (!(askMs > 0) || !registerKey(id, key.toString('hex'))) finish();
+  fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
   // Complete before its name appears: readers never see half a request.
   try { if (!Answer.createExclusive(reqFile, JSON.stringify(request, null, 2))) finish(); } catch { finish(); }
   // An answer that doesn't fit this request (wrong kind, missing answers) is
@@ -484,12 +496,12 @@ function waitForAnswer(channel, hookTimeoutS) {
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < waitUntil) {
-    if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, toolInputHash, judge); answered = true; break; }
+    if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, decisionHash, key, judge); answered = true; break; }
     Atomics.wait(sleeper, 0, 0, 150);
   }
   // The last word: either our timeout marker lands first, or an answer that
   // raced the deadline is already there and is honoured.
-  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, toolInputHash, judge);
+  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, decisionHash, key, judge);
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
   hookOutput = answer ? Input.answerOutput(request, answer) : null;

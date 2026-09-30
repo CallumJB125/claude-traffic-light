@@ -563,15 +563,12 @@ test('set-status: garbage stdin does not crash', () => {
   assert.equal(read(home).signal, 'stop');
 });
 
-// Stands in for the app's signal server, which the hook probes before it waits.
-function fakeApp() {
-  const srv = require('http').createServer((q, r) => r.end());
-  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ port: srv.address().port, close: () => srv.close() })));
-}
+// Stands in for the app's signal server, which takes the hook's answer key.
+const { fakeApp } = require('./fake-app.js');
 
 test('set-status: permission-request blocks until answered, then prints the decision', async () => {
   const home = tmpHome();
-  const app = await fakeApp();
+  const app = await fakeApp(home);
   const env = { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '4000', CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port) };
   const { spawn } = require('child_process');
   const child = spawn(process.execPath, [SET_STATUS, 'permission-request'], { env });
@@ -591,7 +588,7 @@ test('set-status: permission-request blocks until answered, then prints the deci
   assert.equal(req.summary, 'git push origin main');
   assert.deepEqual(req.toolInput, { command: 'git push origin main' }, 'the full input is recorded');
   assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600);
-  assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow').ok, true);
+  assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow', { key: app.keyFor(req.id) }).ok, true);
   return new Promise((resolve) => child.on('exit', (code) => {
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
@@ -604,7 +601,7 @@ test('set-status: permission-request blocks until answered, then prints the deci
 
 test('set-status: permission-request exits at once, writing no request, when the app is down', async () => {
   const home = tmpHome();
-  const app = await fakeApp();
+  const app = await fakeApp(home);
   const port = app.port;
   app.close();
   const t0 = Date.now();
@@ -627,7 +624,7 @@ test('hooks never fail the session: an unwritable state dir still exits 0 silent
 
 test('set-status: permission-request with no answer passes through silently', async () => {
   const home = tmpHome();
-  const app = await fakeApp();
+  const app = await fakeApp(home);
   const r = spawnSync(process.execPath, [SET_STATUS, 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '300', CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port) }, input: JSON.stringify({ session_id: 'p2', tool_name: 'Edit', tool_input: { file_path: '/a.js' } }) });
   assert.equal(r.status, 0);
   assert.equal(r.stdout.toString(), '', 'no decision printed → Claude Code shows its own dialog');
@@ -789,7 +786,7 @@ test('install is idempotent, strips old-style commands, keeps foreign hooks', ()
   const once = Claude.apply(JSON.parse(JSON.stringify(settings)), APP);
   const twice = Claude.apply(JSON.parse(JSON.stringify(once)), APP);
   assert.deepEqual(once, twice);
-  assert.deepEqual(once.permissions, settings.permissions);
+  assert.deepEqual(once.permissions, { ...settings.permissions, deny: Claude.DENY_RULES }, 'foreign permissions kept, Buddy\'s deny rule added');
   const cmds = (ev) => once.hooks[ev].flatMap((h) => h.hooks.map((x) => x.command));
   assert.deepEqual(cmds('PreToolUse'), ['echo hi', `${RUN} "/App/Resources/hooks/set-status.js" tool-use`]);
   assert.deepEqual(cmds('Stop'), [`${RUN} "/App/Resources/hooks/set-status.js" stop`]);

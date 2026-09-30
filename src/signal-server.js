@@ -28,6 +28,9 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks.
 module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus }) => {
+  // Per-request answer keys from the blocking hooks: memory only, never on
+  // disk, so nothing that can write requests/ can also sign an answer.
+  const requestKeys = Answer.requestKeys();
   function readBody(req, done, then) {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
@@ -60,9 +63,10 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
       if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
+      if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' })));
       readBody(req, done, (d) => {
         if (!KNOWN_SIGNALS.has(d.signal)) return done(400, { error: 'unknown signal', known: [...KNOWN_SIGNALS] });
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
@@ -110,6 +114,8 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       try {
         const r = JSON.parse(fs.readFileSync(path.join(requestsDir, f), 'utf8'));
         if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
+        // Edited since the hook wrote it: never shown, so never clicked.
+        if (!Answer.requestIntact(r)) continue;
         out.push({ ...r, view: describeRequest(r) });
       } catch { /* partial write */ }
     }
@@ -118,8 +124,8 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
 
   // First answer wins (desk, MCP or phone); see hooks/answer-file.js.
   function answerRequest(id, decision) {
-    return Answer.writeAnswer(requestsDir, id, decision, { by: 'desk' }).ok;
+    return Answer.writeAnswer(requestsDir, id, decision, { by: 'desk', key: requestKeys.get(id) }).ok;
   }
 
-  return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest };
+  return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor: (id) => requestKeys.get(id) };
 };

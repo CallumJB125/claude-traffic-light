@@ -61,10 +61,13 @@ surfaces as a `blocked` PendingInput for 30 minutes.
 
 Security model (unchanged from remote/THREAT_MODEL.md §1): random request ids;
 0600 request files in a 0700 dir, now created whole before their names appear;
-a single-use `.answer` created by `link()`; every answer is bound to
-SHA-256 of the canonical input; the hook claims the answer slot at its
-deadline; `.taken`/`.refused` acks. New in this change: the answer may carry a
-shape-checked `extra` (`answers`, `permissionIndex`, `mode`, `message`,
+a single-use `.answer` created by `link()`; every answer is bound to the
+request's `decisionHash` (SHA-256 of the canonical kind, channel, tool, input
+and permission suggestions) and carries an HMAC under a per-request key the
+hook hands only to the running app (never to disk), so a same-user writer,
+the agent included, can't forge one; the hook claims the answer slot at its
+deadline; `.taken`/`.refused` acks. The answer may carry a shape-checked
+`extra` (`answers`, `permissionIndex` + `suggestionHash`, `mode`, `message`,
 `content`), and the hook refuses an answer that doesn't fit the request's
 kind, so the answerer hears `refused`. The phone path (`remote/`) only offers
 `permission` and `plan` requests.
@@ -89,7 +92,7 @@ type PendingInput = {
   options: Array<{ id: string; label: string; description?: string; needsContent?: boolean }>;
   created_at: string | null;   // ISO
   expires_at: string | null;   // ISO; when the hook stops waiting (hook items only)
-  answerable: boolean;         // true only for hook items with a bound input hash
+  answerable: boolean;         // true only for hook items with a decision hash
   actions: Array<'answer' | 'open'>;
   // kind-specific
   headline?: string;           // permission: one-line summary (request-view.js)

@@ -29,7 +29,7 @@ function fromRequest(req) {
     v: 1, id: req.id, session: req.sessionId || null, host: req.host || null, cwd: req.cwd || null,
     kind, source: 'hook', tool: req.tool || null,
     created_at: iso(created), expires_at: iso(expires),
-    answerable: typeof req.toolInputHash === 'string', actions: ['answer', 'open'],
+    answerable: typeof req.decisionHash === 'string', actions: ['answer', 'open'],
   };
   if (kind === 'permission') {
     const d = describeRequest(req);

@@ -65,14 +65,16 @@ export function readAuditHead(file) {
 // request without them is never answerable remotely (get → null).
 //
 // settle() goes through hooks/answer-file.js: the answer is created exactly
-// once (link, EEXIST = someone else won) and counts as applied only after the
-// hook renames it to <id>.taken.
+// once (link, EEXIST = someone else won), carries a mac under the request's
+// key (keyFor: the app's in-memory requestKeys; without one nothing can be
+// answered), and counts as applied only after the hook renames it to
+// <id>.taken.
 export class WidgetRequestStore {
   // maxAgeMs stays under the hook's own wait (CLAUDE_TRAFFIC_LIGHT_ASK_MS,
   // default 55 s) so a phone rarely races the hook's deadline; the ack makes
   // that race safe anyway.
-  constructor({ requestsDir, ownerId, describe = () => ({}), maxAgeMs = 45000, ackTimeoutMs = 1500, clock = () => Date.now() }) {
-    Object.assign(this, { requestsDir, ownerId, describe, maxAgeMs, ackTimeoutMs, clock });
+  constructor({ requestsDir, ownerId, describe = () => ({}), keyFor = () => null, maxAgeMs = 45000, ackTimeoutMs = 1500, clock = () => Date.now() }) {
+    Object.assign(this, { requestsDir, ownerId, describe, keyFor, maxAgeMs, ackTimeoutMs, clock });
   }
 
   async get(requestId) {
@@ -89,6 +91,8 @@ export class WidgetRequestStore {
     const now = this.clock();
     if (!Number.isFinite(t) || now - t > this.maxAgeMs || t > now + 5000) return null;
     try { if ((await hashToolInput(r.toolInput)) !== r.toolInputHash) return null; } catch { return null; }
+    // The whole request (kind, tool, suggestions) must still be what the hook wrote.
+    if (!Answer.requestIntact(r)) return null;
     // describe() adds what only the desktop knows (cardId, runner, assignees,
     // repo labels); it can never replace the input, owner or identity fields.
     return {
@@ -100,7 +104,7 @@ export class WidgetRequestStore {
   }
 
   async settle(requestId, decision) {
-    const w = Answer.writeAnswer(this.requestsDir, requestId, decision, { by: 'remote', ack: true });
+    const w = Answer.writeAnswer(this.requestsDir, requestId, decision, { by: 'remote', ack: true, key: this.keyFor(requestId) });
     if (!w.ok) return 'already-answered';
     const taken = await Answer.awaitTaken(this.requestsDir, requestId, w.nonce, { timeoutMs: this.ackTimeoutMs });
     return taken === 'applied' ? 'applied' : taken === 'refused' ? 'refused' : taken === 'lost' ? 'already-answered' : 'unconfirmed';

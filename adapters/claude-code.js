@@ -43,6 +43,35 @@ const RAW_SIGNALS = new Set(Object.values(SIGNAL_OF));
 // plus the delegate.js entries very old installs registered on their own.
 const isOurs = (command) => Runtime.runsScript(command, [SCRIPT, 'delegate.js']);
 
+// Defence in depth for the answer protocol (hooks/answer-file.js): the agent's
+// own file tools may never write Buddy's state dir, requests/ included. One
+// `Edit(path)` rule covers every built-in file-editing tool (Write, MultiEdit,
+// NotebookEdit): Claude Code only consults Edit/Read path rules and ignores a
+// `Write(path)` one (code.claude.com/docs/en/permissions#read-and-edit);
+// `~/path` is the documented home-relative form.
+const DENY_RULES = ['Edit(~/.claude-traffic-light/**)'];
+
+function withDenyRules(settings) {
+  const out = { ...(settings || {}) };
+  const perms = out.permissions && typeof out.permissions === 'object' && !Array.isArray(out.permissions) ? { ...out.permissions } : {};
+  const deny = Array.isArray(perms.deny) ? perms.deny.slice() : [];
+  for (const r of DENY_RULES) if (!deny.includes(r)) deny.push(r);
+  out.permissions = { ...perms, deny };
+  return out;
+}
+
+function withoutDenyRules(settings) {
+  const out = { ...(settings || {}) };
+  if (!out.permissions || typeof out.permissions !== 'object' || !Array.isArray(out.permissions.deny)) return out;
+  const perms = { ...out.permissions, deny: out.permissions.deny.filter((r) => !DENY_RULES.includes(r)) };
+  if (!perms.deny.length) delete perms.deny;
+  if (Object.keys(perms).length) out.permissions = perms;
+  else delete out.permissions;
+  return out;
+}
+
+const hasDenyRules = (settings) => DENY_RULES.every((r) => Array.isArray(settings?.permissions?.deny) && settings.permissions.deny.includes(r));
+
 // Claude Code tags each Notification with notification_type. Types not listed
 // (auth_success, elicitation_complete, …) are bookkeeping and leave the
 // session's signal alone.
@@ -112,7 +141,7 @@ const eventsFor = (opts = {}) => (opts.askFromWidget ? HOOK_EVENTS.concat(OPTION
 // Pure: settings object in, settings object out, with exactly one current set
 // of our hooks and every foreign one kept.
 function apply(settings, runtime, opts = {}) {
-  const out = { ...(settings || {}) };
+  const out = withDenyRules(settings);
   out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
   for (const [event, , timeout] of eventsFor(opts)) {
     const hook = { type: 'command', command: commandFor(event, runtime) };
@@ -123,7 +152,7 @@ function apply(settings, runtime, opts = {}) {
 }
 
 function strip(settings) {
-  const out = { ...(settings || {}) };
+  const out = withoutDenyRules(settings);
   out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
   if (!Object.keys(out.hooks).length) delete out.hooks;
   return out;
@@ -131,7 +160,7 @@ function strip(settings) {
 
 function check(settings, runtime, opts = {}) {
   const has = (event) => (settings?.hooks?.[event] || []).some((h) => h.hooks?.some((hh) => hh.command === commandFor(event, runtime)));
-  return HOOK_EVENTS.every(([e]) => has(e)) && OPTIONAL_EVENTS.every(([e]) => has(e) === !!opts.askFromWidget);
+  return HOOK_EVENTS.every(([e]) => has(e)) && OPTIONAL_EVENTS.every(([e]) => has(e) === !!opts.askFromWidget) && hasDenyRules(settings);
 }
 
 const configPath = (home) => path.join(home, '.claude', 'settings.json');
@@ -142,6 +171,7 @@ module.exports = {
   capabilities: { working: true, yourTurn: true, blocked: true, answer: true, subagents: true, limits: true, cost: true },
   transport: 'command',
   SCRIPT,
+  DENY_RULES,
   HOOK_EVENTS,
   OPTIONAL_EVENTS,
   configPath,
@@ -157,13 +187,17 @@ module.exports = {
   install({ home, runtime, askFromWidget = false, fs: fsImpl }) {
     const file = configPath(home);
     if (Runtime.shellNeedsWrapper(runtime)) Runtime.ensureWrapper(runtime, fsImpl);
-    Runtime.writeJsonConfig(file, apply(Runtime.readJsonConfig(file, fsImpl), runtime, { askFromWidget }), fsImpl);
+    const cur = Runtime.readJsonConfig(file, fsImpl);
+    // First time Buddy adds its deny rules to an existing settings file, keep
+    // a copy of the file as it was.
+    if (!hasDenyRules(cur) && Object.keys(cur).length) Runtime.backupOnce(file, fsImpl);
+    Runtime.writeJsonConfig(file, apply(cur, runtime, { askFromWidget }), fsImpl);
     return { ok: true, file };
   },
   uninstall({ home, fs: fsImpl }) {
     const file = configPath(home);
     const cur = Runtime.readJsonConfig(file, fsImpl);
-    if (!cur.hooks) return { ok: true, file, changed: false };
+    if (!cur.hooks && !hasDenyRules(cur)) return { ok: true, file, changed: false };
     Runtime.writeJsonConfig(file, strip(cur), fsImpl);
     return { ok: true, file, changed: true };
   },

@@ -104,6 +104,12 @@ function writeJsonConfig(file, data, fsImpl = fs) {
   fsImpl.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
+// `<file>.buddy-backup`, once: never replaced, so it stays the file as it was
+// before Buddy first changed it.
+function backupOnce(file, fsImpl = fs) {
+  try { fsImpl.copyFileSync(file, `${file}.buddy-backup`, fs.constants.COPYFILE_EXCL); } catch {}
+}
+
 // Claude Code and Gemini share one hooks shape:
 // { Event: [{ matcher, hooks: [{ type, command }] }] }. Drops every command
 // `isOurs` claims and any group or event left empty; foreign entries stay.
@@ -118,4 +124,4 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

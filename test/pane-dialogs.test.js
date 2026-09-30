@@ -101,7 +101,10 @@ test('detector: at most maxPerScan captures per scan', async () => {
 });
 
 // ── PendingInput assembly ───────────────────────────────────────────────────
-const REQ = (over = {}) => ({ id: 'mac-1', sessionId: 's1', host: 'mac', cwd: '/repo', tool: 'Bash', kind: 'permission', channel: 'PermissionRequest', toolInput: { command: 'npm test' }, toolInputHash: A.hashToolInput({ command: 'npm test' }), createdAt: new Date(NOW).toISOString(), expiresAt: new Date(NOW + 55000).toISOString(), ...over });
+const REQ = (over = {}) => {
+  const r = { id: 'mac-1', sessionId: 's1', host: 'mac', cwd: '/repo', tool: 'Bash', kind: 'permission', channel: 'PermissionRequest', toolInput: { command: 'npm test' }, toolInputHash: A.hashToolInput({ command: 'npm test' }), createdAt: new Date(NOW).toISOString(), expiresAt: new Date(NOW + 55000).toISOString(), ...over };
+  return { ...r, decisionHash: A.decisionHashOf(r) };
+};
 const SCHEMA_KEYS = ['id', 'session', 'kind', 'title', 'text', 'options', 'created_at', 'expires_at', 'answerable'];
 
 test('every PendingInput kind carries the documented fields', () => {

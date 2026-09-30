@@ -11,10 +11,11 @@ const { spawn, spawnSync } = require('child_process');
 const A = require('../hooks/answer-file.js');
 const I = require('../hooks/pending-input.js');
 const Owned = require('../hooks/owned.js');
+const { fakeApp } = require('./fake-app.js');
+const KEY = require('crypto').randomBytes(32);
 
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-inputs-'));
-const listening = () => new Promise((res) => { const s = require('net').createServer(); s.listen(0, '127.0.0.1', () => res(s)); });
 const HOST = os.hostname().split('.')[0];
 
 const QUESTION_INPUT = { questions: [{ question: 'Which framework?', header: 'Framework', options: [{ label: 'React', description: 'hooks' }, { label: 'Vue' }], multiSelect: false }] };
@@ -49,13 +50,17 @@ test('permission: allow once, deny with a message, and a suggestion only ever fo
     permissionSuggestions: I.cleanSuggestions([{ type: 'addDirectories', directories: ['/elsewhere'], destination: 'localSettings' }, { type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Read', ruleContent: '/elsewhere/**' }], destination: 'userSettings' }]) };
   assert.deepEqual(I.answerOutput(req, { decision: 'allow' }), { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
   assert.deepEqual(I.answerOutput(req, { decision: 'deny', extra: { message: 'use the repo copy' } }).hookSpecificOutput.decision, { behavior: 'deny', message: 'use the repo copy' });
-  assert.deepEqual(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 0 } }).hookSpecificOutput.decision,
+  const sh = (i) => A.hashToolInput(req.permissionSuggestions[i]);
+  assert.deepEqual(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 0, suggestionHash: sh(0) } }).hookSpecificOutput.decision,
     { behavior: 'allow', updatedPermissions: [{ type: 'addDirectories', directories: ['/elsewhere'], destination: 'session' }] });
-  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 1 } }).hookSpecificOutput.decision.updatedPermissions[0].destination, 'session');
-  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 5 } }), null, 'no such suggestion');
+  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 1, suggestionHash: sh(1) } }).hookSpecificOutput.decision.updatedPermissions[0].destination, 'session');
+  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 5, suggestionHash: sh(0) } }), null, 'no such suggestion');
+  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 0 } }), null, 'unbound index');
+  assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 1, suggestionHash: sh(0) } }), null, 'the label clicked is not the rule at that index');
   assert.equal(I.answerOutput(req, { decision: 'accept' }), null, 'wrong decision for the kind');
   const view = I.viewOf(req);
   assert.deepEqual(view.options.map((o) => o.id), ['allow', 'allow-session-0', 'allow-session-1', 'deny']);
+  assert.ok(I.answerOutput(req, view.options[2].answer), 'each option carries its own suggestion hash');
   assert.match(view.options[1].label, /Allow access to \/elsewhere for this session/);
 });
 
@@ -101,122 +106,121 @@ test('elicitation: accept with content, decline, cancel; allow/deny are refused'
 test('answer files: extras are shape-checked before they are written', () => {
   const dir = tmp();
   const input = { command: 'ls' };
-  fs.writeFileSync(path.join(dir, 'r.json'), JSON.stringify({ id: 'r', toolInput: input, toolInputHash: A.hashToolInput(input) }));
-  assert.equal(A.writeAnswer(dir, 'r', 'allow', { extra: { answers: 'React' } }).ok, false);
-  assert.equal(A.writeAnswer(dir, 'r', 'allow', { extra: { permissionIndex: -1 } }).ok, false);
-  assert.equal(A.writeAnswer(dir, 'r', 'allow', { extra: { mode: 'bypassPermissions' } }).ok, false);
-  assert.equal(A.writeAnswer(dir, 'r', 'allow', { extra: { sneaky: 1 } }).ok, false);
-  assert.equal(A.writeAnswer(dir, 'r', 'allow', { extra: { permissionIndex: 0 } }).ok, true);
-  assert.deepEqual(A.consumeAnswerDetail(dir, 'r', A.hashToolInput(input)), { decision: 'allow', extra: { permissionIndex: 0 } });
+  const r = { id: 'r', kind: 'permission', channel: 'PermissionRequest', tool: 'Bash', toolInput: input, toolInputHash: A.hashToolInput(input), permissionSuggestions: [{ type: 'setMode', mode: 'acceptEdits' }] };
+  r.decisionHash = A.decisionHashOf(r);
+  fs.writeFileSync(path.join(dir, 'r.json'), JSON.stringify(r));
+  for (const extra of [{ answers: 'React' }, { permissionIndex: -1 }, { mode: 'bypassPermissions' }, { sneaky: 1 }, { suggestionHash: 'x' }]) assert.equal(A.writeAnswer(dir, 'r', 'allow', { key: KEY, extra }).ok, false, JSON.stringify(extra));
+  assert.equal(A.writeAnswer(dir, 'r', 'allow', { key: KEY, extra: { permissionIndex: 0 } }).ok, true);
+  assert.deepEqual(A.consumeAnswerDetail(dir, 'r', r.decisionHash, KEY), { decision: 'allow', extra: { permissionIndex: 0, suggestionHash: A.hashToolInput(r.permissionSuggestions[0]) } });
 });
 
 // ── the real hook ───────────────────────────────────────────────────────────
 test('hook: ExitPlanMode is recorded as a plan with its text and answered through PermissionRequest', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
-    const h = hook('permission-request', home, srv.address().port, { session_id: 's', cwd: '/x', tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan', planFilePath: '/p.md' } });
+    const h = hook('permission-request', home, app.port, { session_id: 's', cwd: '/x', tool_name: 'ExitPlanMode', tool_input: { plan: '# Plan', planFilePath: '/p.md' } });
     const req = await oneRequest(path.join(home, 'requests'));
     assert.equal(req.kind, 'plan');
     assert.equal(req.channel, 'PermissionRequest');
     assert.ok(Date.parse(req.expiresAt) > Date.parse(req.createdAt));
     assert.equal(session(home).ask.kind, 'plan');
-    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, 'allow', { extra: { mode: 'acceptEdits' } }).ok, true);
+    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, 'allow', { key: app.keyFor(req.id), extra: { mode: 'acceptEdits' } }).ok, true);
     const { out, code } = await h.done;
     assert.equal(code, 0);
     assert.deepEqual(JSON.parse(out).hookSpecificOutput.decision.updatedPermissions, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]);
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: a "read outside the working directories" request carries its suggestions; the session option works', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
-    const h = hook('permission-request', home, srv.address().port, { session_id: 's', cwd: '/repo', tool_name: 'Read', tool_input: { file_path: '/other/notes.md' }, permission_suggestions: [{ type: 'addDirectories', directories: ['/other'], destination: 'session' }] });
+    const h = hook('permission-request', home, app.port, { session_id: 's', cwd: '/repo', tool_name: 'Read', tool_input: { file_path: '/other/notes.md' }, permission_suggestions: [{ type: 'addDirectories', directories: ['/other'], destination: 'session' }] });
     const req = await oneRequest(path.join(home, 'requests'));
     assert.equal(req.kind, 'permission');
     assert.deepEqual(req.permissionSuggestions, [{ type: 'addDirectories', directories: ['/other'] }]);
     const opt = I.viewOf(req).options.find((o) => o.id === 'allow-session-0');
-    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, opt.answer.decision, { extra: opt.answer.extra }).ok, true);
+    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, opt.answer.decision, { key: app.keyFor(req.id), extra: opt.answer.extra }).ok, true);
     assert.deepEqual(JSON.parse((await h.done).out).hookSpecificOutput.decision, { behavior: 'allow', updatedPermissions: [{ type: 'addDirectories', directories: ['/other'], destination: 'session' }] });
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: an answer that does not fit the kind is refused and the terminal keeps the prompt', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
     const dir = path.join(home, 'requests');
-    const h = hook('permission-request', home, srv.address().port, { session_id: 's', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    const h = hook('permission-request', home, app.port, { session_id: 's', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
     const req = await oneRequest(dir);
-    const w = A.writeAnswer(dir, req.id, 'accept', { ack: true });
+    const w = A.writeAnswer(dir, req.id, 'accept', { ack: true, key: app.keyFor(req.id) });
     assert.equal(await A.awaitTaken(dir, req.id, w.nonce, { timeoutMs: 3000 }), 'refused');
     assert.equal((await h.done).out, '');
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: AskUserQuestion waits in PreToolUse only with askFromWidget on, and answers with updatedInput', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
     const payload = { session_id: 's', cwd: '/x', tool_name: 'AskUserQuestion', tool_input: QUESTION_INPUT };
     // Off: no wait, no request, but the session shows the real question.
-    assert.equal(runSync('tool-use', home, payload, { CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.address().port) }), '');
+    assert.equal(runSync('tool-use', home, payload, { CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port) }), '');
     assert.equal(fs.existsSync(path.join(home, 'requests')), false);
     const s = session(home);
     assert.equal(s.signal, 'permission-ask');
     assert.deepEqual(s.ask.questions[0].options.map((o) => o.label), ['React', 'Vue']);
     fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ askFromWidget: true }));
-    const h = hook('tool-use', home, srv.address().port, { ...payload, session_id: 's2' });
+    const h = hook('tool-use', home, app.port, { ...payload, session_id: 's2' });
     const req = await oneRequest(path.join(home, 'requests'));
     assert.equal(req.kind, 'question');
     assert.equal(req.channel, 'PreToolUse');
     const opt = I.viewOf(req).options[1];
-    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, opt.answer.decision, { extra: opt.answer.extra }).ok, true);
+    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, opt.answer.decision, { key: app.keyFor(req.id), extra: opt.answer.extra }).ok, true);
     const out = JSON.parse((await h.done).out).hookSpecificOutput;
     assert.equal(out.permissionDecision, 'allow');
     assert.deepEqual(out.updatedInput.answers, { 'Which framework?': 'Vue' });
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: a PermissionRequest for AskUserQuestion passes straight through (no second wait)', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
     const t0 = Date.now();
-    const out = runSync('permission-request', home, { session_id: 's', cwd: '/x', tool_name: 'AskUserQuestion', tool_input: QUESTION_INPUT }, { CLAUDE_TRAFFIC_LIGHT_PORT: String(srv.address().port), CLAUDE_TRAFFIC_LIGHT_ASK_MS: '5000' });
+    const out = runSync('permission-request', home, { session_id: 's', cwd: '/x', tool_name: 'AskUserQuestion', tool_input: QUESTION_INPUT }, { CLAUDE_TRAFFIC_LIGHT_PORT: String(app.port), CLAUDE_TRAFFIC_LIGHT_ASK_MS: '5000' });
     assert.equal(out, '');
     assert.ok(Date.now() - t0 < 3000);
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: Elicitation is recorded and answered with an action', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
-    const h = hook('elicitation', home, srv.address().port, { session_id: 's', cwd: '/x', hook_event_name: 'Elicitation', mcp_server_name: 'srv', message: 'Pick a branch', mode: 'form', requested_schema: { type: 'object', properties: { branch: { type: 'string' } } } });
+    const h = hook('elicitation', home, app.port, { session_id: 's', cwd: '/x', hook_event_name: 'Elicitation', mcp_server_name: 'srv', message: 'Pick a branch', mode: 'form', requested_schema: { type: 'object', properties: { branch: { type: 'string' } } } });
     const req = await oneRequest(path.join(home, 'requests'));
     assert.equal(req.kind, 'elicitation');
     assert.equal(session(home).signal, 'permission-ask');
-    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, 'accept', { extra: { content: { branch: 'main' } } }).ok, true);
+    assert.equal(A.writeAnswer(path.join(home, 'requests'), req.id, 'accept', { key: app.keyFor(req.id), extra: { content: { branch: 'main' } } }).ok, true);
     assert.deepEqual(JSON.parse((await h.done).out), { hookSpecificOutput: { hookEventName: 'Elicitation', action: 'accept', content: { branch: 'main' } } });
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('hook: no answer in time → no output (the terminal prompt), never an automatic allow or deny', async () => {
   const home = tmp();
-  const srv = await listening();
+  const app = await fakeApp(home);
   try {
     for (const [signal, payload] of [
       ['permission-request', { session_id: 's', cwd: '/x', tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } }],
       ['elicitation', { session_id: 's', cwd: '/x', mcp_server_name: 'srv', message: 'm' }],
     ]) {
-      const { out, code } = await hook(signal, home, srv.address().port, payload, { askMs: 300 }).done;
+      const { out, code } = await hook(signal, home, app.port, payload, { askMs: 300 }).done;
       assert.equal(code, 0);
       assert.equal(out, '', signal);
     }
     assert.deepEqual(fs.readdirSync(path.join(home, 'requests')), []);
-  } finally { srv.close(); }
+  } finally { app.close(); }
 });
 
 test('session: a notification ask keeps its words; a classifier denial is "blocked" until the next prompt', () => {

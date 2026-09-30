@@ -283,7 +283,7 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // session's folder. POST also needs the per-install token, written 0600 next
 // to the port file, so only something that can read your files can move a
 // light.
-const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest } = require('./src/signal-server.js')({
+const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
   requestsDir: REQUESTS_DIR,
@@ -2528,7 +2528,9 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const m = more && typeof more === 'object' ? more : {};
   const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
   if (!answer) return { ok: false, error: 'not an option for this request' };
-  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra });
+  // Bound to the request as shown (readRequests drops edited ones): the file
+  // must still hash the same when the answer is written.
+  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
   return w.ok ? { ok: true } : { ok: false, error: w.error };

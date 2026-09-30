@@ -12,6 +12,8 @@
 // Anything that doesn't fit its kind yields null: the hook prints nothing and
 // the normal terminal prompt stays in charge. Nothing here ever decides on
 // its own; the only answers are the ones a person chose.
+const { hashToolInput } = require('./answer-file.js');
+
 const KINDS = ['permission', 'plan', 'question', 'elicitation'];
 
 const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -130,7 +132,7 @@ function viewOf(req) {
         text: '',
         options: [
           { id: 'allow', label: 'Allow once', answer: { decision: 'allow' } },
-          ...sugg.map((s, i) => ({ id: `allow-session-${i}`, label: suggestionLabel(s), answer: { decision: 'allow', extra: { permissionIndex: i } } })),
+          ...sugg.map((s, i) => ({ id: `allow-session-${i}`, label: suggestionLabel(s), answer: { decision: 'allow', extra: { permissionIndex: i, suggestionHash: hashToolInput(s) } } })),
           { id: 'deny', label: 'Deny', answer: { decision: 'deny' } },
         ],
       };
@@ -177,7 +179,9 @@ function answerOutput(req, answer) {
   if (req.kind === 'plan' && extra.mode === 'acceptEdits') d.updatedPermissions = [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }];
   if (req.kind === 'permission' && extra.permissionIndex !== undefined) {
     const s = (Array.isArray(req.permissionSuggestions) ? req.permissionSuggestions : [])[extra.permissionIndex];
-    if (!s || !SAFE_SUGGESTION(s)) return null;
+    // The rule applied is the one the person clicked: the answer names the
+    // suggestion's hash, and the suggestion at that index must still match it.
+    if (!s || !SAFE_SUGGESTION(s) || extra.suggestionHash !== hashToolInput(s)) return null;
     d.updatedPermissions = [{ ...s, destination: 'session' }];
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: d } };
