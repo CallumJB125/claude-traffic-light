@@ -89,6 +89,14 @@ test('widget request store: no input, no hash, a hash that does not match, or a 
   for (const id of ['no-input', 'no-hash', 'bad-hash', 'no-date', 'junk-date', 'future', 'old', 'no-decision-hash', 'edited']) assert.equal(await store.get(id), null, id);
 });
 
+test('widget request store: a request whose cwd was edited after the hook wrote it is not answerable (the allow-list judges by that cwd)', async () => {
+  const dir = tmp();
+  const r = writeReq(dir, 'cwd-edit');
+  fs.writeFileSync(path.join(dir, 'cwd-edit.json'), JSON.stringify({ ...r, cwd: '/tmp/other' }));
+  const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice' });
+  assert.equal(await store.get('cwd-edit'), null);
+});
+
 test('widget request store: only permission and plan requests are answerable remotely', async () => {
   const dir = tmp();
   for (const kind of ['permission', 'plan', 'question', 'elicitation', 'blocked']) writeReq(dir, `k-${kind}`, { kind });

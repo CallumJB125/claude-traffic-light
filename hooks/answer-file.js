@@ -5,7 +5,8 @@
 //   <id>.json    the request, written once by the hook (O_EXCL, 0600), with the
 //                full tool input, toolInputHash = sha256(canonical input) (the
 //                phone's hash) and decisionHash = decisionHashOf(request): the
-//                kind, channel, tool, input and permission suggestions together
+//                kind, channel, tool, input, permission suggestions, cwd,
+//                session and host together
 //   <id>.answer  created exactly once: answerers write a temp file and link()
 //                it into place, so EEXIST means someone else already answered.
 //                Holds {v, id, decision, decisionHash, by, ack, nonce, extra?,
@@ -99,8 +100,10 @@ function canonicalize(v, depth = 0) {
 const hashToolInput = (input) => crypto.createHash('sha256').update(canonicalize(input ?? {}), 'utf8').digest('hex');
 
 // Everything an answer is judged against: what is asked, through which hook,
-// for which tool and input, and which permission rules a click could apply.
-const decisionHashOf = (r) => hashToolInput({ kind: r?.kind ?? null, channel: r?.channel ?? null, tool: r?.tool ?? null, toolInput: r?.toolInput ?? {}, permissionSuggestions: r?.permissionSuggestions ?? null });
+// for which tool and input, which permission rules a click could apply, and
+// where and for whom it runs (cwd, session, host: shown to the person, and cwd
+// decides what the phone's allow-list lets through).
+const decisionHashOf = (r) => hashToolInput({ kind: r?.kind ?? null, channel: r?.channel ?? null, tool: r?.tool ?? null, toolInput: r?.toolInput ?? {}, permissionSuggestions: r?.permissionSuggestions ?? null, cwd: r?.cwd ?? null, sessionId: r?.sessionId ?? null, host: r?.host ?? null });
 
 // The request file still says what its hash says (a request edited after the
 // hook wrote it is never shown or answered).

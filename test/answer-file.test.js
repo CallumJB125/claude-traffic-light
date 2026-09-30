@@ -122,7 +122,7 @@ test('M1: an answer without the request key, or with a forged/altered mac, is re
 test('M1: the decision hash covers kind, channel, tool, input and suggestions; an edited request is not answered', () => {
   const base = { kind: 'permission', channel: 'PermissionRequest', tool: 'Bash', toolInput: { command: 'ls' }, permissionSuggestions: [] };
   const h = A.decisionHashOf(base);
-  for (const change of [{ kind: 'plan' }, { channel: 'PreToolUse' }, { tool: 'Write' }, { toolInput: { command: 'ls -a' } }, { permissionSuggestions: [{ type: 'setMode', mode: 'acceptEdits' }] }]) {
+  for (const change of [{ kind: 'plan' }, { channel: 'PreToolUse' }, { tool: 'Write' }, { toolInput: { command: 'ls -a' } }, { permissionSuggestions: [{ type: 'setMode', mode: 'acceptEdits' }] }, { cwd: '/elsewhere' }, { sessionId: 'other' }, { host: 'other' }]) {
     assert.notEqual(A.decisionHashOf({ ...base, ...change }), h, JSON.stringify(change));
   }
   const dir = tmp();
@@ -309,6 +309,31 @@ test('hook (M1 PoC): a same-user writer that reads the request and writes an ans
     A.createExclusive(path.join(dir, `${req.id}.answer`), JSON.stringify({ v: 2, id: req.id, decision: 'allow', decisionHash: req.decisionHash, toolInputHash: req.toolInputHash, by: 'desk', ack: true, nonce: 'n', extra: { permissionIndex: 0, suggestionHash: A.hashToolInput(req.permissionSuggestions[0]) } }));
     assert.equal(await h.done, '', 'no decision: the terminal prompt shows');
     assert.equal(fs.existsSync(path.join(dir, `${req.id}.taken`)), false);
+  } finally { app.close(); }
+});
+
+test('M1: a request whose cwd was edited is dropped, and the terminal prompt shows', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const dir = path.join(home, 'requests');
+    const h = startHook(home, app.port, { command: 'rm -rf build' }, { askMs: 2500 });
+    const [req] = await waitForRequests(dir, 1);
+    assert.equal(req.cwd, '/x');
+    const file = path.join(dir, `${req.id}.json`);
+    // Edited alone: the stored hash no longer matches, so nobody answers it.
+    fs.writeFileSync(file, JSON.stringify({ ...req, cwd: '/tmp/sandbox' }));
+    assert.equal(A.requestIntact(JSON.parse(fs.readFileSync(file, 'utf8'))), false);
+    assert.match(A.writeAnswer(dir, req.id, 'allow', { key: app.keyFor(req.id) }).error, /changed/);
+    // Edited with the hash recomputed to match: the answer is signed, but the
+    // hook holds the original hash and refuses it.
+    const forged = { ...req, cwd: '/tmp/sandbox' };
+    forged.decisionHash = A.decisionHashOf(forged);
+    fs.writeFileSync(file, JSON.stringify(forged));
+    const w = A.writeAnswer(dir, req.id, 'allow', { key: app.keyFor(req.id), ack: true });
+    assert.equal(w.ok, true);
+    assert.equal(await A.awaitTaken(dir, req.id, w.nonce, { timeoutMs: 3000 }), 'refused');
+    assert.equal(await h.done, '', 'no decision: the terminal prompt shows');
   } finally { app.close(); }
 });
 
