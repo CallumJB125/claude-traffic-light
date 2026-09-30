@@ -13,17 +13,22 @@
 // output is re-serialised from what passed. Nothing from the input is copied
 // through as text, so there is no script, style, href, url(), entity, id,
 // foreignObject, animation element or event handler to smuggle past it.
-const Contract = require('./contract.js');
+const Contract = require('./index.js');
 
-const LIMITS = { layerBytes: 64 * 1024, elements: 1500, depth: 12, coord: 256, pathBytes: 16 * 1024, name: 40, miniParts: 24 };
+const LIMITS = { layerBytes: 64 * 1024, elements: 1500, depth: 12, coord: 256, pathBytes: 16 * 1024, attrBytes: 512, name: 40, miniParts: 24, scale: 4 };
 
 const NUM = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 const HEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const SKIN_PAINT = /^var\(--body-color(,\s*#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}))?\)$/;
 const PATH_D = /^[MmLlHhVvCcSsQqTtAaZz0-9eE.,\s+-]*$/;
 const POINTS = /^[0-9eE.,\s+-]*$/;
-const TRANSFORM_FN = /^\s*(translate|scale|rotate|skewX|skewY|matrix)\s*\(\s*([0-9eE.,\s+-]*)\)\s*,?/;
-const CLASS_TOKEN = /^(skin|char-[a-z0-9-]{1,24})$/;
+// [^()]* rather than \s*[...]*: overlapping classes backtrack quadratically
+// on an unclosed "scale(" followed by whitespace
+const TRANSFORM_FN = /^\s*(translate|scale|rotate|skewX|skewY|matrix)\s*\(([^()]*)\)\s*,?/;
+// character parts get their own prefix (cp-), so nothing an import draws can
+// match a rig hook such as the .char-body slot
+const CLASS_TOKEN = /^(skin|cp-[a-z0-9-]{1,24})$/;
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const ID = /^[a-z][a-z0-9-]{1,31}$/;
 
 const number = (min, max) => (v) => NUM.test(v) && Number(v) >= min && Number(v) <= max;
@@ -37,6 +42,7 @@ function numberList(v, max) {
   return nums.length <= max && nums.every((n) => coord(n));
 }
 function transform(v) {
+  if (v.length > LIMITS.attrBytes) return false;
   let rest = v;
   let n = 0;
   while (rest.trim()) {
@@ -51,6 +57,7 @@ function pathData(v) {
   return (v.match(/[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/g) || []).every((n) => Math.abs(Number(n)) <= LIMITS.coord);
 }
 function classList(v) {
+  if (v.length > LIMITS.attrBytes) return false;
   const tokens = v.trim().split(/\s+/);
   return tokens.length <= 4 && tokens.every((t) => CLASS_TOKEN.test(t));
 }
@@ -153,22 +160,59 @@ function serialise(node) {
   }).join('');
 }
 
-// Rough geometry of sanitised markup: the extent of every coordinate it
-// draws, ignoring transforms (which only built-in art uses much) and stroke.
-function extent(node, box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }) {
-  const add = (x, y) => { if (Number.isFinite(x) && Number.isFinite(y)) { box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y); box.x1 = Math.max(box.x1, x); box.y1 = Math.max(box.y1, y); } };
+// 2D affine [a b c d e f] for a validated transform attribute.
+const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+const ID_M = [1, 0, 0, 1, 0, 0];
+function parseTransform(v) {
+  let m = ID_M;
+  let rest = v || '';
+  while (rest.trim()) {
+    const t = TRANSFORM_FN.exec(rest);
+    if (!t) break;
+    rest = rest.slice(t[0].length);
+    const n = t[2].trim() ? t[2].trim().split(/[\s,]+/).map(Number) : [];
+    const rad = (deg) => (deg * Math.PI) / 180;
+    let f = ID_M;
+    if (t[1] === 'translate') f = [1, 0, 0, 1, n[0] || 0, n[1] || 0];
+    else if (t[1] === 'scale') f = [n[0] ?? 1, 0, 0, n[1] ?? n[0] ?? 1, 0, 0];
+    else if (t[1] === 'rotate') {
+      const [deg = 0, cx = 0, cy = 0] = n;
+      const c = Math.cos(rad(deg)), s = Math.sin(rad(deg));
+      f = mul(mul([1, 0, 0, 1, cx, cy], [c, s, -s, c, 0, 0]), [1, 0, 0, 1, -cx, -cy]);
+    } else if (t[1] === 'skewX') f = [1, 0, Math.tan(rad(n[0] || 0)), 1, 0, 0];
+    else if (t[1] === 'skewY') f = [1, Math.tan(rad(n[0] || 0)), 0, 1, 0, 0];
+    else if (t[1] === 'matrix' && n.length === 6) f = n;
+    m = mul(m, f);
+  }
+  return m;
+}
+// how much a matrix can enlarge anything it draws
+const stretch = (m) => Math.max(Math.hypot(m[0], m[1]), Math.hypot(m[2], m[3]));
+
+// Geometry of sanitised markup: the extent of every coordinate it draws,
+// through its transforms (stroke width aside), and the largest scale any
+// element is drawn at.
+function extent(node, box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, scale: 1 }, ctm = ID_M) {
   for (const c of node.children) {
     const a = Object.fromEntries(c.attrs.map(([k, v]) => [k, v]));
+    const m = a.transform ? mul(ctm, parseTransform(a.transform)) : ctm;
+    box.scale = Math.max(box.scale, stretch(m));
+    const add = (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const X = m[0] * x + m[2] * y + m[4], Y = m[1] * x + m[3] * y + m[5];
+      box.x0 = Math.min(box.x0, X); box.y0 = Math.min(box.y0, Y); box.x1 = Math.max(box.x1, X); box.y1 = Math.max(box.y1, Y);
+    };
+    const corners = (x0, y0, x1, y1) => { add(x0, y0); add(x1, y0); add(x0, y1); add(x1, y1); };
     const n = (k) => Number(a[k] || 0);
-    if (c.tag === 'rect') { add(n('x'), n('y')); add(n('x') + n('width'), n('y') + n('height')); }
-    else if (c.tag === 'circle') { add(n('cx') - n('r'), n('cy') - n('r')); add(n('cx') + n('r'), n('cy') + n('r')); }
-    else if (c.tag === 'ellipse') { add(n('cx') - n('rx'), n('cy') - n('ry')); add(n('cx') + n('rx'), n('cy') + n('ry')); }
+    if (c.tag === 'rect') corners(n('x'), n('y'), n('x') + n('width'), n('y') + n('height'));
+    else if (c.tag === 'circle') corners(n('cx') - n('r'), n('cy') - n('r'), n('cx') + n('r'), n('cy') + n('r'));
+    else if (c.tag === 'ellipse') corners(n('cx') - n('rx'), n('cy') - n('ry'), n('cx') + n('rx'), n('cy') + n('ry'));
     else if (c.tag === 'line') { add(n('x1'), n('y1')); add(n('x2'), n('y2')); }
     else if (c.tag === 'polygon' || c.tag === 'polyline') {
       const p = (a.points || '').trim().split(/[\s,]+/).map(Number);
       for (let k = 0; k + 1 < p.length; k += 2) add(p[k], p[k + 1]);
     } else if (c.tag === 'path') pathExtent(a.d || '', add);
-    extent(c, box);
+    extent(c, box, m);
   }
   return box;
 }
@@ -223,9 +267,10 @@ function validateCharacter(input, { source = 'import', builtinIds = null } = {})
   if (!isObj(input)) { err('', 'type', 'a character is a JSON object'); return { ok: false, errors, warnings, character: null }; }
 
   if (typeof input.id !== 'string' || !ID.test(input.id)) err('id', 'id', 'id is 2–32 lowercase letters, digits and dashes, starting with a letter');
-  else if (source !== 'builtin' && (builtinIds || Contract.ids()).includes(input.id)) err('id', 'id-taken', `"${input.id}" is a built-in character`);
+  else if (source !== 'builtin' && (builtinIds || Contract.ids().filter(Contract.isBuiltin)).includes(input.id)) err('id', 'id-taken', `"${input.id}" is a built-in character`);
   out.id = input.id;
-  const name = typeof input.name === 'string' ? input.name.replace(/[\u0000-\u001f\u007f<>]/g, '').trim() : '';
+  // no control, format (zero-width, bidi override) or markup characters
+  const name = typeof input.name === 'string' ? input.name.replace(/[\p{Cc}\p{Cf}<>&"'`]/gu, '').trim() : '';
   if (!name || name.length > LIMITS.name) err('name', 'name', `name is 1–${LIMITS.name} characters`);
   out.name = name;
   if (input.contract !== Contract.CONTRACT_VERSION) err('contract', 'contract-version', `contract must be ${Contract.CONTRACT_VERSION}`);
@@ -291,6 +336,7 @@ function validateCharacter(input, { source = 'import', builtinIds = null } = {})
     for (const e of s.errors) err(`sprite.${layer}`, e.code, e.message);
     for (const r of s.removed) warn(`sprite.${layer}`, 'svg-removed', `removed ${r}`);
     out.sprite[layer] = s.svg;
+    if (s.ok && s.extent && s.extent.scale > LIMITS.scale) err(`sprite.${layer}`, 'svg-scale', `transforms may enlarge a part at most ${LIMITS.scale}×`);
     if (s.ok && s.extent && Number.isFinite(s.extent.x0)) ext = ext ? { x0: Math.min(ext.x0, s.extent.x0), y0: Math.min(ext.y0, s.extent.y0), x1: Math.max(ext.x1, s.extent.x1), y1: Math.max(ext.y1, s.extent.y1) } : { ...s.extent };
   }
   if (sprite) for (const k of Object.keys(sprite)) if (!Contract.LAYERS.includes(k)) warn(`sprite.${k}`, 'unknown-layer', `ignored layer "${k}"`);
@@ -299,9 +345,9 @@ function validateCharacter(input, { source = 'import', builtinIds = null } = {})
   if (input.offsets !== undefined) {
     if (!isObj(input.offsets)) err('offsets', 'type', 'offsets maps costume → { dx, dy, s }');
     else {
-      out.offsets = {};
+      out.offsets = Object.create(null);
       for (const [k, o] of Object.entries(input.offsets)) {
-        if (!/^[a-z][a-z0-9-]{0,31}$/.test(k) || !isObj(o) || ![o.dx ?? 0, o.dy ?? 0, o.s ?? 1].every(finite) || Math.abs(o.dx ?? 0) > 32 || Math.abs(o.dy ?? 0) > 32 || (o.s ?? 1) <= 0 || (o.s ?? 1) > 3) { err(`offsets.${k}`, 'offset', 'an offset is { dx, dy, s } with |dx|,|dy| ≤ 32 and 0 < s ≤ 3'); continue; }
+        if (!/^[a-z][a-z0-9-]{0,31}$/.test(k) || RESERVED_KEYS.has(k) || !isObj(o) || ![o.dx ?? 0, o.dy ?? 0, o.s ?? 1].every(finite) || Math.abs(o.dx ?? 0) > 32 || Math.abs(o.dy ?? 0) > 32 || (o.s ?? 1) <= 0 || (o.s ?? 1) > 3) { err(`offsets.${k}`, 'offset', 'an offset is { dx, dy, s } with |dx|,|dy| ≤ 32 and 0 < s ≤ 3'); continue; }
         out.offsets[k] = { dx: o.dx ?? 0, dy: o.dy ?? 0, s: o.s ?? 1 };
       }
     }
@@ -309,12 +355,16 @@ function validateCharacter(input, { source = 'import', builtinIds = null } = {})
   if (input.mini !== undefined && input.mini !== null) {
     if (!Array.isArray(input.mini) || input.mini.length > LIMITS.miniParts) err('mini', 'mini', `mini is a list of up to ${LIMITS.miniParts} [tag, attrs] parts`);
     else {
-      const markup = input.mini.map((p) => (Array.isArray(p) && typeof p[0] === 'string' && isObj(p[1]) ? `<${p[0]}${Object.entries(p[1]).map(([k, v]) => ` ${k}="${String(v).replace(/"/g, '')}"`).join('')} />` : '<bad />')).join('');
+      const part = (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && p[0] !== 'g' && Object.prototype.hasOwnProperty.call(ELEMENTS, p[0])
+        && isObj(p[1]) && Object.keys(p[1]).every((k) => /^[a-z][a-z-]*$/.test(k) && k !== 'transform') && Object.values(p[1]).every((v) => typeof v === 'string' || finite(v));
+      const bad = input.mini.findIndex((p) => !part(p));
+      if (bad >= 0) err(`mini[${bad}]`, 'mini-part', 'a mini part is [shape, { attribute: value }] with no groups or transforms');
+      const markup = bad >= 0 ? '' : input.mini.map(([tag, attrs]) => `<${tag}${Object.entries(attrs).map(([k, v]) => ` ${k}="${String(v)}"`).join('')} />`).join('');
       const s = sanitizeSvg(markup);
       for (const e of s.errors) err('mini', e.code, e.message);
       for (const r of s.removed) err('mini', 'svg-removed', `not allowed in a mini: ${r}`);
       if (s.ok && s.extent && Number.isFinite(s.extent.x0) && (s.extent.x0 < -0.5 || s.extent.y0 < -0.5 || s.extent.x1 > 7.4 || s.extent.y1 > 8)) err('mini', 'mini-size', 'mini sprites fit the 6.9×7.5 chip box');
-      if (!errors.some((e) => e.path === 'mini')) out.mini = parseFragment(markup).root.children.map((c) => [c.tag, Object.fromEntries(c.attrs)]);
+      if (!errors.some((e) => e.path.startsWith('mini'))) out.mini = parseFragment(markup).root.children.map((c) => [c.tag, Object.fromEntries(c.attrs)]);
     }
   }
 

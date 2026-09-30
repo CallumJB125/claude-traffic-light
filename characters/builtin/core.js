@@ -5,7 +5,7 @@
 (function (root, factory) {
   const C = typeof module === 'object' && module.exports ? require('../contract.js') : root.BuddyCharacters;
   const defs = factory(C.REF);
-  for (const d of defs) C.register(d);
+  for (const d of defs) C.register(d, { builtin: true });
   if (typeof module === 'object' && module.exports) module.exports = defs;
 })(typeof self !== 'undefined' ? self : this, function (REF) {
   const claudeShaped = (over = {}) => ({ ...REF, skinParts: [], ...over });

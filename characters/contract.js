@@ -47,11 +47,17 @@
   const EYE_GAP = REF.eyes.right.x - REF.eyes.left.x;
 
   const registry = new Map();
-  function register(def) {
+  const builtins = new Set();
+  // Built-ins register from their own script; anything else (installed,
+  // hatched) must have been through characters/validate.js first.
+  function register(def, { builtin = false } = {}) {
     if (!def || typeof def.id !== 'string') throw new Error('character needs an id');
+    if (builtins.has(def.id) && !builtin) throw new Error(`"${def.id}" is a built-in character`);
     registry.set(def.id, def);
+    if (builtin) builtins.add(def.id);
     return def;
   }
+  const isBuiltin = (id) => builtins.has(id);
   const get = (id) => registry.get(id) || null;
   const has = (id) => registry.has(id);
   const ids = () => Array.from(registry.keys());
@@ -80,11 +86,12 @@
     if (mode === 'pair') {
       eye = { x: (a.eyes.left.x + a.eyes.right.x) / 2, y: (a.eyes.left.y + a.eyes.right.y) / 2 };
       eyeS = Math.abs(a.eyes.right.x - a.eyes.left.x) / EYE_GAP;
-    } else if (mode === 'single') {
-      eye = { x: a.eyes.single.x, y: a.eyes.single.y };
     }
-    v['--eye-dx'] = r2(eye.x - 32);
-    v['--eye-dy'] = r2(eye.y - 45.75);
+    // one eye: the left eye of each drawing lands on it (the right is clipped)
+    const from = mode === 'single' ? REF.eyes.left : { x: 32, y: 45.75 };
+    if (mode === 'single') eye = { x: a.eyes.single.x, y: a.eyes.single.y };
+    v['--eye-dx'] = r2(eye.x - from.x);
+    v['--eye-dy'] = r2(eye.y - from.y);
     v['--eye-s'] = r2(eyeS);
     const m = a.mouth || REF.mouth;
     v['--mouth-dx'] = r2(m.x - REF.mouth.x);
@@ -120,5 +127,5 @@
     return `<g class="${cls}"${fill}>${inner}</g>`;
   }
 
-  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, register, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
+  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, register, isBuiltin, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
 });
