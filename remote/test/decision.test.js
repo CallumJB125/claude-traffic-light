@@ -14,7 +14,7 @@ async function setup(opts = {}) {
 const deviceOf = (paired) => ({ deviceId: paired.deviceId, privateKey: paired.keyPair.privateKey });
 const forward = (desk, envelope) => desk.hub.forward({ v: 1, to: desk.identity.desktopId, kind: 'decision', body: envelope });
 async function noticeFor(desk, paired, req) {
-  return verifyRequestNotice(await desk.approvals.announce(req), paired.desktopPub);
+  return verifyRequestNotice(await desk.approvals.announce(req), paired, { now: desk.clock() });
 }
 const lastAudit = (desk) => desk.audit.filter((e) => e.type.startsWith('remote.decision')).at(-1);
 
@@ -111,7 +111,7 @@ test('the hub cannot alter a desktop-signed request notice', async () => {
   const req = desk.pending.add(bashRequest({ toolInput: { command: 'rm -rf build' } }));
   const env = await desk.approvals.announce(req);
   const altered = { ...env, payload: env.payload.replace('rm -rf build', 'ls build') };
-  await assert.rejects(verifyRequestNotice(altered, paired.desktopPub), /not signed/);
+  await assert.rejects(verifyRequestNotice(altered, paired, { now: desk.clock() }), /not signed/);
 });
 
 test('replay: the same signed decision is applied at most once', async () => {
@@ -168,14 +168,26 @@ test('wrong owner: a device may not act on someone else’s session', async () =
   assert.deepEqual([res.applied, res.reason], [false, 'not-authorized']);
 });
 
-test('card assignee may act on a runner session, but not on an interactive one', async () => {
+test('teammate approvals are off by default, even for a hub-supplied assignee', async () => {
   const { desk, paired } = await setup({ ownerId: 'bob' }); // this phone belongs to bob
+  const runner = desk.pending.add(bashRequest({ ownerId: 'alice', runner: true, cardId: 'BDL-12', assigneeIds: ['bob'] }));
+  const res = await sendDecision(desk.hub, { paired, notice: runner, decision: 'allow', now: desk.clock() });
+  assert.equal(res.reason, 'not-authorized');
+});
+
+test('with teammates enabled: assignee on a runner session only if on the desktop’s own teammate list', async () => {
+  const { makeOwnerPolicy } = await import('../src/index.js');
+  const { desk, paired } = await setup({ ownerId: 'bob', authorize: makeOwnerPolicy({ allowTeammates: true, teammates: ['bob'] }) });
   const runner = desk.pending.add(bashRequest({ ownerId: 'alice', runner: true, cardId: 'BDL-12', assigneeIds: ['bob'] }));
   const ok = await sendDecision(desk.hub, { paired, notice: runner, decision: 'allow', now: desk.clock() });
   assert.equal(ok.applied, true, ok.message);
   const interactive = desk.pending.add(bashRequest({ ownerId: 'alice', runner: false, cardId: 'BDL-13', assigneeIds: ['bob'] }));
-  const no = await sendDecision(desk.hub, { paired, notice: interactive, decision: 'allow', now: desk.clock() });
-  assert.equal(no.reason, 'not-authorized');
+  assert.equal((await sendDecision(desk.hub, { paired, notice: interactive, decision: 'allow', now: desk.clock() })).reason, 'not-authorized');
+
+  // The hub names someone as assignee who isn't on this desktop's list.
+  const other = await setup({ ownerId: 'mallory', authorize: makeOwnerPolicy({ allowTeammates: true, teammates: ['bob'] }) });
+  const req = other.desk.pending.add(bashRequest({ ownerId: 'alice', runner: true, cardId: 'BDL-14', assigneeIds: ['mallory'] }));
+  assert.equal((await sendDecision(other.desk.hub, { paired: other.paired, notice: req, decision: 'allow', now: other.desk.clock() })).reason, 'not-authorized');
 });
 
 test('the policy is injected and fails closed when it throws', async () => {
@@ -300,4 +312,87 @@ test('device ids are bound to keys: registering a key yields its fingerprint as 
   const rec = await desk.registry.get(paired.deviceId);
   assert.equal(rec.deviceId, await fingerprint(rec.publicKey));
   assert.equal(rec.publicKey, await exportPublicRaw(paired.keyPair.publicKey));
+});
+
+// ── review fixes ────────────────────────────────────────────────────────────
+test('rejections before the device is authenticated are never desktop-signed', async () => {
+  const { desk, paired } = await setup();
+  const req = desk.pending.add(bashRequest());
+  const mallory = await generateSigningKey();
+  const { envelope } = await signDecision({ device: { deviceId: paired.deviceId, privateKey: mallory.privateKey }, desktopId: desk.identity.desktopId, request: req, decision: 'allow', now: desk.clock() });
+  for (const env of [envelope, null, { v: 1, kind: 'decision', payload: '{}', sig: 'x' }]) {
+    const out = await desk.approvals.handleDecision(env);
+    assert.equal(out.body.unsigned, true);
+    assert.equal('sig' in out.body, false);
+  }
+  await desk.registry.revoke(paired.deviceId);
+  const { envelope: e2 } = await signDecision({ device: deviceOf(paired), desktopId: desk.identity.desktopId, request: req, decision: 'allow', now: desk.clock() });
+  assert.equal((await desk.approvals.handleDecision(e2)).body.unsigned, true, 'revoked device gets nothing signed');
+});
+
+test('audit: hash-chained, keeps the signed decision, carries no tool input', async () => {
+  const { desk, paired } = await setup();
+  const { sha256Hex, canonicalize, GENESIS_HASH } = await import('../src/index.js');
+  const a = desk.pending.add(bashRequest({ toolInput: { command: 'npm test -- --secret=hunter2' } }));
+  await sendDecision(desk.hub, { paired, notice: a, decision: 'allow', now: desk.clock() });
+  await sendDecision(desk.hub, { paired, notice: a, decision: 'deny', now: desk.clock() });
+  const events = desk.audit.filter((e) => e.type.startsWith('remote.decision'));
+  assert.equal(events.length, 2);
+  let prev = GENESIS_HASH;
+  for (const e of events) {
+    assert.equal(e.prevHash, prev);
+    const { hash, ...rest } = e;
+    assert.equal(hash, await sha256Hex(prev + canonicalize(rest)));
+    prev = hash;
+  }
+  assert.deepEqual(events.map((e) => e.seq), [1, 2]);
+  assert.ok(events[0].envelope.payload.includes(a.requestId) && events[0].envelope.sig);
+  assert.ok(!JSON.stringify(events).includes('hunter2'));
+});
+
+test('audit: unauthenticated junk is rate-limited and the overflow is counted', async () => {
+  const { desk } = await setup();
+  for (let i = 0; i < 50; i++) await desk.approvals.handleDecision({ v: 1, kind: 'decision', payload: '{}', sig: 'x' });
+  const junk = desk.audit.filter((e) => e.type === 'remote.decision.rejected');
+  assert.equal(junk.length, 20);
+  desk.clock.advance(61000);
+  await desk.approvals.handleDecision(null);
+  const last = desk.audit.at(-1);
+  assert.equal(last.suppressedUnverified, 30);
+});
+
+test('a phone rejects notices for another desktop or past their expiry', async () => {
+  const { desk, paired } = await setup();
+  const env = await desk.approvals.announce(desk.pending.add(bashRequest()));
+  await assert.rejects(verifyRequestNotice(env, { ...paired, desktopId: 'someone-else' }, { now: desk.clock() }), /different desktop/);
+  await assert.rejects(verifyRequestNotice(env, paired, { now: desk.clock() + 61000 }), /expired/);
+});
+
+test('not on the remote allow-list → approve at your desk, with the reason', async () => {
+  const { desk, paired } = await setup();
+  const req = desk.pending.add(bashRequest({ toolInput: { command: 'npx some-evil-pkg' } }));
+  const notice = await noticeFor(desk, paired, req);
+  assert.equal(notice.deskOnly.ruleId, 'not-on-remote-allow-list');
+  const res = await sendDecision(desk.hub, { paired, notice, decision: 'allow', now: desk.clock() });
+  assert.deepEqual([res.applied, res.reason], [false, 'approve-at-desk']);
+});
+
+test('the hook never confirms → signed "unknown", and the phone says not applied', async () => {
+  const { desk, paired } = await setup();
+  desk.pending.onSettle = () => 'unconfirmed';
+  const req = desk.pending.add(bashRequest());
+  const res = await sendDecision(desk.hub, { paired, notice: req, decision: 'allow', now: desk.clock() });
+  assert.deepEqual([res.applied, res.status, res.reason], [false, 'unknown', 'not-confirmed']);
+  assert.match(res.message, /not applied/);
+  desk.pending.onSettle = () => 'refused';
+  const req2 = desk.pending.add(bashRequest());
+  const res2 = await sendDecision(desk.hub, { paired, notice: req2, decision: 'allow', now: desk.clock() });
+  assert.deepEqual([res2.applied, res2.reason], [false, 'hook-refused']);
+});
+
+test('revealHidden makes bidi, zero-width and control characters visible', async () => {
+  const { revealHidden } = await import('../src/index.js');
+  assert.equal(revealHidden('git push‮ niam​\u0007'), 'git push⟨U+202E⟩ niam⟨U+200B⟩⟨U+0007⟩');
+  assert.equal(revealHidden('plain text\nline two'), 'plain text\nline two');
+  assert.equal(revealHidden('tag\u{E0041}'), 'tag⟨U+E0041⟩');
 });

@@ -3,112 +3,136 @@
 // own tool input — the input whose hash the signed decision was verified
 // against — and the repo labels the desktop (never the hub or phone) assigns.
 //
-// A rule is one of:
+// Defence in depth behind the remote allow-list (allowlist.js): the
+// allow-list decides what a phone may approve at all; this list names the
+// dangerous shapes explicitly so they stay desk-only even if someone widens
+// the allow-list.
+//
+// Shell commands are tokenised first (shell.js) — every check below looks at
+// words, never runs a backtracking regex over the raw command — and inputs
+// over MAX_REMOTE_INPUT_CHARS aren't scanned at all: they're desk-only.
+//
+// A config rule is one of:
 //   { id, reason, tool?: RegExp|string, input?: RegExp|string, labels?: string[] }
 //       tool   matches the tool name (default: any tool)
-//       input  matches any string value inside the input, or its canonical JSON
+//       input  matches any string value inside the input
 //       labels matches if the repo carries any of these labels
-//     All given parts must match.
-//   { id, reason, builtin: 'git-force-push', protectedBranches?: string[] }
-//
-// This is a safety net over free text, not a sandbox: a determined command
-// can be written to dodge a regex (see THREAT_MODEL.md, residual risks).
+//     All given parts must match. Keep `input` regexes simple (no nested or
+//     adjacent unbounded quantifiers); they run on ≤ 8 KB of text.
+//   { id, reason, builtin: 'shell' }            the tokenised shell checks
+//   { id, reason, builtin: 'git-force-push' }   just the force-push check
 import { canonicalize } from './canonical.js';
+import { parseShell, SHELLS, INTERPRETERS } from './shell.js';
 
 export const DESK_MESSAGE = 'approve at your desk';
+export const MAX_REMOTE_INPUT_CHARS = 8192;
 
-const SHELL_TOOLS = /^(Bash|BashOutput|shell|run_shell_command|exec_command|execute_command|terminal|run_terminal_cmd|local_shell)$/i;
-const FILE_WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|write_file|edit_file|replace|apply_patch|str_replace_editor|create_file)$/i;
+export const SHELL_TOOLS = /^(Bash|BashOutput|shell|run_shell_command|exec_command|execute_command|terminal|run_terminal_cmd|local_shell)$/i;
+export const FILE_WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|write_file|edit_file|replace|apply_patch|str_replace_editor|create_file)$/i;
 
-export const DEFAULT_PROTECTED_BRANCHES = ['main', 'master', 'trunk', 'develop', 'dev', 'production', 'prod', 'staging', 'release/*', 'releases/*', 'hotfix/*'];
+// Paths whose contents are secrets or grant access.
+export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains)(\/|\b|$)/;
+// Files that run code later: writing one is as good as running it.
+export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$)/;
 
-// Separators between commands are ; & | newline; a flag of rm/chmod must sit
-// in the same command. `[^;&|\n]*` keeps a match inside one command.
-const C = '[^;&|\\n]*';
+// ── git ────────────────────────────────────────────────────────────────────
+function gitParts(c) {
+  if (c.cmd !== 'git') return null;
+  const a = c.args;
+  let k = 0;
+  let alias = false;
+  while (k < a.length && a[k].startsWith('-')) {
+    if (a[k] === '-c' || a[k] === '--config-env') { if (/^alias\./i.test(a[k + 1] || '') || a[k] === '--config-env') alias = true; k += 2; }
+    else if (a[k] === '-C' || a[k] === '--git-dir' || a[k] === '--work-tree' || a[k] === '--namespace' || a[k] === '--exec-path') k += 2;
+    else k += 1;
+  }
+  return { alias, sub: a[k] ?? '', rest: a.slice(k + 1) };
+}
 
-export const DEFAULT_RULES = [
-  { id: 'rm-recursive', tool: SHELL_TOOLS, input: new RegExp(`\\brm\\b${C}\\s(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\\b`), reason: 'recursive delete' },
-  { id: 'find-delete', tool: SHELL_TOOLS, input: new RegExp(`\\bfind\\b${C}\\s(-delete\\b|-exec\\s+(sudo\\s+)?(rm|shred)\\b)`), reason: 'bulk delete via find' },
-  { id: 'shred-wipe', tool: SHELL_TOOLS, input: /\b(shred|wipefs|srm)\b/, reason: 'secure wipe' },
-  { id: 'mkfs', tool: SHELL_TOOLS, input: /\b(mkfs(\.\w+)?|mke2fs|newfs(_\w+)?|diskutil\s+(erase\w*|partitionDisk|zeroDisk|randomDisk|secureErase)|fdisk|sfdisk|parted)\b/, reason: 'formats or repartitions a disk' },
-  { id: 'dd', tool: SHELL_TOOLS, input: new RegExp(`\\bdd\\b${C}\\bof=`), reason: 'raw disk write (dd)' },
-  { id: 'raw-device-write', tool: SHELL_TOOLS, input: />\s*\/dev\/(sd|hd|nvme|disk|rdisk|mmcblk|vd|xvd)/, reason: 'writes to a raw device' },
-  { id: 'chmod-chown-broad', tool: SHELL_TOOLS, input: new RegExp(`\\b(chmod|chown|chgrp)\\b${C}(\\s-[a-zA-Z]*R\\b|\\s--recursive\\b|\\s[0-7]?777\\b|\\s[augo]*\\+[rwx]*w[rwx]*\\s+/(\\s|$))`), reason: 'recursive or world-writable permission change' },
-  { id: 'pipe-to-shell', tool: SHELL_TOOLS, input: /\|\s*(sudo\s+(-\S+\s+)*)?(env\s+)?(ba|z|da|k|c|tc|fi)?sh\b|\|\s*(sudo\s+)?(python\d?(\.\d+)?|node|perl|ruby|php)\b(\s+-)?\s*($|[;&|])/m, reason: 'pipes content into an interpreter (curl | sh)' },
-  { id: 'shell-from-download', tool: SHELL_TOOLS, input: /\b(ba|z|da|k|fi)?sh\b[^\n]*(<\(|\$\(|`)\s*(curl|wget|fetch)\b|\b(eval|source|\.)\s+[^\n]*(<\(|\$\(|`)\s*(curl|wget|fetch)\b/, reason: 'runs a downloaded script' },
-  { id: 'decode-exec', tool: SHELL_TOOLS, input: /\bbase64\b[^\n]*(-d|--decode|-D)\b[^\n]*\|\s*(ba|z|da|k)?sh\b|(^|[;&|(`])\s*eval\s/m, reason: 'eval / decoded-script execution' },
-  { id: 'fork-bomb', tool: SHELL_TOOLS, input: /:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:/, reason: 'fork bomb' },
-  { id: 'sudo', tool: SHELL_TOOLS, input: /(^|[;&|(`\s])(sudo|doas|su)\s/m, reason: 'runs as another user (sudo)' },
-  { id: 'kill-all', tool: SHELL_TOOLS, input: /\b(killall|pkill)\b|\bkill\s+(-\S+\s+)*-1\b|\b(shutdown|reboot|halt|poweroff)\b|\blaunchctl\s+(bootout|unload|remove)\b/, reason: 'kills processes or shuts down' },
-  { id: 'git-destructive', tool: SHELL_TOOLS, input: /\bgit\b[^;&|\n]*\s(reset\s+--hard|clean\s+-[a-zA-Z]*f|filter-branch|filter-repo|update-ref\s+-d|reflog\s+(expire|delete)|branch\s+-D|checkout\s+--\s+\.|restore\s+(--\S+\s+)*\.(\s|$))/, reason: 'destructive git operation' },
-  { id: 'git-force-push', builtin: 'git-force-push', tool: SHELL_TOOLS, reason: 'force push or delete of a protected branch' },
-  { id: 'credential-paths', tool: /.*/, input: /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains)(\/|\b|$)/, reason: 'touches credentials or agent configuration' },
-  { id: 'shell-startup-and-hooks', tool: FILE_WRITE_TOOLS, input: /(^|\/)(\.(zshrc|zprofile|zshenv|bashrc|bash_profile|profile|envrc)|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/)/, reason: 'writes a file that later runs code' },
-  { id: 'prod-repo', labels: ['prod', 'production'], reason: 'production repository' },
+// Any push that can overwrite or delete remote history.
+function gitPushReason(c) {
+  const g = gitParts(c);
+  if (!g) return null;
+  if (g.alias) return 'git alias defined on the command line';
+  if (g.sub !== 'push') return null;
+  for (const a of g.rest) {
+    if (/^--(force|force-with-lease|force-if-includes)(=|$)/.test(a)) return `force push (${a})`;
+    if (a === '--delete' || a === '--mirror' || a === '--prune') return `push ${a}`;
+    if (/^-[a-zA-Z]+$/.test(a) && /[fd]/.test(a)) return `force/delete push (${a})`;
+    if (!a.startsWith('-') && (a.startsWith('+') || a.startsWith(':'))) return `force/delete refspec ${a}`;
+  }
+  return null;
+}
+
+function gitDestructiveReason(c) {
+  const g = gitParts(c);
+  if (!g) return null;
+  const has = (re) => g.rest.some((a) => re.test(a));
+  switch (g.sub) {
+    case 'reset': return has(/^--(hard|merge|keep)$/) ? 'git reset --hard' : null;
+    case 'clean': return has(/^-[a-zA-Z]*f|^--force$/) ? 'git clean -f' : null;
+    case 'filter-branch': case 'filter-repo': return `git ${g.sub}`;
+    case 'update-ref': return has(/^-d$|^--stdin$/) ? 'git update-ref -d' : null;
+    case 'reflog': return /^(expire|delete)$/.test(g.rest[0] || '') ? `git reflog ${g.rest[0]}` : null;
+    case 'branch': return has(/^-[a-zA-Z]*D|^--delete$|^-[a-zA-Z]*d/) ? 'git branch delete' : null;
+    case 'checkout': return has(/^--$|^-[a-zA-Z]*f|^--force$|^\.$/) ? 'git checkout discarding changes' : null;
+    case 'restore': return !has(/^--staged$|^-S$/) || has(/^--worktree$|^-W$/) ? 'git restore discarding changes' : null;
+    case 'stash': return /^(drop|clear)$/.test(g.rest[0] || '') ? `git stash ${g.rest[0]}` : null;
+    case 'gc': case 'prune': return has(/^--prune/) || g.sub === 'prune' ? 'git prune' : null;
+    default: return null;
+  }
+}
+
+// ── tokenised shell checks: [id, (cmd) → reason | null] ────────────────────
+const SHELL_CHECKS = [
+  ['dynamic-command', (c) => (c.cmd.includes('$') ? 'command name comes from a variable or substitution' : null)],
+  ['rm-recursive', (c) => (c.cmd === 'rm' && c.args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive') ? 'recursive delete' : null)],
+  ['find-delete', (c) => (c.cmd === 'find' && c.args.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(a)) ? 'find that deletes or runs commands' : null)],
+  ['shred-wipe', (c) => (/^(shred|wipefs|srm)$/.test(c.cmd) ? 'secure wipe' : null)],
+  ['mkfs', (c) => (/^(mkfs(\..+)?|mke2fs|newfs(_.+)?|fdisk|sfdisk|gdisk|parted)$/.test(c.cmd) || (c.cmd === 'diskutil' && /^(erase\w*|partitionDisk|zeroDisk|randomDisk|secureErase|reformat)$/i.test(c.args[0] || '')) ? 'formats or repartitions a disk' : null)],
+  ['dd', (c) => (c.cmd === 'dd' && c.args.some((a) => a.startsWith('of=')) ? 'raw disk write (dd)' : null)],
+  ['raw-device-write', (c) => (c.redirects.some((r) => r.op === '>' && /^\/dev\/(sd|hd|nvme|disk|rdisk|mmcblk|vd|xvd)/.test(r.target)) ? 'writes to a raw device' : null)],
+  ['chmod-chown-broad', (c) => (/^(chmod|chown|chgrp)$/.test(c.cmd) && c.args.some((a, k) => /^-[a-zA-Z]*R/.test(a) || a === '--recursive' || /^0?[0-7]?777$/.test(a) || (/^[augo]*[+=][rwxXst]*w/.test(a) && c.args[k + 1] === '/')) ? 'recursive or world-writable permission change' : null)],
+  ['pipe-to-shell', (c) => (c.piped && (SHELLS.has(c.cmd) || INTERPRETERS.test(c.cmd) || c.cmd === 'source' || c.cmd === 'xargs') ? 'pipes content into an interpreter (curl | sh)' : null)],
+  ['interpreter-inline', (c) => ((SHELLS.has(c.cmd) && c.args.some((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a))) || (INTERPRETERS.test(c.cmd) && c.args.some((a) => /^-[a-zA-Z]*[ceEp]$|^--(eval|command|exec|print)$|^-$/.test(a))) ? 'runs inline code (-c / -e)' : null)],
+  ['eval', (c) => (c.cmd === 'eval' ? 'eval' : null)],
+  ['network-tool', (c) => (/^(nc|ncat|netcat|socat|telnet)$/.test(c.cmd) ? 'raw network tool' : null)],
+  ['sudo', (c) => (c.elevated || /^(su|sudo|doas|pkexec)$/.test(c.cmd) ? 'runs as another user (sudo)' : null)],
+  ['kill-all', (c) => (/^(killall|pkill|shutdown|reboot|halt|poweroff)$/.test(c.cmd) || (c.cmd === 'kill' && c.args.includes('-1')) || (c.cmd === 'launchctl' && /^(bootout|unload|remove|disable)$/.test(c.args[0] || '')) ? 'kills processes or shuts down' : null)],
+  ['git-destructive', gitDestructiveReason],
+  ['git-force-push', gitPushReason],
+  ['writes-code-or-secrets', (c) => (c.redirects.some((r) => r.op === '>' && (RUNS_CODE_LATER.test(r.target) || CREDENTIAL_PATHS.test(r.target))) || (/^(tee|cp|mv|ln|install|rsync)$/.test(c.cmd) && c.args.some((a) => RUNS_CODE_LATER.test(a))) ? 'writes a file that runs code later, or a secret' : null)],
 ];
 
-// ── git push parsing ────────────────────────────────────────────────────────
-// Split into commands on ; && || | & and newlines, then into words with
-// simple quote handling. Unknown shapes err towards "force".
-function commands(text) {
-  return text.split(/;|&&|\|\||\||&|\n/).map((c) => c.trim()).filter(Boolean);
-}
-
-function words(cmd) {
-  const out = [];
-  const re = /"((?:\\.|[^"\\])*)"|'([^']*)'|(\S+)/g;
-  let m;
-  while ((m = re.exec(cmd))) out.push(m[1] ?? m[2] ?? m[3]);
-  return out;
-}
-
-function globMatch(pattern, name) {
-  const re = new RegExp('^' + pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
-  return re.test(name);
-}
-
-// Returns a reason string if a `git push` in `text` is a force push, delete
-// or mirror that could hit a protected branch; else null.
-export function gitForcePushViolation(text, protectedBranches = DEFAULT_PROTECTED_BRANCHES) {
-  for (const cmd of commands(text)) {
-    const w = words(cmd);
-    let i = 0;
-    while (i < w.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[i])) i++; // env assignments
-    if (w[i] === 'sudo' || w[i] === 'command' || w[i] === 'exec') i++;
-    if (!/(^|\/)git$/.test(w[i] || '')) continue;
-    i++;
-    // git's own options before the subcommand (-C dir, -c k=v, --git-dir=…)
-    while (i < w.length && w[i].startsWith('-')) { if (w[i] === '-C' || w[i] === '-c') i++; i++; }
-    if (w[i] !== 'push') continue;
-    const args = w.slice(i + 1);
-    let force = false, del = false, everything = false;
-    const positional = [];
-    for (let k = 0; k < args.length; k++) {
-      const a = args[k];
-      if (a === '--') { positional.push(...args.slice(k + 1)); break; }
-      if (/^--(force|force-with-lease|force-if-includes)(=|$)/.test(a)) force = true;
-      else if (a === '--delete') del = true;
-      else if (a === '--mirror' || a === '--all' || a === '--branches' || a === '--prune') everything = true;
-      else if (/^--(repo|receive-pack|exec|push-option|signed|recurse-submodules)$/.test(a) || a === '-o') k++;
-      else if (/^-[a-zA-Z]+$/.test(a)) { if (a.includes('f')) force = true; if (a.includes('d')) del = true; }
-      else if (!a.startsWith('-')) positional.push(a);
-    }
-    const refspecs = positional.slice(1);
-    const plusRefspec = refspecs.some((r) => r.startsWith('+'));
-    const deleteRefspec = refspecs.some((r) => /^:/.test(r));
-    if (!(force || del || plusRefspec || deleteRefspec || everything)) continue;
-    if (everything) return 'pushes every branch with force/prune/mirror';
-    if (refspecs.length === 0) return 'force push without an explicit branch';
-    for (const r of refspecs) {
-      const risky = force || del || r.startsWith('+') || r.startsWith(':');
-      if (!risky) continue;
-      const dst = r.replace(/^\+/, '').split(':').pop().replace(/^refs\/heads\//, '');
-      if (!dst || dst === 'HEAD' || dst.includes('*') || dst.startsWith('@')) return `force push to ${dst || 'an unnamed ref'}`;
-      if (protectedBranches.some((p) => globMatch(p, dst))) return `force push to protected branch ${dst}`;
+// First finding for one shell command string: { id, reason } or null.
+export function shellFinding(text, only = null) {
+  if (/:\s*\(\s*\)\s*\{/.test(text)) return { id: 'fork-bomb', reason: 'fork bomb' };
+  const { cmds, hazards } = parseShell(text);
+  if (!only && (hazards.has('substitution') || hazards.has('process-substitution'))
+    && cmds.some((c) => SHELLS.has(c.cmd) || c.cmd === 'eval' || c.cmd === 'source' || c.cmd === '.')
+    && cmds.some((c) => /^(curl|wget|fetch|http|aria2c)$/.test(c.cmd))) {
+    return { id: 'shell-from-download', reason: 'runs a downloaded script' };
+  }
+  for (const c of cmds) {
+    for (const [id, check] of SHELL_CHECKS) {
+      if (only && id !== only) continue;
+      const reason = check(c);
+      if (reason) return { id, reason };
     }
   }
   return null;
 }
+
+export function gitForcePushViolation(text) {
+  return shellFinding(text, 'git-force-push')?.reason ?? null;
+}
+
+export const DEFAULT_RULES = [
+  { id: 'shell', builtin: 'shell', tool: SHELL_TOOLS, reason: 'dangerous shell command' },
+  { id: 'credential-paths', input: CREDENTIAL_PATHS, reason: 'touches credentials or agent configuration' },
+  { id: 'runs-code-later', tool: FILE_WRITE_TOOLS, input: RUNS_CODE_LATER, reason: 'writes a file that later runs code' },
+  { id: 'prod-repo', labels: ['prod', 'production'], reason: 'production repository' },
+];
 
 // ── evaluation ──────────────────────────────────────────────────────────────
 function toRegExp(x) {
@@ -124,7 +148,6 @@ function stringsIn(v, out = [], depth = 0) {
   return out;
 }
 
-// Regexes are only safe to run repeatedly if they're not global/sticky.
 const test = (re, s) => { re.lastIndex = 0; return re.test(s); };
 
 export function compileRules(rules = DEFAULT_RULES) {
@@ -136,28 +159,28 @@ export function compileRules(rules = DEFAULT_RULES) {
   }));
 }
 
-// → { blocked: true, ruleId, reason, message } or { blocked: false }
-// Larger inputs aren't scanned (regex cost, and nobody reviews 64 KB on a
-// phone): they are desk-only.
-export const MAX_REMOTE_INPUT_CHARS = 65536;
+const desk = (ruleId, reason) => ({ blocked: true, ruleId, reason, message: DESK_MESSAGE });
 
+// → { blocked: true, ruleId, reason, message } or { blocked: false }
 export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [] }) {
-  const labels = new Set((repoLabels || []).map((l) => String(l).toLowerCase()));
   const canonical = canonicalize(toolInput ?? {});
-  if (canonical.length > MAX_REMOTE_INPUT_CHARS) return { blocked: true, ruleId: 'input-too-large', reason: 'input too large to review remotely', message: DESK_MESSAGE };
+  if (canonical.length > MAX_REMOTE_INPUT_CHARS) return desk('input-too-large', 'input too large to review remotely');
+  const labels = new Set((repoLabels || []).map((l) => String(l).toLowerCase()));
   const texts = stringsIn(toolInput ?? {});
-  texts.push(canonical);
   for (const r of compiled) {
     if (r.tool && !test(r.tool, String(toolName ?? ''))) continue;
     if (r.labels && !r.labels.some((l) => labels.has(l))) continue;
-    if (r.builtin === 'git-force-push') {
-      const why = texts.map((t) => gitForcePushViolation(t, r.protectedBranches)).find(Boolean);
-      if (!why) continue;
-      return { blocked: true, ruleId: r.id, reason: `${r.reason}: ${why}`, message: DESK_MESSAGE };
+    if (r.builtin === 'shell' || r.builtin === 'git-force-push') {
+      const only = r.builtin === 'git-force-push' ? 'git-force-push' : null;
+      for (const t of texts) {
+        const f = shellFinding(t, only);
+        if (f) return desk(f.id, `${r.reason}: ${f.reason}`);
+      }
+      continue;
     }
     if (r.input && !texts.some((t) => test(r.input, t))) continue;
     if (!r.input && !r.labels && !r.tool) continue; // an empty rule matches nothing
-    return { blocked: true, ruleId: r.id, reason: r.reason, message: DESK_MESSAGE };
+    return desk(r.id, r.reason);
   }
   return { blocked: false };
 }

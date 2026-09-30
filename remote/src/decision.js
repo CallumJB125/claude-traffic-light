@@ -44,11 +44,21 @@ export async function publishRequest(identity, pending, { deskOnly = null, now =
 }
 
 // ── Phone: check a request notice came from the paired desktop ─────────────
-export async function verifyRequestNotice(env, desktopPubRaw) {
-  const n = await verifyObject(await importPublicRaw(desktopPubRaw), env, { maxBytes: 1024 * 1024 });
+// `paired` is what PairingClient.onComplete returned ({desktopPub, desktopId}).
+export async function verifyRequestNotice(env, { desktopPub, desktopId }, { now = Date.now() } = {}) {
+  const n = await verifyObject(await importPublicRaw(desktopPub), env, { maxBytes: 1024 * 1024 });
   if (!n || n.t !== 'buddy.request' || n.v !== 1) throw new Error('request not signed by your desktop');
+  if (n.did !== desktopId) throw new Error('request is for a different desktop');
+  if (!Number.isSafeInteger(n.expiresAt) || n.expiresAt <= now) throw new Error('request has expired');
   if ((await hashToolInput(n.toolInput)) !== n.toolInputHash) throw new Error('request hash does not match its input');
   return n;
+}
+
+// For the phone UI: make invisible or direction-changing characters visible,
+// so a command or device name can't hide what it really says.
+export function revealHidden(text) {
+  return String(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb]|\udb40[\udc00-\udc7f]/g,
+    (ch) => `⟨U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩`);
 }
 
 // ── Phone: sign a decision ──────────────────────────────────────────────────
@@ -88,11 +98,17 @@ const MESSAGES = {
 export async function interpretResult(outcome, { desktopPubRaw, sent }) {
   if (!outcome || outcome.status === 'desktop-offline') return { applied: false, status: 'desktop-offline', message: MESSAGES['desktop-offline'] };
   if (outcome.status !== 'delivered') return { applied: false, status: 'unknown', message: 'No answer from your desktop — assume not applied.' };
+  // The desktop doesn't sign for senders it couldn't authenticate; the reason
+  // is only a hint (the hub could have written it).
+  if (outcome.body && outcome.body.unsigned === true) {
+    return { applied: false, status: 'unverified', reason: typeof outcome.body.reason === 'string' ? outcome.body.reason : null, message: 'Your desktop did not accept this phone’s signature — not applied. Re-pair if this keeps happening.' };
+  }
   const r = await verifyObject(await importPublicRaw(desktopPubRaw), outcome.body);
   if (!r || r.t !== 'buddy.result' || r.aud !== sent.deviceId || r.requestId !== sent.requestId || r.nonce !== sent.nonce) {
     return { applied: false, status: 'unverified', message: 'Reply was not signed by your desktop — not applied.' };
   }
   if (r.status === 'applied') return { applied: true, status: 'applied', decision: r.decision, message: r.decision === 'allow' ? 'Allowed.' : 'Denied.' };
+  if (r.status === 'unknown') return { applied: false, status: 'unknown', reason: r.reason, message: 'Your desktop could not confirm Claude took the answer — treat it as not applied and check at your desk.' };
   return { applied: false, status: 'rejected', reason: r.reason, message: MESSAGES[r.reason] || `Not applied (${r.reason}).` };
 }
 

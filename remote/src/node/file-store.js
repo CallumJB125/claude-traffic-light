@@ -3,7 +3,12 @@
 // widget's existing requests directory (~/.claude-traffic-light/requests).
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { createIdentity, identityFromJwk } from '../keys.js';
+import { hashToolInput } from '../canonical.js';
+
+// The widget's answer protocol (random ids, link-based first-wins, hook ack).
+const Answer = createRequire(import.meta.url)('../../../hooks/answer-file.js');
 
 function writePrivate(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -47,45 +52,53 @@ export function jsonlAudit(file) {
   };
 }
 
+// Where RemoteApprovals should continue the audit hash chain after a restart.
+export function readAuditHead(file) {
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return undefined; }
+  const last = text.trimEnd().split('\n').pop();
+  try { const e = JSON.parse(last); return typeof e.hash === 'string' ? { head: e.hash, seq: e.seq } : undefined; } catch { return undefined; }
+}
+
 // Pending requests as the PermissionRequest hook (hooks/set-status.js) writes
-// them: <requestsDir>/<id>.json, answered by <id>.answer. The hook must also
-// record the full `toolInput` — a request without it can't be hash-checked,
-// so it is never answerable remotely (get → null).
+// them: <requestsDir>/<id>.json with the full `toolInput` and its hash. A
+// request without them is never answerable remotely (get → null).
 //
-// settle() creates the answer file with O_EXCL ('wx'): of several remote
-// answers exactly one wins. The desk path must use 'wx' as well for the
-// desk-vs-phone race to be first-wins too (see THREAT_MODEL.md).
+// settle() goes through hooks/answer-file.js: the answer is created exactly
+// once (link, EEXIST = someone else won) and counts as applied only after the
+// hook renames it to <id>.taken.
 export class WidgetRequestStore {
   // maxAgeMs stays under the hook's own wait (CLAUDE_TRAFFIC_LIGHT_ASK_MS,
-  // default 55 s): an answer written as the hook gives up would be reported
-  // "applied" though nothing read it.
-  constructor({ requestsDir, ownerId, describe = () => ({}), maxAgeMs = 45000, clock = () => Date.now() }) {
-    Object.assign(this, { requestsDir, ownerId, describe, maxAgeMs, clock });
-  }
-
-  #paths(id) {
-    if (typeof id !== 'string' || !/^[\w.-]{1,200}$/.test(id) || id.startsWith('.')) return null;
-    return { req: path.join(this.requestsDir, `${id}.json`), ans: path.join(this.requestsDir, `${id}.answer`) };
+  // default 55 s) so a phone rarely races the hook's deadline; the ack makes
+  // that race safe anyway.
+  constructor({ requestsDir, ownerId, describe = () => ({}), maxAgeMs = 45000, ackTimeoutMs = 1500, clock = () => Date.now() }) {
+    Object.assign(this, { requestsDir, ownerId, describe, maxAgeMs, ackTimeoutMs, clock });
   }
 
   async get(requestId) {
-    const p = this.#paths(requestId);
+    const p = Answer.paths(this.requestsDir, requestId);
     if (!p || fs.existsSync(p.ans)) return null;
     let r;
     try { r = JSON.parse(fs.readFileSync(p.req, 'utf8')); } catch { return null; }
-    if (!r || r.id !== requestId || !r.toolInput || typeof r.toolInput !== 'object') return null;
-    if (this.clock() - Date.parse(r.createdAt) > this.maxAgeMs) return null;
-    // describe() adds what only the desktop knows: cardId, runner, assignees, repo labels.
+    if (!r || r.id !== requestId || !r.toolInput || typeof r.toolInput !== 'object' || typeof r.toolInputHash !== 'string') return null;
+    const t = Date.parse(r.createdAt);
+    const now = this.clock();
+    if (!Number.isFinite(t) || now - t > this.maxAgeMs || t > now + 5000) return null;
+    try { if ((await hashToolInput(r.toolInput)) !== r.toolInputHash) return null; } catch { return null; }
+    // describe() adds what only the desktop knows (cardId, runner, assignees,
+    // repo labels); it can never replace the input, owner or identity fields.
     return {
-      requestId, sessionId: r.sessionId, cardId: null, toolName: r.tool, toolInput: r.toolInput,
-      cwd: r.cwd, ownerId: this.ownerId, createdAt: r.createdAt,
+      cardId: null,
       ...this.describe(r),
+      requestId, sessionId: r.sessionId, toolName: r.tool, toolInput: r.toolInput,
+      cwd: r.cwd, ownerId: this.ownerId, createdAt: r.createdAt,
     };
   }
 
   async settle(requestId, decision) {
-    const p = this.#paths(requestId);
-    if (!p || !fs.existsSync(p.req)) return false;
-    try { fs.writeFileSync(p.ans, decision, { flag: 'wx' }); return true; } catch { return false; }
+    const w = Answer.writeAnswer(this.requestsDir, requestId, decision, { by: 'remote', ack: true });
+    if (!w.ok) return 'already-answered';
+    const taken = await Answer.awaitTaken(this.requestsDir, requestId, w.nonce, { timeoutMs: this.ackTimeoutMs });
+    return taken === 'applied' ? 'applied' : taken === 'refused' ? 'refused' : taken === 'lost' ? 'already-answered' : 'unconfirmed';
   }
 }

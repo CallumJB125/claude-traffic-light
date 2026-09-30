@@ -36,8 +36,9 @@ export async function pairPhone(desk, { deviceName = 'Alice iPhone' } = {}) {
   const { reveal, sas } = await phone.onChallenge(r1.body.challenge);
   const r2 = await desk.hub.forward({ v: 1, to: qr.did, kind: 'pair-reveal', body: reveal });
   if (!r2.body?.ok) throw new Error(`pair-reveal failed: ${r2.body?.reason}`);
-  if (r2.body.sas !== sas) throw new Error('SAS mismatch');
-  await desk.pairing.confirm(pid, true);
+  if ('sas' in r2.body) throw new Error('desktop must never display the code');
+  const c = await desk.pairing.confirm(pid, sas); // the human types the phone's code
+  if (!c.ok) throw new Error(`confirm failed: ${c.reason}`);
   const r3 = await desk.hub.forward({ v: 1, to: qr.did, kind: 'pair-poll', body: { pid } });
   return phone.onComplete(r3.body.complete);
 }

@@ -4,8 +4,9 @@
 //   phone → desktop  pair-init    {pid, devicePub, deviceName, commit=H(nP)}  + HMAC(secret) + device signature
 //   desktop → phone  pair-challenge {pid, devicePub, commit, nD}              signed by the desktop key
 //   phone → desktop  pair-reveal  {pid, nP}                                   + HMAC(secret)
-//   both screens     SAS = 6 digits of H(pid, did, dpk, devicePub, nP, nD)
-//   human confirms "codes match" on the desktop → registry.add
+//   phone screen     SAS = 6 digits of H(pid, did, dpk, devicePub, nP, nD)
+//   human TYPES that code into the desktop; the desktop compares it with its
+//   own SAS (never displayed) → registry.add
 //   desktop → phone  pair-complete {pid, devicePub, deviceId, ownerId}         signed by the desktop key
 //
 // Why each piece:
@@ -14,7 +15,9 @@
 // - The desktop signs what it received, so a relay that swaps the device key
 //   is caught by the phone (signature is over the wrong key).
 // - If the secret leaks (someone photographs the QR) an attacker holding the
-//   hub could race the real phone. The SAS then differs between the screens.
+//   hub could race the real phone. The code the human reads off the phone
+//   then doesn't match the desktop's session, so typing it fails. Typing
+//   (rather than "do these match? yes") means a hurried click can't confirm.
 //   The commit/reveal order means the attacker has to fix its key before it
 //   sees nD, so it cannot grind a key whose SAS collides with the phone's.
 // - Every failure burns the pairing; the QR is single-use.
@@ -42,6 +45,13 @@ const commitOf = (nP) => sha256Hex(concatBytes(utf8('buddy.pair.commit:'), fromB
 export async function shortCode({ pid, did, dpk, devicePub, nP, nD }) {
   const h = await sha256Hex(canonicalize({ t: 'buddy.pair.sas', pid, did, dpk, devicePub, nP, nD }));
   return String(parseInt(h.slice(0, 8), 16) % 1000000).padStart(6, '0');
+}
+
+function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 const str = (v, max = 256) => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -119,8 +129,8 @@ export class PairingHost {
     return { ok: true, challenge };
   }
 
-  // On success the desktop shows `sas` and the device name, and asks the human
-  // whether the phone shows the same code.
+  // On success the desktop asks the human to type the code shown on the
+  // phone. It shows the device name only as an untrusted, phone-chosen label.
   async handleReveal(msg) {
     const { s, error } = this.#session(msg?.pid, 'reveal');
     if (error) return error === 'unknown-pairing' || error === 'malformed' ? { ok: false, reason: error } : this.#fail(msg.pid, error);
@@ -132,14 +142,16 @@ export class PairingHost {
     if (c !== s.commit) return this.#fail(pid, 'commit-mismatch');
     s.sas = await shortCode({ pid, did: this.identity.desktopId, dpk: this.identity.publicRaw, devicePub: s.devicePub, nP, nD: s.nD });
     s.state = 'confirm';
-    return { ok: true, sas: s.sas, deviceName: s.deviceName };
+    return { ok: true, deviceName: s.deviceName, deviceNameUntrusted: true };
   }
 
-  // The human's answer to "does your phone show <sas>?". Only a yes adds the device.
-  async confirm(pid, codesMatch) {
+  // `typedCode` is what the human typed from the phone's screen. One try: a
+  // wrong code cancels the pairing. Only the local desktop UI calls this.
+  async confirm(pid, typedCode) {
     const { s, error } = this.#session(pid, 'confirm');
     if (error) return error === 'unknown-pairing' || error === 'malformed' ? { ok: false, reason: error } : this.#fail(pid, error);
-    if (codesMatch !== true) return this.#fail(pid, 'codes-did-not-match');
+    const typed = typeof typedCode === 'string' ? typedCode.replace(/\s+/g, '') : '';
+    if (!/^\d{6}$/.test(typed) || !constantTimeEqual(typed, s.sas)) return this.#fail(pid, 'wrong-code');
     this.open.delete(pid);
     const device = await this.registry.add({ publicKey: s.devicePub, name: s.deviceName, ownerId: this.ownerId });
     const complete = await signObject(this.identity.privateKey, { t: 'pair-complete', pid, did: this.identity.desktopId, devicePub: s.devicePub, deviceId: device.deviceId, ownerId: this.ownerId });

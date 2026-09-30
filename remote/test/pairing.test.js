@@ -25,11 +25,12 @@ test('happy path: QR → init → challenge → reveal → matching SAS → conf
 
   const r2 = await send(desk, 'pair-reveal', reveal);
   assert.equal(r2.body.ok, true);
-  assert.equal(r2.body.sas, sas, 'both screens show the same code');
+  assert.equal('sas' in r2.body, false, 'the desktop never displays the code');
   assert.equal(r2.body.deviceName, 'Alice iPhone');
+  assert.equal(r2.body.deviceNameUntrusted, true);
 
   assert.deepEqual((await send(desk, 'pair-poll', { pid })).body, { ok: true, state: 'waiting' });
-  const done = await desk.pairing.confirm(pid, true);
+  const done = await desk.pairing.confirm(pid, ` ${sas.slice(0, 3)} ${sas.slice(3)} `); // typed, with spaces
   assert.equal(done.ok, true);
 
   const r3 = await send(desk, 'pair-poll', { pid });
@@ -55,9 +56,9 @@ test('the QR is single-use: a replayed init after pairing is refused', async () 
   const desk = await makeDesktop();
   const { pid, phone } = await startOnPhone(desk);
   const r1 = await send(desk, 'pair-init', phone.init);
-  const { reveal } = await phone.onChallenge(r1.body.challenge);
+  const { reveal, sas } = await phone.onChallenge(r1.body.challenge);
   await send(desk, 'pair-reveal', reveal);
-  await desk.pairing.confirm(pid, true);
+  await desk.pairing.confirm(pid, sas);
   const again = await send(desk, 'pair-init', phone.init);
   assert.equal(again.body.ok, false);
   assert.equal(again.body.reason, 'unknown-pairing');
@@ -89,14 +90,18 @@ test('relay MITM WITH a leaked QR secret: the phone detects the swap and the cod
   // It passes the desktop's challenge on to the real phone: the desktop signed
   // Mallory's key, so the phone refuses and never shows a code.
   await assert.rejects(phone.onChallenge(r1.body.challenge), /tampered/);
-  // Mallory finishes its own side; the desktop shows Mallory's code, which the
-  // phone (showing nothing / an error) cannot match. The human says no.
+  // Mallory finishes its own side. The desktop asks for the code on the
+  // phone; the phone shows an error, and whatever the human types (a guess,
+  // or a code from an earlier pairing) is not Mallory's code.
   const { reveal, sas: mallorySas } = await mallory.onChallenge(r1.body.challenge);
   const r2 = await send(desk, 'pair-reveal', reveal);
-  assert.equal(r2.body.sas, mallorySas);
-  const refused = await desk.pairing.confirm(pid, false);
-  assert.deepEqual([refused.ok, refused.reason], [false, 'codes-did-not-match']);
+  assert.equal('sas' in r2.body, false);
+  const guess = mallorySas === '123456' ? '654321' : '123456';
+  const refused = await desk.pairing.confirm(pid, guess);
+  assert.deepEqual([refused.ok, refused.reason], [false, 'wrong-code']);
   assert.equal((await desk.registry.list()).length, 0);
+  // One try only: the pairing is gone.
+  assert.equal((await desk.pairing.confirm(pid, mallorySas)).ok, false);
 });
 
 test('commit/reveal: a reveal that does not match the committed nonce is refused', async () => {
@@ -161,10 +166,10 @@ test('a pairing that expires while awaiting confirm cannot be confirmed', async 
   const desk = await makeDesktop();
   const { pid, phone } = await startOnPhone(desk);
   const r1 = await send(desk, 'pair-init', phone.init);
-  const { reveal } = await phone.onChallenge(r1.body.challenge);
+  const { reveal, sas } = await phone.onChallenge(r1.body.challenge);
   await send(desk, 'pair-reveal', reveal);
   desk.clock.advance(PAIRING_TTL_MS + 1);
-  const c = await desk.pairing.confirm(pid, true);
+  const c = await desk.pairing.confirm(pid, sas);
   assert.equal(c.ok, false);
   assert.equal((await desk.registry.list()).length, 0);
 });
@@ -180,7 +185,7 @@ test('non-https hub URLs and junk QR codes are refused', async () => {
 test('pairing confirm is not reachable through the relay', async () => {
   const desk = await makeDesktop();
   const { pid } = await desk.pairing.start();
-  const r = await desk.hub.forward({ v: 1, to: desk.identity.desktopId, kind: 'pair-confirm', body: { pid, codesMatch: true } });
+  const r = await desk.hub.forward({ v: 1, to: desk.identity.desktopId, kind: 'pair-confirm', body: { pid, code: '000000' } });
   assert.equal(r.status, 'bad-request');
 });
 
@@ -212,4 +217,27 @@ test('open pairings are capped', async () => {
   const desk = await makeDesktop();
   for (let i = 0; i < 4; i++) await desk.pairing.start();
   await assert.rejects(desk.pairing.start(), /too many/);
+});
+
+test('confirm needs the exact 6-digit code; "yes" or a wrong code cancels the pairing', async () => {
+  for (const typed of [true, 'yes', '12345', '1234567', 'abcdef']) {
+    const desk = await makeDesktop();
+    const { pid, phone } = await startOnPhone(desk);
+    const r1 = await send(desk, 'pair-init', phone.init);
+    const { reveal } = await phone.onChallenge(r1.body.challenge);
+    await send(desk, 'pair-reveal', reveal);
+    const c = await desk.pairing.confirm(pid, typed);
+    assert.deepEqual([c.ok, c.reason], [false, 'wrong-code'], String(typed));
+    assert.equal((await desk.registry.list()).length, 0);
+  }
+});
+
+test('a revoked device key can never be registered again', async () => {
+  const desk = await makeDesktop();
+  const kp = await generateSigningKey();
+  const pub = await exportPublicRaw(kp.publicKey);
+  const d = await desk.registry.add({ publicKey: pub, name: 'p', ownerId: 'alice' });
+  await desk.registry.revoke(d.deviceId);
+  await assert.rejects(desk.registry.add({ publicKey: pub, name: 'p', ownerId: 'alice' }), /revoked/);
+  assert.equal(await desk.registry.activeKey(d.deviceId), null);
 });

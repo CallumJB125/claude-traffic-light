@@ -1,1 +1,1 @@
-export { fileStorage, loadOrCreateIdentity, jsonlAudit, WidgetRequestStore } from './file-store.js';
+export { fileStorage, loadOrCreateIdentity, jsonlAudit, readAuditHead, WidgetRequestStore } from './file-store.js';

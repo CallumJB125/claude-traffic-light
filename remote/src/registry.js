@@ -48,6 +48,8 @@ export class DeviceRegistry {
       await importPublicRaw(publicKey);
       const deviceId = await fingerprint(publicKey);
       const d = await this.#load();
+      // A revoked key stays revoked: re-pairing must use a fresh key.
+      if (d.devices[deviceId]?.revokedAt) throw new Error('this device key was revoked; pair again with a new key');
       const now = this.clock();
       const rec = { deviceId, publicKey, name: cleanName(name), ownerId, createdAt: now, lastUsedAt: null, revokedAt: null };
       d.devices[deviceId] = rec;
