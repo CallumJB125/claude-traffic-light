@@ -34,7 +34,8 @@ app → runner  {type:'runner.presence', enabled, share_summaries?, sessions:[{s
 ```
 
 `hub_url` must be `https:`/`wss:`; `http:`/`ws:` is accepted only for `localhost`,
-`127.0.0.1` and `::1`. `data_dir` (absolute) takes the place of `BOARD_HOME`. The token and the Access
+`127.0.0.1` and `::1`. `data_dir` (absolute) takes the place of `BOARD_HOME`; it must be a real directory owned by
+this user, and is refused if it is a symlink or cannot be made 0700. The token and the Access
 service-token pair live only in memory and only in the WS connect headers; they never
 reach a log line. SIGTERM (or SIGINT) parks every live run instead of orphaning it: the
 agent gets the final-handover prompt (10 s window), then the stop recipe, a pushed snapshot

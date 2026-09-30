@@ -12,7 +12,7 @@ import path from 'node:path';
 import { WS_CLOSE } from '../shared/protocol.js';
 import { Supervisor } from './supervisor.js';
 import { PresenceReporter } from './presence.js';
-import { makeLogger } from './util.js';
+import { makeLogger, ensurePrivateDir } from './util.js';
 
 const QUIT_BUDGET_MS = 25_000;   // the app waits for us; exit 0 by then whatever is left
 const QUIT_HANDOVER_MS = 10_000; // the agent's final-handover window inside that budget
@@ -74,6 +74,7 @@ async function start(m) {
     ...(m.cf_client_id ? { cf_client_id: m.cf_client_id, cf_client_secret: m.cf_client_secret } : {}),
   };
   try {
+    ensurePrivateDir(m.data_dir);
     sup = new Supervisor({ home: m.data_dir, device, log });
     presence = new PresenceReporter(sup);
     sup.on('connected', () => status('connected'));

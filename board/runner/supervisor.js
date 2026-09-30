@@ -629,6 +629,8 @@ export class Supervisor extends EventEmitter {
 
   async #startControl() {
     const sock = this.l.controlSock;
+    const dir = fs.statSync(path.dirname(sock));
+    if ((dir.mode & 0o077) !== 0) throw new Error('the control socket directory must be a private (0700) directory');
     try { fs.unlinkSync(sock); } catch { /* none */ }
     this.control = net.createServer((c) => {
       c.setEncoding('utf8');
@@ -661,7 +663,13 @@ export class Supervisor extends EventEmitter {
         } catch (e) { return reply({ ok: false, error: { code: e.code ?? 'INTERNAL', message: e.message } }); }
       }));
     });
-    await new Promise((resolve, reject) => { this.control.once('error', reject); this.control.listen(sock, resolve); });
+    // umask 0o177 around listen() (which binds synchronously), restored before
+    // any other await: the socket is created 0600, never briefly wider.
+    await new Promise((resolve, reject) => {
+      this.control.once('error', reject);
+      const umask = process.umask(0o177);
+      try { this.control.listen(sock, resolve); } finally { process.umask(umask); }
+    });
     fs.chmodSync(sock, 0o600);
   }
 }

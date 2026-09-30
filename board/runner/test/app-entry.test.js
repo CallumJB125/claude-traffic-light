@@ -64,6 +64,8 @@ test('app mode: config → ready → connected, credentials only on the WS conne
     assert.ok(fs.existsSync(path.join(data, 'outbox')), 'data_dir is the home');
     assert.ok(fs.existsSync(path.join(data, 'worktrees')));
     assert.equal(fs.existsSync(path.join(data, 'device.json')), false, 'no device file');
+    assert.equal(fs.statSync(data).mode & 0o777, 0o700, 'data_dir is private');
+    assert.equal(fs.statSync(path.join(data, 'runner.sock')).mode & 0o777, 0o600, 'control socket 0600');
     assert.equal(fs.existsSync(path.join(root, 'cli-home')), false, 'BOARD_HOME is ignored');
 
     await new Promise((r) => setTimeout(r, 300));
@@ -279,6 +281,35 @@ test('app mode quit: a release the hub refuses leaves the run to the next start\
     assert.equal(await app.exited, 0);
   } finally {
     app.child.kill('SIGKILL');
+    await hub.close();
+    rm(root);
+  }
+});
+
+test('app mode: data_dir must be private: a symlink is refused, a wider directory is tightened to 0700', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  try {
+    const real = path.join(root, 'real');
+    fs.mkdirSync(real, { mode: 0o700 });
+    fs.symlinkSync(real, path.join(root, 'link'));
+    let app = spawnApp(root);
+    app.child.send(config(hub, root, { data_dir: path.join(root, 'link') }));
+    assert.match((await app.next('runner.fatal')).message, /symlink/);
+    assert.notEqual(await app.exited, 0);
+    assert.equal(app.messages.some((m) => m.type === 'runner.ready'), false);
+
+    const wide = path.join(root, 'wide');
+    fs.mkdirSync(wide);
+    fs.chmodSync(wide, 0o777);
+    app = spawnApp(root);
+    app.child.send(config(hub, root, { data_dir: wide }));
+    await app.next('runner.ready');
+    assert.equal(fs.statSync(wide).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(wide, 'runner.sock')).mode & 0o777, 0o600);
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
+  } finally {
     await hub.close();
     rm(root);
   }
