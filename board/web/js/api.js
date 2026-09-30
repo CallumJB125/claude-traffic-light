@@ -1,6 +1,7 @@
 // HTTP client for CONTRACT §5.2. Every mutation carries a fresh request_id
 // (D8) and Content-Type: application/json; errors come back as ApiError with
 // the hub's code and any extra fields (e.g. answered_by).
+import { clockOffset } from './metrics.js';
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -22,7 +23,7 @@ export const currentOrg = () => org;
 let csrf = null;
 export const setCsrf = (t) => { csrf = t ?? null; };
 
-async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {} } = {}) {
+async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {}, signal, onResponse } = {}) {
   let res;
   try {
     res = await fetchImpl(path, {
@@ -30,11 +31,17 @@ async function call(method, path, body, { fetchImpl = globalThis.fetch, headers 
       credentials: 'same-origin',
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...(csrf && method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
   } catch {
     throw new ApiError(0, { error: { code: 'NETWORK', message: "Can't reach the board." } });
   }
-  const text = await res.text();
+  onResponse?.(res);
+  let text;
+  // A timeout can land mid-body as well as mid-connect.
+  try { text = await res.text(); } catch {
+    throw new ApiError(0, { error: { code: 'NETWORK', message: "Can't reach the board." } });
+  }
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!res.ok) throw new ApiError(res.status, data);
@@ -58,6 +65,17 @@ export const api = {
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
   overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
   repos: () => call('GET', '/api/repos'),
+  // Also returns offset_ms (hub clock − ours, from the Date header): journal
+  // times are hub times. A page gets 30 s before it counts as unreachable.
+  journal: async (boardId, afterSeq = 0, limit = 1000) => {
+    const sent = Date.now();
+    let offset_ms = null;
+    const data = await call('GET', `/api/boards/${enc(boardId)}/journal?after_seq=${enc(afterSeq)}&limit=${enc(limit)}`, undefined, {
+      signal: AbortSignal.timeout(30_000),
+      onResponse: (res) => { offset_ms = clockOffset(res.headers.get('Date'), sent, Date.now()); },
+    });
+    return { ...data, offset_ms };
+  },
 };
 
 // Human copy for the hub's error codes (CONTRACT §8).
