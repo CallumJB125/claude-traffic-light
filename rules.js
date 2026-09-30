@@ -176,8 +176,8 @@
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
   const NUMBERS = ['none', 'sessions', 'minutes', 'tasks', 'agents', 'ralph'];
   const SCREEN_FX = ['none', 'vignette', 'confetti', 'spotlight'];
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
   // Famous faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
   const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;

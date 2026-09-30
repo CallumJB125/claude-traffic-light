@@ -271,6 +271,16 @@
       <rect x="14" y="52" width="22" height="4" rx="1.5" transform="rotate(-14 25 54)" />
       <rect x="28" y="52" width="22" height="4" rx="1.5" transform="rotate(14 39 54)" />
     </g>
+    <!-- cheer: both arms thrown up in a V -->
+    <g class="cheer-arms" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5">
+      <rect x="6" y="40" width="5" height="15" rx="2.5" transform="rotate(-28 8.5 54)" /><rect x="53" y="40" width="5" height="15" rx="2.5" transform="rotate(28 55.5 54)" />
+      <circle cx="4.5" cy="40" r="2.6" transform="rotate(-28 8.5 54)" /><circle cx="59.5" cy="40" r="2.6" transform="rotate(28 55.5 54)" />
+    </g>
+    <!-- facepalm: a hand drawn flat over the face -->
+    <g class="facepalm-hand">
+      <rect x="23" y="41" width="18" height="11" rx="3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+      <path d="M27 41.5v10M31 41v10.5M35 41v10.5M39 41.5v10" stroke="#b85f3c" stroke-width="0.7" />
+    </g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
     <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
@@ -473,6 +483,64 @@
     <rect x="21" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="22.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
     <rect x="38" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="39.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
   </g>
+  <!-- headphones: over-ear cups on a band, a focus LED that pulses -->
+  <g class="costume costume-headphones">
+    <path d="M16 46 q0 -15 16 -15 q16 0 16 15" fill="none" stroke="#2a2a33" stroke-width="3" stroke-linecap="round" />
+    <rect x="12" y="42" width="6" height="10" rx="2" fill="#2a2a33" stroke="#211f1c" stroke-width="0.4" /><rect x="13.4" y="44" width="3.2" height="6" rx="1.4" fill="#5a5a6a" />
+    <rect x="46" y="42" width="6" height="10" rx="2" fill="#2a2a33" stroke="#211f1c" stroke-width="0.4" /><rect x="47.4" y="44" width="3.2" height="6" rx="1.4" fill="#5a5a6a" />
+    <circle class="hp-led" cx="15" cy="50.4" r="0.9" fill="#2fae3e" />
+  </g>
+  <!-- graduate: mortarboard with a swinging tassel -->
+  <g class="costume costume-graduate">
+    <path d="M24 33 h16 v3 q-8 4 -16 0 z" fill="#1a1a1e" />
+    <polygon points="32,25 48,31 32,37 16,31" fill="#22222a" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <circle cx="32" cy="31" r="1.2" fill="#f2d16b" />
+    <path class="tassel-string" d="M32 31 L45 32" fill="none" stroke="#f2d16b" stroke-width="0.8" />
+    <g class="tassel"><rect x="44" y="31.5" width="2" height="5.5" rx="0.6" fill="#f2d16b" /><rect x="43.6" y="36.6" width="2.8" height="2" rx="0.6" fill="#e0b040" /></g>
+  </g>
+  <!-- chef: a puffed white toque on a band -->
+  <g class="costume costume-chef">
+    <circle cx="25" cy="31" r="5.2" fill="#f2efe8" /><circle cx="32" cy="28" r="6" fill="#f2efe8" /><circle cx="39" cy="31" r="5.2" fill="#f2efe8" />
+    <rect x="22" y="34.5" width="20" height="4.5" rx="1" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M25 35.4h2M31 35.4h2M37 35.4h2" stroke="#cfccc3" stroke-width="0.6" />
+  </g>
+  <!-- cowboy: wide-brim hat with a dented crown and band -->
+  <g class="costume costume-cowboy">
+    <ellipse cx="32" cy="38.4" rx="19" ry="3.4" fill="#8a5a2b" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M23 38 q1 -12 9 -12 q8 0 9 12 z" fill="#a06a34" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M26 30 q6 -3 12 0" fill="none" stroke="#7a4a20" stroke-width="0.8" />
+    <rect x="23.5" y="34" width="17" height="2.4" fill="#5a3a1a" />
+  </g>
+  <!-- propeller beanie: a spinning two-blade prop on a bright cap -->
+  <g class="costume costume-propeller">
+    <path d="M21 39 q0 -12 11 -12 q11 0 11 12 z" fill="#38bdf8" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M32 27 v12" stroke="#f2efe8" stroke-width="0.6" opacity="0.55" /><path d="M26 28 v11 M38 28 v11" stroke="#f2efe8" stroke-width="0.5" opacity="0.4" />
+    <g class="propeller"><rect x="24" y="25.2" width="16" height="2" rx="1" fill="#f472b6" stroke="#211f1c" stroke-width="0.35" /></g>
+    <circle cx="32" cy="26.2" r="1.5" fill="#f2d16b" stroke="#211f1c" stroke-width="0.35" />
+  </g>
+  <!-- detective: a tweed deerstalker with brims and ear flaps -->
+  <g class="costume costume-detective">
+    <ellipse cx="32" cy="38.8" rx="16" ry="2.6" fill="#6a5a42" />
+    <path d="M19 39 q1 -12 13 -12 q12 0 13 12 z" fill="#7a6a52" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <rect x="14.5" y="37" width="5.5" height="6.5" rx="2.2" fill="#6a5a42" /><rect x="44" y="37" width="5.5" height="6.5" rx="2.2" fill="#6a5a42" />
+    <g fill="#5a4a34" opacity="0.6"><rect x="23" y="31" width="1" height="1" /><rect x="27" y="34" width="1" height="1" /><rect x="31" y="30" width="1" height="1" /><rect x="35" y="34" width="1" height="1" /><rect x="39" y="31" width="1" height="1" /><rect x="27" y="30" width="1" height="1" /><rect x="35" y="30" width="1" height="1" /></g>
+  </g>
+  <!-- flower crown: a vine of little blooms across the hairline -->
+  <g class="costume costume-flowercrown">
+    <path d="M15 40 q17 -8 34 0" fill="none" stroke="#4a7a3a" stroke-width="1.4" stroke-linecap="round" />
+    <g class="fc-flower" fill="#f472b6"><circle cx="18" cy="37.5" r="1.4" /><circle cx="15.6" cy="37.5" r="1.4" /><circle cx="20.4" cy="37.5" r="1.4" /><circle cx="18" cy="35.5" r="1.4" /><circle cx="18" cy="39.5" r="1.4" /><circle cx="18" cy="37.5" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#f2efe8"><circle cx="28" cy="35" r="1.4" /><circle cx="25.6" cy="35" r="1.4" /><circle cx="30.4" cy="35" r="1.4" /><circle cx="28" cy="33" r="1.4" /><circle cx="28" cy="37" r="1.4" /><circle cx="28" cy="35" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#a78bfa"><circle cx="37" cy="35" r="1.4" /><circle cx="34.6" cy="35" r="1.4" /><circle cx="39.4" cy="35" r="1.4" /><circle cx="37" cy="33" r="1.4" /><circle cx="37" cy="37" r="1.4" /><circle cx="37" cy="35" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#f28c28"><circle cx="46" cy="37.5" r="1.4" /><circle cx="43.6" cy="37.5" r="1.4" /><circle cx="48.4" cy="37.5" r="1.4" /><circle cx="46" cy="35.5" r="1.4" /><circle cx="46" cy="39.5" r="1.4" /><circle cx="46" cy="37.5" r="1.1" fill="#f2d16b" /></g>
+  </g>
+  <!-- beanie: a knit winter cap with a bobbing pom-pom -->
+  <g class="costume costume-beanie">
+    <path d="M20 39 q0 -13 12 -13 q12 0 12 13 z" fill="#3a6ea5" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M24 27 v11 M28 26 v12 M32 26 v12 M36 26 v12 M40 27 v11" stroke="#2f5a8a" stroke-width="0.5" opacity="0.6" />
+    <rect x="19" y="36" width="26" height="4" rx="2" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M22 37.8h22" stroke="#b8cee0" stroke-width="0.6" />
+    <circle class="pom" cx="32" cy="24" r="3" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.4" />
+  </g>
   <!-- the finished cigarette: flicked from the mouth, lands on the ground, gets
        stomped flat; one element, reused every cycle -->
   <g class="cig-butt">
@@ -566,10 +634,10 @@
   <g class="agents-label"></g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
   // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
   // user photo); the drawings below are the fallback, and alfred's the face.
   const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
