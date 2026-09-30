@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import WebSocket from 'ws';
 import { createAccessVerifier, mintRunToken, parseRunToken, devCookieValue, parseDevCookie } from '../auth.js';
 import { loadConfig } from '../config.js';
@@ -172,6 +173,34 @@ test('dev login needs the startup secret header (a loopback peer alone is not en
     const ok = await login(h.devHeaders);
     assert.equal(ok.status, 200);
     assert.match(ok.headers.get('set-cookie'), /^board_dev=/);
+  } finally {
+    await h.destroy();
+  }
+});
+
+test('dev auth refuses requests carrying proxy headers or a non-loopback Host (HTTP and WS upgrade)', async () => {
+  const h = await startHub();
+  try {
+    const { port } = new URL(h.base);
+    const get = (headers, path = '/api/health') => new Promise((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path, headers }, (res) => { res.resume(); resolve(res.statusCode); });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(await get({}), 200);
+    for (const host of ['localhost', `localhost:${port}`, '127.0.0.1', `[::1]:${port}`]) assert.equal(await get({ host }), 200, host);
+    for (const host of ['board.example.com', `board.example.com:${port}`, '127.0.0.1.evil.io', '10.0.0.5']) assert.equal(await get({ host }), 403, host);
+    for (const hdr of ['cf-connecting-ip', 'cf-ray', 'cf-access-jwt-assertion', 'x-forwarded-for', 'forwarded']) {
+      assert.equal(await get({ [hdr]: '1.2.3.4' }), 403, hdr);
+      assert.equal(await get({ [hdr]: '1.2.3.4' }, '/'), 403, `${hdr} (static)`);
+    }
+    const alice = await h.login('alice');
+    const code = await new Promise((resolve) => {
+      const ws = new WebSocket(`${h.base.replace('http', 'ws')}/ws/board`, { headers: { cookie: alice, 'cf-ray': 'abc' } });
+      ws.on('unexpected-response', (_, res) => resolve(res.statusCode));
+      ws.on('error', () => {});
+    });
+    assert.equal(code, 403);
   } finally {
     await h.destroy();
   }

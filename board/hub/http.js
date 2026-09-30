@@ -19,6 +19,13 @@ const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
+// Dev auth trusts a loopback peer. A request that passed through a proxy or
+// tunnel still arrives from loopback, so refuse anything that carries proxy
+// headers or names a non-loopback Host (on top of the config guard).
+const PROXY_HEADERS = ['cf-connecting-ip', 'cf-ray', 'cf-access-jwt-assertion', 'x-forwarded-for', 'forwarded'];
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
+
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers });
@@ -173,6 +180,7 @@ export function createHttpHandler({ hub, api, config }) {
 
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://hub');
+    if (config.auth === 'dev' && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'dev auth serves direct loopback requests only' } });
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         const p = staticPath(url.pathname);
@@ -238,6 +246,7 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
   return async function onUpgrade(req, socket, head) {
     const { pathname, searchParams } = new URL(req.url, 'http://hub');
     socket.on('error', () => {});
+    if (config.auth === 'dev' && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
     if (pathname === WS_PATHS.browser) {
       if (!sameOrigin(req, config.publicUrl)) return refuse(socket, 403, 'Forbidden');
       let auth = null;
