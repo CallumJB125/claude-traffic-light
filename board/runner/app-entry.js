@@ -6,7 +6,7 @@
 // over process.parentPort and the credentials stay in memory, used only for
 // the hub WS connect. data_dir replaces BOARD_HOME (runs, worktrees, outbox).
 // Replies: runner.ready, runner.status {state, detail?}, runner.fatal {message},
-// runner.stopped {parked, orphaned}. `runner.presence` feeds team presence
+// runner.stopped {parked, parked_pending, orphaned}. `runner.presence` feeds team presence
 // (D37b). SIGTERM/SIGINT → park every live run (bounded), exit 0.
 import path from 'node:path';
 import { WS_CLOSE } from '../shared/protocol.js';
@@ -107,7 +107,9 @@ async function stop(signal) {
   log.info('runner stopping', { signal });
   status('stopping');
   presence?.stop();
-  const runs = sup ? [...sup.runs.values()].filter((r) => !r.ended) : [];
+  const live = sup ? [...sup.runs.values()].filter((r) => !r.ended) : [];
+  const pending = live.filter((r) => r.hubHandoverPending);
+  const runs = live.filter((r) => !pending.includes(r));
   let parked = 0;
   if (sup) sup.quitting = true;
   let budget;
@@ -119,7 +121,7 @@ async function stop(signal) {
   const orphaned = runs.length - parked;
   if (orphaned) log.warn('quit: runs not parked; the next start treats them as orphans', { orphaned });
   try { await sup?.shutdown({ stopRuns: false }); } catch (e) { log.error('shutdown failed', { err: e.message }); }
-  post({ type: 'runner.stopped', parked, orphaned });
+  post({ type: 'runner.stopped', parked, parked_pending: pending.length, orphaned });
   setTimeout(() => process.exit(0), 100);   // let the message leave first
 }
 process.on('SIGTERM', () => stop('SIGTERM'));

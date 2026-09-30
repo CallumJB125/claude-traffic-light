@@ -431,6 +431,12 @@ export class Run {
     return this.#beginHandover('quit', waitMs);
   }
 
+  // Inside a hub-requested park or handover window (not our own quit): the
+  // hub already moved the card on, so a quit counts it as parked-pending.
+  get hubHandoverPending() {
+    return !!this.handover && !this.handover.done && this.handover.mode !== 'quit' && !this.ended;
+  }
+
   #beginHandover(mode, waitMs) {
     if (this.handover || this.ending) return;
     const text = 'The board asked for a handover: write your final handover now via board_write_handover (plan, done, hypothesis, dead_ends, next, questions), then stop working.';
@@ -445,6 +451,9 @@ export class Run {
   async #finishHandover(why) {
     const h = this.handover;
     if (!h || h.done) return;
+    // A fence (or any end) landed inside the window: the fence path already
+    // stopped and salvaged; no stop, snapshot or release at a stale fence.
+    if (this.fenced || this.ended) { h.done = true; h.resolve(false); return; }
     h.done = true;
     this.log.info('handover finishing', { run_id: this.run_id, why, mode: h.mode });
     this.ending = true;

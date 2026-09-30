@@ -218,7 +218,7 @@ test('app mode quit: SIGTERM parks a live run (handover, pushed snapshot, releas
     assert.ok(Date.now() - t0 < 26_000, 'bounded by the quit budget');
     assert.deepEqual(app.statuses().slice(-1), ['stopping']);
     const stopped = app.messages.find((m) => m.type === 'runner.stopped');
-    assert.deepEqual({ ...stopped }, { type: 'runner.stopped', parked: 1, orphaned: 0 });
+    assert.deepEqual({ ...stopped }, { type: 'runner.stopped', parked: 1, parked_pending: 0, orphaned: 0 });
 
     const fence = claim.expected_fence + 1;
     assert.equal(hub.outs('handover.write')[0]?.patch.next, 'finish the parser after the restart');
@@ -243,7 +243,7 @@ test('app mode quit: SIGTERM parks a live run (handover, pushed snapshot, releas
     assert.equal(hub.outs('run.failed').length, 0, 'no supervisor-crash orphan on the next start');
     app.child.kill('SIGTERM');
     assert.equal(await app.exited, 0);
-    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, orphaned: 0 });
+    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, parked_pending: 0, orphaned: 0 });
   } finally {
     app.child.kill('SIGKILL');
     await hub.close();
@@ -264,7 +264,7 @@ test('app mode quit: a release the hub refuses leaves the run to the next start\
     await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
     app.child.kill('SIGTERM');
     assert.equal(await app.exited, 0);
-    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, orphaned: 1 });
+    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, parked_pending: 0, orphaned: 1 });
     assert.equal(hub.outs('run.failed').length, 0);
 
     app = spawnApp(root);

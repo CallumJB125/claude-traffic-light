@@ -29,7 +29,7 @@ app → runner  {type:'runner.config', hub_url, device_id, device_token, cf_clie
 runner → app  {type:'runner.ready'}
 runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable'|'stopping', detail?}
 runner → app  {type:'runner.fatal', message}          then exit 2 (bad config) / 1 (startup failed)
-runner → app  {type:'runner.stopped', parked, orphaned} then exit 0 (after SIGTERM/SIGINT)
+runner → app  {type:'runner.stopped', parked, parked_pending, orphaned} then exit 0 (after SIGTERM/SIGINT)
 app → runner  {type:'runner.presence', enabled, share_summaries?, sessions:[{session_id, agent, cwd, state, since, summary?}]}   since: ISO-8601, ≤ 40 chars; share_summaries default false
 ```
 
