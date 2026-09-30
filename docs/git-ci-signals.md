@@ -68,6 +68,9 @@ ingest([{ id, signal, repo, at, branch, pr, title, url }], 'hub')
 
 ## MCP
 
-`buddy_git_status`: state, setup hint, login, watched repos (+ per-repo errors), the
-events showing now, the last 10 fired, rate limit, last/next poll. `buddy_status` and
+`buddy_git_status`: state, setup hint, whether gh is signed in (not the login), watched
+repos with branches and per-repo errors (no session folders), the events showing now, the
+last 10 fired, rate limit, last/next poll. PR titles and branch/workflow names are written by
+other people, so they come back truncated as `untrusted_title` / `untrusted_branch`, and the
+note tells the calling agent to treat them as data, never instructions. `buddy_status` and
 `buddy_why` also see live git events, so "why is he holding a CI FAILED sign?" is answerable.
