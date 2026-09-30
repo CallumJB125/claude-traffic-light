@@ -47,16 +47,21 @@ test('signal server: no CORS, browsers refused, POST needs the install token', a
   expect(fs.statSync(path.join(h.home, 'token')).mode & 0o777).toBe(0o600);
 });
 
+// Tighter than the config's per-pixel default (0.2): at 0.2 a lamp hue
+// change passes as anti-aliasing noise. Any pixel past 0.05 still fails
+// (maxDiffPixelRatio 0).
+const SHOT = { threshold: 0.05 };
+
 for (const [name, sig, lamp] of STATES) {
   test(`widget renders the ${name} state`, async () => {
     await setState(sig, lamp);
-    await expect(widget).toHaveScreenshot(`widget-${name}.png`);
+    await expect(widget).toHaveScreenshot(`widget-${name}.png`, SHOT);
   });
 }
 
 test('widget renders the working state under reduced motion', async () => {
   await widget.emulateMedia({ reducedMotion: 'reduce' });
   await setState('tool-use', 'green');
-  await expect(widget).toHaveScreenshot('widget-working-green-reduced-motion.png');
+  await expect(widget).toHaveScreenshot('widget-working-green-reduced-motion.png', SHOT);
   await widget.emulateMedia({ reducedMotion: 'no-preference' });
 });
