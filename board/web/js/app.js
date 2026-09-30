@@ -6,6 +6,7 @@ import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
 import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { emptyFilters, isFiltering, parseFilters, writeFilters, toggleIn, applyFilters, filterOptions } from './filters.js';
 import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen } from './render-board.js';
@@ -43,7 +44,8 @@ const state = {
   showAllDone: false,
   repos: null,
   view: 'board',
-  table: { sort: DEFAULT_SORT, filter: '' },
+  table: { sort: DEFAULT_SORT },
+  filters: emptyFilters(), // shared by Board and Table; lives in ?q= &f= and sessionStorage
   dash: null, // set below: freshDash(), status idle | loading | ok | error
   integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, confirmDisconnect: null },
   cardsRev: 0,
@@ -95,6 +97,25 @@ function setView(v) {
     q.set('view', v);
     history.replaceState(null, '', `${location.pathname}?${q}${location.hash}`);
   } catch { /* sandboxed */ }
+  update();
+}
+
+// ── filters ──────────────────────────────────────────────────────────────────
+// The URL wins (a shared link shows the same cards); otherwise this tab's last
+// filters come back after a reload.
+
+function loadFilters() {
+  const q = new URLSearchParams(location.search);
+  if (q.has('q') || q.has('f')) { state.filters = parseFilters(location.search); return; }
+  try { state.filters = parseFilters(sessionStorage.getItem('board-filters') ?? ''); } catch { /* storage off */ }
+}
+function setFilters(next) {
+  state.filters = next;
+  try {
+    const q = writeFilters(next, new URLSearchParams(location.search));
+    history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}${location.hash}`);
+  } catch { /* sandboxed */ }
+  try { sessionStorage.setItem('board-filters', writeFilters(next, new URLSearchParams()).toString()); } catch { /* storage off */ }
   update();
 }
 
@@ -157,7 +178,6 @@ async function disconnectIntegration(id) {
   state.integ = { ...state.integ, confirmDisconnect: null };
   if (res) { toast('Disconnected.'); loadIntegrations(); } else update();
 }
-
 // ── toasts ───────────────────────────────────────────────────────────────────
 
 let toastSeq = 0;
@@ -186,11 +206,16 @@ function buildModel() {
     const data = d.data ? { ...d.data, feed: (d.data.feed ?? []).map((ev) => ({ ...ev, at_age_ms: ev.at_age_ms == null ? null : ev.at_age_ms + Math.max(0, clockNow - (ev._rx ?? d.rx)) })) } : null;
     detail = { ...d, data, elapsed_ms };
   }
+  const fctx = { viewerId: state.me?.member?.id, members: state.members };
+  const filtered = applyFilters(entries, state.filters, fctx);
   return {
     me: state.me,
     board: state.board,
     members: state.members,
     entries,
+    visible: filtered.entries,
+    filters: state.filters,
+    filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx) },
     alerts: alertsForViewer(state.me?.member?.id, entries),
     conn: { ...state.conn, retryInMs: state.conn.retryAt != null ? state.conn.retryAt - Date.now() : null },
     detail,
@@ -927,6 +952,9 @@ function onClick(e) {
     case 'theme': setTheme(el.dataset.next); return;
     case 'reconnect': socket?.reconnectNow(); return;
     case 'clear-selection': setSelection(new Set()); return;
+    case 'filter-chip': setFilters({ ...state.filters, chips: toggleIn(state.filters.chips, el.dataset.chip) }); return;
+    case 'filter-label-off': setFilters({ ...state.filters, labels: state.filters.labels.filter((l) => l !== el.dataset.label) }); return;
+    case 'filter-clear': setFilters(emptyFilters()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'view': setView(el.dataset.view); return;
     case 'integ-reload': loadIntegrations(); return;
@@ -952,7 +980,7 @@ function onSubmit(e) {
 
 function onInput(e) {
   const el = e.target.closest?.('[data-input]');
-  if (el?.dataset.input === 'table-filter') { state.table = { ...state.table, filter: el.value }; update(); }
+  if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
 }
 
 function onChange(e) {
@@ -968,6 +996,8 @@ function onChange(e) {
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
   if (what === 'move') moveCards([el.dataset.card], el.value);
+  if (what === 'filter-label' && el.value) { setFilters({ ...state.filters, labels: [...state.filters.labels, el.value] }); el.value = ''; }
+  if (what === 'filter-assignee') setFilters({ ...state.filters, assignee: el.value || null });
   if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
   if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
 }
@@ -1042,21 +1072,21 @@ function onKeydown(e) {
     if (state.me?.member?.role !== 'viewer' && !openQuickAdd()) openNewCard();
     return;
   }
-  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !state.detail && state.view === 'table' && !root.querySelector('dialog[open]')) {
+  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'dashboard' && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    root.querySelector('[data-input="table-filter"]')?.focus();
+    root.querySelector('[data-input="filter-q"]')?.focus();
     return;
   }
-  if (typing && e.key === 'Escape' && e.target.dataset?.input === 'table-filter' && e.target.value) {
+  if (e.key === 'Escape' && e.target.dataset?.input === 'filter-q') {
     e.preventDefault();
-    state.table = { ...state.table, filter: '' };
-    update();
+    if (e.target.value) setFilters({ ...state.filters, q: '' }); else e.target.blur();
     return;
   }
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !root.querySelector('dialog[open]')) {
     const cardEl = e.key === 'x' ? e.target.closest?.('.card-open')?.closest('.card[data-card-id]') : null;
     if (cardEl) { e.preventDefault(); setSelection(toggleSelection(state.selection, cardEl.dataset.cardId)); return; }
     if (e.key === 'Escape' && state.selection.size) { setSelection(new Set()); return; }
+    if (e.key === 'Escape' && state.view !== 'dashboard' && isFiltering(state.filters)) { setFilters(emptyFilters()); return; }
   }
   const tab = e.target.closest?.('[role="tab"]');
   if (tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
@@ -1102,5 +1132,6 @@ setInterval(() => { if (state.view === 'dashboard' && state.board && document.vi
 
 loadTheme();
 loadView();
+loadFilters();
 takeDevSecretFromHash();
 boot();

@@ -6,6 +6,7 @@ import { icon, pixelClaude, PILL_ICON, ALERT_ICON } from './icons.js';
 import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
 import { selectionBar } from './dnd.js';
+import { filterBar } from './render-filters.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -279,12 +280,13 @@ function viewSwitch(model) {
 
 /** `body` replaces the columns for the other views (table, dashboard, …). */
 export function boardScreen(model, body = null) {
-  const cols = groupColumns(model.entries);
+  const cols = groupColumns(model.visible ?? model.entries);
   const lamps = boardLamps(model.me?.member?.id, model.entries, model.conn.status === 'lost');
   return h('div', { class: 'app', 'data-conn': model.conn.status },
     topBar(model, lamps),
     connectionBanner(model.conn),
     alertsStrip(model.alerts, model),
+    model.view === 'dashboard' ? null : filterBar(model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
     selectionActions(model),
