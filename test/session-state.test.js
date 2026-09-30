@@ -207,6 +207,16 @@ test('set-status: a session-start is a fresh idle session, but a compaction mid-
   assert.equal(read(home, 'ss').via, 'session-start/compact');
 });
 
+test('set-status: auto-compaction leaves background agents working; a real session-start ends them', () => {
+  const home = tmpHome();
+  run(home, 'prompt-submit', { session_id: 'ca' });
+  run(home, 'subagent-start', { session_id: 'ca', agent_id: 'bg-1', agent_type: 'executor' });
+  run(home, 'session-start', { session_id: 'ca', source: 'compact' });
+  assert.deepEqual(read(home, 'ca').agents.map((a) => [a.id, a.status]), [['bg-1', 'working']]);
+  run(home, 'session-start', { session_id: 'ca', source: 'startup' });
+  assert.deepEqual(read(home, 'ca').agents.map((a) => [a.id, a.status]), [['bg-1', 'done']]);
+});
+
 test('set-status: a permission denial mid-turn keeps the turn, its clock and the ignored timer', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'pd' });

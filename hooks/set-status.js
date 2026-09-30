@@ -421,7 +421,9 @@ function nextSession(prev, { hostApp, pid }) {
   // so the app's log shows it.
   const viaOut = t.held ? (prev?.via ?? null)
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
-  const agents = updateAgents(prev?.agents, signal, data, now);
+  // A compaction's SessionStart is the same session carrying on, so its
+  // background agents are still running.
+  const agents = updateAgents(prev?.agents, resolved === 'compact' ? 'compact' : signal, data, now);
   return {
     sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),
