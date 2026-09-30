@@ -52,7 +52,18 @@ if (adapterId) {
   // Codex passes its JSON as the last argument; everyone else pipes it.
   const payload = adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin());
   const reply = adapter.reply ? adapter.reply(event, payload) : null;
-  if (reply) process.stdout.write(JSON.stringify(reply));
+  // fs.writeSync, like set-status.js: stdout is an async pipe on macOS and
+  // process.exit below would cut the reply short.
+  if (reply) {
+    const buf = Buffer.from(JSON.stringify(reply));
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    for (let off = 0; off < buf.length;) {
+      try { off += fs.writeSync(1, buf, off); } catch (e) {
+        if (e.code !== 'EAGAIN') break;
+        Atomics.wait(sleeper, 0, 0, 5);
+      }
+    }
+  }
   const events = adapter.normalize(event, payload).filter((e) => KNOWN.includes(e.signal));
   if (!events.length) process.exit(0);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
