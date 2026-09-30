@@ -233,3 +233,82 @@ test('history: the spend worker folds turns into the record and backfills once, 
     assert.equal(again.added, 0, 'folding again adds nothing');
   } finally { await w.terminate(); }
 });
+
+// ── pace: today against your own usual ────────────────────────────────────
+const NOW = at('2026-09-30T15:30:00');
+function withDays(n, { perDay = 10, hour = 10, out = 1e6 } = {}) {
+  const store = History.open({ root: tmp() });
+  const turns = [];
+  for (let d = 1; d <= n; d += 1) {
+    const base = NOW - d * 86400000;
+    const day = new Date(base); day.setHours(hour, 0, 0, 0);
+    for (let k = 0; k < perDay; k += 1) turns.push(turn({ ts: day.getTime() + k * 60000, model: 'claude-opus-5-5', input: 0, output: out / perDay, cacheRead: 0, cacheWrite: 0 }));
+  }
+  History.record(store, turns);
+  return store;
+}
+
+test('pace: needs a week of history before it says anything', () => {
+  const p = History.pace(withDays(6), 500, { now: NOW });
+  assert.equal(p.ready, false);
+  assert.equal(p.aboveBy, null);
+  assert.equal(History.paceFiring(p), false);
+  assert.equal(History.pace(withDays(7), 500, { now: NOW }).ready, true);
+  assert.equal(History.pace(History.open({ root: tmp() }), 500, { now: NOW }).ready, false, 'an empty record is not ready');
+});
+
+test('pace: the baseline is what you had spent by this hour on earlier days', () => {
+  // each day: $25 of Opus output, all at 10:00, so by 15:30 the whole $25 is in
+  const late = History.pace(withDays(10), 30, { now: NOW });
+  assert.equal(late.avg, 25);
+  assert.equal(late.aboveBy, 20);
+  // at 08:00 none of it had happened yet on earlier days
+  const early = History.pace(withDays(10), 0, { now: at('2026-09-30T08:00:00') });
+  assert.equal(early.avg, 0);
+  assert.equal(early.ready, false, 'a zero baseline never divides');
+});
+
+test('pace: fires only for at least double the usual and $5 more', () => {
+  const store = withDays(10);
+  assert.equal(History.paceFiring(History.pace(store, 49, { now: NOW })), false, 'under 2x');
+  assert.equal(History.paceFiring(History.pace(store, 50, { now: NOW })), true);
+  const tiny = withDays(10, { out: 1e5 }); // $2.50 a day
+  assert.equal(History.paceFiring(History.pace(tiny, 6, { now: NOW })), false, '2.4x but only $3.50 more');
+  assert.equal(History.paceFiring(History.pace(tiny, 7.6, { now: NOW })), true);
+});
+
+test('pace: today and legacy cost-only days are not in the baseline', () => {
+  const store = withDays(10);
+  History.record(store, [turn({ ts: NOW - 3600000, output: 4e6, input: 0, cacheRead: 0, cacheWrite: 0 })]); // a big turn today
+  History.importLegacy(store, { '2026-08-20': { cost: 900 } });
+  const p = History.pace(store, 30, { now: NOW });
+  assert.equal(p.avg, 25);
+  assert.equal(p.days, 10);
+});
+
+test('rules: above-usual-pace is a virtual signal with no default rule, riding live sessions', () => {
+  const Rules = require('../rules.js');
+  assert.ok(Rules.SIGNALS.some((s) => s.id === 'above-usual-pace' && s.kind === 'virtual'));
+  assert.ok(!Rules.SPEND_RULES.some((r) => r.when.signal.includes('above-usual-pace')));
+  assert.ok(!Rules.defaultRules().some((r) => r.when.signal.includes('above-usual-pace')));
+  const sessions = [{ sessionId: 'a', cwd: '/w/a', signal: 'tool-use' }];
+  const fired = Rules.spendSessions(sessions, { spend: { pace: { firing: true, text: 'Today $40 · 60% above' } } });
+  assert.deepEqual(fired.map((f) => [f.signal, f.cwd, f.pace]), [['above-usual-pace', '/w/a', 'Today $40 · 60% above']]);
+  assert.deepEqual(Rules.spendSessions(sessions, { spend: { pace: { firing: false } } }), []);
+  assert.deepEqual(Rules.spendSessions([], { spend: { pace: { firing: true } } }), [], 'never on an empty desk');
+});
+
+test('history worker: a backfill marker without the record (restored or partly deleted) does not throw', async () => {
+  const { Worker } = require('worker_threads');
+  const projects = tmp();
+  const dataDir = tmp();
+  fs.mkdirSync(path.join(dataDir, 'usage'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'usage', '.backfilled'), 'x');
+  fs.writeFileSync(path.join(dataDir, 'usage', 'daily'), 'not a directory'); // and a corrupt store
+  const w = new Worker(path.join(__dirname, '..', 'src', 'usage-worker.js'));
+  try {
+    const got = await new Promise((resolve) => { w.on('message', resolve); w.postMessage({ type: 'history.tick', root: projects, dataDir, statsFile: path.join(dataDir, 'nope.json') }); });
+    assert.ok(got.type === 'history.done' || got.type === 'history.error', got.type);
+    assert.ok(w.threadId >= 0, 'the worker is still up');
+  } finally { await w.terminate(); }
+});

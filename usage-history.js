@@ -235,6 +235,50 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
   return { from: fromKey, to: toKey, groupBy, rows: list, total: round(total), legacyDays, unpricedModels: [...unpricedModels].sort(), priceVersion: PRICE_VERSION };
 }
 
+// How today is going against your own usual. The baseline is, for each of up
+// to `days` earlier days that have turns, what had been spent by this hour of
+// that day (the day's cost times its share of turns so far), averaged; it
+// needs `minDays` such days, so a new install never reads as "above usual".
+// `todayCost` is passed in (the live transcripts are fresher than the record).
+function pace(store, todayCost, { now = Date.now(), days = 30, minDays = 7 } = {}) {
+  const hour = new Date(now).getHours();
+  const todayKey = dayKey(now);
+  const from = dayKey(now - days * DAY_MS);
+  const perDay = new Map();
+  for (const mk of months(store)) {
+    if (mk < from.slice(0, 7) || mk > todayKey.slice(0, 7)) continue;
+    for (const [day, d] of Object.entries(month(store, mk).rec.days)) {
+      if (day < from || day >= todayKey || !d.sources) continue;
+      let cost = 0;
+      let turns = 0;
+      let sofar = 0;
+      for (const models of Object.values(d.sources)) {
+        for (const [model, projects] of Object.entries(models)) {
+          const key = Usage.modelKey(model);
+          for (const b of Object.values(projects)) {
+            const c = key ? Usage.costOf(b, key) : null;
+            const n = b.hours.reduce((a, v) => a + v, 0);
+            if (c == null || !n) continue;
+            cost += c;
+            turns += n;
+            sofar += c * (b.hours.slice(0, hour + 1).reduce((a, v) => a + v, 0) / n);
+          }
+        }
+      }
+      if (turns && cost > 0) perDay.set(day, sofar);
+    }
+  }
+  const vals = [...perDay.values()];
+  const avg = vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;
+  const today = Math.round(todayCost * 1e4) / 1e4;
+  const ready = vals.length >= minDays && avg > 0;
+  return { ready, days: vals.length, today, avg: Math.round(avg * 1e4) / 1e4, ratio: ready ? today / avg : null, aboveBy: ready ? Math.round((today / avg - 1) * 100) : null };
+}
+// Fires only for a clear difference: at least double the usual and $5 more.
+const PACE_RATIO = 2;
+const PACE_MIN_EXTRA = 5;
+const paceFiring = (p) => !!p && p.ready && p.today >= p.avg * PACE_RATIO && p.today - p.avg >= PACE_MIN_EXTRA;
+
 // The earliest and latest recorded day, or null.
 function extent(store) {
   const ms = months(store);
@@ -245,4 +289,4 @@ function extent(store) {
   return first && last ? { from: first, to: last } : null;
 }
 
-module.exports = { VERSION, PRICE_VERSION, GROUPS, open, record, importLegacy, flush, catchUp, query, extent, DAY_MS };
+module.exports = { VERSION, PRICE_VERSION, GROUPS, open, record, importLegacy, flush, catchUp, query, extent, pace, paceFiring, DAY_MS };

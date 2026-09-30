@@ -92,7 +92,11 @@
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'runaway', label: 'A session is burning money fast', hook: null, kind: 'virtual' },
     { id: 'budget-warning', label: 'Spend is nearing your budget', hook: null, kind: 'virtual' },
-    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' });
+    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' },
+    // Today's spend so far is far above your own usual for this hour (needs a
+    // week of history). Optional: no default rule, so it never lights a lamp
+    // unless you add one.
+    { id: 'above-usual-pace', label: 'Today is well above your usual spend', hook: null, kind: 'virtual' });
   const SPEND_RULES = [
     { id: 'runaway', name: 'Runaway session', enabled: true, when: { signal: ['runaway'] }, then: { lamp: 'red', lampFx: 'pulse', eyes: 'wide' } },
     { id: 'budget-exceeded', name: 'Over budget', enabled: true, when: { signal: ['budget-exceeded'] }, then: { lamp: 'red', eyes: 'money' } },
@@ -131,6 +135,7 @@
       if (!s || TURN_END.has(sessionSignal(s))) continue;
       out.push({ signal: 'runaway', sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, source: s.source, hostApp: s.hostApp, virtual: true, burn: r.burn });
     }
+    if (sp.pace && sp.pace.firing) for (const s of sessions) out.push({ signal: 'above-usual-pace', cwd: s.cwd, virtual: true, pace: sp.pace.text || '' });
     const level = sp.budget && sp.budget.level;
     if (level === 'warning' || level === 'exceeded') for (const s of sessions) out.push({ signal: `budget-${level}`, cwd: s.cwd, virtual: true, budget: sp.budgetText || '' });
     return out;

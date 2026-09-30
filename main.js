@@ -588,7 +588,7 @@ function computeState(opts = {}) {
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend), away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend), paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.ready && spend.pace.aboveBy >= 20 ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -2348,7 +2348,28 @@ const spendTracker = Spend.tracker();
 const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 function spendSnapshot(config) {
   if (SPEND_FIXTURE && fs.existsSync(SPEND_FIXTURE)) return JSON.parse(fs.readFileSync(SPEND_FIXTURE, 'utf8'));
-  return spendTurns.turns ? spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend) : null;
+  if (!spendTurns.turns) return null;
+  const snap = spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend);
+  return { ...snap, pace: paceFor(spendTurns.turns, spendTurns.version) };
+}
+// Today against your own usual (usage-history.js pace): recomputed per turns
+// version and minute. Needs a week of recorded history before it says anything.
+let paceMemo = { key: null, value: null };
+function paceFor(turns, version) {
+  const now = Date.now();
+  const key = `${version}|${Math.floor(now / 60000)}|${historyState.lastDone || 0}`;
+  if (paceMemo.key === key) return paceMemo.value;
+  let value = null;
+  try {
+    const from = new Date(now); from.setHours(0, 0, 0, 0);
+    let today = 0;
+    for (const t of turns) if (t.ts >= from.getTime() && t.ts <= now) today += Usage.costOf(t) || 0;
+    const p = UsageHistory.pace(UsageHistory.open({ root: ROOT_DIR }), today, { now });
+    const money = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
+    value = { ...p, firing: UsageHistory.paceFiring(p), text: p.ready ? `Today ${money(p.today)} · ${p.aboveBy >= 0 ? `${p.aboveBy}% above` : `${-p.aboveBy}% below`} your usual for now (${money(p.avg)})` : '' };
+  } catch (err) { console.warn('[history] pace failed:', err.message); }
+  paceMemo = { key, value };
+  return value;
 }
 // What the tooltip adds after the spend rule that fired: the burn rate or
 // how far over budget.
@@ -2362,6 +2383,7 @@ function spendNote(rules, fired, sessions, spend) {
       if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${v.cwd.split('/').filter(Boolean).pop()}` : ''}` };
     }
     if ((sig.includes('budget-exceeded') || sig.includes('budget-warning')) && spend.budgetText) return { rule: rule.name, text: spend.budgetText };
+    if (sig.includes('above-usual-pace') && spend.pace && spend.pace.text) return { rule: rule.name, text: spend.pace.text };
   }
   return null;
 }
