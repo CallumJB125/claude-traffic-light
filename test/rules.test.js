@@ -865,6 +865,16 @@ test('migrateRules: a saved config gains offline and failed-turn once, in their 
   assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn', 'started']);
 });
 
+test('migrateRules: offline and failed-turn you deleted on v2+ stay deleted through later upgrades', () => {
+  const v4 = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn').map(R.normalizeRule);
+  for (const from of [2, 3, 4]) {
+    const ids = R.migrateRules(v4, from).map((r) => r.id);
+    assert.ok(!ids.includes('offline') && !ids.includes('failed-turn'), `from v${from}`);
+  }
+  const v1 = R.migrateRules(v4, 1).map((r) => r.id);
+  assert.ok(v1.includes('offline') && v1.includes('failed-turn'), 'a v1 config gains them');
+});
+
 test('presentSignal: a young notification ask shows what came before it', () => {
   const now = Date.parse('2026-09-10T12:00:00Z');
   const at = (ms) => new Date(now - ms).toISOString();

@@ -337,9 +337,12 @@
       if (out.some((r) => r.id === id)) return;
       out.splice(at < 0 ? out.length : at, 0, normalizeRule(defaults.find((r) => r.id === id)));
     };
-    add('offline', out.findIndex((r) => !r.locked));
-    const done = out.findIndex((r) => r.id === 'done');
-    add('failed-turn', done >= 0 ? done : out.findIndex((r) => r.when.signal.includes('idle')));
+    // v2: a lost network and a failed turn got their own rules.
+    if (version < 2) {
+      add('offline', out.findIndex((r) => !r.locked));
+      const done = out.findIndex((r) => r.id === 'done');
+      add('failed-turn', done >= 0 ? done : out.findIndex((r) => r.when.signal.includes('idle')));
+    }
     // v3: a failed tool or a starting subagent is still mid-turn; without them
     // a second, finished session read as "Task finished" over this one.
     const w = out.findIndex((r) => r.id === 'working');
