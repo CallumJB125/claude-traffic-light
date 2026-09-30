@@ -2258,8 +2258,9 @@ ipcMain.on('reduced-motion', (e, on) => {
 
 // The widget window is a transparent rectangle; the renderer reports whether
 // the cursor is over something drawn so clicks on empty space fall through.
+const ClickThrough = require('./src/click-through.js').create({ screen, getWin: () => win, every, stopTimer });
 ipcMain.on('set-click-through', (e, ignore) => {
-  try { win?.setIgnoreMouseEvents(!!ignore, { forward: true }); } catch { /* window gone */ }
+  try { ClickThrough.set(ignore); } catch { /* window gone */ }
 });
 
 ipcMain.on('resize-window-by', (e, factor) => {
