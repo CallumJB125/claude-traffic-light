@@ -34,4 +34,6 @@ contextBridge.exposeInMainWorld('lightsApi', {
   },
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   onShowView: (cb) => ipcRenderer.on('show-view', (e, v) => cb(v)),
+  onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
+  onWindowFocus: (cb) => ipcRenderer.on('window-focus', (e, focused) => cb(focused)),
 });

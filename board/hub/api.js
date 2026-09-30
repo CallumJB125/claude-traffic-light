@@ -2,7 +2,7 @@
 // change is hub.apply() → states.step() inside the board's queue; the rest are
 // plain row edits that never touch run state.
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
@@ -151,8 +151,15 @@ export class Api {
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
         const c = this.hub.card(id);
+        // An integration's card text is external text: the append-only
+        // journal can never erase it, so it keeps only hashes (D41); the
+        // text lives in `cards`, where replay and the Dashboard read it.
+        const via = this.hub.viaScope.getStore();
+        const texts = via?.member_id === member.id
+          ? { title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id, external_ref: via.external_ref ?? null }
+          : { title, body: text, acceptance };
         this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload: {
-          key: c.key, title, body: text, acceptance, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
+          key: c.key, ...texts, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
         } });
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
@@ -361,8 +368,12 @@ export class Api {
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
-    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source: 'web', trusted: 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
-    this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: 'web', for_agent: !!for_agent } });
+    // Text an integration wrote (inside its actVia scope) is outside text:
+    // never trusted, so it can never reach a running agent (deliverComments).
+    const byIntegration = this.hub.viaScope.getStore()?.member_id === member.id;
+    const source = byIntegration ? 'integration' : 'web';
+    this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source, trusted: byIntegration ? 0 : 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source, for_agent: !!for_agent } });
     return id;
   }
 
@@ -378,7 +389,7 @@ export class Api {
       });
       if (body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
-      return { comment: { id, author_name: member.display_name, source: c.source, trusted: true, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
+      return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
     });
   }
 
@@ -495,6 +506,8 @@ export class Api {
     this.db.insert('audit', { actor, action, target, detail, at: this.hub.iso() });
   }
 }
+
+const shortHash = (s) => (s == null ? null : createHash('sha256').update(s).digest('hex').slice(0, 16));
 
 function stripErr(e) {
   const { code, message, ...rest } = e;

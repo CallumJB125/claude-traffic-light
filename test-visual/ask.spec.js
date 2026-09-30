@@ -22,7 +22,10 @@ function writeRequest(id, tool, toolInput) {
   const dir = path.join(h.home, 'requests');
   fs.mkdirSync(dir, { recursive: true });
   for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f));
-  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, sessionId: 'visual', cwd: '/visual/app', tool, summary: '', toolInput, toolInputHash: 'x', createdAt: new Date().toISOString() }));
+  const req = { id, sessionId: 'visual', cwd: '/visual/app', tool, summary: '', toolInput, toolInputHash: 'x', createdAt: new Date().toISOString() };
+  // The app shows only requests that still match their decision hash.
+  req.decisionHash = require('../hooks/answer-file.js').decisionHashOf(req);
+  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(req));
 }
 
 test('a long command shows "+N more chars" and opens in full', async () => {

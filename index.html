@@ -73,6 +73,8 @@
   /* Allow / Deny strip, shown while a permission request waits. */
   #ask { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; padding: 0 6px 4px; gap: 4px; align-items: center; flex-wrap: wrap; align-content: flex-end; }
   body.asking #ask { display: flex; }
+  /* Nobody can see the widget: finite animations mid-flight hold too. */
+  body.motion-paused * { animation-play-state: paused !important; }
   body.asking #app { height: calc(100% - 46px); }
   #ask button { flex: 1; height: 22px; border: none; border-radius: var(--radius); font: 600 10px -apple-system, system-ui, sans-serif; cursor: pointer; color: #fff; }
   #ask .allow { background: var(--green); }
@@ -162,7 +164,12 @@
     window.trafficLight.onSway((v) => rig.swing(v));
     window.trafficLight.onLean((vx) => rig.lean(vx));
     window.trafficLight.onEyes((x, y) => rig.lookAt(x, y));
-    window.trafficLight.onVisibility((visible) => rig.setHidden(!visible));
+    let motionPaused = false;
+    window.trafficLight.onMotionPaused((paused) => {
+      motionPaused = !!paused;
+      document.body.classList.toggle('motion-paused', motionPaused);
+      rig.setHidden(motionPaused);
+    });
     const tooltip = document.getElementById('tooltip');
     const app = document.getElementById('app');
 
@@ -232,7 +239,7 @@
       if (look.celebrate && look.ruleId !== lastRuleId) {
         rig.celebrate();
         clearInterval(confettiTimer);
-        confettiTimer = setInterval(() => rig.celebrate(), 10000);
+        confettiTimer = setInterval(() => { if (!motionPaused) rig.celebrate(); }, 10000);
       } else if (!look.celebrate) {
         clearInterval(confettiTimer);
         confettiTimer = null;

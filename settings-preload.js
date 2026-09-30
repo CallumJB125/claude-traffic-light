@@ -18,4 +18,12 @@ contextBridge.exposeInMainWorld('settingsApi', {
   busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
   busyReconnectCalendar: () => ipcRenderer.invoke('busy-reconnect-calendar'),
   voiceStatus: () => ipcRenderer.invoke('voice-status'),
+  privacyText: () => ipcRenderer.invoke('get-privacy'),
+  exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
+  exportSetup: () => ipcRenderer.invoke('setup-export'),
+  showDataFolder: () => ipcRenderer.invoke('show-data-folder'),
+  remoteDevices: () => ipcRenderer.invoke('remote-devices'),
+  remotePair: (name) => ipcRenderer.invoke('remote-pair', name),
+  remoteRevoke: (id) => ipcRenderer.invoke('remote-revoke', id),
+  remoteCopyCode: (code) => ipcRenderer.invoke('remote-copy-code', code),
 });

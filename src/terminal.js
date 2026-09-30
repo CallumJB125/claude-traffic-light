@@ -36,7 +36,7 @@ function activateTerminalApp(folderHint, preferApp = null) {
     return new Promise((resolve) => {
       const tries = [folderHint, 'Windows Terminal', 'PowerShell', 'Command Prompt'].filter(Boolean);
       const ps = `$w = New-Object -ComObject WScript.Shell; foreach ($t in @(${tries.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})) { if ($w.AppActivate($t)) { Write-Output $t; exit } }; Write-Output NONE`;
-      execFile('powershell', ['-NoProfile', '-c', ps], (err, out) => {
+      execFile('powershell', ['-NoProfile', '-c', ps], (err, out) => { // privacy-flow: terminal-jump
         const hit = (out || '').trim();
         resolve(!err && hit && hit !== 'NONE' ? { app: hit, exact: hit === folderHint } : null);
       });
@@ -195,7 +195,7 @@ module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
     load: () => JSON.parse(fs.readFileSync(explainedFile(), 'utf8')),
     save: (list) => { fs.mkdirSync(getRootDir(), { recursive: true }); writeJsonAtomic(explainedFile(), list); },
     notify: showNote,
-    openSettings: () => shell.openExternal(Permission.SETTINGS_URL),
+    openSettings: () => shell.openExternal(Permission.SETTINGS_URL), // privacy-flow: os-settings
   });
   let jumper = null;
   function jumpToSession(session, folderHint, preferApp = null) {

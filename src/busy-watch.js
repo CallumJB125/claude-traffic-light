@@ -31,7 +31,7 @@ const ICS_MAX_REDIRECTS = 3;
 async function fetchHttpsOnly(url, signal, fetchImpl = fetch) {
   let current = url;
   for (let hop = 0; hop <= ICS_MAX_REDIRECTS; hop += 1) {
-    const res = await fetchImpl(current, { signal, redirect: 'manual' });
+    const res = await fetchImpl(current, { signal, redirect: 'manual' }); // privacy-flow: ics-feed
     if (!(res.status >= 300 && res.status < 400)) return res;
     const next = res.headers.get('location');
     if (!next) throw new Error(`HTTP ${res.status} without a location`);
@@ -177,7 +177,7 @@ module.exports = function busyWatch(deps) {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), ICS_TIMEOUT_MS);
     try {
-      const res = await fetchHttpsOnly(url, abort.signal, fetch);
+      const res = await fetchHttpsOnly(url, abort.signal, fetch); // privacy-flow: ics-feed
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await readCapped(res);
       if (!/BEGIN:VCALENDAR/.test(text)) throw new Error('not a calendar feed');

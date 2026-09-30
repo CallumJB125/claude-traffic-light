@@ -23,10 +23,10 @@ export const currentOrg = () => org;
 let csrf = null;
 export const setCsrf = (t) => { csrf = t ?? null; };
 
-async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {}, signal, onResponse } = {}) {
+async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {}, signal, onResponse } = {}) { // privacy-flow: board-view
   let res;
   try {
-    res = await fetchImpl(path, {
+    res = await fetchImpl(path, { // privacy-flow: board-view
       method,
       credentials: 'same-origin',
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...(csrf && method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}), ...headers },
@@ -65,6 +65,13 @@ export const api = {
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
   overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
   repos: () => call('GET', '/api/repos'),
+  // Integrations (team-level; admins connect, configure and disconnect).
+  integrations: () => call('GET', '/api/integrations'),
+  connectToken: (provider, token) => mut('POST', `/api/integrations/${enc(provider)}/token`, { token }),
+  startConnect: (provider) => mut('POST', `/api/integrations/${enc(provider)}/start`),
+  patchIntegration: (id, patch) => mut('PATCH', `/api/integrations/${enc(id)}`, patch),
+  disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
+  integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.
   journal: async (boardId, afterSeq = 0, limit = 1000) => {

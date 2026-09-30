@@ -1,7 +1,7 @@
 // Per-run local IPC server (CONTRACT §7.2): unix socket in the 0700 run dir,
 // socket 0600, NDJSON ≤ 1 MiB/line, every request carries the run token
 // (constant-time compare; mismatch → BAD_RUN_TOKEN and the connection closes).
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { validate } from '../shared/protocol.js';
@@ -99,7 +99,7 @@ export function startIpcServer({ socketPath, token, handler, log }) {
 /** Minimal client (hook shim, tests). */
 export function ipcRequest(socketPath, msg, { timeoutMs = 10000 } = {}) {
   return new Promise((resolve, reject) => {
-    const sock = net.createConnection(socketPath);
+    const sock = net.createConnection(socketPath); // privacy-flow: local-board-sockets
     let buf = '';
     const t = setTimeout(() => { sock.destroy(); reject(Object.assign(new Error('ipc timeout'), { code: 'TIMEOUT' })); }, timeoutMs);
     sock.setEncoding('utf8');

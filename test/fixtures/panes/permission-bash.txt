@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Bash command                                                                 │
+│                                                                              │
+│   npm run build                                                              │
+│   Build the app                                                              │
+│                                                                              │
+│ Do you want to proceed?                                                      │
+│ ❯ 1. Yes                                                                     │
+│   2. Yes, and don't ask again for npm run build commands in                  │
+│   /Users/callumbaker/Development/other-projects/ctl-p3-middleman             │
+│   3. No, and tell Claude what to do differently (esc)                        │
+╰──────────────────────────────────────────────────────────────────────────────╯

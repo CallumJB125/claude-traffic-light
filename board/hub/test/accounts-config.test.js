@@ -169,3 +169,42 @@ test('009 migrates Access-era members: one verified user per email, rows linked,
   assert.equal(db.prepare("SELECT v FROM hub_meta WHERE k = 'session_epoch'").get().v, '1');
   assert.equal(db.prepare("SELECT member_id FROM devices WHERE id = 'd1'").get().member_id, 'm1', 'existing rows untouched');
 });
+
+test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam trigger; 008 is refused after 012', () => {
+  const all = loadMigrations();
+  const triggers = (db) => db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'xteam_%' ORDER BY name").all().map((r) => r.name);
+  const shipped = [...all.flatMap((m) => [...m.sql.matchAll(/CREATE TRIGGER (?:IF NOT EXISTS )?(xteam_\w+)/g)].map((x) => x[1]))];
+  const want = [...new Set(shipped)].sort();
+  assert.ok(want.includes('xteam_comments_ins') && want.includes('xteam_invites_ins'));
+
+  const fresh = new DatabaseSync(':memory:');
+  migrate(fresh, { migrations: all });
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(triggers(fresh), want);
+  fresh.close();
+
+  const old = new DatabaseSync(':memory:');
+  migrate(old, { migrations: all.filter((m) => m.version <= 6) });
+  const NOW = '2026-09-30T10:00:00.000Z';
+  old.exec(`
+    INSERT INTO orgs (id, name, created_at) VALUES ('o1','Acme','${NOW}');
+    INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('m1','o1',101,'callum','c@x.io','Callum','owner','${NOW}');
+    INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('b1','o1','Board','BRD');
+    INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at) VALUES ('c1','b1','BRD-1','Card','m1','${NOW}','${NOW}');
+    INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
+    INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
+  `);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(triggers(old), want);
+  assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
+  assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
+  old.close();
+
+  // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
+  const skipped = new DatabaseSync(':memory:');
+  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8) });
+  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 12/);
+  assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
+  assert.deepEqual(triggers(skipped), want);
+  skipped.close();
+});

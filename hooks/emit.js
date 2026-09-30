@@ -67,23 +67,48 @@ if (adapterId) {
   const events = adapter.normalize(event, payload).filter((e) => KNOWN.includes(e.signal));
   if (!events.length) process.exit(0);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  // Paired as a reporter (hooks/remote.js): the local file also records the
+  // agent's pid (the heartbeat checks it) and a per-session sequence number
+  // (the desktop orders events by it), and each event is dispatched.
+  const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
+  const fallbackSession = process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`;
   for (const e of events) {
-    SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession: process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`, fallbackCwd: process.cwd() });
+    e.sessionId = SessionState.safeSessionId(e.sessionId || fallbackSession);
+    const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, adapter.id, e.sessionId);
+    const before = Remote ? SessionState.readJson(file) : null;
+    if (Remote && !e.pid) e.pid = Remote.agentPid(before?.claudePid);
+    if (Remote && e.signal === 'session-end') e.seq = Remote.nextSeq(before?.remoteSeq);
+    SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    if (Remote && !e.cwd) e.cwd = process.cwd();
   }
-  process.exit(0);
+  if (Remote) Remote.dispatchThenExit(adapter.id, events);
+  else process.exit(0);
 }
 
-const signal = argv.find((a) => KNOWN.includes(a)) || null;
-if (!signal) process.exit(0);
-const source = opt('source') || 'custom';
-fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-const sessionId = opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
-const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
-if (signal === 'session-end') { fs.rmSync(file, { force: true }); process.exit(0); }
-// Same lock and state step as the Claude Code hook and the app's /signal
-// endpoint, so what the app and the pollers stored on the file survives.
-SessionState.withLock(file, () => {
-  const prev = SessionState.readJson(file);
-  const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd: opt('cwd') || prev?.cwd || process.cwd(), signal, tool: opt('tool') || null });
-  SessionState.writeJsonAtomic(file, next);
-});
+// The bare-signal form, when no adapter was named (the adapter branch above
+// may still be sending, so it must not fall through to here).
+if (!adapterId) {
+  const signal = argv.find((a) => KNOWN.includes(a)) || null;
+  if (!signal) process.exit(0);
+  // Lower case, as the desktop's reporter check wants a source to be.
+  const source = /^[a-z]/.test(String(opt('source') || '').toLowerCase()) ? opt('source').toLowerCase() : 'custom';
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  const sessionId = opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
+  const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
+  let cwd = '';
+  let seq = null;
+  const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
+  if (signal === 'session-end') { if (Remote) seq = Remote.nextSeq(SessionState.readJson(file)?.remoteSeq); fs.rmSync(file, { force: true }); }
+  // Same lock and state step as the Claude Code hook and the app's /signal
+  // endpoint, so what the app and the pollers stored on the file survives.
+  else {
+    SessionState.withLock(file, () => {
+      const prev = SessionState.readJson(file);
+      cwd = opt('cwd') || prev?.cwd || process.cwd();
+      const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd, signal, tool: opt('tool') || null });
+      if (Remote) next.remoteSeq = seq = Remote.nextSeq(prev?.remoteSeq);
+      SessionState.writeJsonAtomic(file, next);
+    });
+  }
+  if (Remote) Remote.dispatchThenExit(source.replace(/[^a-z0-9_-]/g, '').slice(0, 24) || 'custom', [{ signal, seq, sessionId: SessionState.safeSessionId(sessionId), cwd, tool: opt('tool') || null }]);
+}

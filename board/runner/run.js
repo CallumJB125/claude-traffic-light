@@ -866,9 +866,12 @@ export class Run {
   #wrapCard(r) {
     const key = r?.card?.key ?? this.key;
     const w = (what, s) => (typeof s === 'string' ? this.#wrap(`card:${key} ${what}`, s) : s);
+    // A card an integration created says so (D42): its text came from outside the team.
+    const via = r?.card?.labels?.find?.((l) => typeof l === 'string' && /^via:[a-z0-9-]{2,32}$/.test(l))?.slice(4);
+    const v = via ? ` via ${via}` : '';
     return {
       ...r,
-      card: r.card && { ...r.card, title: w('title', r.card.title), body: w('body', r.card.body) },
+      card: r.card && { ...r.card, title: w(`title${v}`, r.card.title), body: w(`body${v}`, r.card.body) },
       acceptance: w('acceptance', r.acceptance),
       handover_md: w('handover', r.handover_md),
       open_asks: (r.open_asks ?? []).map((a) => ({ ...a, text: w('open ask', a.text) })),

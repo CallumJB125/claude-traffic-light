@@ -4,7 +4,9 @@
 // liveness (D11), overlap recompute, notifications (N-rules) and the GitHub
 // merge poll. Transports (HTTP, /ws/board, /ws/runner) call into this class.
 
+import { createVault } from './vault.js';
 import { EventEmitter } from 'node:events';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
@@ -47,6 +49,8 @@ export class Hub extends EventEmitter {
     this.queues = new Map();
     this.inflight = new Set();
     this.post = [];
+    this.boardScope = new AsyncLocalStorage(); // Set of board ids whose queue the current code runs in
+    this.viaScope = new AsyncLocalStorage();   // {connection_id, member_id, name}: an integration acting (D42)
     this.live = new Map();          // run_id → lease memory (hub monotonic)
     this.runners = new Map();       // device_id → runner connection (ws-runner.js)
     this.browsers = new Set();      // browser connections (ws-board.js)
@@ -75,11 +79,20 @@ export class Hub extends EventEmitter {
 
   // Integrations encryption key handed in by the desktop app (local mode, over
   // parentPort; D36). Held in memory only; set once.
-  setVaultKey(buf) {
+  setVaultKey(buf, previous = null) {
     if (this.vaultKey) throw new Error('vault key already set');
     if (!Buffer.isBuffer(buf) || buf.length !== 32) throw new Error('vault key must be 32 bytes');
+    if (previous != null && (!Buffer.isBuffer(previous) || previous.length !== 32)) throw new Error('previous vault key must be 32 bytes');
+    this.vaultPrevKey = previous ? Buffer.from(previous) : null;
     this.vaultKey = Buffer.from(buf);
     this.emit('vault-key');
+  }
+
+  // Sealed connector secrets (D41), built from the key D36 hands in; keyless
+  // (every seal refused) until then.
+  get vault() {
+    if (this._vaultFor !== this.vaultKey) { this._vault = createVault(this.vaultKey, this.vaultPrevKey); this._vaultFor = this.vaultKey; }
+    return this._vault;
   }
 
   loadSecret() {
@@ -117,7 +130,7 @@ export class Hub extends EventEmitter {
   // ── single-writer queues ──────────────────────────────────────────────────
   withBoard(boardId, fn) {
     const prev = this.queues.get(boardId) ?? Promise.resolve();
-    const run = prev.then(() => fn());
+    const run = prev.then(() => this.boardScope.run(new Set([...(this.boardScope.getStore() ?? []), boardId]), fn));
     const settled = run.then(() => {}, () => {});
     this.queues.set(boardId, settled);
     this.inflight.add(settled);
@@ -127,6 +140,17 @@ export class Hub extends EventEmitter {
     });
     return run;
   }
+
+  /** True inside a withBoard(boardId) callback: waiting on that queue again would deadlock. */
+  inBoard(boardId) { return !!this.boardScope.getStore()?.has(boardId); }
+
+  /**
+   * Run fn as an integration (D42): journal rows the acting member (or, for a
+   * system fact, the connection) writes inside it get actor_kind
+   * 'integration', actor_id = the connection id; feed events name the tool.
+   * Permission checks still use the member.
+   */
+  actVia(via, fn) { return this.viaScope.run(via, fn); }
 
   withCard(cardId, fn) {
     const row = this.db.get('SELECT board_id FROM cards WHERE id = ?', cardId);
@@ -187,15 +211,28 @@ export class Hub extends EventEmitter {
   isAdmin(m) { return isAdmin(m); }
   canWrite(m) { return canWrite(m); }
   cardSpentCents(cardId) { return this.db.get('SELECT COALESCE(SUM(cost_cents), 0) AS s FROM runs WHERE card_id = ?', cardId).s; }
+  // A deleted team's integrations stop with it: revoked, secrets erased (inside the deleting txn).
+  revokeDeletedTeamConnections(now) {
+    this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
+    this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+  }
 
   // ── journal (P-1): append-only, same transaction as the change ─────────────
   /** {board_id? (else from card_id), card_id?, run_id?, actor_kind, actor_id?, kind, payload} */
   journal({ board_id, card_id = null, run_id = null, actor_kind = 'system', actor_id = null, kind, payload = {} }) {
+    const via = this.viaScope.getStore();
+    if (via && ((actor_kind === 'member' && actor_id && actor_id === via.member_id) || (actor_kind === 'system' && actor_id === via.connection_id))) {
+      if (actor_kind === 'member') payload = { ...payload, on_behalf_of: actor_id };
+      actor_kind = 'integration';
+      actor_id = via.connection_id;
+    }
     const board = board_id !== undefined ? board_id : this.db.get('SELECT board_id FROM cards WHERE id = ?', card_id)?.board_id ?? null;
     this.db.insert('journal', {
       board_id: board, card_id, run_id, at_hub: this.iso(), hub_epoch: this.epoch ?? null,
       actor_kind, actor_id, kind, payload: JSON.stringify(payload),
     });
+    // After commit: bus consumers (integrations, webhooks) read from here.
+    this.later(() => this.emit('journal'));
   }
 
   // ── apply: step() + effects in one transaction ────────────────────────────
@@ -237,7 +274,8 @@ export class Hub extends EventEmitter {
     this.journal({
       board_id: row.board_id, card_id: row.id, run_id: env.newRunId ?? env.runId ?? null,
       actor_kind: src === 'human' ? 'member' : src === 'runner' ? 'runner' : 'system',
-      actor_id: src === 'human' ? actor : src === 'runner' ? device?.id ?? null : null,
+      // A system event from an integration names its connection (D42); the merge poll passes none.
+      actor_id: src === 'human' ? actor : src === 'runner' ? device?.id ?? null : actor ?? null,
       kind: 'card.transition',
       payload: { rule: res.rule, event: event.type, from: res.from, to: res.to, state, effects: res.effects.map((e) => e.type) },
     });
@@ -339,6 +377,9 @@ export class Hub extends EventEmitter {
         this.deliverAnswer(env);
         break;
       case 'notify':
+        // D40: every notification is a journal row in this transaction, so the
+        // notifier (a bus consumer) is at-least-once and survives restarts.
+        this.journal({ board_id: row.board_id, card_id: cardId, run_id: env.runId ?? null, kind: 'card.notify', payload: { rule: e.rule, to: this.recipients(cardId, e.to) } });
         this.later(() => this.notify(e.rule, cardId, e.to));
         break;
       case 'notify_after':
@@ -525,6 +566,8 @@ export class Hub extends EventEmitter {
 
   // ── feed + notifications ──────────────────────────────────────────────────
   feed(cardId, kind, data = {}, { actor = null, run = null, device = null, seq = null, delayed = false } = {}) {
+    const via = this.viaScope.getStore();
+    if (via && actor && actor === via.member_id) data = { ...data, via: via.name };
     const info = this.db.insert('events', {
       card_id: cardId, run_id: run?.id ?? null, fence: run?.fence ?? null, device_id: device, seq, kind,
       payload: JSON.stringify(data), actor, at_hub: this.iso(), delayed: delayed ? 1 : 0,
@@ -1071,7 +1114,7 @@ export function feedEvent(hub, ev) {
   }
   else if (ev.kind === 'failed' && data.reason) text = `Failed: ${data.reason}`;
   return {
-    id: ev.id, kind: ev.kind, at_age_ms: hub.ageOf(ev.at_hub), actor_name: ev.actor ? hub.memberName(ev.actor) : null,
+    id: ev.id, kind: ev.kind, at_age_ms: hub.ageOf(ev.at_hub), actor_name: data.via ?? (ev.actor ? hub.memberName(ev.actor) : null),
     run_n: ev.fence ?? null, text, data,
   };
 }

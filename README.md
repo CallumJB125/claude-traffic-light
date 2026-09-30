@@ -133,8 +133,8 @@ Rage meter: *Ignored for 10 / 20 / 30 minutes* are signals you can rule on;
 the **Loud** preset escalates from foot-tapping to arms crossed and a beard
 to a banner with laser eyes.
 
-Presets: **Classic** (the original behaviour), **Minimal** (lamps only),
-**Tool-aware** (eye colours per tool), **Loud** (sounds, bullets, rage meter),
+Start from a template (**Solo dev**, **Team lead**, **Pair with Claude all day**,
+**Minimal**, **Show-off**), or a preset: **Tool-aware** (eye colours per tool), **Loud** (sounds, bullets, rage meter),
 **Party** (running, pets, costumes, hearts, fire) — plus your own: type a name at the
 bottom of the Presets menu to save the current rules, and pick or delete
 them there later. Everything is stored in `~/.claude-traffic-light/config.json`
@@ -191,6 +191,16 @@ curl http://127.0.0.1:47172/status     # the resolved look + live sessions
 Signals: prompt-submit, tool-use, tool-done, tool-failed, stop,
 permission-ask, limit-hit, idle-nudge, session-start, session-end,
 subagent-start, subagent-done.
+
+### Sessions on another machine
+
+Claude Code in tmux on a server can light this widget too. Pair the machine in
+Preferences → Remote devices, then from a checkout on that machine run
+`node hooks/install.js --remote http://127.0.0.1:47173` over an
+`ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:47173:127.0.0.1:47173` tunnel
+(a unix socket on shared hosts, or opt in to Tailscale). Every event is
+signed with the device's own key, and its sessions show under the device's
+name. Recipes, wire format and threat notes: [docs/remote-reporter.md](docs/remote-reporter.md).
 
 ## Windows
 

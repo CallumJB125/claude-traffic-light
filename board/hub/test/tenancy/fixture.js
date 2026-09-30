@@ -3,12 +3,13 @@
 // admin, a member and a viewer; B has an owner. User S is a member of both.
 // Both teams link the SAME canonical repo URL (separate repo rows), and B holds
 // content in every table a route can reach: a card with a comment, a run with
-// an open permission request, a runner device, an ask, a pending invite. N is signed in and in
-// no team. Everything B holds carries the marker `B-SECRET`.
+// an open permission request, a runner device, an ask, a pending invite, an
+// integration connection (the fake connector). N is signed in and in no team. Everything B holds carries the marker `B-SECRET`.
 
-import { randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { startAccounts } from '../accounts-helpers.js';
 import { emailOnlyIdentity } from '../../views.js';
+import fake from '../../integrations/fake/index.js';
 
 export const MARK = 'B-SECRET';
 
@@ -88,6 +89,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.inviteToken = ib.body.link.split('#')[1];
   B.ask = randomUUID();
   db.insert('asks', { id: B.ask, run_id: B.run, card_id: B.card, kind: 'question', text: `${MARK} ask`, state: 'open', created_at: now });
+  h.hub.setVaultKey(randomBytes(32));
+  h.app.integrations.register(fake);
+  const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
+  B.connection = h.app.integrations.createConnection({ ...v, display_name: `${MARK} workspace`, orgId: B.team, memberId: B.owner, provider: 'fake' }).id;
 
   /** Everything team B owns, as one string: equal before and after = untouched. */
   function snapshotB() {
@@ -103,6 +108,8 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM repos WHERE org_id = ?', B.team),
       q('SELECT * FROM invites WHERE org_id = ?', B.team),
+      q('SELECT * FROM connections WHERE org_id = ?', B.team),
+      q('SELECT * FROM connection_secrets WHERE connection_id = ?', B.connection),
     ].join('\n');
   }
 

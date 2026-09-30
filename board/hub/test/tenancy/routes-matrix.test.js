@@ -8,21 +8,24 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { tenancy, MARK } from './fixture.js';
+import { sign } from '../../integrations/fake/index.js';
 
 // kind:
 //   cross    – names B's resources in the path; expect 404
 //   team     – no resource in the path; sent with X-Board-Team: <B>; expect 404
 //   self     – acts only on the caller's own account (no foreign id possible)
-//   public   – no auth (health, sign-in, invite preview): proven in their own tests
+//   public   – no auth (health, sign-in, invite preview): proven in their own tests;
+//              `reason` says why no sign-in is needed
 //   (a cross entry may name another expected `status` when 404 isn't the generic answer)
 //   create   – makes a new team for the caller (teams.test.js)
 // For cross routes `path(fx)` fills B's ids; `alt` adds calls that mix A's
-// team with B's sub-resource ids (also 404).
+// team with B's sub-resource ids (also 404); `headers(fx)` names team B where
+// the path's id is not a tenant resource (an integration provider).
 const MATRIX = {
-  'GET /api/health': { kind: 'public' },
-  'GET /api/auth/methods': { kind: 'public' },
-  'POST /api/auth/email/start': { kind: 'public' },
-  'POST /api/auth/email/verify': { kind: 'public' },
+  'GET /api/health': { kind: 'public', reason: 'liveness probe; no team data' },
+  'GET /api/auth/methods': { kind: 'public', reason: 'the sign-in page asks before anyone is signed in' },
+  'POST /api/auth/email/start': { kind: 'public', reason: 'starts a sign-in' },
+  'POST /api/auth/email/verify': { kind: 'public', reason: 'finishes a sign-in' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
@@ -53,7 +56,7 @@ const MATRIX = {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/invites/${fx.B.invite}/resend`,
     alt: (fx) => [`/api/teams/${fx.A.team}/invites/${fx.B.invite}/resend`],
   },
-  'POST /api/invites/preview': { kind: 'public' },
+  'POST /api/invites/preview': { kind: 'public', reason: 'the invite token is the credential (invites.test.js)' },
   // Token / own-address acceptance: invites.test.js proves the email binding.
   'POST /api/invites/accept': { kind: 'self' },
   // An invite addressed to someone else is as unknown as a made-up id: the one
@@ -77,6 +80,20 @@ const MATRIX = {
   'DELETE /api/devices/:id': { kind: 'cross', path: (fx) => `/api/devices/${fx.B.device}` },
   'GET /api/repos': { kind: 'team' },
   'POST /api/repos': { kind: 'team', body: { url: 'git@github.com:pwned/app.git' } },
+  // Integrations (D40–D42): connections belong to a team.
+  'GET /api/integrations': { kind: 'team' },
+  'POST /api/integrations/:provider/token': { kind: 'cross', path: () => '/api/integrations/fake/token', headers: (fx) => ({ 'x-board-team': fx.B.team }), body: { token: 'fake_pwned12345' } },
+  'POST /api/integrations/:provider/start': { kind: 'cross', path: () => '/api/integrations/fake/start', headers: (fx) => ({ 'x-board-team': fx.B.team }) },
+  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} } },
+  'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}` },
+  'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
+};
+
+// Handled before the route table (and before accounts auth): not in
+// app.routes, so listed here with why they need no sign-in.
+const PRE_ROUTE = {
+  'POST /integrations/:id/webhook': 'the provider signs every delivery; the signature (the connection\'s own secret) is the auth',
+  'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
 };
 
 const key = (r) => `${r.method} ${r.pattern}`;
@@ -92,7 +109,9 @@ test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matri
     // Every route that takes an id from the URL is exercised cross-team.
     for (const r of fx.h.app.routes) {
       if (r.pattern.includes('/:')) assert.equal(MATRIX[key(r)].kind, 'cross', `${key(r)} takes an id: it must be a cross entry`);
+      if (MATRIX[key(r)].kind === 'public') assert.ok(MATRIX[key(r)].reason, `${key(r)} is public: give the reason`);
     }
+    for (const [k, why] of Object.entries(PRE_ROUTE)) assert.ok(!live.includes(k) && why, k);
   } finally {
     await fx.h.close();
   }
@@ -112,7 +131,7 @@ async function sweep(fx, caller) {
     const e = MATRIX[key(r)];
     const body = typeof e.body === 'function' ? e.body(fx) : e.body ?? {};
     if (e.kind === 'cross') {
-      await check(key(r), r.method, e.path(fx), body, {}, e.status);
+      await check(key(r), r.method, e.path(fx), body, e.headers?.(fx) ?? {}, e.status);
       for (const p of e.alt?.(fx) ?? []) await check(`${key(r)} (alt)`, r.method, p, body);
     } else if (e.kind === 'team') {
       await check(key(r), r.method, r.pattern, body, { 'x-board-team': fx.B.team });
@@ -137,6 +156,43 @@ test('T-ROUTES: a signed-in user in no team gets 404 from every route that names
   const fx = await tenancy();
   try {
     await sweep(fx, fx.users.n);
+  } finally {
+    await fx.h.close();
+  }
+});
+
+test('T-ROUTES: the webhook ignores a signed-in caller: B\'s connection answers 401 to an unsigned post, with no B data', async () => {
+  const fx = await tenancy();
+  try {
+    for (const u of [fx.users.ua, fx.users.n]) {
+      const r = await fx.as(u, 'POST', `/integrations/${fx.B.connection}/webhook`, { event: 'issue.opened', issue: { id: 'x', title: 'pwned' } });
+      assert.equal(r.status, 401, r.text);
+      assert.ok(!r.text.includes(MARK) && !r.text.includes(fx.B.team));
+    }
+    const snap = fx.snapshotB();
+    assert.equal((await fx.as(fx.users.ua, 'POST', `/integrations/${randomUUID()}/webhook`, {})).status, 404);
+    assert.equal(fx.snapshotB(), snap);
+  } finally {
+    await fx.h.close();
+  }
+});
+
+test('accounts mode: a signed delivery acts as the connecting member in its own team, on the connection\'s buckets', async () => {
+  const fx = await tenancy();
+  try {
+    const { h, B, A } = fx;
+    const own = () => h.hub.limiter.buckets.get(`mutate_member|${B.owner}`)?.tokens;
+    const before = own();
+    const raw = Buffer.from(JSON.stringify({ event: 'issue.opened', issue: { id: 'ISS-1', title: 'From the tracker' } }));
+    const r = await fetch(`${h.base}/integrations/${B.connection}/webhook`, {
+      method: 'POST', body: raw, headers: { 'content-type': 'application/json', 'x-fake-signature': sign('whsec_abcdef123456', raw), 'x-fake-delivery': randomUUID() },
+    });
+    assert.equal(r.status, 200, await r.text());
+    const card = h.db.get("SELECT board_id, created_by FROM cards WHERE title = 'From the tracker'");
+    assert.deepEqual({ ...card }, { board_id: B.board, created_by: B.owner });
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE board_id = ? AND title = 'From the tracker'", A.board).n, 0);
+    for (const rule of ['integration_conn', 'integration_card_conn']) assert.ok(h.hub.limiter.buckets.has(`${rule}|${B.connection}`), rule);
+    assert.equal(own(), before, 'never the member\'s own bucket');
   } finally {
     await fx.h.close();
   }

@@ -164,6 +164,7 @@ export class Teams {
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
+      this.hub.revokeDeletedTeamConnections(now);
       this.audit('team.delete', member, { ip, target: o.id, detail: { purge_after: purgeAfter } });
       this.hub.later(() => {
         for (const d of devices) {

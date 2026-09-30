@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -21,9 +21,12 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const http = require('http');
+const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
+const { createAwayFeeds } = require('./src/away-feeds.js');
+const { createProbeBackoff } = require('./src/probe-backoff.js');
+const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
+const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
   TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
@@ -163,6 +166,9 @@ const DEFAULT_CONFIG = {
   busyFocus: true,
   busyFocusShortcut: '',
   voice: { ...Voice.DEFAULTS },
+  // Accept paired devices' events on the Tailscale address too (loopback
+  // only otherwise, which an ssh -R tunnel reaches).
+  remoteTailscale: false,
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -207,7 +213,7 @@ function buildConfig() {
     const at = config.rules.findIndex((r) => r.when.signal.includes('idle'));
     config.rules.splice(at < 0 ? config.rules.length : at, 0, Rules.normalizeRule(nudge));
   }
-  if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0);
+  if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0, saved.template);
   config.rulesVersion = Rules.RULES_VERSION;
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
@@ -218,6 +224,8 @@ function buildConfig() {
 function saveConfig(partial) {
   const next = Setup.dropRemovedKeys({ ...loadConfig(), ...partial });
   if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
+  // A template only describes the rules it saved them with.
+  if (partial.rules && !('template' in partial)) next.template = null;
   // Presets reach here from loadConfig or Lights, so their rules are current.
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   fs.mkdirSync(ROOT_DIR, { recursive: true });
@@ -286,13 +294,50 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // session's folder. POST also needs the per-install token, written 0600 next
 // to the port file, so only something that can read your files can move a
 // light.
-const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest } = require('./src/signal-server.js')({
+// Paired machines report their sessions over POST /remote/event, signed per
+// device, on a port of their own that serves nothing else (src/remote-devices.js,
+// docs/remote-reporter.md). Their writes land outside SESSIONS_DIR, so the
+// watcher there doesn't see them: onChange does.
+const RemoteDevices = require('./src/remote-devices.js')({
+  rootDir: ROOT_DIR,
+  onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
+  log: (m) => console.log(m),
+});
+const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
   requestsDir: REQUESTS_DIR,
   aggregateState: (...a) => aggregateState(...a),
   broadcastStatus: (...a) => broadcastStatus(...a),
 });
+// A remote session's folder names a directory on another machine: it is
+// shown, never opened, copied as a path, knocked on or used to find a
+// terminal here.
+const { localSessions } = require('./src/remote-devices.js');
+
+// ── Waiting inputs (P3+): every ask, answerable or not, as one list
+// (state.inputs; schema in docs/waiting-inputs.md). Dialogs no hook can see
+// are read off the session's tmux pane, read-only and rate-limited.
+const PendingInputs = require('./src/pending-inputs.js');
+const PaneDialogs = require('./src/pane-dialogs.js');
+const Owned = require('./hooks/owned.js');
+const AnswerFile = require('./hooks/answer-file.js');
+let paneDialogs = [];
+let paneDetector = null;
+async function scanPaneDialogs() {
+  if (process.platform === 'win32') return;
+  const Focus = require('./src/focus/index.js');
+  paneDetector = paneDetector || PaneDialogs.createDetector({ exec: Focus.exec, serverOk: Focus.tmuxServerOk, tmuxBin: Focus.which(require('./src/focus/tmux.js').BINS) });
+  const st = aggregateState();
+  const pendingSessionIds = new Set((st.pending || []).map((r) => r.sessionId));
+  const next = await paneDetector.scan({ sessions: st.sessions || [], pendingSessionIds, launches: Owned.unclaimedLaunches(ROOT_DIR) });
+  const sig = (list) => list.map((d) => `${d.key}:${d.dialog}:${d.options.length}`).join('|');
+  if (sig(next) !== sig(paneDialogs)) {
+    paneDialogs = next;
+    stateMemo = { at: 0, key: null, value: null };
+    broadcastStatus();
+  } else paneDialogs = next;
+}
 
 let win;
 let tray;
@@ -393,6 +438,7 @@ function sweepSessionFiles() {
   const c = loadConfig();
   const maxAge = Math.max(c.waitingStaleHours * 3600000 || 0, c.workingStaleMinutes * 60000 || 0, AGENT_KEEPALIVE_MS) + SESSION_SWEEP_MARGIN_MS;
   const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
+  for (const dir of RemoteDevices.deviceDirs()) removed.push(...Agents.sweepStaleFiles(dir, maxAge));
   if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
 }
 
@@ -403,12 +449,14 @@ const lastPresented = new Map(); // sessionId -> { signal, loggedAt, skipped }
 function logTransition(data, signal, source, now) {
   const sid = String(data.sessionId || '?');
   const last = lastPresented.get(sid);
+  // Remote ids are minted elsewhere; don't let them grow this without bound.
+  if (!last && lastPresented.size >= 1000) lastPresented.delete(lastPresented.keys().next().value);
   if (last && last.signal === signal) return;
   const entry = { signal, loggedAt: last ? last.loggedAt : 0, skipped: last ? last.skipped : 0 };
   if (now - entry.loggedAt >= TRANSITION_LOG_MS) {
     const tail = String(data.cwd || '').split('/').filter(Boolean).slice(-2).join('/');
     const why = signal === 'turn-failed' ? ` [${data.failKind || 'error'}]` : '';
-    console.log(`[state] ${sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal}${why} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
+    console.log(`[state] ${data.logId || sid.slice(0, 8)} ${tail} ${last ? last.signal : '—'} → ${signal}${why} (${source})${entry.skipped ? ` +${entry.skipped} unlogged` : ''}`);
     entry.loggedAt = now;
     entry.skipped = 0;
   } else entry.skipped += 1;
@@ -455,6 +503,24 @@ function readSessions(config, pendingIds = []) {
     } catch {
       // skip unreadable/partially-written file
     }
+  }
+  return sessions;
+}
+
+// Paired devices' sessions, through the same reader machine; liveness is the
+// device's heartbeat (a pid on another machine can't be checked from here).
+function readRemoteSessions(config) {
+  const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
+  const waitingStaleMs = config.waitingStaleHours * 60 * 60 * 1000;
+  const now = Date.now();
+  const sessions = [];
+  for (const data of RemoteDevices.readSessions()) {
+    const c = Rules.classifySession(data, { now, isGone: () => RemoteDevices.isGone(data, now), workingStaleMs, waitingStaleMs });
+    if (c.dropped === 'gone') logTransition(data, 'gone', 'heartbeat lapsed', now);
+    if (c.held) wakeWhenHoldEnds(data, now);
+    if (!c.live) continue;
+    logTransition(data, c.presented, c.source, now);
+    sessions.push(c.session);
   }
   return sessions;
 }
@@ -561,20 +627,21 @@ function cameosChanged() {
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
-  const sessions = readSessions(config, requests.map((r) => r.sessionId));
+  const sessions = readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
+  const inputs = PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs });
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks, away: BusyWatch.recap() };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap() };
   }
   const override = readManualOverride();
   if (override) {
     const synthetic = [{ signal: OVERRIDE_SIGNALS[override.state] || 'idle', cwd: '' }];
     const { look, fired, owned } = Rules.resolve(config.rules, synthetic);
-    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, tasks };
+    return { look: { ...look, tasks }, reason: 'manual', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), pending, inputs, tasks };
   }
   // A pending permission request is the "Needs your input" state, whatever
   // the session files say (the hook blocks before Notification fires). It
@@ -591,7 +658,7 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -632,12 +699,12 @@ const BusyWatch = require('./src/busy-watch.js')({
   isDevRun: IS_DEV_RUN,
   fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
   tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
-  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))), // privacy-flow: calendar-helper
   readFile: (f) => fs.readFileSync(f, 'utf8'),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
   removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
-  fetch: (url) => net.fetch(url),
+  fetch: (url) => net.fetch(url), // privacy-flow: ics-feed
   log: (...a) => console.log(...a),
   onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
 });
@@ -695,6 +762,82 @@ ipcMain.handle('busy-status', () => BusyWatch.status());
 ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
 ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
+// ── Motion gate ────────────────────────────────────────────────────────────
+// backgroundThrottling is off, so Chromium never tells a page nobody can see
+// it. Every reason the widget can't be seen (hidden, minimised, screen locked,
+// asleep, displays off) feeds one gate — menu-bar-only mode (item 10) will
+// call setMotionPaused('menu-bar', …); while it holds, the renderer stops its
+// clocks and main stops the cursor poll, the overlay, the garden, roaming and
+// status pushes.
+const widgetMotion = createMotionGate((paused) => {
+  if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
+  syncEyePoll();
+  // Whatever changed while paused lands the moment it's back.
+  if (!paused) broadcastStatus();
+});
+function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
+
+// The editor's previews run every animation the rules can pick, at full
+// rate; hidden, minimised or behind a locked screen that is pure waste.
+const lightsMotion = createMotionGate((paused) => {
+  if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
+});
+
+// Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
+// only while the machine sleeps.
+let gitTick = null;
+const awayFeeds = createAwayFeeds({
+  busyWatch: BusyWatch,
+  feeds: () => [refreshSpend, ...(gitTick ? [gitTick] : [])],
+});
+
+// Machine-wide reasons (locked, asleep, displays off) apply to every gate.
+const machineReasons = new Set();
+function pauseEverywhere(reason, on) {
+  if (on) machineReasons.add(reason); else machineReasons.delete(reason);
+  setMotionPaused(reason, on);
+  lightsMotion.set(reason, on);
+  awayFeeds.power(reason, on);
+  syncMachineReconcile();
+}
+
+// A missed unlock or wake notification would leave the widget frozen for
+// good. While a lock or displays-off reason stands, check once a minute
+// whether someone is plainly back.
+let machineReconcileTimer = null;
+function syncMachineReconcile() {
+  const want = machineReasons.has('locked') || machineReasons.has('screens-asleep');
+  if (want && !machineReconcileTimer) {
+    machineReconcileTimer = every(60 * 1000, () => {
+      const stale = staleMachineReasons([...machineReasons], powerMonitor.getSystemIdleState(60), powerMonitor.getSystemIdleTime());
+      for (const r of stale) { console.log(`[motion] clearing a stale '${r}'`); pauseEverywhere(r, false); }
+    }, 'motion-reconcile');
+  } else if (!want) machineReconcileTimer = stopTimer(machineReconcileTimer);
+}
+
+function watchPowerForMotion() {
+  powerMonitor.on('lock-screen', () => pauseEverywhere('locked', true));
+  powerMonitor.on('unlock-screen', () => pauseEverywhere('locked', false));
+  powerMonitor.on('suspend', () => pauseEverywhere('suspended', true));
+  powerMonitor.on('resume', () => pauseEverywhere('suspended', false));
+  if (IS_MAC) {
+    // Displays asleep without a lock (energy saver, a closed lid on a dock).
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidSleepNotification', () => pauseEverywhere('screens-asleep', true));
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidWakeNotification', () => pauseEverywhere('screens-asleep', false));
+    // An app launching or coming to the front may be the terminal gaining its
+    // Dock icon (or leaving the front): the roam probe looks again soon.
+    for (const n of ['NSWorkspaceDidLaunchApplicationNotification', 'NSWorkspaceDidActivateApplicationNotification']) systemPreferences.subscribeWorkspaceNotification(n, () => roamProbe.wake());
+  }
+}
+
+let eyeTimer = null;
+function syncEyePoll() {
+  // The visual tests screenshot a still face; a live cursor would shift it.
+  const want = DEMO !== 'visual' && app.isReady() && !widgetMotion.paused;
+  if (want && !eyeTimer) eyeTimer = every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  else if (!want) eyeTimer = stopTimer(eyeTimer);
+}
+
 function createWindow() {
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
@@ -720,6 +863,7 @@ function createWindow() {
     fullscreenable: false,
     show: false,
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       backgroundThrottling: false,
@@ -742,16 +886,24 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', () => { if (!glideTimer) saveBounds(); });
-  // backgroundThrottling is off, so the page never learns it's hidden: tell
-  // it, so the rig's clocks (idle loops, blinks) stop while nobody can see.
-  const visibility = (on) => () => { if (win && !win.isDestroyed()) win.webContents.send('visibility', on); };
-  win.on('show', visibility(true));
-  win.on('restore', visibility(true));
-  win.on('hide', visibility(false));
-  win.on('minimize', visibility(false));
-  // Those only fire on a change; a widget that loads hidden (showWidget off)
-  // would otherwise run its clocks until its first hide.
-  win.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) visibility(win.isVisible() && !win.isMinimized())(); });
+  // Each event re-reads both from the window: a restore can bring back a
+  // window that was hidden before it was minimised, with no 'show' at all.
+  const syncVisibility = (visible = win.isVisible()) => {
+    if (!win || win.isDestroyed()) return;
+    setMotionPaused('minimized', win.isMinimized());
+    setMotionPaused('hidden', !visible && !win.isMinimized());
+  };
+  win.on('show', () => syncVisibility(true));
+  win.on('hide', () => syncVisibility(false));
+  win.on('restore', () => syncVisibility());
+  win.on('minimize', () => syncVisibility());
+  // Those only fire on a change; a widget that loads hidden (showWidget off),
+  // or reloads while paused, must still start in the right state.
+  win.webContents.on('did-finish-load', () => {
+    if (!win || win.isDestroyed()) return;
+    syncVisibility();
+    win.webContents.send('motion-paused', widgetMotion.paused);
+  });
   win.on('closed', () => {
     win = null;
   });
@@ -774,6 +926,7 @@ function createSettingsWindow() {
     maximizable: false,
     title: 'Claude Buddy Preferences',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
       contextIsolation: true,
     },
@@ -823,6 +976,7 @@ function createLightsWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'lights-preload.js'),
       contextIsolation: true,
       // The live preview must keep animating when this window sits behind
@@ -831,6 +985,24 @@ function createLightsWindow() {
     },
   });
   lightsWin.setMenuBarVisibility(false);
+  const syncLightsVisibility = (visible = lightsWin?.isVisible()) => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsMotion.set('minimized', lightsWin.isMinimized());
+    lightsMotion.set('hidden', !visible && !lightsWin.isMinimized());
+  };
+  lightsWin.on('show', () => syncLightsVisibility(true));
+  lightsWin.on('hide', () => syncLightsVisibility(false));
+  lightsWin.on('restore', () => syncLightsVisibility());
+  lightsWin.on('minimize', () => syncLightsVisibility());
+  lightsWin.webContents.on('did-finish-load', () => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsWin.webContents.send('motion-paused', lightsMotion.paused);
+    lightsWin.webContents.send('window-focus', lightsWin.isFocused());
+  });
+  // The page's own focus state can't be trusted in every host (automation
+  // pins document.hasFocus()), so the window's is sent in.
+  lightsWin.on('focus', () => lightsWin?.webContents.send('window-focus', true));
+  lightsWin.on('blur', () => lightsWin?.webContents.send('window-focus', false));
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
@@ -909,6 +1081,9 @@ function createLightsWindow() {
   if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
+    // The next editor opens shown; only the machine-wide reasons carry over.
+    lightsMotion.set('hidden', false);
+    lightsMotion.set('minimized', false);
     if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
@@ -943,6 +1118,7 @@ function createHelpWindow() {
     title: 'What is Claude doing?',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'help-preload.js'),
       contextIsolation: true,
     },
@@ -1002,7 +1178,7 @@ function maybeNotify(st) {
       // A runaway's whole point is the jump, so it goes even without a known host app.
       const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
       // Another machine's session: nothing on this Mac to jump to.
-      if (isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
+      if (String(n.sessionId || '').startsWith('remote:') || isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
         jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
       }
@@ -1147,7 +1323,7 @@ async function pushScreenFx(fx) {
 function updateOverlay(look) {
   const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
   const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : (look.effect === 'garden' || gardenRun ? 'garden' : null);
-  const wants = (gun || fx) && win && win.isVisible() && !prefersReducedMotion();
+  const wants = (gun || fx) && win && win.isVisible() && !widgetMotion.paused && !prefersReducedMotion();
   if (!wants) { stopOverlay(); overlayFx = 'none'; return; }
   const m = widgetMuzzle();
   if (!m) return;
@@ -1171,7 +1347,7 @@ function updateOverlay(look) {
     skipTaskbar: true,
     fullscreenable: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setIgnoreMouseEvents(true);
   overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1233,7 +1409,7 @@ function ensureTrayRenderer() {
     show: false,
     transparent: true,
     frame: false,
-    webPreferences: { preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
@@ -1540,7 +1716,7 @@ function updateGarden(st) {
   // Judge by the state underneath any travel override, or a state change
   // during gardening would never be seen.
   const real = gardenRun ? aggregateState({ ignoreTravel: true }) : st;
-  const wants = real.look.effect === 'garden' && win && win.isVisible() && real.reason !== 'preview';
+  const wants = real.look.effect === 'garden' && win && win.isVisible() && !widgetMotion.paused && real.reason !== 'preview';
   if (wants && !gardenRun && !roamState.busy) {
     runGarden(real.look).catch((e) => console.log('[garden]', e.message));
   } else if (!wants && gardenRun && !gardenRun.stop) {
@@ -1549,6 +1725,7 @@ function updateGarden(st) {
   }
 }
 
+let widgetAsksSent = null;
 function broadcastStatus() {
   // travelLook is only ever legitimate while the garden or a roam is running.
   // If one of those died (a throw, a crashed renderer, a closed window) the
@@ -1568,11 +1745,14 @@ function broadcastStatus() {
     win = null;
     createWindow();
   }
-  win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    // A paused widget catches up when the gate lifts (it broadcasts then),
+    // except for its waiting inputs, which it always hears about.
+    const asks = askKey(st);
+    if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
@@ -1588,7 +1768,16 @@ function broadcastStatus() {
 // When something needs you and the terminal isn't the front app, Claude runs
 // along the screen to that app's Dock icon, knocks, and runs home. Once per
 // waiting episode, then every 10 minutes while still ignored.
-let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
+let roamState = { lastKnock: 0, probing: false, waitingSince: null, busy: false, home: null };
+// A probe that keeps failing the same way (no Dock icon for the terminal)
+// backs off to 10 min; the terminal being in front must still be seen at once.
+const roamProbe = createProbeBackoff({
+  base: 20000,
+  max: 10 * 60 * 1000,
+  // A terminal that isn't running yet is worth checking for again soon.
+  caps: { 'no terminal app running': 60 * 1000 },
+  steady: (why) => why === 'already the front app',
+});
 
 // The renderer reports prefers-reduced-motion; while it holds, travel snaps
 // to its destination (keeping the pacing) and nothing roams, hops or glides.
@@ -1664,17 +1853,17 @@ async function roamAndKnock(st, { force = false } = {}) {
   // status tick start another round while the previous one was still waiting —
   // thousands of hung osascript processes, and an exhausted process table.
   roamState.busy = true;
-  const giveUp = (why) => { roamState.busy = false; return { ok: false, why }; };
+  const giveUp = (why, situation) => { roamState.busy = false; return { ok: false, why, situation }; };
   let appName = null;
   let icon = null;
   try {
-    appName = await terminalForSessions(st.sessions);
-    if (!appName) return giveUp('no terminal app running');
-    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app');
+    appName = await terminalForSessions(localSessions(st.sessions));
+    if (!appName) return giveUp('no terminal app running', { app: null, running: false });
+    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app', { app: appName, running: true, frontmost: true });
     icon = await dockIconRect(appName);
-    if (!icon) return giveUp(`no Dock icon for ${appName}`);
+    if (!icon) return giveUp(`no Dock icon for ${appName}`, { app: appName, running: true, frontmost: false, dockIcon: false });
   } catch (e) {
-    return giveUp(`could not locate the Dock icon: ${e.message}`);
+    return giveUp(`could not locate the Dock icon: ${e.message}`, { app: appName, running: !!appName });
   }
   roamState.lastKnock = Date.now();
   const wasVisible = win.isVisible();
@@ -1727,9 +1916,9 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
-  const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
-  if (!waiting) { roamState.waitingSince = null; return; }
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
+  const waiting = st.pending?.length || localSessions(st.sessions).some((s) => WAITING_SIGNALS.has(s.signal));
+  if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
@@ -1748,13 +1937,19 @@ function maybeRoam(st) {
   // processes every 4 seconds (and on every session-file write), which is what
   // made the machine crawl while a permission prompt sat unanswered.
   if (roamState.probing) return;
-  if (Date.now() - roamState.lastProbe < 20000) return;
+  // Who is waiting, and in which terminal: a change there is a new situation.
+  roamProbe.setKey([...(st.pending || []).map((p) => p.id), ...st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).map((s) => `${s.sessionId}:${s.signal}:${s.hostApp || ''}`)].sort().join('|'));
+  if (!roamProbe.due(Date.now())) return;
   roamState.probing = true;
-  roamState.lastProbe = Date.now();
+  let result = null;
   roamAndKnock(st)
-    .then((r) => { if (!r.ok) console.log('[roam] skipped:', r.why); })
-    .catch((e) => console.log('[roam]', e.message))
-    .finally(() => { roamState.probing = false; });
+    .then((r) => { result = r; })
+    .catch((e) => { result = { ok: false, why: e.message }; console.log('[roam]', e.message); })
+    .finally(() => {
+      roamState.probing = false;
+      roamProbe.probed(result, Date.now());
+      if (result && !result.ok) console.log(`[roam] skipped: ${result.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+    });
 }
 
 // ── Rare events ────────────────────────────────────────────────────────────
@@ -1764,10 +1959,11 @@ const seenSessions = new Set();
 let lastEventAt = 0;
 function maybeRandomEvent(st) {
   const config = loadConfig();
-  if (!config.randomEvents || !win || !win.isVisible() || previewLook || travelLook) return;
+  if (!config.randomEvents || !win || !win.isVisible() || widgetMotion.paused || previewLook || travelLook) return;
   let milestone = false;
   for (const s of st.sessions) {
     if (!seenSessions.has(s.sessionId)) {
+      if (seenSessions.size >= 5000) seenSessions.delete(seenSessions.values().next().value);
       seenSessions.add(s.sessionId);
       stats.sessionsSeen = (stats.sessionsSeen || 0) + 1;
       statsDirty = true;
@@ -2008,14 +2204,16 @@ ipcMain.handle('get-aggregate-status', () => {
 // live signal is a waiting one. Cycles through them, oldest first; a limit
 // hit jumps the queue.
 ipcMain.handle('go-to-needing-session', async () => {
-  const { sessions } = aggregateState();
+  const sessions = localSessions(aggregateState().sessions);
   const needing = sessions
     .filter((s) => WAITING_SIGNALS.has(s.signal))
     .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
 
   if (needing.length === 0) {
     cycleIndex = 0;
-    return { opened: 'none', total: 0 };
+    // Nothing here to jump to, but say where the waiting is.
+    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+    return away ? { opened: 'remote', total: 0, feedback: `waiting on ${away.deviceName}` } : { opened: 'none', total: 0 };
   }
 
   const limits = needing.filter((s) => s.signal === 'limit-hit');
@@ -2055,21 +2253,24 @@ function commitConfig(partial) {
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
   if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
   if ('showWidget' in partial) applyWidgetVisibility();
+  if ('remoteTailscale' in partial) syncTailnetListener();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   if ('voice' in partial) applyVoiceHotkey();
   broadcastStatus();
   return next;
 }
 
+ipcMain.handle('get-privacy', () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-ipcMain.handle('export-stats', async (_e, format, days) => {
+ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
   const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
-  const r = await dialog.showSaveDialog(lightsWin || undefined, {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
     filters: [csv ? { name: 'CSV', extensions: ['csv'] } : { name: 'JSON', extensions: ['json'] }],
@@ -2266,7 +2467,7 @@ let spendReqId = 0;
 function spendRead(since) {
   if (spendWorker === null) {
     try {
-      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
+      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js')); // privacy-flow: local-worker
       spendWorker.unref();
       spendWorker.on('message', (m) => {
         if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
@@ -2418,13 +2619,17 @@ ipcMain.handle('get-spend', () => {
 let snoozeTimer = null;
 let cycleIndex = 0;
 async function runAction(action, st) {
-  const needing = st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
-  const target = needing[0] || st.sessions[0] || null;
+  const local = localSessions(st.sessions);
+  const needing = local.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  const target = needing[0] || local[0] || null;
   const cwd = target?.cwd || null;
   const folderHint = cwd ? cwd.split('/').filter(Boolean).pop() : '';
   switch (action.type) {
     case 'jump': {
-      if (!needing.length) return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+      if (!needing.length) {
+        const away = st.sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+        return away ? { feedback: `waiting on ${away.deviceName}` } : { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
+      }
       const r = await jumpToNeeding();
       return { feedback: r };
     }
@@ -2433,10 +2638,14 @@ async function runAction(action, st) {
       return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
+      // Tool permissions only: a plan, question or elicitation is answered
+      // from its own options, never by a gesture.
       const req = st.pending && st.pending[0];
       if (!req) return { feedback: 'nothing to answer' };
-      answerRequest(req.id, action.type);
+      if (req.kind && req.kind !== 'permission') return { feedback: 'open it to answer' };
+      const ok = answerRequest(req.id, action.type);
       setTimeout(broadcastStatus, 250);
+      if (!ok) return { feedback: 'answer it in the terminal' };
       return { feedback: action.type === 'allow' ? 'allowed' : 'denied' };
     }
     case 'poke': return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
@@ -2452,12 +2661,12 @@ async function runAction(action, st) {
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
-    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
+    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' }; // privacy-flow: rule-url
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
-      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
     case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
@@ -2473,9 +2682,12 @@ async function runAction(action, st) {
 }
 
 async function jumpToNeeding() {
-  const { sessions } = aggregateState();
+  const sessions = localSessions(aggregateState().sessions);
   const needing = sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
-  if (!needing.length) return 'nothing waiting';
+  if (!needing.length) {
+    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
+    return away ? `waiting on ${away.deviceName}` : 'nothing waiting';
+  }
   const limits = needing.filter((s) => s.signal === 'limit-hit');
   const queue = limits.length > 0 ? limits : needing;
   cycleIndex = cycleIndex % queue.length;
@@ -2594,10 +2806,40 @@ ipcMain.handle('voice-status', () => ({
   hotkeyTaken: voiceHotkeyTaken,
 }));
 
+// allow | deny for a tool permission only (answerRequest checks both).
 ipcMain.handle('answer-request', (e, id, decision) => {
   const ok = answerRequest(String(id), String(decision));
   setTimeout(broadcastStatus, 250);
   return ok;
+});
+
+// A click on a PendingInput option: the renderer sends the input id and the
+// option id (plus free-text answers, form content or a deny message); the
+// answer itself is rebuilt from the request file, never taken from the
+// renderer. First answer wins (answer-file.js); every answer is logged.
+ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
+  const req = readRequests().find((r) => r.id === String(id));
+  if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
+  const m = more && typeof more === 'object' ? more : {};
+  const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
+  if (!answer) return { ok: false, error: 'not an option for this request' };
+  // Bound to the request as shown (readRequests drops edited ones): the file
+  // must still hash the same when the answer is written.
+  const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
+  console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
+  setTimeout(broadcastStatus, 250);
+  return w.ok ? { ok: true } : { ok: false, error: w.error };
+});
+
+// "Open it": jump to the pane or tab the input is waiting in. Never types.
+ipcMain.handle('open-input', async (e, id) => {
+  const item = (aggregateState().inputs || []).find((i) => i.id === String(id));
+  if (!item) return { ok: false, error: 'gone' };
+  const dialog = item.source === 'tmux' ? paneDialogs.find((d) => `dialog-${d.key}` === item.id) : null;
+  const session = dialog ? dialog.jump : (aggregateState().sessions || []).find((s) => s.sessionId === item.session);
+  if (!session) return { ok: false, error: 'session not found' };
+  const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  return { ok: !!r, app: r ? r.app : null };
 });
 
 // The widget grows a strip of Allow / Deny buttons while a request waits,
@@ -2621,7 +2863,7 @@ ipcMain.handle('preview-sound', (e, name) => playSound(name));
 ipcMain.handle('export-rules', async (e, rules) => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
-  fs.writeFileSync(r.filePath, JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: Rules.RULES_VERSION, rules: (rules || []).map(Rules.normalizeRule) }, null, 2));
+  fs.writeFileSync(r.filePath, JSON.stringify(Rules.shareFile(rules || []), null, 2));
   return r.filePath;
 });
 
@@ -2669,6 +2911,39 @@ ipcMain.handle('connect-agent', (e, which) => {
 });
 ipcMain.handle('git-status', () => ({ ...git.status(), enabled: loadConfig().gitSignals !== false }));
 ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+// Not the signal server's port: an ssh -R tunnel makes this one reachable to
+// every user of the far host, so it serves only the signed device route.
+// A bad override is reported in Settings, never thrown at startup.
+const REMOTE_PORT = process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT ? Number(process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT) : SIGNAL_PORT + 1;
+function syncTailnetListener() {
+  return RemoteDevices.syncTailnet(!!loadConfig().remoteTailscale, REMOTE_PORT)
+    .then((r) => { if (r.error) console.log('[remote]', r.error); return r; })
+    .catch((e) => { console.log('[remote] tailnet:', e.message); });
+}
+function remoteDevicesView() {
+  const live = {};
+  for (const s of readRemoteSessions(loadConfig())) live[s.device] = (live[s.device] || 0) + 1;
+  return { devices: RemoteDevices.list(live), port: REMOTE_PORT, loopback: RemoteDevices.loopbackStatus(), tailnet: { enabled: !!loadConfig().remoteTailscale, ...RemoteDevices.tailnetStatus() } };
+}
+ipcMain.handle('remote-devices', () => remoteDevicesView());
+// The pairing code goes to the window that asked, once; nothing else keeps it.
+ipcMain.handle('remote-pair', (_e, name) => {
+  const r = RemoteDevices.pair(String(name || ''));
+  return r.error ? { error: r.error } : { ...remoteDevicesView(), paired: r.device, code: r.code };
+});
+// The clipboard forgets the code after a minute, unless something else has
+// been copied since.
+ipcMain.handle('remote-copy-code', (_e, code) => {
+  const text = String(code || '');
+  if (!/^buddy-pair-v1\./.test(text)) return false;
+  clipboard.writeText(text);
+  setTimeout(() => { if (clipboard.readText() === text) clipboard.writeText(''); }, 60000);
+  return true;
+});
+ipcMain.handle('remote-revoke', (_e, id) => {
+  const revoked = RemoteDevices.revoke(String(id || ''));
+  return { ...remoteDevicesView(), revoked };
+});
 
 ipcMain.handle('choose-sound-file', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
@@ -2706,8 +2981,8 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-ipcMain.handle('setup-export', async () => {
-  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+ipcMain.handle('setup-export', async (e) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
@@ -2862,6 +3137,14 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startSignalServer();
+  // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
+  every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');
+  // Dev and demo runs share this machine with a real install; they only
+  // listen for devices when given a port of their own.
+  if (!IS_DEV_RUN || process.env.CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT) RemoteDevices.listenLoopback(REMOTE_PORT);
+  syncTailnetListener();
+  // Tailscale can come up (or change address) after Buddy does.
+  every(60000, () => { if (loadConfig().remoteTailscale) syncTailnetListener(); }, 'tailnet');
   if (DEMO === 'weed') {
     // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
     // at 6½ min a fake session appears so the state changes and the hammer teardown plays.
@@ -2918,7 +3201,7 @@ app.whenReady().then(() => {
   // dev runs never call gh, but still show saved events.
   if (IS_DEV_RUN) git.pause('dev-run');
   else {
-    const gitTick = () => {
+    gitTick = () => {
       const config = loadConfig();
       if (!git.due(config)) return;
       git.tick({ sessions: readSessions(config), config }).then((fired) => {
@@ -2929,12 +3212,11 @@ app.whenReady().then(() => {
       }).catch((e) => console.log('[git]', e.message));
     };
     setTimeout(gitTick, 5000);
-    every(15000, gitTick, 'git');
   }
   refreshSpend();
-  every(SPEND_POLL_MS, refreshSpend, 'spend');
-  // The visual tests screenshot a still face; a live cursor would shift it.
-  if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  every(SPEND_POLL_MS, awayFeeds.tick, 'feeds');
+  syncEyePoll();
+  watchPowerForMotion();
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
@@ -2959,7 +3241,7 @@ app.whenReady().then(() => {
       try {
         const st = aggregateState({ ignoreTravel: true });
         report.sessions = st.sessions.map((s) => ({ hostApp: s.hostApp, signal: s.signal }));
-        report.terminal = await terminalForSessions(st.sessions);
+        report.terminal = await terminalForSessions(localSessions(st.sessions));
         report.result = await knockNow();
       } catch (e) {
         report.error = e.stack || e.message;

@@ -116,6 +116,14 @@
     cursor: pointer;
     transition: filter var(--t);
   }
+  .pv { font-size: var(--text-sm, 12px); line-height: 1.45; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .pv p, .pv ul, .pv ol, .pv blockquote { margin: 0; }
+  .pv ul, .pv ol { padding-left: 18px; }
+  .pv li { margin: 3px 0; }
+  .pv .pv-h { font-size: var(--text-base); margin: 10px 0 0; }
+  .pv blockquote { border-left: 3px solid var(--line-input); padding-left: 8px; color: var(--text); }
+  .pv code { font-size: 11px; word-break: break-all; }
+  #privacy summary { cursor: pointer; font-weight: 500; }
   button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); font-weight: 500; padding: 5px 12px; }
   button.secondary:hover { filter: none; background: #322e3a; }
   button:hover { filter: brightness(1.08); }
@@ -131,6 +139,19 @@
   #busy-sources { display: flex; flex-direction: column; gap: 3px; padding-left: 23px; }
   .busy-state { font-size: var(--text-xs); color: var(--muted); padding-left: 23px; margin-top: -3px; }
   .busy-state.ok { color: var(--green); }
+  #remote-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #remote-list li { display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  #remote-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #remote-list .who span:last-child { font-size: var(--text-xs); color: var(--muted); }
+  #remote-list:empty { display: none; }
+  #remote-code { display: flex; flex-direction: column; gap: 6px; padding: var(--space-2); background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); }
+  #remote-code[hidden] { display: none; }
+  #remote-list button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #remote-list li { flex-wrap: wrap; }
+  #remote-list .revoke-note { flex-basis: 100%; text-align: right; font-size: var(--text-xs); color: var(--danger-text); }
+  #remote-list .revoke-note:empty { display: none; }
+  .remote-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+  #remote-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); user-select: all; }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
     button:active { transform: none; }
@@ -332,7 +353,8 @@
     </div>
     <div class="hint">One session spending this fast turns the light pulsing red (hover Claude for its burn rate) and sends one notification that jumps to its terminal. Buddy never stops or types into a session you started. 0 turns a limit off.</div>
     <label class="row"><input type="checkbox" id="spend-notify-runaway" /> Notify me about a runaway session</label>
-    <label class="row"><input type="checkbox" id="spend-notify-budget" /> Notify me near and over budget</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-warning" /> Notify me when spend nears a budget</label>
+    <label class="row"><input type="checkbox" id="spend-notify-budget-exceeded" /> Notify me when spend goes over a budget</label>
   </div>
   <!-- end F1 spend -->
   <h2>Busy &amp; Focus</h2>
@@ -359,11 +381,53 @@
     <div class="hint" id="hint-focus">macOS only lets Buddy read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Buddy never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
   </div>
 
+  <h2>Remote devices</h2>
+  <div class="field" id="remote-devices">
+    <div class="hint">Claude Code on another machine (a server, tmux over SSH) can light this widget: pair the machine here, then run Buddy's hooks there in reporter mode. Its sessions show under the device's name. Buddy never opens their folders or jumps to their terminals.</div>
+    <label for="remote-name">Pair a device</label>
+    <div class="row">
+      <input type="text" id="remote-name" placeholder="devbox" maxlength="40" aria-describedby="remote-pair-status" />
+      <button type="button" class="secondary" id="remote-pair">Pair</button>
+    </div>
+    <div class="hint" id="remote-pair-status" role="status" aria-live="polite"></div>
+    <div id="remote-code" hidden>
+      <div class="hint">Shown once. To connect <b id="remote-code-name"></b>:</div>
+      <ol class="hint remote-steps">
+        <li>On this Mac, open a tunnel to it: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> <span id="remote-code-host"></span></code></li>
+        <li>On <span id="remote-code-where"></span>, in the folder where you downloaded Claude Buddy, run <code>node hooks/remote.js pair http://127.0.0.1:<span class="remote-port">47173</span></code> and paste this code:</li>
+      </ol>
+      <pre id="remote-code-text"></pre>
+      <div class="row"><button type="button" class="secondary" id="remote-copy">Copy code</button><button type="button" class="secondary" id="remote-done">Done</button></div>
+      <div class="hint">Use it within 10 minutes. It's this device's key: keep it private; if it leaks, revoke and pair again. Copied, it leaves the clipboard after a minute.</div>
+    </div>
+    <ul id="remote-list" aria-label="Paired devices"></ul>
+    <div class="hint">Reach this Mac with a tunnel from here: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> &lt;host&gt;</code>. Every event is signed with the device's own key; revoking stops it at once.</div>
+    <div class="hint" id="remote-listener" role="status" aria-live="polite"></div>
+    <label class="row"><input type="checkbox" id="remoteTailscale" aria-describedby="remote-tailnet" /> Also accept devices over Tailscale</label>
+    <div class="hint" id="remote-tailnet">Listens on this Mac's Tailscale address only, for signed device events and nothing else.</div>
+  </div>
+
+  <h2>Privacy</h2>
+  <div class="field" id="privacy">
+    <div class="hint">Buddy reads your sessions on this machine and sends nothing to us. The full notice is below, and it is a draft pending legal review.</div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="privacy-export-stats">Export stats</button>
+      <button type="button" class="secondary" id="privacy-export-setup">Export setup</button>
+      <button type="button" class="secondary" id="privacy-folder">Show data folder</button>
+    </div>
+    <div class="hint" id="privacy-status" role="status" aria-live="polite"></div>
+    <details id="privacy-notice">
+      <summary>Read the privacy notice</summary>
+      <div id="privacy-body" class="pv"></div>
+    </details>
+  </div>
+
   <div class="actions">
     <span id="status" role="status" aria-live="polite"></span>
     <button id="save">Save</button>
   </div>
 
+  <script src="privacy-render.js"></script>
   <script>
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
@@ -399,6 +463,7 @@
       document.getElementById('gitRepos').value = (config.gitRepos || []).join(', ');
       document.getElementById('gitDeployWorkflows').value = (config.gitDeployWorkflows || []).join(', ');
       loadSpend(config.spend || {}); // F1 spend
+      document.getElementById('remoteTailscale').checked = !!config.remoteTailscale;
       document.getElementById('busyHold').checked = config.busyHold !== false;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
@@ -477,7 +542,8 @@
       spendEl('runaway-tokens').value = Math.round((sp.runawayTokens || 0) / 1000);
       spendEl('runaway-minutes').value = sp.runawayMinutes || 20;
       spendEl('notify-runaway').checked = sp.notifyRunaway !== false;
-      spendEl('notify-budget').checked = sp.notifyBudget !== false;
+      spendEl('notify-budget-warning').checked = sp.notifyBudgetWarning !== false;
+      spendEl('notify-budget-exceeded').checked = sp.notifyBudgetExceeded !== false;
     }
     function spendSettings() {
       const n = (id) => Math.max(0, Number(spendEl(id).value) || 0);
@@ -490,7 +556,8 @@
         runawayTokens: n('runaway-tokens') * 1000,
         runawayMinutes: Math.min(240, Math.max(1, n('runaway-minutes') || 20)),
         notifyRunaway: spendEl('notify-runaway').checked,
-        notifyBudget: spendEl('notify-budget').checked,
+        notifyBudgetWarning: spendEl('notify-budget-warning').checked,
+        notifyBudgetExceeded: spendEl('notify-budget-exceeded').checked,
       };
     }
     window.settingsApi.spend().then((sp) => {
@@ -535,8 +602,10 @@
         busyFocus: document.getElementById('busyFocus').checked,
         busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
         busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
+        remoteTailscale: document.getElementById('remoteTailscale').checked,
       });
       setTimeout(showBusy, 1500);
+      showRemote(await window.settingsApi.remoteDevices());
       status.className = '';
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 2500);
@@ -573,6 +642,80 @@
         : '';
     };
     window.settingsApi.gitStatus().then(showGit);
+
+    const remoteEl = (id) => document.getElementById(`remote-${id}`);
+    const ago = (iso) => {
+      const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+      return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+    };
+    // textContent throughout: device names come from this window, but a
+    // hand-edited devices.json shouldn't be able to inject markup.
+    function showRemote(v) {
+      if (!v) return;
+      document.querySelectorAll('.remote-port').forEach((el) => { el.textContent = v.port; });
+      const list = remoteEl('list');
+      list.replaceChildren(...v.devices.map((d) => {
+        const li = document.createElement('li');
+        const who = document.createElement('div'); who.className = 'who';
+        const name = document.createElement('span'); name.textContent = d.name;
+        const meta = document.createElement('span');
+        meta.textContent = d.pairing === 'expired' ? 'Code expired unused: revoke and pair again'
+          : d.pairing === 'waiting' ? 'Waiting for the device to use its code'
+          : `${d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'not seen since Buddy started'} · ${d.sessions} live session${d.sessions === 1 ? '' : 's'}`;
+        who.append(name, meta);
+        const revoke = document.createElement('button');
+        revoke.type = 'button'; revoke.className = 'secondary'; revoke.textContent = 'Revoke';
+        revoke.setAttribute('aria-label', `Revoke ${d.name}`);
+        // Said beside the button it's about, and gone again when it disarms.
+        const note = document.createElement('span');
+        note.className = 'revoke-note';
+        note.setAttribute('role', 'status');
+        note.setAttribute('aria-live', 'polite');
+        revoke.addEventListener('click', async () => {
+          if (!revoke.dataset.armed) {
+            revoke.dataset.armed = '1'; revoke.textContent = 'Revoke now?'; revoke.classList.add('armed');
+            note.textContent = `Click again to revoke ${d.name}. Its key stops working at once.`;
+            setTimeout(() => { delete revoke.dataset.armed; revoke.textContent = 'Revoke'; revoke.classList.remove('armed'); note.textContent = ''; }, 4000);
+            return;
+          }
+          const r = await window.settingsApi.remoteRevoke(d.id);
+          remoteEl('pair-status').textContent = r.revoked ? `Revoked ${d.name}. Its key no longer works.` : `${d.name} was already gone.`;
+          showRemote(r);
+        });
+        li.append(who, revoke, note);
+        return li;
+      }));
+      const lb = v.loopback || {};
+      remoteEl('listener').textContent = lb.error ? lb.error : lb.listening ? `Listening for devices on 127.0.0.1:${v.port}.` : 'Not listening for devices in this run.';
+      const t = v.tailnet;
+      remoteEl('tailnet').textContent = !t.enabled ? 'Listens on this Mac\'s Tailscale address only, for signed device events and nothing else.'
+        : t.listening ? `Listening on ${t.address}:${v.port} for signed device events only.`
+        : t.error || 'Not listening yet.';
+    }
+    remoteEl('pair').addEventListener('click', async () => {
+      const r = await window.settingsApi.remotePair(remoteEl('name').value);
+      if (r.error) { remoteEl('pair-status').textContent = r.error; return; }
+      remoteEl('pair-status').textContent = `Paired ${r.paired.name}.`;
+      remoteEl('name').value = '';
+      remoteEl('code-name').textContent = r.paired.name;
+      remoteEl('code-where').textContent = r.paired.name;
+      // The name as the ssh host when it can be one; otherwise say what goes there.
+      remoteEl('code-host').textContent = /^[A-Za-z0-9._-]+$/.test(r.paired.name) ? r.paired.name : `<${r.paired.name}'s ssh address>`;
+      remoteEl('code-text').textContent = r.code;
+      remoteEl('code').hidden = false;
+      showRemote(r);
+    });
+    remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
+    remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
+    window.settingsApi.remoteDevices().then(showRemote);
+    const pvStatus = document.getElementById('privacy-status');
+    const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
+    document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));
+    document.getElementById('privacy-export-setup').addEventListener('click', async () => pvDone(await window.settingsApi.exportSetup()));
+    document.getElementById('privacy-folder').addEventListener('click', async () => pvDone(await window.settingsApi.showDataFolder()));
+    window.settingsApi.privacyText().then((t) => {
+      document.getElementById('privacy-body').innerHTML = t ? window.renderPrivacy(t) : '<p>The privacy notice could not be loaded.</p>';
+    });
     load();
 
     // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.

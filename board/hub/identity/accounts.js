@@ -537,6 +537,7 @@ export class Accounts {
         SELECT m.org_id FROM members m WHERE m.user_id = ? AND m.removed_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.removed_at IS NULL))`,
       now, this.at(PURGE_AFTER_MS), user.id);
+      this.hub.revokeDeletedTeamConnections(now);
       for (const m of members) {
         // github_login/github_id are NOT NULL and unique per org until the P2
         // rebuild: a private placeholder (never shown) and a stable negative id.

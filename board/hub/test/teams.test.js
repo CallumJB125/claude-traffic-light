@@ -231,6 +231,22 @@ test('rename (admin) and soft delete (owner, confirm_slug + step-up): the team 4
   }
 });
 
+test('a deleted team\'s integrations stop: connection revoked, secrets erased, its webhook 404s', async () => {
+  const fx = await tenancy();
+  try {
+    const { as, users, B, db } = fx;
+    assert.equal(db.get('SELECT status FROM connections WHERE id = ?', B.connection).status, 'active');
+    const flow = await fx.h.stepUp(users.ub.token, users.ub.email);
+    const slug = db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug;
+    assert.equal((await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: slug, flow_id: flow })).status, 200);
+    assert.equal(db.get('SELECT status FROM connections WHERE id = ?', B.connection).status, 'revoked');
+    assert.equal(db.get('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', B.connection).n, 0);
+    assert.equal((await fx.h.call('POST', `/integrations/${B.connection}/webhook`, { body: {} })).status, 404);
+  } finally {
+    await fx.h.close();
+  }
+});
+
 test('account deletion soft-deletes the teams where the user was the only member', async () => {
   const h = await startAccounts({ config: { rateLimits: ROOMY } });
   try {
