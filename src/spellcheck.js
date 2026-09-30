@@ -12,7 +12,7 @@ function keepOffline({ app, getDefaultSession, platform = process.platform }) {
   const off = (ses) => {
     try {
       ses.setSpellCheckerEnabled(false);
-      ses.setSpellCheckerDictionaryDownloadURL(NOWHERE);
+      ses.setSpellCheckerDictionaryDownloadURL(NOWHERE); // privacy-flow: spellcheck-off
     } catch (err) { console.warn('[spellcheck] could not turn off:', err.message); }
   };
   app.on('session-created', off);

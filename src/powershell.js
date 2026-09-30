@@ -26,7 +26,7 @@ function command(script, values = []) {
 
 function run(script, values, opts, cb) {
   const c = command(script, values);
-  return execFile(c.file, c.args, { ...opts, env: { ...c.env, ...(opts && opts.env) }, windowsHide: true }, cb);
+  return execFile(c.file, c.args, { ...opts, env: { ...c.env, ...(opts && opts.env) }, windowsHide: true }, cb); // privacy-flow: windows-powershell
 }
 
 // The scripts the app runs. Each takes the $env: references for its values.

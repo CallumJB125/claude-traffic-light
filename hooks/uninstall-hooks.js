@@ -10,7 +10,7 @@ const UninstallAll = require('../adapters/uninstall-all.js');
 
 function loadMcp() {
   for (const p of [path.join(__dirname, '..', 'app.asar', 'mcp-install.js'), path.join(__dirname, '..', 'mcp-install.js')]) {
-    try { return require(p); } catch { /* try the next */ }
+    try { return require(p); } catch { /* try the next */ } // privacy-flow: own-code
   }
   return null;
 }

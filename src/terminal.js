@@ -45,7 +45,7 @@ function activateTerminalApp(folderHint, preferApp = null) {
   }
   if (process.platform === 'linux') {
     // exec: true on exit 0, false on another code, throws when wmctrl is missing.
-    const exec = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 2000 }, (err) => {
+    const exec = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 2000 }, (err) => { // privacy-flow: terminal-jump
       if (err && err.code === 'ENOENT') reject(err); else resolve(!err);
     }));
     return LinuxActivate.activate(folderHint, exec);

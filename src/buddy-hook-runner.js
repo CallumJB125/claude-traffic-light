@@ -24,7 +24,7 @@ function run(argv, { exit = (code) => process.exit(code) } = {}) {
   const job = parse(argv);
   if (!job) { exit(0); return; }
   process.argv = [process.argv[0], job.script, ...job.args];
-  try { require(job.script); } catch { /* a hook never breaks the agent that ran it */ }
+  try { require(job.script); } catch { /* a hook never breaks the agent that ran it */ } // privacy-flow: own-code
   // emit.js exits by itself; one that returns without exiting must not leave
   // an Electron process running.
   exit(process.exitCode || 0);
