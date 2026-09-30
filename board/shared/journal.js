@@ -18,8 +18,10 @@ export const JOURNAL_KINDS = Object.freeze([
   'comment.create',     // {comment_id, source, for_agent}
   'feed.relabel',       // {event_id, relabel}: replaces the old in-place events UPDATE
   'hub.restore_bump',   // {bump}: every card fence += bump (Litestream restore, D10)
-  'card.notify',        // {rule, to}: the delayed orphan notification (the others ride card.transition effects)
+  'card.notify',        // {rule, to}: every notify effect (D40) and the delayed orphan notification
   'lesson.create',      // {lesson_id, repo_id}: board_add_lesson (no text, like comment.create)
+  'integration.connect',    // {connection_id, provider}: a team connected a tool (D41; never secrets)
+  'integration.disconnect', // {connection_id, provider}
   'device.outbox',      // {reason:'runner_acked'|'gap'|'reset', from, to, outbox_id?}: a device's last_seq_acked moved other than by an ack (board_id NULL)
 ]);
 

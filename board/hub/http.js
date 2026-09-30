@@ -78,7 +78,7 @@ async function readBody(req) {
   }
 }
 
-export function createHttpHandler({ hub, api, config }) {
+export function createHttpHandler({ hub, api, config, integrations = null }) {
   const etags = new Map();
 
   const authMember = makeAuthMember({ hub, config });
@@ -95,6 +95,7 @@ export function createHttpHandler({ hub, api, config }) {
     }
     if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
+    if (r.pattern.startsWith('/api/integrations/:id')) return hub.db.get('SELECT org_id FROM connections WHERE id = ?', params.id)?.org_id ?? null;
     return null;
   };
 
@@ -145,6 +146,48 @@ export function createHttpHandler({ hub, api, config }) {
   route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
   route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
 
+  // ── integrations (I1, D41; buddy-builder-5) ──────────────────────────────
+  // Team-level: members see what's connected and its health; admins connect,
+  // configure and disconnect. Secrets never appear in any response.
+  if (integrations) {
+    const own = (member, id) => {
+      const c = integrations.get(id);
+      if (!c || hub.db.get('SELECT org_id FROM connections WHERE id = ?', id)?.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
+      return c;
+    };
+    route('GET', '/api/integrations', ({ member }) => ({
+      available: integrations.connectors(), connections: integrations.list(member.org_id), vault: hub.vault.available,
+    }));
+    route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
+      api.requireAdmin(member);
+      const conn = integrations.connectors().find((c) => c.id === params.provider);
+      if (!conn || conn.connect !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
+      const token = String(body.token ?? '').trim();
+      if (!token || token.length > 4096) throw new HubError('VALIDATION', 'paste the token');
+      let v;
+      try { v = await integrations.verifyToken(params.provider, token); } catch (e) { throw new HubError('VALIDATION', e.message); }
+      return { connection: integrations.createConnection({ orgId: member.org_id, memberId: member.id, provider: params.provider, ...v }) };
+    });
+    route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      const patch = {};
+      if (body.autonomy !== undefined) patch.autonomy = body.autonomy;
+      if (body.config !== undefined) patch.config = body.config;
+      return { connection: integrations.setSettings(params.id, patch) };
+    });
+    route('DELETE', '/api/integrations/:id', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      integrations.revokeConnection(params.id, member.id);
+      return { ok: true };
+    });
+    route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
+      own(member, params.id);
+      return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
+    });
+  }
+
   async function serveFile(req, res, path) {
     let info;
     try { info = await stat(path); } catch { info = null; }
@@ -183,6 +226,20 @@ export function createHttpHandler({ hub, api, config }) {
     const url = new URL(req.url, 'http://hub');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
+    if (hook) {
+      try {
+        limitOrThrow(hub, 'mutate_ip', clientIp(req, config));
+        const chunks = [];
+        let n = 0;
+        for await (const c of req) { n += c.length; if (n > MAX_BODY) return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } }); chunks.push(c); }
+        const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
+        return sendJson(res, out.status, out.body);
+      } catch (e) {
+        if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e));
+        throw e;
+      }
+    }
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         const p = staticPath(url.pathname);

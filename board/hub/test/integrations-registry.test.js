@@ -1,0 +1,209 @@
+// I1 connector framework: connections + sealed secrets, signed webhooks with
+// replay protection, the autonomy gate + audit log, bus delivery scoped to the
+// connection's team, and actAs through the normal Api.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { Api } from '../api.js';
+import { createIntegrations } from '../integrations/registry.js';
+import { defineConnector } from '../integrations/connector.js';
+import fake, { sign } from '../integrations/fake/index.js';
+import { startHub } from './helpers.js';
+
+async function setup({ key = true } = {}) {
+  const h = await startHub();
+  if (key) h.hub.setVaultKey(randomBytes(32));
+  // A dev hub already runs the registry (with the fake connector) and the bus.
+  return { h, bus: h.app.bus, reg: h.app.integrations };
+}
+
+async function connectFake(h, reg) {
+  const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
+  return reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', ...v });
+}
+
+const post = (reg, conn, payload, { secret = 'whsec_abcdef123456', delivery = randomUUID(), tamper = false } = {}) => {
+  const raw = Buffer.from(JSON.stringify(payload));
+  const sig = sign(secret, raw);
+  return reg.webhook(conn.id, { headers: { 'x-fake-signature': sig, 'x-fake-delivery': delivery }, rawBody: tamper ? Buffer.concat([raw, Buffer.from(' ')]) : raw });
+};
+
+const issue = (id, title = 'Login broken') => ({ event: 'issue.opened', issue: { id, title, url: `https://fake.example/issues/${id}` } });
+
+test('defineConnector refuses an incomplete connector (webhooks without verify, bad autonomy)', () => {
+  const base = { id: 'x-y', name: 'X', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) } };
+  assert.doesNotThrow(() => defineConnector(base));
+  assert.throws(() => defineConnector({ ...base, handleWebhook: async () => {} }), /verify/);
+  assert.throws(() => defineConnector({ ...base, actions: { a: { default: 'yolo' } } }), /auto\|ask\|off/);
+  assert.throws(() => defineConnector({ ...base, id: 'Bad Id' }), /id must match/);
+  assert.throws(() => defineConnector({ ...base, connect: { kind: 'oauth' } }), /authorizeUrl/);
+});
+
+test('connect: secrets are sealed (never in the row, the list or the journal); needs the vault key', async () => {
+  const { h, reg } = await setup({ key: false });
+  try {
+    await assert.rejects(connectFake(h, reg), (e) => e.code === 'POLICY_DENIED');
+  } finally { await h.close(); }
+  const s = await setup();
+  try {
+    const conn = await connectFake(s.h, s.reg);
+    const dump = JSON.stringify([s.reg.list(s.h.ids.org), s.h.db.all('SELECT * FROM connections'), s.h.db.all('SELECT payload FROM journal')]);
+    assert.ok(!dump.includes('fake_abcdef123456') && !dump.includes('whsec_'), 'no plaintext secret anywhere visible');
+    const sealed = s.h.db.all('SELECT kind, ciphertext FROM connection_secrets WHERE connection_id = ?', conn.id);
+    assert.deepEqual(sealed.map((r) => r.kind).sort(), ['api_token', 'webhook_secret']);
+    assert.ok(!Buffer.from(sealed[0].ciphertext).toString().includes('fake_'));
+    assert.equal(s.reg.ctxFor(conn.id).secret('api_token'), 'fake_abcdef123456');
+    await assert.rejects(connectFake(s.h, s.reg), (e) => e.code === 'CONFLICT');
+  } finally { await s.h.close(); }
+});
+
+test('webhook: a signed issue becomes one linked card (auto, audited); a replay is deduped', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    const delivery = randomUUID();
+    const r1 = await post(reg, conn, issue('ISS-1'), { delivery });
+    assert.equal(r1.status, 200);
+    const cards = h.db.all("SELECT id, title FROM cards WHERE title = 'Login broken'");
+    assert.equal(cards.length, 1);
+    assert.equal(reg.ctxFor(conn.id).linked('issue', 'ISS-1'), cards[0].id);
+    const r2 = await post(reg, conn, issue('ISS-1'), { delivery });
+    assert.deepEqual(r2.body, { ok: true, duplicate: true });
+    // A fresh delivery of the same issue is deduplicated by the link, not a second card.
+    await post(reg, conn, issue('ISS-1'));
+    assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Login broken'").length, 1);
+    const audit = reg.audit(conn.id);
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].action, 'card.create');
+    assert.equal(audit[0].decision, 'auto');
+    assert.equal(audit[0].external_ref, 'ISS-1');
+    assert.equal(reg.get(conn.id).health.ok, true);
+  } finally { await h.close(); }
+});
+
+test('webhook: a forged or tampered request is 401, logged, and changes nothing', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    const before = h.db.get('SELECT COUNT(*) AS n FROM cards').n;
+    assert.equal((await post(reg, conn, issue('ISS-2'), { secret: 'whsec_wrong' })).status, 401);
+    assert.equal((await post(reg, conn, issue('ISS-2'), { tamper: true })).status, 401);
+    assert.equal((await reg.webhook(conn.id, { headers: {}, rawBody: Buffer.from('{}') })).status, 401);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM cards').n, before);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe').n, 0);
+    assert.equal((await reg.webhook('no-such-connection', { headers: {}, rawBody: Buffer.from('{}') })).status, 404);
+  } finally { await h.close(); }
+});
+
+test('autonomy: "off" skips, "ask" records a suggestion without acting; both audited', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    reg.setSettings(conn.id, { autonomy: { 'card.create': 'off' } });
+    await post(reg, conn, issue('ISS-3', 'Skipped issue'));
+    assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Skipped issue'").length, 0);
+    reg.setSettings(conn.id, { autonomy: { 'card.create': 'ask' } });
+    await post(reg, conn, issue('ISS-4', 'Asked issue'));
+    assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Asked issue'").length, 0);
+    assert.deepEqual(reg.audit(conn.id).map((a) => a.decision), ['asked', 'skipped']);
+    assert.throws(() => reg.setSettings(conn.id, { autonomy: { 'card.create': 'always' } }), /auto, ask or off/);
+    assert.throws(() => reg.setSettings(conn.id, { autonomy: { 'rm.rf': 'auto' } }), /no action/);
+  } finally { await h.close(); }
+});
+
+test('bus: board events reach the connector for its own team only; "ask" by default for speaking outward', async () => {
+  const { h, reg, bus } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    // Simulate a done transition journal row for a card of this team.
+    const cardId = h.db.get('SELECT id FROM cards LIMIT 1')?.id ?? (await post(reg, conn, issue('ISS-5')), h.db.get('SELECT id FROM cards LIMIT 1').id);
+    h.hub.journal({ board_id: h.ids.board, card_id: cardId, kind: 'card.transition', payload: { rule: '34', event: 'pr_merged', from: 'in_review', to: 'done' } });
+    h.hub.emit('journal');
+    await bus.settle();
+    const asked = reg.audit(conn.id).filter((a) => a.action === 'issue.close');
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].decision, 'asked');
+    // Another team's event never reaches this connection.
+    const otherOrg = randomUUID();
+    h.db.run('INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)', otherOrg, 'Other', h.hub.iso());
+    const otherBoard = randomUUID();
+    h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, 'O', 'OTH')", otherBoard, otherOrg);
+    h.hub.journal({ board_id: otherBoard, card_id: null, kind: 'card.transition', payload: { to: 'done' } });
+    h.hub.emit('journal');
+    await bus.settle();
+    assert.equal(reg.audit(conn.id).filter((a) => a.action === 'issue.close').length, 1);
+  } finally { await h.close(); }
+});
+
+test('actAs: only members of the connection’s team; revoked connection drops secrets and 404s webhooks', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    const ctx = reg.ctxFor(conn.id);
+    assert.throws(() => ctx.actAs('not-a-member'), (e) => e.code === 'FORBIDDEN');
+    assert.equal(ctx.actAs(h.ids.bob).member.id, h.ids.bob);
+    reg.revokeConnection(conn.id, h.ids.alice);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', conn.id).n, 0);
+    assert.equal((await post(reg, conn, issue('ISS-9'))).status, 404);
+    assert.deepEqual(reg.list(h.ids.org), []);
+    // Reconnecting after a revoke works.
+    await connectFake(h, reg);
+    assert.equal(reg.list(h.ids.org).length, 1);
+  } finally { await h.close(); }
+});
+
+test('ctx.fetch retries 5xx/429 with backoff and records health', async () => {
+  const h = await startHub();
+  try {
+    h.hub.setVaultKey(randomBytes(32));
+    let n = 0;
+    const reg = createIntegrations({
+      hub: h.hub, api: new Api(h.hub), log: null, sleep: async () => {},
+      fetchImpl: async () => { n += 1; return n < 3 ? { status: n === 1 ? 503 : 429, headers: new Map([['retry-after', '1']]) } : { status: 200, headers: new Map() }; },
+    });
+    reg.register(fake);
+    const conn = await connectFake(h, reg);
+    const res = await reg.ctxFor(conn.id).fetch('https://api.fake.example/x');
+    assert.equal(res.status, 200);
+    assert.equal(n, 3);
+    assert.equal(reg.get(conn.id).health.ok, true);
+  } finally { await h.close(); }
+});
+
+// ── over HTTP, on a dev hub (the fake connector is offered only there) ─────
+
+test('HTTP: members list (no secrets), admins connect by token / configure / disconnect; webhook ingress verifies', async () => {
+  const h = await startHub();
+  try {
+    h.hub.setVaultKey(randomBytes(32));
+    const alice = await h.login('alice');
+    const bob = await h.login('bob');
+    const list = await h.api(alice, 'GET', '/api/integrations');
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.body.available.map((c) => c.id), ['fake']);
+    assert.equal(list.body.vault, true);
+    const roles = Object.fromEntries(h.db.all('SELECT id, role FROM members').map((m) => [m.id, m.role]));
+    const [admin, other] = roles[h.ids.alice] === 'member' ? [bob, alice] : [alice, bob];
+    const denied = await h.api(other, 'POST', '/api/integrations/fake/token', { request_id: randomUUID(), token: 'fake_abcdef123456' });
+    if (roles[h.ids.alice] !== roles[h.ids.bob]) assert.equal(denied.status, 403);
+    const bad = await h.api(admin, 'POST', '/api/integrations/fake/token', { request_id: randomUUID(), token: 'nope' });
+    assert.equal(bad.status, 400);
+    const ok = await h.api(admin, 'POST', '/api/integrations/fake/token', { request_id: randomUUID(), token: 'fake_abcdef123456' });
+    assert.equal(ok.status, 200);
+    const conn = ok.body.connection;
+    assert.ok(!JSON.stringify(ok.body).includes('fake_abcdef123456'));
+    // Webhook: raw body, signature only, no cookie, no CSRF.
+    const raw = JSON.stringify(issue('ISS-HTTP', 'From the webhook'));
+    const hook = (sig) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-fake-signature': sig, 'x-fake-delivery': randomUUID() }, body: raw });
+    assert.equal((await hook('sha256=00')).status, 401);
+    assert.equal((await hook(sign('whsec_abcdef123456', Buffer.from(raw)))).status, 200);
+    assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'From the webhook'").length, 1);
+    const cfg = await h.api(admin, 'PATCH', `/api/integrations/${conn.id}`, { request_id: randomUUID(), autonomy: { 'card.create': 'ask' } });
+    assert.equal(cfg.body.connection.settings.autonomy['card.create'], 'ask');
+    const audit = await h.api(other, 'GET', `/api/integrations/${conn.id}/audit`);
+    assert.equal(audit.body.entries[0].action, 'card.create');
+    assert.equal((await h.api(admin, 'DELETE', `/api/integrations/${conn.id}`, { request_id: randomUUID() })).status, 200);
+    assert.equal((await hook(sign('whsec_abcdef123456', Buffer.from(raw)))).status, 404);
+  } finally { await h.close(); }
+});

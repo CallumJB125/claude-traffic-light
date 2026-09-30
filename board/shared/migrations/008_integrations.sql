@@ -11,6 +11,7 @@ CREATE TABLE connections (
   scopes TEXT NOT NULL DEFAULT '[]',  -- JSON: what the provider actually granted
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'revoked', 'error')),
   health TEXT,                        -- JSON {ok, last_ok_at, last_error, last_error_at, backlog}
+  settings TEXT NOT NULL DEFAULT '{}', -- JSON {autonomy:{<action>:'auto'|'ask'|'off'}, …connector config}
   created_by TEXT REFERENCES members(id),
   created_at TEXT NOT NULL,
   revoked_at TEXT,
@@ -69,3 +70,19 @@ CREATE TABLE inbound_dedupe (
   received_at TEXT NOT NULL,
   PRIMARY KEY (provider, dedupe_key)
 );
+
+-- Every automatic action an integration takes (Callum: automate the obvious,
+-- audit all of it, reversible from the card).
+CREATE TABLE integration_audit (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES connections(id),
+  action TEXT NOT NULL,               -- e.g. card.move, card.link, card.create, notify.post
+  decision TEXT NOT NULL CHECK (decision IN ('auto', 'asked', 'approved', 'denied', 'skipped')),
+  card_id TEXT REFERENCES cards(id),
+  external_ref TEXT,                  -- provider id (PR number, Sentry issue id) — never message text
+  detail TEXT NOT NULL DEFAULT '{}',  -- JSON, no secrets, no external message bodies
+  undo TEXT,                          -- JSON describing how to reverse it, when reversible
+  at TEXT NOT NULL
+);
+CREATE INDEX integration_audit_by_conn ON integration_audit (connection_id, at);
+CREATE INDEX integration_audit_by_card ON integration_audit (card_id) WHERE card_id IS NOT NULL;
