@@ -262,3 +262,28 @@ test('session: SessionStart records the tmux pane and socket, and ownership only
   assert.equal(other.status, 0);
   assert.equal(session(home, 'c').owned, undefined);
 });
+
+test('M2: broad suggestions are never offered — whole-tool Bash/Write/Edit/MultiEdit/NotebookEdit/WebFetch, wildcard rules, root/home/ancestor/relative/.. directories', () => {
+  const home = os.homedir();
+  const rule = (toolName, ruleContent) => ({ type: 'addRules', behavior: 'allow', rules: [ruleContent === undefined ? { toolName } : { toolName, ruleContent }] });
+  const dirs = (...d) => ({ type: 'addDirectories', directories: d });
+  const broad = [
+    ...['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch'].map((t) => rule(t)),
+    rule('Bash', '*'), rule('Bash', ':*'), rule('Bash', ''), rule('Bash', '  '), rule('Read', '*'), rule('WebFetch', ':*'),
+    { type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Bash', ruleContent: 'npm test' }, { toolName: 'Bash' }] },
+    dirs('/'), dirs(home), dirs(`${home}/`), dirs(path.dirname(home)), dirs('/Users'), dirs('relative/dir'), dirs('~/work'), dirs(`${home}/work/../..`), dirs('/work', '/'),
+  ];
+  for (const s of broad) assert.deepEqual(I.cleanSuggestions([s]), [], JSON.stringify(s));
+  const ok = [rule('Bash', 'npm test:*'), rule('Read'), rule('Edit', '/repo/src/**'), rule('WebFetch', 'domain:example.com'), dirs('/work'), dirs(path.join(home, 'code', 'proj')), { type: 'setMode', mode: 'acceptEdits' }];
+  assert.equal(I.cleanSuggestions(ok).length, ok.length);
+  // The PoC's suggestions: nothing survives.
+  assert.deepEqual(I.describeHookInput('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'x' }, permission_suggestions: [{ type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: 'Bash' }] }, { type: 'addDirectories', directories: ['/'], destination: 'userSettings' }] }).permissionSuggestions, []);
+});
+
+test('M2: answerOutput re-checks the suggestion before building updatedPermissions', () => {
+  // A request whose suggestions were not cleaned (as if written by something other than this hook).
+  const sugg = [{ type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Bash' }] }, { type: 'addDirectories', directories: ['/'] }, { type: 'addDirectories', directories: ['/work'] }];
+  const req = { kind: 'permission', channel: 'PermissionRequest', tool: 'Bash', toolInput: { command: 'x' }, permissionSuggestions: sugg };
+  for (const i of [0, 1]) assert.equal(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: i, suggestionHash: A.hashToolInput(sugg[i]) } }), null, `index ${i}`);
+  assert.deepEqual(I.answerOutput(req, { decision: 'allow', extra: { permissionIndex: 2, suggestionHash: A.hashToolInput(sugg[2]) } }).hookSpecificOutput.decision.updatedPermissions, [{ type: 'addDirectories', directories: ['/work'], destination: 'session' }]);
+});

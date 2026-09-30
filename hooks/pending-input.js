@@ -12,6 +12,8 @@
 // Anything that doesn't fit its kind yields null: the hook prints nothing and
 // the normal terminal prompt stays in charge. Nothing here ever decides on
 // its own; the only answers are the ones a person chose.
+const os = require('os');
+const path = require('path');
 const { hashToolInput } = require('./answer-file.js');
 
 const KINDS = ['permission', 'plan', 'question', 'elicitation'];
@@ -48,13 +50,30 @@ function suggestionLabel(s) {
   const rules = (s.rules || []).map((r) => (r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName));
   return `Allow ${rules.join(', ')} for this session`;
 }
+// Too broad to grant from a click, even for one session: a whole-tool rule for
+// a tool that runs or writes anything, a wildcard rule, or a directory that is
+// the filesystem root, the home directory or above it, relative, or has `..`.
+const WHOLE_TOOL_DENIED = new Set(['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch']);
+function broadRule(r) {
+  const content = typeof r.ruleContent === 'string' ? r.ruleContent.trim() : null;
+  if (content === null) return WHOLE_TOOL_DENIED.has(r.toolName);
+  return content === '' || content === '*' || content === ':*';
+}
+function broadDirectory(d, home = os.homedir()) {
+  if (typeof d !== 'string' || !path.isAbsolute(d) || d.includes('..')) return true;
+  const dir = path.resolve(d);
+  const h = path.resolve(home);
+  return dir === h || h.startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
+}
+const narrow = (s) => (s.type !== 'addRules' || !s.rules.some(broadRule)) && (s.type !== 'addDirectories' || !s.directories.some((d) => broadDirectory(d)));
+
 function cleanSuggestions(list) {
   if (!Array.isArray(list)) return [];
   return list.slice(0, 16).filter((s) => plain(s) && SUGGESTION_TYPES.has(s.type) && (s.type !== 'addRules' || s.behavior === 'allow')).map((s) => {
     if (s.type === 'addDirectories') return { type: s.type, directories: (Array.isArray(s.directories) ? s.directories : []).filter((d) => typeof d === 'string').slice(0, 8).map((d) => d.slice(0, 1000)) };
     if (s.type === 'setMode') return { type: s.type, mode: str(s.mode, 40) };
     return { type: s.type, behavior: 'allow', rules: (Array.isArray(s.rules) ? s.rules : []).filter((r) => plain(r) && typeof r.toolName === 'string').slice(0, 8).map((r) => ({ toolName: str(r.toolName, 200), ...(typeof r.ruleContent === 'string' ? { ruleContent: str(r.ruleContent, 2000) } : {}) })) };
-  }).filter((s) => (s.type !== 'addRules' || (s.behavior === 'allow' && s.rules.length)) && (s.type !== 'addDirectories' || s.directories.length) && (s.type !== 'setMode' || ['acceptEdits', 'default', 'plan'].includes(s.mode)));
+  }).filter((s) => (s.type !== 'addRules' || (s.behavior === 'allow' && s.rules.length)) && (s.type !== 'addDirectories' || s.directories.length) && (s.type !== 'setMode' || ['acceptEdits', 'default', 'plan'].includes(s.mode)) && narrow(s));
 }
 
 // Modes a widget click may switch to. bypassPermissions/auto are never offered.
@@ -182,9 +201,12 @@ function answerOutput(req, answer) {
     // The rule applied is the one the person clicked: the answer names the
     // suggestion's hash, and the suggestion at that index must still match it.
     if (!s || !SAFE_SUGGESTION(s) || extra.suggestionHash !== hashToolInput(s)) return null;
+    // The request file is the hook's own, but re-check: never a broad grant.
+    const again = cleanSuggestions([s])[0];
+    if (!again || hashToolInput(again) !== hashToolInput(s)) return null;
     d.updatedPermissions = [{ ...s, destination: 'session' }];
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: d } };
 }
 
-module.exports = { KINDS, DENY_MESSAGE, kindOfTool, questionsOf, cleanSuggestions, describeHookInput, viewOf, answerOutput };
+module.exports = { KINDS, DENY_MESSAGE, kindOfTool, questionsOf, cleanSuggestions, broadRule, broadDirectory, describeHookInput, viewOf, answerOutput };
