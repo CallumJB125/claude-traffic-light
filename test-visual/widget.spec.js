@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, signal, status, windowByFile } = require('./app');
 
@@ -13,8 +15,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await h?.cleanup(); });
 
 async function setState(sig, lamp) {
-  await signal(h.port, { signal: 'session-end', session: 'visual', source: 'claude' });
-  if (sig) await signal(h.port, { signal: sig, session: 'visual', source: 'claude', cwd: '/visual', tool: 'Bash' });
+  await signal(h, { signal: 'session-end', session: 'visual', source: 'claude' });
+  if (sig) await signal(h, { signal: sig, session: 'visual', source: 'claude', cwd: '/visual', tool: 'Bash' });
   await expect.poll(async () => (await status(h.port)).look.lamp).toBe(lamp);
   // The widget repaints on the status push; let the rig settle.
   await widget.waitForTimeout(600);
@@ -26,6 +28,24 @@ const STATES = [
   ['your-turn-amber', 'idle-nudge', 'amber'],
   ['blocked-red', 'limit-hit', 'red'],
 ];
+
+test('signal server: no CORS, browsers refused, POST needs the install token', async () => {
+  const url = `http://127.0.0.1:${h.port}`;
+  const body = JSON.stringify({ signal: 'tool-use', session: 'intruder', source: 'web' });
+  const noToken = await fetch(`${url}/signal`, { method: 'POST', body });
+  expect(noToken.status).toBe(401);
+  const wrong = await fetch(`${url}/signal`, { method: 'POST', headers: { 'x-buddy-token': 'nope' }, body });
+  expect(wrong.status).toBe(401);
+  const fromPage = await fetch(`${url}/status`, { headers: { origin: 'https://evil.example' } });
+  expect(fromPage.status).toBe(403);
+  expect(fromPage.headers.get('access-control-allow-origin')).toBeNull();
+  expect((await fetch(`${url}/status`, { method: 'OPTIONS' })).headers.get('access-control-allow-origin')).toBeNull();
+  const ok = await fetch(`${url}/status`);
+  expect(ok.status).toBe(200);
+  expect(ok.headers.get('access-control-allow-origin')).toBeNull();
+  expect((await status(h.port)).sessions.some((s) => s.source === 'web')).toBe(false);
+  expect(fs.statSync(path.join(h.home, 'token')).mode & 0o777).toBe(0o600);
+});
 
 for (const [name, sig, lamp] of STATES) {
   test(`widget renders the ${name} state`, async () => {

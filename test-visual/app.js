@@ -55,8 +55,10 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
   return { app, home, port, cleanup };
 }
 
-async function signal(port, body) {
-  const res = await fetch(`http://127.0.0.1:${port}/signal`, { method: 'POST', body: JSON.stringify(body) });
+// POST /signal needs the per-install token the app writes beside its port file.
+async function signal({ port, home }, body) {
+  const token = fs.readFileSync(path.join(home, 'token'), 'utf8');
+  const res = await fetch(`http://127.0.0.1:${port}/signal`, { method: 'POST', headers: { 'x-buddy-token': token }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`signal ${JSON.stringify(body)} -> ${res.status}`);
 }
 

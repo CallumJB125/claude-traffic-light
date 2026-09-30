@@ -170,10 +170,14 @@ hook config for:
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
 
 Anything else — ChatGPT desktop via a Shortcut, a script, another IDE — can
-POST to the local endpoint or run the emitter:
+POST to the local endpoint or run the emitter. The endpoint is for local
+programs, not web pages: it sends no CORS headers, refuses any request with
+an `Origin`, and a POST must carry the per-install token the app writes
+(0600) to `~/.claude-traffic-light/token` at startup:
 
 ```bash
 curl -X POST http://127.0.0.1:47172/signal -H 'content-type: application/json' \
+  -H "x-buddy-token: $(cat ~/.claude-traffic-light/token)" \
   -d '{"source":"chatgpt","session":"abc","signal":"tool-use","tool":"Bash","cwd":"/path"}'
 node hooks/emit.js permission-ask --source myagent --session abc --cwd /path
 curl http://127.0.0.1:47172/status     # the resolved look + live sessions

@@ -22,6 +22,7 @@ const McpInstall = require('./mcp-install.js');
 const Setup = require('./setup.js');
 const Help = require('./help.js');
 const http = require('http');
+const crypto = require('crypto');
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
 // own home folder, a 24x clock, every plant is weed, a long deal, then quit.
@@ -381,17 +382,33 @@ function installHooks() {
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 
-// ── Local endpoint: any agent can POST a signal ────────────────────────────
+// ── Local endpoint: any local agent can POST a signal ──────────────────────
 //   curl -X POST http://127.0.0.1:47172/signal -H 'content-type: application/json' \
+//        -H "x-buddy-token: $(cat ~/.claude-traffic-light/token)" \
 //        -d '{"source":"chatgpt","session":"abc","signal":"tool-use","tool":"Bash","cwd":"/x"}'
+// Not for browsers: no CORS, and a request carrying an Origin (or a Host
+// that isn't loopback — DNS rebinding) is refused, since /status lists every
+// session's folder. POST also needs the per-install token, written 0600 next
+// to the port file, so only something that can read your files can move a
+// light.
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
+const SIGNAL_TOKEN_HEADER = 'x-buddy-token';
 const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.id).concat(['session-end']));
+function tokenMatches(sent) {
+  const a = Buffer.from(String(sent || ''));
+  const b = Buffer.from(SIGNAL_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 function startSignalServer() {
+  const tokenFile = path.join(ROOT_DIR, 'token');
   const server = http.createServer((req, res) => {
-    const done = (code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(body)); };
-    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST, GET' }); return res.end(); }
+    const done = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    const host = String(req.headers.host || '').replace(/:\d+$/, '');
+    if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
     if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })) }); }
     if (req.method !== 'POST' || req.url !== '/signal') return done(404, { error: 'POST /signal or GET /status' });
+    if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
     req.on('end', () => {
@@ -420,8 +437,14 @@ function startSignalServer() {
   });
   server.on('error', (e) => console.log('[signal server]', e.message));
   const portFile = path.join(ROOT_DIR, 'port');
-  server.on('listening', () => { try { fs.writeFileSync(portFile, String(server.address().port)); } catch {} });
-  app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); } catch {} });
+  server.on('listening', () => {
+    // The token first, so whoever sees the port can already read it; chmod
+    // too, since the mode only applies when the file is created.
+    try { fs.writeFileSync(tokenFile, SIGNAL_TOKEN, { mode: 0o600 }); fs.chmodSync(tokenFile, 0o600); } catch {}
+    try { fs.writeFileSync(portFile, String(server.address().port)); } catch {}
+    // Only the instance that bound the port owns these files.
+    app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
+  });
   server.listen(SIGNAL_PORT, '127.0.0.1');
 }
 
