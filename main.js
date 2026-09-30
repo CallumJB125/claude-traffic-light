@@ -22,6 +22,7 @@ const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
 const { createMotionGate } = require('./src/motion-gate.js');
+const { createProbeBackoff } = require('./src/probe-backoff.js');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
@@ -745,10 +746,14 @@ const lightsMotion = createMotionGate((paused) => {
 
 // Nobody at the machine at all (locked, asleep, displays off) — unlike a
 // hidden widget or menu-bar mode, where the person is still working and the
-// spend and GitHub alerts must keep coming. Those feeds hold while away and
-// catch up the moment someone is back.
+// spend, GitHub and busy/Focus alerts must keep coming. Those feeds hold
+// while away and catch up the moment someone is back.
 let feedsTick = () => {};
-const machineAway = createMotionGate((away) => { if (!away) feedsTick(); });
+const machineAway = createMotionGate((away) => {
+  if (away) { BusyWatch.stop(); return; }
+  BusyWatch.start();
+  feedsTick();
+});
 
 function pauseEverywhere(reason, on) {
   setMotionPaused(reason, on);
@@ -1693,6 +1698,9 @@ function broadcastStatus() {
 // along the screen to that app's Dock icon, knocks, and runs home. Once per
 // waiting episode, then every 10 minutes while still ignored.
 let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
+// A probe that keeps failing the same way (no Dock icon for the terminal)
+// backs off to 10 min; the terminal being in front must still be seen at once.
+const roamProbe = createProbeBackoff({ base: 20000, max: 10 * 60 * 1000, steady: (why) => why === 'already the front app' });
 
 // The renderer reports prefers-reduced-motion; while it holds, travel snaps
 // to its destination (keeping the pacing) and nothing roams, hops or glides.
@@ -1833,7 +1841,7 @@ function maybeRoam(st) {
   const config = loadConfig();
   if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
-  if (!waiting) { roamState.waitingSince = null; return; }
+  if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
@@ -1852,11 +1860,15 @@ function maybeRoam(st) {
   // processes every 4 seconds (and on every session-file write), which is what
   // made the machine crawl while a permission prompt sat unanswered.
   if (roamState.probing) return;
-  if (Date.now() - roamState.lastProbe < 20000) return;
+  roamProbe.setKey([...(st.pending || []).map((p) => p.id), ...st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).map((s) => `${s.sessionId}:${s.signal}`)].sort().join('|'));
+  if (Date.now() - roamState.lastProbe < roamProbe.gap) return;
   roamState.probing = true;
   roamState.lastProbe = Date.now();
   roamAndKnock(st)
-    .then((r) => { if (!r.ok) console.log('[roam] skipped:', r.why); })
+    .then((r) => {
+      roamProbe.record(r);
+      if (!r.ok) console.log(`[roam] skipped: ${r.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+    })
     .catch((e) => console.log('[roam]', e.message))
     .finally(() => { roamState.probing = false; });
 }
