@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Tag or branch to build (a dry run: artifacts only, nothing staged)
+        description: 'Tag or branch to build (a dry run: artifacts only, nothing staged)'
         required: true
         default: main
 
