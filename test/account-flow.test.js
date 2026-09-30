@@ -605,7 +605,7 @@ test('no invite mail from the hub: Email it opens a mailto: the flow built from 
   const long = inviteMailto({ to: 'a@example.com', team: 'T\r\nBcc: e@x.com'.padEnd(500, 'x'), link: 'https://h/invite#t', code: 'ABCD-EFGH', brand: 'P' });
   assert.ok(!decodeURIComponent(long).includes('\r\nBcc'), 'control characters in the team name are flattened');
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  assert.ok(!/emailed it|Invite sent/i.test(page));
+  assert.ok(!/emailed it|Invite sent|Send invite|from your email|invite email/i.test(page));
   assert.ok(!/email/i.test(require('../buddy-window/brand').COPY.inviteHint.replace('doesn’t email', '')), 'no promise of an email');
 }));
 

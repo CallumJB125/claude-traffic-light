@@ -679,6 +679,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     status: () => ({ selected, hub: hubStatus, viewError, workspace: store.active().id, screen: flow.acct.screen, url: content === hubView ? (hubView?.webContents.getURL() ?? null) : null }),
     // Dev only (main.js gates it on !app.isPackaged): the hub-address step without the form.
     devConnect: (url) => flow.ACCT.hub(url),
+    // Dev only: the sidebar's "Join with an invite…" / "Sign in…" menu items.
+    devStartFlow: (which) => flow.startFlow(which),
     // Dev only: take the system browser's part in a provider sign-in.
     devBrowser: (fn) => { devBrowser = fn; },
     // Dev only: drive the account page as a person would (fills and clicks in the page).

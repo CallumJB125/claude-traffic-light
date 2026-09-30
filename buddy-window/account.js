@@ -249,7 +249,7 @@ const SCREENS = {
     if (s.canManage) {
       const role = roleSelect('member', { label: 'Role for the invite' });
       const email = input({ name: 'email', type: 'email', autocomplete: 'off', placeholder: 'name@example.com', required: true, 'aria-label': 'Email to invite' });
-      const f = form({ fields: el('div', { class: 'acct-row-form' }, email, role), submit: 'Send invite', busy: 'Sending…', fn: (v) => act(api.invite(team, v.email, v.role)) });
+      const f = form({ fields: el('div', { class: 'acct-row-form' }, email, role), submit: 'Create invite', busy: 'Creating…', fn: (v) => act(api.invite(team, v.email, v.role)) });
       out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Invite people'), el('p', { class: 'acct-hint' }, s.brand.copy.inviteHint), f));
     }
 
@@ -305,7 +305,7 @@ const SCREENS = {
   join(s) {
     if (!s.invite) {
       return [
-        heading('Join with an invite', 'Paste the invite link or code from your email.'),
+        heading('Join with an invite', 'Paste the invite link you were sent.'),
         s.error ? el('p', { class: 'acct-error', role: 'alert' }, s.error) : null,
         form({
           fields: field('Invite link or code', input({ name: 'code', type: 'text', autocomplete: 'off', placeholder: 'https://… or inv_…', required: true, autofocus: true })),
@@ -313,7 +313,7 @@ const SCREENS = {
           fn: (v) => api.joinCode(v.code),
         }),
         el('section', { class: 'acct-section' }, el('h2', {}, 'Have a code?'),
-          el('p', { class: 'acct-hint' }, 'The invite email also has an 8-letter code. It works when you’re signed in with the address it was sent to.'),
+          el('p', { class: 'acct-hint' }, 'An invite also comes with an 8-letter code. It works when you’re signed in with the email address it was made for.'),
           form({
             fields: input({ name: 'code', type: 'text', autocomplete: 'off', maxlength: '9', placeholder: 'ABCD-EFGH', class: 'input input-code', required: true, 'aria-label': 'Invite code' }),
             submit: 'Join', busy: 'Joining…',

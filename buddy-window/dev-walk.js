@@ -35,14 +35,22 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await shot('01-signin', { sidebar: true });
   await submit();
   await onScreen('email');
-  await fill('input[name=email]', 'callum@example.com');
-  await shot('02-email');
-  await submit();
-  await onScreen('code');
-  await shot('03-code');
-  // Typing the sixth digit submits on its own.
-  await fill('input[name=code]', mock.lastCode('callum@example.com'));
+  await until('sign-in methods', () => page("!!document.querySelector('.btn-google')"));
+  await shot('02-signin-methods');
+  // Continue with Google: the walk plays the system browser, after a look at the waiting screen.
+  mock.setOAuthIdentity('google', { email: 'callum@example.com' });
+  let browsed = null;
+  buddy.devBrowser((url) => {
+    browsed = (async () => {
+      await onScreen('browser');
+      await shot('03-browser-wait');
+      const r = await fetch(url, { redirect: 'manual' });
+      await fetch(r.headers.get('location'));
+    })();
+  });
+  await click('Continue with Google');
   await onScreen('create-team');
+  await browsed;
   await shot('04-create-team');
   await fill('input[name=name]', 'Bondly');
   await submit();
@@ -74,6 +82,10 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await shot('08-confirm-unknown-hub');
   await click('Cancel');
 
+  // Join by the invite's typed code.
+  buddy.devStartFlow('join');
+  await onScreen('join');
+  await shot('08b-join-code');
   buddy.select('thismac');
   await onScreen('thismac');
   await shot('09-this-mac');
@@ -88,7 +100,10 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await onScreen('hub');
   await submit();
   await onScreen('email');
+  await until('sign-in methods', () => page("!!document.querySelector('.btn-google')"));
+  await click('Use an email code instead');
   await fill('input[name=email]', 'sam@example.com');
+  await shot('10b-email-code');
   await submit();
   await onScreen('code');
   const good = mock.lastCode('sam@example.com');
