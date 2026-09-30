@@ -92,7 +92,7 @@ test('board_create_card: scope denial (foreign repo, viewer member, bad input) w
 });
 
 test('board_create_card and board_add_lesson are rate limited per member', async () => {
-  const { h, r, run } = await setup({ config: { rateLimits: { agent_card_member: { capacity: 2, per_ms: 3_600_000 }, agent_lesson_member: { capacity: 1, per_ms: 3_600_000 } } } });
+  const { h, r, run } = await setup({ config: { rateLimits: { agent_card_member: { capacity: 2, per_ms: 3_600_000 }, agent_lesson_member: { capacity: 2, per_ms: 3_600_000 } } } });
   try {
     for (const t of ['one', 'two']) assert.equal((await r.rpc(run, 'board_create_card', { title: t })).ok, true);
     const third = await r.rpc(run, 'board_create_card', { title: 'three' });
@@ -100,7 +100,8 @@ test('board_create_card and board_add_lesson are rate limited per member', async
     assert.ok(third.error.retry_after_s >= 1);
     assert.equal((await r.rpc(run, 'board_add_lesson', { text: 'first lesson of the day' })).ok, true);
     const again = await r.rpc(run, 'board_add_lesson', { text: 'first lesson of the day' });
-    assert.equal(again.result.duplicate, true, 'a repeat is answered from the table and costs nothing');
+    assert.equal(again.result.duplicate, true, 'a repeat is answered from the table');
+    assert.equal((await r.rpc(run, 'board_add_lesson', { text: 'first lesson of the day' })).error.code, 'RATE_LIMITED', 'but the lookup costs a token, so it is no free oracle');
     assert.equal((await r.rpc(run, 'board_add_lesson', { text: 'a different second lesson' })).error.code, 'RATE_LIMITED');
   } finally {
     await h.destroy();

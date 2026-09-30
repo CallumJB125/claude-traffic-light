@@ -248,10 +248,11 @@ const METHODS = {
     if (!text || text.length < 10 || text.length > 500) throw new HubError('VALIDATION', 'text must be 10–500 characters');
     const evidence = optText(params.evidence, 1000, 'evidence');
     const member = runMember(hub, run);
+    // Before the lookup: "is this text already a lesson?" must not be free to ask.
+    limitOrThrow(hub, 'agent_lesson_member', member.id);
     const orgId = hub.board(row.board_id).org_id;
     const dup = hub.db.get('SELECT id FROM lessons WHERE org_id = ? AND repo_id = ? AND text = ?', orgId, run.repo_id, text);
     if (dup) return { lesson_id: dup.id, status: 'suggested', duplicate: true };
-    limitOrThrow(hub, 'agent_lesson_member', member.id);
     const id = randomUUID();
     hub.txn(() => {
       hub.db.insert('lessons', {
