@@ -6,6 +6,9 @@ import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, isHumanOwned } from './view.js';
 import { boardScreen, loadingScreen } from './render-board.js';
+import { tableScreen } from './render-table.js';
+import { DEFAULT_SORT, nextSort } from './table.js';
+import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
@@ -33,6 +36,8 @@ const state = {
   theme: 'system',
   showAllDone: false,
   repos: null,
+  view: 'board',
+  table: { sort: DEFAULT_SORT, filter: '' },
 };
 
 let socket = null;
@@ -51,6 +56,28 @@ function setTheme(t) {
   state.theme = ['dark', 'light'].includes(t) ? t : 'system';
   try { localStorage.setItem('board-theme', state.theme); } catch { /* private mode */ }
   applyTheme();
+  update();
+}
+
+// ── views ───────────────────────────────────────────────────────────────────
+// ?view= wins (the app window's sidebar links straight to a view), then the
+// last one this browser used.
+
+function loadView() {
+  const want = new URLSearchParams(location.search).get('view');
+  let saved = null;
+  try { saved = localStorage.getItem('board-view'); } catch { /* private mode */ }
+  state.view = VIEWS.some((v) => v.id === want) ? want : VIEWS.some((v) => v.id === saved) ? saved : 'board';
+}
+function setView(v) {
+  if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
+  state.view = v;
+  try { localStorage.setItem('board-view', v); } catch { /* private mode */ }
+  try {
+    const q = new URLSearchParams(location.search);
+    q.set('view', v);
+    history.replaceState(null, '', `${location.pathname}?${q}${location.hash}`);
+  } catch { /* sandboxed */ }
   update();
 }
 
@@ -96,6 +123,8 @@ function buildModel() {
     showAllDone: state.showAllDone,
     openCardId: state.detail?.cardId ?? null,
     readOnly: state.me?.member?.role === 'viewer',
+    view: state.view,
+    table: state.table,
   };
 }
 
@@ -112,7 +141,8 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  return h('div', { class: 'app-shell' }, boardScreen(model), drawer(model), dialog(model), toasts());
+  const body = model.view === 'table' ? tableScreen(model) : null;
+  return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
 let queued = false;
@@ -580,6 +610,8 @@ function onClick(e) {
     case 'theme': setTheme(el.dataset.next); return;
     case 'reconnect': socket?.reconnectNow(); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
+    case 'view': setView(el.dataset.view); return;
+    case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
     default:
   }
@@ -590,6 +622,11 @@ function onSubmit(e) {
   if (!form) return;
   e.preventDefault();
   submitDialogForm(form, e.submitter);
+}
+
+function onInput(e) {
+  const el = e.target.closest?.('[data-input]');
+  if (el?.dataset.input === 'table-filter') { state.table = { ...state.table, filter: el.value }; update(); }
 }
 
 function onChange(e) {
@@ -619,6 +656,17 @@ function onKeydown(e) {
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
     openNewCard();
+    return;
+  }
+  if (!typing && e.key === '/' && state.view === 'table' && !root.querySelector('dialog[open]')) {
+    e.preventDefault();
+    root.querySelector('[data-input="table-filter"]')?.focus();
+    return;
+  }
+  if (typing && e.key === 'Escape' && e.target.dataset?.input === 'table-filter' && e.target.value) {
+    e.preventDefault();
+    state.table = { ...state.table, filter: '' };
+    update();
     return;
   }
   const tab = e.target.closest?.('[role="tab"]');
@@ -669,6 +717,7 @@ function onImgError(e) {
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
 document.addEventListener('change', onChange);
+document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
 document.addEventListener('close', onDialogClose, true);
 document.addEventListener('dragstart', onDragStart);
@@ -682,5 +731,6 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 
 loadTheme();
+loadView();
 takeDevSecretFromHash();
 boot();

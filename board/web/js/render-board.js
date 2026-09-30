@@ -4,6 +4,7 @@
 import { h } from './h.js';
 import { icon, pixelClaude, PILL_ICON, ALERT_ICON } from './icons.js';
 import { inline } from './markdown.js';
+import { VIEWS } from './views.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -203,6 +204,7 @@ export function topBar(model, lamps) {
       h('div', { class: 'brand-text' },
         h('span', { class: 'brand-board' }, model.board?.name ?? 'Board'),
         model.board?.key_prefix ? h('span', { class: 'brand-key num' }, model.board.key_prefix) : null)),
+    viewSwitch(model),
     h('div', { class: 'topbar-status', role: 'status', 'aria-live': 'polite' },
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
@@ -212,14 +214,25 @@ export function topBar(model, lamps) {
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
 }
 
-export function boardScreen(model) {
+function viewSwitch(model) {
+  return h('nav', { class: 'viewswitch', 'aria-label': 'Board views' },
+    VIEWS.map((v) => h('button', {
+      key: v.id, type: 'button', class: 'viewswitch-btn', 'data-action': 'view', 'data-view': v.id,
+      'aria-pressed': model.view === v.id ? 'true' : 'false',
+      // The text label is hidden on phones; the name must survive it.
+      'aria-label': v.label, title: v.label,
+    }, icon(v.icon, 'icon-xs'), h('span', { class: 'viewswitch-label' }, v.label))));
+}
+
+/** `body` replaces the columns for the other views (table, dashboard, …). */
+export function boardScreen(model, body = null) {
   const cols = groupColumns(model.entries);
   const lamps = boardLamps(model.me?.member?.id, model.entries, model.conn.status === 'lost');
   return h('div', { class: 'app', 'data-conn': model.conn.status },
     topBar(model, lamps),
     connectionBanner(model.conn),
     alertsStrip(model.alerts, model),
-    h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
+    body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))));
 }
 
