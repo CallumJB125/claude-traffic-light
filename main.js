@@ -2615,6 +2615,7 @@ ipcMain.handle('get-spend', () => {
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
 let cycleIndex = 0;
+const LinuxActions = require('./src/linux-actions.js');
 async function runAction(action, st) {
   const needing = st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
   const target = needing[0] || st.sessions[0] || null;
@@ -2650,7 +2651,9 @@ async function runAction(action, st) {
     case 'editor': {
       if (!cwd) return { feedback: 'no session folder' };
       if (IS_WIN) execFile('cmd', ['/c', 'start', '', action.arg || 'code', cwd], () => {});
-      else execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      else if (IS_MAC) execFile('open', ['-a', action.arg || 'Visual Studio Code', cwd], () => {});
+      // Linux: the editor's command; if there is none, the folder in the file manager.
+      else execFile(LinuxActions.editorCommand(action.arg), [cwd], (err) => { if (err && err.code === 'ENOENT') shell.openPath(cwd); });
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
@@ -2659,10 +2662,10 @@ async function runAction(action, st) {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
       if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile(IS_MAC ? '/bin/zsh' : LinuxActions.userShell(), ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
-    case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
+    case 'shortcut': if (!IS_MAC) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
     case 'say': speak(action.arg || (target ? `${folderHint} needs you` : 'hello')); return { react: { pose: 'bubble' }, ms: 1500, feedback: 'said' };
     case 'snooze': {
       win?.hide();
