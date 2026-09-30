@@ -26,8 +26,15 @@
 // The provider step-up for deleting an account (`purpose:'delete'`, for a hub
 // with no mailer): start and exchange need the Bearer; the exchange answers
 // `{stepup_until}` and never a token, and only when the provider identity is
-// one linked to the signed-in user (else WRONG_ACCOUNT). DELETE /api/account
-// then takes that flow_id once, within 5 minutes.
+// one linked to the signed-in user (else the same INVALID_TOKEN as a bad
+// code). DELETE /api/account, or DELETE /api/teams/:id, then takes that
+// flow_id once, within 5 minutes.
+//
+// The emailed step-ups: `purpose:'delete'` for the account and
+// `purpose:'delete_team'` for a team, both sent to the signed-in account's own
+// address, verified by that same user only, their tries counted per user so
+// they never lock anyone out of email sign-in. Each is spent only by its own
+// action, once, within 5 minutes of the verify; a failed DELETE spends nothing.
 'use strict';
 
 const http = require('node:http'); // privacy-flow: local-board-hub
@@ -37,6 +44,7 @@ const { WebSocketServer } = require('ws'); // privacy-flow: local-board-hub
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
 const STEP_UP_MS = 5 * 60_000;
+const STEP_UPS = ['delete', 'delete_team'];
 const INVITE_TTL_MS = 7 * 24 * 3600_000;
 const VERIFY_PER_ADDRESS = 10; // per 15 minutes, right or wrong
 const VERIFY_WINDOW_MS = 15 * 60_000;
@@ -127,17 +135,17 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
     flows.set(id, { email, user_id: userId, codeHash: sha(code), expires: now() + CODE_TTL_MS, wrong: 0, purpose, dead: false, verifiedAt: null, used: false });
     codes.set(email, code);
-    log(`[mock-hub] ${purpose === 'delete' ? 'delete-account' : 'sign-in'} code for ${email}: ${code}`);
+    log(`[mock-hub] ${{ delete: 'delete-account', delete_team: 'delete-team' }[purpose] ?? 'sign-in'} code for ${email}: ${code}`);
     return id;
   }
 
-  // Every attempt counts against the address, right or wrong: over the limit
-  // even the right code is refused until the bucket refills.
-  function limited(email) {
+  // Every attempt counts against the address (a step-up's against its user), right or wrong: over
+  // the limit even the right code is refused until the bucket refills.
+  function limited(key) {
     const t = now();
-    const list = (verifies.get(email) ?? []).filter((x) => t - x < VERIFY_WINDOW_MS);
+    const list = (verifies.get(key) ?? []).filter((x) => t - x < VERIFY_WINDOW_MS);
     list.push(t);
-    verifies.set(email, list);
+    verifies.set(key, list);
     if (list.length <= VERIFY_PER_ADDRESS) return null;
     const retry = Math.ceil((list[0] + VERIFY_WINDOW_MS - t) / 1000);
     return { ...err(429, 'RATE_LIMITED', 'too many attempts for this address', { retry_after_s: retry }), headers: { 'retry-after': String(retry) } };
@@ -266,7 +274,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (!who.verified) return err(403, 'EMAIL_UNVERIFIED', 'the provider has not verified this email');
       if (f.purpose === 'delete') {
         // Only the same provider identity the account signs in with; never a token.
-        if (!links.get(me.user.id)?.has(f.provider) || who.email !== me.user.email) return err(403, 'WRONG_ACCOUNT', 'that provider account is not linked to this user');
+        if (!links.get(me.user.id)?.has(f.provider) || who.email !== me.user.email) return invalid();
         f.stepupUntil = now() + STEP_UP_MS;
         return ok({ stepup_until: iso(f.stepupUntil) });
       }
@@ -276,12 +284,12 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     if (method === 'POST' && path === '/api/auth/email/start') {
       starts.push({ ...body });
       const purpose = body.purpose ?? 'signin';
-      if (!['signin', 'delete'].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
-      if (purpose === 'delete') {
+      if (!['signin', ...STEP_UPS].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
+      if (STEP_UPS.includes(purpose)) {
         // The code goes to the signed-in account's own address; email and client are ignored.
         if (!me) return err(401, 'UNAUTHENTICATED', 'not signed in');
         if (!signInMethods.email) return err(404, 'METHOD_DISABLED', 'this hub has no mailer');
-        return ok({ flow_id: startFlow(me.user.email, 'delete', me.user.id), expires_in: CODE_TTL_MS / 1000 });
+        return ok({ flow_id: startFlow(me.user.email, purpose, me.user.id), expires_in: CODE_TTL_MS / 1000 });
       }
       if (!signInMethods.email) return err(400, 'VALIDATION', 'email sign-in is off');
       const email = String(body.email ?? '').trim().toLowerCase();
@@ -293,11 +301,14 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
 
     if (method === 'POST' && path === '/api/auth/email/verify') {
       const f = flows.get(String(body.flow_id ?? ''));
-      if (f) { const rl = limited(f.email); if (rl) return rl; }
-      if (f?.purpose === 'delete' && me?.user.id !== f.user_id) return err(401, 'UNAUTHENTICATED', 'sign in as that account');
+      const stepUp = STEP_UPS.includes(f?.purpose);
+      if (stepUp && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
+      // Someone else's step-up is just an invalid code: nothing tried, nothing counted.
+      if (stepUp && me.user.id !== f.user_id) return err(400, 'INVALID_TOKEN', 'invalid or expired code');
+      if (f) { const rl = limited(stepUp ? `user:${f.user_id}` : f.email); if (rl) return rl; }
       const bad = checkCode(f, body.code);
       if (bad) return bad;
-      if (f.purpose === 'delete') {
+      if (stepUp) {
         f.verifiedAt = now();
         return ok({ ok: true, flow_id: body.flow_id, step_up_expires_in: STEP_UP_MS / 1000 });
       }
@@ -383,6 +394,14 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
         if (method === 'DELETE') {
           if (myRole !== 'owner') return err(403, 'FORBIDDEN', 'owners only');
           if (body.confirm_slug !== team.slug) return err(400, 'VALIDATION', 'confirm_slug does not match');
+          // The emailed `delete_team` step-up (never the account's `delete` code), or a provider check.
+          const id = String(body.flow_id ?? '');
+          const f = flows.get(id);
+          const emailOk = f && f.purpose === 'delete_team' && f.user_id === me.user.id && !f.used && f.verifiedAt && now() - f.verifiedAt <= STEP_UP_MS;
+          const o = oauthFlows.get(id);
+          const oauthOk = o && o.purpose === 'delete' && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
+          if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete_team' });
+          (emailOk ? f : o).used = true;
           team.deleted = true;
           for (const e of enrolments) if (e.team_id === teamId) e.revoked = true;
           return ok({ ok: true, purge_after: iso(now() + 7 * 24 * 3600_000) });
