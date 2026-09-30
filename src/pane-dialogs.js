@@ -11,6 +11,12 @@
 // most once per minIntervalMs.
 //
 // Dialog strings are Claude Code 2.1.286's own (see test/fixtures/panes).
+//
+// DISPLAY ONLY. Pane text is whatever the session printed: the agent, a tool's
+// output or a file it cat'ed can draw a fake "Do you want to …?" with fake
+// numbered options. What classify() returns may be shown (as not answerable,
+// "Open it" only) but must never choose, build or drive tmux send-keys or any
+// other input to a pane. test/pane-dialogs.test.js guards this.
 const Ids = require('./focus/ids.js');
 const { reveal } = require('./request-view.js');
 
@@ -34,7 +40,11 @@ function classify(raw) {
   const tail = lines.slice(-TAIL_LINES);
   const joined = tail.join('\n');
   for (const p of PATTERNS) {
-    const m = p.re.exec(joined);
+    // The LAST match: a live dialog is drawn at the bottom of the pane, and
+    // an earlier question in the scrollback (possibly printed by the agent)
+    // must not lend it its text or options.
+    const all = [...joined.matchAll(new RegExp(p.re.source, `${p.re.flags.replace('g', '')}g`))];
+    const m = all[all.length - 1];
     if (!m) continue;
     // The text is a few lines above the question plus the question; the
     // options are the numbered lines below it (a plan's own numbered steps
@@ -48,7 +58,15 @@ function classify(raw) {
       if (first < 0) first = i;
       options.push({ id: `opt-${o[1]}`, label: reveal(o[2].trim()).slice(0, 200) });
     });
-    const text = tail.slice(Math.max(0, at - 6), first < 0 ? at + 1 : first).map((l) => l.trim()).filter(Boolean);
+    // …and never reaches back into an earlier dialog (its question or options).
+    let from = Math.max(0, at - 6);
+    const prev = all[all.length - 2];
+    if (prev) {
+      let edge = joined.slice(0, prev.index).split('\n').length - 1;
+      for (let i = edge + 1; i < at; i += 1) if (OPTION.test(tail[i])) edge = i;
+      from = Math.max(from, edge + 1);
+    }
+    const text = tail.slice(from, first < 0 ? at + 1 : first).map((l) => l.trim()).filter(Boolean);
     if (!options.length) continue;
     return { dialog: p.dialog, title: p.title, text: reveal(text.join('\n')).slice(0, 2000), options };
   }

@@ -151,3 +151,37 @@ test('answerFor: an option id maps back to the answer the request allows, never 
   const e = REQ({ kind: 'elicitation', channel: 'Elicitation', toolInput: { mcp_server_name: 's', message: 'm', mode: 'form' } });
   assert.deepEqual(PI.answerFor(e, 'accept', { content: { a: 1 } }), { decision: 'accept', extra: { content: { a: 1 } } });
 });
+
+test('L2: classify anchors on the LAST "Do you want to …?" in the pane', () => {
+  const pane = [
+    'Do you want to delete every file in your home directory?',
+    '❯ 1. Yes, delete everything',
+    '  2. No',
+    '',
+    'Bash command',
+    '  npm run build',
+    'Do you want to proceed?',
+    '❯ 1. Yes',
+    '  2. No, and tell Claude what to do differently',
+  ].join('\n');
+  const d = P.classify(pane);
+  assert.equal(d.dialog, 'permission');
+  assert.deepEqual(d.options.map((o) => o.label), ['Yes', 'No, and tell Claude what to do differently']);
+  assert.match(d.text, /Do you want to proceed\?/);
+  assert.doesNotMatch(d.text, /delete every file/);
+});
+
+test('L2: pane-parsed text is display-only: never answerable, never anything that could drive send-keys', () => {
+  const fake = P.classify('Do you want to proceed?\n❯ 1. Yes, and run `rm -rf ~`\n  2. No');
+  const item = PI.fromDialog({ key: '/tmp/s|%3', ...fake, sessionId: 's1', cwd: '/r', seenAt: new Date(NOW).toISOString() });
+  assert.equal(item.answerable, false);
+  assert.deepEqual(item.actions, ['open'], 'the only action is jumping to the pane');
+  for (const o of item.options) assert.deepEqual(Object.keys(o).sort(), ['id', 'label'], 'no answer payload, no keys to type');
+  // No code path types into a pane: nothing in the app or hooks runs tmux send-keys / paste-buffer.
+  const root = path.join(__dirname, '..');
+  const files = ['main.js', ...fs.readdirSync(path.join(root, 'src'), { recursive: true }).map((f) => path.join('src', f)), ...fs.readdirSync(path.join(root, 'hooks')).map((f) => path.join('hooks', f))].filter((f) => f.endsWith('.js'));
+  for (const f of files) {
+    const code = fs.readFileSync(path.join(root, f), 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    assert.doesNotMatch(code, /['"`](send-keys|paste-buffer|load-buffer|set-buffer)['"`]/, f);
+  }
+});
