@@ -323,3 +323,28 @@ test('Low-a: 008 aborts, changing nothing, for a trigger written ON JOURNAL / ON
   assert.deepEqual(migrate(ok, { migrations: upTo(8) }), [8]);
   ok.close();
 });
+
+// ── Low-c: vault health writes ────────────────────────────────────────────
+
+test('Low-c: a vault that cannot open a connection’s secrets records vault_error once a minute, not on every delivery', async () => {
+  const h = await startHub();
+  try {
+    h.hub.setVaultKey(randomBytes(32));
+    const reg = h.app.integrations;
+    reg.register(probe('m4a', { secrets: ['webhook_secret'] }));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'm4a', external_id: 'w1', secrets: { webhook_secret: randomBytes(16).toString('hex') } });
+    // A restart with another key and no BOARD_ENC_KEY_PREVIOUS.
+    h.hub.vaultKey = null;
+    h.hub.setVaultKey(randomBytes(32));
+    let writes = 0;
+    const run = h.db.run.bind(h.db);
+    h.db.run = (sql, ...args) => { if (/UPDATE connections SET health/.test(sql)) writes += 1; return run(sql, ...args); };
+    const post = () => reg.webhook(conn.id, { headers: { 'x-ok': '1', 'x-id': randomUUID() }, rawBody: Buffer.from('{}') });
+    for (let i = 0; i < 5; i += 1) assert.equal((await post()).status, 500);
+    assert.equal(writes, 1);
+    assert.equal(reg.get(conn.id).health.last_error, 'vault_error');
+    h.clock.advance(61_000);
+    assert.equal((await post()).status, 500);
+    assert.equal(writes, 2);
+  } finally { await h.close(); }
+});

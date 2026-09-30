@@ -604,8 +604,12 @@ export function createIntegrations({
     // A key problem is the hub's, not the caller's: 500, and no failure spent.
     let secrets;
     try { secrets = secretsOf(c); } catch (e) {
-      setHealth(c.id, false, 'vault_error');
-      warn('integration secrets could not be opened', c, e);
+      // Recorded once a minute per connection: a broken key must not turn
+      // every delivery (anyone can post one) into a DB write and a log line.
+      if (hub.limiter.take('vault_health_conn', c.id).ok) {
+        setHealth(c.id, false, 'vault_error');
+        warn('integration secrets could not be opened', c, e);
+      }
       return { status: 500, body: { error: { code: 'INTERNAL', message: 'internal error' } } };
     }
     let v;
