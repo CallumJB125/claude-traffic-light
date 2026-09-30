@@ -55,6 +55,7 @@ export const api = {
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
   overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
   repos: () => call('GET', '/api/repos'),
+  journal: (boardId, afterSeq = 0, limit = 1000) => call('GET', `/api/boards/${enc(boardId)}/journal?after_seq=${enc(afterSeq)}&limit=${enc(limit)}`),
 };
 
 // Human copy for the hub's error codes (CONTRACT §8).

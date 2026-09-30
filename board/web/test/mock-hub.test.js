@@ -6,9 +6,11 @@ import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 import { createMockHub } from '../mock/server.js';
 import { validate } from '../../shared/protocol.js';
+import { replay } from '../../shared/journal.js';
+import { dashboardMetrics } from '../js/metrics.js';
 
-async function withHub(fn) {
-  const hub = createMockHub();
+async function withHub(fn, opts = {}) {
+  const hub = createMockHub(opts);
   const port = await hub.listen(0);
   const base = `http://127.0.0.1:${port}`;
   const login = async (who) => {
@@ -90,3 +92,58 @@ test('the scripted story walks BDL-152 through the real state machine to done, t
   }
   for (const s of ['queued', 'claimed', 'running', 'blocked', 'unresponsive', 'orphaned', 'handed_over', 'in_review', 'done', 'dropped']) assert.ok(seen.includes(s), `story reaches ${s}`);
 }));
+
+const getJson = async (base, path, cookie) => (await fetch(`${base}${path}`, { headers: { Cookie: cookie } })).json();
+
+async function allJournal(base, cookie, limit = 1000) {
+  const rows = [];
+  let after = 0;
+  for (;;) {
+    const page = await getJson(base, `/api/boards/board-bdl/journal?after_seq=${after}&limit=${limit}`, cookie);
+    rows.push(...page.rows);
+    if (page.rows.length < limit) return rows;
+    after = page.next_after_seq;
+  }
+}
+
+test('journal: member-only, pages by after_seq, and replays to the snapshot', () => withHub(async ({ base, login }) => {
+  assert.equal((await fetch(`${base}/api/boards/board-bdl/journal`)).status, 401);
+  const cookie = await login('alice');
+  assert.equal((await fetch(`${base}/api/boards/nope/journal`, { headers: { Cookie: cookie } })).status, 404);
+  const first = await getJson(base, '/api/boards/board-bdl/journal?after_seq=0&limit=5', cookie);
+  assert.deepEqual(first.rows.map((r) => r.seq), [1, 2, 3, 4, 5]);
+  assert.equal(first.next_after_seq, 5);
+  assert.deepEqual(Object.keys(first.rows[0]).sort(), ['actor_id', 'actor_kind', 'at_hub', 'board_id', 'card_id', 'hub_epoch', 'kind', 'payload', 'run_id', 'seq']);
+  const rows = await allJournal(base, cookie, 7);
+  assert.ok(rows.every((r, i) => r.seq === i + 1));
+  assert.ok(rows.every((r, i) => i === 0 || Date.parse(r.at_hub) >= Date.parse(rows[i - 1].at_hub)));
+  const snap = await getJson(base, '/api/boards/board-bdl', cookie);
+  const replayed = replay(rows);
+  for (const c of snap.cards) {
+    const r = replayed.get(c.id);
+    assert.ok(r, `${c.key} has a card.create`);
+    assert.equal(r.run_state ?? 'todo', c.run_state, `${c.key} run_state`);
+    assert.equal(r.column_name, c.column, `${c.key} column`);
+  }
+  // A human column move is journalled as the hub does it (DB column name).
+  const card = snap.cards.find((c) => c.id === 'c-150');
+  const patch = await fetch(`${base}/api/cards/c-150`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ request_id: 'j1', version: card.version, column: 'done' }) });
+  assert.equal(patch.status, 200);
+  const tail = await getJson(base, `/api/boards/board-bdl/journal?after_seq=${rows.at(-1).seq}`, cookie);
+  assert.deepEqual(tail.rows.map((r) => [r.kind, r.payload.fields?.column_name]), [['card.update', ['todo', 'done']]]);
+}));
+
+test('journal with history: a month of finished cards on the board and in the journal', () => withHub(async ({ base, login }) => {
+  const cookie = await login('alice');
+  const rows = await allJournal(base, cookie);
+  const snap = await getJson(base, '/api/boards/board-bdl', cookie);
+  const done = snap.cards.filter((c) => c.column === 'done');
+  assert.ok(done.length >= 20);
+  const m = dashboardMetrics({ rows, cards: snap.cards, now: Date.now() });
+  assert.ok(m.throughput.total >= 20);
+  assert.ok(m.share.claude > 0 && m.share.human > 0);
+  assert.ok(m.blocked.total_ms > 0);
+  assert.ok(m.cycle.median_ms > 0);
+  const replayed = replay(rows);
+  for (const c of snap.cards) assert.equal(replayed.get(c.id)?.run_state ?? 'todo', c.run_state, c.key);
+}, { history: true }));

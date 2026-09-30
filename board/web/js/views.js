@@ -3,4 +3,5 @@
 export const VIEWS = [
   { id: 'board', label: 'Board', icon: 'columns' },
   { id: 'table', label: 'Table', icon: 'rows' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
 ];

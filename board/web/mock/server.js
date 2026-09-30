@@ -1,13 +1,15 @@
 // Mock board hub for developing and testing the web app standalone.
 //
-//   node web/mock/server.js [--port 8788] [--login alice] [--script] [--interval 4000]
+//   node web/mock/server.js [--port 8788] [--login alice] [--script] [--interval 4000] [--history]
 //
 // Implements the browser-facing half of CONTRACT.md §5 (static files with the
 // hub's CSP, the §5.2 HTTP routes, and /ws/board push) over in-memory
 // fixtures. State changes go through the real shared step(), handover pages
 // through mergeHandover/renderMarkdown, and every frame is checked with
 // protocol.validate before it is sent. A small runner simulator claims
-// dispatched cards and keeps live ones heartbeating.
+// dispatched cards and keeps live ones heartbeating. The journal (§15) holds a
+// history for every fixture card; --history adds a month of finished cards so
+// the Dashboard has something to chart.
 //
 // Control endpoints (never on the real hub):
 //   POST /__mock/step            advance the scripted BDL-152 story one step
@@ -27,6 +29,7 @@ import { isGreen } from '../../shared/liveness.js';
 import { mergeHandover, syncAges, renderMarkdown as handoverMarkdown } from '../../shared/handover.js';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, WS_CLOSE, validate, compatible, httpStatus } from '../../shared/protocol.js';
 import { BOARD, ORG, MEMBERS, REPOS, ONLINE, buildCards } from './fixtures.js';
+import { buildJournal, historyCards } from './journal.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..');
@@ -40,10 +43,11 @@ class HttpError extends Error {
   constructor(code, message, extra = {}) { super(message); this.code = code; this.extra = extra; }
 }
 
-export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
+export function createMockHub({ login = null, clock = () => Date.now(), history = false } = {}) {
   const epoch = randomUUID();
   const bootAt = clock();
   let cards = new Map();
+  let journal = null;
   const idem = new Map();
   const sockets = new Set();
   let refuseUntil = 0;
@@ -59,7 +63,11 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
   const who = (id) => (id ? { member_id: id, name: nameOf(id) } : null);
 
   function reset() {
-    cards = new Map(buildCards(clock()).map((c) => [c.id, c]));
+    const now = clock();
+    const fixtures = buildCards(now);
+    const past = history ? historyCards(now) : [];
+    cards = new Map([...fixtures, ...past.map((x) => x.card)].map((c) => [c.id, c]));
+    journal = buildJournal({ boardId: BOARD.id, epoch, cards: fixtures, history: past, now });
     scriptStep = 0;
   }
   reset();
@@ -190,6 +198,7 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
     const r = step(machine(c), event, ctxFor(c, ctx));
     if (!r.ok) throw new HttpError(r.error.code, r.error.message);
     Object.assign(c, r.card);
+    journal.transition(c.id, r, event, clock(), { by: meta.by ?? event.by ?? null, runOwner: c.run?.owner_id, runId: c.run?.id ?? null });
     const changed = r.from !== r.to;
     if (changed) c.state_since = clock();
     c.version += 1;
@@ -227,6 +236,7 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
     const owner = target;
     c.run = { id: `run-${randomUUID().slice(0, 8)}`, backend: 'claude_cli', owner_id: owner, dispatched_by_id: c.dispatched_by_id ?? owner, device_name: member(owner)?.device };
     c.branch = `board/${c.key}-r${c.fence}`;
+    journalRun(c);
     c.live = { hb_at: clock(), child_alive: true, activity_at: null, tool: null, wake_at: null, post_wake_activity: false, pulse: false };
     upsert(c);
     later(1500, () => {
@@ -300,11 +310,17 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
     () => { drop(8000); return null; },
   ];
 
+  function journalRun(c) {
+    const dev = `dev-${c.run.owner_id.slice(2)}`;
+    journal.append({ card_id: c.id, run_id: c.run.id, at: clock(), actor_kind: 'runner', actor_id: dev, kind: 'run.create', payload: { fence: c.fence, device_id: dev, branch: c.branch, snapshot_ref: `refs/board/${c.key}/r${c.fence}`, dispatch_request_id: null } });
+  }
+
   function simulateClaimNow(c) {
     apply(c, { type: 'claim', expected_fence: c.fence });
     c.run = { id: `run-${randomUUID().slice(0, 8)}`, backend: 'claude_cli', owner_id: c.target?.member_id ?? 'm-alice', dispatched_by_id: c.dispatched_by_id ?? 'm-alice', device_name: 'MacBook Pro' };
     c.run.owner_id ??= 'm-alice';
     c.branch = `board/${c.key}-r${c.fence}`;
+    journalRun(c);
     c.live = { hb_at: clock(), child_alive: true, activity_at: null, tool: null, wake_at: null, post_wake_activity: false, pulse: false };
   }
 
@@ -385,6 +401,7 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
       if (!ask) throw new HttpError('NOT_FOUND', 'no such ask');
       if (ask.state !== 'open') throw new HttpError('ALREADY_ANSWERED', `already answered by ${ask.answered_by_name}`, { answered_by: { name: ask.answered_by_name } });
       Object.assign(ask, { state: 'answered', answer: String(body.answer ?? ''), answered_by_name: me.name });
+      journal.append({ card_id: c.id, run_id: c.run?.id ?? null, at: clock(), actor_kind: 'member', actor_id: me.member_id, kind: 'ask.answer', payload: { ask_id: ask.id, by: me.member_id } });
     }
     const r = apply(c, ev, ctx, { by: me.member_id });
     if (type === 'stop') c.stopped_by_name = me.name;
@@ -454,6 +471,10 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
       const { type, ...snap } = snapshotFor(me.member_id);
       return json(res, 200, snap);
     }
+    if ((m = /^\/api\/boards\/([^/]+)\/journal$/.exec(p)) && method === 'GET') {
+      if (m[1] !== BOARD.id) throw new HttpError('NOT_FOUND', 'no such board');
+      return json(res, 200, journal.page(url.searchParams.get('after_seq'), url.searchParams.get('limit')));
+    }
     if ((m = /^\/api\/cards\/([^/]+)$/.exec(p)) && method === 'GET') return json(res, 200, toDetail(card(decodeURIComponent(m[1])), me.member_id));
     if ((m = /^\/api\/cards\/([^/]+)\/handover$/.exec(p)) && method === 'GET') {
       const ho = handoverOf(card(decodeURIComponent(m[1])), clock());
@@ -495,6 +516,10 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
         state_since: clock(), budget: body.budget_usd ? { spent_usd: 0, cap_usd: body.budget_usd } : null, detail: { feed: [] },
       };
       cards.set(c.id, c);
+      journal.append({ card_id: c.id, at: clock(), actor_kind: 'member', actor_id: me.member_id, kind: 'card.create', payload: {
+        key: c.key, title: c.title, body: c.body, acceptance: c.acceptance, repo_id: c.repo_id, base_ref: c.base_ref, labels: c.labels,
+        budget_cents: body.budget_usd ? Math.round(body.budget_usd * 100) : null, column_name: 'todo', assignees: c.assignee_ids, request_id: body.request_id,
+      } });
       upsert(c);
       return remember(200, { card: toView(c, me.member_id) });
     }
@@ -502,8 +527,16 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
       const c = card(decodeURIComponent(m[1]));
       if (body.version !== c.version) throw new HttpError('VERSION_CONFLICT', 'card changed');
       if (body.column != null && c.run_state !== 'todo') throw new HttpError('CONFLICT', 'column follows the run while a run exists');
-      for (const k of ['title', 'body', 'acceptance', 'labels', 'repo_id', 'base_ref', 'column']) if (k in body) c[k] = body[k];
-      if ('assignees' in body) c.assignee_ids = body.assignees;
+      const fields = {};
+      // The hub journals the column under its DB name.
+      for (const k of ['title', 'body', 'acceptance', 'labels', 'repo_id', 'base_ref', 'column']) {
+        if (!(k in body)) continue;
+        const before = k === 'column' ? (c.column ?? columnOf(c.run_state)) : c[k] ?? null;
+        if (JSON.stringify(before) !== JSON.stringify(body[k])) fields[k === 'column' ? 'column_name' : k] = [before, body[k]];
+        c[k] = body[k];
+      }
+      if ('assignees' in body) { fields.assignees = [c.assignee_ids, body.assignees]; c.assignee_ids = body.assignees; }
+      journal.append({ card_id: c.id, at: clock(), actor_kind: 'member', actor_id: me.member_id, kind: 'card.update', payload: { fields, request_id: body.request_id } });
       c.version += 1;
       upsert(c);
       return remember(200, { card: toView(c, me.member_id) });
@@ -522,6 +555,7 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
       if (pr.state !== 'open') throw new HttpError('ALREADY_ANSWERED', `already answered by ${pr.answered_by_name}`, { answered_by: { name: pr.answered_by_name } });
       if (!['allow', 'deny'].includes(body.decision)) throw new HttpError('VALIDATION', 'decision must be allow or deny');
       Object.assign(pr, { state: body.decision === 'allow' ? 'allowed' : 'denied', answered_by_name: me.name, scope: body.scope ?? 'once' });
+      journal.append({ card_id: c.id, run_id: c.run?.id ?? null, at: clock(), actor_kind: 'member', actor_id: me.member_id, kind: 'permission.answer', payload: { permission_request_id: pr.id, decision: body.decision, scope: pr.scope } });
       const remaining = openPermission(c).length;
       c.ask = remaining ? { ...c.ask, count: remaining, summary: openPermission(c)[0].input_summary } : null;
       apply(c, { type: 'answer', by: me.member_id }, { open_asks_remaining: remaining }, { by: me.member_id });
@@ -604,13 +638,14 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
     drop,
     reset,
     cards: () => cards,
+    journal: () => journal,
     toView,
   };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? (process.argv[i + 1] ?? true) : dflt; };
-  const hub = createMockHub({ login: arg('login', null) });
+  const hub = createMockHub({ login: arg('login', null), history: process.argv.includes('--history') });
   const port = await hub.listen(Number(arg('port', 8788)));
   process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), level: 'info', msg: 'mock board hub listening', url: `http://127.0.0.1:${port}/` })}\n`);
   if (process.argv.includes('--script')) {
