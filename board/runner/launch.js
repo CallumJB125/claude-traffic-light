@@ -64,8 +64,13 @@ function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
-function hookCmd(node, event) {
-  return `${shq(node)} ${shq(HOOK_SHIM)} ${event}`;
+// In the packaged app the runner is an Electron utilityProcess: its execPath
+// is the Electron helper, which runs a script as plain node only with
+// ELECTRON_RUN_AS_NODE=1 (D82; the widget's hooks use the same pattern).
+export const underElectron = () => !!process.versions.electron;
+
+function hookCmd(node, event, electron) {
+  return `${electron ? 'ELECTRON_RUN_AS_NODE=1 ' : ''}${shq(node)} ${shq(HOOK_SHIM)} ${event}`;
 }
 
 /**
@@ -73,8 +78,8 @@ function hookCmd(node, event) {
  * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
  * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
  */
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null }) {
-  const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event), timeout }] }];
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, electron = underElectron() }) {
+  const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
   return {
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
     permissions: {
@@ -116,8 +121,9 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
 // denyRead for sandboxed Bash and Read(~/.board/**) is disallowed + confined).
 export const HOOK_TOKEN_FILE = 'hook.token';
 
-export function buildMcpConfig({ socket, token, node = process.execPath, server = MCP_SERVER }) {
-  return { mcpServers: { board: { type: 'stdio', command: node, args: [server], env: { BOARD_RUN_SOCKET: socket, BOARD_RUN_TOKEN: token } } } };
+export function buildMcpConfig({ socket, token, node = process.execPath, server = MCP_SERVER, electron = underElectron() }) {
+  const env = { ...(electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}), BOARD_RUN_SOCKET: socket, BOARD_RUN_TOKEN: token };
+  return { mcpServers: { board: { type: 'stdio', command: node, args: [server], env } } };
 }
 
 /** Allowlisted child env (D15). parentEnv is the supervisor's env. */
