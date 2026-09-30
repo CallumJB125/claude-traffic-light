@@ -83,47 +83,11 @@
     <g class="meteor"><circle cx="0" cy="0" r="3.5" fill="#f2a200" /><path d="M0 0 l-22 -9 l16 6 z" fill="#f28c28" opacity="0.8" /><path d="M0 0 l-30 -6 l20 2 z" fill="#f2d16b" opacity="0.5" /></g>
   </g>
   <g class="claude-body">
-    <g class="body body-default">
-      <rect x="17" y="39" width="30" height="13" />
-      <rect x="4" y="52" width="56" height="7" />
-      <rect x="15" y="59" width="7" height="9" />
-      <rect x="28.5" y="59" width="7" height="9" />
-      <rect x="42" y="59" width="7" height="9" />
-    </g>
-    <!-- body swaps: whole-sprite variants sharing the eye positions -->
-    <g class="body body-dog" fill="#b07a4a">
-      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
-      <rect x="15" y="59" width="7" height="9" /><rect x="28.5" y="59" width="7" height="9" /><rect x="42" y="59" width="7" height="9" />
-      <rect x="11" y="38" width="6" height="13" rx="3" fill="#7d5230" /><rect x="47" y="38" width="6" height="13" rx="3" fill="#7d5230" />
-      <rect x="27" y="47.5" width="10" height="4.5" rx="2" fill="#e8c9a8" /><rect x="30.5" y="46.5" width="3" height="2" rx="1" fill="#211f1c" />
-      <rect class="wag" x="59" y="52" width="7" height="2.2" rx="1" fill="#7d5230" />
-    </g>
-    <g class="body body-cat" fill="#8c8c96">
-      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
-      <rect x="15" y="59" width="7" height="9" /><rect x="28.5" y="59" width="7" height="9" /><rect x="42" y="59" width="7" height="9" />
-      <polygon points="18,40 21,31 26,39" /><polygon points="38,39 43,31 46,40" />
-      <polygon points="20,38 21.5,34 24,38" fill="#f4a7c0" /><polygon points="40,38 42.5,34 44,38" fill="#f4a7c0" />
-      <rect x="30.5" y="47" width="3" height="2" rx="1" fill="#f4a7c0" />
-      <rect x="15" y="48.5" width="6" height="0.7" fill="#211f1c" /><rect x="43" y="48.5" width="6" height="0.7" fill="#211f1c" />
-      <path class="cat-tail" d="M60 56 q7 -4 4 -10" fill="none" stroke="#8c8c96" stroke-width="2.2" stroke-linecap="round" />
-    </g>
-    <g class="body body-frog" fill="#5fbf5a">
-      <rect x="17" y="41" width="30" height="11" rx="3" /><rect x="4" y="52" width="56" height="7" />
-      <rect x="13" y="59" width="9" height="9" rx="2" /><rect x="42" y="59" width="9" height="9" rx="2" />
-      <circle cx="24" cy="40" r="4.5" /><circle cx="40" cy="40" r="4.5" />
-      <rect x="24" y="49" width="16" height="1.2" rx="0.6" fill="#2d6b2a" />
-    </g>
-    <g class="body body-robot" fill="#9aa3ad">
-      <rect x="17" y="39" width="30" height="13" /><rect x="4" y="52" width="56" height="7" />
-      <rect x="13" y="59" width="38" height="9" rx="4" fill="#5c646d" />
-      <rect x="31" y="32" width="2" height="7" fill="#5c646d" /><circle class="antenna" cx="32" cy="31" r="2" fill="#e2231a" />
-      <rect x="19" y="41" width="26" height="9" fill="#5c646d" />
-      <circle cx="8" cy="55.5" r="1" fill="#5c646d" /><circle cx="56" cy="55.5" r="1" fill="#5c646d" />
-      <rect x="27" y="47.5" width="10" height="1.4" fill="#38bdf8" />
-    </g>
-    <g class="body body-ghost" fill="#eef0f5" opacity="0.92">
-      <path d="M17 39 h30 v27 l-5 -4 l-5 4 l-5 -4 l-5 4 l-5 -4 l-5 4 z" />
-    </g>
+    <!-- the character (characters/): its back and body layers, filled in by
+         wearCharacter; everything after is drawn for Claude's anchors and
+         offset onto the character's -->
+    <g class="char-back"></g>
+    <g class="char-body"></g>
     <!-- cameos (back layer): hair, facial hair and collar, under the eyes so they stay alive -->
     <g class="cameo cameo-neo">
       <path d="M4 52h24l4 6 4-6h24v7H4z" fill="#2a2a33" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M28 52l4 6 4-6z" fill="#0c0c10" /><path d="M4.6 52.8h22.6l3.8 5.6M59.4 52.8H36.8l-3.8 5.6" stroke="#5a5a6a" stroke-width="0.7" fill="none" />
@@ -318,6 +282,7 @@
       <rect x="23" y="41" width="18" height="11" rx="3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
       <path d="M27 41.5v10M31 41v10.5M35 41v10.5M39 41.5v10" stroke="#b85f3c" stroke-width="0.7" />
     </g>
+    <g class="char-front"></g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
     <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
@@ -411,6 +376,7 @@
       <circle class="glow-eye" cx="24.25" cy="45.75" r="2.6" /><circle class="glow-eye" cx="39.75" cy="45.75" r="2.6" />
     </g>
     </g><!-- /eye-anchor -->
+    <g class="char-face"></g>
     <!-- cameos (front layer): eyewear, over the eyes -->
     <g class="cameo cameo-neo">
       <rect x="18" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="42.8" y="44.4" width="3.2" height="0.7" fill="#0a0a0d" /><rect x="27.2" y="44.6" width="9.6" height="0.8" fill="#0a0a0d" />
@@ -815,19 +781,20 @@
   // hats sit on y 39. A photo's anchors (fractions of its square) map into the
   // head box; the face's scale comes from the eye-to-mouth gap, which on a real
   // face is close to the distance between the pupils.
-  function photoAnchors(photo) {
+  // box: the character's face box as a square (Claude's is PHOTO_BOX).
+  function photoAnchors(photo, box = PHOTO_BOX) {
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
     const at = (p, dx, dy) => ({
-      x: PHOTO_BOX.x + clamp(Number.isFinite(p && p.x) ? p.x : dx, 0, 1) * PHOTO_BOX.size,
-      y: PHOTO_BOX.y + clamp(Number.isFinite(p && p.y) ? p.y : dy, 0, 1) * PHOTO_BOX.size,
+      x: box.x + clamp(Number.isFinite(p && p.x) ? p.x : dx, 0, 1) * box.size,
+      y: box.y + clamp(Number.isFinite(p && p.y) ? p.y : dy, 0, 1) * box.size,
     });
     const eyes = at(photo.eyes, 0.5, 0.4);
     const mouth = at(photo.mouth, 0.5, 0.75);
     const gap = Math.max(2, mouth.y - eyes.y);
     const s = clamp((gap * 0.95) / 15.5, 0.4, 1);
-    const top = clamp(eyes.y - gap * 1.3, PHOTO_BOX.y + 1, eyes.y - 3);
+    const top = clamp(eyes.y - gap * 1.3, box.y + 1, eyes.y - 3);
     // mouth to chin is about two-thirds of eyes to mouth
-    const chin = clamp(mouth.y + gap * 0.7, mouth.y + 2, PHOTO_BOX.y + PHOTO_BOX.size);
+    const chin = clamp(mouth.y + gap * 0.7, mouth.y + 2, box.y + box.size);
     return {
       '--chin-dy': `${(chin - 58).toFixed(2)}px`,
       '--eye-dx': `${(eyes.x - 32).toFixed(2)}px`, '--eye-dy': `${(eyes.y - 45.75).toFixed(2)}px`, '--eye-s': s.toFixed(3),
@@ -840,7 +807,8 @@
   const SMOKE_CYCLE_MS = 5 * 60 * 1000;
   const SMOKE_STEPS = [['flick', 1200], ['stomp', 1300], ['draw', 1800]];
   const SMOKE_MIN_CYCLE_MS = 8000;
-  const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
+  // Characters register themselves (characters/contract.js, loaded first).
+  const Characters = window.BuddyCharacters;
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
@@ -957,8 +925,8 @@
       for (const m of EYE_MOODS) svg.classList.toggle(`eyes-${m}`, eyes === m);
       svg.style.setProperty('--eye-color', /^#/.test(eyes) ? eyes : eyes === 'laser' ? '#ff3b30' : '#211f1c');
 
-      const body = BODIES.includes(look.body) ? look.body : 'claude';
-      for (const b of BODIES) svg.classList.toggle(`body-${b}`, body === b);
+      const body = Characters.has(look.body) ? look.body : 'claude';
+      if (!current || current.body !== body) wearCharacter(body);
       svg.style.setProperty('--body-color', /^#[0-9a-f]{6}$/i.test(look.bodyColor || '') ? look.bodyColor : '#da7756');
       const effect = EFFECTS.includes(look.effect) ? look.effect : 'none';
       for (const e of EFFECTS) svg.classList.toggle(`effect-${e}`, effect === e);
@@ -1034,16 +1002,52 @@
       const nextBloom = lit && !groupFx && numText === '' ? `${lit}|${color}|${sign}` : '';
       if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign.sign-${sign} .lamp.on`));
       bloomKey = nextBloom;
-      current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
+      current = { ...look, body, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
       if (ambient) ambient.scan();
     }
 
+    // Only the worn character's layers are in the rig. Its anchors become the
+    // offsets that move eyes, mouth, hats and hands onto it; a character
+    // drawn to Claude's anchors needs none, and its rig is left as drawn.
+    let character = null;
+    let wornPhoto = null;
+    function wearCharacter(id) {
+      const prev = character;
+      character = Characters.get(id);
+      if (prev) svg.classList.remove(`body-${prev.id}`);
+      svg.classList.add(`body-${character.id}`);
+      for (const layer of Characters.LAYERS) svg.querySelector(`.char-${layer}`).innerHTML = Characters.layerMarkup(character, layer);
+      const caps = Characters.capabilities(character);
+      svg.classList.toggle('char-no-hands', !caps.hands);
+      svg.classList.toggle('char-no-mouth', !caps.mouth);
+      svg.classList.toggle('char-no-legs', !caps.legs);
+      svg.classList.toggle('char-eyes-single', caps.eyes === 'single');
+      svg.classList.toggle('char-eyes-none', caps.eyes === 'none');
+      if (wornPhoto) wearPhoto(wornPhoto); else fitAnchors();
+    }
+    function faceSquare() {
+      const f = character.anchors.faceBox;
+      const size = Math.min(f.w, f.h);
+      return { x: f.x + (f.w - size) / 2, y: f.y + (f.h - size) / 2, size };
+    }
+    // The photo's own eyes and mouth win over the character's; both land in
+    // the same variables.
+    function fitAnchors() {
+      const fit = Characters.anchorVars(character);
+      svg.classList.toggle('char-fitted', fit.fitted);
+      if (!fit.fitted && !wornPhoto) return;
+      const vars = { ...fit.css, ...(wornPhoto ? photoAnchors(wornPhoto, faceSquare()) : {}) };
+      for (const [k, v] of Object.entries(vars)) svg.style.setProperty(k, v);
+    }
     function wearPhoto(photo) {
+      wornPhoto = photo || null;
       svg.classList.toggle('has-photo', !!photo);
       const img = svg.querySelector('.cameo-photo-img');
-      if (!photo) { img.removeAttribute('href'); return; }
+      if (!photo) { img.removeAttribute('href'); fitAnchors(); return; }
+      const box = faceSquare();
+      for (const [k, v] of [['x', box.x], ['y', box.y], ['width', box.size], ['height', box.size]]) if (img.getAttribute(k) !== String(v)) img.setAttribute(k, String(v));
       img.setAttribute('href', photo.src);
-      for (const [k, v] of Object.entries(photoAnchors(photo))) svg.style.setProperty(k, v);
+      fitAnchors();
     }
 
     let eventTimer = null;
@@ -1777,7 +1781,7 @@
   window.RIG_CAMEOS = CAMEOS;
   window.RIG_CAMEO_ID = CAMEO_ID;
   window.rigSetCameoPhotos = setCameoPhotos;
-  window.RIG_BODIES = BODIES;
+  Object.defineProperty(window, 'RIG_BODIES', { get: () => Characters.ids(), configurable: true });
   window.RIG_EFFECTS = EFFECTS;
   window.RIG_PETS = PETS;
   window.RIG_EYE_MOODS = EYE_MOODS;

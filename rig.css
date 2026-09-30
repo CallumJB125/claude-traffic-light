@@ -279,12 +279,10 @@
 @keyframes rig-banner-in { 0% { transform: translateY(-24px); } 100% { transform: translateY(0); } }
 @keyframes rig-banner-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
 
-/* Body: colour is a variable so a rule (or a project) can recolour Claude;
-   whole-sprite swaps hide the default body and show a variant. */
+/* Body: colour is a variable so a rule (or a project) can recolour Claude.
+   The worn character's layers are the only ones in the rig (rig.js
+   wearCharacter), so there is nothing to hide. */
 .rig .body-default, .rig .sign-assembly > rect:last-child, .rig .thumbs-up, .rig .arms-crossed { fill: var(--body-color, #da7756); }
-.rig .body { opacity: 0; }
-.rig.body-claude .body-default, .rig.body-dog .body-dog, .rig.body-cat .body-cat, .rig.body-frog .body-frog,
-.rig.body-robot .body-robot, .rig.body-ghost .body-ghost { opacity: 1; }
 .rig.body-ghost .body-ghost { animation: rig-float 2.4s ease-in-out infinite; }
 @keyframes rig-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
 .rig .wag { transform-origin: 59px 53px; }
