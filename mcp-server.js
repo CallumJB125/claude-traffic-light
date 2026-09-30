@@ -393,18 +393,19 @@ async function buddySpend({ root, now = Date.now(), projectsDir } = {}) {
   const Usage = require('./usage.js');
   const Spend = require('./spend.js');
   const cfg = Spend.normalize((readJson(path.join(root, 'config.json')) || {}).spend);
-  const since = Math.min(Spend.startOfWeek(now), now - cfg.runawayMinutes * 60000);
+  const since = Spend.readSince(cfg, now);
   const { turns, files, skipped } = await Usage.readTurns({ since, ...(projectsDir ? { root: projectsDir } : {}) });
   const snap = Spend.snapshot(turns, cfg, now);
   const b = snap.budget;
   const line = (p, when) => `${Spend.money(p.spent)} ${when}${p.budget ? ` of a ${Spend.money(p.budget)} budget (${Math.round(p.share * 100)}%)` : ''}`;
   return {
-    summary: `${line(b.day, 'today')}; ${line(b.week, 'this week')}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${snap.runaway.length ? ` Runaway: ${snap.runaway.map((r) => `${r.project || r.sessionId} ${r.burn}`).join('; ')}.` : ''}`,
+    summary: `${line(b.day, 'today')}; ${line(b.week, 'this week')}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${b.week.unpriced ? ` ${b.week.unpriced} turn${b.week.unpriced === 1 ? '' : 's'} this week unpriced (unknown model), not counted.` : ''}${snap.runaway.length ? ` Runaway: ${snap.runaway.map((r) => `${r.project || r.sessionId} ${r.burn}`).join('; ')}.` : ''}`,
     mode: snap.mode,
     unit: snap.unit,
     today: b.day,
     week: { ...b.week, startsOn: new Date(Spend.startOfWeek(now)).toDateString() },
     level: b.level,
+    unpriced: { today: b.day.unpriced, week: b.week.unpriced, note: 'turns on a model usage.js has no price for; left out of the totals' },
     runaway: snap.runaway,
     runawayThreshold: snap.runawayThreshold,
     transcripts: { files, turns: turns.length, overSizeCap: skipped.length },

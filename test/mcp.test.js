@@ -184,9 +184,9 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-projects-'));
   // Midday, so the 5 minutes can't straddle a day or week boundary.
   const now = new Date(2026, 8, 30, 12).getTime();
-  const lines = [5, 3].map((min, i) => JSON.stringify({
+  const lines = [[5, 'claude-opus-5'], [3, 'claude-opus-5'], [2, 'claude-mystery-9']].map(([min, model], i) => JSON.stringify({
     type: 'assistant', sessionId: 'burn', cwd: '/w/hot', timestamp: new Date(now - min * 60000).toISOString(), requestId: `r${i}`,
-    message: { id: `m${i}`, model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: 1000000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    message: { id: `m${i}`, model, usage: { input_tokens: 0, output_tokens: 1000000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
   }));
   fs.mkdirSync(path.join(projectsDir, 'p'));
   fs.writeFileSync(path.join(projectsDir, 'p', 'burn.jsonl'), `${lines.join('\n')}\n`);
@@ -197,6 +197,8 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.equal(r.runaway.length, 1);
   assert.equal(r.runaway[0].burn, '$50.00 in 5 min');
   assert.match(r.summary, /^\$50\.00 today of a \$50\.00 budget \(100%\).*API-price equivalent.*Runaway: hot \$50\.00 in 5 min/);
+  assert.deepEqual([r.unpriced.today, r.unpriced.week], [1, 1]);
+  assert.match(r.summary, /1 turn this week unpriced/);
 });
 
 test('the server exposes exactly the nine buddy_ tools', () => {

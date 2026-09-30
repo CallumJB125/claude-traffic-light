@@ -106,6 +106,22 @@ test('readTurns re-parses only files whose mtime or size changed, and resumes ap
   assert.deepEqual(r.turns.map((t) => t.output).sort(), [1, 2, 3]);
 });
 
+test('readTurns re-reads from zero a file rewritten in place with a different first line', async () => {
+  const root = fixture({ 'p/a.jsonl': [line({ id: 'old1', requestId: 'o1', usage: { output_tokens: 1 } })] });
+  const file = path.join(root, 'p/a.jsonl');
+  const cache = new Map();
+  await U.readTurns({ root, cache });
+  const ino = fs.statSync(file).ino;
+  // Same inode (truncate + write through the same path), longer than before.
+  const fd = fs.openSync(file, 'r+');
+  fs.ftruncateSync(fd, 0);
+  fs.writeSync(fd, [line({ id: 'new1', requestId: 'n1', usage: { output_tokens: 7 } }), line({ id: 'new2', requestId: 'n2', usage: { output_tokens: 8 } })].map((l) => `${l}\n`).join(''), 0);
+  fs.closeSync(fd);
+  assert.equal(fs.statSync(file).ino, ino);
+  const r = await U.readTurns({ root, cache });
+  assert.deepEqual(r.turns.map((t) => t.output).sort(), [7, 8]);
+});
+
 test('readTurns drops cache entries for transcripts deleted or aged out of `since`', async () => {
   const root = fixture({
     'p/a.jsonl': [line({ usage: { output_tokens: 1 } })],

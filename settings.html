@@ -359,7 +359,8 @@
     window.settingsApi.spend().then((sp) => {
       if (!sp) { spendEl('now').textContent = 'Reading your transcripts…'; return; }
       const eq = sp.mode === 'subscription' ? ' (API-price equivalent)' : '';
-      spendEl('now').textContent = `So far: $${sp.budget.day.spent.toFixed(2)} today, $${sp.budget.week.spent.toFixed(2)} this week${eq}.`;
+      const n = sp.budget.week.unpriced;
+      spendEl('now').textContent = `So far: $${sp.budget.day.spent.toFixed(2)} today, $${sp.budget.week.spent.toFixed(2)} this week${eq}.${n ? ` ${n} turn${n === 1 ? '' : 's'} unpriced (unknown model), not counted.` : ''}`;
     }).catch(() => {});
     // ── end F1 spend ──
 

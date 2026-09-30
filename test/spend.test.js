@@ -69,11 +69,59 @@ test('runaways: a session over the $ threshold inside the window, with its burn 
   ]);
   const r = S.runaways(turns, {}, NOW);
   assert.equal(r.length, 1);
-  assert.deepEqual([r[0].sessionId, r[0].cost, r[0].minutes, r[0].by], ['s1', 41.4, 18, 'cost']);
-  assert.equal(r[0].burn, '$41.40 in 18 min');
+  // s1 had a turn before the window, so its burn is timed over the whole window.
+  assert.deepEqual([r[0].sessionId, r[0].cost, r[0].minutes, r[0].by], ['s1', 41.4, 20, 'cost']);
+  assert.equal(r[0].burn, '$41.40 in 20 min');
   assert.equal(S.runaways(turns, { runawayDollars: 45 }, NOW).length, 0);
   assert.equal(S.runaways(turns, { runawayMinutes: 45 }, NOW)[0].cost, 71.4);
   assert.deepEqual(S.runaways(turns, { runawayDollars: 0 }, NOW), []);
+});
+
+test('runaways: a session with no earlier turn is timed from its first turn, in seconds under a minute', () => {
+  const born = [turn(NOW - 18 * MIN, 20), turn(NOW - 2 * MIN, 21.4)];
+  assert.equal(S.runaways(born, {}, NOW)[0].burn, '$41.40 in 18 min');
+  const quick = [turn(NOW - 45000, 41)];
+  assert.equal(S.runaways(quick, {}, NOW)[0].burn, '$41.00 in 45 s');
+  // An earlier turn two windows back is too old to count as "previous".
+  const old = [turn(NOW - 50 * MIN, 1), turn(NOW - 10 * MIN, 41)];
+  assert.equal(S.runaways(old, {}, NOW)[0].burn, '$41.00 in 10 min');
+});
+
+test('latchRunaways: one episode per crossing, held until under half the threshold', () => {
+  const t = sorted([turn(NOW - 10 * MIN, 20), turn(NOW - 5 * MIN, 21)]);
+  const a = S.latchRunaways(new Map(), t, {}, NOW);
+  assert.deepEqual([a.list.length, a.list[0].firedAt], [1, NOW]);
+  // 12 min on, only the $21 turn is left in the window: under $40, over $20.
+  const b = S.latchRunaways(a.latched, t, {}, NOW + 12 * MIN);
+  assert.deepEqual([b.list.length, b.list[0].firedAt, b.list[0].cost], [1, NOW, 21], 'same episode, same firedAt');
+  assert.equal(S.runaways(t, {}, NOW + 12 * MIN).length, 0, 'stateless: not over');
+  assert.equal(S.latchRunaways(new Map(), t, {}, NOW + 12 * MIN).list.length, 0, 'a new latch needs the full threshold');
+  // 16 min on the window is empty: released.
+  const c = S.latchRunaways(b.latched, t, {}, NOW + 16 * MIN);
+  assert.equal(c.list.length, 0);
+  const again = sorted(t.concat(turn(NOW + 17 * MIN, 45)));
+  assert.equal(S.latchRunaways(c.latched, again, {}, NOW + 18 * MIN).list[0].firedAt, NOW + 18 * MIN, 'a new crossing is a new episode');
+});
+
+test('snapshot: with a latch it holds runaways; without, it is stateless', () => {
+  const t = [turn(NOW - 5 * MIN, 41)];
+  const first = S.snapshot(t, {}, NOW, new Map());
+  assert.ok(first.latch instanceof Map);
+  const held = S.snapshot([turn(NOW - 5 * MIN, 30)], {}, NOW + MIN, first.latch);
+  assert.equal(held.runaway.length, 1);
+  assert.equal(S.snapshot([turn(NOW - 5 * MIN, 30)], {}, NOW + MIN).runaway.length, 0);
+});
+
+test('budgetStatus counts unpriced turns today and this week', () => {
+  const t = sorted([turn(NOW - 2 * DAY, 1, { modelKey: null }), turn(NOW - MIN, 1, { modelKey: null }), turn(NOW - MIN, 3)]);
+  const b = S.budgetStatus(t, {}, NOW);
+  assert.deepEqual([b.day.unpriced, b.week.unpriced, b.day.spent], [1, 2, 3]);
+});
+
+test('readSince covers this week and two runaway windows', () => {
+  assert.equal(S.readSince({}, NOW), S.startOfWeek(NOW));
+  const monday = new Date(2026, 8, 28, 0, 10).getTime();
+  assert.equal(S.readSince({}, monday), monday - 40 * MIN);
 });
 
 test('runaways: a token-rate threshold fires on its own and says tokens', () => {
@@ -105,6 +153,44 @@ test('budgetStatus and runaways only walk turns inside their windows', () => {
   S.budgetStatus(turns, {}, NOW);
   S.runaways(turns, {}, NOW);
   assert.ok(reads <= 4, `read ${reads} turns`);
+});
+
+test('tracker: recomputes only on new turns, new settings or a new minute, and keeps the latch', () => {
+  const tr = S.tracker();
+  const t = sorted([turn(NOW - 10 * MIN, 20), turn(NOW - 5 * MIN, 21)]);
+  const a = tr.snapshot(t, 1, {}, NOW);
+  assert.equal(tr.snapshot(t, 1, {}, NOW + 30000), a, 'same minute: memoized');
+  assert.equal(tr.computed, 1);
+  tr.snapshot(t, 2, {}, NOW + 30000);
+  tr.snapshot(t, 2, { dailyBudget: 5 }, NOW + 30000);
+  assert.equal(tr.computed, 3);
+  // 12 min on only $21 is in the window: held by the latch, same episode.
+  const held = tr.snapshot(t, 2, { dailyBudget: 5 }, NOW + 12 * MIN);
+  assert.deepEqual([held.runaway.length, held.runaway[0].firedAt], [1, NOW]);
+});
+
+test('usage worker: reads off the main thread, then says unchanged until a file changes', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { Worker } = require('worker_threads');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spend-worker-'));
+  fs.mkdirSync(path.join(root, 'p'));
+  const line = (i) => `${JSON.stringify({ type: 'assistant', sessionId: 's', timestamp: new Date().toISOString(), requestId: `r${i}`, message: { id: `m${i}`, model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })}\n`;
+  fs.writeFileSync(path.join(root, 'p', 's.jsonl'), line(0));
+  const w = new Worker(path.join(__dirname, '..', 'src', 'usage-worker.js'));
+  const ask = (id) => new Promise((resolve) => { w.once('message', resolve); w.postMessage({ id, root, since: 0 }); });
+  try {
+    const a = await ask(1);
+    assert.deepEqual([a.id, a.unchanged, a.turns.length, a.parsed], [1, false, 1, 1]);
+    const b = await ask(2);
+    assert.deepEqual([b.unchanged, b.turns], [true, null]);
+    fs.appendFileSync(path.join(root, 'p', 's.jsonl'), line(1));
+    const c = await ask(3);
+    assert.deepEqual([c.unchanged, c.turns.length, c.parsed], [false, 2, 1]);
+  } finally {
+    await w.terminate();
+  }
 });
 
 // ── rules.js spend block ────────────────────────────────────────────────────
@@ -186,24 +272,54 @@ test('rules: editing a default spend rule does not leak into the next defaults',
 const note = (prev, next, config = {}) => Help.notifications(prev, { sessions: [], pending: [], offline: false, ...next }, config);
 
 test('help: a runaway notifies once per episode and names the burn and terminal', () => {
-  const sp = env({ runaway: [{ sessionId: 'a', burn: '$47.20 in 18 min' }] }).spend;
+  const sp = env({ runaway: [{ sessionId: 'a', burn: '$47.20 in 18 min', firedAt: 1 }] }).spend;
   const first = note(new Set(), { sessions: [live('a', 'tool-use', { hostApp: 'iTerm2' })], spend: sp });
   assert.equal(first.fire.length, 1);
   assert.deepEqual([first.fire[0].kind, first.fire[0].sessionId, first.fire[0].hostApp], ['runaway', 'a', 'iTerm2']);
   assert.equal(first.fire[0].title, 'Runaway session — a');
   assert.match(first.fire[0].body, /\$47\.20 in 18 min/);
-  assert.equal(note(first.keys, { sessions: [live('a')], spend: sp }).fire.length, 0, 'held: no repeat');
   assert.equal(note(new Set(), { sessions: [live('a')], spend: sp }, { spend: { notifyRunaway: false } }).fire.length, 0, 'muted');
   assert.equal(note(new Set(), { sessions: [live('a')], spend: sp }, { notifyOnStates: false }).fire.length, 0, 'master switch');
 });
 
-test('help: budget notifies once per level per period', () => {
-  const sp = env({ budget: { level: 'exceeded', which: 'day', dayKey: 'Wed Sep 30 2026' }, budgetText: '$60.00 of $50.00 today' }).spend;
-  const r = note(new Set(), { sessions: [live('a'), live('b')], spend: sp });
+test('help: a runaway does not re-fire when its turn ends and the next one starts', () => {
+  const sp = env({ runaway: [{ sessionId: 'a', cwd: '/w/a', burn: '$47.20 in 18 min', firedAt: 1 }] }).spend;
+  let keys = note(new Set(), { sessions: [live('a')], spend: sp }).keys;
+  for (const signal of ['stop', 'idle-nudge', 'prompt-submit', 'tool-use']) {
+    const r = note(keys, { sessions: [live('a', signal)], spend: sp });
+    assert.equal(r.fire.length, 0, signal);
+    keys = r.keys;
+  }
+  // Nor when the session file is gone altogether (a headless run).
+  assert.equal(note(keys, { sessions: [], spend: sp }).fire.length, 0);
+  const lone = note(new Set(), { sessions: [], spend: sp });
+  assert.equal(lone.fire[0].title, 'Runaway session — a', 'a runaway with no live session still notifies, named from the transcript');
+  // A new episode (the latch released and re-fired) is a new notification.
+  const next = env({ runaway: [{ sessionId: 'a', burn: '$41.00 in 9 min', firedAt: 2 }] }).spend;
+  assert.equal(note(keys, { sessions: [live('a')], spend: next }).fire.length, 1);
+});
+
+test('help: budget notifies once per level per period, from spend alone', () => {
+  const b = { level: 'exceeded', which: 'day', dayKey: 'Wed Sep 30 2026', weekKey: 'Mon Sep 28 2026' };
+  const sp = env({ budget: b, budgetText: '$60.00 of $50.00 today' }).spend;
+  // An empty desk: still one notice (keys don't come from sessions).
+  const r = note(new Set(), { sessions: [], spend: sp });
   assert.equal(r.fire.length, 1);
   assert.deepEqual([r.fire[0].title, r.fire[0].body], ['Over budget', '$60.00 of $50.00 today.']);
-  assert.equal(note(r.keys, { sessions: [live('a')], spend: sp }).fire.length, 0);
-  assert.equal(note(new Set(), { sessions: [live('a')], spend: sp }, { spend: { notifyBudget: false } }).fire.length, 0);
+  let keys = r.keys;
+  for (const sessions of [[live('a')], [], [live('b'), live('c')], []]) {
+    const x = note(keys, { sessions, spend: sp });
+    assert.equal(x.fire.length, 0, 'session churn never re-fires');
+    keys = x.keys;
+  }
+  // Sticky: the level dipping (budget raised) and coming back is the same notice.
+  const dip = note(keys, { sessions: [], spend: env({ budget: { ...b, level: null } }).spend });
+  assert.equal(note(dip.keys, { sessions: [], spend: sp }).fire.length, 0);
+  // Warning then exceeded are two notices; a new day is a new one.
+  const warn = note(new Set(), { sessions: [], spend: { ...sp, budget: { ...b, level: 'warning' } } });
+  assert.equal(note(warn.keys, { sessions: [], spend: sp }).fire.length, 1);
+  assert.equal(note(keys, { sessions: [], spend: { ...sp, budget: { ...b, dayKey: 'Thu Oct 01 2026' } } }).fire.length, 1);
+  assert.equal(note(new Set(), { sessions: [], spend: sp }, { spend: { notifyBudget: false } }).fire.length, 0);
 });
 
 test('help: the panel explains the spend rules', () => {

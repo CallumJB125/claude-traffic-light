@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
+const { Worker } = require('worker_threads');
 const Rules = require('./rules.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
@@ -2080,7 +2081,6 @@ async function refreshUsage() {
   // and a slow one are worth a line.
   if (!usageMemo.turns || ms > 1000) console.log(`[usage] parsed ${r.parsed} files in ${ms} ms (${r.files} transcripts, ${r.turns.length} turns${r.skipped.length ? `, ${r.skipped.length} over the size cap` : ''})`);
   usageMemo = { at: Date.now(), turns: r.turns };
-  spendMaybeChanged();
   return r.turns;
 }
 function getUsageTurns() {
@@ -2107,11 +2107,63 @@ function refreshUsageLive() {
 }
 
 // ── F1 spend: budgets and runaway sessions (spend.js) ─────────────────────
-// Priced from the same incremental transcript reader as Stats: after the
-// first pass each refresh only stats files and reads what was appended.
-// Nothing here ever types into a terminal or stops a session you started.
+// Its own transcript read, this week only, in a worker thread with its own
+// incremental cache: the main thread only receives turns when a file
+// changed. Nothing here ever types into a terminal or stops a session you
+// started.
+let spendTurns = { version: 0, turns: null };
+let spendWorker = null; // null: not started; false: unavailable, read inline
+const spendFileCache = new Map();
+const spendPending = new Map();
+let spendReqId = 0;
+function spendRead(since) {
+  if (spendWorker === null) {
+    try {
+      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
+      spendWorker.unref();
+      spendWorker.on('message', (m) => { const p = spendPending.get(m.id); spendPending.delete(m.id); if (p) (m.error ? p.reject(new Error(m.error)) : p.resolve(m)); });
+      spendWorker.on('error', (err) => {
+        console.warn('[spend] worker failed, reading inline:', err.message);
+        spendWorker = false;
+        for (const p of spendPending.values()) p.reject(err);
+        spendPending.clear();
+      });
+    } catch (err) {
+      console.warn('[spend] no worker, reading inline:', err.message);
+      spendWorker = false;
+    }
+  }
+  if (spendWorker === false) return Usage.readTurns({ since, cache: spendFileCache, ...(PROJECTS_DIR ? { root: PROJECTS_DIR } : {}) }).then((r) => ({ turns: r.turns, parsed: r.parsed, unchanged: false }));
+  const id = ++spendReqId;
+  return new Promise((resolve, reject) => {
+    spendPending.set(id, { resolve, reject });
+    spendWorker.postMessage({ id, root: PROJECTS_DIR, since });
+  });
+}
+let spendInFlight = null;
+let spendReadAt = 0;
+const SPEND_POLL_MS = 15000;
+const SPEND_LIVE_MS = 3000;
+function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
+  if (spendInFlight || Date.now() - spendReadAt < minGap) return;
+  const t0 = Date.now();
+  spendInFlight = spendRead(Spend.readSince(loadConfig().spend))
+    .then((r) => {
+      spendReadAt = Date.now();
+      if (!spendTurns.turns || Date.now() - t0 > 1000) console.log(`[spend] read ${r.parsed} files in ${Date.now() - t0} ms${spendWorker ? ' (worker)' : ''}`);
+      if (r.unchanged && spendTurns.turns) return;
+      spendTurns = { version: spendTurns.version + 1, turns: r.turns };
+      stateMemo = { at: 0, key: null, value: null };
+      broadcastStatus();
+    })
+    .catch((err) => { spendReadAt = Date.now(); console.warn('[spend] refresh failed:', err.message); })
+    .finally(() => { spendInFlight = null; });
+}
+// Memoized per turns version, spend settings and minute, with the runaway
+// latch carried between recomputes (one notification per episode).
+const spendTracker = Spend.tracker();
 function spendSnapshot(config) {
-  return usageMemo.turns ? Spend.snapshot(usageMemo.turns, config.spend) : null;
+  return spendTurns.turns ? spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend) : null;
 }
 // What the tooltip adds after the spend rule that fired: the burn rate or
 // how far over budget.
@@ -2128,30 +2180,16 @@ function spendNote(rules, fired, sessions, spend) {
   }
   return null;
 }
-let spendKey = null;
-function spendMaybeChanged() {
-  const snap = spendSnapshot(loadConfig());
-  const key = snap ? `${snap.budget.level}|${snap.runaway.map((r) => `${r.sessionId}:${r.burn}`).join(',')}` : '';
-  if (key === spendKey) return;
-  spendKey = key;
-  stateMemo = { at: 0, key: null, value: null };
-  broadcastStatus();
-}
 // Hook point for the board runner (later): a runner that spawned a session
 // registers `sessionId → stop()` here, and that session's runaway
 // notification gets a Stop button that calls it (killing the supervised
 // process). Interactive sessions never register, so they only ever get the
 // notification and the jump to their terminal.
 const runawayStoppers = new Map();
-ipcMain.handle('get-spend', () => spendSnapshot(loadConfig()));
-const SPEND_POLL_MS = 15000;
-function refreshSpend() {
-  // A second under the poll interval, so a read that finished just after the
-  // last tick doesn't make the next tick skip.
-  if (usageInFlight || (usageMemo.turns && Date.now() - usageMemo.at < SPEND_POLL_MS - 1000)) return;
-  usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
-  usageInFlight.catch((err) => console.warn('[spend] refresh failed:', err.message));
-}
+ipcMain.handle('get-spend', () => {
+  const snap = spendSnapshot(loadConfig());
+  return snap ? { ...snap, latch: undefined } : null;
+});
 
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
@@ -2521,6 +2559,7 @@ app.whenReady().then(() => {
       broadcastStatus();
       maybePlayAlertSound();
       refreshUsageLive();
+      refreshSpend(SPEND_LIVE_MS);
     }, 200);
   });
 

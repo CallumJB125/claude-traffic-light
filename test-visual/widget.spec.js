@@ -81,8 +81,8 @@ test('widget renders the runaway-red state', async () => {
   fs.writeFileSync(path.join(h.projects, 'visual', 'visual-burn.jsonl'), `${[line(17.5, 0, 1000000), line(1, 1, 888000)].join('\n')}\n`);
   await signal(h, { signal: 'session-end', session: 'visual', source: 'claude' });
   await signal(h, { signal: 'tool-use', session: 'visual-burn', source: 'claude', cwd: '/visual', tool: 'Bash' });
-  await expect.poll(async () => (await status(h.port)).spend?.runaway?.[0]?.burn, { timeout: 30000 }).toBe('$47.20 in 18 min');
-  await expect.poll(async () => (await status(h.port)).look.ruleId).toBe('runaway');
+  await expect.poll(async () => (await status(h.port)).look.ruleId, { timeout: 30000 }).toBe('runaway');
+  expect((await status(h.port)).spend).toEqual({ level: null, runaway: 1 });
   expect((await status(h.port)).look.lamp).toBe('red');
   await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Runaway session ($47.20 in 18 min in visual)');
   await widget.waitForTimeout(600);

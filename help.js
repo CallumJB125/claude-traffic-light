@@ -136,6 +136,8 @@ const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: 
 
 const folderOf = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
 
+const periodKey = (b) => (b.which === 'week' ? b.weekKey : b.dayKey);
+
 function notifiable({ sessions = [], pending = [], offline = false, spend = null }) {
   const out = new Map();
   for (const s of sessions) {
@@ -154,14 +156,17 @@ function notifiable({ sessions = [], pending = [], offline = false, spend = null
   // Only worth saying while a session is open: a laptop dropping wifi with
   // nothing running is none of Claude's business.
   if (offline && sessions.length) out.set('offline', { kind: 'offline', session: null });
-  // F1 spend: the same entries the rules light, so a notification never
-  // fires for a runaway the widget isn't showing.
-  for (const v of Rules.spendSessions(sessions, { spend })) {
-    if (v.signal === 'runaway') out.set(`runaway:${v.sessionId}`, { kind: 'runaway', session: v });
-    else if (spend && spend.budget) {
-      const b = spend.budget;
-      out.set(`${v.signal}:${b.which}:${b.which === 'week' ? b.weekKey : b.dayKey}`, { kind: v.signal, session: null, text: spend.budgetText });
+  // F1 spend: keyed on spend alone, never on which sessions are open. A
+  // runaway is one key per episode (the app's latch keeps firedAt while the
+  // session hovers near the line or its turn ends); a budget level is one
+  // key per day or week.
+  if (spend) {
+    for (const r of spend.runaway || []) {
+      const s = sessions.find((x) => x.sessionId && x.sessionId === r.sessionId) || {};
+      out.set(`runaway:${r.sessionId}:${r.firedAt || 0}`, { kind: 'runaway', session: { ...s, sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, burn: r.burn } });
     }
+    const b = spend.budget;
+    if (b && b.level) out.set(`budget-${b.level}:${b.which}:${periodKey(b)}`, { kind: `budget-${b.level}`, session: null, text: spend.budgetText });
   }
   return out;
 }
@@ -201,6 +206,10 @@ function spendMuted(kind, config) {
 function notifications(prevKeys, next, config) {
   const now = notifiable(next);
   const keys = new Set(now.keys());
+  // A budget notice stays sent for its day or week, even if the level dips
+  // (a raised budget, a new day's first read) and comes back.
+  const b = next.spend && next.spend.budget;
+  for (const k of prevKeys || []) if (k.startsWith('budget-') && (!b || k.endsWith(`:${b.dayKey}`) || k.endsWith(`:${b.weekKey}`))) keys.add(k);
   if (!prevKeys) return { keys, fire: [] };
   const { on, kinds } = notifyConfig(config);
   const fire = [];
