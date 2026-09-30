@@ -34,8 +34,10 @@
     // lamp change: a glow blooms off the newly lit lamp
     bloom: { ms: 420, scale: 1.9, opacity: 0.55 },
     // idle loops are sampled at this rate instead of every display frame;
-    // stepped loops wake only when their frame actually changes
-    ambient: { fps: 6, minMs: 1000 },
+    // stepped loops wake only when their frame actually changes; fast smooth
+    // loops (a flame's flicker) get a finer grid that still lands on every
+    // slow frame, so both cost one wake-up together
+    ambient: { fps: 6, minMs: 1000, fastFps: 12, fastMinMs: 300 },
   };
 
   // Apple-style parameters: `response` is roughly how long (s) the spring
@@ -187,8 +189,10 @@
   //   { stepped: true, points } — changes only at these iteration fractions,
   //     so it is woken exactly then;
   //   { stepped: false } — smooth, sampled at the ambient fps;
+  //   { stepped: false, fast: true } — smooth but quick (fastMinMs..minMs),
+  //     sampled at the fast fps;
   //   null — too short to sample (left to the display clock).
-  function ambientPlan(keyframes, durationMs, direction, minMs) {
+  function ambientPlan(keyframes, durationMs, direction, minMs, fastMinMs) {
     if (!(durationMs > 0) || !Array.isArray(keyframes) || keyframes.length < 2) return null;
     const segs = keyframes.slice(0, -1);
     const steps = segs.map((k) => /^steps\((\d+)|^step-(start|end)/.exec(String(k.easing || '')));
@@ -204,7 +208,8 @@
       const list = [...points].map((p) => Math.min(1, Math.max(0, p))).sort((x, y) => x - y);
       return { stepped: true, points: [...new Set(list)] };
     }
-    return durationMs >= minMs ? { stepped: false } : null;
+    if (durationMs >= minMs) return { stepped: false };
+    return fastMinMs > 0 && durationMs >= fastMinMs ? { stepped: false, fast: true } : null;
   }
 
   // Local time (ms since the animation's start) when a stepped loop next

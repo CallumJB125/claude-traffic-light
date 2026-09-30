@@ -242,6 +242,16 @@ test('ambientPlan: stepped loops wake at their frame changes, smooth ones on the
   assert.equal(M.ambientPlan([], 1000, 'normal', 1000), null);
 });
 
+test('ambientPlan: quick smooth loops (the fire flicker) take the fast grid; too quick stays on the display clock', () => {
+  const smooth = [{ offset: 0, easing: 'ease-in-out' }, { offset: 1, easing: 'ease-in-out' }];
+  assert.deepEqual(M.ambientPlan(smooth, 400, 'alternate', 1000, 300), { stepped: false, fast: true });
+  assert.deepEqual(M.ambientPlan(smooth, 1800, 'normal', 1000, 300), { stepped: false }, 'slow loops keep the slow grid');
+  assert.equal(M.ambientPlan(smooth, 250, 'normal', 1000, 300), null);
+  assert.equal(M.ambientPlan(smooth, 400, 'normal', 1000), null, 'no fast floor: as before');
+  const A = M.MOTION.ambient;
+  assert.equal(A.fastFps % A.fps, 0, 'every slow frame is also a fast frame, so the two grids share wake-ups');
+});
+
 test('nextStepTime finds the next frame change, across the delay and iterations', () => {
   const pts = [0, 0.5, 1];
   assert.equal(M.nextStepTime(pts, 4000, 300, 100), 300, 'waits out the delay');

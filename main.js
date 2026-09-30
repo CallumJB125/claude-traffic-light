@@ -743,9 +743,17 @@ const lightsMotion = createMotionGate((paused) => {
   if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
 });
 
+// Nobody at the machine at all (locked, asleep, displays off) — unlike a
+// hidden widget or menu-bar mode, where the person is still working and the
+// spend and GitHub alerts must keep coming. Those feeds hold while away and
+// catch up the moment someone is back.
+let feedsTick = () => {};
+const machineAway = createMotionGate((away) => { if (!away) feedsTick(); });
+
 function pauseEverywhere(reason, on) {
   setMotionPaused(reason, on);
   lightsMotion.set(reason, on);
+  machineAway.set(reason, on);
 }
 
 function watchPowerForMotion() {
@@ -3042,9 +3050,10 @@ app.whenReady().then(() => {
   every(30000, flushStats, 'stats-flush');
   // GitHub is asked at most once a poll interval (github-signals decides);
   // dev runs never call gh, but still show saved events.
+  let gitTick = null;
   if (IS_DEV_RUN) git.pause('dev-run');
   else {
-    const gitTick = () => {
+    gitTick = () => {
       const config = loadConfig();
       if (!git.due(config)) return;
       git.tick({ sessions: readSessions(config), config }).then((fired) => {
@@ -3055,10 +3064,15 @@ app.whenReady().then(() => {
       }).catch((e) => console.log('[git]', e.message));
     };
     setTimeout(gitTick, 5000);
-    every(15000, gitTick, 'git');
   }
+  // Spend and GitHub share one 15 s tick instead of two timers.
+  feedsTick = () => {
+    if (machineAway.paused) return;
+    refreshSpend();
+    gitTick?.();
+  };
   refreshSpend();
-  every(SPEND_POLL_MS, refreshSpend, 'spend');
+  every(SPEND_POLL_MS, feedsTick, 'feeds');
   syncEyePoll();
   watchPowerForMotion();
   sweepSessionFiles();

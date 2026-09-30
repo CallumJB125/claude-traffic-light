@@ -1291,13 +1291,14 @@
         const t = a.effect && typeof a.effect.getTiming === 'function' ? a.effect.getTiming() : null;
         if (!t || t.iterations !== Infinity || !(t.duration > 0)) return null;
         const kfs = a.effect.getKeyframes().map((k) => ({ offset: k.computedOffset ?? k.offset, easing: k.easing && k.easing !== 'linear' ? k.easing : t.easing }));
-        return Mo().ambientPlan(kfs, t.duration, t.direction, cfg('ambient').minMs || 1000);
+        return Mo().ambientPlan(kfs, t.duration, t.direction, cfg('ambient').minMs || 1000, cfg('ambient').fastMinMs);
       }
       // Smooth loops share one frame grid, so however many there are, they
       // cost one wake-up (and one style/paint pass) per ambient frame.
       function dueAt(rec, t) {
         if (!rec.plan.stepped) {
-          const frame = 1000 / Math.max(1, cfg('ambient').fps || 12);
+          const A = cfg('ambient');
+          const frame = 1000 / Math.max(1, (rec.plan.fast ? A.fastFps : A.fps) || 12);
           return (Math.floor(t / frame) + 1) * frame;
         }
         return rec.base + Mo().nextStepTime(rec.plan.points, rec.dur, rec.delay, t - rec.base);
