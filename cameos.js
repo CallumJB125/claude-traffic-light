@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BUILTINS = ['neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
+const BUILTINS = ['neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
 const ID_RE = /^[a-z0-9-]{1,32}$/;
 // Saved with full photographic detail; it's cut at WORK first, where edges
 // have room.

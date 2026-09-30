@@ -297,10 +297,22 @@
 .rig.eyes-heart .eyefx-heart, .rig.eyes-dizzy .eyefx-dizzy, .rig.eyes-x .eyefx-x, .rig.eyes-tears .eyefx-tears, .rig.eyes-laser .eyefx-laser,
 .rig.eyes-happy .eyefx-happy, .rig.eyes-angry .eyefx-angry, .rig.eyes-sad .eyefx-sad, .rig.eyes-surprised .eyefx-surprised, .rig.eyes-wink .eyefx-wink,
 .rig.eyes-star .eyefx-star, .rig.eyes-money .eyefx-money, .rig.eyes-sleepy .eyefx-sleepy, .rig.eyes-suspicious .eyefx-suspicious, .rig.eyes-roll .eyefx-roll,
-.rig.eyes-googly .eyefx-googly { opacity: 1; }
+.rig.eyes-googly .eyefx-googly,
+.rig.eyes-loading .eyefx-loading, .rig.eyes-scan .eyefx-scan, .rig.eyes-wide .eyefx-wide, .rig.eyes-content .eyefx-content, .rig.eyes-side .eyefx-side, .rig.eyes-glow .eyefx-glow { opacity: 1; }
 /* moods that replace the plain eyes (brows-only moods keep them) */
 .rig.eyes-heart .eye-open, .rig.eyes-dizzy .eye-open, .rig.eyes-x .eye-open, .rig.eyes-happy .eye-open, .rig.eyes-surprised .eye-open, .rig.eyes-wink .eye-open,
-.rig.eyes-star .eye-open, .rig.eyes-money .eye-open, .rig.eyes-sleepy .eye-open, .rig.eyes-suspicious .eye-open, .rig.eyes-roll .eye-open, .rig.eyes-googly .eye-open { opacity: 0; }
+.rig.eyes-star .eye-open, .rig.eyes-money .eye-open, .rig.eyes-sleepy .eye-open, .rig.eyes-suspicious .eye-open, .rig.eyes-roll .eye-open, .rig.eyes-googly .eye-open,
+.rig.eyes-loading .eye-open, .rig.eyes-scan .eye-open, .rig.eyes-wide .eye-open, .rig.eyes-content .eye-open, .rig.eyes-side .eye-open, .rig.eyes-glow .eye-open { opacity: 0; }
+/* loading: the activity spinner steps round an eighth at a time (agent thinking) */
+.rig .spin-eye { transform-origin: 24.25px 45.75px; }
+.rig .spin-eye + .spin-eye { transform-origin: 39.75px 45.75px; }
+.rig.eyes-loading .spin-eye { animation: rig-spin 1.2s steps(8) infinite; }
+/* scan: a bar sweeps down each eye */
+.rig.eyes-scan .scanbar { animation: rig-scanbar 1.6s ease-in-out infinite; }
+@keyframes rig-scanbar { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3.4px); } }
+/* glow: luminous eyes softly pulse (opacity + glow, ~0.5 Hz) */
+.rig.eyes-glow .glow-eye { filter: drop-shadow(0 0 2px #38bdf8); animation: rig-eyeglow 2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes rig-eyeglow { 0%, 100% { opacity: 0.65; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } }
 .rig .starpupil { transform-box: fill-box; transform-origin: center; }
 .rig.eyes-star .starpupil { animation: rig-twinkle 1.2s ease-in-out infinite; }
 @keyframes rig-twinkle { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.2) rotate(15deg); } }
@@ -421,7 +433,53 @@
 /* Effects */
 .rig .effect { opacity: 0; transition: opacity 200ms ease; }
 .rig.effect-rain .effect-rain, .rig.effect-sun .effect-sun, .rig.effect-snow .effect-snow, .rig.effect-sparkles .effect-sparkles,
-.rig.effect-fire .effect-fire, .rig.effect-beard .effect-beard { opacity: 1; }
+.rig.effect-fire .effect-fire, .rig.effect-beard .effect-beard,
+.rig.effect-stars .effect-stars, .rig.effect-bubbles .effect-bubbles, .rig.effect-leaves .effect-leaves, .rig.effect-matrix .effect-matrix,
+.rig.effect-hearts .effect-hearts, .rig.effect-fireflies .effect-fireflies, .rig.effect-rainbow .effect-rainbow, .rig.effect-petals .effect-petals { opacity: 1; }
+/* stars: a slow, staggered twinkle (opacity only, ~0.3 Hz) */
+.rig .twinkle { opacity: 0.25; transform-box: fill-box; transform-origin: center; }
+.rig.effect-stars .twinkle { animation: rig-twinkle-star 3.2s ease-in-out infinite; }
+.rig.effect-stars .twinkle.sx2 { animation-delay: 0.6s; } .rig.effect-stars .twinkle.sx3 { animation-delay: 1.2s; }
+.rig.effect-stars .twinkle.sx4 { animation-delay: 1.8s; } .rig.effect-stars .twinkle.sx5 { animation-delay: 2.4s; }
+@keyframes rig-twinkle-star { 0%, 100% { opacity: 0.25; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
+/* Particle effects (bubbles, leaves, matrix, hearts, fireflies, petals): each
+   particle is drawn at its origin and placed by --x/--ry, so at rest (reduced
+   motion) it sits still at a scattered spot and the effect still reads. In
+   motion a negative --d spreads the particles through the cycle, so any single
+   frame shows most of them; transform/opacity only, on smooth loops the
+   ambient clock samples. */
+.rig :is(.bubble, .leaf, .glyph, .floatheart, .firefly, .petal) { transform: translate(var(--x, 0px), var(--ry, 0px)); }
+.rig.effect-bubbles .bubble { animation: rig-fx-rise 5s linear var(--d, 0s) infinite; }
+.rig.effect-hearts .floatheart { animation: rig-fx-rise 4.5s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-rise {
+  0% { opacity: 0; transform: translate(var(--x), 76px) scale(0.8); }
+  10% { opacity: 1; }
+  40% { transform: translate(calc(var(--x) + var(--s, 0px)), 50px) scale(1); }
+  70% { transform: translate(calc(var(--x) - var(--s, 0px)), 28px) scale(1); }
+  88% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 8px) scale(1.15); }
+}
+.rig.effect-leaves .leaf { animation: rig-fx-fall 6s linear var(--d, 0s) infinite; }
+.rig.effect-petals .petal { animation: rig-fx-fall 6.5s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-fall {
+  0% { opacity: 0; transform: translate(var(--x), -6px) rotate(0deg); }
+  8% { opacity: 1; }
+  50% { transform: translate(calc(var(--x) + var(--s, 0px)), 40px) rotate(calc(var(--r, 0deg) * 0.5)); }
+  92% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 86px) rotate(var(--r, 0deg)); }
+}
+.rig.effect-matrix .glyph { animation: rig-fx-code 3.4s linear var(--d, 0s) infinite; }
+@keyframes rig-fx-code {
+  0% { opacity: 0; transform: translate(var(--x), -2px); }
+  6%, 90% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), 90px); }
+}
+.rig.effect-fireflies .firefly { animation: rig-fx-drift 5s ease-in-out var(--d, 0s) infinite; }
+@keyframes rig-fx-drift {
+  0%, 100% { opacity: 0.5; transform: translate(var(--x), var(--ry)); }
+  25%, 75% { opacity: 1; }
+  50% { opacity: 0.7; transform: translate(calc(var(--x) + var(--s, 0px)), calc(var(--ry) - 4px)); }
+}
 .rig .drop { opacity: 0; }
 .rig.effect-rain .drop { animation: rig-drop 1s linear infinite; }
 .rig.effect-rain .drop.d2 { animation-delay: 0.33s; } .rig.effect-rain .drop.d3 { animation-delay: 0.66s; }
@@ -445,7 +503,23 @@
 .rig.costume-crown .costume-crown, .rig.costume-partyhat .costume-partyhat, .rig.costume-shades .costume-shades,
 .rig.costume-halo .costume-halo, .rig.costume-devil .costume-devil, .rig.costume-wizard .costume-wizard,
 .rig.costume-tophat .costume-tophat, .rig.costume-santa .costume-santa, .rig.costume-pumpkin .costume-pumpkin,
-.rig.costume-bunny .costume-bunny { opacity: 1; }
+.rig.costume-bunny .costume-bunny,
+.rig.costume-headphones .costume-headphones, .rig.costume-graduate .costume-graduate, .rig.costume-chef .costume-chef,
+.rig.costume-cowboy .costume-cowboy, .rig.costume-propeller .costume-propeller, .rig.costume-detective .costume-detective,
+.rig.costume-flowercrown .costume-flowercrown, .rig.costume-beanie .costume-beanie { opacity: 1; }
+/* headphones: a focus LED breathes (a slow ~0.4 Hz fade, well under three flashes/s) */
+.rig.costume-headphones .hp-led { animation: rig-hp-led 2.4s ease-in-out infinite; }
+@keyframes rig-hp-led { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+/* graduate: the tassel swings from the board corner */
+.rig .tassel { transform-box: fill-box; transform-origin: top center; }
+.rig.costume-graduate .tassel { animation: rig-tassel 2.2s ease-in-out infinite; }
+@keyframes rig-tassel { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(9deg); } }
+/* propeller: the two-blade prop spins */
+.rig .propeller { transform-box: fill-box; transform-origin: center; }
+.rig.costume-propeller .propeller { animation: rig-spin 0.7s linear infinite; }
+/* beanie: the pom-pom bobs */
+.rig.costume-beanie .pom { animation: rig-pom 2s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+@keyframes rig-pom { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
 .rig .dog-tail { transform-origin: 59px 53px; }
 .rig.costume-dog .dog-tail { animation: rig-wag 0.35s ease-in-out infinite alternate; }
 @keyframes rig-wag { from { transform: rotate(-25deg); } to { transform: rotate(25deg); } }
@@ -466,7 +540,8 @@
    drawn after, so a crown sits on the hair. */
 .rig .cameo { opacity: 0; transition: opacity 150ms ease; }
 .rig.cameo-neo .cameo-neo, .rig.cameo-alfred .cameo-alfred, .rig.cameo-mcafee .cameo-mcafee,
-.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker { opacity: 1; }
+.rig.cameo-spagni .cameo-spagni, .rig.cameo-powell .cameo-powell, .rig.cameo-baker .cameo-baker,
+.rig.cameo-wizard .cameo-wizard, .rig.cameo-scientist .cameo-scientist, .rig.cameo-pirate .cameo-pirate, .rig.cameo-punk .cameo-punk { opacity: 1; }
 /* Opaque shades (neo) hide only plain eyes. Any other eye state — closed, a
    mood, or a pose that works the eyes (zyn, line, juice, smoke, grin, dead) —
    shows through lenses gone smoky, so no pose ever loses its eyes. */
@@ -775,6 +850,19 @@
 @keyframes rig-die { 0% { transform: rotate(0); } 60% { transform: rotate(80deg) translateY(2px); } 75% { transform: rotate(92deg) translateY(4px); } 100% { transform: rotate(88deg) translateY(4px); } }
 @keyframes rig-drop-sign { 0% { transform: rotate(0); } 100% { transform: rotate(35deg) translate(10px, 6px); } }
 
+/* cheer: both arms fly up in a V and the body hops for joy */
+.rig .cheer-arms, .rig .facepalm-hand { opacity: 0; }
+.rig.pose-cheer .cheer-arms { opacity: 1; animation: rig-cheer-arms 0.6s ease-in-out infinite; transform-origin: 32px 54px; }
+.rig.pose-cheer .claude-body { animation: rig-cheer-hop 0.6s ease-in-out infinite; transform-origin: 32px 68px; }
+@keyframes rig-cheer-arms { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes rig-cheer-hop { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-3px); } }
+
+/* facepalm: a hand covers the face and the head shakes slowly (oops) */
+.rig.pose-facepalm .facepalm-hand { opacity: 1; }
+.rig.pose-facepalm .claude-body { animation: rig-headshake 2.4s ease-in-out infinite; transform-origin: 32px 60px; }
+.rig.pose-facepalm .sign-assembly { transform: rotate(8deg); transition: transform 400ms ease; }
+@keyframes rig-headshake { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-3deg); } 75% { transform: rotate(3deg); } }
+
 /* processing (weed → jar): hands work at the table */
 .rig.processing .knock-fist { opacity: 1; animation: rig-grind 0.6s ease-in-out infinite alternate; transform-origin: 53px 49px; }
 @keyframes rig-grind { from { transform: translate(-2px, 1px) rotate(-25deg); } to { transform: translate(3px, -1px) rotate(25deg); } }
@@ -860,7 +948,10 @@
   .rig .hammer, .rig .scene, .rig .pet-tail, .rig .tongue, .rig .wing, .rig .fire, .rig .pet-mark, .rig .wisp, .rig .ex, .rig .ember, .rig .sniff, .rig .grin, .rig .selfie, .rig .flashbulb, .rig .puff, .rig .pouch, .rig .tin, .rig .line, .rig .note, .rig .needle, .rig .plunger, .rig .bicep, .rig .skate, .rig .dead, .rig .plant, .rig .edible,
   .rig .sign-assembly, .rig .lamp, .rig .knock-fist, .rig .cookie, .rig .event, .rig .meteor, .rig .portal-ring, .rig .ufo-lights circle, .rig .starpupil, .rig .rollpupil, .rig .googly, .rig .eyefx-sleepy, .rig .sn-body, .rig .gun-aim, .rig .tear, .rig .beam, .rig .arms-crossed, .rig .body, .rig .prop-bubble, .rig .pet, .rig .drop, .rig .rays, .rig .flake, .rig .spk,   .rig .speed-lines, .rig .flame,
   .rig .zyn-mouth, .rig .lip-bump, .rig .tin-text, .rig .zyn-glints, .rig .syringe, .rig .juice-fill, .rig .muscles, .rig .cameo-skin, .rig .cameo-photo-img, .rig .sign-assembly > rect,
-  .rig .cig-glow, .rig .wisp-line, .rig .cig-held, .rig .cig-butt-fly, .rig .cig-butt-body, .rig .cig-scuff, .rig .dust, .rig .cig-pack, .rig .cig-pack-stick, .rig .cig-flame {
+  .rig .cig-glow, .rig .wisp-line, .rig .cig-held, .rig .cig-butt-fly, .rig .cig-butt-body, .rig .cig-scuff, .rig .dust, .rig .cig-pack, .rig .cig-pack-stick, .rig .cig-flame,
+  .rig .hp-led, .rig .tassel, .rig .propeller, .rig .pom,
+  .rig .twinkle, .rig .bubble, .rig .leaf, .rig .glyph, .rig .floatheart, .rig .firefly, .rig .petal,
+  .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms {
     animation: none !important;
   }
   /* walking/running/tapping legs, the munching mouth, agent chips, the selfie

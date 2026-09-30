@@ -188,6 +188,43 @@
       <g fill="#c9c2b8" opacity="0.8"><rect x="22" y="49.2" width="1" height="1" /><rect x="26" y="49.9" width="1" height="1" /><rect x="30" y="49.8" width="1" height="1" /><rect x="34" y="49.9" width="1" height="1" /><rect x="38" y="49.9" width="1" height="1" /><rect x="42" y="49.2" width="1" height="1" /></g>
       <rect class="cameo-lips" x="28.5" y="50.6" width="7" height="0.8" fill="#211f1c" opacity="0.7" />
     </g>
+    <!-- generic bearded wizard: long hair, robe collar and a great beard -->
+    <g class="cameo cameo-wizard">
+      <rect x="4" y="52" width="56" height="7" fill="#463a66" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><path d="M4.6 52.8h20M39.4 52.8h20" stroke="#5f5286" stroke-width="0.7" />
+      <polygon points="15,40 13,54 18,59 20,52 19,42" fill="#cbc8bf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="49,40 51,54 46,59 44,52 45,42" fill="#cbc8bf" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <polygon points="16,45 16,39 18,34 24,31 32,30 40,31 46,34 48,39 48,45 46,45 46,41 44,39.5 20,39.5 18,41 18,45" fill="#d0cdc4" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <rect x="22" y="33.5" width="10" height="0.8" fill="#bdbab1" /><rect x="33" y="34.2" width="8" height="0.8" fill="#bdbab1" />
+      <path d="M20 50 q12 5 24 0 q-1 10 -12 12 q-11 -2 -12 -12 z" fill="#dcd9d0" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M26 54v6M32 55v7M38 54v6" stroke="#bdbab1" stroke-width="0.6" />
+      <path d="M24 49 q8 4 16 0 q-4 3.5 -8 3.5 q-4 0 -8 -3.5 z" fill="#cfccc3" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    </g>
+    <!-- generic mad scientist: frazzled white hair, forehead goggles, lab coat -->
+    <g class="cameo cameo-scientist">
+      <rect x="4" y="52" width="56" height="7" fill="#eef0f2" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="25,52 32,57 39,52" fill="#dfe3e6" /><rect x="31" y="52" width="2" height="6" fill="#38bdf8" />
+      <polygon points="15,46 13,40 16,41 15,35 19,39 20,33 24,38 25,32 30,37 32,31 34,37 39,32 40,38 44,33 45,39 48,35 47,41 50,40 49,46 46,45 46,41 44,39.5 20,39.5 18,41 18,46" fill="#eceae4" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <rect x="17" y="39.4" width="30" height="2.2" rx="1" fill="#5a5a6a" /><circle cx="23" cy="40.4" r="2.2" fill="#cfe9ff" stroke="#3a3a46" stroke-width="0.8" /><circle cx="41" cy="40.4" r="2.2" fill="#cfe9ff" stroke="#3a3a46" stroke-width="0.8" />
+      <rect class="cameo-lips" x="29" y="50.4" width="6" height="0.8" fill="#211f1c" opacity="0.7" />
+    </g>
+    <!-- generic pirate: red bandana, dark beard, hoop earring, striped shirt -->
+    <g class="cameo cameo-pirate">
+      <rect x="4" y="52" width="56" height="7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><g fill="#c8202a"><rect x="4.5" y="52.4" width="55" height="1.1" /><rect x="4.5" y="55" width="55" height="1.1" /><rect x="4.5" y="57.4" width="55" height="1.1" /></g>
+      <path d="M17 40 q15 -12 30 0 z" fill="#c8202a" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <polygon points="46,38 53,35 51,41 55,44 47,43" fill="#c8202a" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+      <g fill="#f2efe8" opacity="0.7"><rect x="24" y="34" width="1" height="1" /><rect x="30" y="32" width="1" height="1" /><rect x="36" y="34" width="1" height="1" /><rect x="21" y="36.5" width="1" height="1" /><rect x="42" y="36.5" width="1" height="1" /></g>
+      <path d="M19 47 q13 8 26 0 q-1 9 -13 11 q-12 -2 -13 -11 z" fill="#2e241c" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M24 48.5 q8 3 16 0 q-4 3 -8 3 q-4 0 -8 -3 z" fill="#241c15" />
+      <circle cx="48.5" cy="51" r="1.6" fill="none" stroke="#f2d16b" stroke-width="0.9" />
+    </g>
+    <!-- generic punk: green mohawk, studded leather collar -->
+    <g class="cameo cameo-punk">
+      <rect x="4" y="52" width="56" height="7" fill="#1c1a1f" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" /><polygon points="24,52 32,58 40,52" fill="#0e0d10" />
+      <g fill="#b9b3a9"><circle cx="12" cy="55.4" r="0.7" /><circle cx="17" cy="56.4" r="0.7" /><circle cx="47" cy="56.4" r="0.7" /><circle cx="52" cy="55.4" r="0.7" /></g>
+      <polygon points="27,40 27.5,32 29.5,34 30,25 32,33 34,27 34.5,34 37,31 37,40" fill="#2fae3e" stroke="#211f1c" stroke-width="0.5" stroke-linejoin="round" />
+      <path d="M30 39v-6M32 39v-9M34 39v-6" stroke="#26922f" stroke-width="0.6" />
+      <g fill="#8a7f73" opacity="0.45"><rect x="20" y="42" width="1" height="1" /><rect x="22" y="44" width="1" height="1" /><rect x="43" y="42" width="1" height="1" /><rect x="41" y="44" width="1" height="1" /></g>
+      <path d="M48 49.5v3.5" stroke="#c9c2b8" stroke-width="0.9" /><circle cx="48" cy="49.3" r="0.7" fill="#c9c2b8" />
+      <rect class="cameo-lips" x="29" y="50.4" width="6" height="0.8" fill="#211f1c" opacity="0.7" />
+    </g>
     <!-- photo cameo: the user's own face (cameos.js), a real photo in the head
          box (17,30)–(47,60), untouched but for its cut-out, with a soft
          shadow where the chin meets the body; mouth props and hats go on top -->
@@ -271,6 +308,16 @@
       <rect x="14" y="52" width="22" height="4" rx="1.5" transform="rotate(-14 25 54)" />
       <rect x="28" y="52" width="22" height="4" rx="1.5" transform="rotate(14 39 54)" />
     </g>
+    <!-- cheer: both arms thrown up in a V -->
+    <g class="cheer-arms" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5">
+      <rect x="6" y="40" width="5" height="15" rx="2.5" transform="rotate(-28 8.5 54)" /><rect x="53" y="40" width="5" height="15" rx="2.5" transform="rotate(28 55.5 54)" />
+      <circle cx="4.5" cy="40" r="2.6" transform="rotate(-28 8.5 54)" /><circle cx="59.5" cy="40" r="2.6" transform="rotate(28 55.5 54)" />
+    </g>
+    <!-- facepalm: a hand drawn flat over the face -->
+    <g class="facepalm-hand">
+      <rect x="23" y="41" width="18" height="11" rx="3" fill="var(--body-color, #da7756)" stroke="#211f1c" stroke-width="0.5" />
+      <path d="M27 41.5v10M31 41v10.5M35 41v10.5M39 41.5v10" stroke="#b85f3c" stroke-width="0.7" />
+    </g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
     <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
@@ -334,6 +381,35 @@
     <g class="eyefx eyefx-laser">
       <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
     </g>
+    <!-- loading: an activity spinner in each eye, eight cream spokes with a
+         fading tail stepping round on a dark disc -->
+    <g class="eyefx eyefx-loading">
+      <circle cx="24.25" cy="45.75" r="3.6" fill="#211f1c" /><circle cx="39.75" cy="45.75" r="3.6" fill="#211f1c" />
+      <g fill="#f2efe8"><g class="spin-eye"><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="1" transform="rotate(0 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.85" transform="rotate(45 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.7" transform="rotate(90 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.56" transform="rotate(135 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.45" transform="rotate(180 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.36" transform="rotate(225 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.28" transform="rotate(270 24.25 45.75)" /><rect x="23.75" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.2" transform="rotate(315 24.25 45.75)" /></g><g class="spin-eye"><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="1" transform="rotate(0 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.85" transform="rotate(45 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.7" transform="rotate(90 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.56" transform="rotate(135 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.45" transform="rotate(180 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.36" transform="rotate(225 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.28" transform="rotate(270 39.75 45.75)" /><rect x="39.25" y="42.1" width="1" height="1.8" rx="0.5" opacity="0.2" transform="rotate(315 39.75 45.75)" /></g></g>
+    </g>
+    <!-- scan: dark robotic eyes with a sweeping bar -->
+    <g class="eyefx eyefx-scan">
+      <rect x="21" y="43.5" width="6.5" height="4.5" rx="0.6" fill="#0a1a2a" /><rect x="36.5" y="43.5" width="6.5" height="4.5" rx="0.6" fill="#0a1a2a" />
+      <rect class="scanbar" x="21" y="43.5" width="6.5" height="1.1" fill="#38bdf8" /><rect class="scanbar" x="36.5" y="43.5" width="6.5" height="1.1" fill="#38bdf8" />
+    </g>
+    <!-- wide: big alarmed eyes -->
+    <g class="eyefx eyefx-wide">
+      <circle cx="24.25" cy="45.75" r="3.7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><circle cx="39.75" cy="45.75" r="3.7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" />
+      <circle cx="24.25" cy="45.75" r="1.9" fill="#211f1c" /><circle cx="39.75" cy="45.75" r="1.9" fill="#211f1c" />
+    </g>
+    <!-- content: calm closed upward eyes (peaceful) -->
+    <g class="eyefx eyefx-content" fill="none" stroke="#211f1c" stroke-width="1.3" stroke-linecap="round">
+      <path d="M21.5 44.5 q2.8 3 5.6 0" /><path d="M37 44.5 q2.8 3 5.6 0" />
+    </g>
+    <!-- side: side-eye, pupils cut to one side (skeptical) -->
+    <g class="eyefx eyefx-side">
+      <rect x="22" y="43.5" width="4.5" height="4.5" fill="#f2efe8" /><rect x="37.5" y="43.5" width="4.5" height="4.5" fill="#f2efe8" />
+      <rect x="24.4" y="44.6" width="2" height="2.4" fill="#211f1c" /><rect x="39.9" y="44.6" width="2" height="2.4" fill="#211f1c" />
+    </g>
+    <!-- glow: luminous eyes that softly pulse -->
+    <g class="eyefx eyefx-glow" fill="#38bdf8">
+      <circle class="glow-eye" cx="24.25" cy="45.75" r="2.6" /><circle class="glow-eye" cx="39.75" cy="45.75" r="2.6" />
+    </g>
     </g><!-- /eye-anchor -->
     <!-- cameos (front layer): eyewear, over the eyes -->
     <g class="cameo cameo-neo">
@@ -345,6 +421,11 @@
     </g>
     <g class="cameo cameo-powell" fill="none" stroke="#d5dbe0" stroke-width="0.6">
       <rect x="20.8" y="42.6" width="7" height="6.2" rx="1" /><rect x="36.2" y="42.6" width="7" height="6.2" rx="1" /><path d="M27.8 44.4h8.4M20.8 44.2h-2.6M43.2 44.2h2.6" />
+    </g>
+    <!-- pirate eyepatch (front layer): covers the left eye, strap over the brow -->
+    <g class="cameo cameo-pirate">
+      <path d="M17 43 h11 v3.4 l-11 1.2 z" fill="#141319" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+      <path d="M13 42.4 l15 0.8 M28 44 l17 -1.4" fill="none" stroke="#141319" stroke-width="0.8" />
     </g>
     <circle class="think-dot d1" cx="24" cy="34" r="2" />
     <circle class="think-dot d2" cx="32" cy="34" r="2" />
@@ -473,6 +554,68 @@
     <rect x="21" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="22.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
     <rect x="38" y="22" width="5" height="18" rx="2.5" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><rect x="39.5" y="25" width="2" height="12" rx="1" fill="#f4a7c0" />
   </g>
+  <!-- headphones: a band over the top and big over-ear cups hugging the head,
+       cream shells outlined in ink so they read on the body and the dark desk;
+       a focus LED on the left cup breathes -->
+  <g class="costume costume-headphones">
+    <path d="M14 45 q0 -17 18 -17 q18 0 18 17" fill="none" stroke="#211f1c" stroke-width="4.4" stroke-linecap="round" />
+    <path d="M14 45 q0 -17 18 -17 q18 0 18 17" fill="none" stroke="#f2efe8" stroke-width="2.6" stroke-linecap="round" />
+    <rect x="9" y="39" width="9" height="14" rx="3" fill="#f2efe8" stroke="#211f1c" stroke-width="0.7" /><rect x="15" y="41" width="3" height="10" rx="1" fill="#3a3a46" />
+    <rect x="46" y="39" width="9" height="14" rx="3" fill="#f2efe8" stroke="#211f1c" stroke-width="0.7" /><rect x="46" y="41" width="3" height="10" rx="1" fill="#3a3a46" />
+    <rect x="10" y="44" width="2" height="4" rx="1" fill="#38bdf8" /><rect x="52" y="44" width="2" height="4" rx="1" fill="#38bdf8" />
+    <circle class="hp-led" cx="13" cy="50.5" r="1" fill="#2fae3e" />
+  </g>
+  <!-- graduate: mortarboard with a swinging tassel -->
+  <g class="costume costume-graduate">
+    <path d="M24 33 h16 v3 q-8 4 -16 0 z" fill="#1a1a1e" />
+    <polygon points="32,25 48,31 32,37 16,31" fill="#22222a" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <circle cx="32" cy="31" r="1.2" fill="#f2d16b" />
+    <path class="tassel-string" d="M32 31 L45 32" fill="none" stroke="#f2d16b" stroke-width="0.8" />
+    <g class="tassel"><rect x="44" y="31.5" width="2" height="5.5" rx="0.6" fill="#f2d16b" /><rect x="43.6" y="36.6" width="2.8" height="2" rx="0.6" fill="#e0b040" /></g>
+  </g>
+  <!-- chef: a puffed white toque on a band -->
+  <g class="costume costume-chef">
+    <circle cx="25" cy="31" r="5.2" fill="#f2efe8" /><circle cx="32" cy="28" r="6" fill="#f2efe8" /><circle cx="39" cy="31" r="5.2" fill="#f2efe8" />
+    <rect x="22" y="34.5" width="20" height="4.5" rx="1" fill="#f2efe8" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M25 35.4h2M31 35.4h2M37 35.4h2" stroke="#cfccc3" stroke-width="0.6" />
+  </g>
+  <!-- cowboy: wide-brim hat with a dented crown and band -->
+  <g class="costume costume-cowboy">
+    <ellipse cx="32" cy="38.4" rx="19" ry="3.4" fill="#8a5a2b" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M23 38 q1 -12 9 -12 q8 0 9 12 z" fill="#a06a34" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M26 30 q6 -3 12 0" fill="none" stroke="#7a4a20" stroke-width="0.8" />
+    <rect x="23.5" y="34" width="17" height="2.4" fill="#5a3a1a" />
+  </g>
+  <!-- propeller beanie: a spinning two-blade prop on a bright cap -->
+  <g class="costume costume-propeller">
+    <path d="M21 39 q0 -12 11 -12 q11 0 11 12 z" fill="#38bdf8" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M32 27 v12" stroke="#f2efe8" stroke-width="0.6" opacity="0.55" /><path d="M26 28 v11 M38 28 v11" stroke="#f2efe8" stroke-width="0.5" opacity="0.4" />
+    <g class="propeller"><rect x="24" y="25.2" width="16" height="2" rx="1" fill="#f472b6" stroke="#211f1c" stroke-width="0.35" /></g>
+    <circle cx="32" cy="26.2" r="1.5" fill="#f2d16b" stroke="#211f1c" stroke-width="0.35" />
+  </g>
+  <!-- detective: a tweed deerstalker with brims and ear flaps -->
+  <g class="costume costume-detective">
+    <ellipse cx="32" cy="38.8" rx="16" ry="2.6" fill="#6a5a42" />
+    <path d="M19 39 q1 -12 13 -12 q12 0 13 12 z" fill="#7a6a52" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <rect x="14.5" y="37" width="5.5" height="6.5" rx="2.2" fill="#6a5a42" /><rect x="44" y="37" width="5.5" height="6.5" rx="2.2" fill="#6a5a42" />
+    <g fill="#5a4a34" opacity="0.6"><rect x="23" y="31" width="1" height="1" /><rect x="27" y="34" width="1" height="1" /><rect x="31" y="30" width="1" height="1" /><rect x="35" y="34" width="1" height="1" /><rect x="39" y="31" width="1" height="1" /><rect x="27" y="30" width="1" height="1" /><rect x="35" y="30" width="1" height="1" /></g>
+  </g>
+  <!-- flower crown: a vine of little blooms across the hairline -->
+  <g class="costume costume-flowercrown">
+    <path d="M15 40 q17 -8 34 0" fill="none" stroke="#4a7a3a" stroke-width="1.4" stroke-linecap="round" />
+    <g class="fc-flower" fill="#f472b6"><circle cx="18" cy="37.5" r="1.4" /><circle cx="15.6" cy="37.5" r="1.4" /><circle cx="20.4" cy="37.5" r="1.4" /><circle cx="18" cy="35.5" r="1.4" /><circle cx="18" cy="39.5" r="1.4" /><circle cx="18" cy="37.5" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#f2efe8"><circle cx="28" cy="35" r="1.4" /><circle cx="25.6" cy="35" r="1.4" /><circle cx="30.4" cy="35" r="1.4" /><circle cx="28" cy="33" r="1.4" /><circle cx="28" cy="37" r="1.4" /><circle cx="28" cy="35" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#a78bfa"><circle cx="37" cy="35" r="1.4" /><circle cx="34.6" cy="35" r="1.4" /><circle cx="39.4" cy="35" r="1.4" /><circle cx="37" cy="33" r="1.4" /><circle cx="37" cy="37" r="1.4" /><circle cx="37" cy="35" r="1.1" fill="#f2d16b" /></g>
+    <g class="fc-flower" fill="#f28c28"><circle cx="46" cy="37.5" r="1.4" /><circle cx="43.6" cy="37.5" r="1.4" /><circle cx="48.4" cy="37.5" r="1.4" /><circle cx="46" cy="35.5" r="1.4" /><circle cx="46" cy="39.5" r="1.4" /><circle cx="46" cy="37.5" r="1.1" fill="#f2d16b" /></g>
+  </g>
+  <!-- beanie: a knit winter cap with a bobbing pom-pom -->
+  <g class="costume costume-beanie">
+    <path d="M20 39 q0 -13 12 -13 q12 0 12 13 z" fill="#3a6ea5" stroke="#211f1c" stroke-width="0.4" stroke-linejoin="round" />
+    <path d="M24 27 v11 M28 26 v12 M32 26 v12 M36 26 v12 M40 27 v11" stroke="#2f5a8a" stroke-width="0.5" opacity="0.6" />
+    <rect x="19" y="36" width="26" height="4" rx="2" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.4" />
+    <path d="M22 37.8h22" stroke="#b8cee0" stroke-width="0.6" />
+    <circle class="pom" cx="32" cy="24" r="3" fill="#dbe8f5" stroke="#211f1c" stroke-width="0.4" />
+  </g>
   <!-- the finished cigarette: flicked from the mouth, lands on the ground, gets
        stomped flat; one element, reused every cycle -->
   <g class="cig-butt">
@@ -535,6 +678,86 @@
   <g class="effect effect-beard">
     <path class="beard" d="M22 51 q10 6 20 0 v3 q-10 8 -20 0 z" fill="#5a4636" />
   </g>
+  <!-- stars: a night sky twinkling above -->
+  <g class="effect effect-stars" fill="#f2efe8">
+    <g class="twinkle sx1"><rect x="8" y="4" width="1" height="1" /><rect x="7.2" y="4.4" width="2.6" height="0.2" /><rect x="8.4" y="3.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx2"><rect x="22" y="2" width="1" height="1" /><rect x="21.2" y="2.4" width="2.6" height="0.2" /><rect x="22.4" y="1.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx3"><rect x="40" y="3" width="1" height="1" /><rect x="39.2" y="3.4" width="2.6" height="0.2" /><rect x="40.4" y="2.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx4"><rect x="53" y="6" width="1" height="1" /><rect x="52.2" y="6.4" width="2.6" height="0.2" /><rect x="53.4" y="5.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx5"><rect x="31" y="8" width="0.8" height="0.8" /></g><g class="twinkle sx2"><rect x="15" y="9" width="0.8" height="0.8" /></g><g class="twinkle sx4"><rect x="47" y="10" width="0.8" height="0.8" /></g>
+  </g>
+  <!-- particle shapes for the effects below, each centred on its origin -->
+  <defs>
+    <g id="fx-leaf"><path d="M-4 0 Q0 -4 4 0 Q0 4 -4 0 Z" /><path d="M-4 0h7" stroke="#6b3412" stroke-width="0.6" /></g>
+    <path id="fx-petal" d="M0 3 Q-3 0 -1.5 -3 L0 -2 L1.5 -3 Q3 0 0 3 Z" />
+    <path id="fx-heart" d="M0 3 L-3.4 -0.4 A1.8 1.8 0 0 1 0 -2.2 A1.8 1.8 0 0 1 3.4 -0.4 Z" />
+  </defs>
+  <!-- bubbles: soap bubbles drifting up; eight in flight at staggered points -->
+  <g class="effect effect-bubbles">
+    <g class="bubble" style="--x:7px;--ry:60px;--d:0s;--s:2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:15px;--ry:30px;--d:-2.5s;--s:-2px"><circle r="3" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.5" y="-1.5" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:23px;--ry:48px;--d:-1.25s;--s:2px"><circle r="2.5" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.25" y="-1.25" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:30px;--ry:18px;--d:-3.75s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:38px;--ry:66px;--d:-0.625s;--s:2px"><circle r="3" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.5" y="-1.5" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:46px;--ry:38px;--d:-3.125s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:53px;--ry:24px;--d:-1.875s;--s:2px"><circle r="2.5" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1.25" y="-1.25" width="1" height="1" fill="#ffffff" /></g>
+    <g class="bubble" style="--x:59px;--ry:52px;--d:-4.375s;--s:-2px"><circle r="2" fill="#9fd3ff" fill-opacity="0.3" stroke="#bfe3ff" stroke-width="0.7" /><rect x="-1" y="-1" width="1" height="1" fill="#ffffff" /></g>
+  </g>
+  <!-- leaves: autumn leaves tumbling down -->
+  <g class="effect effect-leaves">
+    <use class="leaf" href="#fx-leaf" fill="#d97a2b" style="--x:6px;--ry:20px;--d:0s;--s:5px;--r:300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#c8202a" style="--x:14px;--ry:50px;--d:-3s;--s:-4px;--r:-320deg" />
+    <use class="leaf" href="#fx-leaf" fill="#f2a200" style="--x:22px;--ry:8px;--d:-1.5s;--s:6px;--r:280deg" />
+    <use class="leaf" href="#fx-leaf" fill="#b8571f" style="--x:31px;--ry:64px;--d:-4.5s;--s:-5px;--r:-300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#d97a2b" style="--x:39px;--ry:34px;--d:-0.75s;--s:4px;--r:320deg" />
+    <use class="leaf" href="#fx-leaf" fill="#c8202a" style="--x:47px;--ry:14px;--d:-3.75s;--s:-6px;--r:-280deg" />
+    <use class="leaf" href="#fx-leaf" fill="#f2a200" style="--x:55px;--ry:56px;--d:-2.25s;--s:5px;--r:300deg" />
+    <use class="leaf" href="#fx-leaf" fill="#b8571f" style="--x:60px;--ry:40px;--d:-5.25s;--s:-4px;--r:-320deg" />
+  </g>
+  <!-- matrix: columns of green code falling, a bright head and a fading trail -->
+  <g class="effect effect-matrix" font-family="ui-monospace, Menlo, monospace" font-size="5" font-weight="700">
+    <g class="glyph" style="--x:5px;--ry:20px;--d:0s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:15px;--ry:50px;--d:-1.7s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">0</text></g>
+    <g class="glyph" style="--x:25px;--ry:34px;--d:-0.85s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:39px;--ry:12px;--d:-2.55s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">1</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:49px;--ry:60px;--d:-0.425s"><text y="0" fill="#c8f7b8">1</text><text y="-5" fill="#2fae3e">0</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+    <g class="glyph" style="--x:58px;--ry:28px;--d:-2.125s"><text y="0" fill="#c8f7b8">0</text><text y="-5" fill="#2fae3e">1</text><text y="-10" fill="#2fae3e" opacity="0.65">0</text><text y="-15" fill="#2fae3e" opacity="0.35">1</text></g>
+  </g>
+  <!-- hearts: little hearts floating up -->
+  <g class="effect effect-hearts">
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:8px;--ry:50px;--d:0s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:17px;--ry:26px;--d:-2.571s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:26px;--ry:62px;--d:-0.643s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:35px;--ry:14px;--d:-3.214s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:44px;--ry:40px;--d:-1.286s;--s:3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f9a8d4" style="--x:52px;--ry:58px;--d:-3.857s;--s:-3px" />
+    <use class="floatheart" href="#fx-heart" fill="#f472b6" style="--x:58px;--ry:22px;--d:-1.929s;--s:3px" />
+  </g>
+  <!-- fireflies: warm glowing dots drifting, always a few bright -->
+  <g class="effect effect-fireflies">
+    <g class="firefly" style="--x:7px;--ry:30px;--d:0s;--s:4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:16px;--ry:10px;--d:-2.1s;--s:-4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:27px;--ry:22px;--d:-0.7s;--s:3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:41px;--ry:6px;--d:-2.8s;--s:-3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:52px;--ry:26px;--d:-1.4s;--s:4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:58px;--ry:58px;--d:-3.5s;--s:-4px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+    <g class="firefly" style="--x:9px;--ry:62px;--d:-4.2s;--s:3px"><circle r="3" fill="#f2d16b" opacity="0.25" /><circle r="1.5" fill="#fff3b0" /></g>
+  </g>
+  <!-- rainbow: a still arc over Claude -->
+  <g class="effect effect-rainbow" fill="none" stroke-width="1.5">
+    <path stroke="#e2231a" d="M4 34 a28 28 0 0 1 56 0" /><path stroke="#f28c28" d="M6 34 a26 26 0 0 1 52 0" /><path stroke="#f2d16b" d="M8 34 a24 24 0 0 1 48 0" /><path stroke="#2fae3e" d="M10 34 a22 22 0 0 1 44 0" /><path stroke="#38bdf8" d="M12 34 a20 20 0 0 1 40 0" /><path stroke="#8b5cf6" d="M14 34 a18 18 0 0 1 36 0" />
+  </g>
+  <!-- petals: cherry blossom drifting down -->
+  <g class="effect effect-petals">
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:5px;--ry:44px;--d:0s;--s:4px;--r:220deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:13px;--ry:12px;--d:-3.25s;--s:-4px;--r:-240deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:21px;--ry:58px;--d:-1.625s;--s:5px;--r:200deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:29px;--ry:26px;--d:-4.875s;--s:-5px;--r:-220deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:37px;--ry:4px;--d:-0.8125s;--s:4px;--r:240deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:45px;--ry:36px;--d:-4.0625s;--s:-4px;--r:-200deg" />
+    <use class="petal" href="#fx-petal" fill="#f4a7c0" style="--x:53px;--ry:64px;--d:-2.4375s;--s:5px;--r:220deg" />
+    <use class="petal" href="#fx-petal" fill="#fbd3e1" style="--x:60px;--ry:18px;--d:-5.6875s;--s:-5px;--r:-240deg" />
+  </g>
   <!-- speech bubble pose -->
   <g class="prop prop-bubble">
     <rect x="30" y="0" width="34" height="13" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" />
@@ -566,13 +789,13 @@
   <g class="agents-label"></g>
 </svg>`;
 
-  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead'];
+  const POSES = ['none', 'think', 'wave', 'thumbs', 'sleep', 'blink', 'nod', 'bounce', 'look', 'spin', 'party', 'guitar', 'ak47', 'sniper', 'banner', 'bubble', 'tap', 'arms', 'run', 'knock', 'munch', 'kickflip', 'selfie', 'grin', 'smoke', 'zyn', 'line', 'juice', 'dead', 'cheer', 'facepalm'];
   const EVENTS = ['ufo', 'portal', 'meteor'];
   const LAMP_FX = ['none', 'pulse', 'strobe', 'breathe', 'flicker', 'chase', 'police', 'rainbow', 'all', 'sos'];
-  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny'];
+  const COSTUMES = ['none', 'dog', 'cat', 'unicorn', 'crown', 'partyhat', 'shades', 'halo', 'devil', 'wizard', 'tophat', 'santa', 'pumpkin', 'bunny', 'headphones', 'graduate', 'chef', 'cowboy', 'propeller', 'detective', 'flowercrown', 'beanie'];
   // Built-in slots. Most ship a photo (assets/cameos/built, delivered like a
   // user photo); the drawings below are the fallback, and alfred's the face.
-  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor'];
+  const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
   // cameos whose eyewear is opaque: the eyes underneath are hidden, like the shades costume
   const CAMEOS_HIDE_EYES = new Set(['neo']);
   // Photo cameos: any id the user added (cameos.js). A built-in id with a
@@ -616,8 +839,8 @@
   const SMOKE_STEPS = [['flick', 1200], ['stomp', 1300], ['draw', 1800]];
   const SMOKE_MIN_CYCLE_MS = 8000;
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
-  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
+  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   // The three state lamps take the colour-vision-safe palette from tokens.css.
