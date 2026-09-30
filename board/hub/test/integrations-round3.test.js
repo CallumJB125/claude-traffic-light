@@ -343,3 +343,29 @@ test('L-3: an http (dev) hub keeps board_int_<provider> on Path=/integrations/ w
     assert.equal(ok.headers.get('set-cookie'), 'board_int_oprobe=; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=0');
   } finally { await h.close(); }
 });
+
+// ── L-1 / L-2 ─────────────────────────────────────────────────────────────
+
+test('L-1/L-2: a card an integration creates has no budget and carries via:<provider> (a connector cannot claim another)', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('tracker'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'tracker', external_id: 'w1' });
+    const ctx = reg.ctxFor(conn.id);
+    const { card } = (await ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, {
+      request_id: randomUUID(), title: 'From the tracker', budget_usd: 500, labels: ['bug', 'via:slack'],
+    }))).result;
+    const row = h.db.get('SELECT budget_cents, labels FROM cards WHERE id = ?', card.id);
+    assert.equal(row.budget_cents, null, 'no budget from an integration');
+    assert.deepEqual(JSON.parse(row.labels), ['bug', 'via:tracker']);
+    assert.deepEqual(card.labels, ['bug', 'via:tracker']);
+    const bare = (await ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, { request_id: randomUUID(), title: 'No labels' }))).result.card;
+    assert.deepEqual(bare.labels, ['via:tracker']);
+    // A person's own card is untouched.
+    const alice = await h.login('alice');
+    const mine = await h.api(alice, 'POST', `/api/boards/${h.ids.board}/cards`, { request_id: randomUUID(), title: 'Mine', budget_usd: 5 });
+    assert.deepEqual(mine.body.card.labels, []);
+    assert.equal(h.db.get('SELECT budget_cents FROM cards WHERE id = ?', mine.body.card.id).budget_cents, 500);
+  } finally { await h.close(); }
+});

@@ -252,6 +252,16 @@ export function createIntegrations({
     // journal and feed name the integration (D42, §15). `live()` is the
     // act() scope: every call on the handle checks it, so a stashed handle
     // is dead once run() returns.
+    // A budget lets a card spend more once a person gives it to Claude: that
+    // stays a person's call. via:<provider> shows where the card came from
+    // (to people and, in its envelope source, to the agent); a connector
+    // can't claim another provider.
+    const cardBody = (body) => {
+      const via = `via:${conn.id}`;
+      const labels = Array.isArray(body.labels) ? [...body.labels.filter((l) => !(typeof l === 'string' && l.startsWith('via:'))), via] : (body.labels ?? [via]);
+      return { ...body, budget_usd: undefined, labels };
+    };
+
     function actAs(memberId, { live, action: actName, track }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name };
@@ -283,7 +293,7 @@ export function createIntegrations({
       };
       return {
         member: { id: first.id, role: first.role },
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, body)),
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body))),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
           return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));

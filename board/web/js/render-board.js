@@ -114,6 +114,9 @@ export function card({ view, face }, model) {
   const req = view.ask?.count > 1 ? `${view.ask.count} req` : view.ask?.count === 1 && view.run_state === 'blocked' ? '1 req' : null;
   const sponsor = human ? (view.target ? face.sponsor : null) : face.sponsor;
   const selected = model.openCardId === view.id;
+  // An integration's card (via:<provider>, D42) shows as a badge, like agent-suggested.
+  const via = (view.labels ?? []).find((l) => /^via:[a-z0-9-]{2,32}$/.test(l))?.slice(4) ?? null;
+  const labels = (view.labels ?? []).filter((l) => !/^via:[a-z0-9-]{2,32}$/.test(l));
 
   return h('article', {
     key: view.id,
@@ -127,6 +130,7 @@ export function card({ view, face }, model) {
   h('div', { class: 'card-top' },
     h('span', { class: 'card-key num' }, view.key),
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
+    via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must give it to Claude` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
@@ -138,7 +142,7 @@ export function card({ view, face }, model) {
     req ? h('span', { class: 'card-req num' }, req) : null) : null,
   face.overlap_chip ? h('button', { type: 'button', class: 'chip chip-overlap', 'data-action': 'open', 'data-card': view.id, 'data-section': 'overlaps' },
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
-  view.labels?.length ? h('div', { class: 'card-labels' }, view.labels.map((l) => h('span', { class: 'label' }, l))) : null,
+  labels.length ? h('div', { class: 'card-labels' }, labels.map((l) => h('span', { class: 'label' }, l))) : null,
   // An unspent budget on a card nobody is running is noise; the drawer and the Give dialog show it.
   face.budget && (view.run || view.budget?.spent_usd > 0) ? budgetBar(face.budget) : null,
   model.readOnly ? null : cardActions(face, view, model.busy),
