@@ -26,12 +26,15 @@ const { dayKey } = require('./stats.js');
 
 const VERSION = 1;
 const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h'];
+// tokens of the turns that looked routine (short reply, little new context); the
+// Opus saving estimate prices them at Sonnet, so it needs tokens, not a count
+const RFIELDS = FIELDS.map((f) => `r${f[0].toUpperCase()}${f.slice(1)}`);
 const DAY_MS = 86400000;
 const PRICE_VERSION = crypto.createHash('sha1').update(JSON.stringify(Usage.PRICES)).digest('hex').slice(0, 10);
 
 const hash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 16);
 const isRoutine = (t) => t.output <= Usage.ROUTINE_OUTPUT && t.input + t.cacheWrite <= Usage.ROUTINE_NEW_INPUT;
-const blankBucket = () => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, routineTurns: 0, sessions: 0, firstTs: 0, lastTs: 0, hours: new Array(24).fill(0) });
+const blankBucket = () => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, rInput: 0, rOutput: 0, rCacheRead: 0, rCacheWrite: 0, rCacheWrite1h: 0, routineTurns: 0, sessions: 0, firstTs: 0, lastTs: 0, hours: new Array(24).fill(0) });
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 function readJson(file, fallback) {
@@ -91,6 +94,10 @@ function record(store, turns, { source = 'claude' } = {}) {
     const byProject = own(src, model) ? src[model] : (src[model] = {});
     const b = own(byProject, project) ? byProject[project] : (byProject[project] = blankBucket());
     FIELDS.forEach((f, i) => { b[f] += delta[i]; });
+    // routine tokens follow the turn while it stays routine; a turn that grew
+    // past routine takes back what it had added
+    if (routine) RFIELDS.forEach((f, i) => { b[f] = (b[f] || 0) + delta[i]; });
+    else if (prev && prev[5]) RFIELDS.forEach((f, i) => { b[f] = Math.max(0, (b[f] || 0) - prev[i]); });
     if (!prev) {
       b.turns += 1;
       b.hours[new Date(t.ts).getHours()] += 1;
@@ -176,8 +183,8 @@ async function catchUp(store, { root, since = 0, batch = 8, source = 'claude', o
 
 // ── Reading ────────────────────────────────────────────────────────────────
 const FAMILY = (id) => { const k = Usage.modelKey(id); return k === 'fable-5' ? 'fable' : k || 'unpriced'; };
-const blankRow = (key) => ({ key, turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, cost: 0, unpricedTurns: 0, unpricedTokens: 0, routineTurns: 0, sessions: 0, legacyCost: 0 });
-const GROUPS = ['day', 'model', 'family', 'project', 'source', 'hour', 'weekday-hour', 'none'];
+const blankRow = (key) => ({ key, turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, cost: 0, routineCost: 0, routineSonnetCost: 0, unpricedTurns: 0, unpricedTokens: 0, routineTurns: 0, sessions: 0, legacyCost: 0 });
+const GROUPS = ['day', 'model', 'family', 'project', 'source', 'hour', 'weekday-hour', 'day-family', 'day-model', 'project-day', 'none'];
 
 // Every day in [from, to] (local days, ms or 'YYYY-MM-DD'), grouped.
 // → { from, to, groupBy, rows: [...], total, legacyDays, unpricedModels, priceVersion }
@@ -197,7 +204,7 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
       if (day < fromKey || day > toKey) continue;
       if (d.legacy && !d.sources && !project && (!source || source === 'claude')) {
         legacyDays += 1;
-        for (const r of groupBy === 'day' ? [row(day), total] : groupBy === 'none' ? [total] : [total]) { r.cost += d.legacy.cost; r.legacyCost += d.legacy.cost; }
+        for (const r of groupBy === 'day' ? [row(day), total] : [total]) { r.cost += d.legacy.cost; r.legacyCost += d.legacy.cost; }
         continue;
       }
       const wd = new Date(`${day}T12:00:00`).getDay();
@@ -213,6 +220,12 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
               r.turns += b.turns * share;
               for (const f of FIELDS) r[f] += b[f] * share;
               r.routineTurns += b.routineTurns * share;
+              if (key && b.routineTurns) {
+                // what the routine turns cost on this model, and on Sonnet
+                const rt = { input: b.rInput || 0, output: b.rOutput || 0, cacheRead: b.rCacheRead || 0, cacheWrite: b.rCacheWrite || 0, cacheWrite1h: b.rCacheWrite1h || 0 };
+                r.routineCost += (Usage.costOf(rt, key) || 0) * share;
+                r.routineSonnetCost += (Usage.costOf(rt, 'sonnet') || 0) * share;
+              }
               r.sessions += b.sessions * share;
               if (cost == null) { r.unpricedTurns += b.turns * share; r.unpricedTokens += (b.input + b.output + b.cacheRead + b.cacheWrite) * share; } else r.cost += cost * share;
             };
@@ -222,16 +235,16 @@ function query(store, { from, to = Date.now(), groupBy = 'day', project = null, 
               const n = b.hours.reduce((a, c) => a + c, 0) || 1;
               b.hours.forEach((c, h) => { if (c) add(row(groupBy === 'hour' ? String(h) : `${wd}:${h}`), c / n); });
             } else if (groupBy !== 'none') {
-              add(row({ day, model, family: FAMILY(model), project: proj, source: src }[groupBy]));
+              add(row({ day, model, family: FAMILY(model), project: proj, source: src, 'day-family': `${day}|${FAMILY(model)}`, 'day-model': `${day}|${model}`, 'project-day': `${proj}|${day}` }[groupBy]));
             }
           }
         }
       }
     }
   }
-  const round = (r) => { r.cost = Math.round(r.cost * 1e4) / 1e4; r.legacyCost = Math.round(r.legacyCost * 1e4) / 1e4; return r; };
+  const round = (r) => { for (const k of ['cost', 'legacyCost', 'routineCost', 'routineSonnetCost']) r[k] = Math.round(r[k] * 1e4) / 1e4; return r; };
   const list = [...rows.values()].map(round);
-  list.sort(groupBy === 'day' || groupBy === 'hour' || groupBy === 'weekday-hour' ? (a, b) => (a.key < b.key ? -1 : 1) : (a, b) => b.cost - a.cost || b.turns - a.turns);
+  list.sort(['day', 'hour', 'weekday-hour', 'day-family', 'day-model', 'project-day'].includes(groupBy) ? (a, b) => (a.key < b.key ? -1 : 1) : (a, b) => b.cost - a.cost || b.turns - a.turns);
   return { from: fromKey, to: toKey, groupBy, rows: list, total: round(total), legacyDays, unpricedModels: [...unpricedModels].sort(), priceVersion: PRICE_VERSION };
 }
 

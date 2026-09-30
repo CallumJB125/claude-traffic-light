@@ -58,6 +58,8 @@
       "stats.js",
       "usage.js",
       "usage-history.js",
+      "usage-insights.js",
+      "usage-view.js",
       "spend.js",
       "mcp-server.js",
       "mcp-install.js",

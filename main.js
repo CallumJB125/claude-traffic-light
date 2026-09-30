@@ -2234,7 +2234,7 @@ ipcMain.handle('usage-history', (_e, q = {}) => {
   const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
   const now = Date.now();
   const out = UsageHistory.query(store, { from: num(q.from, now - 30 * 86400000), to: num(q.to, now), groupBy: q.groupBy || 'day', project: q.project || null });
-  return { ...out, extent: UsageHistory.extent(store), progress: historyState.progress };
+  return { ...out, extent: UsageHistory.extent(store), progress: historyState.progress, mode: Spend.normalize(loadConfig().spend).mode };
 });
 
 // Hook activity is what moves spend, so each burst of it gets a fresh read
