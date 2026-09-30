@@ -126,7 +126,7 @@ test('protocol: a stepped-back wall clock cannot replay a request older than the
   // Legitimate traffic moves the device's high-water mark on.
   const later = Protocol.verify({ ...signed({ v: 1 }, { now: T0 + 120000 }), lookup: look, nonces, now: T0 + 120000, mono: 120000 });
   assert.equal(later.ok, true);
-  dev.highTs = later.ts;
+  Object.assign(dev, { highTs: later.ts, highMono: 120000 });
   // 126 s on the monotonic clock: R0's nonce has expired. The wall clock has stepped back.
   for (const back of [66000, 125000]) {
     const r = Protocol.verify({ ...R0, lookup: look, nonces, now: T0 + 126000 - back, mono: 126000 });
@@ -135,6 +135,37 @@ test('protocol: a stepped-back wall clock cannot replay a request older than the
   }
   // A fresh request within 60 s of the mark still passes.
   assert.equal(Protocol.verify({ ...signed({ v: 1 }, { now: T0 + 70000 }), lookup: look, nonces, now: T0 + 70000, mono: 127000 }).ok, true);
+});
+
+test('protocol: past its nonce\'s life, the newest request can\'t be replayed once; same-ms requests still pass', () => {
+  const nonces = Protocol.nonceCaches();
+  const T = 1790000000000;
+  const dev = { ...registry['devbox-a1b2c3'] };
+  const look = () => dev;
+  const a = signed({ v: 1 }, { now: T });
+  const b = signed({ v: 1 }, { now: T });
+  assert.equal(Protocol.verify({ ...a, lookup: look, nonces, now: T, mono: 0 }).ok, true);
+  Object.assign(dev, { highTs: T, highMono: 0 });
+  assert.equal(Protocol.verify({ ...b, lookup: look, nonces, now: T, mono: 1000 }).ok, true, 'same millisecond, its own nonce: fine while the cache holds a');
+  // 126 s later the cache has forgotten a; the wall clock stepped back to T.
+  const replay = Protocol.verify({ ...a, lookup: look, nonces, now: T, mono: 126000 });
+  assert.equal(replay.ok, false);
+  assert.match(replay.error, /not newer/);
+  assert.equal(Protocol.verify({ ...signed({ v: 1 }, { now: T + 1 }), lookup: look, nonces, now: T + 1, mono: 126001 }).ok, true, 'anything newer still passes');
+  // A mark read back from disk (no highMono) has no nonces behind it at all.
+  const restarted = { ...registry['devbox-a1b2c3'], highTs: T };
+  assert.equal(Protocol.verify({ ...signed({ v: 1 }, { now: T }), lookup: () => restarted, nonces: Protocol.nonceCaches(), now: T, mono: 5 }).ok, false);
+});
+
+test('registry: the newest request replayed after its nonce expires is refused, end to end', async () => {
+  let t = 1790000000000;
+  let m = 0;
+  const { R } = devices(tmp(), { now: () => t, mono: () => m });
+  const p = R.pair('devbox');
+  const req = signed(env(p.device.id, { kind: 'ping' }), { device: p.device.id, token: tokenOf(p), now: t });
+  assert.equal((await call(R, req)).code, 200);
+  m += 126000;
+  assert.equal((await call(R, req)).code, 401, 'clock stepped back to the same moment, nonce forgotten');
 });
 
 test('registry: the high-water mark survives a restart', async () => {
@@ -877,11 +908,23 @@ test('e2e: ping and heartbeat talk to the desktop, and the heartbeat resyncs a l
     const r = await Remote.send('ping', {}, { rootDir: rep.home, ignoreBackoff: true });
     assert.equal(r.ok, true);
     assert.deepEqual(r.body, { ok: true, name: 'devbox' });
+    // The heartbeat vouches only for sessions whose agent pid is on file; a
+    // ps that timed out under load leaves none, so give the hook another go.
+    const localFile = path.join(rep.home, 'sessions', `${HOST}-remote-sess-1.json`);
+    for (let i = 0; i < 3 && !SessionState.readJson(localFile)?.claudePid; i++) await runEmit(rep.home, ['--adapter', 'claude', 'UserPromptSubmit'], payload());
+    assert.ok(SessionState.readJson(localFile).claudePid, 'the reporter recorded the agent pid');
+    // Let any sender still in flight land before the desktop "loses" the session.
+    await new Promise((r) => setTimeout(r, 300));
     // The desktop loses the session (restart, missed events); the heartbeat brings it back.
     fs.rmSync(path.join(desk.R.remoteDir, rep.device), { recursive: true });
     assert.equal(desk.R.readSessions().length, 0);
-    assert.equal((await Remote.heartbeat({ rootDir: rep.home })).ok, true);
-    const s = one(desk.R);
+    let s;
+    for (const end = Date.now() + 2000; !s && Date.now() < end;) {
+      assert.equal((await Remote.heartbeat({ rootDir: rep.home })).ok, true);
+      s = one(desk.R);
+      if (!s) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(s, 'the heartbeat rebuilt the session');
     assert.equal(s.signal, 'prompt-submit');
     assert.equal(s.heartbeatMode, true);
   } finally { desk.close(); }

@@ -118,7 +118,7 @@ module.exports = function createRemoteDevices({ rootDir, onChange = () => {}, lo
   const lastSeen = new Map(); // device id -> ms, since this app started
   const buckets = new Map(); // device id -> { tokens, at (mono ms) }
   const tombstones = new Map(); // device id -> Map(fileKey -> seq of its session-end)
-  const highwater = new Map(); // device id -> latest accepted timestamp (sender's clock)
+  const highwater = new Map(); // device id -> { ts: latest accepted timestamp (sender's clock), mono: when }
   let cache = { key: null, devices: [] };
 
   // Remote writes come in bursts; the widget needs one refresh per burst.
@@ -161,19 +161,23 @@ module.exports = function createRemoteDevices({ rootDir, onChange = () => {}, lo
   const lookup = (id) => {
     const d = load().find((x) => x.id === id);
     if (!d || expired(d)) return null;
-    const highTs = Math.max(Number.isFinite(d.highTs) ? d.highTs : -Infinity, highwater.get(id) ?? -Infinity);
-    return Number.isFinite(highTs) ? { ...d, highTs } : d;
+    const mem = highwater.get(id);
+    const stored = Number.isFinite(d.highTs) ? d.highTs : -Infinity;
+    // highMono only when the in-memory mark is the one in force: a mark read
+    // back from disk has no nonces behind it.
+    if (mem && mem.ts >= stored) return { ...d, highTs: mem.ts, highMono: mem.mono };
+    return Number.isFinite(stored) ? { ...d, highTs: stored } : d;
   };
 
   // After a verified request: the first one confirms the pairing, and the
   // high-water mark reaches devices.json in HIGHWATER_STEP_MS steps.
   function accepted(device, ts) {
-    if (ts > (highwater.get(device.id) ?? -Infinity)) highwater.set(device.id, ts);
+    if (ts > (highwater.get(device.id)?.ts ?? -Infinity)) highwater.set(device.id, { ts, mono: mono() });
     const stored = load().find((d) => d.id === device.id) || {};
     const persist = !stored.confirmedAt || !(ts - (Number(stored.highTs) || 0) < HIGHWATER_STEP_MS);
     if (!persist) return;
     try {
-      save(load().map((d) => (d.id === device.id ? { ...d, confirmedAt: d.confirmedAt || new Date(now()).toISOString(), highTs: Math.max(Number(d.highTs) || 0, highwater.get(d.id)) } : d)));
+      save(load().map((d) => (d.id === device.id ? { ...d, confirmedAt: d.confirmedAt || new Date(now()).toISOString(), highTs: Math.max(Number(d.highTs) || 0, highwater.get(d.id).ts) } : d)));
     } catch (e) { log(`[remote] could not record device state: ${e.message}`); }
   }
 

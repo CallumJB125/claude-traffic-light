@@ -119,6 +119,11 @@ function verify({ headers, body, lookup, nonces, now = Date.now(), mono = monoMs
   // Past the nonce's life, a wall clock stepped back could let an old
   // request's timestamp pass again; the device's own latest one bounds it.
   if (Number.isFinite(entry.highTs) && Number(ts) < entry.highTs - MAX_SKEW_MS) return deny(401, 'older than this device\'s recent requests');
+  // Once the nonce of the device's newest request may have been forgotten
+  // (its life has passed, or this app restarted), nothing at or before that
+  // timestamp is new; before then the nonce cache tells same-ms requests apart.
+  const nonceKept = Number.isFinite(entry.highMono) && mono - entry.highMono < NONCE_TTL_MS;
+  if (Number.isFinite(entry.highTs) && !nonceKept && Number(ts) <= entry.highTs) return deny(401, 'not newer than this device\'s latest request');
   const seen = nonces.check(device, nonce, mono);
   if (seen === 'replay') return deny(401, 'replayed request');
   if (seen === 'full') return { ...deny(429, 'too many requests'), device: entry, nonce };

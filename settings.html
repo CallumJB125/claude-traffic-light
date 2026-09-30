@@ -698,7 +698,7 @@
       remoteEl('code-name').textContent = r.paired.name;
       remoteEl('code-where').textContent = r.paired.name;
       // The name as the ssh host when it can be one; otherwise say what goes there.
-      remoteEl('code-host').textContent = /^[A-Za-z0-9._-]+$/.test(r.paired.name) ? r.paired.name : `<${r.paired.name}'s address>`;
+      remoteEl('code-host').textContent = /^[A-Za-z0-9._-]+$/.test(r.paired.name) ? r.paired.name : `<${r.paired.name}'s ssh address>`;
       remoteEl('code-text').textContent = r.code;
       remoteEl('code').hidden = false;
       showRemote(r);
