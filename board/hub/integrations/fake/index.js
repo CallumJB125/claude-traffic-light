@@ -37,6 +37,11 @@ export default defineConnector({
 
   // A new issue becomes a card (a fact → automatic, deduplicated by issue id).
   async handleWebhook({ payload, ctx }) {
+    // A linked PR merged → the card's own pr_merged fact (never a card id from the payload).
+    if (payload.event === 'pr.merged') {
+      await ctx.system.event('pr_merged', { kind: 'pr', external_id: String(payload.pr?.id ?? ''), pr: Number(payload.pr?.number) || null });
+      return;
+    }
     if (payload.event !== 'issue.opened') return;
     const issueId = String(payload.issue?.id ?? '');
     if (!issueId || ctx.linked('issue', issueId)) return;
@@ -58,7 +63,9 @@ export default defineConnector({
     await ctx.act('issue.close', { card_id: row.card_id }, async () => true);
   },
 
+  systemEvents: ['pr_merged'],
   actions: {
+    'system.pr_merged': { default: 'auto' },
     'card.create': { default: 'auto', reversible: true },
     'issue.close': { default: 'ask' },
   },

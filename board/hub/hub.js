@@ -241,7 +241,8 @@ export class Hub extends EventEmitter {
     this.journal({
       board_id: row.board_id, card_id: row.id, run_id: env.newRunId ?? env.runId ?? null,
       actor_kind: src === 'human' ? 'member' : src === 'runner' ? 'runner' : 'system',
-      actor_id: src === 'human' ? actor : src === 'runner' ? device?.id ?? null : null,
+      // A system event from an integration names its connection (D42); the merge poll passes none.
+      actor_id: src === 'human' ? actor : src === 'runner' ? device?.id ?? null : actor ?? null,
       kind: 'card.transition',
       payload: { rule: res.rule, event: event.type, from: res.from, to: res.to, state, effects: res.effects.map((e) => e.type) },
     });

@@ -207,3 +207,27 @@ test('HTTP: members list (no secrets), admins connect by token / configure / dis
     assert.equal((await hook(sign('whsec_abcdef123456', Buffer.from(raw)))).status, 404);
   } finally { await h.close(); }
 });
+
+test('ctx.system: only declared facts, only for a card linked to this connection, attributed to the connection', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = await connectFake(h, reg);
+    await post(reg, conn, issue('ISS-S', 'Linked card'));
+    const cardId = h.db.get("SELECT id FROM cards WHERE title = 'Linked card'").id;
+    const ctx = reg.ctxFor(conn.id);
+    // Not linked as a PR yet → nothing happens, even with the right card id nowhere in reach.
+    assert.deepEqual(await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 }), { done: false, reason: 'not linked' });
+    await assert.rejects(ctx.system.event('pr_closed', { kind: 'pr', external_id: 'PR-1' }), /may not raise/);
+    ctx.link(cardId, 'pr', 'PR-1');
+    // The card is in To do, so the state machine refuses pr_merged: applied exactly like the merge poll.
+    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 });
+    assert.equal(r.done, false);
+    assert.equal(r.reason, 'ILLEGAL_TRANSITION');
+    // Autonomy applies to facts too.
+    reg.setSettings(conn.id, { autonomy: { 'system.pr_merged': 'off' } });
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1' })).decision, 'skipped');
+    // A connector that declares no system events gets no ctx.system.
+    assert.throws(() => defineConnector({ id: 'chatty', name: 'Chat', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['card_delete'] }), /not an allowed system event/);
+    assert.throws(() => defineConnector({ id: 'gh2', name: 'G', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['pr_merged'] }), /declare the action system.pr_merged/);
+  } finally { await h.close(); }
+});

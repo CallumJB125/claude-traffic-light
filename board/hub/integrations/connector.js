@@ -37,12 +37,20 @@
 //   // anything that speaks for a person or touches production asks).
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
 //
+//   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
+//   // declared as action `system.<event>`. Only for a card linked to this
+//   // connection (ctx.link); never from a card id or key in the payload.
+//   systemEvents: ['pr_merged', 'pr_closed'],
+//
 //   async health(ctx) → { ok, detail? },
 // })
 
 const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
+// The only state-machine events an integration may raise as the system (D42):
+// facts from a code host about a PR linked to a card. Chat connectors raise none.
+export const SYSTEM_EVENTS = Object.freeze(['pr_merged', 'pr_closed']);
 
 export function defineConnector(spec) {
   const errs = [];
@@ -58,6 +66,10 @@ export function defineConnector(spec) {
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);
   }
+  for (const e of spec?.systemEvents ?? []) {
+    if (!SYSTEM_EVENTS.includes(e)) errs.push(`systemEvents: ${e} is not an allowed system event (${SYSTEM_EVENTS.join(', ')})`);
+    else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
+  }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  return Object.freeze({ consumes: [], actions: {}, ...spec });
+  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec });
 }

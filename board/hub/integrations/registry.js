@@ -142,7 +142,8 @@ export function createIntegrations({ hub, api, bus = null, log, fetchImpl = glob
     function autonomyOf(action) {
       const def = conn.actions[action]?.default;
       if (!def) throw new Error(`${conn.id} did not declare action ${action}`);
-      const set = settings?.autonomy?.[action];
+      // Read fresh: an admin's change applies to the very next action.
+      const set = safeJson(row(c.id)?.settings, {})?.autonomy?.[action];
       return AUTONOMY.includes(set) ? set : def;
     }
 
@@ -165,8 +166,35 @@ export function createIntegrations({ hub, api, bus = null, log, fetchImpl = glob
       return { done: true, decision: 'auto', result: out };
     }
 
+    /**
+     * Raise a state-machine fact as the system (D42): `type` must be one the
+     * connector declared; the card comes only from this connection's own
+     * link. Applied like the merge poll, audited in the same transaction.
+     */
+    async function systemEvent(type, { kind, external_id, pr = null, by = null, external_ref = null }) {
+      if (!conn.systemEvents.includes(type)) throw new Error(`${conn.id} may not raise ${type}`);
+      const cardId = db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(external_id))?.card_id;
+      if (!cardId) return { done: false, reason: 'not linked' };
+      const card = hub.card(cardId);
+      if (!card || hub.board(card.board_id)?.org_id !== c.org_id) return { done: false, reason: 'not linked' };
+      const action = `system.${type}`;
+      const mode = autonomyOf(action);
+      const audit = (decision) => db.insert('integration_audit', {
+        id: randomUUID(), connection_id: c.id, action, decision, card_id: cardId,
+        external_ref: external_ref == null ? String(external_id).slice(0, 200) : String(external_ref).slice(0, 200), detail: JSON.stringify({ pr }), undo: null, at: now(),
+      });
+      if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
+      return hub.withBoard(card.board_id, () => db.tx(() => {
+        const r = hub.apply(cardId, { type, pr, by }, { actor: c.id });
+        if (!r.ok) return { done: false, reason: r.error.code };
+        audit('auto');
+        return { done: true, decision: 'auto', to: r.to };
+      }));
+    }
+
     return {
       connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by },
+      system: conn.systemEvents.length ? { event: systemEvent } : null,
       secret: (kind) => secrets()[kind] ?? null,
       fetch: retryingFetch,
       actAs,
