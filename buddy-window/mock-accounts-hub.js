@@ -23,9 +23,9 @@
 // code (single use, 10 minutes).
 'use strict';
 
-const http = require('node:http');
+const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer } = require('ws'); // privacy-flow: local-board-hub
 
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
@@ -508,7 +508,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   });
 
   // /ws/board: the injected Bearer (or nothing: a plain HTTP 401, no socket).
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true }); // privacy-flow: local-board-hub
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
     const refuse = (code, text) => { socket.end(`HTTP/1.1 ${code} ${text}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`); };

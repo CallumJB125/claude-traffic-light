@@ -5,7 +5,7 @@
 // shell.openExternal, tests drive it against the mock hub.
 'use strict';
 
-const http = require('node:http');
+const http = require('node:http'); // privacy-flow: team-hub-account
 const crypto = require('node:crypto');
 const { isPrivateHost } = require('./workspaces');
 
@@ -137,7 +137,7 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
       log('provider sign-in refused: the hub gave a page this app will not open');
       return { ok: false, error: `${host} gave a sign-in page ${brand} won’t open.` };
     }
-    openExternal(start.url);
+    openExternal(start.url); // privacy-flow: team-hub-account
     const cb = await listener.result;
     if (!cb.ok) {
       if (cb.reason === 'cancelled') return { ok: false, cancelled: true };

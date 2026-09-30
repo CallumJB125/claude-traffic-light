@@ -842,7 +842,7 @@ test('This Mac: “Include one-line summaries” is its own per-hub switch, off 
   assert.match(page, /Applies to every team on/);
 }));
 
-test('the default team hub lives in brand.js only and prefills the hub field until another hub is used', async () => harness(async (h) => {
+test('the default team hub comes from the app’s brand module and prefills the hub field until another hub is used', async () => harness(async (h) => {
   const BRAND = require('../buddy-window/brand');
   assert.equal(BRAND.DEFAULT_HUB, 'https://app.plexiform.dev');
   await h.A.go('hub');
@@ -854,6 +854,11 @@ test('the default team hub lives in brand.js only and prefills the hub field unt
   s = await h.A.state();
   assert.equal(s.lastHub, h.origin, 'the hub last used wins');
   const { execFileSync } = require('node:child_process');
-  const hits = execFileSync('git', ['grep', '-l', '-e', 'plexiform\\.dev', '-e', 'bondly\\.co\\.za', '--', 'buddy-window', 'main.js'], { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-  assert.deepEqual(hits, ['buddy-window/brand.js']);
+  // git grep exits 1 when nothing matches: that is the answer we want.
+  const grep = (args) => { try { return execFileSync('git', args, { cwd: path.join(__dirname, '..'), encoding: 'utf8' }); } catch (e) { if (e.status === 1) return ''; throw e; } };
+  const hits = grep(['grep', '-l', '-e', 'plexiform\\.dev', '-e', 'bondly\\.co\\.za', '--', 'buddy-window', 'main.js']).trim().split('\n').filter(Boolean);
+  assert.deepEqual(hits, [], 'the URL comes from the app’s brand module, not a literal in the window');
+  const Root = require('../brand');
+  assert.equal(BRAND.DEFAULT_HUB, Root.urls.hub);
+  assert.deepEqual([BRAND.NAME, BRAND.SCHEME, [...BRAND.LEGACY_SCHEMES]], [Root.name, Root.scheme, [...Root.legacySchemes]]);
 }));

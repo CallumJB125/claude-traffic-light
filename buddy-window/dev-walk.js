@@ -44,8 +44,8 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
     browsed = (async () => {
       await onScreen('browser');
       await shot('03-browser-wait');
-      const r = await fetch(url, { redirect: 'manual' });
-      await fetch(r.headers.get('location'));
+      const r = await fetch(url, { redirect: 'manual' }); // privacy-flow: local-board-hub
+      await fetch(r.headers.get('location')); // privacy-flow: local-board-hub
     })();
   });
   await click('Continue with Google');

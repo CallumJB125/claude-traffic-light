@@ -16,7 +16,7 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron');
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -469,7 +469,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const authorizeHost = new URL(url).host;
     const w = new BrowserWindow({
       width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
-      webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
+      webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: false },
     });
     w.hubOrigin = h.origin;
     connectWin = w;
