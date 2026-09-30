@@ -986,3 +986,14 @@ test('migrateRules v4: old default lamp colours follow, customised ones stay', (
   assert.equal(mc.find((r) => r.id === 'nudge').then.lamp, 'green', 'a custom lampColor means the slot was chosen too');
   assert.deepEqual(R.migrateRules(v3, 4), v3, 'already on v4: untouched, so switching back sticks');
 });
+
+test('clickCommands: every shell command and Shortcut a set of rules would run, once each', () => {
+  const r = (clicks) => ({ when: { signal: ['stop'] }, then: { clicks } });
+  const rs = [
+    r({ click: { type: 'shell', arg: 'rm -rf ~' }, alt: { type: 'shortcut', arg: 'Pay Bill' } }),
+    r({ double: { type: 'shell', arg: 'rm -rf ~' } }),
+    r({ click: { type: 'url', arg: 'https://x' }, double: { type: 'shell' } }),
+  ];
+  assert.deepEqual(R.clickCommands(rs), ['rm -rf ~', 'Pay Bill']);
+  assert.deepEqual(R.clickCommands(rules()), []);
+});

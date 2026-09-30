@@ -683,8 +683,8 @@
   #presets .menu-choice .btn { height: 26px; flex-direction: row; align-items: center; justify-content: center; text-align: center; }
   #presets .menu-choice .btn.primary { background: var(--accent); color: var(--accent-ink); }
   #presets .menu-choice .btn.primary:hover { background: #e5866a; }
-  #setup-summary { font-size: 12px; line-height: 1.4; }
-  #setup-summary code { display: block; font-size: 11px; color: #ffb4a8; white-space: pre-wrap; word-break: break-all; }
+  #setup-summary, #rules-summary { font-size: 12px; line-height: 1.4; }
+  #setup-summary code, #rules-summary code { display: block; font-size: 11px; color: #ffb4a8; white-space: pre-wrap; word-break: break-all; }
   #presets .menu-form .btn:disabled { opacity: 0.4; }
   #presets .empty-small { padding: 4px 8px 6px; color: var(--faint); font-size: 11px; }
 
@@ -1320,6 +1320,11 @@
     <button type="button" class="btn primary" data-setup="merge">Merge presets &amp; faces, keep my rules</button>
     <button type="button" class="btn ghost" data-setup="replace">Replace everything</button>
     <button type="button" class="btn ghost" data-setup="cancel">Cancel</button>
+  </div>
+  <div id="rules-choice" class="menu-choice" hidden>
+    <div id="rules-summary"></div>
+    <button type="button" class="btn primary" data-rules="load">Load these rules</button>
+    <button type="button" class="btn ghost" data-rules="cancel">Cancel</button>
   </div>
   <form id="share-form" class="menu-form" hidden>
     <input type="text" id="share-code" aria-label="Share code" placeholder="ctl1:…" autocomplete="off" spellcheck="false" />
@@ -2452,7 +2457,7 @@
     e.stopPropagation();
     const open = $('presets').hidden;
     $('presets').hidden = !open;
-    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; $('setup-choice').hidden = true; $('presets').querySelector('button')?.focus(); }
+    if (open) { renderUserPresets(); $('preset-name').value = ''; $('preset-save').disabled = true; $('setup-choice').hidden = true; $('rules-choice').hidden = true; $('presets').querySelector('button')?.focus(); }
   });
   document.addEventListener('click', (e) => { if (!e.target.closest('#presets')) $('presets').hidden = true; });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('presets').hidden) { $('presets').hidden = true; $('presets-btn').focus(); } });
@@ -2498,13 +2503,40 @@
   function flash(msg) { $('save-state').textContent = msg; setTimeout(() => { if (!dirty) $('save-state').textContent = ''; else setDirty(true); }, 2200); }
   $('share-copy').addEventListener('click', async (e) => { e.stopPropagation(); const code = await encodeShare(rules); await navigator.clipboard.writeText(code); $('presets').hidden = true; flash(`Share code copied (${code.length} chars)`); });
   $('share-paste').addEventListener('click', async (e) => { e.stopPropagation(); $('share-form').hidden = false; $('share-code').value = ''; try { const t = await navigator.clipboard.readText(); if (/^ctl1:/.test(t.trim())) $('share-code').value = t.trim(); } catch { /* clipboard not readable */ } $('share-code').focus(); });
+  // Rules from someone else (a share code or a file) can bind clicks to shell
+  // commands and Shortcuts, so, like a whole-setup import, they are shown —
+  // every command included — and only load on an explicit confirm.
+  let offered = null;
+  function offerRules(incoming, done) {
+    offered = { rules: incoming.map(R.normalizeRule), done };
+    const cmds = R.clickCommands(offered.rules);
+    const k = offered.rules.length;
+    $('rules-summary').innerHTML = `<b>${k} rule${k === 1 ? '' : 's'} — they replace your current rules until you Save or Revert</b>`
+      + (cmds.length ? `<br>Clicks in these rules run:${cmds.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');
+    $('share-form').hidden = true;
+    $('setup-choice').hidden = true;
+    $('presets').hidden = false;
+    $('rules-choice').hidden = false;
+    $('rules-choice').querySelector('button').focus();
+  }
+  $('rules-choice').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('button[data-rules]');
+    if (!b || !offered) return;
+    const { rules: incoming, done } = offered;
+    offered = null;
+    $('rules-choice').hidden = true;
+    if (b.dataset.rules === 'cancel') { $('presets').hidden = true; return; }
+    applyRules(incoming);
+    flash(done);
+  });
   $('share-form').addEventListener('submit', async (e) => {
     e.preventDefault(); e.stopPropagation();
-    try { applyRules(await decodeShare($('share-code').value)); $('share-form').hidden = true; flash('Loaded shared rules — Save to keep them'); }
+    try { offerRules(await decodeShare($('share-code').value), 'Loaded shared rules — Save to keep them'); }
     catch (err) { flash(err.message); }
   });
   $('share-export').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.exportRules(rules.map(R.normalizeRule)); if (r) flash(`Exported to ${r.split('/').pop()}`); });
-  $('share-import').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.importRules(); if (r && Array.isArray(r.rules)) { applyRules(r.rules); flash('Imported — Save to keep them'); } else if (r && r.error) flash(r.error); });
+  $('share-import').addEventListener('click', async (e) => { e.stopPropagation(); const r = await window.lightsApi.importRules(); if (r && Array.isArray(r.rules)) offerRules(r.rules, 'Imported — Save to keep them'); else { $('presets').hidden = true; if (r && r.error) flash(r.error); } });
   // Whole setup: export writes what's saved; import shows what the file holds
   // (and any commands its clicks run) before the user picks merge or replace.
   $('setup-export').addEventListener('click', async (e) => {
@@ -2524,6 +2556,7 @@
       + (s.old ? '<br>From an older version — updated as it loads.' : '')
       + (s.dropped ? `<br>${n(s.dropped, 'face')} skipped (not a valid photo).` : '')
       + (s.commands.length ? `<br>Clicks in this setup run:${s.commands.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');
+    $('rules-choice').hidden = true;
     $('setup-choice').hidden = false;
   });
   $('setup-choice').addEventListener('click', async (e) => {

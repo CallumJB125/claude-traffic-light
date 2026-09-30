@@ -151,8 +151,7 @@ function readSetup(text) {
 // command a click in the file would run, since it came from someone else.
 function summarize(parsed) {
   const all = [...(parsed.config.rules || []), ...(parsed.config.presets || []).flatMap((p) => p.rules)];
-  const commands = [...new Set(all.flatMap((r) => Object.values(r.then.clicks || {}))
-    .filter((a) => (a.type === 'shell' || a.type === 'shortcut') && a.arg).map((a) => a.arg))];
+  const commands = Rules.clickCommands(all);
   return {
     rules: parsed.config.rules ? parsed.config.rules.length : null,
     presets: parsed.config.presets ? parsed.config.presets.length : null,
