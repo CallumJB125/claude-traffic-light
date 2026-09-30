@@ -25,7 +25,9 @@ function ttyOf(raw) {
 function captureTerminal({ env = {}, pid, cwd, run, platform = process.platform }) {
   const out = { env: {}, tty: null, cwd: typeof cwd === 'string' && cwd.startsWith('/') && cwd.length <= 1000 ? cwd : null };
   for (const k of ENV_KEYS) if (clean(env[k])) out.env[k] = env[k];
-  if ((platform === 'darwin' || platform === 'linux') && Number.isInteger(pid) && pid > 1) {
+  // Only macOS's focus adapters (Terminal, iTerm) use the tty, and Linux
+  // may have no /bin/ps, so the probe runs on macOS only.
+  if (platform === 'darwin' && Number.isInteger(pid) && pid > 1) {
     try {
       out.tty = ttyOf(run('/bin/ps', ['-o', 'tty=', '-p', String(pid)]));
     } catch { /* no tty is fine: the app falls back to activating the app */ }
