@@ -1,6 +1,8 @@
 // Release files on Cloudflare R2 (served at download.plexiform.dev).
 //
 //   stage <version> <dir>   upload every file in <dir> under <version>/
+//   stage-beta <version> <dir>  the same under beta/<version>/ (dry runs; the
+//                           live feed and beta/ feed files are never touched)
 //   promote <version>       make <version> what the apps update to: copy its
 //                           files to the bucket root, the feed files last
 //
@@ -36,9 +38,9 @@ function aws(cfg, args, run = execFileSync) {
   return run('aws', ['s3', ...args, '--endpoint-url', cfg.endpoint], { env: cfg.env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }); // privacy-flow: release-upload (CI only, never in the app)
 }
 
-function stagePlan(version, files) {
+function stagePlan(version, files, prefix = '') {
   if (!VERSION.test(version)) throw new Error(`not a version: ${version}`);
-  return files.filter((f) => !f.startsWith('.')).sort((a, b) => FEED.test(a) - FEED.test(b)).map((name) => ({ name, key: `${version}/${name}`, cache: cacheControl(name) }));
+  return files.filter((f) => !f.startsWith('.')).sort((a, b) => FEED.test(a) - FEED.test(b)).map((name) => ({ name, key: `${prefix}${version}/${name}`, cache: cacheControl(name) }));
 }
 
 function promotePlan(version, keys) {
@@ -57,8 +59,8 @@ function main([cmd, version, dir], run) {
     console.log(`R2: skipped (${cfg.missing.join(', ')} not set); the GitHub Release is the feed.`);
     return;
   }
-  if (cmd === 'stage') {
-    for (const f of stagePlan(version, fs.readdirSync(dir))) {
+  if (cmd === 'stage' || cmd === 'stage-beta') {
+    for (const f of stagePlan(version, fs.readdirSync(dir), cmd === 'stage-beta' ? 'beta/' : '')) {
       console.log(`R2: ${f.key}`);
       aws(cfg, ['cp', path.join(dir, f.name), `s3://${cfg.bucket}/${f.key}`, '--cache-control', f.cache, '--only-show-errors'], run);
     }
@@ -70,7 +72,7 @@ function main([cmd, version, dir], run) {
       aws(cfg, ['cp', `s3://${cfg.bucket}/${c.from}`, `s3://${cfg.bucket}/${c.to}`, '--cache-control', c.cache, '--metadata-directive', 'REPLACE', '--only-show-errors'], run);
     }
   } else {
-    throw new Error('usage: release-r2.js stage <version> <dir> | promote <version>');
+    throw new Error('usage: release-r2.js stage <version> <dir> | stage-beta <version> <dir> | promote <version>');
   }
 }
 

@@ -44,6 +44,12 @@ test('R2 staging puts the feed files last and caches only installers', () => {
   assert.throws(() => R2.stagePlan('../evil', []), /not a version/);
 });
 
+test('R2 beta staging goes under beta/ only', () => {
+  const plan = R2.stagePlan('1.0.0-beta.7', ['Plexiform-1.0.0-beta.7-mac-arm64.zip', 'latest-mac.yml'], 'beta/');
+  assert.deepEqual(plan.map((p) => p.key), ['beta/1.0.0-beta.7/Plexiform-1.0.0-beta.7-mac-arm64.zip', 'beta/1.0.0-beta.7/latest-mac.yml']);
+  assert.ok(plan.every((p) => /^beta\/[^/]+\/[^/]+$/.test(p.key)), 'never the bucket root or beta/ root');
+});
+
 test('R2 promote copies installers before the feed, and refuses an unstaged version', () => {
   const keys = ['1.2.0/Plexiform-1.2.0-mac-arm64.zip', '1.2.0/latest-mac.yml', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/latest.yml', '1.2.0/nested/x'];
   const plan = R2.promotePlan('1.2.0', keys);
