@@ -590,7 +590,11 @@ export function createIntegrations({
     return !!(c && c.status === 'active' && connectors.get(c.provider)?.handleWebhook);
   }
 
-  /** → {status, body}. Never echoes why a signature failed to the caller. */
+  /**
+   * → {status, body, verified?}. Never echoes why a signature failed to the
+   * caller. `verified`: the signature checked out (the HTTP layer trusts that
+   * sender's address a little more).
+   */
   async function webhook(connectionId, { headers, rawBody }) {
     const c = row(connectionId);
     const conn = c && connectors.get(c.provider);
@@ -609,6 +613,10 @@ export function createIntegrations({
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
     }
+    return { ...(await verifiedWebhook(c, conn, { headers, rawBody, v })), verified: true };
+  }
+
+  async function verifiedWebhook(c, conn, { headers, rawBody, v }) {
     let payload;
     try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
     // The connector's key alone may rest on an unsigned delivery header: the

@@ -100,8 +100,8 @@ test('M-1: bad posts from an IP to connection A never block that IP’s verified
   } finally { await h.close(); }
 });
 
-test('M-1: a flooding (connection, IP) pair gets one body read at a time; another connection is unaffected', async () => {
-  const h = await hubWith();
+test('M-1: a flooding (connection, IP) pair gets its pair cap of body reads (hardening M-1: 1 here); another connection is unaffected', async () => {
+  const h = await hubWith({ config: { webhookReads: { perPair: 1 } } });
   try {
     const reg = h.app.integrations;
     reg.register(probe('fa'));
@@ -123,7 +123,7 @@ test('M-1: a flooding (connection, IP) pair gets one body read at a time; anothe
     const flood = Array.from({ length: 5 }, () => open(a));
     const other = open(b);
     await new Promise((r) => setTimeout(r, 300));
-    assert.deepEqual(flood.map((f) => f.status), [429, 429, 429, 429, 429], 'refused before their bodies are read');
+    assert.deepEqual(flood.map((f) => f.status), [503, 503, 503, 503, 503], 'refused before their bodies are read');
     assert.equal(held.status, null, 'the one read in flight goes on');
     assert.equal(other.status, null, 'another connection is read as usual');
     for (const x of [held, other, ...flood]) x.req.destroy();

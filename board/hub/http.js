@@ -56,6 +56,14 @@ const localCookieOk = (hub, req) => {
   try { return safeEqual(parseCookies(req.headers.cookie).board_local ?? '', hub.localSecret); } catch { return false; }
 };
 
+// Webhook bodies are read before any signature is checked, so what an
+// unverified sender can hold is bounded by count and time: in-flight reads
+// per (connection, IP), per IP (over every connection) and per connection,
+// and a deadline for the whole body (slowloris). A pair that delivered a
+// verified webhook recently skips the per-connection cap, so a flood from
+// fresh addresses can't crowd out the provider's own. config.webhookReads overrides.
+const WEBHOOK_READS = Object.freeze({ perPair: 4, perIp: 8, perConn: 16, deadlineMs: 10_000, verifiedMs: 15 * 60_000, verifiedMax: 10_000 });
+
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers });
@@ -81,6 +89,31 @@ export function sameOrigin(req, publicUrl) {
   } catch {
     return false;
   }
+}
+
+// → {body} | {error: 413 | 408 | 'aborted'}; never waits past deadlineMs.
+function readRaw(req, deadlineMs) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let n = 0;
+    let settled = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(t);
+      resolve(r);
+    };
+    const t = setTimeout(() => finish({ error: 408 }), deadlineMs);
+    req.on('data', (c) => {
+      if (settled) return;
+      n += c.length;
+      if (n > MAX_BODY) finish({ error: 413 });
+      else chunks.push(c);
+    });
+    req.on('end', () => finish({ body: Buffer.concat(chunks) }));
+    req.on('error', () => finish({ error: 'aborted' }));
+    req.on('close', () => finish({ error: 'aborted' }));
+  });
 }
 
 async function readBody(req) {
@@ -132,7 +165,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const hosts = integrations?.formHosts() ?? [];
     return hosts.length ? `${CSP}; form-action 'self' ${hosts.map((x) => `https://${x}`).join(' ')}` : CSP;
   };
-  const webhookReads = new Set(); // (connection|ip) pairs over their failure budget with a body read in flight
+  const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
+  const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
+  const verifiedPairs = new Map(); // (connection|ip) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
   const hsts = (() => { try { return new URL(config.publicUrl).protocol === 'https:'; } catch { return false; } })();
 
@@ -391,33 +426,47 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       try {
         // Unknown or inactive → 404 before a byte of the body is read.
         if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
-        // Failures are counted per (connection, client IP) and never refuse a
-        // delivery before its signature is checked: a provider's shared egress
-        // IPs also carry anyone's forged posts. A pair over its failure budget
-        // gets one body read at a time instead, so a flood can't fan out reads.
-        const failKey = `${hook[1]}|${failBucketKey(clientIp(req, config))}`;
-        const overBudget = !hub.limiter.peek('webhook_fail_ip', failKey).ok;
-        if (overBudget && webhookReads.has(failKey)) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: 1 });
+        // Nothing here refuses a delivery for other senders' failures: a
+        // provider's shared egress IPs also carry anyone's forged posts. Failures
+        // (per connection + client IP) only turn a later failure's 401 into a
+        // 429; before the signature is checked only the in-flight read caps
+        // (WEBHOOK_READS) apply, and a refused read is 503 so the provider retries.
+        const ip = failBucketKey(clientIp(req, config));
+        const failKey = `${hook[1]}|${ip}`;
+        const count = (m, k) => m.get(k) ?? 0;
+        const vetted = (verifiedPairs.get(failKey) ?? -Infinity) > hub.mono();
+        // An unread (or half-read) body is not drained at the sender's pace:
+        // the socket goes once the answer had a moment to reach the sender.
+        const cut = () => res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
+        if (count(reading.pair, failKey) >= readLimits.perPair || count(reading.ip, ip) >= readLimits.perIp || (!vetted && count(reading.conn, hook[1]) >= readLimits.perConn)) {
+          cut();
+          return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } }, { 'retry-after': '1' });
+        }
         const failed = (status, body) => {
           const t = hub.limiter.take('webhook_fail_ip', failKey);
-          if (t.ok || status === 413) return sendJson(res, status, body);
+          if (t.ok || status !== 401) return sendJson(res, status, body);
           const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
           return sendJson(res, 429, { error: { code: 'RATE_LIMITED', message: 'too many failed deliveries', retry_after_s: s } }, { 'retry-after': String(s) });
         };
-        const chunks = [];
-        if (overBudget) webhookReads.add(failKey);
+        const slots = [[reading.pair, failKey], [reading.ip, ip], [reading.conn, hook[1]]];
+        for (const [m, k] of slots) m.set(k, count(m, k) + 1);
+        let got;
         try {
-          let n = 0;
-          for await (const c of req) {
-            n += c.length;
-            if (n > MAX_BODY) return failed(413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
-            chunks.push(c);
-          }
+          got = await readRaw(req, readLimits.deadlineMs);
         } finally {
-          if (overBudget) webhookReads.delete(failKey);
+          for (const [m, k] of slots) { const n = count(m, k) - 1; if (n > 0) m.set(k, n); else m.delete(k); }
         }
+        if (got.error) cut();
+        if (got.error === 413) return failed(413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+        if (got.error === 408) return failed(408, { error: { code: 'TIMEOUT', message: 'body not received in time' } });
+        if (got.error) return undefined;
         // webhook() spends webhook_conn only once the signature is verified.
-        const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
+        const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: got.body });
+        if (out.verified) {
+          verifiedPairs.delete(failKey);
+          verifiedPairs.set(failKey, hub.mono() + readLimits.verifiedMs);
+          if (verifiedPairs.size > readLimits.verifiedMax) verifiedPairs.delete(verifiedPairs.keys().next().value);
+        }
         if (out.status === 401) return failed(out.status, out.body);
         return sendJson(res, out.status, out.body);
       } catch (e) {

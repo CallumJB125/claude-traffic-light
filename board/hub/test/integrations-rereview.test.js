@@ -259,28 +259,27 @@ test('M-2: unauthenticated spam never spends the connection bucket; only verifie
   } finally { await h.close(); }
 });
 
-test('M-2: a (connection, IP) pair that keeps failing gets one body read at a time: a concurrent post gets 429 before its body is read', async () => {
+test('M-2: a (connection, IP) pair has at most 4 body reads in flight (hardening M-1): the next post gets 503 before its body is read', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
-    h.hub.limiter.limits.webhook_fail_ip = { capacity: 2, per_ms: 60_000 };
-    const bad = () => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'x-fake-signature': 'sha256=00', 'x-fake-delivery': randomUUID() }, body: '{}' });
-    assert.equal((await bad()).status, 401);
-    assert.equal((await bad()).status, 401);
-    assert.equal((await bad()).status, 429);
     const u = new URL(`${h.base}/integrations/${conn.id}/webhook`);
-    const held = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } });
-    held.on('error', () => {});
-    held.write('{"partial":');
+    const held = Array.from({ length: 4 }, () => {
+      const r = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } });
+      r.on('error', () => {});
+      r.write('{"partial":');
+      return r;
+    });
     await new Promise((r) => setTimeout(r, 100));
-    const status = await new Promise((resolve, reject) => {
-      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
+    const res = await new Promise((resolve, reject) => {
+      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (r) => { r.resume(); resolve(r); });
       req.on('error', reject);
       req.write('{"partial":');
       setTimeout(() => reject(new Error('the hub waited for the body')), 2000).unref();
     });
-    assert.equal(status, 429);
-    held.destroy();
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.headers['retry-after'], '1');
+    for (const r of held) r.destroy();
   } finally { await h.close(); }
 });
 
