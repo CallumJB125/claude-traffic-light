@@ -1,3 +1,6 @@
+// Windows hook commands in argv form run the exe with --buddy-hook: the hook
+// script runs here and the process exits before any of the app starts.
+if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');

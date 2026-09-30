@@ -1,7 +1,8 @@
 // Codex CLI: ~/.codex/config.toml — a top-level `notify` array Codex runs
 // with the event JSON as its last argument. An argv array can't carry an
-// `ENV=1` prefix, so the command is the generated wrapper script (see
-// runtime.js), which sets ELECTRON_RUN_AS_NODE and execs the app binary.
+// `ENV=1` prefix, so on macOS/Linux the command is the generated wrapper
+// script, which sets ELECTRON_RUN_AS_NODE and execs the app binary; on
+// Windows it is the exe with --buddy-hook (see runtime.js).
 //
 // Codex runs exactly one notify command, and other tools (Codex Computer
 // Use, …) use it too, so one that isn't Buddy's is never replaced: install
@@ -80,7 +81,7 @@ module.exports = {
     const file = configPath(home);
     const r = apply(readText(file, fsImpl), runtime);
     if (r.error) return { ok: false, file, error: r.error };
-    Runtime.ensureWrapper(runtime, fsImpl);
+    if (Runtime.argvNeedsWrapper(runtime)) Runtime.ensureWrapper(runtime, fsImpl);
     fsImpl.mkdirSync(path.dirname(file), { recursive: true });
     fsImpl.writeFileSync(file, r.text);
     return { ok: true, file };
