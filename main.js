@@ -7,6 +7,7 @@ const Rules = require('./rules.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
+const Spend = require('./spend.js');
 const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
@@ -143,6 +144,7 @@ const DEFAULT_CONFIG = {
   agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
+  spend: { ...Spend.DEFAULTS },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -173,6 +175,7 @@ function buildConfig() {
   const config = { ...DEFAULT_CONFIG, ...Setup.dropRemovedKeys(saved) };
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
+  config.spend = Spend.normalize(saved.spend);
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -556,16 +559,17 @@ function computeState(opts = {}) {
   // A pending permission request is the "Needs your input" state, whatever
   // the session files say (the hook blocks before Notification fires). It
   // replaces the look only; the chips, number and season still apply.
+  const spend = spendSnapshot(config);
   const { look, fired, owned } = pending.length
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
-    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
+    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online, spend });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend) };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -867,17 +871,20 @@ const liveNotifications = new Set(); // held so a click still reaches its handle
 function maybeNotify(st) {
   // A preview empties the pending list; skipping it keeps that from reading as a new ask.
   if (st.reason === 'preview') return;
-  const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online }, loadConfig());
+  const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online, spend: st.spend }, loadConfig());
   notifyKeys = keys;
   for (const n of fire) {
     console.log(`[notify] ${n.key} — ${n.title}`);
     if (IS_DEV_RUN || !Notification.isSupported()) continue;
     // Silent: the widget's own sound channel already speaks for these states.
-    const note = new Notification({ title: n.title, body: n.body, silent: true });
+    const stop = n.kind === 'runaway' ? runawayStoppers.get(n.sessionId) : null;
+    const note = new Notification({ title: n.title, body: n.body, silent: true, ...(stop ? { actions: [{ type: 'button', text: 'Stop session' }] } : {}) });
     liveNotifications.add(note);
+    if (stop) note.on('action', () => { liveNotifications.delete(note); Promise.resolve().then(stop).catch((err) => console.warn('[spend] stop failed:', err.message)); });
     note.on('click', () => {
       liveNotifications.delete(note);
-      if (n.hostApp) activateTerminalApp(String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
+      // A runaway's whole point is the jump, so it goes even without a known host app.
+      if (n.hostApp || n.kind === 'runaway') activateTerminalApp(String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
     });
     note.on('close', () => liveNotifications.delete(note));
     note.show();
@@ -2059,18 +2066,21 @@ ipcMain.handle('get-costs', () => getCosts());
 
 // ── Usage: per-turn tokens read from the transcripts themselves ───────────
 const USAGE_TTL_MS = 60 * 1000;
+// The visual tests point this at a fixture folder; everyone else reads Claude Code's.
+const PROJECTS_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_PROJECTS || null;
 const usageFileCache = new Map();
 let usageMemo = { at: 0, turns: null };
 let usageInFlight = null;
 async function refreshUsage() {
   const t0 = Date.now();
   // 61 days covers the Stats page's 60-day lookback.
-  const r = await Usage.readTurns({ since: Date.now() - 61 * 86400000, cache: usageFileCache });
+  const r = await Usage.readTurns({ since: Date.now() - 61 * 86400000, cache: usageFileCache, ...(PROJECTS_DIR ? { root: PROJECTS_DIR } : {}) });
   const ms = Date.now() - t0;
   // Live refreshes follow every burst of hook activity; only the first pass
   // and a slow one are worth a line.
   if (!usageMemo.turns || ms > 1000) console.log(`[usage] parsed ${r.parsed} files in ${ms} ms (${r.files} transcripts, ${r.turns.length} turns${r.skipped.length ? `, ${r.skipped.length} over the size cap` : ''})`);
   usageMemo = { at: Date.now(), turns: r.turns };
+  spendMaybeChanged();
   return r.turns;
 }
 function getUsageTurns() {
@@ -2094,6 +2104,53 @@ function refreshUsageLive() {
   if (!usageMemo.turns || usageInFlight || Date.now() - usageMemo.at < USAGE_LIVE_MS) return;
   usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
   usageInFlight.catch((err) => console.warn('[usage] live refresh failed:', err.message));
+}
+
+// ── F1 spend: budgets and runaway sessions (spend.js) ─────────────────────
+// Priced from the same incremental transcript reader as Stats: after the
+// first pass each refresh only stats files and reads what was appended.
+// Nothing here ever types into a terminal or stops a session you started.
+function spendSnapshot(config) {
+  return usageMemo.turns ? Spend.snapshot(usageMemo.turns, config.spend) : null;
+}
+// What the tooltip adds after the spend rule that fired: the burn rate or
+// how far over budget.
+function spendNote(rules, fired, sessions, spend) {
+  if (!spend) return null;
+  for (const id of fired) {
+    const rule = rules.find((r) => r.id === id);
+    const sig = rule ? rule.when.signal : [];
+    if (sig.includes('runaway')) {
+      const v = Rules.spendSessions(sessions, { spend }).find((x) => x.signal === 'runaway');
+      if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${v.cwd.split('/').filter(Boolean).pop()}` : ''}` };
+    }
+    if ((sig.includes('budget-exceeded') || sig.includes('budget-warning')) && spend.budgetText) return { rule: rule.name, text: spend.budgetText };
+  }
+  return null;
+}
+let spendKey = null;
+function spendMaybeChanged() {
+  const snap = spendSnapshot(loadConfig());
+  const key = snap ? `${snap.budget.level}|${snap.runaway.map((r) => `${r.sessionId}:${r.burn}`).join(',')}` : '';
+  if (key === spendKey) return;
+  spendKey = key;
+  stateMemo = { at: 0, key: null, value: null };
+  broadcastStatus();
+}
+// Hook point for the board runner (later): a runner that spawned a session
+// registers `sessionId → stop()` here, and that session's runaway
+// notification gets a Stop button that calls it (killing the supervised
+// process). Interactive sessions never register, so they only ever get the
+// notification and the jump to their terminal.
+const runawayStoppers = new Map();
+ipcMain.handle('get-spend', () => spendSnapshot(loadConfig()));
+const SPEND_POLL_MS = 15000;
+function refreshSpend() {
+  // A second under the poll interval, so a read that finished just after the
+  // last tick doesn't make the next tick skip.
+  if (usageInFlight || (usageMemo.turns && Date.now() - usageMemo.at < SPEND_POLL_MS - 1000)) return;
+  usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
+  usageInFlight.catch((err) => console.warn('[spend] refresh failed:', err.message));
 }
 
 // ── Gestures on the avatar → the action the current state programmed ──────
@@ -2473,6 +2530,8 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
+  refreshSpend();
+  every(SPEND_POLL_MS, refreshSpend, 'spend');
   // The visual tests screenshot a still face; a live cursor would shift it.
   if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
   sweepSessionFiles();

@@ -51,6 +51,7 @@
       "overlay-preload.js",
       "stats.js",
       "usage.js",
+      "spend.js",
       "mcp-server.js",
       "mcp-install.js",
       "agents.js",

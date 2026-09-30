@@ -45,10 +45,11 @@ test('a pasted share code shows its commands and loads nothing until confirmed',
   await lights.click('#share-form button[type=submit]');
   await lights.click('#rules-choice [data-rules=load]');
   // A code from before rulesVersion migrates like an old config: v5 slots in
-  // its "session open" rule.
-  await expect(lights.locator('#rule-list li')).toHaveCount(2);
-  await expect(lights.locator('#rule-list li').first()).toContainText('Looks harmless');
-  await expect(lights.locator('#rule-list li').nth(1)).toContainText('Session open');
+  // its "session open" rule, v7 the spend rules (runaway above the rest).
+  await expect(lights.locator('#rule-list li')).toHaveCount(5);
+  await expect(lights.locator('#rule-list li').first()).toContainText('Runaway session');
+  await expect(lights.locator('#rule-list li').nth(1)).toContainText('Looks harmless');
+  await expect(lights.locator('#rule-list li').nth(4)).toContainText('Session open');
 });
 
 test('a share code stamped with the current rulesVersion loads exactly as shared', async () => {

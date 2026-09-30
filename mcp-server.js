@@ -210,10 +210,12 @@ async function buddyStatus({ root, now = Date.now(), online, live } = {}) {
     pendingRequests: st.pending.length,
     manualOverride: st.override || null,
     online: { value: st.online, source: 'network interfaces (the app uses Electron net.isOnline)' },
+    // F1 spend: only the running app prices transcripts on every poll; buddy_spend reads them itself.
+    spend: liveStatus && liveStatus.spend ? liveStatus.spend : null,
     app: liveStatus
       ? { running: true, look: liveLook, agrees: ['lamp', 'pose', 'eyes', 'costume', 'effect', 'pet', 'cameo'].every((k) => liveLook[k] === look[k]) }
       : { running: false, note: 'widget not reachable on its local /status endpoint; look computed from disk only' },
-    note: 'Computed from disk with rules.js. If app.agrees is false, the widget is showing something only it knows: a Lights preview, the walk to your terminal, or a different online state.',
+    note: 'Computed from disk with rules.js. If app.agrees is false, the widget is showing something only it knows: a Lights preview, the walk to your terminal, a different online state, or a spend signal (runaway / budget; see spend and buddy_spend).',
   };
 }
 
@@ -385,6 +387,31 @@ async function buddyModelMix({ now = Date.now(), projectsDir } = {}) {
   return { ...Usage.modelMix(turns, { now }), transcripts: { files, turns: turns.length, overSizeCap: skipped.length } };
 }
 
+// F1 spend: budgets and runaway sessions, read fresh from the transcripts
+// with the widget's own settings — "how much have I spent today?".
+async function buddySpend({ root, now = Date.now(), projectsDir } = {}) {
+  const Usage = require('./usage.js');
+  const Spend = require('./spend.js');
+  const cfg = Spend.normalize((readJson(path.join(root, 'config.json')) || {}).spend);
+  const since = Math.min(Spend.startOfWeek(now), now - cfg.runawayMinutes * 60000);
+  const { turns, files, skipped } = await Usage.readTurns({ since, ...(projectsDir ? { root: projectsDir } : {}) });
+  const snap = Spend.snapshot(turns, cfg, now);
+  const b = snap.budget;
+  const line = (p, when) => `${Spend.money(p.spent)} ${when}${p.budget ? ` of a ${Spend.money(p.budget)} budget (${Math.round(p.share * 100)}%)` : ''}`;
+  return {
+    summary: `${line(b.day, 'today')}; ${line(b.week, 'this week')}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${snap.runaway.length ? ` Runaway: ${snap.runaway.map((r) => `${r.project || r.sessionId} ${r.burn}`).join('; ')}.` : ''}`,
+    mode: snap.mode,
+    unit: snap.unit,
+    today: b.day,
+    week: { ...b.week, startsOn: new Date(Spend.startOfWeek(now)).toDateString() },
+    level: b.level,
+    runaway: snap.runaway,
+    runawayThreshold: snap.runawayThreshold,
+    transcripts: { files, turns: turns.length, overSizeCap: skipped.length },
+    note: 'Priced per turn at API list prices from ~/.claude/projects transcripts. Budgets and the runaway threshold are set in Buddy Preferences → Spend.',
+  };
+}
+
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Claude Buddy widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
@@ -392,6 +419,7 @@ const TOOLS = [
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
   { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
   { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
+  { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Buddy, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
   { name: 'buddy_answer_request', description: 'Answer a pending permission request exactly as the widget\'s Allow/Deny buttons do. This approves or denies a tool call in ANOTHER Claude Code session — only do it when the user has asked you to.', input: (z) => ({ id: z.string().describe('request id from buddy_pending_requests'), decision: z.enum(['allow', 'deny']) }), readOnly: false, run: (a, c) => answerRequest(c.root, a.id, a.decision) },
 ];
@@ -418,7 +446,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddySpend };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

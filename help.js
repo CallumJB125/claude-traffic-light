@@ -30,6 +30,10 @@ const RULE_TEXT = {
   ignored: { signal: 'ignored-20', text: 'Something has been waiting on you for 20+ minutes, so he has crossed his arms and grown a beard.' },
   nudge: { signal: 'idle-nudge', text: 'Claude finished a while ago and is idle until you send the next message. Nothing is blocked.' },
   idle: { signal: 'idle', text: 'No Claude Code session is running (or they have all gone quiet).' },
+  // F1 spend
+  runaway: { signal: 'runaway', text: "A session has spent more than your runaway threshold in the last few minutes (hover Claude for how much, how fast). Check it's doing what you meant — Buddy never stops a session you started; the notification jumps to its terminal." },
+  'budget-exceeded': { signal: 'budget-exceeded', text: "You're over the daily or weekly budget set in Preferences → Spend. Nothing is stopped; this is just so you know." },
+  'budget-warning': { signal: 'budget-warning', text: "You're close to the daily or weekly budget set in Preferences → Spend." },
 };
 
 const LAMP_TEXT = {
@@ -132,7 +136,7 @@ const NOTIFY_DEFAULTS = { 'permission-ask': true, 'turn-failed': true, offline: 
 
 const folderOf = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
 
-function notifiable({ sessions = [], pending = [], offline = false }) {
+function notifiable({ sessions = [], pending = [], offline = false, spend = null }) {
   const out = new Map();
   for (const s of sessions) {
     if (!s || !s.sessionId || (s.signal !== 'permission-ask' && s.signal !== 'turn-failed')) continue;
@@ -150,11 +154,23 @@ function notifiable({ sessions = [], pending = [], offline = false }) {
   // Only worth saying while a session is open: a laptop dropping wifi with
   // nothing running is none of Claude's business.
   if (offline && sessions.length) out.set('offline', { kind: 'offline', session: null });
+  // F1 spend: the same entries the rules light, so a notification never
+  // fires for a runaway the widget isn't showing.
+  for (const v of Rules.spendSessions(sessions, { spend })) {
+    if (v.signal === 'runaway') out.set(`runaway:${v.sessionId}`, { kind: 'runaway', session: v });
+    else if (spend && spend.budget) {
+      const b = spend.budget;
+      out.set(`${v.signal}:${b.which}:${b.which === 'week' ? b.weekKey : b.dayKey}`, { kind: v.signal, session: null, text: spend.budgetText });
+    }
+  }
   return out;
 }
 
-function message(kind, s) {
+function message(kind, s, text) {
   const where = s ? folderOf(s.cwd) : '';
+  if (kind === 'runaway') return { title: `Runaway session${where ? ` — ${where}` : ''}`, body: `${s.burn}. Click to jump to its terminal.` };
+  if (kind === 'budget-exceeded') return { title: 'Over budget', body: `${text || 'Spend is over your budget'}.` };
+  if (kind === 'budget-warning') return { title: 'Nearing your budget', body: `${text || 'Spend is close to your budget'}.` };
   if (kind === 'permission-ask') {
     const body = s.askKind === 'question' ? 'Claude has a question for you.' : s.tool ? `Claude wants to use ${s.tool}.` : 'Claude is waiting for your answer.';
     return { title: `Needs your input${where ? ` — ${where}` : ''}`, body };
@@ -171,6 +187,14 @@ function notifyConfig(config) {
   return { on: !config || config.notifyOnStates !== false, kinds: { ...NOTIFY_DEFAULTS, ...per } };
 }
 
+// F1 spend: toggled in Preferences → Spend, under the master switch.
+function spendMuted(kind, config) {
+  const sp = (config && config.spend) || {};
+  if (kind === 'runaway') return sp.notifyRunaway === false;
+  if (kind === 'budget-warning' || kind === 'budget-exceeded') return sp.notifyBudget === false;
+  return false;
+}
+
 // prevKeys: the key set from last time, or null on the very first look —
 // which only records what is already going on, so a restart doesn't replay
 // every ask and failure that is still sitting there.
@@ -181,9 +205,9 @@ function notifications(prevKeys, next, config) {
   const { on, kinds } = notifyConfig(config);
   const fire = [];
   if (on) {
-    for (const [key, { kind, session }] of now) {
-      if (prevKeys.has(key) || kinds[kind] === false) continue;
-      fire.push({ key, kind, ...message(kind, session), hostApp: (session && session.hostApp) || null, cwd: (session && session.cwd) || null });
+    for (const [key, { kind, session, text }] of now) {
+      if (prevKeys.has(key) || kinds[kind] === false || spendMuted(kind, config)) continue;
+      fire.push({ key, kind, ...message(kind, session, text), hostApp: (session && session.hostApp) || null, cwd: (session && session.cwd) || null, sessionId: (session && session.sessionId) || null });
     }
   }
   return { keys, fire };

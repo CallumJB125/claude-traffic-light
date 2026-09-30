@@ -916,13 +916,15 @@ test('a failed turn has its own look; {fail} says why; it waits on you', () => {
 });
 
 test('migrateRules: a saved config gains offline and failed-turn once, in their default places', () => {
-  const saved = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn').map(R.normalizeRule);
+  // A v0 config predates the v7 spend rules too.
+  const spendIds = R.SPEND_RULES.map((r) => r.id);
+  const saved = rules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn' && !spendIds.includes(r.id)).map(R.normalizeRule);
   const m = R.migrateRules(saved, 0);
   assert.deepEqual(m.map((r) => r.id), rules().map((r) => r.id));
   assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
   assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
   const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
-  assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn', 'started']);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', 'runaway', 'mine', 'failed-turn', 'budget-exceeded', 'budget-warning', 'started']);
 });
 
 test('migrateRules: offline and failed-turn you deleted on v2+ stay deleted through later upgrades', () => {

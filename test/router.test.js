@@ -20,7 +20,7 @@ const tmp = (p = 'ctl-router-') => fs.realpathSync(fs.mkdtempSync(path.join(os.t
 
 test('rules v6: the router signals are gone, and saved rules using them are dropped or disabled', () => {
   for (const id of ['routed-cheap', 'escalated', 'delegated-read']) assert.ok(!R.SIGNALS.some((s) => s.id === id), id);
-  assert.equal(R.RULES_VERSION, 6);
+  assert.ok(R.RULES_VERSION >= 6);
   const saved = [
     { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } },
     { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { pose: 'munch' } },
@@ -36,7 +36,7 @@ test('rules v6: the router signals are gone, and saved rules using them are drop
   const mix = out.find((r) => r.id === 'mix');
   assert.equal(mix.enabled, true);
   assert.deepEqual(mix.when.signal, ['stop']);
-  assert.equal(R.migrateRules(saved, 6), saved);
+  assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved);
 });
 
 // ── set-status no longer carries router state ───────────────────────────────

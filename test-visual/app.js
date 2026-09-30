@@ -30,6 +30,10 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
+  // Spend (F1) reads transcripts from here instead of ~/.claude/projects, so
+  // a real runaway on this machine can't leak into a baseline.
+  const projects = path.join(home, 'projects');
+  fs.mkdirSync(projects);
   // Pre-mark the first-run help so it never pops up unasked.
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ ...FIXED_CONFIG, ...config }));
@@ -44,6 +48,7 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
       ...process.env,
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
+      CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
     },
   });
   const cleanup = async () => {
@@ -51,7 +56,7 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
   };
-  return { app, home, port, cleanup };
+  return { app, home, port, projects, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.

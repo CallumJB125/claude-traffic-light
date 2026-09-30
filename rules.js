@@ -43,6 +43,60 @@
     { id: 'idle', label: 'No sessions running', hook: null, kind: 'virtual' },
   ];
 
+  // ── F1 spend ──────────────────────────────────────────────────────────────
+  // Budgets and runaway sessions. The app works them out from the transcripts
+  // (spend.js) and passes them in as env.spend = { budget: { level },
+  // budgetText, runaway: [{ sessionId, cwd, burn }] }; here they become
+  // virtual signals, get default rules, and v7 slots those rules into saved
+  // configs. Everything else in this file only calls into this block.
+  SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
+    { id: 'runaway', label: 'A session is burning money fast', hook: null, kind: 'virtual' },
+    { id: 'budget-warning', label: 'Spend is nearing your budget', hook: null, kind: 'virtual' },
+    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' });
+  const SPEND_RULES = [
+    { id: 'runaway', name: 'Runaway session', enabled: true, when: { signal: ['runaway'] }, then: { lamp: 'red', lampFx: 'pulse', eyes: 'wide' } },
+    { id: 'budget-exceeded', name: 'Over budget', enabled: true, when: { signal: ['budget-exceeded'] }, then: { lamp: 'red', eyes: 'money' } },
+    { id: 'budget-warning', name: 'Nearing budget', enabled: true, when: { signal: ['budget-warning'] }, then: { lamp: 'amber', eyes: 'money' } },
+  ];
+  // No banners by default: the lamp stays visible, and the tooltip carries the
+  // burn rate or budget line. A rule's text can quote them as {burn} and
+  // {budget}. "Runaway" sits under "No network", above "working", so it shows while the
+  // session is still burning. The budget rules sit above "Task finished": a
+  // working session stays green, and a turn that ends over budget reads red
+  // (or amber with money eyes when close) instead of plain amber.
+  function placeSpendRules(list, spendRules = SPEND_RULES) {
+    const out = list.slice();
+    const at = (ids) => { for (const id of ids) { const i = out.findIndex((r) => r.id === id); if (i >= 0) return i; } return -1; };
+    const put = (id, i) => {
+      if (out.some((r) => r.id === id)) return;
+      // A copy: callers (Lights presets) edit the rules they get back.
+      out.splice(i < 0 ? out.length : i, 0, JSON.parse(JSON.stringify(spendRules.find((r) => r.id === id))));
+    };
+    const offline = at(['offline']);
+    put('runaway', offline >= 0 ? offline + 1 : out.findIndex((r) => !r.locked));
+    put('budget-exceeded', at(['done', 'nudge', 'started', 'idle']));
+    put('budget-warning', at(['done', 'nudge', 'started', 'idle']));
+    return out;
+  }
+  // A runaway lights only while its session is live and mid-turn: once the
+  // turn ends the burn has stopped, and its notification already went out.
+  // Budget signals ride on every live session (so a rule can scope them to a
+  // project) and never on an empty desk.
+  function spendSessions(sessions, env) {
+    const sp = env && env.spend;
+    if (!sp) return [];
+    const out = [];
+    for (const r of sp.runaway || []) {
+      const s = sessions.find((x) => x.sessionId && x.sessionId === r.sessionId);
+      if (!s || TURN_END.has(sessionSignal(s))) continue;
+      out.push({ signal: 'runaway', sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, source: s.source, hostApp: s.hostApp, virtual: true, burn: r.burn });
+    }
+    const level = sp.budget && sp.budget.level;
+    if (level === 'warning' || level === 'exceeded') for (const s of sessions) out.push({ signal: `budget-${level}`, cwd: s.cwd, virtual: true, budget: sp.budgetText || '' });
+    return out;
+  }
+  // ── end F1 spend ──────────────────────────────────────────────────────────
+
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
   // Signal sets, owned by the state machine: WAITING (blocked on you),
@@ -123,6 +177,7 @@
       if (mode === 'ralph') out.push({ signal: 'ralph', cwd: s.cwd, virtual: true, agents: agents.length, iteration: Number(s.iteration) || 0 });
     }
     if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
+    out.push(...spendSessions(sessions, env)); // F1 spend
     return out;
   }
   // "Ignored" means you haven't touched *any* Claude, not just this one: a
@@ -226,7 +281,7 @@
   // blocked until you act (a permission ask, a limit, no network). Off:
   // nothing running.
   function defaultRules() {
-    return [
+    return placeSpendRules([ // F1 spend
       {
         id: 'limit', name: 'Out of tokens', locked: true, enabled: true,
         when: { signal: ['limit-hit'] },
@@ -307,13 +362,13 @@
         when: { signal: ['idle'] },
         then: { lamp: 'off', pose: 'none' },
       },
-    ];
+    ]);
   }
 
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 6;
+  const RULES_VERSION = 7;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -368,8 +423,10 @@
         if (!live.length && DEAD_DEFAULT_IDS.includes(r.id)) continue;
         kept.push({ ...r, enabled: live.length ? r.enabled : false, when: { ...r.when, signal: live } });
       }
-      return kept;
+      out.splice(0, out.length, ...kept);
     }
+    // v7 (F1 spend): runaway and budget rules.
+    if (version < 7) return placeSpendRules(out, SPEND_RULES.map(normalizeRule));
     return out;
   }
 
@@ -473,6 +530,8 @@
       .replace(/\{iteration\}/g, String(Number(session.iteration) || 0))
       .replace(/\{agents\}/g, String(Number(session.agents) || 0))
       .replace(/\{fail\}/g, FAIL_TEXT[session.failKind] || FAIL_TEXT.error)
+      .replace(/\{burn\}/g, session.burn || '') // F1 spend: '$7.40 in 18 min'
+      .replace(/\{budget\}/g, session.budget || '') // F1 spend: '$42.10 of $50 today'
       .slice(0, 24);
   }
 
@@ -579,5 +638,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, SPEND_RULES, placeSpendRules, spendSessions };
 });

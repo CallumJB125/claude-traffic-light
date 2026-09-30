@@ -65,3 +65,27 @@ test('widget renders the working state under reduced motion', async () => {
   await expect(widget).toHaveScreenshot('widget-working-green-reduced-motion.png', SHOT);
   await widget.emulateMedia({ reducedMotion: 'no-preference' });
 });
+
+// F1 spend: a session burning past the runaway threshold ($40 in 20 min by
+// default) turns the lamp pulsing red with wide eyes; the tooltip carries the
+// burn rate. The fixture transcript is priced by the app's own reader; its
+// first turn sits 17.5 min back so the rate reads "18 min" for the next minute.
+test('widget renders the runaway-red state', async () => {
+  const now = Date.now();
+  const line = (min, i, out) => JSON.stringify({
+    type: 'assistant', sessionId: 'visual-burn', cwd: '/visual', timestamp: new Date(now - min * 60000).toISOString(), requestId: `r${i}`,
+    message: { id: `m${i}`, model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: out, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  });
+  fs.mkdirSync(path.join(h.projects, 'visual'), { recursive: true });
+  // 1,888,000 output tokens at $25/M = $47.20.
+  fs.writeFileSync(path.join(h.projects, 'visual', 'visual-burn.jsonl'), `${[line(17.5, 0, 1000000), line(1, 1, 888000)].join('\n')}\n`);
+  await signal(h, { signal: 'session-end', session: 'visual', source: 'claude' });
+  await signal(h, { signal: 'tool-use', session: 'visual-burn', source: 'claude', cwd: '/visual', tool: 'Bash' });
+  await expect.poll(async () => (await status(h.port)).spend?.runaway?.[0]?.burn, { timeout: 30000 }).toBe('$47.20 in 18 min');
+  await expect.poll(async () => (await status(h.port)).look.ruleId).toBe('runaway');
+  expect((await status(h.port)).look.lamp).toBe('red');
+  await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Runaway session ($47.20 in 18 min in visual)');
+  await widget.waitForTimeout(600);
+  await expect(widget).toHaveScreenshot('widget-runaway-red.png', SHOT);
+  await signal(h, { signal: 'session-end', session: 'visual-burn', source: 'claude' });
+});
