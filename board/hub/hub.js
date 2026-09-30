@@ -190,6 +190,8 @@ export class Hub extends EventEmitter {
       board_id: board, card_id, run_id, at_hub: this.iso(), hub_epoch: this.epoch ?? null,
       actor_kind, actor_id, kind, payload: JSON.stringify(payload),
     });
+    // After commit: bus consumers (integrations, webhooks) read from here.
+    this.later(() => this.emit('journal'));
   }
 
   // ── apply: step() + effects in one transaction ────────────────────────────
@@ -333,6 +335,9 @@ export class Hub extends EventEmitter {
         this.deliverAnswer(env);
         break;
       case 'notify':
+        // D40: every notification is a journal row in this transaction, so the
+        // notifier (a bus consumer) is at-least-once and survives restarts.
+        this.journal({ board_id: row.board_id, card_id: cardId, run_id: env.runId ?? null, kind: 'card.notify', payload: { rule: e.rule, to: this.recipients(cardId, e.to) } });
         this.later(() => this.notify(e.rule, cardId, e.to));
         break;
       case 'notify_after':
