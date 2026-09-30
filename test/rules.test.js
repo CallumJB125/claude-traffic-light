@@ -1101,3 +1101,72 @@ test('clickCommands: every shell command, Shortcut, URL and app a set of rules w
   assert.deepEqual(R.clickCommands(rs), ['rm -rf ~', 'Pay Bill', 'https://x', 'open -a Evil App <session folder>']);
   assert.deepEqual(R.clickCommands(rules()), []);
 });
+
+// Templates by role
+const TEMPLATE_IDS = ['solo-dev', 'team-lead', 'pair', 'minimal', 'show-off'];
+const LAMP_KEYS = ['lamp', 'lampColor'];
+const nonLamp = (r) => Object.entries(r.then).filter(([k, v]) => !LAMP_KEYS.includes(k) && v && !(typeof v === 'object' && !Object.keys(v).length));
+
+test('templates: the five roles, each with id, name and description', () => {
+  assert.deepEqual(R.templates().map((t) => t.id), TEMPLATE_IDS);
+  for (const t of R.templates()) {
+    assert.ok(t.name && t.description, t.id);
+    assert.equal(t.rulesVersion, R.RULES_VERSION);
+  }
+  assert.equal(R.applyTemplate('nope'), null);
+});
+
+test('templates: every rule validates (nothing dropped by normalizeRule) and the locked rules stay', () => {
+  for (const id of TEMPLATE_IDS) {
+    const rs = R.applyTemplate(id);
+    assert.deepEqual(rs, rs.map(R.normalizeRule), id);
+    assert.ok(rs.some((r) => r.id === 'limit' && r.locked), id);
+    assert.ok(rs.some((r) => r.id === 'permission' && r.locked), id);
+    assert.equal(new Set(rs.map((r) => r.id)).size, rs.length, `${id} has unique ids`);
+  }
+});
+
+test('templates: authored values survive normalization (no typo silently dropped)', () => {
+  const sets = { 'show-off': ['sniper', 'ak47', 'dragon', 'partyhat', 'confetti', 'vignette', 'kickflip'], 'team-lead': ['crown', 'duck', 'TEAM {agents}'] };
+  for (const [id, wants] of Object.entries(sets)) {
+    const json = JSON.stringify(R.applyTemplate(id));
+    for (const w of wants) assert.ok(json.includes(w), `${id} keeps ${w}`);
+  }
+});
+
+test('templates: export then import round-trips through the share format', () => {
+  for (const id of TEMPLATE_IDS) {
+    const file = JSON.parse(JSON.stringify(R.templateShare(id)));
+    assert.equal(file.app, 'claude-traffic-light');
+    const imported = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file));
+    assert.deepEqual(imported, R.applyTemplate(id), id);
+  }
+});
+
+test('templates: Minimal has no non-lamp outputs', () => {
+  const rs = R.applyTemplate('minimal');
+  assert.ok(rs.length > 3);
+  for (const r of rs) assert.deepEqual(nonLamp(r), [], r.id);
+  assert.equal(look([{ signal: 'stop' }], rs).pose, 'none');
+});
+
+test('templates: Pair only sounds or animates on red', () => {
+  const rs = R.applyTemplate('pair');
+  let loud = 0;
+  for (const r of rs) {
+    if (nonLamp(r).length) { loud += 1; assert.equal(r.then.lamp, 'red', r.id); }
+  }
+  assert.ok(loud > 0);
+  assert.equal(rs.find((r) => r.id === 'permission').then.sound, 'beep');
+  assert.equal(look([{ signal: 'stop' }], rs).pose, 'none');
+  assert.equal(look([{ signal: 'tool-use', tool: 'Bash' }], rs).lamp, 'green');
+});
+
+test('templates: applying hands back fresh rules and never touches the current set', () => {
+  const current = R.defaultRules();
+  const snapshot = JSON.stringify(current);
+  const a = R.applyTemplate('show-off');
+  a[0].name = 'mutated';
+  assert.notEqual(R.applyTemplate('show-off')[0].name, 'mutated');
+  assert.equal(JSON.stringify(current), snapshot);
+});

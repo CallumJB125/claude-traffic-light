@@ -525,6 +525,72 @@
     return v != null && Number.isFinite(Number(v)) ? Number(v) : LEGACY_RULES_VERSION;
   }
 
+  // Starting points by role. Plain rule sets, built on the defaults, so they
+  // validate, share and import like any other set, and need no migration: they
+  // always carry the current RULES_VERSION. Applying one only hands the caller
+  // the rules; the Lights tab stages them unsaved (Revert undoes), and
+  // onboarding saves them itself.
+  const lampOnly = (r) => ({ ...r, then: Object.fromEntries(['lamp', 'lampColor'].filter((k) => r.then[k]).map((k) => [k, r.then[k]])) });
+  // A rule that neither lights the lamp nor interrupts has nothing left once
+  // it is quiet, so it goes.
+  const quiet = (keepRed) => defaultRules()
+    .map((r) => (keepRed && r.then.lamp === 'red' ? r : lampOnly(r)))
+    .filter((r) => r.then.lamp);
+  const TEMPLATE_DEFS = [
+    {
+      id: 'solo-dev', name: 'Solo dev', description: 'The everyday defaults: a lamp, a pose, and a sound when Claude needs you.',
+      build: () => defaultRules(),
+    },
+    {
+      id: 'team-lead', name: 'Team lead', description: 'Teammates and agents stay front and centre, with a banner counting them.',
+      build: () => {
+        const d = defaultRules();
+        const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
+        set('team', { pose: 'banner', text: 'TEAM {agents}', number: 'agents', eyes: 'star', costume: 'crown', pet: null, agents: 'duck' });
+        set('swarm', { number: 'agents', eyes: '#f2a200', agents: 'duck' });
+        set('subagent', { eyes: '#8b5cf6', agents: 'duck' });
+        d.splice(d.findIndex((x) => x.id === 'swarm') + 1, 0,
+          { id: 'subagents', name: 'Agents running', enabled: true, when: { signal: ['subagents'] }, then: { pose: 'banner', text: '{agents} AGENTS', number: 'agents', agents: 'duck' } });
+        return d;
+      },
+    },
+    {
+      id: 'pair', name: 'Pair with Claude all day', description: 'Quiet: lamp colours only. Sounds and effects are kept for red, when you are blocked.',
+      build: () => quiet(true),
+    },
+    {
+      id: 'minimal', name: 'Minimal', description: 'The lamp and nothing else: no poses, costumes, pets, effects or sounds.',
+      build: () => quiet(false),
+    },
+    {
+      id: 'show-off', name: 'Show-off', description: 'Everything on: costumes, pets, effects, sounds, confetti and a dragon.',
+      build: () => {
+        const d = defaultRules().map((r) => (r.id === 'failed' || r.id === 'shell' ? { ...r, enabled: true } : r));
+        const set = (id, then) => Object.assign(d.find((x) => x.id === id).then, then);
+        set('permission', { pose: 'sniper', lampFx: 'strobe', sound: 'Hero', screenFx: 'vignette', eyes: 'laser' });
+        set('limit', { pose: 'ak47', lampFx: 'sos', sound: 'Sosumi', body: 'robot', screenFx: 'vignette' });
+        set('working', { pose: 'run', lampFx: 'chase', pet: 'dragon', effect: 'fire' });
+        set('done', { pose: 'party', lampFx: 'rainbow', screenFx: 'confetti', costume: 'partyhat', eyes: 'star', sound: 'Glass' });
+        set('failed', { eyes: 'dizzy', effect: 'fire', signFx: 'rattle' });
+        set('idle', { pose: 'kickflip', lampFx: 'chase', pet: 'duck' });
+        return d;
+      },
+    },
+  ];
+  function templates() {
+    return TEMPLATE_DEFS.map(({ id, name, description, build }) => ({ id, name, description, rulesVersion: RULES_VERSION, rules: build().map(normalizeRule) }));
+  }
+  // Fresh rules for a template, or null for an unknown id.
+  function applyTemplate(id) {
+    const t = TEMPLATE_DEFS.find((x) => x.id === id);
+    return t ? t.build().map(normalizeRule) : null;
+  }
+  // The same file shape Export writes, so a template is shareable as-is.
+  function templateShare(id) {
+    const rules = applyTemplate(id);
+    return rules && { v: 1, app: 'claude-traffic-light', rulesVersion: RULES_VERSION, rules };
+  }
+
   function normalizeRule(r) {
     const signal = Array.isArray(r.when?.signal) ? r.when.signal : r.when?.signal ? [r.when.signal] : [];
     return {
@@ -725,5 +791,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templates, applyTemplate, templateShare, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
 });

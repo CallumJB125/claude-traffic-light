@@ -927,6 +927,11 @@
     }
   }
 
+  function renderTemplates() {
+    $('templates').innerHTML = R.templates().map((t) => `<button data-template="${t.id}"><span>${escape(t.name)}</span><small>${escape(t.description)}</small></button>`).join('');
+  }
+  renderTemplates();
+
   function applyRules(next) {
     rules = next.map(R.normalizeRule);
     selectedId = rules[0]?.id || null;
@@ -1074,6 +1079,11 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.preset) return applyRules(PRESETS[b.dataset.preset]());
+    if (b.dataset.template) {
+      // Staged, not saved: Revert brings back the rules it replaced.
+      applyRules(R.applyTemplate(b.dataset.template));
+      return flash('Template loaded — Save to keep it, Revert to undo');
+    }
     if (b.dataset.user) {
       const p = userPresets().find((x) => x.id === b.dataset.user);
       if (p) applyRules(p.rules);
