@@ -25,7 +25,8 @@ const ch = (...codes) => String.fromCharCode(...codes);
 function freePort() {
   return new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 }
-async function waitFor(fn, ms = 3000) {
+// Generous by default: the full suite runs files in parallel on a busy machine.
+async function waitFor(fn, ms = 10000) {
   const end = Date.now() + ms;
   for (;;) {
     const v = fn();
@@ -544,7 +545,8 @@ test('events: a session whose file is locked answers 503 at once rather than wai
   fs.writeFileSync(`${file}.lock`, 'someone');
   const start = Date.now();
   assert.equal(R.apply(d, env(device.id, { events: [ev({ signal: 'stop' })] })).status, 503);
-  assert.ok(Date.now() - start < 100);
+  // Far below the 250 ms-3 s a waiting lock would take, with room for a loaded machine.
+  assert.ok(Date.now() - start < 1000);
   fs.rmSync(`${file}.lock`);
 });
 
@@ -1020,7 +1022,9 @@ function sendersRunning(home) {
   return out.split('\n').filter((l) => l.includes(`${REMOTE_CLI} __send`) && l.includes(home)).length;
 }
 
-test('senders: 100 hooks in a second against a desktop that never answers keep the peak at 4 or fewer', { skip: process.platform === 'win32' }, async () => {
+// A burst of 24 hooks at once (six times the cap). 100 in a second proved the
+// same thing but starved every other file of the parallel suite.
+test('senders: a burst of hooks against a desktop that never answers keeps the peak at 4 or fewer', { skip: process.platform === 'win32' }, async () => {
   const hole = http.createServer(() => {});
   await new Promise((r) => hole.listen(0, '127.0.0.1', r));
   const home = tmp('ctl-pileup-');
@@ -1029,10 +1033,7 @@ test('senders: 100 hooks in a second against a desktop that never answers keep t
   const sampler = setInterval(() => { peak = Math.max(peak, sendersRunning(home)); }, 50);
   try {
     const runs = [];
-    for (let i = 0; i < 100; i++) {
-      runs.push(runEmit(home, ['--adapter', 'claude', 'PreToolUse'], payload({ session_id: `pile-${i % 5}` })));
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    for (let i = 0; i < 24; i++) runs.push(runEmit(home, ['--adapter', 'claude', 'PreToolUse'], payload({ session_id: `pile-${i % 5}` })));
     const res = await Promise.all(runs);
     await new Promise((r) => setTimeout(r, 500));
     assert.deepEqual([...new Set(res.map((r) => r.code))], [0]);

@@ -575,28 +575,33 @@ test('set-status: permission-request blocks until answered, then prints the deci
   child.stdin.end(JSON.stringify({ session_id: 'p1', cwd: '/x/proj', tool_name: 'Bash', tool_input: { command: 'git push origin main' } }));
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
-  const reqDir = path.join(home, 'requests');
-  const deadline = Date.now() + 2000;
-  let req = null;
-  while (Date.now() < deadline && !req) {
-    const f = fs.existsSync(reqDir) ? fs.readdirSync(reqDir).find((x) => x.endsWith('.json')) : null;
-    if (f) req = JSON.parse(fs.readFileSync(path.join(reqDir, f), 'utf8'));
-    else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
-  }
-  assert.ok(req, 'request file appears while the hook waits');
-  assert.equal(req.tool, 'Bash');
-  assert.equal(req.summary, 'git push origin main');
-  assert.deepEqual(req.toolInput, { command: 'git push origin main' }, 'the full input is recorded');
-  assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600);
-  assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow', { key: app.keyFor(req.id) }).ok, true);
-  return new Promise((resolve) => child.on('exit', (code) => {
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  try {
+    const reqDir = path.join(home, 'requests');
+    // Generous: on a loaded machine the hook's node start alone can take seconds.
+    const deadline = Date.now() + 10000;
+    let req = null;
+    while (Date.now() < deadline && !req) {
+      const f = fs.existsSync(reqDir) ? fs.readdirSync(reqDir).find((x) => x.endsWith('.json')) : null;
+      if (f) req = JSON.parse(fs.readFileSync(path.join(reqDir, f), 'utf8'));
+      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+    }
+    assert.ok(req, 'request file appears while the hook waits');
+    assert.equal(req.tool, 'Bash');
+    assert.equal(req.summary, 'git push origin main');
+    assert.deepEqual(req.toolInput, { command: 'git push origin main' }, 'the full input is recorded');
+    assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600);
+    assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow', { key: app.keyFor(req.id) }).ok, true);
+    const code = await exited;
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
     assert.deepEqual(parsed.hookSpecificOutput.decision, { behavior: 'allow' });
     assert.equal(fs.readdirSync(reqDir).length, 0, 'request and answer files are cleaned up');
+  } finally {
+    // A failed assertion above must not leave the hook or the fake app running.
+    if (child.exitCode === null) child.kill();
     app.close();
-    resolve();
-  }));
+  }
 });
 
 test('set-status: permission-request exits at once, writing no request, when the app is down', async () => {
