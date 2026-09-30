@@ -16,6 +16,15 @@
     <p id="blurb"></p>
     <p id="badge" class="info-badge"></p>
     <button type="button" class="btn" id="retry" hidden>Try again</button>
+    <form class="connect" id="connect" hidden>
+      <label class="field"><span>Team hub address</span>
+        <input class="input" name="url" type="text" inputmode="url" autocomplete="url" placeholder="buddy.example.com" required autofocus spellcheck="false"></label>
+      <label class="field"><span>Name in the sidebar <em>(optional)</em></span>
+        <input class="input" name="name" type="text" placeholder="e.g. Bondly team" maxlength="60"></label>
+      <p class="connect-error" id="connect-error" role="alert"></p>
+      <button type="submit" class="btn btn-primary" id="connect-go">Connect</button>
+      <p class="connect-note">Next you’ll sign in with your work email. You’ll get a one-time code; nothing opens in a browser.</p>
+    </form>
   </main>
 </body>
 </html>

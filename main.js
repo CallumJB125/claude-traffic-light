@@ -3249,6 +3249,8 @@ app.whenReady().then(() => {
     const at = process.argv.indexOf('--buddy');
     const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
     openBuddy(page);
+    const connectAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-connect');
+    if (connectAt > 0 && process.argv[connectAt + 1]) buddyWin.devConnect(process.argv[connectAt + 1]).then((r) => console.log('[buddy-connect]', JSON.stringify(r)));
     const shotAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-shot');
     if (shotAt > 0 && process.argv[shotAt + 1]) {
       setTimeout(async () => {

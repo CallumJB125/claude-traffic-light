@@ -112,5 +112,37 @@ document.addEventListener('keydown', (e) => {
   all[(i + (e.key === 'ArrowDown' ? 1 : -1) + all.length) % all.length].focus();
 });
 
-window.buddy.onState((s) => { Object.assign(state, s); paint(); });
+// Workspace switcher: the board on this Mac, each team hub, and "connect".
+let wsKey = '';
+function paintWorkspaces() {
+  const box = document.getElementById('ws');
+  const list = state.workspaces ?? [];
+  const key = JSON.stringify([list, state.active]);
+  if (key === wsKey) return;
+  wsKey = key;
+  box.textContent = '';
+  const label = el('label', { class: 'sr-only', for: 'ws-select' }, 'Workspace');
+  const sel = el('select', { class: 'ws-select', id: 'ws-select' });
+  for (const w of list) {
+    const o = el('option', { value: w.id }, w.kind === 'local' ? 'My board (this Mac)' : w.name);
+    if (w.id === state.active) o.selected = true;
+    sel.append(o);
+  }
+  sel.append(el('option', { value: 'connect' }, 'Connect to a team hub…'));
+  sel.addEventListener('change', () => {
+    const v = sel.value;
+    window.buddy.workspace(v);
+    // "Connect…" isn't a place to stay selected; the next state repaints it.
+    if (v === 'connect') { wsKey = ''; }
+  });
+  box.append(label, sel);
+  const active = list.find((w) => w.id === state.active);
+  if (active?.kind === 'team') {
+    const out = el('button', { type: 'button', class: 'ws-signout' }, `Sign out of ${active.name}`);
+    out.addEventListener('click', () => window.buddy.signOut(active.id));
+    box.append(out);
+  }
+}
+
+window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(); });
 window.buddy.pages().then((r) => { if (!r) return; pages = r.pages; groups = r.groups; build(); });

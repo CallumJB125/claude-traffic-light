@@ -10,9 +10,10 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme } = require('electron');
+const { BaseWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net } = require('electron');
 const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, pageForHubUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
+const { createWorkspaceStore, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition } = require('./workspaces');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -55,7 +56,42 @@ function dispose(view, win) {
   try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { /* already gone */ }
 }
 
-function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeamHub = () => null, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged } = {}) {
+/**
+ * Is `origin` a Buddy team hub, and where does it send people to sign in?
+ * Asks from the hub's own partition without following redirects: a hub behind
+ * Cloudflare Access answers 302 to <team>.cloudflareaccess.com (or 200 when
+ * this app is already signed in); a bare hub answers /api/health itself.
+ */
+function probeHub(origin, partition) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
+    const req = net.request({ url: `${origin}/api/health`, session: session.fromPartition(partition), redirect: 'manual', useSessionCookies: true });
+    const timer = setTimeout(() => { try { req.abort(); } catch { /* done */ } finish({ ok: false, error: 'The hub did not answer in 10 seconds.' }); }, 10_000);
+    req.on('redirect', (_status, _method, location) => {
+      try { req.abort(); } catch { /* done */ }
+      const team = accessTeamFromLocation(location);
+      finish(team ? { ok: true, accessTeam: team, signedIn: false } : { ok: false, error: 'That address redirects somewhere that isn’t a Buddy sign-in.' });
+    });
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (d) => { if (body.length < 4096) body += d; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          if (res.statusCode === 200 && j.ok && j.protocol) return finish({ ok: true, accessTeam: null, signedIn: true, auth: j.auth });
+        } catch { /* not JSON */ }
+        finish({ ok: false, error: 'That address answered, but it isn’t a Buddy team hub.' });
+      });
+    });
+    req.on('error', (e) => finish({ ok: false, error: `Couldn’t reach it (${e.message}).` }));
+    req.end();
+  });
+}
+
+function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged } = {}) {
+  const store = createWorkspaceStore(path.join(app.getPath('userData'), 'buddy-workspaces.json'));
+  const getTeamHub = () => { const w = store.active(); return w.kind === 'team' ? w : null; };
   let win = null;
   let sidebar = null;
   let content = null; // the view currently attached on the right
@@ -84,6 +120,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
 
   function onStatus(s) {
     hubStatus = s;
+    // The embedded hub only drives the page while the local workspace is active.
+    if (getTeamHub()) { pushState(); return; }
     // A restarted hub has a new port and a new secret: the old page, its
     // socket and its cookie are all dead. Forget them and load afresh.
     if (hubInfo && !hubInfo.team && (s.state !== 'ready' || s.url !== hubInfo.url)) forgetHub();
@@ -93,7 +131,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     if (s.state === 'ready') { if (!hubLoading) showHubPage(pageById(selected)); } else showInfo(pageById(selected));
   }
 
+  // Bumped whenever the hub the page should show changes (workspace switch,
+  // restart): a load that finishes for an older generation is dropped.
+  let gen = 0;
+
   function forgetHub() {
+    gen += 1;
+    hubLoading = null; // a resolve for the old hub must not be awaited by the new one
     const old = localUrl();
     hubInfo = null;
     viewError = null;
@@ -120,27 +164,33 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
 
   function pushState() {
     if (!sidebar || sidebar.webContents.isDestroyed()) return;
-    const team = !!(hubInfo?.team ?? getTeamHub());
+    const team = getTeamHub();
     sidebar.webContents.send('buddy:state', {
       selected,
-      hub: { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode: team ? 'team' : mode },
+      workspaces: store.list().map(({ id, name, kind }) => ({ id, name, kind })),
+      active: store.active().id,
+      hub: team
+        ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
+        : { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode },
     });
   }
 
   // ── info page (soon / loading / error) ──────────────────────────────────
 
-  function showInfo(page) {
+  function showInfo(page, extra = {}) {
     if (!win || !page) return;
     if (!infoView) {
       infoView = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'info-preload.js') } });
       lockLocal(infoView);
     }
     const hub = isHubPage(page.id);
-    const failed = viewError || hubStatus.state === 'failed';
+    const team = getTeamHub();
+    const failed = viewError || (!team && hubStatus.state === 'failed');
     const query = {
       title: page.title,
       kind: hub ? (failed ? 'error' : 'loading') : page.kind,
-      blurb: hub ? (failed ? (viewError ?? hubStatus.error ?? 'The board could not start.') : 'Starting the board…') : (page.blurb ?? ''),
+      blurb: hub ? (failed ? (viewError ?? hubStatus.error ?? 'The board could not start.') : team ? `Opening ${team.name}…` : 'Starting the board…') : (page.blurb ?? ''),
+      ...extra,
     };
     infoView.webContents.loadFile(path.join(DIR, 'info.html'), { query }).catch(() => {});
     attach(infoView);
@@ -161,7 +211,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     const team = getTeamHub();
     if (team?.url) {
       const origin = new URL(team.url).origin;
-      return { url: team.url, origin, accessTeam: team.accessTeam ?? null, partition: `persist:board-${new URL(team.url).host}`, team: true };
+      return { url: team.url, origin, accessTeam: team.accessTeam ?? null, partition: teamPartition(team.url), team: true };
     }
     const info = await supervisor.ensure();
     const partition = partitionFor();
@@ -219,11 +269,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
 
   async function showHubPage(page) {
     if (!win || !page) return;
+    const myGen = gen;
     if (!hubInfo) {
       if (hubStatus.state !== 'ready') showInfo(page);
-      if (!hubLoading) hubLoading = resolveHub().finally(() => { hubLoading = null; });
+      if (!hubLoading) { const p = resolveHub().finally(() => { if (hubLoading === p) hubLoading = null; }); hubLoading = p; }
       try {
         const h = await hubLoading;
+        if (myGen !== gen) return selected === page.id ? showHubPage(page) : undefined;
         // A hub that restarted while we set its cookie has a new URL: start
         // over against the new one rather than adopt a dead one. (hubLoading
         // is already cleared here; the crash budget bounds the loop.)
@@ -285,6 +337,56 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     supervisor.retry().catch(() => {});
   }
 
+  // ── workspaces ──────────────────────────────────────────────────────────
+
+  function switchWorkspace(id) {
+    if (!store.setActive(id)) return;
+    forgetHub();
+    select('board');
+  }
+
+  function showConnect(extra = {}) {
+    if (!win) return;
+    selected = 'connect';
+    pushState();
+    showInfo({ id: 'connect', title: 'Connect to a team hub', kind: 'connect', blurb: 'Your team’s Buddy board, right here in the app. You sign in once with your work email.' }, extra);
+  }
+
+  async function onConnect(e, arg) {
+    if (!fromInfo(e)) return { ok: false, error: 'not allowed' };
+    return connectTo(arg);
+  }
+
+  async function connectTo(arg) {
+    let origin;
+    try { origin = normalizeHubUrl(arg?.url); } catch (err) { return { ok: false, error: err.message }; }
+    const probe = await probeHub(origin, teamPartition(origin));
+    if (!probe.ok) return probe;
+    const name = String(arg?.name ?? '').trim() || new URL(origin).host;
+    const ws = store.add({ url: origin, name, accessTeam: probe.accessTeam });
+    log('connected team hub', { host: new URL(origin).host, access: !!probe.accessTeam });
+    forgetHub();
+    select('board');
+    return { ok: true, id: ws.id };
+  }
+
+  async function onSignOut(e, id) {
+    if (!fromSidebar(e)) return;
+    const ws = store.get(id);
+    if (!ws || ws.kind !== 'team') return;
+    // Signing out = forgetting this hub's cookies and storage; the next visit signs in again.
+    await session.fromPartition(teamPartition(ws.url)).clearStorageData().catch(() => {});
+    store.remove(id);
+    forgetHub();
+    select('board');
+  }
+
+  ipcMain.on('buddy:workspace', (e, id) => {
+    if (!fromSidebar(e) || typeof id !== 'string') return;
+    if (id === 'connect') showConnect(); else switchWorkspace(id);
+  });
+  ipcMain.handle('buddy:connect', onConnect);
+  ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
   ipcMain.on('buddy:retry', onRetry);
   ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS } : null));
@@ -333,7 +435,9 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
       // The secret dies with this hub; don't leave it in the cookie store.
       if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {});
     },
-    status: () => ({ selected, hub: hubStatus, viewError }),
+    status: () => ({ selected, hub: hubStatus, viewError, workspace: store.active().id, url: hubView?.webContents.getURL() ?? null }),
+    // Dev only (main.js gates it on !app.isPackaged): the connect form's path without the form.
+    devConnect: (url, name) => connectTo({ url, name }),
     // Dev hook: capture what's on screen.
     async capture() {
       if (!win) return null;

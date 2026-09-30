@@ -246,3 +246,60 @@ test('dev mode never logs the dev login secret from the hub stderr', async () =>
   assert.ok(lines.some((l) => l.includes('dev_secret=<redacted>')), lines.join('|'));
   assert.ok(!lines.some((l) => l.includes('SuperSecretValue123')));
 });
+
+// ── workspaces ─────────────────────────────────────────────────────────────
+
+const { createWorkspaceStore, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition } = require('../buddy-window/workspaces');
+
+test('team hub URLs: https origins only, bare hosts become https, junk refused', () => {
+  assert.equal(normalizeHubUrl('buddy.bondly.co.za'), 'https://buddy.bondly.co.za');
+  assert.equal(normalizeHubUrl(' https://buddy.bondly.co.za/some/path?x=1#y '), 'https://buddy.bondly.co.za');
+  assert.throws(() => normalizeHubUrl('http://buddy.bondly.co.za'), /https/);
+  assert.throws(() => normalizeHubUrl('https://user:pw@buddy.bondly.co.za'), /password/);
+  assert.throws(() => normalizeHubUrl('localhost:8787'), /public address/);
+  assert.throws(() => normalizeHubUrl('https://127.0.0.1'), /public address/);
+  assert.throws(() => normalizeHubUrl(''), /Enter/);
+  assert.throws(() => normalizeHubUrl('javascript:alert(1)'), /web address|https/);
+  assert.equal(teamPartition('https://buddy.bondly.co.za'), 'persist:board-buddy.bondly.co.za');
+});
+
+test('the Access team comes only from a *.cloudflareaccess.com redirect', () => {
+  assert.equal(accessTeamFromLocation('https://restless-hall-ab0c.cloudflareaccess.com/cdn-cgi/access/login/buddy.bondly.co.za?kid=1'), 'restless-hall-ab0c');
+  assert.equal(accessTeamFromLocation('https://evil.example.com/cloudflareaccess.com'), null);
+  assert.equal(accessTeamFromLocation('https://a.b.cloudflareaccess.com/'), null);
+  assert.equal(accessTeamFromLocation('not a url'), null);
+});
+
+test('workspace store: local is always there; add makes a team active; persisted without secrets; remove falls back to local', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const file = path.join(dir, 'ws.json');
+  const s1 = createWorkspaceStore(file);
+  assert.equal(s1.active().id, 'local');
+  const t = s1.add({ url: 'buddy.bondly.co.za', name: 'Bondly team', accessTeam: 'restless-hall-ab0c' });
+  assert.equal(t.id, 'team:buddy.bondly.co.za');
+  assert.equal(s1.active().id, t.id);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(Object.keys(saved.teams[0]).sort(), ['accessTeam', 'name', 'url']);
+  const s2 = createWorkspaceStore(file);
+  assert.deepEqual(s2.list().map((w) => w.id), ['local', 'team:buddy.bondly.co.za']);
+  assert.equal(s2.active().name, 'Bondly team');
+  assert.equal(s2.setActive('team:nope'), false);
+  assert.equal(s2.setActive('local'), true);
+  s2.setActive(t.id);
+  assert.equal(s2.remove(t.id), true);
+  assert.equal(s2.active().id, 'local');
+});
+
+test('workspace store: a tampered file cannot smuggle in a non-https hub or a bad Access team', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const file = path.join(dir, 'ws.json');
+  fs.writeFileSync(file, JSON.stringify({ active: 'team:evil', teams: [
+    { name: 'x', url: 'http://evil.example.com' },
+    { name: 'y', url: 'https://ok.example.com', accessTeam: 'evil.example.com/../' },
+  ] }));
+  const s = createWorkspaceStore(file);
+  assert.deepEqual(s.list().map((w) => w.id), ['local', 'team:ok.example.com']);
+  assert.equal(s.get('team:ok.example.com').accessTeam, null);
+  assert.equal(s.active().id, 'local');
+});

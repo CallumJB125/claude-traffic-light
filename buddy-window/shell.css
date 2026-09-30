@@ -79,3 +79,32 @@ ul { padding: 0; list-style: none; }
 }
 .btn:disabled { opacity: 0.55; }
 @media (prefers-reduced-motion: reduce) { .info-body[data-kind="loading"] .info-mark { animation: none; } }
+
+/* ── connect form ── */
+
+.connect { width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; margin-top: 10px; text-align: left; user-select: text; }
+.field { display: flex; flex-direction: column; gap: 5px; font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.field em { font-style: normal; font-weight: 400; color: var(--faint); }
+.input { min-height: 34px; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--line-input); background: var(--panel); color: var(--text); font: inherit; font-weight: 400; }
+.input:focus-visible { outline: none; box-shadow: var(--focus); border-color: transparent; }
+.btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.connect-error { min-height: 1em; color: var(--danger-text) !important; font-size: var(--text-sm) !important; }
+.connect-error:empty { display: none; }
+.connect-note { font-size: var(--text-sm) !important; color: var(--faint) !important; }
+
+/* ── workspace switcher ── */
+
+.ws { display: flex; flex-direction: column; gap: 4px; padding: 0 0 12px; }
+.ws-select {
+  appearance: none; width: 100%; min-height: 32px; padding: 0 28px 0 10px;
+  border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text);
+  font: inherit; font-weight: 600; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px; background-repeat: no-repeat;
+}
+.ws-select:focus-visible { box-shadow: var(--focus); outline: none; }
+.ws-signout { all: unset; align-self: flex-start; padding: 2px 4px; font-size: var(--text-xs); color: var(--faint); cursor: pointer; border-radius: var(--radius-sm); }
+.ws-signout:hover { color: var(--text); }
+.ws-signout:focus-visible { box-shadow: var(--focus); }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
