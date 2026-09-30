@@ -18,23 +18,31 @@ const ROUTES = {
   signOut: ['POST', '/api/auth/signout'],
   deleteAccount: ['DELETE', '/api/account'],
   createTeam: ['POST', '/api/teams'],
+  team: ['GET', '/api/teams/:team'],
+  renameTeam: ['PATCH', '/api/teams/:team'],
+  deleteTeam: ['DELETE', '/api/teams/:team'],
+  addBoard: ['POST', '/api/teams/:team/boards'],
   members: ['GET', '/api/teams/:team/members'],
   setRole: ['PATCH', '/api/teams/:team/members/:member'],
   removeMember: ['DELETE', '/api/teams/:team/members/:member'],
   invites: ['GET', '/api/teams/:team/invites'],
   invite: ['POST', '/api/teams/:team/invites'],
   revokeInvite: ['DELETE', '/api/teams/:team/invites/:invite'],
+  resendInvite: ['POST', '/api/teams/:team/invites/:invite/resend'],
   previewInvite: ['POST', '/api/invites/preview'],
   acceptInvite: ['POST', '/api/invites/accept'],
+  acceptInviteById: ['POST', '/api/account/invites/:invite/accept'],
   enrol: ['POST', '/api/teams/:team/enrol'],
   unenrol: ['DELETE', '/api/teams/:team/enrol'],
 };
 
-const ROLES = ['owner', 'admin', 'member', 'guest'];
+const ROLES = ['owner', 'admin', 'member', 'viewer'];
 const TIMEOUT_MS = 15_000;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
 // Invite tokens and ids travel in URLs and bodies; keep them to a safe alphabet.
 const TOKEN_RE = /^[A-Za-z0-9_-]{1,200}$/;
+// The invite mail's typed code, XXXX-XXXX; case and the dash don't matter.
+const INVITE_CODE_RE = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/;
 const ID_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 // The hub counts a verified delete flow as fresh for 5 minutes (D56).
 const STEP_UP_MS = 5 * 60_000;
@@ -50,11 +58,21 @@ function routePath(name, params = {}) {
 // Hub errors are `{error:{code, message, ...extra}}` (ACCOUNTS-API.md). The
 // hub's message is written for developers; these are the sentences a person sees.
 const INVITE_GONE = 'This invite link isn’t valid any more. Ask for a new one.';
+const INVITE_CODE_GONE = 'That code didn’t work. Check it, or ask for a new invite.';
 const CODE_TEXT = {
   LAST_OWNER: 'A team needs at least one owner. Make someone else an owner first.',
   FORBIDDEN: 'You don’t have permission to do that in this team.',
   NOT_FOUND: 'That no longer exists.',
+  QUOTA_EXCEEDED: 'This team has reached its limit.',
+  EMAIL_UNVERIFIED: 'Verify your email first.',
+  ALREADY_MEMBER: 'They’re already in this team.',
 };
+// CONFLICT says what clashed in its extra fields.
+function conflictText(e) {
+  if (e?.reason === 'LAST_OWNER') return CODE_TEXT.LAST_OWNER;
+  if (e?.invite_id) return 'There’s already an invite waiting for that address. Resend it instead.';
+  return null;
+}
 
 // Wrong, expired and used codes are one answer on the hub, so they are one
 // sentence here too; only the tries left differ.
@@ -73,6 +91,8 @@ function humanError(status, json, host) {
   const code = e?.code;
   if (code === 'RATE_LIMITED' || status === 429) return waitText(e?.retry_after_s);
   if (code === 'INVALID_TOKEN') return codeText(e?.attempts_left);
+  if (code === 'WRONG_ACCOUNT') return `This invite is for ${typeof e?.email_masked === 'string' ? e.email_masked.slice(0, 120) : 'another email'}.`;
+  if (code === 'CONFLICT' && conflictText(e)) return conflictText(e);
   if (code && CODE_TEXT[code]) return CODE_TEXT[code];
   if (status === 403) return CODE_TEXT.FORBIDDEN;
   if (status === 404) return CODE_TEXT.NOT_FOUND;
@@ -83,11 +103,10 @@ function humanError(status, json, host) {
   return `Something went wrong (${status}).`;
 }
 
-// Accept errors carry a second code (FORBIDDEN {code:'WRONG_ACCOUNT'},
-// CONFLICT {code:'ALREADY_MEMBER'}); spread after the outer code it replaces
-// it on the wire. `reason` and the extra fields are read too, so either
-// encoding works.
-function inviteOutcome(r) {
+// WRONG_ACCOUNT and ALREADY_MEMBER are top-level codes (P3); the older
+// nested form (FORBIDDEN {reason:'WRONG_ACCOUNT'}) and the extra fields alone
+// are read too, so either encoding works.
+function inviteOutcome(r, { gone = INVITE_GONE } = {}) {
   if (r.ok) return r;
   const d = r.detail ?? {};
   const sub = d.reason ?? r.code;
@@ -99,7 +118,7 @@ function inviteOutcome(r) {
     const team = { id: String(d.team?.id ?? ''), name: String(d.team?.name ?? '').slice(0, 60) };
     return { ok: false, alreadyMember: true, team, error: `You’re already in ${team.name || 'this team'}.` };
   }
-  if (r.code === 'INVALID_TOKEN') return { ok: false, gone: true, error: INVITE_GONE };
+  if (r.code === 'INVALID_TOKEN') return { ok: false, gone: true, error: gone };
   return r;
 }
 
@@ -138,6 +157,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     const s = auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
     if (s) headers.Authorization = `Bearer ${s.token}`;
+    // The team the call acts in; a URL id in another team makes the hub answer 404.
+    if (params?.team) headers['X-Board-Team'] = String(params.team);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     let res;
     try {
@@ -163,6 +184,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
   const need = (cond, error) => (cond ? null : { ok: false, error });
   const device = ({ deviceName, platform } = {}) => ({ device_name: String(deviceName ?? 'Mac').slice(0, 100), platform: String(platform ?? 'darwin').slice(0, 50) });
+  const codeOk = (c) => (typeof c === 'string' && INVITE_CODE_RE.test(c) ? c.toUpperCase() : null);
   const linkOk = (link) => typeof link === 'string' && link.startsWith(`${origin}/invite#`) && TOKEN_RE.test(link.slice(origin.length + 8));
 
   return {
@@ -211,6 +233,22 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
       return call('createTeam', { body: { name: n, request_id: crypto.randomUUID() } });
     },
+    getTeam: (team) => call('team', { params: { team } }),
+    renameTeam(team, name) {
+      const n = String(name ?? '').trim();
+      if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
+      return call('renameTeam', { params: { team }, body: { name: n } });
+    },
+    /** Owner only; the hub wants the team's slug typed back. */
+    async deleteTeam(team, confirmSlug) {
+      const r = await call('deleteTeam', { params: { team }, body: { confirm_slug: String(confirmSlug ?? '').trim() } });
+      return !r.ok && r.status === 400 && r.code === 'VALIDATION' ? { ok: false, error: 'That doesn’t match the team’s name. Type it exactly as shown.' } : r;
+    },
+    addBoard(team, name) {
+      const n = String(name ?? '').trim();
+      if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the board a name (up to 60 characters).' });
+      return call('addBoard', { params: { team }, body: { name: n } });
+    },
     listMembers: (team) => call('members', { params: { team } }),
     setRole(team, member, role) {
       if (!ROLES.includes(role)) return Promise.resolve({ ok: false, error: 'Pick a role.' });
@@ -218,24 +256,37 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     },
     removeMember: (team, member) => call('removeMember', { params: { team, member }, body: {} }),
     listInvites: (team) => call('invites', { params: { team } }),
-    /** → {ok, invite, link|null}: `link` is shown once; the hub keeps only its hash. */
+    /** → {ok, invite, link|null, code|null}: shown once; the hub keeps only hashes and sends no mail. */
     async invite(team, email, role = 'member') {
       const e = String(email ?? '').trim().toLowerCase();
       if (!EMAIL_RE.test(e)) return { ok: false, error: 'Enter their email address.' };
       if (!ROLES.includes(role) || role === 'owner') return { ok: false, error: 'Pick a role.' };
       const r = await call('invite', { params: { team }, body: { email: e, role, request_id: crypto.randomUUID() } });
-      return r.ok ? { ...r, link: linkOk(r.link) ? r.link : null } : r;
+      return r.ok ? { ...r, link: linkOk(r.link) ? r.link : null, code: codeOk(r.code) } : r;
     },
     revokeInvite: (team, invite) => call('revokeInvite', { params: { team, invite }, body: {} }),
+    /** A new link and code and a fresh 7 days; the old ones die. */
+    async resendInvite(team, invite) {
+      const r = await call('resendInvite', { params: { team, invite }, body: {} });
+      return r.ok ? { ...r, link: linkOk(r.link) ? r.link : null, code: codeOk(r.code) } : r;
+    },
     // No auth, and the token goes in the body, never the URL, so no log or proxy keeps it.
     async previewInvite(t) {
       if (!TOKEN_RE.test(String(t ?? ''))) return { ok: false, gone: true, error: INVITE_GONE };
       return inviteOutcome(await call('previewInvite', { body: { t }, auth: false }));
     },
+    /** One of {t} (the link's token), {inviteId} (a pending invite) or {code} (XXXX-XXXX from the mail). */
     async acceptInvite(ref) {
-      const body = ref?.inviteId ? { invite_id: String(ref.inviteId) } : { t: String(ref?.t ?? '') };
-      if (body.t !== undefined && !TOKEN_RE.test(body.t)) return { ok: false, gone: true, error: INVITE_GONE };
-      return inviteOutcome(await call('acceptInvite', { body }));
+      if (ref?.inviteId) return inviteOutcome(await call('acceptInviteById', { params: { invite: String(ref.inviteId) }, body: {} }));
+      if (ref?.code !== undefined) {
+        const c = String(ref.code).trim();
+        if (!INVITE_CODE_RE.test(c)) return { ok: false, error: 'The code looks like ABCD-EFGH.' };
+        const n = c.replace('-', '').toUpperCase();
+        return inviteOutcome(await call('acceptInvite', { body: { code: `${n.slice(0, 4)}-${n.slice(4)}` } }), { gone: INVITE_CODE_GONE });
+      }
+      const t = String(ref?.t ?? '');
+      if (!TOKEN_RE.test(t)) return { ok: false, gone: true, error: INVITE_GONE };
+      return inviteOutcome(await call('acceptInvite', { body: { t } }));
     },
     enrol: (team) => call('enrol', { params: { team }, body: {} }),
     unenrol: (team) => call('unenrol', { params: { team }, body: {} }),
@@ -358,6 +409,25 @@ function routeInvite(inv, { knownHubs = [], signedIn = () => false }) {
   return { action: signedIn(hub) ? 'preview' : 'signin', hub };
 }
 
+const MAIL_BODY_MAX = 1500;
+// Stricter than EMAIL_RE: a mailto: address has no room for ?, & or = even encoded.
+const MAILTO_TO_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}$/;
+/**
+ * The inviter's own mail draft for an invite: a mailto: URL built here from
+ * parts main already checked, never one a page supplied. Null if a part is off.
+ */
+function inviteMailto({ to, team, link, code, brand }) {
+  const email = String(to ?? '').trim().toLowerCase();
+  if (!MAILTO_TO_RE.test(email) || (!link && !code)) return null;
+  const name = String(team ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 60) || 'my team';
+  const lines = [`I invited you to join ${name} on ${brand}.`, ''];
+  if (link) lines.push(`Open this link to join: ${link}`, '');
+  if (code) lines.push(`Or enter this code in ${brand} (Join a team, Have a code?): ${code}`, '');
+  lines.push(`Sign in with ${email}. The invite works for 7 days.`);
+  const body = lines.join('\n').slice(0, MAIL_BODY_MAX);
+  return `mailto:${email}?subject=${encodeURIComponent(`Join ${name} on ${brand}`)}&body=${encodeURIComponent(body)}`;
+}
+
 /** Mask an email for "This invite is for c…@example.com". */
 function maskEmail(e) {
   const m = /^([^@]+)@(.+)$/.exec(String(e ?? ''));
@@ -408,4 +478,4 @@ function bearerHeaders(requestHeaders, url, { scope, token }) {
   return headers;
 }
 
-module.exports = { createAccountClient, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_GONE };
+module.exports = { createAccountClient, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };

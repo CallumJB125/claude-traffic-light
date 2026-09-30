@@ -64,6 +64,7 @@ async function harness(fn) {
     return sessions.get(p);
   };
   const signedOutHubs = [];
+  const mails = [];
   flow = createAccountFlow({
     store, clientFor, signedIn, userOf: (o) => vault(o).load()?.user ?? null,
     normHub: (u) => normalizeHubUrl(u, { allowOrigins }), normLink: (u) => normalizeLinkHub(u, { allowOrigins }),
@@ -87,6 +88,7 @@ async function harness(fn) {
       isOpen: () => true,
       onHubPage: () => false,
       devicesChanged() {},
+      openMail: (u) => mails.push(u),
     },
   });
   const A = flow.ACCT;
@@ -105,7 +107,7 @@ async function harness(fn) {
     await c.verifyCode(hub.lastCode(email));
     return c;
   };
-  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, host: hostOf(origin) };
+  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, host: hostOf(origin) };
   try { await fn(h); } finally { await flow.stopDevices(); await hub.close(); }
 }
 
@@ -228,13 +230,16 @@ test('L4: team actions name the rendered team and are refused once the active te
   assert.equal(s.team.id, bondly.id);
   const r = await h.A.invite(bondly.id, 'sam@example.com', 'member');
   assert.equal(r.ok, true);
-  assert.ok(r.link.startsWith(`${h.origin}/invite#`), 'the link is shown once');
-  assert.equal(r.email, 'sam@example.com');
+  assert.ok(r.invite.link.startsWith(`${h.origin}/invite#`), 'the link is shown once');
+  assert.match(r.invite.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.equal(r.invite.email, 'sam@example.com');
+  assert.equal(r.notice, 'Invite created. Share the link or the code.');
   const invId = (await h.A.state()).invites[0].id;
   const re = await h.A.resendInvite(bondly.id, invId);
   assert.equal(re.ok, true);
-  assert.notEqual(re.link, r.link, 'resend mints a new link');
-  assert.match(re.notice, /old one no longer works/);
+  assert.notEqual(re.invite.link, r.invite.link, 'resend mints a new link');
+  assert.notEqual(re.invite.code, r.invite.code, 'and a new code');
+  assert.equal(re.notice, 'New link and code created. The old ones no longer work.');
   // The page still shows Bondly, but the member switched to another team meanwhile.
   await h.A.createTeam('Other');
   assert.notEqual(h.store.active().id, bondly.id);
@@ -441,3 +446,148 @@ test('M4: the listener strips ours anywhere, a page’s own only outside the hub
   }
   assert.deepEqual(bearerHeaders({}, 'wss://buddy.example.com/ws/board', { scope, token }), ours, 'the socket upgrade too');
 });
+
+// ── accounts P2/P3 alignment ───────────────────────────────────────────────
+
+test('P3: the top-level error codes read as plain sentences', () => {
+  const { humanError } = require('../buddy-window/accounts');
+  const say = (status, error) => humanError(status, { error }, 'hub.example.com');
+  assert.equal(say(403, { code: 'QUOTA_EXCEEDED', resource: 'members', limit: 25 }), 'This team has reached its limit.');
+  assert.equal(say(403, { code: 'EMAIL_UNVERIFIED' }), 'Verify your email first.');
+  assert.equal(say(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }), 'This invite is for c…@example.com.');
+  assert.equal(say(409, { code: 'ALREADY_MEMBER', team: { id: 't', name: 'T' } }), 'They’re already in this team.');
+  assert.equal(say(409, { code: 'CONFLICT', reason: 'LAST_OWNER' }), 'A team needs at least one owner. Make someone else an owner first.');
+  assert.equal(say(409, { code: 'CONFLICT', invite_id: 'inv_1' }), 'There’s already an invite waiting for that address. Resend it instead.');
+});
+
+test('P3: roles are owner, admin, member, viewer (no guest) in the client, the store and the page', () => {
+  const { ROLES } = require('../buddy-window/accounts');
+  assert.deepEqual(ROLES, ['owner', 'admin', 'member', 'viewer']);
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.ok(!/guest/i.test(page), 'no guest anywhere on the page');
+  assert.match(page, /viewer: 'Can look, not change'/);
+  const { teamsFromAccount } = require('../buddy-window/workspaces');
+  assert.deepEqual(teamsFromAccount({ teams: [{ id: 'a', name: 'A', role: 'viewer' }, { id: 'b', name: 'B', role: 'guest' }] }).map((t) => t.role), ['viewer', 'member']);
+});
+
+test('P3: invites never above your own role; a second pending invite is a CONFLICT; a full team is QUOTA_EXCEEDED', async () => {
+  const hub = createMockAccountsHub({ quotas: { members: 3 } });
+  const origin = await hub.listen();
+  const signIn = async (email) => {
+    let v = null;
+    const c = createAccountClient({ origin, store: { load: () => v, save: (x) => { v = x; }, clear: () => { v = null; } } });
+    await c.startEmail(email);
+    await c.verifyCode(hub.lastCode(email));
+    return c;
+  };
+  try {
+    const owner = await signIn('o@example.com');
+    const team = (await owner.createTeam('T')).team;
+    const adm = await signIn('a@example.com');
+    await adm.acceptInvite({ t: (await owner.invite(team.id, 'a@example.com', 'admin')).link.split('#')[1] });
+    assert.equal((await adm.invite(team.id, 'v@example.com', 'viewer')).ok, true, 'an admin invites a viewer');
+    assert.equal((await adm.invite(team.id, 'x@example.com', 'owner')).error, 'Pick a role.', 'never as owner');
+    const full = await owner.invite(team.id, 'y@example.com', 'member');
+    assert.deepEqual([full.code, full.error], ['QUOTA_EXCEEDED', 'This team has reached its limit.'], 'pending invites count');
+    hub.setVerified('o@example.com', false);
+    assert.equal((await owner.createTeam('U')).error, 'Verify your email first.');
+  } finally { await hub.close(); }
+});
+
+test('P3: accept with the mail’s XXXX-XXXX code, only for the signed-in address; joinCode routes a code there too', async () => harness(async (h) => {
+  const luke = await h.other('luke@example.com');
+  const team = (await luke.createTeam('Pistor')).team;
+  await luke.invite(team.id, 'me@example.com', 'member');
+  const code = h.hub.inviteCode('me@example.com');
+  assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.equal((await h.A.acceptCode(code)).error, 'Sign in first, then enter the code.');
+  await h.signInAs('me@example.com');
+  assert.equal((await h.A.acceptCode('nope')).error, 'The code looks like ABCD-EFGH.');
+  assert.equal((await h.A.acceptCode('ZZZZ-ZZZZ')).error, 'That code didn’t work. Check it, or ask for a new invite.');
+  // Someone else's code is just invalid for me: codes reveal nothing.
+  await luke.invite(team.id, 'sam@example.com', 'member');
+  assert.equal((await h.A.acceptCode(h.hub.inviteCode('sam@example.com'))).error, 'That code didn’t work. Check it, or ask for a new invite.');
+  const r = await h.A.joinCode(code.toLowerCase().replace('-', ''));
+  assert.equal(r.ok, true, r.error);
+  assert.equal(h.store.active().name, 'Pistor');
+  assert.ok(h.requests.some((u) => u.pathname === '/api/invites/accept'));
+}));
+
+test('P3: a pending invite is accepted with POST /api/account/invites/:id/accept', async () => harness(async (h) => {
+  const luke = await h.other('luke@example.com');
+  const team = (await luke.createTeam('Pistor')).team;
+  await luke.invite(team.id, 'me@example.com', 'viewer');
+  await h.signInAs('me@example.com');
+  assert.equal(h.flow.acct.screen, 'invites');
+  const id = (await h.A.state()).invites[0].id;
+  assert.equal((await h.A.acceptPending(id)).ok, true);
+  assert.ok(h.requests.some((u) => u.pathname === `/api/account/invites/${id}/accept`));
+  assert.equal(h.store.active().role, 'viewer');
+  // Viewers can look, not run cards: refused before any enrolment.
+  assert.equal((await h.A.runner(h.store.active().id, true)).error, 'Viewers can’t run cards.');
+  assert.equal(h.hub.enrolments().length, 0);
+}));
+
+test('P2: team settings: rename, add a board, resend with the resend route, delete by typing the slug', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly Team');
+  const ws = h.store.active();
+  let s = await h.A.state();
+  assert.deepEqual([s.team.slug, s.team.boards], ['bondly-team', 1]);
+  assert.equal((await h.A.renameTeam(ws.id, 'Bondly')).ok, true);
+  assert.equal(h.store.active().name, 'Bondly');
+  assert.equal((await h.A.addBoard(ws.id, 'Marketing')).notice, 'Added the Marketing board.');
+  assert.equal((await h.A.state()).team.boards, 2);
+  await h.A.invite(ws.id, 'sam@example.com', 'member');
+  s = await h.A.state();
+  const re = await h.A.resendInvite(ws.id, s.invites[0].id);
+  assert.equal(re.ok, true);
+  assert.ok(h.requests.some((u) => u.pathname === `/api/teams/${ws.teamId}/invites/${s.invites[0].id}/resend`));
+  assert.equal((await h.A.deleteTeam(ws.id, 'Bondly')).error, 'That doesn’t match the team’s name. Type it exactly as shown.');
+  assert.equal((await h.A.deleteTeam(ws.id, 'bondly-team')).ok, true);
+  assert.equal(h.flow.acct.screen, 'team');
+  assert.match((await h.A.state()).notice ?? '', /was deleted/);
+  assert.equal(h.store.list().some((w) => w.id === ws.id), false, 'gone from the switcher');
+}));
+
+test('P2: team-scoped calls name the team in X-Board-Team; a header naming another team is a 404', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  await h.A.state();
+  assert.ok(h.hub.teamHeaders().length > 0 && h.hub.teamHeaders().every((t) => t === ws.teamId));
+  const token = h.vault(h.origin).load().token;
+  const res = await fetch(`${h.origin}/api/teams/${ws.teamId}/members`, { headers: { Authorization: `Bearer ${token}`, 'X-Board-Team': 'team_other' } });
+  assert.equal(res.status, 404);
+}));
+
+test('no invite mail from the hub: Email it opens a mailto: the flow built from the invite it minted, never a page URL', async () => harness(async (h) => {
+  await h.signInAs('owner@example.com');
+  await h.A.createTeam('Bondly & Co');
+  const ws = h.store.active();
+  const r = await h.A.invite(ws.id, 'sam@example.com', 'member');
+  assert.equal((await h.A.emailInvite(ws.id, 'inv_someone_else')).ok, false, 'only the invite just shown');
+  assert.deepEqual(h.mails, []);
+  assert.equal((await h.A.emailInvite(ws.id, r.invite.id)).ok, true);
+  const u = new URL(h.mails[0]);
+  assert.equal(u.protocol, 'mailto:');
+  assert.equal(u.pathname, 'sam@example.com');
+  assert.equal(u.searchParams.get('subject'), 'Join Bondly & Co on Plexiform');
+  const body = u.searchParams.get('body');
+  assert.ok(body.includes(r.invite.link) && body.includes(r.invite.code));
+  assert.ok(body.length <= 1500);
+  // Resend replaces what Email it drafts; signing out forgets it.
+  const re = await h.A.resendInvite(ws.id, r.invite.id);
+  assert.equal((await h.A.emailInvite(ws.id, r.invite.id)).ok, false);
+  assert.equal((await h.A.emailInvite(ws.id, re.invite.id)).ok, true);
+  assert.ok(h.mails[1].includes(encodeURIComponent(re.invite.code)));
+  await h.A.signOut(h.host);
+  assert.equal((await h.A.emailInvite(ws.id, re.invite.id)).ok, false);
+  const { inviteMailto } = require('../buddy-window/accounts');
+  assert.equal(inviteMailto({ to: 'x?cc=evil@example.com', team: 'T', link: 'l', brand: 'P' }), null, 'no header smuggling in the address');
+  const long = inviteMailto({ to: 'a@example.com', team: 'T\r\nBcc: e@x.com'.padEnd(500, 'x'), link: 'https://h/invite#t', code: 'ABCD-EFGH', brand: 'P' });
+  assert.ok(!decodeURIComponent(long).includes('\r\nBcc'), 'control characters in the team name are flattened');
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.ok(!/emailed it|Invite sent/i.test(page));
+  assert.ok(!/email/i.test(require('../buddy-window/brand').COPY.inviteHint.replace('doesn’t email', '')), 'no promise of an email');
+}));

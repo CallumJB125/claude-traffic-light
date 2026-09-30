@@ -82,7 +82,7 @@ function accessTeamFromLocation(location) {
 function teamsFromAccount(account) {
   const list = Array.isArray(account?.teams) ? account.teams : [];
   return list.filter((t) => t && TEAM_ID_RE.test(String(t.id ?? '')) && typeof t.name === 'string').map((t) => ({
-    id: String(t.id), name: t.name.trim().slice(0, 60) || 'Team', role: ['owner', 'admin', 'member', 'guest'].includes(t.role) ? t.role : 'member',
+    id: String(t.id), name: t.name.trim().slice(0, 60) || 'Team', role: ['owner', 'admin', 'member', 'viewer'].includes(t.role) ? t.role : 'member',
   }));
 }
 

@@ -6,7 +6,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { parseInvite, routeInvite } = require('./accounts');
+const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE } = require('./accounts');
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
 const BRAND = require('./brand');
 
@@ -17,8 +17,9 @@ const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'th
 // Argument types per action; the IPC layer refuses anything else before it runs.
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
-  invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
-  joinCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
+  invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
+  renameTeam: ['string', 'string'], deleteTeam: ['string', 'string'], addBoard: ['string', 'string'],
+  joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
   deleteConfirm: ['string'], cancelDelete: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'],
 };
 
@@ -40,7 +41,8 @@ async function clearHubSessions(origin, fromPartition) {
  * createAccountFlow({store, clientFor, signedIn, userOf, normHub, normLink, probe,
  *   makeDevice, hasDeviceFile, discardDeviceFiles, deviceInfo, ui, log})
  *   ui: {show(screen), select(pageId), switchWorkspace(id, {show}), pushState(),
- *        forgetHub(), hubSignedOut(origin), isOpen(), onHubPage(), devicesChanged()}
+ *        forgetHub(), hubSignedOut(origin), isOpen(), onHubPage(), devicesChanged(),
+ *        openMail(mailtoUrl)}
  */
 function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), ui, log = () => {} }) {
   const acct = { screen: null, hub: null, notice: null, deleting: false };
@@ -53,6 +55,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   const devices = new Map(); // workspace id → {hub, name, d}
   let lastSessions = [];
   const checks = new Map(); // origin → in-flight "still signed in?" check
+  // The last invite made or resent per team, in memory only: "Email it" drafts from this, not from the page.
+  const minted = new Map(); // workspace id → {id, email, link, code, team}
   const outs = new Map(); // origin → in-flight sign-out cleanup
 
   const hubTrusted = (h) => !!h && (store.knows(h) || trustedHub === h);
@@ -116,6 +120,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (trustedHub === origin) trustedHub = null;
     if (awaitingConfirm === origin) awaitingConfirm = null;
     if (acct.hub === origin) acct.deleting = false;
+    for (const id of minted.keys()) if (id.startsWith(`team:${hostOf(origin)}:`)) minted.delete(id);
     await dropDevices(origin);
     await ui.hubSignedOut(origin);
     ui.pushState();
@@ -252,12 +257,12 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const ws = activeTeam();
       if (!ws) return { ...base, team: null, hasTeams: store.list().some((w) => w.kind === 'team') };
       const c = clientFor(ws.hub);
-      const m = await c.listMembers(ws.teamId);
+      const [m, t] = await Promise.all([c.listMembers(ws.teamId), c.getTeam(ws.teamId)]);
       const canManage = ['owner', 'admin'].includes(ws.role);
       const inv = canManage ? await c.listInvites(ws.teamId) : { ok: true, invites: [] };
       const meId = userOf(ws.hub)?.id ?? null;
       const members = (m.members ?? []).map((x) => ({ id: String(x.member_id ?? x.id), name: String(x.display_name ?? ''), email: String(x.email ?? ''), role: String(x.role), you: meId != null && String(x.user_id) === String(meId) }));
-      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
+      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
     }
     if (screen === 'account') {
       return { ...base, deleting: acct.deleting && acct.hub ? hostOf(acct.hub) : null, accounts: store.hubs().filter(signedIn).map((h) => { const u = userOf(h) ?? {}; return { host: hostOf(h), name: String(u.display_name ?? ''), email: String(u.email ?? '') }; }) };
@@ -274,6 +279,13 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return { ...base, hubs };
     }
     return base;
+  }
+
+  function inviteMade(ws, r, notice) {
+    const id = String(r.invite?.id ?? '');
+    const email = String(r.invite?.email ?? '');
+    minted.set(ws.id, { id, email, link: r.link, code: r.code, team: ws.name });
+    return { ok: true, notice, invite: { id, email, link: r.link, code: r.code } };
   }
 
   // ── actions (one per account-page button or form) ───────────────────────
@@ -347,18 +359,47 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       if (!ws) return TEAM_CHANGED;
       const r = await clientFor(ws.hub).invite(ws.teamId, email, role);
       if (!r.ok) return r;
-      const to = r.invite?.email ?? email;
-      return { ok: true, link: r.link, email: to, notice: `Invite sent to ${to}.` };
+      return inviteMade(ws, r, 'Invite created. Share the link or the code.');
     },
     async resendInvite(wsId, id) {
       const ws = renderedTeam(wsId);
       if (!ws) return TEAM_CHANGED;
-      const c = clientFor(ws.hub);
-      const list = await c.listInvites(ws.teamId);
-      const inv = list.invites?.find((i) => String(i.id) === id);
-      if (!inv) return { ok: false, error: 'That invite is gone.' };
-      const r = await c.invite(ws.teamId, inv.email, inv.role);
-      return r.ok ? { ok: true, link: r.link, email: inv.email, notice: `Sent a new link to ${inv.email}. The old one no longer works.` } : r;
+      const r = await clientFor(ws.hub).resendInvite(ws.teamId, id);
+      if (!r.ok) return r;
+      return inviteMade(ws, r, 'New link and code created. The old ones no longer work.');
+    },
+    async emailInvite(wsId, inviteId) {
+      const ws = renderedTeam(wsId);
+      if (!ws) return TEAM_CHANGED;
+      const m = minted.get(ws.id);
+      if (!m || m.id !== inviteId) return { ok: false, error: 'That link is no longer shown here. Make a new one with Resend.' };
+      const url = inviteMailto({ to: m.email, team: m.team, link: m.link, code: m.code, brand: BRAND.NAME });
+      if (!url) return { ok: false, error: 'Couldn’t start an email for that invite.' };
+      ui.openMail(url);
+      return { ok: true };
+    },
+    async renameTeam(wsId, name) {
+      const ws = renderedTeam(wsId);
+      if (!ws) return TEAM_CHANGED;
+      const r = await clientFor(ws.hub).renameTeam(ws.teamId, name);
+      if (!r.ok) return r;
+      await refreshAccount(ws.hub);
+      return { ok: true, notice: 'Team renamed.' };
+    },
+    async deleteTeam(wsId, typed) {
+      const ws = renderedTeam(wsId);
+      if (!ws) return TEAM_CHANGED;
+      const r = await clientFor(ws.hub).deleteTeam(ws.teamId, typed);
+      if (!r.ok) return r;
+      await refreshAccount(ws.hub);
+      show('team', { notice: `${ws.name} was deleted.` });
+      return { ok: true };
+    },
+    async addBoard(wsId, name) {
+      const ws = renderedTeam(wsId);
+      if (!ws) return TEAM_CHANGED;
+      const r = await clientFor(ws.hub).addBoard(ws.teamId, name);
+      return r.ok ? { ok: true, notice: `Added the ${String(r.board?.name ?? name).slice(0, 60)} board.` } : r;
     },
     async revokeInvite(wsId, id) {
       const ws = renderedTeam(wsId);
@@ -379,6 +420,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return r;
     },
     async joinCode(code) {
+      if (INVITE_CODE_RE.test(String(code ?? '').trim())) return ACCT.acceptCode(code);
       const inv = parseInvite(code, { normalizeHub: normLink });
       if (!inv) return { ok: false, error: 'That doesn’t look like an invite. Paste the whole link or code.' };
       pendingInvite = inv;
@@ -391,6 +433,13 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       if (!inv?.previewId || inv.previewId !== previewId) return { ok: false, error: 'That invite changed. Look again before you join.' };
       if (!hubTrusted(inv.hub) || !signedIn(inv.hub)) return { ok: false, error: 'Sign in first.' };
       return joined(inv.hub, await clientFor(inv.hub).acceptInvite({ t: inv.token }));
+    },
+    // The mail's XXXX-XXXX code works only for the signed-in, verified address, so it goes to a hub already signed in to.
+    async acceptCode(code) {
+      const signedInHubs = store.hubs().filter(signedIn);
+      const origin = [acct.hub, activeTeam()?.hub, store.lastHub()].find((h) => h && signedIn(h)) ?? (signedInHubs.length === 1 ? signedInHubs[0] : null);
+      if (!origin) return { ok: false, error: 'Sign in first, then enter the code.' };
+      return joined(origin, await clientFor(origin).acceptInvite({ code }));
     },
     async notNow() {
       pendingInvite = null;
@@ -462,6 +511,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     async runner(wsId, on) {
       const ws = store.get(wsId);
       if (ws?.kind !== 'team' || !signedIn(ws.hub)) return { ok: false };
+      if (on && ws.role === 'viewer') return { ok: false, error: 'Viewers can’t run cards.' };
       const d = deviceFor(ws);
       if (on && !d.status().enrolled) return d.enroll({ name: deviceInfo().deviceName ?? 'Mac' });
       return d.setEnabled(on);

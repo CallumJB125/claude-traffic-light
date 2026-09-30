@@ -154,6 +154,7 @@ ul { padding: 0; list-style: none; }
 .acct-btns { display: flex; gap: 2px; }
 .acct-spacer { width: 1px; }
 .acct-row-form { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
+.acct-code { display: flex; align-items: center; justify-content: center; min-height: 36px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); font: 600 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.2em; user-select: all; }
 .acct-select { appearance: none; min-height: 32px; padding: 0 26px 0 10px; font-weight: 500; cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position: calc(100% - 14px) 55%, calc(100% - 9px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }

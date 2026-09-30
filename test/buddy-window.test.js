@@ -346,7 +346,7 @@ test('workspace store: hubs, teams from the account, active team, persisted with
   const hub = s1.addHub('buddy.bondly.co.za');
   assert.equal(hub, 'https://buddy.bondly.co.za');
   assert.equal(s1.lastHub(), hub);
-  assert.equal(s1.setTeams(hub, { teams: [{ id: 't1', name: 'Bondly', role: 'owner' }, { id: 't2', name: 'Side', role: 'guest' }] }), true);
+  assert.equal(s1.setTeams(hub, { teams: [{ id: 't1', name: 'Bondly', role: 'owner' }, { id: 't2', name: 'Side', role: 'viewer' }] }), true);
   assert.equal(s1.activateTeam(hub, 't2'), true);
   assert.equal(s1.active().name, 'Side');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
@@ -797,8 +797,11 @@ test('accounts: create a team, invite by email (link shown once), preview withou
   assert.equal(acc.member.role, 'member');
   assert.deepEqual((await sam.c.me()).teams.map((x) => [x.name, x.role]), [['Bondly', 'member']]);
   const again = await sam.c.acceptInvite({ t: token });
-  assert.equal(again.gone, true);
-  assert.equal(again.error, 'This invite link isn’t valid any more. Ask for a new one.');
+  assert.equal(again.ok, true, 'the same user accepting again gets the same answer');
+  assert.equal(again.member.member_id, acc.member.member_id);
+  const used = await other.c.acceptInvite({ t: token });
+  assert.equal(used.gone, true, 'used by someone else');
+  assert.equal(used.error, 'This invite link isn’t valid any more. Ask for a new one.');
   const members = (await owner.c.listMembers(teamId)).members;
   assert.deepEqual(members.map((m) => m.email).sort(), ['owner@example.com', 'sam@example.com']);
   assert.ok(members.every((m) => m.member_id && m.user_id && m.joined_at));
@@ -830,9 +833,9 @@ test('accounts: roles: members cannot manage; the last owner cannot be demoted o
   const me = list.find((x) => x.email === 'o@example.com');
   const them = list.find((x) => x.email === 'm@example.com');
   const r = await owner.c.setRole(teamId, me.member_id, 'admin');
-  assert.equal(r.code, 'LAST_OWNER');
+  assert.deepEqual([r.status, r.code, r.detail.reason], [409, 'CONFLICT', 'LAST_OWNER']);
   assert.match(r.error, /at least one owner/);
-  assert.equal((await owner.c.removeMember(teamId, me.member_id)).code, 'LAST_OWNER');
+  assert.match((await owner.c.removeMember(teamId, me.member_id)).error, /at least one owner/);
   assert.match((await m.c.setRole(teamId, them.member_id, 'admin')).error, /permission/);
   assert.match((await m.c.invite(teamId, 'x@example.com', 'member')).error, /permission/);
   assert.equal((await owner.c.setRole(teamId, them.member_id, 'owner')).ok, true);
@@ -843,9 +846,15 @@ test('accounts: roles: members cannot manage; the last owner cannot be demoted o
 test('accounts: resend mints a new link and the old one dies; a revoked link is refused with a plain sentence', async () => withHub(async (hub, origin) => {
   const owner = await signIn(hub, origin, 'o@example.com');
   const teamId = (await owner.c.createTeam('T')).team.id;
-  const a = await owner.c.invite(teamId, 'x@example.com', 'guest');
-  const b = await owner.c.invite(teamId, 'x@example.com', 'guest');
+  const a = await owner.c.invite(teamId, 'x@example.com', 'viewer');
+  const dup = await owner.c.invite(teamId, 'x@example.com', 'viewer');
+  assert.deepEqual([dup.status, dup.code, dup.detail.invite_id], [409, 'CONFLICT', a.invite.id]);
+  assert.equal(dup.error, 'There’s already an invite waiting for that address. Resend it instead.');
+  const b = await owner.c.resendInvite(teamId, a.invite.id);
+  assert.equal(b.ok, true);
+  assert.notEqual(b.invite.id, a.invite.id, 'a new invite id');
   assert.notEqual(a.link, b.link);
+  assert.ok(b.link.startsWith(`${origin}/invite#`));
   const live = (await owner.c.listInvites(teamId)).invites;
   assert.deepEqual(live.map((i) => i.id), [b.invite.id]);
   assert.match((await owner.c.previewInvite(a.link.split('#')[1])).error, /isn’t valid any more/);
@@ -862,10 +871,8 @@ test('accounts: already a member gets a clear answer with the team', async () =>
   const o2 = await signIn(hub, origin, 'o2@example.com');
   await o2.c.acceptInvite({ t: inv.link.split('#')[1] });
   const again = await owner.c.invite(team.id, 'o2@example.com', 'member');
-  const r = await o2.c.acceptInvite({ t: again.link.split('#')[1] });
-  assert.equal(r.alreadyMember, true);
-  assert.deepEqual(r.team, { id: team.id, name: 'T' });
-  assert.equal(r.error, 'You’re already in T.');
+  assert.deepEqual([again.status, again.code, again.detail.team], [409, 'ALREADY_MEMBER', { id: team.id, name: 'T' }]);
+  assert.equal(again.error, 'They’re already in this team.');
 }));
 
 test('accounts: sign out revokes on the hub and forgets locally', async () => withHub(async (hub, origin) => {

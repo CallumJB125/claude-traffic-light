@@ -18,8 +18,9 @@ function el(tag, attrs = {}, ...kids) {
   return n;
 }
 
-const ROLE = { owner: 'Owner', admin: 'Admin', member: 'Member', guest: 'Guest' };
-const ROLE_HINT = { admin: 'Can invite people and manage the team', member: 'Can work on the board', guest: 'Can see and comment only' };
+const ROLES = ['owner', 'admin', 'member', 'viewer'];
+const ROLE = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
+const ROLE_HINT = { owner: 'Can do everything, including delete the team', admin: 'Can invite people and manage the team', member: 'Can work on the board', viewer: 'Can look, not change' };
 
 // A form whose submit runs `fn(values)`; errors show under the fields and the
 // button says what it is doing meanwhile.
@@ -57,9 +58,9 @@ const hostTag = (host) => el('span', { class: 'acct-hosttag' }, host);
 
 function roleSelect(value, { name = 'role', allowOwner = false, label = 'Role' } = {}) {
   const s = el('select', { class: 'input acct-select', name, 'aria-label': label });
-  for (const r of ['owner', 'admin', 'member', 'guest']) {
+  for (const r of ROLES) {
     if (r === 'owner' && !allowOwner && value !== 'owner') continue;
-    const o = el('option', { value: r }, ROLE[r]);
+    const o = el('option', { value: r, title: ROLE_HINT[r] }, ROLE[r]);
     if (r === value) o.selected = true;
     s.append(o);
   }
@@ -87,28 +88,41 @@ function flash(text, isError = false) {
   root.querySelector('.acct-card')?.prepend(flashEl);
 }
 
+let team = null; // the team the page rendered, for the invite panel's Email it
+
 async function act(p, okText) {
   const r = await p;
   if (!r?.ok) { flash(r?.error ?? 'Something went wrong. Try again.', true); return r; }
   await render();
   if (okText || r.notice) flash(okText ?? r.notice);
-  if (r.link) showLink(r.link, r.email);
+  if (r.invite && team) showInvite(r.invite, team);
   return r;
 }
 
-// The hub shows an invite link once and keeps only its hash: copy it now or
-// send a new one later.
-function showLink(link, email) {
-  const box = el('input', { class: 'input acct-link-box', type: 'text', readonly: true, value: link, 'aria-label': 'Invite link', onfocus: (e) => e.currentTarget.select() });
-  const copy = el('button', { type: 'button', class: 'btn' }, 'Copy');
-  copy.addEventListener('click', async () => {
-    box.select();
-    try { await navigator.clipboard.writeText(link); } catch { document.execCommand('copy'); }
-    copy.textContent = 'Copied';
+function copyButton(text, box) {
+  const b = el('button', { type: 'button', class: 'btn' }, 'Copy');
+  b.addEventListener('click', async () => {
+    box?.select();
+    try { await navigator.clipboard.writeText(text); } catch { document.execCommand('copy'); }
+    b.textContent = 'Copied';
   });
+  return b;
+}
+
+// The hub shows an invite's link and code once, keeps only their hashes and
+// sends no mail: copy them now, email them from your own mail app, or resend.
+function showInvite(inv, team) {
+  const rows = [];
+  if (inv.link) {
+    const box = el('input', { class: 'input acct-link-box', type: 'text', readonly: true, value: inv.link, 'aria-label': 'Invite link', onfocus: (e) => e.currentTarget.select() });
+    rows.push(el('div', { class: 'acct-row-form' }, box, copyButton(inv.link, box)));
+  }
+  if (inv.code) rows.push(el('div', { class: 'acct-row-form' }, el('span', { class: 'acct-code', 'aria-label': 'Invite code' }, inv.code), copyButton(inv.code)));
+  const mail = el('button', { type: 'button', class: 'btn btn-primary' }, 'Email it');
+  mail.addEventListener('click', async () => { const r = await api.emailInvite(team, inv.id); if (!r?.ok) flash(r?.error ?? 'Something went wrong.', true); });
   const sec = el('section', { class: 'acct-section acct-linkshow', role: 'status' },
-    el('p', { class: 'acct-hint' }, `Here’s ${email ? `${email}’s` : 'the'} invite link. We also emailed it. It’s shown only this once.`),
-    el('div', { class: 'acct-row-form' }, box, copy));
+    el('p', { class: 'acct-hint' }, `Send ${inv.email || 'them'} the link or the code. They’re shown only this once; Resend makes new ones.`),
+    rows, el('div', { class: 'acct-actions acct-actions-left' }, mail));
   root.querySelector('.acct-linkshow')?.remove();
   root.querySelector('.acct-section')?.after(sec);
 }
@@ -193,7 +207,7 @@ const SCREENS = {
           el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Join with an invite')),
       ];
     }
-    const team = s.team.id;
+    team = s.team.id;
     const out = [el('h1', {}, s.team.name), el('p', { class: 'acct-sub' }, `${ROLE[s.team.role] ?? s.team.role} · `, hostTag(s.host))];
     if (s.error) out.push(el('p', { class: 'acct-error', role: 'alert' }, s.error));
 
@@ -225,6 +239,13 @@ const SCREENS = {
     out.push(el('section', { class: 'acct-section' }, el('h2', {}, `Members (${s.members.length})`), el('ul', { class: 'acct-list' }, rows)));
 
     if (s.canManage) {
+      const rename = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', value: s.team.name, required: true, 'aria-label': 'Team name' })), submit: 'Rename', busy: 'Saving…', fn: (v) => act(api.renameTeam(team, v.name)) });
+      const board = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', placeholder: 'e.g. Marketing', required: true, 'aria-label': 'New board name' })), submit: 'Add board', busy: 'Adding…', fn: (v) => act(api.addBoard(team, v.name)) });
+      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Team settings'), rename,
+        el('p', { class: 'acct-hint' }, s.team.boards == null ? 'Add another board to this team.' : `${s.team.boards} board${s.team.boards === 1 ? '' : 's'}. Add another:`), board));
+    }
+
+    if (s.canManage) {
       const inv = s.invites.map((i) => el('li', { class: 'acct-item' },
         el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, i.email), el('span', { class: 'acct-mail' }, expires(i.expires))),
         el('span', { class: 'chip chip-role' }, ROLE[i.role] ?? i.role),
@@ -232,6 +253,16 @@ const SCREENS = {
           el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.resendInvite(team, i.id)) }, 'Resend'),
           el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => act(api.revokeInvite(team, i.id), 'Invite cancelled.') }, 'Revoke'))));
       out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Pending invites'), inv.length ? el('ul', { class: 'acct-list' }, inv) : el('p', { class: 'acct-hint' }, 'No invites waiting.')));
+    }
+
+    if (s.isOwner && s.team.slug) {
+      const del = form({
+        fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
+        submit: 'Delete team', busy: 'Deleting…', fn: (v) => api.deleteTeam(team, v.slug),
+      });
+      del.querySelector('.acct-go').classList.add('btn-danger');
+      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Delete team'),
+        el('p', { class: 'acct-hint' }, `Everyone loses ${s.team.name}, its boards and its cards at once, and runners stop. This can’t be undone from the app.`), del));
     }
     return out;
   },
@@ -246,6 +277,13 @@ const SCREENS = {
           submit: 'Continue', busy: 'Checking…',
           fn: (v) => api.joinCode(v.code),
         }),
+        el('section', { class: 'acct-section' }, el('h2', {}, 'Have a code?'),
+          el('p', { class: 'acct-hint' }, 'The invite email also has an 8-letter code. It works when you’re signed in with the address it was sent to.'),
+          form({
+            fields: input({ name: 'code', type: 'text', autocomplete: 'off', maxlength: '9', placeholder: 'ABCD-EFGH', class: 'input input-code', required: true, 'aria-label': 'Invite code' }),
+            submit: 'Join', busy: 'Joining…',
+            fn: (v) => api.acceptCode(v.code),
+          })),
       ];
     }
     const err = el('p', { class: 'acct-error', role: 'alert' });
@@ -327,10 +365,10 @@ const SCREENS = {
         el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Share my live sessions with my teams'), el('span', { class: 'acct-mail' }, `Everyone in every team on ${h.host} sees which project folders your Claude sessions are in (the folder name, not the path) and whether they’re working. Off unless you turn it on.`)),
         toggle(h.share, `Share my live sessions with every team on ${h.host}`, (on) => api.presence(h.host, on))));
       for (const t of h.teams) {
-        const guest = t.role === 'guest';
+        const viewer = t.role === 'viewer';
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, guest ? 'Guests can’t run cards.' : runnerText(t))),
-          toggle(t.enabled, `Run ${t.name} cards on this Mac`, (on) => act(api.runner(t.id, on)), { disabled: guest })));
+          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : runnerText(t))),
+          toggle(t.enabled, `Run ${t.name} cards on this Mac`, (on) => act(api.runner(t.id, on)), { disabled: viewer })));
       }
       out.push(sec);
     }

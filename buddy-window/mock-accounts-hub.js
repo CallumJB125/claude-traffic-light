@@ -4,8 +4,13 @@
 // board/ACCOUNTS-API.md (P1 as built, P2–P4 as planned); state is in memory
 // and dies with the process.
 //
-// Test hooks: `lastCode(email)` (the emailed code), `setNow(ms)` (clock),
-// `starts()` (email/start bodies), `revokeAll(email)`, `enrolments()`.
+// The hub mails sign-in codes but no invites: an invite's link and code come
+// back once to the inviter, who sends them on.
+//
+// Test hooks: `lastCode(email)` (the emailed sign-in code), `inviteCode(email)`
+// (the last invite's XXXX-XXXX code), `setNow(ms)` (clock), `starts()` (email/start
+// bodies), `revokeAll(email)`, `enrolments()`, `setVerified(email, bool)`,
+// `teamHeaders()` (X-Board-Team values seen).
 'use strict';
 
 const http = require('node:http');
@@ -18,19 +23,24 @@ const STEP_UP_MS = 5 * 60_000;
 const INVITE_TTL_MS = 7 * 24 * 3600_000;
 const VERIFY_PER_ADDRESS = 10; // per 15 minutes, right or wrong
 const VERIFY_WINDOW_MS = 15 * 60_000;
-const ROLES = ['owner', 'admin', 'member', 'guest'];
+const ROLES = ['owner', 'admin', 'member', 'viewer'];
+const RANK = { owner: 4, admin: 3, member: 2, viewer: 1 };
 const WS_UNAUTHENTICATED = 4401;
+const QUOTAS = { teams: 10, boards: 10, members: 25 };
+// The invite's typed code: no 0/O or 1/I/L to misread.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 const rid = (p) => `${p}_${crypto.randomBytes(9).toString('base64url')}`;
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const mask = (email) => `${email.charAt(0)}…@${email.split('@')[1]}`;
 const firstName = (u) => String(u?.display_name ?? 'Someone').split(/\s+/)[0];
 
-function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() } = {}) {
+function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), quotas = {} } = {}) {
+  const limits = { ...QUOTAS, ...quotas };
   let skew = null;
   const now = () => skew ?? clock();
   let base = null; // our own origin, once listening
-  const users = new Map(); // id → {id, email, display_name}
+  const users = new Map(); // id → {id, email, display_name, email_verified}
   const byEmail = new Map();
   const flows = new Map(); // id → {email, user_id, codeHash, expires, wrong, purpose, dead, verifiedAt, used}
   const codes = new Map(); // email → last plain code (test hook only)
@@ -38,10 +48,12 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
   const starts = [];
   const tokens = new Map(); // sha(token) → {user_id, device_id, revoked}
   const sockets = new Map(); // sha(token) → Set<ws>
-  const teams = new Map(); // id → {id, name, slug, boards}
+  const teams = new Map(); // id → {id, name, slug, plan, boards, deleted}
   const members = []; // {id, team_id, user_id, role, joined_at}
-  const invites = new Map(); // id → {id, team_id, email, role, tokenHash, expires_at, inviter_id, used, revoked}
+  const invites = new Map(); // id → {id, team_id, email, role, tokenHash, codeHash, expires_at, inviter_id, used_by, revoked}
+  const inviteCodes = new Map(); // email → last plain invite code (test hook only)
   const enrolments = [];
+  const teamHeaders = [];
 
   const err = (status, code, message, extra = {}) => ({ status, body: { error: { code, message, ...extra } } });
   const ok = (body) => ({ status: 200, body });
@@ -63,20 +75,24 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
     sockets.delete(tokenHash);
   }
 
-  const roleIn = (teamId, userId) => members.find((m) => m.team_id === teamId && m.user_id === userId)?.role ?? null;
+  const roleIn = (teamId, userId) => (teams.get(teamId)?.deleted ? null : members.find((m) => m.team_id === teamId && m.user_id === userId)?.role ?? null);
   const canManage = (teamId, userId) => ['owner', 'admin'].includes(roleIn(teamId, userId));
   const iso = (ms) => new Date(ms).toISOString();
   const inviteView = (i) => ({ id: i.id, email: i.email, role: i.role, expires_at: iso(i.expires_at), created_by_name: users.get(i.inviter_id)?.display_name ?? 'Someone' });
-  const liveInvite = (i) => !i.used && !i.revoked && i.expires_at > now();
+  const liveInvite = (i) => !i.used_by && !i.revoked && i.expires_at > now() && !teams.get(i.team_id)?.deleted;
+  const liveTeam = (id) => { const t = teams.get(id); return t && !t.deleted ? t : null; };
+  const pendingFor = (teamId) => [...invites.values()].filter((i) => i.team_id === teamId && liveInvite(i));
+  const teamView = (t) => ({ id: t.id, name: t.name, slug: t.slug, plan: t.plan });
+  const normCode = (c) => String(c ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   function account(user) {
     return {
-      user: { id: user.id, display_name: user.display_name, email: user.email, email_verified: true },
-      teams: members.filter((m) => m.user_id === user.id).map((m) => {
+      user: { id: user.id, display_name: user.display_name, email: user.email, email_verified: user.email_verified },
+      teams: members.filter((m) => m.user_id === user.id && liveTeam(m.team_id)).map((m) => {
         const t = teams.get(m.team_id);
-        return { id: t.id, name: t.name, slug: t.slug, role: m.role, member_id: m.id, boards: t.boards };
+        return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, role: m.role, member_id: m.id, boards: t.boards };
       }).sort((a, b) => a.name.localeCompare(b.name)),
-      pending_invites: [...invites.values()].filter((i) => i.email === user.email && liveInvite(i) && !roleIn(i.team_id, user.id)).map((i) => ({
+      pending_invites: [...invites.values()].filter((i) => user.email_verified && i.email === user.email && liveInvite(i) && !roleIn(i.team_id, user.id)).map((i) => ({
         id: i.id, team_name: teams.get(i.team_id).name, inviter_first_name: firstName(users.get(i.inviter_id)), role: i.role, expires_at: iso(i.expires_at),
       })),
     };
@@ -117,6 +133,50 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
   function findInvite(t) {
     const h = sha(String(t ?? ''));
     return [...invites.values()].find((i) => i.tokenHash === h) ?? null;
+  }
+
+  function mintInvite(teamId, email, role, inviterId) {
+    const token = `inv_${crypto.randomBytes(32).toString('base64url')}`;
+    const raw = Array.from(crypto.randomBytes(8), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+    const code = `${raw.slice(0, 4)}-${raw.slice(4)}`;
+    const inv = { id: rid('inv'), team_id: teamId, email, role, tokenHash: sha(token), codeHash: sha(raw), expires_at: now() + INVITE_TTL_MS, inviter_id: inviterId, used_by: null, revoked: false };
+    invites.set(inv.id, inv);
+    inviteCodes.set(email, code);
+    const link = `${base}/invite#${token}`;
+    log(`[mock-hub] invite created for ${email} to ${teams.get(teamId).name}: ${link} (code ${code})`);
+    return { invite: inviteView(inv), link, code };
+  }
+
+  // One user signed in (email code or a provider): the same answer either way.
+  function signInUser(email, deviceName) {
+    let user = users.get(byEmail.get(email));
+    if (!user) {
+      user = { id: rid('usr'), email, display_name: email.split('@')[0], email_verified: true };
+      users.set(user.id, user);
+      byEmail.set(user.email, user.id);
+    }
+    const token = `bdt_${crypto.randomBytes(32).toString('base64url')}`;
+    const device_id = rid('udev');
+    tokens.set(sha(token), { user_id: user.id, device_id, name: String(deviceName ?? ''), revoked: false });
+    const a = account(user);
+    return ok({ user: a.user, teams: a.teams, device_token: token, device_id });
+  }
+
+  function accept(me, i, { byId }) {
+    // By id or code: anything not addressed to your verified address is just invalid.
+    if (!i || (byId && (i.email !== me.user.email || !me.user.email_verified))) return err(400, 'INVALID_TOKEN', 'invalid invite');
+    const team = liveTeam(i.team_id);
+    if (!team) return err(400, 'INVALID_TOKEN', 'invalid invite');
+    const mine = members.find((x) => x.team_id === team.id && x.user_id === me.user.id);
+    // The same user accepting the same invite again gets the same answer.
+    if (i.used_by === me.user.id && mine) return ok({ team: teamView(team), member: { member_id: mine.id, role: mine.role } });
+    if (!liveInvite(i)) return err(400, 'INVALID_TOKEN', 'invalid invite');
+    if (i.email !== me.user.email || !me.user.email_verified) return err(403, 'WRONG_ACCOUNT', 'invite is for another address', { email_masked: mask(i.email) });
+    if (mine) return err(409, 'ALREADY_MEMBER', 'already a member', { team: { id: team.id, name: team.name } });
+    i.used_by = me.user.id;
+    const member = { id: rid('mem'), team_id: team.id, user_id: me.user.id, role: i.role, joined_at: iso(now()) };
+    members.push(member);
+    return ok({ team: teamView(team), member: { member_id: member.id, role: member.role } });
   }
 
   function route(method, path, body, req, url) {
@@ -161,17 +221,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
         return ok({ ok: true, flow_id: body.flow_id, step_up_expires_in: STEP_UP_MS / 1000 });
       }
       f.dead = true;
-      let user = users.get(byEmail.get(f.email));
-      if (!user) {
-        user = { id: rid('usr'), email: f.email, display_name: f.email.split('@')[0] };
-        users.set(user.id, user);
-        byEmail.set(user.email, user.id);
-      }
-      const token = `bdt_${crypto.randomBytes(32).toString('base64url')}`;
-      const device_id = rid('udev');
-      tokens.set(sha(token), { user_id: user.id, device_id, name: String(body.device_name ?? ''), revoked: false });
-      const a = account(user);
-      return ok({ user: a.user, teams: a.teams, device_token: token, device_id });
+      return signInUser(f.email, body.device_name);
     }
 
     if (method === 'POST' && path === '/api/auth/signout') {
@@ -206,40 +256,81 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
 
     if (method === 'POST' && path === '/api/teams') {
       if (needMe()) return needMe();
-      const name = String(body.name ?? '').trim();
+      if (!me.user.email_verified) return err(403, 'EMAIL_UNVERIFIED', 'verify your email first');
+      const name = String(body.name ?? '').trim().replace(/\s+/g, ' ');
       if (!name || name.length > 60) return err(400, 'VALIDATION', 'name required');
-      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'team';
-      const team = { id: rid('team'), name, slug, boards: [] };
+      if (members.filter((x) => x.user_id === me.user.id && x.role === 'owner' && liveTeam(x.team_id)).length >= limits.teams) return err(403, 'QUOTA_EXCEEDED', 'team limit', { resource: 'teams', limit: limits.teams });
+      const stem = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'team';
+      let slug = stem;
+      for (let n = 2; [...teams.values()].some((t) => t.slug === slug); n += 1) slug = `${stem}-${n}`;
+      const team = { id: rid('team'), name, slug, plan: 'free', boards: [], deleted: false };
       const board = { id: rid('brd'), name, key_prefix: name.replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase() || 'BRD' };
       team.boards.push(board);
       teams.set(team.id, team);
       members.push({ id: rid('mem'), team_id: team.id, user_id: me.user.id, role: 'owner', joined_at: iso(now()) });
-      return ok({ team: { id: team.id, name: team.name, slug }, board });
+      return ok({ team: teamView(team), board });
     }
 
-    if ((m = /^\/api\/teams\/([^/]+)\/(members|invites|enrol)(?:\/([^/]+))?$/.exec(path))) {
+    if ((m = /^\/api\/teams\/([^/]+)(?:\/(members|invites|enrol|boards)(?:\/([^/]+)(?:\/(resend))?)?)?$/.exec(path))) {
       if (needMe()) return needMe();
-      const [, teamId, what, sub] = m;
-      const team = teams.get(teamId);
+      const [, teamId, what, sub, verb] = m;
+      const named = req.headers['x-board-team'];
+      if (named !== undefined) teamHeaders.push(named);
+      // A header naming another team than the URL's is a foreign id: 404.
+      if (named !== undefined && named !== teamId) return err(404, 'NOT_FOUND', 'no such team');
+      const team = liveTeam(teamId);
       const myRole = team ? roleIn(teamId, me.user.id) : null;
       if (!team || !myRole) return err(404, 'NOT_FOUND', 'no such team');
       const admin = canManage(teamId, me.user.id);
+      const onlyAdmins = () => err(403, 'FORBIDDEN', 'owners and admins only');
 
+      if (!what) {
+        if (method === 'GET') {
+          const mine = members.find((x) => x.team_id === teamId && x.user_id === me.user.id);
+          return ok({ team: teamView(team), me: { member_id: mine.id, role: mine.role }, counts: { members: members.filter((x) => x.team_id === teamId).length, boards: team.boards.length }, quotas: { members: limits.members, boards: limits.boards } });
+        }
+        if (method === 'PATCH') {
+          if (!admin) return onlyAdmins();
+          const name = String(body.name ?? '').trim().replace(/\s+/g, ' ');
+          if (!name || name.length > 60) return err(400, 'VALIDATION', 'name required');
+          team.name = name;
+          return ok({ team: teamView(team) });
+        }
+        if (method === 'DELETE') {
+          if (myRole !== 'owner') return err(403, 'FORBIDDEN', 'owners only');
+          if (body.confirm_slug !== team.slug) return err(400, 'VALIDATION', 'confirm_slug does not match');
+          team.deleted = true;
+          for (const e of enrolments) if (e.team_id === teamId) e.revoked = true;
+          return ok({ ok: true, purge_after: iso(now() + 7 * 24 * 3600_000) });
+        }
+        return err(404, 'NOT_FOUND', 'not found');
+      }
+
+      if (what === 'boards' && !sub && method === 'POST') {
+        if (!admin) return onlyAdmins();
+        const name = String(body.name ?? '').trim();
+        if (!name || name.length > 60) return err(400, 'VALIDATION', 'name required');
+        if (body.key_prefix !== undefined && !/^[A-Z]{1,10}$/.test(body.key_prefix)) return err(400, 'VALIDATION', 'bad key_prefix');
+        if (team.boards.length >= limits.boards) return err(403, 'QUOTA_EXCEEDED', 'board limit', { resource: 'boards', limit: limits.boards });
+        const board = { id: rid('brd'), name, key_prefix: body.key_prefix ?? (name.replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase() || 'BRD') };
+        team.boards.push(board);
+        return ok({ board });
+      }
       if (what === 'members' && method === 'GET' && !sub) {
-        return ok({ members: members.filter((x) => x.team_id === teamId).map((x) => {
+        return ok({ members: members.filter((x) => x.team_id === teamId).sort((a, b) => RANK[b.role] - RANK[a.role]).map((x) => {
           const u = users.get(x.user_id);
           return { member_id: x.id, user_id: u.id, display_name: u.display_name, role: x.role, joined_at: x.joined_at, ...(admin ? { email: u.email } : {}) };
         }) });
       }
-      if (what === 'members' && sub && (method === 'PATCH' || method === 'DELETE')) {
+      if (what === 'members' && sub && !verb && (method === 'PATCH' || method === 'DELETE')) {
         const target = members.find((x) => x.id === sub && x.team_id === teamId);
         if (!target) return err(404, 'NOT_FOUND', 'no such member');
         const self = target.user_id === me.user.id;
-        if (!admin && !(method === 'DELETE' && self)) return err(403, 'FORBIDDEN', 'owners and admins only');
+        if (!admin && !(method === 'DELETE' && self)) return onlyAdmins();
         if (target.role === 'owner' && myRole !== 'owner') return err(403, 'FORBIDDEN', 'only an owner can change an owner');
         const owners = members.filter((x) => x.team_id === teamId && x.role === 'owner');
         const demotes = target.role === 'owner' && (method === 'DELETE' || body.role !== 'owner');
-        if (demotes && owners.length === 1) return err(409, 'LAST_OWNER', 'a team needs an owner');
+        if (demotes && owners.length === 1) return err(409, 'CONFLICT', 'a team needs an owner', { reason: 'LAST_OWNER' });
         if (method === 'DELETE') { members.splice(members.indexOf(target), 1); return ok({ ok: true }); }
         if (!ROLES.includes(body.role)) return err(400, 'VALIDATION', 'bad role');
         if (body.role === 'owner' && myRole !== 'owner') return err(403, 'FORBIDDEN', 'only an owner can make an owner');
@@ -247,32 +338,41 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
         return ok({ member: { member_id: target.id, role: target.role } });
       }
       if (what === 'invites' && !sub && method === 'GET') {
-        if (!admin) return err(403, 'FORBIDDEN', 'owners and admins only');
-        return ok({ invites: [...invites.values()].filter((i) => i.team_id === teamId && liveInvite(i)).map(inviteView) });
+        if (!admin) return onlyAdmins();
+        return ok({ invites: pendingFor(teamId).map(inviteView) });
       }
       if (what === 'invites' && !sub && method === 'POST') {
-        if (!admin) return err(403, 'FORBIDDEN', 'owners and admins only');
+        if (!admin) return onlyAdmins();
+        if (!me.user.email_verified) return err(403, 'EMAIL_UNVERIFIED', 'verify your email first');
         const email = String(body.email ?? '').trim().toLowerCase();
+        const role = body.role ?? 'member';
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(400, 'VALIDATION', 'bad email');
-        if (!['admin', 'member', 'guest'].includes(body.role)) return err(400, 'VALIDATION', 'bad role');
-        // Inviting the same address again is a resend: a new link, and the old one dies.
-        for (const i of invites.values()) if (i.team_id === teamId && i.email === email && liveInvite(i)) i.revoked = true;
-        const token = crypto.randomBytes(32).toString('base64url');
-        const inv = { id: rid('inv'), team_id: teamId, email, role: body.role, tokenHash: sha(token), expires_at: now() + INVITE_TTL_MS, inviter_id: me.user.id, used: false, revoked: false };
-        invites.set(inv.id, inv);
-        const link = `${base}/invite#${token}`;
-        log(`[mock-hub] invite for ${email} to ${team.name}: ${link}`);
-        return ok({ invite: inviteView(inv), link });
+        if (!['admin', 'member', 'viewer'].includes(role)) return err(400, 'VALIDATION', 'bad role');
+        if (RANK[role] > RANK[myRole]) return err(403, 'FORBIDDEN', 'not above your own role');
+        const already = members.find((x) => x.team_id === teamId && users.get(x.user_id)?.email === email);
+        if (already) return err(409, 'ALREADY_MEMBER', 'already a member', { team: { id: team.id, name: team.name } });
+        const dup = pendingFor(teamId).find((i) => i.email === email);
+        if (dup) return err(409, 'CONFLICT', 'an invite is already pending', { invite_id: dup.id });
+        if (members.filter((x) => x.team_id === teamId).length + pendingFor(teamId).length >= limits.members) return err(403, 'QUOTA_EXCEEDED', 'team is full', { resource: 'members', limit: limits.members });
+        return ok(mintInvite(teamId, email, role, me.user.id));
       }
-      if (what === 'invites' && sub && method === 'DELETE') {
-        if (!admin) return err(403, 'FORBIDDEN', 'owners and admins only');
+      if (what === 'invites' && sub && verb === 'resend' && method === 'POST') {
+        if (!admin) return onlyAdmins();
+        const old = invites.get(sub);
+        if (!old || old.team_id !== teamId || old.used_by || old.revoked) return err(404, 'NOT_FOUND', 'no such invite');
+        if (RANK[old.role] > RANK[myRole]) return err(403, 'FORBIDDEN', 'not above your own role');
+        old.revoked = true;
+        return ok(mintInvite(teamId, old.email, old.role, me.user.id));
+      }
+      if (what === 'invites' && sub && !verb && method === 'DELETE') {
+        if (!admin) return onlyAdmins();
         const inv = invites.get(sub);
-        if (!inv || inv.team_id !== teamId) return err(404, 'NOT_FOUND', 'no such invite');
+        if (!inv || inv.team_id !== teamId || !liveInvite(inv)) return err(404, 'NOT_FOUND', 'no such invite');
         inv.revoked = true;
         return ok({ ok: true });
       }
       if (what === 'enrol' && !sub && method === 'POST') {
-        if (myRole === 'guest') return err(403, 'FORBIDDEN', 'guests cannot run cards');
+        if (myRole === 'viewer') return err(403, 'FORBIDDEN', 'viewers cannot run cards');
         let e = enrolments.find((x) => x.team_id === teamId && x.device_id === me.device_id && !x.revoked);
         if (!e) { e = { enrollment_id: rid('enr'), team_id: teamId, user_id: me.user.id, device_id: me.device_id, revoked: false }; enrolments.push(e); }
         return ok({ enrollment_id: e.enrollment_id, team_id: teamId });
@@ -294,15 +394,17 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
 
     if (method === 'POST' && path === '/api/invites/accept') {
       if (needMe()) return needMe();
-      const i = body.invite_id ? invites.get(String(body.invite_id)) : findInvite(body.t);
-      if (!i || !liveInvite(i)) return err(400, 'INVALID_TOKEN', 'invalid invite');
-      const team = teams.get(i.team_id);
-      if (i.email !== me.user.email) return err(403, 'FORBIDDEN', 'invite is for another address', { code: 'WRONG_ACCOUNT', email_masked: mask(i.email) });
-      if (roleIn(i.team_id, me.user.id)) return err(409, 'CONFLICT', 'already a member', { code: 'ALREADY_MEMBER', team: { id: team.id, name: team.name } });
-      i.used = true;
-      const member = { id: rid('mem'), team_id: team.id, user_id: me.user.id, role: i.role, joined_at: iso(now()) };
-      members.push(member);
-      return ok({ team: { id: team.id, name: team.name, slug: team.slug }, member: { member_id: member.id, role: member.role } });
+      if (body.invite_id !== undefined) return accept(me, invites.get(String(body.invite_id)), { byId: true });
+      if (body.code !== undefined) {
+        const h = sha(normCode(body.code));
+        return accept(me, [...invites.values()].find((i) => i.codeHash === h && i.email === me.user.email) ?? null, { byId: true });
+      }
+      return accept(me, findInvite(body.t), { byId: false });
+    }
+
+    if (method === 'POST' && (m = /^\/api\/account\/invites\/([^/]+)\/accept$/.exec(path))) {
+      if (needMe()) return needMe();
+      return accept(me, invites.get(m[1]), { byId: true });
     }
 
     return null;
@@ -371,6 +473,9 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
     lastCode: (email) => codes.get(String(email).toLowerCase()) ?? null,
     setNow: (ms) => { skew = ms; },
     starts: () => starts.slice(),
+    inviteCode: (email) => inviteCodes.get(String(email).toLowerCase()) ?? null,
+    setVerified: (email, v) => { const u = users.get(byEmail.get(String(email).toLowerCase())); if (u) u.email_verified = !!v; },
+    teamHeaders: () => teamHeaders.slice(),
     revokeAll: (email) => { const id = byEmail.get(email); for (const [h, t] of tokens) if (t.user_id === id) revoke(h); },
     enrolments: () => enrolments.slice(),
   };
