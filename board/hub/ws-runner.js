@@ -46,6 +46,7 @@ export class RunnerConn {
     this.ready = false;
     this.repos = new Map();
     this.pendingOut = new Map();
+    this.ackVersions = [];          // [{seq, version}] of handover.write entries, carried by the next ack
     this.lastSeqAcked = device.last_seq_acked;
     this.chain = Promise.resolve();
     this.closed = false;
@@ -138,6 +139,7 @@ export class RunnerConn {
     this.lastSeqAcked = dev.last_seq_acked;
     this.repos = new Map(hub.db.all('SELECT repo_id FROM runner_repos WHERE device_id = ?', this.device_id).map((r) => [r.repo_id, { approvals_from: [], auto_accept_from: [] }]));
     hub.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', hub.iso(), this.device_id);
+    if (msg.form_factor === 'laptop' || msg.form_factor === 'desktop') hub.db.run('UPDATE devices SET form_factor = ? WHERE id = ?', msg.form_factor, this.device_id);
     this.send({ type: 'welcome', protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, device_id: this.device_id, member_id: this.member_id, last_seq_acked: this.lastSeqAcked, allowlist: this.allowlist() });
     this.ready = true;
     hub.log.info('runner connected', { device_id: this.device_id, runs: msg.runs.length });
@@ -318,7 +320,8 @@ export class RunnerConn {
       this.pendingOut.delete(this.lastSeqAcked + 1);
       await this.applyOut(next);
     }
-    this.send({ type: 'ack', seq: this.lastSeqAcked });
+    const versions = this.ackVersions.splice(0);
+    this.send({ type: 'ack', seq: this.lastSeqAcked, ...(versions.length ? { versions } : {}) });
   }
 
   consumeSeq(seq) {
@@ -377,7 +380,7 @@ export class RunnerConn {
         this.applyFacts(row, run, m.items, rec);
         break;
       case 'run.failed':
-        rec('run.failed', { fail_kind: m.fail_kind });
+        rec('run.failed', { fail_kind: m.fail_kind, ...(Number.isSafeInteger(m.resets_in_ms) && m.resets_in_ms >= 0 ? { resets_in_ms: m.resets_in_ms } : {}) });
         stepOr({ type: 'run_failed', fail_kind: m.fail_kind, reason: m.reason == null ? null : clip(m.reason, 500) });
         break;
       case 'prep.failed':
@@ -398,7 +401,8 @@ export class RunnerConn {
         break;
       case 'handover.write': {
         rec('handover.write');
-        hub.writeNarrative(row.id, m.patch, { written_by: 'claude', run });
+        const version = hub.writeNarrative(row.id, m.patch, { written_by: 'claude', run });
+        this.ackVersions.push({ seq, version });
         break;
       }
       case 'progress.append':
@@ -518,6 +522,7 @@ export class RunnerConn {
     const row0 = this.ownCard(msg.card_id);
     const run = hub.run(msg.run_id);
     if (!row0 || !run || run.card_id !== row0.id || run.device_id !== this.device_id) throw new HubError('FORBIDDEN', 'salvage for a run that is not this device\'s');
+    if (msg.repo_id !== run.repo_id) throw new HubError('FORBIDDEN', 'salvage repo_id does not match the run (out of scope)');
     if (!['handover', 'snapshot', 'note'].includes(msg.kind)) throw new HubError('VALIDATION', 'kind must be handover|snapshot|note');
     await hub.withBoard(row0.board_id, () => {
       const row = hub.card(row0.id);

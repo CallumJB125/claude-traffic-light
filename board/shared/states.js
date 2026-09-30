@@ -27,6 +27,8 @@ export const ACTIVE = new Set(['claimed', 'running', 'quiet', 'blocked', 'suspen
 export const DARK = new Set(['suspended', 'reconnecting', 'unresponsive', 'orphaned']);
 export const LIVE = new Set(['running', 'quiet', 'blocked']);
 
+// The card label that turns on plan approval (ctx.require_plan_approval, offer.require_plan_approval).
+export const PLAN_APPROVAL_LABEL = 'plan-approval';
 export const BLOCKED_KINDS = Object.freeze(['permission', 'question', 'clarify', 'decision', 'plan', 'conflict', 'loop']);
 export const FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'stopped', 'released']);
 // What a runner may report through run_failed; stopped/released have their own events.
@@ -75,7 +77,7 @@ export const EVENTS = Object.freeze({
   // runner (WS, fenced)
   claim: 'runner', activity: 'runner', prep_failed: 'runner', block: 'runner',
   host_suspending: 'runner', hb: 'runner', run_failed: 'runner', release: 'runner',
-  complete: 'runner', handover_complete: 'runner',
+  complete: 'runner', handover_complete: 'runner', withdraw: 'runner',
   // hub timers (liveness.timerEvent)
   queue_nudge: 'timer', hb_timeout: 'timer', claim_timeout: 'timer', quiet_timeout: 'timer',
   park_timeout: 'timer', orphan_timeout: 'timer', suspend_timeout: 'timer',
@@ -172,6 +174,16 @@ export const TRANSITIONS = Object.freeze([
     when: (c) => c.resume_to === 'blocked', guard: guardAll(['can_answer', 'FORBIDDEN']),
     patch: (c, ev, ctx) => (ctx.open_asks_remaining > 0 ? {} : { resume_to: 'quiet' }),
     effects: (c, ev) => [{ type: 'deliver_answer' }, feed('answered', { by: ev.by ?? null })] },
+  // The CLI cancelled a held permission prompt (approval_cancel rpc): the
+  // request is withdrawn, like an answer that delivers nothing.
+  { id: '9w', from: ['blocked'], on: 'withdraw', to: 'running', fenced: 'event', when: (c, ev, ctx) => !(ctx.open_asks_remaining > 0),
+    effects: () => [feed('withdrawn')] },
+  { id: '9wb', from: ['blocked'], on: 'withdraw', to: 'SAME', fenced: 'event', when: (c, ev, ctx) => ctx.open_asks_remaining > 0,
+    effects: () => [feed('withdrawn')] },
+  { id: '9wd', from: ['suspended', 'reconnecting', 'unresponsive', 'orphaned'], on: 'withdraw', to: 'SAME', fenced: 'event',
+    when: (c) => c.resume_to === 'blocked',
+    patch: (c, ev, ctx) => (ctx.open_asks_remaining > 0 ? {} : { resume_to: 'quiet' }),
+    effects: () => [feed('withdrawn')] },
   { id: '10', from: ['blocked'], on: 'park_timeout', to: 'parked', bump: true,
     effects: (c) => [runnerCmd(c, 'park'), ...endRun('parked'), notify('parked'), feed('parked')] },
   { id: '11', from: ['parked'], on: 'answer', to: 'queued', bump: true, guard: guardAll(['can_answer', 'FORBIDDEN']),

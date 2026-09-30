@@ -70,7 +70,7 @@ export function createHttpHandler({ hub, api, config }) {
     routes.push({ method, re, keys, handler, auth, mutating });
   };
 
-  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()) }), { auth: 'none' });
+  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
   route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (config.auth !== 'dev' || !isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
     const m = hub.db.get('SELECT * FROM members WHERE github_login = ? ORDER BY created_at LIMIT 1', String(body.github_login ?? ''));

@@ -42,6 +42,14 @@ test('matchRepo against canonical urls and aliases', () => {
   assert.equal(matchRepo('/local/path', allowlist), null);
 });
 
+test('matchRepo: a bare canonical allowlist entry (what the hub stores) matches', () => {
+  assert.equal(matchRepo('git@github.com:acme/new.git', allowlist), 'r-alias');
+  assert.equal(matchRepo('https://GitHub.com/Acme/New/', [{ repo_id: 'x', canonical_url: 'github.com/acme/new' }]), 'x');
+  // leniency is for allowlist names only: a session remote must be a real remote
+  assert.equal(matchRepo('github.com/acme/new', allowlist), null);
+  assert.equal(matchRepo('git@github.com:acme/new.git', [{ repo_id: 'x', canonical_url: 'acme/new' }]), null);
+});
+
 test('scopeOf: default deny — needs allowlist AND local opt-in AND a remote', () => {
   const s = { cwd: '/Users/c/wt/src', toplevel: '/Users/c/wt', remote_url: 'git@github.com:PistorVentures/bondly.git' };
   assert.deepEqual(scopeOf(s, { allowlist, opted_in: ['r-bondly'] }), { repo_id: 'r-bondly', toplevel: '/Users/c/wt' });

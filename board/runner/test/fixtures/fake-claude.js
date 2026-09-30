@@ -156,7 +156,7 @@ async function tool(step) {
   if (step.ms) await wait(step.ms);
   if (aborted) return;
   const ok = !step.fail;
-  const response = name === 'Bash' ? { stdout: step.output ?? 'ok', stderr: '', interrupted: false } : { ok: true };
+  const response = step.response ?? (name === 'Bash' ? { stdout: step.output ?? 'ok', stderr: '', interrupted: false } : { ok: true });
   await runHook(ok ? 'PostToolUse' : 'PostToolUseFailure', { tool_name: name, tool_input: input, tool_use_id: id, tool_response: response, ...(ok ? {} : { error: step.error ?? 'Exit code 1\nboom' }) }, name);
   out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: step.output ?? 'ok', is_error: !ok }] } });
 }

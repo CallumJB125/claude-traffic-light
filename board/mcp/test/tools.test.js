@@ -256,6 +256,13 @@ describe('integration with a fake runner', () => {
     await assert.rejects(call);
     for (let i = 0; i < 100 && ipc.pending.size; i++) await new Promise((r) => setTimeout(r, 5));
     assert.equal(ipc.pending.size, 0, 'the server stopped waiting on the runner');
+    const held = pendingApprovals.get('t-cancel').msg;
+    for (let i = 0; i < 100 && !runner.received.some((m) => m.type === 'cancel'); i++) await new Promise((r) => setTimeout(r, 5));
+    const cancel = runner.received.find((m) => m.type === 'cancel');
+    assert.ok(cancel, 'the runner is told the held call was cancelled');
+    assert.equal(cancel.re, held.id);
+    assert.equal(cancel.token, TOKEN);
+    assert.deepEqual(runner.invalid, []);
     pendingApprovals.get('t-cancel').reply(true, { behavior: 'allow' });
     const res = await client.callTool({ name: 'board_check_overlap', arguments: {} });
     assert.deepEqual(parse(res), { tool: 'board_check_overlap', args: {} });

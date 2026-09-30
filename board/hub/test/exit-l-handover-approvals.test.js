@@ -123,3 +123,30 @@ test('exit (l): teammate approval is first-wins; the second answer is rejected; 
     await h.destroy();
   }
 });
+
+test('approval_cancel: a CLI-cancelled prompt is withdrawn — card unblocks, late answers are refused, the card face had its id', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const r = await h.runner(await h.enroll(alice));
+    const run = await h.startRun(alice, r);
+    const ap = await r.rpc(run, 'approval', { tool_name: 'Bash', input_summary: 'make deploy' });
+    const prId = ap.result.permission_request_id;
+    const view = (await h.api(alice, 'GET', `/api/cards/${run.card_id}`)).body.card;
+    assert.equal(view.ask.permission_request_id, prId, 'CardView.ask carries the request id for one-click answers');
+    const c1 = await r.rpc(run, 'approval_cancel', { permission_request_id: prId });
+    assert.deepEqual([c1.ok, c1.result.state], [true, 'cancelled']);
+    assert.equal(h.card(run.card_id).run_state, 'running');
+    const late = await h.api(alice, 'POST', `/api/permission-requests/${prId}/answer`, { request_id: randomUUID(), decision: 'allow' });
+    assert.equal(late.status, 409);
+    const again = await r.rpc(run, 'approval_cancel', { permission_request_id: prId });
+    assert.equal(again.result.state, 'cancelled', 'idempotent');
+    const detail = (await h.api(alice, 'GET', `/api/cards/${run.card_id}`)).body;
+    assert.equal(detail.permission_requests[0].state, 'cancelled');
+    assert.ok(detail.feed.some((e) => e.kind === 'withdrawn'));
+    const nf = await r.rpc(run, 'approval_cancel', { permission_request_id: 'nope' });
+    assert.equal(nf.error.code, 'NOT_FOUND');
+  } finally {
+    await h.destroy();
+  }
+});

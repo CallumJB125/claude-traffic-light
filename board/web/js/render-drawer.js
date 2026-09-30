@@ -10,7 +10,7 @@ import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } fr
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
 
-const FEED_LABEL = {
+export const FEED_LABEL = {
   dispatched: 'Given to Claude', claimed: 'Runner claimed it', started: 'Claude started', blocked: 'Asked for help',
   answered: 'Answered', parked: 'Parked: no agent running', requeued_answered: 'Answered and requeued', suspended: 'Laptop went to sleep',
   recovered: 'Back online', unresponsive: 'Lost signal', orphaned: 'Orphaned', reconnecting: 'Board restarted',
@@ -21,7 +21,8 @@ const FEED_LABEL = {
   pr_closed_unmerged: 'PR closed without merging', progress: 'Progress', status: 'Status', comment: 'Comment',
   tool_start: 'Tool', tool_end: 'Tool finished', file: 'File', command: 'Command', error: 'Error', git: 'Git', plan: 'Plan',
   subagent: 'Subagent', message: 'Claude said', compacted: 'Context compacted', cost: 'Cost', session: 'Session', degraded: 'Degraded',
-  salvage: 'Salvage',
+  salvage: 'Salvage', withdrawn: 'Request withdrawn', created: 'Created', evidence: 'Evidence', plan_declared: 'Plan declared',
+  handover_frozen: 'Handover frozen',
 };
 const FEED_TONE = {
   failed: 'red', orphaned: 'red', stopped: 'red', error: 'red', blocked: 'amber', parked: 'amber', unresponsive: 'grey',
@@ -93,7 +94,8 @@ function permissionBlock(pr, model) {
   const canAnswer = (pr.approvers ?? []).includes(meId);
   const busy = model.busy?.has(`pr:${pr.id}`);
   const names = (pr.approvers ?? []).map((id) => model.members.get(id)?.name).filter(Boolean);
-  if (pr.state !== 'open') {
+  // parked requests (the run was parked) can still be answered: the answer requeues the card.
+  if (pr.state !== 'open' && pr.state !== 'parked') {
     const verb = pr.state === 'allowed' ? 'Allowed' : pr.state === 'denied' ? 'Denied' : pr.state === 'cancelled' ? 'Cancelled' : 'Answered';
     return h('li', { key: `pr-${pr.id}`, class: 'ask is-answered', 'data-kind': 'permission' },
       h('p', { class: 'ask-head' }, icon(pr.state === 'denied' ? 'close' : 'check', 'icon-xs'), `${pr.tool ?? 'Tool'} request`),
@@ -256,7 +258,7 @@ export function drawer(model) {
     const hypothesis = det.data?.handover?.doc?.sections?.hypothesis;
     const asks = det.data?.asks ?? [];
     const prs = det.data?.permission_requests ?? [];
-    const openCount = asks.filter((a) => a.state === 'open' || a.state == null).length + prs.filter((p) => p.state === 'open').length;
+    const openCount = asks.filter((a) => a.state === 'open' || a.state == null).length + prs.filter((p) => p.state === 'open' || p.state === 'parked').length;
 
     body.push(
       h('div', { class: 'drawer-status' },

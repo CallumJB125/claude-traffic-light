@@ -97,6 +97,8 @@ test('cancel {re} from board-mcp denies the held approval and drops the late ans
     const a1 = await waitFor(() => lines.find((l) => l.id === 'a1'), { what: 'a1 answered' });
     assert.equal(a1.result.behavior, 'deny');
     assert.match(a1.result.message, /cancelled/);
+    const withdraw = await waitFor(() => hub.of('rpc').find((f) => f.method === 'approval_cancel'), { what: 'approval_cancel rpc' });
+    assert.deepEqual(withdraw.params, { permission_request_id: 'pr-1' }, 'the hub is told to withdraw the request');
     answer(hub, run, 'pr-1', OWNER);   // late: dropped, nothing crashes
     await new Promise((r) => setTimeout(r, 100));
     assert.equal(run.approvals.size, 0);

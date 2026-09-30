@@ -22,7 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { step, ACTIVE, DARK, columnOf } from '../../shared/states.js';
+import { step, ACTIVE, DARK, columnOf, PLAN_APPROVAL_LABEL } from '../../shared/states.js';
 import { isGreen } from '../../shared/liveness.js';
 import { mergeHandover, syncAges, renderMarkdown as handoverMarkdown } from '../../shared/handover.js';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, WS_CLOSE, validate, compatible, httpStatus } from '../../shared/protocol.js';
@@ -34,7 +34,7 @@ const SHARED = path.resolve(HERE, '../../shared');
 const SHARED_OK = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
-const PLAN_LABEL = 'plan-approval';
+const PLAN_LABEL = PLAN_APPROVAL_LABEL;
 
 class HttpError extends Error {
   constructor(code, message, extra = {}) { super(message); this.code = code; this.extra = extra; }
@@ -426,7 +426,7 @@ export function createMockHub({ login = null, clock = () => Date.now() } = {}) {
     }
 
     if (!p.startsWith('/api/')) return json(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
-    if (p === '/api/health') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION, hub_epoch: epoch, uptime_ms: clock() - bootAt });
+    if (p === '/api/health') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION, hub_epoch: epoch, uptime_ms: clock() - bootAt, auth: 'dev' });
 
     const mutating = method !== 'GET' && method !== 'HEAD';
     if (mutating) {

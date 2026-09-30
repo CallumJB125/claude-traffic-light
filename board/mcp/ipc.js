@@ -110,7 +110,12 @@ export class IpcClient {
         signal?.removeEventListener('abort', onAbort);
         this.pending.delete(id);
       };
-      const onAbort = () => { done(); reject(new IpcError('CANCELLED', 'request cancelled')); };
+      const onAbort = () => {
+        done();
+        // Tell the runner so a held call (approval) is withdrawn on the hub too.
+        try { this.socket?.write(`${JSON.stringify({ type: 'cancel', id: String(this.nextId++), token: this.token, re: id })}\n`); } catch { /* closed */ }
+        reject(new IpcError('CANCELLED', 'request cancelled'));
+      };
       this.pending.set(id, {
         settle: (msg) => {
           done();

@@ -59,11 +59,24 @@ function askView(hub, row) {
   const perms = hub.openPermissions(row.id);
   if (!asks.length && !perms.length) return null;
   if (row.blocked_kind === 'permission' || (!asks.length && perms.length)) {
-    return { kind: 'permission', summary: perms[0]?.input_summary ?? null, count: perms.length };
+    return { kind: 'permission', summary: perms[0]?.input_summary ?? null, count: perms.length, permission_request_id: perms[0]?.id ?? null };
   }
   const a = asks[0];
   const steps = a.kind === 'plan' ? json(a.options, []).length || null : null;
-  return { kind: a.kind, summary: a.text.length > 80 ? `${a.text.slice(0, 79)}…` : a.text, count: asks.length + perms.length, ...(steps ? { steps } : {}) };
+  return { kind: a.kind, summary: a.text.length > 80 ? `${a.text.slice(0, 79)}…` : a.text, count: asks.length + perms.length, ask_id: a.id, ...(steps ? { steps } : {}) };
+}
+
+// run.failed{limit} carries resets_in_ms as of when the hub received it.
+function limitResetsIn(hub, row) {
+  if (row.run_state !== 'failed' || row.fail_kind !== 'limit') return null;
+  const ev = hub.db.get("SELECT payload, at_hub FROM events WHERE card_id = ? AND kind = 'run.failed' ORDER BY id DESC LIMIT 1", row.id);
+  const ms = ev ? json(ev.payload, {}).resets_in_ms : null;
+  return Number.isFinite(ms) ? Math.max(0, Math.round(ms - hub.ageOf(ev.at_hub))) : null;
+}
+
+function deviceKind(hub, runRow) {
+  const f = runRow ? hub.device(runRow.device_id)?.form_factor : null;
+  return f === 'laptop' || f === 'desktop' ? f : null;
 }
 
 export function cardView(hub, row, viewerId) {
@@ -103,8 +116,8 @@ export function cardView(hub, row, viewerId) {
     handover: doc && (h || synced.length) ? { version: h?.version ?? 0, synced_age_ms: synced.length ? Math.min(...synced) : null } : null,
     handover_target_name: ht ? (ht.kind === 'queue' ? 'the queue' : hub.memberName(ht.member_id ?? ht.by)) : null,
     stopped_by_name: row.stopped_by ? hub.memberName(row.stopped_by) : null,
-    limit_resets_in_ms: null,
-    device_kind: null,
+    limit_resets_in_ms: limitResetsIn(hub, row),
+    device_kind: deviceKind(hub, runRow),
     overlaps: hub.overlapViews(row),
     budget: budgetCap != null ? { spent_usd: hub.cardSpentCents(row.id) / 100, cap_usd: budgetCap / 100 } : null,
     pr: prView(hub, row),

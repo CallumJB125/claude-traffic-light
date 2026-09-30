@@ -59,9 +59,25 @@ export function budgetBar(budget) {
     h('span', { class: 'budget-text num' }, budget.text));
 }
 
-function actionButton(id, view, { primary: wantPrimary = false, busy = false } = {}) {
+// One-click answer on the card face when the viewer is an approver of the
+// open request (first answer wins on the hub); otherwise open the drawer.
+function permissionButton(id, view, { primary, busyKeys }) {
+  const prId = view.ask?.permission_request_id;
+  if (!prId || !view.viewer_can_approve) return id === 'allow' ? actionButton('allow_review', view, { primary }) : null;
+  const allow = id === 'allow';
+  const busy = busyKeys?.has(`pr:${prId}`);
+  return h('button', {
+    type: 'button',
+    class: `btn btn-sm${allow ? ' btn-primary' : ' btn-quiet-danger'}`,
+    'data-action': 'permission', 'data-pr': prId, 'data-decision': allow ? 'allow' : 'deny', 'data-scope': allow ? 'once' : null,
+    'data-card': view.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null,
+  }, allow ? 'Allow' : 'Deny');
+}
+
+function actionButton(id, view, { primary: wantPrimary = false, busy = false, busyKeys = null } = {}) {
+  if (id === 'allow' || id === 'deny') return permissionButton(id, view, { primary: wantPrimary, busyKeys });
   let primary = wantPrimary;
-  const label = ACTION_LABEL[id];
+  const label = ACTION_LABEL[id === 'allow_review' ? 'allow' : id];
   if (!label) return null;
   if (id === 'open_pr') {
     return view.pr?.url
@@ -74,7 +90,7 @@ function actionButton(id, view, { primary: wantPrimary = false, busy = false } =
   return h('button', {
     type: 'button',
     class: `btn btn-sm${give ? ' btn-claude' : primary ? ' btn-primary' : ''}${destructive ? ' btn-quiet-danger' : ''}`,
-    'data-action': id,
+    'data-action': id === 'allow_review' ? 'allow' : id,
     'data-card': view.id,
     disabled: busy || null,
     'aria-busy': busy ? 'true' : null,
@@ -83,7 +99,7 @@ function actionButton(id, view, { primary: wantPrimary = false, busy = false } =
 
 export function cardActions(face, view, busy) {
   const primary = primaryAction(face);
-  const buttons = face.actions.map((a) => actionButton(a, view, { primary: a === primary, busy: busy?.has(`${view.id}:${a}`) })).filter(Boolean);
+  const buttons = face.actions.map((a) => actionButton(a, view, { primary: a === primary, busy: busy?.has(`${view.id}:${a}`), busyKeys: busy })).filter(Boolean);
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;
 }
 

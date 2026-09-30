@@ -31,7 +31,7 @@ board/
     protocol.js           PROTOCOL_VERSION, error codes, message shapes, validate()
     schema.sql            SQLite schema = migration 001
     migrate.js            migration runner + applyRestoreBump (Node only)
-    migrations/           002_*.sql … (none yet)
+    migrations/           002_device_form_factor.sql …
     test/                 node --test
   hub/                    board hub (Node ≥ 22.13, node:sqlite, ws). Serves web/ and shared/.
   runner/                 detached supervisor + hook shim + CLI (Node ≥ 22.13, ws)
@@ -61,14 +61,14 @@ Clocks: the hub judges every timeout on its **own** monotonic clock at receive t
 
 | Module | Key exports | Used by |
 |---|---|---|
-| `states.js` | `STATES`, `ACTIVE`, `DARK`, `LIVE`, `BLOCKED_KINDS`, `FAIL_KINDS`, `RUNNER_FAIL_KINDS`, `TRANSITIONS`, `EVENTS`, `step(card, event, ctx)`, `columnOf`, `toDb`/`fromDb` | hub (authoritative), web (labels/columns) |
+| `states.js` | `STATES`, `ACTIVE`, `DARK`, `LIVE`, `PLAN_APPROVAL_LABEL`, `BLOCKED_KINDS`, `FAIL_KINDS`, `RUNNER_FAIL_KINDS`, `TRANSITIONS`, `EVENTS`, `step(card, event, ctx)`, `columnOf`, `toDb`/`fromDb` | hub (authoritative), web (labels/columns) |
 | `liveness.js` | all timer constants, `isGreen`, `toolBound`, `hasProgress`, `advanceView`, `timerEvent`, `gate`, `ackAge`, `sleptEstimate`, `reconnectDelay`, `formatAge` | hub (reaper, green), runner (gate, sleep, backoff), web (ageing) |
 | `fence.js` | `makeFence`, `isCurrent`, `bump`, `restoreBump`, `formatFence`/`parseFence`, `branchName`, `snapshotRef`, `salvageRef`, `RESTORE_BUMP` | hub, runner |
 | `scope.js` | `normalizeRemoteUrl`, `matchRepo`, `scopeOf`, `filterPath`, `redact`, `assertNoForeignBytes`, `serializeOutbound`, `ForeignBytesError`, `CREDENTIAL_PATTERNS` | runner (mandatory, §6.8), hub (normalise repo urls on create) |
 | `overlap.js` | `classifyPair`, `computeOverlaps`, `overlapsFor`, `teamContextBlock`, `overlapDelta`, `TEAM_CONTEXT_BUDGET_TOKENS` | hub |
 | `cardface.js` | `cardFace(view, {elapsed_ms, connection_lost})`, `sponsorLine`, `alertsFor`, `agentName`, `PILLS` | web (and hub tests) |
 | `handover.js` | `SECTIONS`, `AGENT_WRITABLE`, `applyPatch`, `mergeHandover`, `renderMarkdown`, `syncAges`, `howToTakeOver`, `handoffMemoryText` | hub (store/render/seed), web (render JSON form) |
-| `protocol.js` | `PROTOCOL_VERSION`, `ERRORS`, `httpStatus`, `WS_CLOSE`, `WS_PATHS`, `SHAPES`, `OUTBOX_SHAPES`, `FACT_KINDS`, `OUTBOX_KINDS`, `RPC_METHODS`, `MCP_TOOLS`, `MCP_OUTBOX_TOOLS`, `HOOK_EVENTS`, `RUNNER_COMMANDS`, `validate(channel, msg)`, `compatible` | all |
+| `protocol.js` | `PROTOCOL_VERSION`, `ERRORS`, `httpStatus`, `WS_CLOSE`, `WS_PATHS`, `SHAPES`, `OUTBOX_SHAPES`, `FACT_KINDS`, `FEED_KINDS`, `OUTBOX_KINDS`, `RPC_METHODS`, `RUNNER_ONLY_RPC`, `MCP_TOOLS`, `MCP_OUTBOX_TOOLS`, `HOOK_EVENTS`, `RUNNER_COMMANDS`, `validate(channel, msg)`, `compatible` | all |
 | `migrate.js` | `migrate(db, opts)`, `loadMigrations`, `currentVersion`, `applyRestoreBump` | hub |
 
 ## 4. Identity and auth
@@ -104,7 +104,7 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 
 | Method + path | Auth | Body | 200 response | Errors |
 |---|---|---|---|---|
-| `GET /api/health` | none | — | `{ok, protocol, hub_epoch, uptime_ms}` | — |
+| `GET /api/health` | none | — | `{ok, protocol, hub_epoch, uptime_ms, auth:'access'\|'dev'}`. The web offers dev login only when `auth` is `dev` | — |
 | `GET /api/me` | member | — | `{member, org, boards:[{id,name,key_prefix}]}` | 401, 403 |
 | `POST /api/dev/login` | dev only | `{github_login}` | `{member}` + cookie | 404 when not dev |
 | `GET /api/boards/:board_id` | member | — | `Snapshot` (as the WS `snapshot` body) | 404 |
@@ -125,13 +125,13 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 
 | `:action` | Extra body | Event | Notes |
 |---|---|---|---|
-| `dispatch` | `target_member_id?` (null = me), `backend?` (`claude_cli` only in Phase 1) | `dispatch` | Creates `dispatches` row. `needs_confirm = target ≠ dispatcher ∧ dispatcher ∉ target runner's advertised auto_accept_from` (display only; the runner decides) |
+| `dispatch` | `target_member_id?` (null = me), `backend?` (`claude_cli` only in Phase 1), `budget_usd?` (> 0) | `dispatch` | `budget_usd` becomes the card's cap (`cards.budget_cents`), is checked by `policy_ok`, rides `offer.budget_usd`; the runner passes min(it, local `budget_per_run`) as `--max-budget-usd`. Creates `dispatches` row. `needs_confirm = target ≠ dispatcher ∧ dispatcher ∉ target runner's advertised auto_accept_from` (display only; the runner decides) |
 | `cancel` | — | `cancel` | queued only |
 | `stop` | — | `stop` | |
-| `retry` | `target_member_id?` | `retry` | |
+| `retry` | `target_member_id?`, `budget_usd?` | `retry` | |
 | `take_over` | `confirm?:bool` | `take_over` | `confirm:true` required from suspended/unresponsive (`CONFIRM_REQUIRED` otherwise) |
 | `hand_over` | `target:{kind:'queue'\|'member'\|'self', member_id?}` | `hand_over` | |
-| `take_over_with_claude` | `target_member_id?` | `redispatch` | from handed_over |
+| `take_over_with_claude` | `target_member_id?`, `budget_usd?` | `redispatch` | from handed_over; `budget_usd` as for `dispatch` |
 | `take_over_myself` | — | `take_myself` | from handed_over |
 | `request_changes` | `comment` | `request_changes` | comment stored + seeded |
 | `approve_done` | — | `approve_done` | |
@@ -173,10 +173,11 @@ When the socket drops, the web shows one banner "Board connection lost: states a
   run: {id, backend, device_name, owner:{member_id,name}, dispatched_by:{member_id,name}} | null,
   live: LeaseView | null,         // ACTIVE states only
   state_age_ms,                   // time in run_state (hub clock, at send)
-  ask: {kind, summary, count, steps?} | null,
+  ask: {kind, summary, count, steps?, permission_request_id?, ask_id?} | null,   // ids of the oldest open request/ask: the card face answers in one click
   handover: {version, synced_age_ms} | null,
-  handover_target_name, stopped_by_name, limit_resets_in_ms,
-  device_kind: 'laptop' | 'desktop' | null,
+  handover_target_name, stopped_by_name,
+  limit_resets_in_ms,             // failed{limit}: run.failed.resets_in_ms minus the time since the hub received it; else null
+  device_kind: 'laptop' | 'desktop' | null,   // the run device's devices.form_factor (runner hello.form_factor)
   overlaps: [OverlapView],
   budget: {spent_usd, cap_usd} | null,
   pr: {number, url, state:'open'|'merged'|'closed', merged_by?, merged_age_ms?} | null,
@@ -186,14 +187,31 @@ LeaseView  = { hb_age_ms, child_alive, activity_age_ms,
                tool_in_flight: {name, summary, age_ms, bash_timeout_ms?} | null,
                wake_age_ms, post_wake_activity, green }   // green = hub's isGreen at send
 OverlapView = { other_card_id, other_key, other_owner, level, kind:'overlapping'|'adjacent', reasons:[..], paths:[..], age_ms }
-FeedEvent  = { id, kind, at_age_ms, actor_name?, run_n?, text?, data }  // kind = states.js feed kinds or fact kinds
+FeedEvent  = { id, kind, at_age_ms, actor_name?, run_n?, text?, data }  // kind ∈ protocol.FEED_KINDS (below)
 ```
+
+`FEED_KINDS` = every `states.js` feed effect (incl. `withdrawn`), the hub-recorded `created`, `comment` (a human or agent comment, `data.comment_id`), `progress` (`board_append_progress` / `board_complete` summary, `text`), `evidence`, `plan_declared`, `handover_frozen`, `salvage`, and the displayed fact kinds `file`, `git`, `command`, `plan`, `error`, `subagent`, `message`, `compacted`, `cost`, `session`, `degraded`. Every other `events` row (`activity`, `facts`, `tool_start`/`tool_end`, the raw outbox kinds such as `run.failed`) is internal and never sent. The web has a label for every `FEED_KINDS` entry (`web/test/render.test.js`).
+
+On the card face, an approver (`viewer_can_approve`) of an open permission request gets one-click **Allow** (scope `once`) and **Deny** buttons that call `POST /api/permission-requests/:id/answer` with `ask.permission_request_id` (first answer wins); everyone else opens the drawer.
 
 The hub computes `green` with `liveness.isGreen`; the web recomputes it from ages every second with `cardFace` and shows green only if both agree (D13).
 
 ### 5.4 `CardDetail`
 
-`{card:CardView, body, acceptance, run:{…, planned_paths, touched_paths, snapshot:{sha,ref,status,reason,age_ms}} | null, handover:{doc, ages, markdown} | null, feed:[FeedEvent] (last 200), comments:[{id, author_name, source, trusted, body, for_agent, delivered_age_ms, created_age_ms}], permission_requests:[{id, tool, input_summary, state, approvers, answered_by_name}], asks:[…], evidence:[…], overlaps:[OverlapView], memories:[…handoff kind]}`.
+```
+{ card: CardView, body, acceptance,
+  run: {…CardView.run, fence, status_summary, cost_usd, planned_paths, touched_paths, snapshot:{sha,ref,status,reason,age_ms}|null} | null,
+  handover: {doc, ages, markdown} | null,
+  feed: [FeedEvent] (last 200),
+  comments: [{id, author_name, source, trusted, body, for_agent, reply_to, delivered_age_ms, created_age_ms}],
+  permission_requests: [{id, tool, input_summary, state, scope, approvers:[member_id], answered_by_name, created_age_ms}],
+  asks: [{id, kind, text, options:[string]|null, state, answer, answered_by_name, created_age_ms}],
+  evidence: [{id, run_id, kind, ref, summary, result, verification, created_age_ms}],
+  overlaps: [OverlapView],
+  memories: [{id, kind:'handoff', body, status, created_age_ms}] }
+```
+
+Permission request `state`: `open` (answerable) → `allowed` | `denied` (a human answered; `answered_by_name`), `cancelled` (the run ended, or the CLI cancelled the prompt: `approval_cancel`), or `parked` (the run was parked while it was open; still answerable, and the answer requeues the card per row `11`; it becomes `cancelled` once the card leaves `parked`). Ask `state`: `open` → `answered` | `cancelled`. `scope` is `once` | `run` | null.
 
 The web renders handover markdown as **text** (escape everything; only headings, lists, code spans and code blocks are formatted). No HTML from any agent- or human-written field is ever injected.
 
@@ -203,7 +221,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 
 `wss://<hub>/ws/runner` with the §4.2 headers. Reconnect with `liveness.reconnectDelay(attempt)` (exponential, full jitter, **cap 30 s**). A second connection from the same device replaces the first (old one closed `4409`).
 
-1. Runner → `hello {protocol, device_id, runner_version, outbox_head_seq, runs:[{run_id, card_id, fence, local_state}]}` where `local_state` ∈ `running | paused_offline | fenced | ending`.
+1. Runner → `hello {protocol, device_id, runner_version, outbox_head_seq, runs:[{run_id, card_id, fence, local_state}], form_factor?}` where `local_state` ∈ `running | paused_offline | fenced | ending` and `form_factor` ∈ `laptop | desktop` (battery present; `policy.json` `form_factor` overrides). The hub stores it in `devices.form_factor` (migration 002).
 2. Hub → `welcome {protocol, hub_epoch, device_id, member_id, last_seq_acked, allowlist:[{repo_id, canonical_url, aliases}]}`. `allowlist` = every repo on any board the device's member belongs to (the input to `scope.matchRepo`, D14).
 3. Runner replays every outbox entry with `seq > last_seq_acked`, in order, as `out` frames (with `delayed:true`), then sends `advertise`, then its first `hb` immediately (not waiting for the 15 s tick).
 4. Hub re-sends pending `offer`s for this device and any `cmd` still implied by card state (e.g. `stop` for a run whose card is failed/handed_over).
@@ -220,7 +238,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 | `host.suspending` | `{runs:[{run_id, card_id, fence}]}` | From Buddy's powerMonitor relay → event `host_suspending` per run. Sent immediately, not outboxed |
 | `out` | `{seq, delayed, msg:OutboxMsg}` | Durable outbox entry (§6.5) |
 | `rpc` | `{id, method, run_id, card_id, fence, repo_id, run_token, params}` | Needs the hub now; `method` ∈ `RPC_METHODS` (§6.6) |
-| `salvage` | `{run_id, card_id, fence, kind:'handover'\|'snapshot'\|'note', payload}` | Append-only, **accepts stale fences**, never changes state (§6.9) |
+| `salvage` | `{run_id, card_id, fence, repo_id, kind:'handover'\|'snapshot'\|'note', payload}` | Append-only, **accepts stale fences**, never changes state (§6.9). Built by `serializeOutbound` under the run scope; `repo_id` ≠ the run's → `FORBIDDEN` |
 
 `RunHb = {run_id, card_id, fence, child_alive, tool_in_flight:{name, summary, age_ms, bash_timeout_ms?}|null, last_activity_age_ms, cost_usd, post_wake_activity, wake_age_ms, gate:'open'|'closed', local_state}`. Ages are measured by the runner at send time; the hub converts each to its own monotonic clock as `rx_mono − age`.
 
@@ -229,7 +247,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 | Type | Body | Semantics |
 |---|---|---|
 | `welcome` | above | — |
-| `ack` | `{seq}` | Cumulative: every outbox seq ≤ `seq` is durably applied (or deduped). Runner may drop them |
+| `ack` | `{seq, versions?:[{seq, version}]}` | Cumulative: every outbox seq ≤ `seq` is durably applied (or deduped). Runner may drop them. `versions` gives the hub's handover version for each `handover.write` applied since the last ack (so `board_write_handover` returns a hub-confirmed version) |
 | `offer` | `{card_id, key, title, body, repo_id, base_ref, fence, request_id, dispatched_by:{member_id,name}, needs_confirm, labels, budget_usd, max_turns, require_plan_approval, seed}` | Sent to every connected device of the target member that advertised `repo_id`. `fence` = the current fence, to be sent back as `expected_fence`. `seed` = `{handover_md?, answer?, review?, comments?:[…], from_snapshot?:{ref, sha}, prev_run_n?}` |
 | `offer.withdrawn` | `{card_id, request_id, reason}` | Cancelled, claimed elsewhere, or card changed |
 | `claim.result` | `{re, ok, run_id?, fence?, branch?, snapshot_ref?, run_token?, team_context?:{text,tokens}, error?}` | `ok:false` → `error.code` = `CLAIM_LOST` (lost the CAS or the card is no longer queued), `POLICY_DENIED`, `REPO_NOT_ADVERTISED`. The loser spawns nothing |
@@ -261,7 +279,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 |---|---|---|
 | `activity` | `source` (`init`\|`tool_start`\|`assistant`\|`tool_end`\|`mcp`) | `step(activity)` (#`4`, #`7`). Throttled by the runner to ≤ 1 per 5 s per run |
 | `facts` | `items:[Fact]` | Merge into `runs.facts`/`touched_paths`, feed, overlap recompute (debounced `OVERLAP_DEBOUNCE_MS`) |
-| `run.failed` | `fail_kind` ∈ `RUNNER_FAIL_KINDS`, `reason` | `step(run_failed)` (#`22`) |
+| `run.failed` | `fail_kind` ∈ `RUNNER_FAIL_KINDS`, `reason`, `resets_in_ms?` (`limit`: from the stream's `rate_limit_event.resetsAt`) | `step(run_failed)` (#`22`); `resets_in_ms` feeds `CardView.limit_resets_in_ms` |
 | `prep.failed` | `cause` | `step(prep_failed)` (#`5`) |
 | `handover.complete` | — | `step(handover_complete)` (#`27b`) — after the final snapshot push + release |
 | `snapshot` | `status` (`pushed`\|`push_failed`\|`held`), `sha`, `ref`, `reason` | Update `runs.snapshot_*` (the code layer's "last synced") |
@@ -289,6 +307,7 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 | `board_check_overlap` | `{}` | `{overlaps:[OverlapView], locks:[]}` | same repo only |
 | `board_recall` | `{paths?, query?, kinds?}` | `{memories:[…]}` | Phase 1: `handoff` kind only; stale ones labelled |
 | `approval` | `{tool_name, input_summary, tool_use_id?}` | `{permission_request_id}` | creates `permission_requests` (approvers = owner, dispatcher, assignees, owner's `approvals_from`) + `step(block{permission})`; the decision arrives later as `answer` |
+| `approval_cancel` | `{permission_request_id}` | `{state}` | The CLI cancelled the held prompt (board-mcp → IPC `cancel` → runner). An `open` request of this run becomes `cancelled` and the card gets `step(withdraw)` (rows `9w`/`9wb`/`9wd`: unblocks when nothing else is open); already answered → its state, unchanged. Idempotent. Runner-only (not an MCP tool, like `team_context`) |
 | `team_context` | `{}` | `{text, tokens}` | `overlap.teamContextBlock` within the board's `team_context_budget` (default 700) |
 
 ### 6.7 Commands and the stop recipe (spikes 1c, 5b–5e)
@@ -304,7 +323,8 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 
 ### 6.8 Scope and gate (runner obligations)
 
-- `scope.scopeOf({cwd, toplevel, remote_url}, {allowlist, opted_in})` runs before anything about a session is built. `null` → nothing is built (exit f).
+- `scope.scopeOf({cwd, toplevel, remote_url}, {allowlist, opted_in})` runs before anything about a session is built. `null` → nothing is built (exit f). `allowlist` entries may be canonical (`github.com/o/r`, what the hub stores and sends in `welcome`) or remote URLs; `matchRepo` normalises both. Only allowlist names get this leniency: a session's `remote_url` must be a real network remote.
+- **Identity input (D27):** `remote_url` = `git config --get remote.origin.url` (the URL the member configured), not `git remote get-url origin` (which expands `url.<base>.insteadOf`). insteadOf is a local transport rewrite (SSH↔HTTPS, a mirror, a local bare repo in tests); the repo's identity is the name the member gave it. Both are fail-safe: a rewrite to a different host can only make a session *not* match.
 - Every path in a fact goes through `filterPath(p, toplevel)`; `null` → the path is dropped. Every free text goes through `redact(text, toplevel)`.
 - Gate G is `liveness.gate({ack_age_ms: ackAge(...), fenced, wake})` evaluated on the runner's clocks, where the ack is the last `hb.ack` with `current:true` for that run. Sleep is detected with the tick-gap detector (`sleptEstimate`, 1 s tick) plus Buddy's powerMonitor relay (spike 8: `hrtime` includes sleep on macOS, so Δwall − Δmono is useless). Closing the gate = PreToolUse denies everything + `interrupt` (SIGKILL after 10 s) + local snapshot + `local_state:'paused_offline'`. A 530/1033 from the edge ("origin down") never reopens a closed gate. Only a `current:true` ack does.
 
@@ -331,11 +351,11 @@ Widget session files: the runner writes one session file per run through the wid
   --setting-sources "" \
   --settings <run_dir>/settings.json \
   --strict-mcp-config --mcp-config <run_dir>/mcp.json \
-  --tools "Read,Edit,Write,Glob,Grep,Bash,TodoWrite,Task" \
+  --tools "Read,Edit,Write,Glob,Grep,Bash,TaskCreate,TaskUpdate,TaskList,TaskGet,Task" \
   --disallowedTools "WebFetch" "WebSearch" "Bash(git push --force*)" "Bash(git push -f*)" "Bash(git push * +*)" \
      "Read(~/.ssh/**)" "Read(~/.aws/**)" "Read(~/.config/gh/**)" "Read(~/.claude/**)" "Read(~/.claude.json)" \
-     "Read(~/.claude-traffic-light/**)" "Read(~/.board/**)" "Read(~/.codex/**)" "Read(~/Library/Keychains/**)" \
-     "Edit(~/.board/**)" "Write(~/.board/**)" \
+     "Read(~/.claude-traffic-light/**)" "Read(~/.codex/**)" "Read(~/Library/Keychains/**)" \
+     <for T in Read Edit Write:> "T(~/.board/*.json)" "T(~/.board/run/**)" "T(~/.board/outbox/**)" \
   --permission-mode acceptEdits \
   --permission-prompt-tool mcp__board__approval \
   --max-budget-usd <card budget> --max-turns <card max turns> \
@@ -343,7 +363,9 @@ Widget session files: the runner writes one session file per run through the wid
 ```
 
 - `cwd` = the worktree. Resume (Phase 2 / plan approval) = `--resume <session_id>` **with the same isolation flags** (spike 5a).
-- **Env is an allowlist (D15)**, not the member's full env: `HOME USER LOGNAME PATH TMPDIR LANG LC_* TZ`, proxy/CA vars if set (`HTTP(S)_PROXY NO_PROXY NODE_EXTRA_CA_CERTS`), `ANTHROPIC_API_KEY` only if the member's env has it, plus `TERM=dumb`, `SHELL=/bin/sh`, `ZDOTDIR=<run_dir>/shell` (empty), `BASH_ENV=` and `ENV=` unset, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, `MCP_TOOL_TIMEOUT=2100000`, `BOARD_RUN_SOCKET`, `BOARD_RUN_TOKEN`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`.
+- **Tools (CLI 2.1.285).** `TodoWrite` is not a tool in `-p` mode any more: with it in `--tools`, `system/init` lists only `Task, Bash, Edit, Glob, Grep, Read, Write` (+ `mcp__board__*`). The task list is `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`; `Task` is the subagent tool. The `plan` fact mirrors `TaskCreate {subject}` / `TaskUpdate {taskId, status, subject?}` (and still `TodoWrite {todos}` for older CLIs).
+- **BOARD_HOME rules.** Worktrees live in `BOARD_HOME/worktrees/`, so only the runner's private files are denied: `*.json` (device token, policy, ledger), `run/**` (run tokens, API key file) and `outbox/**`, both as permission rules and as sandbox `denyRead`. A non-default `BOARD_HOME` uses absolute rules (`Read(//abs/home/run/**)`, sandbox `denyRead: ["/abs/home/run", …]`).
+- **Env is an allowlist (D15) with no secret in it (D26):** `HOME USER LOGNAME PATH TMPDIR LANG LC_* TZ`, proxy/CA vars if set (`HTTP(S)_PROXY NO_PROXY NODE_EXTRA_CA_CERTS`), plus `TERM=dumb`, `SHELL=/bin/sh`, `ZDOTDIR=<run_dir>/shell` (empty), `BASH_ENV=` and `ENV=` unset, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `MCP_TOOL_TIMEOUT=2100000`, `BOARD_RUN_SOCKET`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`. **Not** `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (it forces permission mode `default`, D26), **not** `BOARD_RUN_TOKEN` (the hook shim reads `<run_dir>/hook.token`, 0600; board-mcp gets it in `mcp.json`'s server `env`, which only the MCP server process sees), **not** `ANTHROPIC_API_KEY` (when the member has one, the runner writes it to `<run_dir>/api.key`, 0600, and `settings.json` sets `"apiKeyHelper": "/bin/cat '<run_dir>/api.key'"`). Everything the CLI has in its env, sandboxed Bash can read.
 - **Gap A (shell snapshot) must be neutralised** (spike 2, change 7): with the env above, the runner's integration test asserts that `alias` and `type rm` inside the Bash tool show no user aliases/functions; a run where the first Bash tool shows user aliases is failed with `run.failed{error, reason:'shell_isolation'}`. Gap B (transcripts in `~/.claude/projects`) is accepted.
 - Mid-run input = one stdin line `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"…"}]},"parent_tool_use_id":null,"session_id":""}` (spike 1b). Idle between turns is normal; EOF ends the process (spike 1d).
 
@@ -351,16 +373,19 @@ Widget session files: the runner writes one session file per run through the wid
 
 ```json
 {
+  "apiKeyHelper": "/bin/cat '<run_dir>/api.key'",        // only when the member uses an API key
   "permissions": {
     "defaultMode": "acceptEdits",
-    "allow": ["Bash(git add *)", "Bash(git commit *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
+    "allow": ["Read", "Edit", "Write", "Glob", "Grep", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "Task", "mcp__board",
+              "Bash(git add *)", "Bash(git commit *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
               "Bash(git rev-parse*)", "Bash(git branch*)", "…repo policy bash_allow"]
   },
   "sandbox": {
     "enabled": true, "failIfUnavailable": true, "autoAllowBashIfSandboxed": true, "allowUnsandboxedCommands": false,
     "filesystem": {
       "allowWrite": ["<worktree>", "<TMPDIR>", "~/.npm", "~/.cache", "~/Library/Caches", "~/Library/pnpm", "~/.yarn", "…policy allow_write_extra"],
-      "denyRead": ["~/.ssh", "~/.aws", "~/.config/gh", "~/Library/Keychains", "~/.claude", "~/.claude.json", "~/.board", "~/.codex", "~/.claude-traffic-light"]
+      "denyRead": ["~/.ssh", "~/.aws", "~/.config/gh", "~/Library/Keychains", "~/.claude", "~/.claude.json", "~/.codex", "~/.claude-traffic-light",
+                   "~/.board/device.json", "~/.board/policy.json", "~/.board/ledger.json", "~/.board/outbox", "~/.board/run"]
     },
     "network": { "allowedDomains": ["…policy allowed_domains ∪ repo allowed_domains"], "strictAllowlist": true }
   },
@@ -389,6 +414,7 @@ Widget session files: the runner writes one session file per run through the wid
   - `hello {id, token}` → `{id, ok:true, result:{run_id, card_id, key, fence, repo_id, tools:[…MCP_TOOLS]}}`.
   - `tool` `{id, token, name, args}` → `{id, ok, result|error}`. `name` ∈ `MCP_TOOLS`.
   - `hook` `{id, token, event, payload}` → `{id, ok, result:{stdout:object, exit_code}}`. `event` ∈ `HOOK_EVENTS`; `payload` is the CLI's hook stdin JSON.
+  - `cancel` `{id, token, re}` → `{id, ok:true, result:{}}`. board-mcp sends it when the CLI cancels a call it is holding (`re` = that call's request id). For a held `approval` the runner answers the held call with deny and sends rpc `approval_cancel` so the request is withdrawn on the hub.
 - Responses: `{id, ok:true, result}` or `{id, ok:false, error:{code, message}}` with codes from `protocol.ERRORS` (`GATE_CLOSED`, `HUB_UNREACHABLE`, `OUT_OF_SCOPE`, `FENCED`, `VALIDATION`, …).
 
 ### 7.3 board-mcp tool surface (Phase 1)
@@ -401,7 +427,7 @@ Server name `board`, stdio, one per run. Each tool forwards `tool {name, args}` 
 | `board_list_cards` | `{column?: enum, mine?: bool}` | `{cards}` | rpc |
 | `board_update_status` | `{summary: string ≤ 140}` | `{ok, queued?}` | outbox `status.update` |
 | `board_append_progress` | `{text: string ≤ 500}` | `{ok, queued?}` | outbox `progress.append` |
-| `board_write_handover` | `{patch: {plan?, done?, hypothesis?, dead_ends?, next?, questions?}}` | `{version}` or `{queued:true}` | outbox `handover.write` (waits ≤ 5 s for `ack` to report the version). Only `AGENT_WRITABLE` keys (VALIDATION otherwise). Also triggers a code snapshot (§7.2 design) |
+| `board_write_handover` | `{patch: {plan?, done?, hypothesis?, dead_ends?, next?, questions?}}` | `{version}` or `{queued:true}` | outbox `handover.write`; waits ≤ 5 s for the `ack`, whose `versions` carry the **hub's** handover version. No ack in time (or offline) → `{queued:true}`. Only `AGENT_WRITABLE` keys (VALIDATION otherwise). Also triggers a code snapshot (§7.2 design) |
 | `board_ask_human` | `{kind: 'question'\|'clarify'\|'decision', text, options?: string[]}` | `{ask_id}` | rpc; the answer arrives at the next boundary (§7.4) |
 | `board_comment` | `{text, reply_to?}` | `{ok, queued?}` | outbox `comment.create` |
 | `board_attach_evidence` | `{kind: evidence kind, ref, summary, result?: 'pass'\|'fail'}` | `{evidence_id, verification}` | rpc |
@@ -426,7 +452,7 @@ What the runner answers per event (the facts go to the outbox, §6.5):
 | `start` | SessionStart (`startup`, `compact`, `resume`) | mark "not degraded"; `startup` on a seeded run → seed (handover + card + "you are run rN; rN-1 ended …") + team context; `compact` → re-inject the current handover | `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}` |
 | `prompt` | UserPromptSubmit | team-context block (≤ budget) | `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}` |
 | `pre` | PreToolUse | gate G (wait ≤ `wait_ms` on `await_ack`), fenced check, path confinement of Read/Glob/Grep/Edit/Write/NotebookEdit to the worktree after realpath, deny `git push` to anything but `origin board/<KEY>-r<n>`; record `tool_in_flight` (+ Bash timeout) | deny object, or `{}` to proceed |
-| `post` | PostToolUse | facts (`tool_end`, `file`, `command`, `git`, `plan`); pending trusted comments; one-time overlap delta; narrative nudge when > 10 min or > 25 calls old; handover_begin injection; code snapshot at a quiescent point | `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"…"}}` or `{}` |
+| `post` | PostToolUse | facts (`tool_end`, `file`, `command`, `git`, `plan` from TaskCreate/TaskUpdate/TodoWrite); pending trusted comments; one-time overlap delta; narrative nudge when > 10 min or > 25 calls old; handover_begin injection; code snapshot at a quiescent point | `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"…"}}` or `{}` |
 | `postfail` | PostToolUseFailure | `error` fact | same shape as `post` |
 | `precompact` | PreCompact | snapshot; `compacted` fact | `{}` |
 | `stop` | Stop | if the agent is stopping without `board_complete`/`board_ask_human`/`board_release`: remind it (not a terminal signal) | `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"…"}}` or `{}` |
@@ -500,6 +526,9 @@ WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `440
 | `9` | blocked → running | `answer` (human) | `can_answer`; no asks/requests left open |
 | `9b` | blocked → blocked | `answer` (human) | more still open |
 | `9d` | dark (resume_to=blocked) → same | `answer` (human) | D6: resume_to → quiet if nothing left open |
+| `9w` | blocked → running | `withdraw` (runner rpc `approval_cancel`) | nothing else open |
+| `9wb` | blocked → blocked | `withdraw` (runner rpc) | more still open |
+| `9wd` | dark (resume_to=blocked) → same | `withdraw` (runner rpc) | resume_to → quiet if nothing left open |
 | `10` | blocked → parked | `park_timeout` (timer) | oldest open ask ≥ T_park; fence+1; `park` command; notify once |
 | `11` | parked → queued | `answer` (human) | fence+1; seed handover + answer |
 | `12` | running/quiet/blocked → suspended | `host_suspending` (runner) | DARK |
@@ -541,7 +570,7 @@ Anything else → `ILLEGAL_TRANSITION`. Runner events with a stale `fence` → `
 
 ### 10.2 `ctx` the hub must supply
 
-`has_repo`, `can_write` (member role ≥ member), `policy_ok` (no `never_auto` label, card/day budget left), `needs_confirm`, `can_cancel` (dispatcher, assignee or admin), `is_target_member`, `repo_advertised`, `runner_accepts` (true when the runner claims; it has already applied local policy), `no_active_run`, `can_answer` (asks: dispatcher/assignee/owner; permission: in `approvers`), `open_asks_remaining` (open asks + open permission requests **after** this answer), `require_plan_approval` (label), `can_stop` (dispatcher, assignee, run owner or admin), `policy_allows_requeue`, `can_hand_over` (owner, dispatcher or assignee), `confirmed` (`confirm:true` in the body), `evidence_ok`, `hub_uptime_ms`, `tunnel_ok` (self-probe healthy), `duplicate_request`. Missing booleans are false (fail-closed).
+`has_repo`, `can_write` (member role ≥ member), `policy_ok` (no `never_auto` label, card/day budget left), `needs_confirm`, `can_cancel` (dispatcher, assignee or admin), `is_target_member`, `repo_advertised`, `runner_accepts` (true when the runner claims; it has already applied local policy), `no_active_run`, `can_answer` (asks: dispatcher/assignee/owner; permission: in `approvers`), `open_asks_remaining` (open asks + open permission requests **after** this answer), `require_plan_approval` (the card has the label `plan-approval` = `states.PLAN_APPROVAL_LABEL`; also sent as `offer.require_plan_approval`), `can_stop` (dispatcher, assignee, run owner or admin), `policy_allows_requeue`, `can_hand_over` (owner, dispatcher or assignee), `confirmed` (`confirm:true` in the body), `evidence_ok`, `hub_uptime_ms`, `tunnel_ok` (self-probe healthy), `duplicate_request`. Missing booleans are false (fail-closed).
 
 ### 10.3 Effects the hub must execute (same transaction unless noted)
 
@@ -626,6 +655,11 @@ The reaper calls `timerEvent(snapshot)` for each card every second and feeds a n
 - **D23 Git allow rules.** Explicit `Bash(git add *)`/`Bash(git commit *)`… allow rules (spike 4b). Everything else outside the sandbox goes to `approval`.
 - **D24 Pushes are allowed only to `origin board/<KEY>-r<n>` and the snapshot/salvage refs (supervisor-only).** Enforced by the `pre` hook as well as `--disallowedTools`.
 - **D25 Web renders agent/human text as text.** No HTML injection path exists.
+- **D26 No `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`; no secret in the CLI env instead (low admin + credential isolation).** CLI 2.1.285 with `SCRUB=1` forces permission mode `default` ("allowed_non_write_users hardening") and strips `*TOKEN*` vars from hook env. Evidence, two real `claude --model haiku` runs through the full profile against a fake hub, same six Bash commands (`ls`, `node --version`, `npm test`, `echo … > probe.txt && cat probe.txt`, `env | cut …`, `git status --short`), 2026-09-30:
+  - **SCRUB=1** ($0.036): `system/init.permissionMode = "default"`. `ls`, `node --version` and `git status` ran (read-only, or the explicit git allow rule); `npm test`, the redirect and the `env` pipeline each went to `mcp__board__approval`, i.e. **3 of 6 routine sandboxed commands would have waited for a human**. So (a) `sandbox.autoAllowBashIfSandboxed` does **not** auto-allow under the forced `default` mode. (b) Explicit allow rules do work per command (the `Bash(git …)` rules), but every build/test/redirect/pipe shape would need one: an endless per-repo list, rejected. Bash saw no `BOARD_RUN_TOKEN`.
+  - **SCRUB unset** ($0.053): `permissionMode = "acceptEdits"`, **0 approvals**, all six ran sandboxed, and a sandboxed `git commit` passed. (c) What SCRUB bought: Bash's `env` then listed `BOARD_RUN_TOKEN` (and the CLI's own `CLAUDE_CODE_MESSAGING_TOKEN`). So the fix is to keep secrets out of the env, not to scrub it: the run token moved to `<run_dir>/hook.token` (hook shim) and `mcp.json` (board-mcp only); `ANTHROPIC_API_KEY` moved to `apiKeyHelper` + `<run_dir>/api.key`; the private `BOARD_HOME` files are sandbox `denyRead` and disallowed for Read/Edit/Write. The env allowlist (D15) had no other secret. Residual: `CLAUDE_CODE_MESSAGING_TOKEN` is visible to Bash (the CLI's own local socket token, not a member credential). `apiKeyHelper` is unit-tested but not yet exercised live (the test member uses a subscription login).
+- **D27 Repo identity = the configured origin URL** (`git config --get remote.origin.url`), not `git remote get-url` (§6.8). Deviation from design §9.4 #1, which named `get-url`: insteadOf is a local transport rewrite, and the member's configured name is the identity. Tests and the e2e harness rely on it (a bare remote reached through `insteadOf`).
+- **D28 Plan approval is the card label `plan-approval`** (`states.PLAN_APPROVAL_LABEL`); the hub derives `ctx.require_plan_approval` and `offer.require_plan_approval` from it.
 
 ## 13. Phase 1 exit criteria → tests
 

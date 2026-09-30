@@ -9,28 +9,41 @@ export const BOARD_DIR = path.resolve(HERE, '..');
 export const HOOK_SHIM = path.join(HERE, 'hook-shim.js');
 export const MCP_SERVER = path.join(BOARD_DIR, 'mcp', 'server.js');
 
-export const TOOLS = 'Read,Edit,Write,Glob,Grep,Bash,TodoWrite,Task';
+// CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
+// task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.
+export const TASK_TOOLS = Object.freeze(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
+export const TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', ...TASK_TOOLS, 'Task'].join(',');
 
 export const DISALLOWED_TOOLS = Object.freeze([
   'WebFetch', 'WebSearch', 'Bash(git push --force*)', 'Bash(git push -f*)', 'Bash(git push * +*)',
   'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
-  'Read(~/.claude-traffic-light/**)', 'Read(~/.board/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
-  'Edit(~/.board/**)', 'Write(~/.board/**)',
+  'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
 ]);
+
+// BOARD_HOME holds the run worktrees (which the agent must read and write) next
+// to the runner's private files (device token, policy, ledger, outbox, run dirs
+// with the run token). Only the private ones are denied. home = null means the
+// default ~/.board; otherwise an absolute path ("//" = absolute in permission rules).
+export function boardHomeRules(home = null) {
+  const rp = home ? `/${home}` : '~/.board';
+  const sp = home ?? '~/.board';
+  return {
+    disallowed: ['Read', 'Edit', 'Write'].flatMap((t) => [`${t}(${rp}/*.json)`, `${t}(${rp}/run/**)`, `${t}(${rp}/outbox/**)`]),
+    denyRead: ['device.json', 'policy.json', 'ledger.json', 'outbox', 'run'].map((f) => `${sp}/${f}`),
+  };
+}
 
 export const GIT_ALLOW = Object.freeze([
   'Bash(git add *)', 'Bash(git commit *)', 'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)',
   'Bash(git rev-parse*)', 'Bash(git branch*)',
 ]);
 
-// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 forces permission mode `default` (CLI
-// 2.1.285: "allowed_non_write_users hardening"), so acceptEdits alone no longer
-// auto-accepts: the file tools and the board MCP server are allowed explicitly.
-// PreToolUse still confines every file tool to the worktree.
-export const TOOL_ALLOW = Object.freeze(['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite', 'Task', 'mcp__board']);
+// Explicit allows for the non-Bash tools and the board MCP server (D26). PreToolUse
+// still confines every file tool to the worktree; sandboxed Bash is auto-allowed.
+export const TOOL_ALLOW = Object.freeze(['Read', 'Edit', 'Write', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
 
 export const DENY_READ = Object.freeze([
-  '~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.board', '~/.codex', '~/.claude-traffic-light',
+  '~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
 ]);
 
 export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn']);
@@ -38,8 +51,12 @@ export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Cache
 export const DEFAULT_MAX_TURNS = 200;
 export const DEFAULT_BUDGET_USD = 5;
 
+// No secret is ever in the CLI env (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+// Bash sees the CLI's env. ANTHROPIC_API_KEY reaches the CLI through apiKeyHelper
+// (a 0600 file in the run dir) and the run token only through files/mcp.json.
 const ENV_KEEP = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ',
-  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'ANTHROPIC_API_KEY'];
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS'];
+export const API_KEY_FILE = 'api.key';
 
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -49,10 +66,15 @@ function hookCmd(node, event) {
   return `${shq(node)} ${shq(HOOK_SHIM)} ${event}`;
 }
 
-/** --settings file content. repo = policy.repos[repo_id] (may be {}). */
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {} }) {
+/**
+ * --settings file content. repo = policy.repos[repo_id] (may be {}).
+ * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
+ * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
+ */
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event), timeout }] }];
   return {
+    ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
     permissions: {
       defaultMode: 'acceptEdits',
       allow: [...TOOL_ALLOW, ...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))],
@@ -64,7 +86,7 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: [worktree, tmpdir, ...CACHE_WRITE, ...(repo.allow_write_extra ?? [])].filter(Boolean),
-        denyRead: [...DENY_READ],
+        denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead],
       },
       network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
     },
@@ -82,9 +104,9 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
   };
 }
 
-// The CLI scrubs *TOKEN* variables from hook subprocesses (SUBPROCESS_ENV_SCRUB),
-// so the hook shim reads the run token from this 0600 file in the 0700 run dir
-// (the agent can't: ~/.board is denyRead for Bash and Read(~/.board/**) is disallowed).
+// The run token is not in the CLI env (Bash would see it, D26): the hook shim
+// reads it from this 0600 file in the 0700 run dir (the agent can't: BOARD_HOME is
+// denyRead for sandboxed Bash and Read(~/.board/**) is disallowed + confined).
 export const HOOK_TOKEN_FILE = 'hook.token';
 
 export function buildMcpConfig({ socket, token, node = process.execPath, server = MCP_SERVER }) {
@@ -92,7 +114,7 @@ export function buildMcpConfig({ socket, token, node = process.execPath, server 
 }
 
 /** Allowlisted child env (D15). parentEnv is the supervisor's env. */
-export function buildEnv(parentEnv, { runDir, socket, token, supervisorPid, supervisorLstart }) {
+export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorLstart }) {
   const env = {};
   for (const k of ENV_KEEP) if (parentEnv[k] != null && parentEnv[k] !== '') env[k] = parentEnv[k];
   for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
@@ -101,10 +123,8 @@ export function buildEnv(parentEnv, { runDir, socket, token, supervisorPid, supe
     SHELL: '/bin/sh',
     ZDOTDIR: path.join(runDir, 'shell'),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
     MCP_TOOL_TIMEOUT: '2100000',
     BOARD_RUN_SOCKET: socket,
-    BOARD_RUN_TOKEN: token,
     BOARD_SUPERVISOR_PID: String(supervisorPid),
     BOARD_SUPERVISOR_LSTART: supervisorLstart ?? '',
   });
@@ -112,7 +132,7 @@ export function buildEnv(parentEnv, { runDir, socket, token, supervisorPid, supe
 }
 
 /** argv after the binary. Resume keeps every isolation flag (spike 5a). */
-export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model }) {
+export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model, boardHome = null }) {
   const argv = ['-p',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
@@ -120,7 +140,7 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
     '--settings', path.join(runDir, 'settings.json'),
     '--strict-mcp-config', '--mcp-config', path.join(runDir, 'mcp.json'),
     '--tools', TOOLS,
-    '--disallowedTools', ...DISALLOWED_TOOLS,
+    '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed,
     '--permission-mode', 'acceptEdits',
     '--permission-prompt-tool', 'mcp__board__approval',
     '--max-budget-usd', String(budgetUsd ?? DEFAULT_BUDGET_USD),

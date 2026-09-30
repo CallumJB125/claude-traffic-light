@@ -95,6 +95,7 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
     bytes: 0,
     lastAck: 0,
     autoAck: true,
+    handoverVersion: 0,
     current: true,         // hb.ack current flag
     fencedRuns: new Set(),
     holdHb: false,         // withhold hb.acks (silent hub on a live socket)
@@ -133,7 +134,11 @@ export async function startFakeHub({ allowlist = [{ repo_id: REPO_ID, canonical_
           send(ws, { type: 'welcome', protocol: 1, hub_epoch: hub.epoch, device_id: f.device_id, member_id: memberId, last_seq_acked: hub.lastAck, allowlist });
           break;
         case 'out':
-          if (hub.autoAck && f.seq === hub.lastAck + 1) { hub.lastAck = f.seq; send(ws, { type: 'ack', seq: f.seq }); }
+          if (hub.autoAck && f.seq === hub.lastAck + 1) {
+            hub.lastAck = f.seq;
+            const v = f.msg?.kind === 'handover.write' ? { versions: [{ seq: f.seq, version: ++hub.handoverVersion }] } : {};
+            send(ws, { type: 'ack', seq: f.seq, ...v });
+          }
           break;
         case 'hb':
           if (hub.holdHb) { hub.heldHb.push(() => send(ws, { type: 'hb.ack', seq_hb: f.seq_hb, hub_epoch: hub.epoch, runs: f.runs.map((r) => ({ run_id: r.run_id, fence: r.fence, current: true, state: 'running' })) })); break; }

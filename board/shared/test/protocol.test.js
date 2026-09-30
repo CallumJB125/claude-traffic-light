@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { validate, SHAPES, OUTBOX_SHAPES, FACT_KINDS, ERRORS, httpStatus, compatible, PROTOCOL_VERSION, MCP_TOOLS, RPC_METHODS, MCP_OUTBOX_TOOLS, HOOK_EVENTS, RUNNER_COMMANDS } from '../protocol.js';
+import { validate, SHAPES, OUTBOX_SHAPES, FACT_KINDS, ERRORS, httpStatus, compatible, PROTOCOL_VERSION, MCP_TOOLS, RPC_METHODS, MCP_OUTBOX_TOOLS, HOOK_EVENTS, RUNNER_COMMANDS, RUNNER_ONLY_RPC } from '../protocol.js';
 import { TRANSITIONS } from '../states.js';
 
 const CONTRACT = readFileSync(fileURLToPath(new URL('../../CONTRACT.md', import.meta.url)), 'utf8');
@@ -43,7 +43,7 @@ test('outbox tools are MCP tools with outbox kinds', () => {
     assert.ok(MCP_TOOLS.includes(tool));
     assert.ok(kind in OUTBOX_SHAPES);
   }
-  for (const m of RPC_METHODS.filter((x) => x !== 'team_context')) assert.ok(MCP_TOOLS.includes(m), m);
+  for (const m of RPC_METHODS.filter((x) => !RUNNER_ONLY_RPC.includes(x))) assert.ok(MCP_TOOLS.includes(m), m);
 });
 
 test('validate: accepts well-formed messages on each channel', () => {
@@ -72,4 +72,12 @@ test('validate: rejects unknown types, missing/mistyped fields, bad outbox/fact 
   assert.match(validate('runner→hub', { type: 'out', seq: 1, delayed: false, msg: { kind: 'facts', run_id: 'r', card_id: 'c', fence: 1, repo_id: 'x', items: [{ kind: 'zzz' }] } }).message, /unknown fact kind/);
   assert.match(validate('runner→hub', { type: 'out', seq: 1, delayed: false, msg: { kind: 'facts', run_id: 'r', card_id: 'c', fence: 1, repo_id: 'x', items: [{ kind: 'file', op: 'edit' }] } }).message, /fact file: missing path/);
   assert.match(validate('hub→browser', null).message, /unknown type/);
+});
+
+test('every states.js feed effect is a FeedEvent kind', async () => {
+  const { FEED_KINDS } = await import('../protocol.js');
+  const src = readFileSync(fileURLToPath(new URL('../states.js', import.meta.url)), 'utf8');
+  const kinds = [...src.matchAll(/feed\('([a-z_]+)'/g)].map((m) => m[1]);
+  assert.ok(kinds.length > 20);
+  assert.deepEqual([...new Set(kinds)].filter((k) => !FEED_KINDS.includes(k)), []);
 });

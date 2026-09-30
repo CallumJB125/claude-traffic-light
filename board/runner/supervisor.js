@@ -8,7 +8,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION, validate, MCP_TOOLS, WS_CLOSE } from '../shared/protocol.js';
-import { serializeOutbound, assertNoForeignBytes, scopeOf, normalizeRemoteUrl } from '../shared/scope.js';
+import { serializeOutbound, assertNoForeignBytes, scopeOf } from '../shared/scope.js';
 import { HB_MS, SLEEP_TICK_MS, STOP_GRACE_MS, INTERRUPT_WAIT_MS, reconnectDelay, sleptEstimate } from '../shared/liveness.js';
 import { branchName, snapshotRef } from '../shared/fence.js';
 import { initHome, readDevice, readPolicy, readLedger, writeLedger, writePolicy, hubWsUrl } from './config.js';
@@ -16,10 +16,10 @@ import { Outbox } from './outbox.js';
 import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
 import { startIpcServer } from './ipc.js';
-import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, MCP_SERVER, HOOK_TOKEN_FILE } from './launch.js';
+import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
 import { createWorktree, sessionOf, snapshot as gitSnapshot } from './git.js';
 import { decideOffer, advertisable } from './policy.js';
-import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree } from './procs.js';
+import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
 
 // Device-level frames carry no repo_id; they still pass the serializer guard
@@ -30,15 +30,8 @@ function err(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-// shared/scope.matchRepo re-normalizes canonical_url, and a bare canonical
-// ("github.com/o/r", which is what the hub stores) does not parse as a remote.
-// Give it a scheme so it matches (shared/ change requested in the report).
-export function scopableAllowlist(list) {
-  return (list ?? []).map((r) => ({
-    ...r,
-    canonical_url: r.canonical_url && !normalizeRemoteUrl(r.canonical_url) ? `https://${r.canonical_url}` : r.canonical_url,
-  }));
-}
+// The card's budget, capped by this machine's policy budget_per_run (policy.json is authoritative).
+const minDefined = (...xs) => { const v = xs.filter((x) => Number.isFinite(x) && x > 0); return v.length ? Math.min(...v) : undefined; };
 
 export function findOnPath(bin, envPath = process.env.PATH ?? '') {
   if (bin.includes('/')) return bin;
@@ -95,6 +88,7 @@ export class Supervisor extends EventEmitter {
     this.claudeBin = opts.claudeBin ?? this.policy.backends?.claude ?? findOnPath('claude', this.env.PATH);
     this.mcpServer = opts.mcpServer ?? this.env.BOARD_MCP_SERVER ?? MCP_SERVER;
     this.supervisorLstart = lstartOf(process.pid);
+    this.formFactor = opts.formFactor ?? this.policy.form_factor ?? detectFormFactor();
     this.confirm = opts.confirm ?? ((o) => this.#confirmViaControl(o));
   }
 
@@ -190,6 +184,7 @@ export class Supervisor extends EventEmitter {
     this.#sendDevice({
       type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.device.device_id, runner_version: RUNNER_VERSION,
       outbox_head_seq: this.outbox.head,
+      ...(this.formFactor ? { form_factor: this.formFactor } : {}),
       runs: [...this.runs.values()].map((r) => ({ run_id: r.run_id, card_id: r.card_id, fence: r.fence, local_state: r.ending ? 'ending' : r.localState })),
     });
   }
@@ -201,7 +196,7 @@ export class Supervisor extends EventEmitter {
     if (bad) { this.log.warn('bad hub frame', { type: m?.type, err: bad.message }); return; }
     switch (m.type) {
       case 'welcome': return this.#onWelcome(m);
-      case 'ack': return this.#onAck(m.seq);
+      case 'ack': return this.#onAck(m.seq, m.versions);
       case 'offer': return this.handleOffer(m).catch((e) => this.log.error('offer failed', { err: e.message }));
       case 'offer.withdrawn': {
         this.deferred.delete(m.card_id);
@@ -236,7 +231,7 @@ export class Supervisor extends EventEmitter {
   #onWelcome(m) {
     this.hubEpoch = m.hub_epoch;
     this.memberId = m.member_id;
-    this.allowlist = scopableAllowlist(m.allowlist);
+    this.allowlist = m.allowlist ?? [];
     this.attempt = 0;
     this.originDown = false;
     this.outbox.ack(m.last_seq_acked);
@@ -249,20 +244,23 @@ export class Supervisor extends EventEmitter {
     this.emit('connected', m);
   }
 
-  #onAck(seq) {
+  // versions: [{seq, version}] — the hub's handover version for handover.write entries.
+  #onAck(seq, versions) {
     this.outbox.ack(seq);
+    const byseq = new Map((Array.isArray(versions) ? versions : []).map((v) => [v?.seq, v?.version]));
     this.ackWaiters = this.ackWaiters.filter((w) => {
-      if (w.seq <= this.outbox.acked) { w.resolve(true); return false; }
+      if (w.seq <= this.outbox.acked) { w.resolve({ acked: true, version: Number.isSafeInteger(byseq.get(w.seq)) ? byseq.get(w.seq) : null }); return false; }
       return true;
     });
   }
 
+  /** → {acked, version} (version = the hub's, when the ack carried one). */
   waitAck(seq, ms) {
-    if (seq <= this.outbox.acked) return Promise.resolve(true);
+    if (seq <= this.outbox.acked) return Promise.resolve({ acked: true, version: null });
     return new Promise((resolve) => {
       const w = { seq, resolve };
       this.ackWaiters.push(w);
-      setTimeout(() => { this.ackWaiters = this.ackWaiters.filter((x) => x !== w); resolve(false); }, ms).unref?.();
+      setTimeout(() => { this.ackWaiters = this.ackWaiters.filter((x) => x !== w); resolve({ acked: false, version: null }); }, ms).unref?.();
     });
   }
 
@@ -490,17 +488,21 @@ export class Supervisor extends EventEmitter {
 
   #spawn(run, { resume }) {
     const repo = this.policy.repos[run.repo_id] ?? {};
-    const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo });
+    const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
+    if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
+    const home = path.resolve(this.l.home);
+    const boardHome = home === path.join(this.env.HOME ?? '', '.board') ? null : home;
+    const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome });
     writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
     writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     writeFileAtomic(path.join(run.runDir, HOOK_TOKEN_FILE), run.run_token);
-    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, token: run.run_token, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart });
+    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart });
     const systemPrompt = boardBrief({ key: run.key, fence: run.fence, trusted: trustedInstructions(repo.local_path) });
     const Backend = this.opts.Backend ?? ClaudeBackend;
     const backend = new Backend({
       bin: this.claudeBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
-      budgetUsd: run.offer.budget_usd ?? repo.budget_per_run, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
-      log: this.log, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
+      budgetUsd: minDefined(run.offer.budget_usd, repo.budget_per_run), maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
+      log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
     });
     run.attach(backend);
     backend.start(resume ? 'Board connection restored and your run is still current. Continue where you left off.' : firstPrompt({ key: run.key, title: run.offer.title }));

@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
+import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
@@ -201,10 +202,10 @@ export class Api {
     };
   }
 
-  policyOk(row) {
+  policyOk(row, budgetCents = row.budget_cents) {
     const labels = this.hub.labels(row);
     if (labels.includes('never_auto')) return false;
-    if (row.budget_cents != null && this.hub.cardSpentCents(row.id) >= row.budget_cents) return false;
+    if (budgetCents != null && this.hub.cardSpentCents(row.id) >= budgetCents) return false;
     return true;
   }
 
@@ -227,7 +228,7 @@ export class Api {
       can_stop: involved(rel.dispatcher, rel.owner, rel.assignees),
       can_hand_over: [rel.owner, rel.dispatcher, ...rel.assignees].includes(me),
       confirmed: body.confirm === true,
-      require_plan_approval: this.hub.labels(row).includes('require_plan_approval'),
+      require_plan_approval: this.hub.labels(row).includes(PLAN_APPROVAL_LABEL),
     };
     const event = { type, by: me };
     const opts = { ctx, actor: me };
@@ -246,6 +247,14 @@ export class Api {
         ctx.duplicate_request = !!existing;
         ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
         Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: 'claude_cli' });
+        // A budget given with the dispatch becomes the card's cap: the offer
+        // carries it and the runner passes it to --max-budget-usd.
+        if (body.budget_usd != null) {
+          if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd > 0)) throw new HubError('VALIDATION', 'budget_usd must be > 0');
+          const cents = Math.round(body.budget_usd * 100);
+          ctx.policy_ok = this.policyOk(row, cents);
+          if (!existing) opts.pre = () => this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
+        }
         break;
       }
       case 'hand_over': {

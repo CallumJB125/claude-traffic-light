@@ -20,6 +20,8 @@ test('self-dispatched offer is claimed and spawned; activity < 60 s; complete en
         { tool: 'Write', input: { file_path: 'src/a.js', content: 'export const a = 1;\n' } },
         { tool: 'Bash', input: { command: 'npm test' }, output: 'tests 3\npass 3' },
         { tool: 'TodoWrite', input: { todos: [{ content: 'write a', status: 'completed' }, { content: 'test', status: 'in_progress' }] } },
+        { tool: 'TaskCreate', input: { subject: 'write b', description: 'b.js' }, response: { task: { id: '7', subject: 'write b' } } },
+        { tool: 'TaskUpdate', input: { taskId: '7', status: 'in_progress' }, response: { success: true } },
         { mcp: 'board_update_status', args: { summary: 'writing a.js' } },
         { mcp: 'board_complete', args: { summary: 'done', evidence_ids: ['e1'] } },
         { result: 'success', cost: 0.02 },
@@ -60,7 +62,8 @@ test('self-dispatched offer is claimed and spawned; activity < 60 s; complete en
     const facts = hub.facts();
     assert.ok(facts.some((f) => f.kind === 'file' && f.path === 'src/a.js' && f.op === 'write'), 'file fact is repo-relative');
     assert.ok(facts.some((f) => f.kind === 'command' && f.cmd === 'npm test' && f.exit === 0), 'test command fact');
-    assert.ok(facts.some((f) => f.kind === 'plan' && f.items[1].status === 'doing'), 'TodoWrite mirror');
+    assert.ok(facts.some((f) => f.kind === 'plan' && f.items[1]?.status === 'doing'), 'TodoWrite mirror');
+    assert.ok(facts.some((f) => f.kind === 'plan' && f.items.length === 1 && f.items[0].text === 'write b' && f.items[0].status === 'doing'), 'TaskCreate/TaskUpdate mirror');
     assert.ok(facts.some((f) => f.kind === 'cost' && f.cost_usd === 0.02));
     assert.ok(facts.some((f) => f.kind === 'session'));
     assert.equal(hub.outs('status.update')[0].summary, 'writing a.js');

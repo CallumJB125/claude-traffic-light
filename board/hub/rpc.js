@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { RPC_METHODS } from '../shared/protocol.js';
+import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
 import { prNumberOf } from './github.js';
@@ -68,7 +69,7 @@ const METHODS = {
     if (hub.openAsks(row.id).length) throw new HubError('ONE_OPEN_ASK', 'this card already has an open question');
     const id = randomUUID();
     const res = hub.apply(row.id, { type: 'block', fence: row.fence, kind: params.kind }, {
-      ctx: { require_plan_approval: hub.labels(row).includes('require_plan_approval') },
+      ctx: { require_plan_approval: hub.labels(row).includes(PLAN_APPROVAL_LABEL) },
       pre: () => hub.db.insert('asks', {
         id, run_id: run.id, card_id: row.id, kind: params.kind, text: clip(params.text, 2000),
         options: params.options ? JSON.stringify(params.options.slice(0, 10).map((o) => clip(o, 200))) : null, state: 'open', created_at: hub.iso(),
@@ -159,6 +160,26 @@ const METHODS = {
     });
     if (!res.ok) throw new HubError(res.error.code, res.error.message);
     return { permission_request_id: id };
+  },
+
+  // The CLI cancelled the held prompt: withdraw the request so nobody answers
+  // a prompt that no longer exists, and unblock the card when nothing else is open.
+  approval_cancel(hub, { run, row }, params) {
+    const pr = typeof params.permission_request_id === 'string'
+      ? hub.db.get('SELECT * FROM permission_requests WHERE id = ? AND run_id = ?', params.permission_request_id, run.id) : null;
+    if (!pr) throw new HubError('NOT_FOUND', 'permission request not found');
+    if (pr.state !== 'open') return { state: pr.state };
+    const open = hub.openAsks(row.id).length + hub.openPermissions(row.id).filter((p) => p.id !== pr.id).length;
+    const withdrawable = row.run_state === 'blocked' || row.resume_to === 'blocked';
+    hub.txn(() => {
+      hub.db.run("UPDATE permission_requests SET state = 'cancelled', answered_at = ? WHERE id = ? AND state = 'open'", hub.iso(), pr.id);
+      if (withdrawable) {
+        const res = hub.apply(row.id, { type: 'withdraw', fence: row.fence }, { ctx: { open_asks_remaining: open } });
+        if (!res.ok) throw new HubError(res.error.code, res.error.message);
+      }
+      hub.later(() => hub.broadcastCard(row.id));
+    });
+    return { state: 'cancelled' };
   },
 
   team_context(hub, { run }) {

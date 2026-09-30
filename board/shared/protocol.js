@@ -68,7 +68,10 @@ export const OUTBOX_KINDS = Object.freeze([
 export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
+  'approval_cancel',
 ]);
+// RPC methods that are runner plumbing, not board-mcp tools.
+export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel']);
 
 // board-mcp tools (Phase 1). `approval` is the --permission-prompt-tool target (mcp__board__approval).
 export const MCP_TOOLS = Object.freeze([
@@ -83,6 +86,21 @@ export const MCP_OUTBOX_TOOLS = Object.freeze({
   board_write_handover: 'handover.write',
   board_comment: 'comment.create',
 });
+
+// FeedEvent.kind values the hub sends to browsers (§5.3): states.js feed
+// effects, hub-recorded lines, and the displayed fact kinds. Every other
+// events row (activity, facts, tool_start/_end, raw outbox kinds…) is internal.
+export const FEED_KINDS = Object.freeze([
+  // states.js feed effects
+  'dispatched', 'claimed', 'started', 'cancelled', 'declined', 'blocked', 'answered', 'withdrawn', 'parked',
+  'requeued_answered', 'suspended', 'unresponsive', 'orphaned', 'recovered', 'reconnecting', 'failed', 'stopped',
+  'released', 'retried', 'taken_over', 'handing_over', 'handed_over', 'human_on_it', 'in_review', 'changes_requested',
+  'pr_closed_unmerged', 'merged', 'approved_done', 'prep_failed', 'requeued_claim_timeout',
+  // hub-recorded
+  'created', 'comment', 'progress', 'evidence', 'plan_declared', 'handover_frozen', 'salvage',
+  // facts shown in the feed
+  'file', 'git', 'command', 'plan', 'error', 'subagent', 'message', 'compacted', 'cost', 'session', 'degraded',
+]);
 
 // Hook-shim events (CLI hook → shim → runner IPC `hook` method).
 export const HOOK_EVENTS = Object.freeze(['start', 'prompt', 'pre', 'post', 'postfail', 'precompact', 'stop', 'stopfail', 'substop']);
@@ -114,7 +132,7 @@ export const SHAPES = Object.freeze({
   },
   // runner → hub
   'runner→hub': {
-    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array' },
+    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?' },
     advertise: { repos: 'array' },
     claim: { id: 'string', card_id: 'string', request_id: 'string', expected_fence: 'int' },
     decline: { card_id: 'string', request_id: 'string', reason: 'string?' },
@@ -122,12 +140,12 @@ export const SHAPES = Object.freeze({
     'host.suspending': { runs: 'array' },
     out: { seq: 'int', delayed: 'bool', msg: 'object' },
     rpc: { id: 'string', method: 'string', ...run3, repo_id: 'string', run_token: 'string', params: 'object' },
-    salvage: { ...run3, kind: 'string', payload: 'object' },
+    salvage: { ...run3, repo_id: 'string', kind: 'string', payload: 'object' },
   },
   // hub → runner
   'hub→runner': {
     welcome: { protocol: 'int', hub_epoch: 'string', device_id: 'string', member_id: 'string', last_seq_acked: 'int', allowlist: 'array' },
-    ack: { seq: 'int' },
+    ack: { seq: 'int', versions: 'array?' },
     offer: { card_id: 'string', key: 'string', title: 'string', body: 'string', repo_id: 'string', base_ref: 'string', fence: 'int', request_id: 'string', dispatched_by: 'object', needs_confirm: 'bool', labels: 'array', budget_usd: 'number?', max_turns: 'int?', require_plan_approval: 'bool', seed: 'object' },
     'offer.withdrawn': { card_id: 'string', request_id: 'string', reason: 'string' },
     'claim.result': { re: 'string', ok: 'bool' },
@@ -145,6 +163,7 @@ export const SHAPES = Object.freeze({
     hello: { id: 'string', token: 'string' },
     tool: { id: 'string', token: 'string', name: 'string', args: 'object' },
     hook: { id: 'string', token: 'string', event: 'string', payload: 'object' },
+    cancel: { id: 'string', token: 'string', re: 'string' },
   },
 });
 
@@ -152,7 +171,7 @@ export const SHAPES = Object.freeze({
 export const OUTBOX_SHAPES = Object.freeze({
   activity: { kind: 'string', ...run3, repo_id: 'string', source: 'string' },
   facts: { kind: 'string', ...run3, repo_id: 'string', items: 'array' },
-  'run.failed': { kind: 'string', ...run3, repo_id: 'string', fail_kind: 'string', reason: 'string?' },
+  'run.failed': { kind: 'string', ...run3, repo_id: 'string', fail_kind: 'string', reason: 'string?', resets_in_ms: 'int?' },
   'prep.failed': { kind: 'string', ...run3, repo_id: 'string', cause: 'string' },
   'handover.complete': { kind: 'string', ...run3, repo_id: 'string' },
   snapshot: { kind: 'string', ...run3, repo_id: 'string', status: 'string', sha: 'string?', ref: 'string?', reason: 'string?' },

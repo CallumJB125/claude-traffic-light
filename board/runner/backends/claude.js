@@ -16,10 +16,10 @@ import { lineReader } from '../util.js';
  *  rate_limit {info} · control_response {request_id, subtype} · compact {} · exit {code, signal, sawResult}
  */
 export class ClaudeBackend extends EventEmitter {
-  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume = false, log,
+  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
     interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
     super();
-    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, interruptWaitMs, stopGraceMs });
+    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, interruptWaitMs, stopGraceMs });
     this.child = null;
     this.pid = null;
     this.lstart = null;
@@ -33,7 +33,7 @@ export class ClaudeBackend extends EventEmitter {
 
   argv() {
     return buildArgv({ runDir: this.runDir, sessionId: this.sessionId, resume: this.resume, budgetUsd: this.budgetUsd,
-      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model });
+      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome });
   }
 
   start(firstPromptText) {

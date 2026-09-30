@@ -14,7 +14,8 @@ test('health, Board-Protocol header, static web + shared whitelist, ETag/304, CS
     const health = await h.api(null, 'GET', '/api/health');
     assert.equal(health.status, 200);
     assert.equal(health.headers.get('board-protocol'), '1');
-    assert.deepEqual(Object.keys(health.body).sort(), ['hub_epoch', 'ok', 'protocol', 'uptime_ms']);
+    assert.deepEqual(Object.keys(health.body).sort(), ['auth', 'hub_epoch', 'ok', 'protocol', 'uptime_ms']);
+    assert.equal(health.body.auth, 'dev');
 
     const index = await h.api(null, 'GET', '/');
     assert.equal(index.status, 200);

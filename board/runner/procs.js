@@ -3,6 +3,7 @@
 // descendants are enumerated BEFORE claude is killed and every descendant
 // process group is killed separately.
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 
 const PS = process.platform === 'darwin' ? '/bin/ps' : 'ps';
 
@@ -90,4 +91,14 @@ export function killTree(pid, lstart) {
   killGroups(groups, 'SIGKILL');
   for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
   return { groups, pids };
+}
+
+// 'laptop' when the machine has a battery, else 'desktop' (CardView.device_kind
+// → "laptop asleep"). policy.json form_factor overrides; null when unknown.
+export function detectFormFactor(platform = process.platform) {
+  try {
+    if (platform === 'darwin') return /InternalBattery/.test(execFileSync('pmset', ['-g', 'batt'], { encoding: 'utf8', timeout: 2000 })) ? 'laptop' : 'desktop';
+    if (platform === 'linux') return fs.readdirSync('/sys/class/power_supply').some((n) => /^BAT/.test(n)) ? 'laptop' : 'desktop';
+  } catch { /* unknown */ }
+  return null;
 }

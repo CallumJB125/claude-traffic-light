@@ -59,15 +59,14 @@ export function startIpcServer({ socketPath, token, handler, log }) {
         sock.end();
         return;
       }
-      // `cancel {id, token, re}`: board-mcp aborting a held call (additive,
-      // pending protocol.SHAPES['ipc→runner'].cancel).
+      const err = validate('ipc→runner', msg);
+      if (err) { reply({ id, ok: false, error: err }); return; }
+      // `cancel {id, token, re}`: board-mcp aborting a held call (the CLI cancelled it).
       if (msg.type === 'cancel') {
-        Promise.resolve().then(() => handler.cancel?.(String(msg.re), { connId, reqId: id }))
+        Promise.resolve().then(() => handler.cancel?.(msg.re, { connId, reqId: id }))
           .then(() => reply({ id, ok: true, result: {} }), () => reply({ id, ok: true, result: {} }));
         return;
       }
-      const err = validate('ipc→runner', msg);
-      if (err) { reply({ id, ok: false, error: err }); return; }
       const ctx = { connId, reqId: id };
       Promise.resolve()
         .then(() => {

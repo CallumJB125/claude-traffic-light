@@ -58,15 +58,25 @@ export function normalizeRemoteUrl(url) {
   return `${host}/${CASE_INSENSITIVE_HOSTS.has(host) ? joined.toLowerCase() : joined}`;
 }
 
+// Allowlist entries are trusted hub data and may already be canonical
+// ("github.com/o/r", which is what the hub stores) or a remote URL. Only
+// allowlist names get this leniency: a session's remote must be a real remote.
+function allowlistName(s) {
+  if (typeof s !== 'string') return null;
+  const t = s.trim();
+  return normalizeRemoteUrl(t) ?? (/^[^:/\s]+\.[^:/\s]+\//.test(t) ? normalizeRemoteUrl(`https://${t}`) : null);
+}
+
 /**
  * allowlist: [{repo_id, canonical_url, aliases?: string[]}] (board_repos ⋈ repos).
+ * canonical_url/aliases may be canonical ("host/owner/repo") or remote URLs.
  * Returns the repo_id whose canonical url or alias matches, else null.
  */
 export function matchRepo(remoteUrl, allowlist) {
   const canon = normalizeRemoteUrl(remoteUrl);
   if (!canon || !Array.isArray(allowlist)) return null;
   for (const r of allowlist) {
-    const names = [r.canonical_url, ...(r.aliases ?? [])].map(normalizeRemoteUrl).filter(Boolean);
+    const names = [r.canonical_url, ...(r.aliases ?? [])].map(allowlistName).filter(Boolean);
     if (names.includes(canon)) return r.repo_id;
   }
   return null;

@@ -19,11 +19,13 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
     '--setting-sources', '',
     '--settings', `${RUN_DIR}/settings.json`,
     '--strict-mcp-config', '--mcp-config', `${RUN_DIR}/mcp.json`,
-    '--tools', 'Read,Edit,Write,Glob,Grep,Bash,TodoWrite,Task',
+    '--tools', 'Read,Edit,Write,Glob,Grep,Bash,TaskCreate,TaskUpdate,TaskList,TaskGet,Task',
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Bash(git push --force*)', 'Bash(git push -f*)', 'Bash(git push * +*)',
     'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
-    'Read(~/.claude-traffic-light/**)', 'Read(~/.board/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
-    'Edit(~/.board/**)', 'Write(~/.board/**)',
+    'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
+    'Read(~/.board/*.json)', 'Read(~/.board/run/**)', 'Read(~/.board/outbox/**)',
+    'Edit(~/.board/*.json)', 'Edit(~/.board/run/**)', 'Edit(~/.board/outbox/**)',
+    'Write(~/.board/*.json)', 'Write(~/.board/run/**)', 'Write(~/.board/outbox/**)',
     '--permission-mode', 'acceptEdits',
     '--permission-prompt-tool', 'mcp__board__approval',
     '--max-budget-usd', '2.5', '--max-turns', '40',
@@ -33,7 +35,11 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
   const r = buildArgv({ runDir: RUN_DIR, sessionId: 'S', resume: true, budgetUsd: 2.5, maxTurns: 40, systemPrompt: 'BRIEF' });
   assert.deepEqual(r.filter((x) => x !== '--resume' && x !== '--session-id'), a.filter((x) => x !== '--resume' && x !== '--session-id'));
   assert.equal(r[r.indexOf('--resume') + 1], 'S');
-  assert.equal(DISALLOWED_TOOLS.length, 16);
+  assert.equal(DISALLOWED_TOOLS.length, 13);
+  // A non-default BOARD_HOME is denied by absolute path ("//" prefix); worktrees under it stay readable.
+  const t = buildArgv({ runDir: RUN_DIR, sessionId: 'S', boardHome: '/tmp/bh' });
+  assert.ok(t.includes('Read(//tmp/bh/run/**)') && t.includes('Write(//tmp/bh/*.json)'));
+  assert.ok(!t.some((x) => /worktrees/.test(x)));
 });
 
 test('env is an allowlist (D15): secrets and shell hooks of the member env never reach the CLI', () => {
@@ -43,10 +49,10 @@ test('env is an allowlist (D15): secrets and shell hooks of the member env never
     AWS_SECRET_ACCESS_KEY: 'x', GITHUB_TOKEN: 'ghp_x', OPENAI_API_KEY: 'sk-x', SSH_AUTH_SOCK: '/tmp/ssh', BASH_ENV: '/Users/m/.bashenv', ENV: '/Users/m/.shrc',
     ZDOTDIR: '/Users/m/.zsh', SHELL: '/bin/zsh', TERM: 'xterm-256color', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', NODE_OPTIONS: '--require /x.js', DYLD_INSERT_LIBRARIES: '/x.dylib',
   };
-  const env = buildEnv(parent, { runDir: RUN_DIR, socket: `${RUN_DIR}/ipc.sock`, token: 'brt1.a.b', supervisorPid: 42, supervisorLstart: 'Wed Sep 30 10:00:00 2026' });
+  const env = buildEnv(parent, { runDir: RUN_DIR, socket: `${RUN_DIR}/ipc.sock`, supervisorPid: 42, supervisorLstart: 'Wed Sep 30 10:00:00 2026' });
   assert.deepEqual(Object.keys(env).sort(), [
-    'BOARD_RUN_SOCKET', 'BOARD_RUN_TOKEN', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID',
-    'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'HTTPS_PROXY', 'LANG', 'LC_ALL', 'LOGNAME',
+    'BOARD_RUN_SOCKET', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID',
+    'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'HOME', 'HTTPS_PROXY', 'LANG', 'LC_ALL', 'LOGNAME',
     'MCP_TOOL_TIMEOUT', 'NODE_EXTRA_CA_CERTS', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'TZ', 'USER', 'ZDOTDIR',
   ]);
   assert.equal(env.SHELL, '/bin/sh');
@@ -54,21 +60,23 @@ test('env is an allowlist (D15): secrets and shell hooks of the member env never
   assert.equal(env.ZDOTDIR, `${RUN_DIR}/shell`);
   assert.equal(env.MCP_TOOL_TIMEOUT, '2100000');
   assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
-  assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  assert.ok(!('CLAUDE_CODE_SUBPROCESS_ENV_SCRUB' in env), 'D26: SCRUB forces permission mode default (every non-read-only Bash would prompt)');
   assert.equal(env.BOARD_SUPERVISOR_PID, '42');
   assert.ok(!('BASH_ENV' in env) && !('ENV' in env));
-  assert.equal(buildEnv({ ...parent, ANTHROPIC_API_KEY: 'sk-ant-k' }, { runDir: RUN_DIR }).ANTHROPIC_API_KEY, 'sk-ant-k', 'own API key passes only if the member has one');
+  assert.ok(!('ANTHROPIC_API_KEY' in buildEnv({ ...parent, ANTHROPIC_API_KEY: 'sk-ant-k' }, { runDir: RUN_DIR })), 'D26: the API key reaches the CLI only via apiKeyHelper');
+  assert.ok(!Object.values(env).some((v) => /brt1\./.test(v)), 'no run token in the CLI env');
 });
 
 test('settings.json: sandbox, permissions, git allow rules, hook shim on every event', () => {
   const s = buildSettings({ worktree: '/wt', tmpdir: '/tmp/x/', node: '/usr/local/bin/node', repo: { bash_allow: ['npm test'], allowed_domains: ['registry.npmjs.org'], allow_write_extra: ['~/.m2'] } });
   assert.equal(s.permissions.defaultMode, 'acceptEdits');
-  assert.deepEqual(s.permissions.allow, ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TodoWrite', 'Task', 'mcp__board', 'Bash(git add *)', 'Bash(git commit *)', 'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)', 'Bash(git rev-parse*)', 'Bash(git branch*)', 'Bash(npm test)']);
+  assert.deepEqual(s.permissions.allow, ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'Task', 'mcp__board', 'Bash(git add *)', 'Bash(git commit *)', 'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)', 'Bash(git rev-parse*)', 'Bash(git branch*)', 'Bash(npm test)']);
   assert.deepEqual(s.sandbox, {
     enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: ['/wt', '/tmp/x/', '~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn', '~/.m2'],
-      denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.board', '~/.codex', '~/.claude-traffic-light'],
+      denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
+        '~/.board/device.json', '~/.board/policy.json', '~/.board/ledger.json', '~/.board/outbox', '~/.board/run'],
     },
     network: { allowedDomains: ['registry.npmjs.org'], strictAllowlist: true },
   });
@@ -81,6 +89,8 @@ test('settings.json: sandbox, permissions, git allow rules, hook shim on every e
     assert.equal(h.timeout, ['pre', 'precompact'].includes(arg) ? 30 : 10);
   }
   assert.equal(s.hooks.PreToolUse[0].matcher, '*');
+  assert.equal(s.apiKeyHelper, undefined);
+  assert.equal(buildSettings({ worktree: '/wt', tmpdir: '/t', apiKeyFile: '/r/api.key' }).apiKeyHelper, "/bin/cat '/r/api.key'");
   const m = buildMcpConfig({ socket: '/s', token: 'T', node: '/n' });
   assert.deepEqual(m, { mcpServers: { board: { type: 'stdio', command: '/n', args: [MCP_SERVER], env: { BOARD_RUN_SOCKET: '/s', BOARD_RUN_TOKEN: 'T' } } } });
 });
@@ -134,7 +144,7 @@ test('the spawned CLI actually receives exactly the allowlisted env and the prof
     const run = await claimRun(sup, hub, offerFor({ key: 'APP-99' }));
     const start = await waitFor(() => readFakeLog(run.runDir).find((e) => e.ev === 'start'), { what: 'fake start' });
     const got = Object.keys(start.env).filter((k) => !['PWD', 'SHLVL', '_', 'OLDPWD', '__CF_USER_TEXT_ENCODING'].includes(k)).sort();
-    assert.deepEqual(got, ['BOARD_RUN_SOCKET', 'BOARD_RUN_TOKEN', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'LANG', 'MCP_TOOL_TIMEOUT', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'ZDOTDIR'].sort());
+    assert.deepEqual(got, ['BOARD_RUN_SOCKET', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'HOME', 'LANG', 'MCP_TOOL_TIMEOUT', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'ZDOTDIR'].sort());
     assert.equal(start.argv[start.argv.indexOf('--session-id') + 1], run.sessionId);
     assert.equal(start.argv[start.argv.indexOf('--setting-sources') + 1], '');
     assert.equal((fs.statSync(run.runDir).mode & 0o777), 0o700);

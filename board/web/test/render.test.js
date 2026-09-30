@@ -254,3 +254,21 @@ test('avatar renders initials when no image', () => {
   assert.equal(textOf(byClass(n, 'avatar-initials')[0]), 'A');
   assert.ok(ALICE);
 });
+
+test('card face: an approver answers a permission request in one click; non-approvers get no buttons', () => {
+  const ask = { kind: 'permission', summary: 'npm run migrate', count: 1, permission_request_id: 'pr-9' };
+  const mine = card(entry(view({ run_state: 'blocked', blocked_kind: 'permission', ask, viewer_can_approve: true, live: live({ green: false }) })), model([]));
+  const clicks = byAttr(mine, 'data-action', 'permission');
+  assert.deepEqual(clicks.map(textOf), ['Allow', 'Deny']);
+  assert.deepEqual(clicks.map((b) => [b.props['data-pr'], b.props['data-decision']]), [['pr-9', 'allow'], ['pr-9', 'deny']]);
+  const theirs = card(entry(view({ run_state: 'blocked', blocked_kind: 'permission', ask, viewer_can_approve: false, live: live({ green: false }) })), model([]));
+  assert.equal(byAttr(theirs, 'data-action', 'permission').length, 0);
+  const legacy = card(entry(view({ run_state: 'blocked', blocked_kind: 'permission', ask: { ...ask, permission_request_id: undefined }, viewer_can_approve: true, live: live({ green: false }) })), model([]));
+  assert.deepEqual(byAttr(legacy, 'data-action', 'allow').map(textOf), ['Review request'], 'no request id → open the drawer');
+});
+
+test('every FeedEvent kind the hub sends has a feed label (CONTRACT §5.3)', async () => {
+  const { FEED_KINDS } = await import('../../shared/protocol.js');
+  const { FEED_LABEL } = await import('../js/render-drawer.js');
+  assert.deepEqual(FEED_KINDS.filter((k) => !FEED_LABEL[k]), []);
+});

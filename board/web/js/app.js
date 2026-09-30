@@ -9,12 +9,14 @@ import { boardScreen, loadingScreen } from './render-board.js';
 import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
+import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
 
 const root = document.getElementById('root');
 const perf = () => performance.now();
 
 const state = {
   auth: 'loading', // loading | signed_out | forbidden | ok
+  authMode: null, // /api/health auth: 'dev' | 'access'
   authError: null,
   authBusy: false,
   email: null,
@@ -105,7 +107,7 @@ function toasts() {
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: isLoopback(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -142,11 +144,13 @@ function syncDialogs() {
 
 // ── auth + boot ──────────────────────────────────────────────────────────────
 
-const isLoopback = () => ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
-
 async function boot() {
   state.auth = 'loading';
   update();
+  // /api/health says whether this hub offers dev login (BOARD_AUTH=dev) or Access.
+  if (state.authMode == null) {
+    try { state.authMode = (await api.health()).auth ?? 'access'; } catch { state.authMode = 'access'; }
+  }
   try {
     state.me = await api.me();
   } catch (err) {
@@ -352,9 +356,8 @@ async function openGive(cardId, mode) {
   loadPreview();
 }
 
-// The hub reads plan approval from a card label (CONTRACT §10.2
-// require_plan_approval). The label name is a contract request.
-const PLAN_LABEL = 'plan-approval';
+// The hub reads plan approval from this card label (CONTRACT §10.2).
+const PLAN_LABEL = PLAN_APPROVAL_LABEL;
 
 async function loadPreview() {
   const d = state.dialog;

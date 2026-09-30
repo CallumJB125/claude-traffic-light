@@ -21,6 +21,8 @@ const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const DEFAULT_TEST_PATTERNS = [/\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b/, /\bnode\s+--test\b/, /\b(jest|vitest|pytest|mocha)\b/, /\bgo\s+test\b/, /\bcargo\s+test\b/, /\bmake\s+(test|check)\b/];
 
+const planStatus = (s) => ({ pending: 'todo', in_progress: 'doing', completed: 'done' }[s] ?? 'todo');
+
 function hso(event, extra) {
   return { hookSpecificOutput: { hookEventName: event, ...extra } };
 }
@@ -98,6 +100,7 @@ export class Run {
     this.lastActivitySentMono = -Infinity;
     this.toolInFlight = null;
     this.streamTools = new Map();
+    this.tasks = new Map();      // CLI task list mirror (TaskCreate/TaskUpdate)
     this.facts = [];
     this.lastFactFlush = now;
     this.costUsd = 0;
@@ -695,9 +698,9 @@ export class Run {
     }
     if (name === 'Bash') await this.#bashFacts(input, payload, ok, duration);
     if (name === 'TodoWrite' && Array.isArray(input.todos)) {
-      const status = (s) => ({ pending: 'todo', in_progress: 'doing', completed: 'done' }[s] ?? 'todo');
-      this.fact('plan', { items: input.todos.slice(0, 50).map((x) => ({ text: clip(redact(String(x.content ?? ''), this.worktree), 300), status: status(x.status) })) });
+      this.fact('plan', { items: input.todos.slice(0, 50).map((x) => ({ text: clip(redact(String(x.content ?? ''), this.worktree), 300), status: planStatus(x.status) })) });
     }
+    if ((name === 'TaskCreate' || name === 'TaskUpdate') && ok) this.#taskPlan(name, input, payload.tool_response);
     this.activity('tool_end');
 
     const ctx = [];
@@ -716,6 +719,28 @@ export class Run {
     const text = ctx.join('\n\n');
     const event = ok ? 'PostToolUse' : 'PostToolUseFailure';
     return { stdout: text ? hso(event, { additionalContext: text }) : {}, exit_code: 0 };
+  }
+
+  // Plan mirror for the CLI's task list (TaskCreate/TaskUpdate, which replaced
+  // TodoWrite): keep id → {text, status} and send the whole list as a plan fact.
+  #taskPlan(name, input, resp) {
+    let id;
+    if (name === 'TaskCreate') {
+      const r = resp && typeof resp === 'object' ? resp : {};
+      id = r.task?.id ?? r.id ?? /#?(\d+)/.exec(typeof resp === 'string' ? resp : JSON.stringify(resp ?? ''))?.[1] ?? `n${this.tasks.size + 1}`;
+      this.tasks.set(String(id), { text: String(input.subject ?? input.description ?? ''), status: 'todo' });
+    } else {
+      id = String(input.taskId ?? '');
+      if (!id) return;
+      if (input.status === 'deleted') this.tasks.delete(id);
+      else {
+        const t = this.tasks.get(id) ?? { text: `task ${id}`, status: 'todo' };
+        if (input.subject) t.text = String(input.subject);
+        if (input.status) t.status = planStatus(input.status);
+        this.tasks.set(id, t);
+      }
+    }
+    this.fact('plan', { items: [...this.tasks.values()].slice(0, 50).map((t) => ({ text: clip(redact(t.text, this.worktree), 300), status: t.status })) });
   }
 
   async #bashFacts(input, payload, ok, duration) {
@@ -822,22 +847,33 @@ export class Run {
     if (kind === 'handover.write') {
       this.snapshotNow({ why: 'handover' });
       if (this.handover && !this.handover.done) setTimeout(() => this.#finishHandover('written'), 0);
+      // {version} is the hub's handover version from the ack; without one it is
+      // queued (delivered later, the hub assigns the version then).
       if (entry?.seq && this.sup.connected) {
-        const acked = await this.sup.waitAck(entry.seq, 5000);
-        return acked ? { ok: true, version: this.narrative.version } : { ok: true, queued: true };
+        const a = await this.sup.waitAck(entry.seq, 5000);
+        if (a.acked && a.version != null) return { ok: true, version: a.version };
       }
-      return { ok: true, queued: true, version: this.narrative.version };
+      return { ok: true, queued: true };
     }
     return { ok: true, ...(this.sup.connected && !this.postFence ? {} : { queued: true }) };
   }
 
+  // The CLI cancelled a held approval: deny locally and withdraw it on the hub.
   cancel(connId, reqId) {
     const key = `${connId}:${reqId}`;
     const p = this.approvals.get(key);
     if (!p) return;
     this.approvals.delete(key);
+    p.cancelled = true;
     this.log.info('approval cancelled by the CLI', { run_id: this.run_id });
+    if (p.prid) this.#withdrawApproval(p.prid);
     p.resolve({ behavior: 'deny', message: 'Permission prompt was cancelled.' });
+  }
+
+  #withdrawApproval(prid) {
+    this.sup.rpc(this, 'approval_cancel', { permission_request_id: prid }).catch((e) => {
+      this.log.info('approval withdraw not delivered', { run_id: this.run_id, code: e.code });
+    });
   }
 
   async #waitStreamTool(id, ms) {
@@ -866,16 +902,11 @@ export class Run {
     }
     if (this.runAllow.has(runAllowKey(toolName, input))) return { behavior: 'allow' };
     if (!this.gateOpen) return { behavior: 'deny', message: 'board offline gate is closed' };
-    let prid;
-    try {
-      prid = (await this.sup.rpc(this, 'approval', { tool_name: toolName, input_summary: summary, ...(tuid ? { tool_use_id: tuid } : {}) })).permission_request_id;
-    } catch (e) {
-      return { behavior: 'deny', message: `${e.code ?? 'INTERNAL'}: ${e.message}` };
-    }
     const key = `${ctx.connId}:${ctx.reqId}`;
     return new Promise((resolve) => {
-      this.approvals.set(key, {
-        prid,
+      const entry = {
+        prid: null,
+        cancelled: false,
         resolve,
         onAnswer: (a) => {
           if (!answererAllowed(this.sup.policy, this.repo_id, this.sup.memberId, a.answered_by)) {
@@ -888,6 +919,15 @@ export class Run {
             resolve({ behavior: 'allow' });
           } else resolve({ behavior: 'deny', message: `Denied on the board by ${a.answered_by?.name ?? 'a teammate'}.` });
         },
+      };
+      // Registered before the rpc so a cancel that races it is not lost.
+      this.approvals.set(key, entry);
+      this.sup.rpc(this, 'approval', { tool_name: toolName, input_summary: summary, ...(tuid ? { tool_use_id: tuid } : {}) }).then((r) => {
+        entry.prid = r.permission_request_id;
+        if (entry.cancelled) this.#withdrawApproval(entry.prid);
+      }, (e) => {
+        this.approvals.delete(key);
+        resolve({ behavior: 'deny', message: `${e.code ?? 'INTERNAL'}: ${e.message}` });
       });
     });
   }

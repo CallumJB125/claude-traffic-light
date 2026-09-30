@@ -7,7 +7,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
-import { step, fromDb, toDb, ACTIVE } from '../shared/states.js';
+import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import {
   timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
 } from '../shared/liveness.js';
@@ -15,6 +15,7 @@ import { branchName, snapshotRef } from '../shared/fence.js';
 import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
+import { FEED_KINDS } from '../shared/protocol.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
@@ -544,7 +545,7 @@ export class Hub extends EventEmitter {
       base_ref: row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
       dispatched_by: { member_id: d.dispatched_by, name: this.memberName(d.dispatched_by) }, needs_confirm: !!d.needs_confirm,
       labels, budget_usd: budgetCents == null ? null : budgetCents / 100, max_turns: settings.default_max_turns ?? null,
-      require_plan_approval: labels.includes('require_plan_approval'), seed: out,
+      require_plan_approval: labels.includes(PLAN_APPROVAL_LABEL), seed: out,
     };
   }
 
@@ -925,8 +926,8 @@ export class Hub extends EventEmitter {
 }
 
 // ── feed rendering (shared by views and broadcasts) ─────────────────────────
-const HIDDEN_KINDS = new Set(['activity', 'facts', 'tool_start', 'tool_end', 'handover.write', 'status.update', 'comment.delivered', 'snapshot']);
-export const isFeedKind = (k) => !HIDDEN_KINDS.has(k);
+const SHOWN_KINDS = new Set(FEED_KINDS);
+export const isFeedKind = (k) => SHOWN_KINDS.has(k);
 
 const FEED_TEXT = {
   dispatched: 'Given to Claude', claimed: 'Runner claimed the card', started: 'Claude started', cancelled: 'Dispatch cancelled',
@@ -936,7 +937,7 @@ const FEED_TEXT = {
   retried: 'Retried', taken_over: 'Taken over', handing_over: 'Handing over', handed_over: 'Handed over',
   human_on_it: 'A human took it', in_review: 'In review', changes_requested: 'Changes requested', pr_closed_unmerged: 'PR closed without merge',
   merged: 'Merged', approved_done: 'Approved as done', prep_failed: 'Preparation failed', requeued_claim_timeout: 'Requeued: runner never started',
-  handover_frozen: 'Handover frozen', salvage: 'Salvage attached',
+  handover_frozen: 'Handover frozen', salvage: 'Salvage attached', withdrawn: 'Request withdrawn', created: 'Created',
 };
 
 export function feedEvent(hub, ev) {
