@@ -103,3 +103,27 @@ test('Integrations is not in the board view switcher', () => {
   assert.equal(findAll(v, (n) => n.props['data-view'] === 'integrations').length, 0);
   assert.equal(actionLabel('unknown.x'), 'unknown.x');
 });
+
+test('a manifest connect renders a real POST form: hidden fields, one "Create the app" submit, no script, not intercepted', () => {
+  const manifest = { provider: 'github', action: 'https://github.com/settings/apps/new?state=s.t', fields: { manifest: '{"name":"Buddy","url":"x\\"y"}' }, target: '_blank' };
+  const v = integrationsScreen(m({ data: { available, connections: [], vault: true }, manifest }));
+  const forms = findAll(v, (n) => n.tag === 'form');
+  assert.equal(forms.length, 1);
+  const f = forms[0];
+  assert.equal(f.props.method, 'post');
+  assert.equal(f.props.action, manifest.action);
+  assert.equal(f.props.target, '_blank');
+  assert.equal(f.props.rel, 'noopener noreferrer');
+  assert.equal(f.props['data-form'], undefined, 'the app\'s submit handler must not preventDefault it');
+  const hidden = findAll(f, (n) => n.tag === 'input');
+  assert.deepEqual(hidden.map((i) => [i.props.type, i.props.name, i.props.value]), [['hidden', 'manifest', manifest.fields.manifest]]);
+  const buttons = findAll(f, (n) => n.tag === 'button');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].props.type, 'submit');
+  assert.equal(textOf(buttons[0]), 'Create the app on GitHub');
+  assert.equal(findAll(v, (n) => n.tag === 'script').length, 0);
+  assert.equal(byAttr(v, 'data-provider', 'github').filter((n) => n.props['data-action'] === 'integ-connect').length, 0, 'the form replaces the connect button');
+  // The fake (token) card is untouched; a manifest for another provider or a non-https action renders no form.
+  assert.equal(findAll(integrationsScreen(m({ data: { available, connections: [], vault: true }, manifest: { ...manifest, provider: 'fake' } })), (n) => n.tag === 'form' && n.props.method === 'post').length, 0);
+  assert.equal(findAll(integrationsScreen(m({ data: { available, connections: [], vault: true }, manifest: { ...manifest, action: 'http://github.com/x' } })), (n) => n.tag === 'form').length, 0);
+});

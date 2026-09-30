@@ -91,7 +91,17 @@ function connectedCard(conn, m) {
     open ? h('section', { class: 'integ-section', 'aria-label': 'Activity' }, h('h4', null, 'Activity'), activity(m.audit[conn.id])) : null);
 }
 
+// A provider's App-manifest flow (GitHub) takes a POSTed form, not a link:
+// a real form the admin submits themselves (no auto-submit, no inline script
+// under the CSP). The hub checked the action host; https is re-checked here.
+function manifestForm(c, mf) {
+  return h('form', { class: 'integ-manifest', method: 'post', action: mf.action, target: mf.target ?? '_blank', rel: 'noopener noreferrer' },
+    Object.entries(mf.fields ?? {}).map(([name, value]) => h('input', { key: name, type: 'hidden', name, value })),
+    h('button', { type: 'submit', class: 'btn btn-sm btn-primary' }, `Create the app on ${c.name}`));
+}
+
 function availableCard(c, m) {
+  const manifest = c.connect === 'app_install' && m.manifest?.provider === c.id && /^https:\/\//.test(m.manifest.action ?? '') ? m.manifest : null;
   const tokenOpen = m.tokenFor === c.id;
   const busy = m.busy.has(`integ-connect:${c.id}`);
   return h('article', { key: c.id, class: 'integ-card integ-available' },
@@ -99,6 +109,7 @@ function availableCard(c, m) {
     c.scopes?.length ? h('p', { class: 'muted small' }, `Asks for: ${c.scopes.join(', ')}`) : null,
     !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
+      : manifest ? manifestForm(c, manifest)
       : c.connect === 'token'
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
@@ -142,7 +153,7 @@ export function integrationsScreen(model) {
   const data = m.data;
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
-    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
   };
   const connected = data.connections ?? [];
   const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id));
