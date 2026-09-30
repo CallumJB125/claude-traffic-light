@@ -31,7 +31,8 @@ test('invite → mail with a fragment link → preview (3 fields, no address) �
     const { h, users, A } = fx;
     const r = await fx.invite(users.ua, 'Jo@Example.com', 'member');
     assert.equal(r.status, 200, r.text);
-    assert.deepEqual(Object.keys(r.body).sort(), ['invite', 'link']);
+    assert.deepEqual(Object.keys(r.body).sort(), ['code', 'invite', 'link', 'mailed']);
+    assert.equal(r.body.mailed, true);
     assert.deepEqual(Object.keys(r.body.invite).sort(), ['email', 'expires_at', 'id', 'role']);
     assert.equal(r.body.invite.email, 'jo@example.com');
     assert.equal(Date.parse(r.body.invite.expires_at) - Date.parse(h.hub.iso()), 7 * DAY);
@@ -45,7 +46,7 @@ test('invite → mail with a fragment link → preview (3 fields, no address) �
     assert.equal(mail.subject, 'owner invited you to Alpha on Plexiform');
     assert.ok(mail.text.includes(r.body.link));
     assert.match(mail.text, /as a member/);
-    assert.match(mail.text, /enter this code: [BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}/);
+    assert.ok(mail.text.includes(`enter this code: ${r.body.code}`), 'the mail carries the code the inviter was shown');
     assert.match(mail.text, /expires on \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
     assert.match(mail.text, /only for jo@example\.com/);
     assert.match(mail.text, /Ignore it to decline/);

@@ -20,6 +20,7 @@ import { tenancy, MARK } from './fixture.js';
 // team with B's sub-resource ids (also 404).
 const MATRIX = {
   'GET /api/health': { kind: 'public' },
+  'GET /api/auth/methods': { kind: 'public' },
   'POST /api/auth/email/start': { kind: 'public' },
   'POST /api/auth/email/verify': { kind: 'public' },
   'POST /api/auth/signout': { kind: 'self' },

@@ -1,6 +1,6 @@
 # Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P3)
 
-For the desktop app builder. What exists today (P1 sign-in, P2 teams and members, P3 invites), and the P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D65; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
+For the desktop app builder. What exists today (P1 sign-in, P2 teams and members, P3 invites), and the P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D66; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
 
 The product name is **Plexiform** (`shared/brand.js`). Only user-facing text uses it; technical names keep `buddy` for now (the `__Host-buddy_*` cookies, the `bdt_` token prefix, `BOARD_*` env vars, route paths).
 
@@ -10,6 +10,21 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 - Errors: `{"error": {"code": "<CODE>", "message": "…", …extra}}`. The HTTP status comes from the code (table at the end). `429` responses also send `Retry-After: <s>` and `error.retry_after_s`.
 - `request_id` (uuid) is optional on the account routes. When present on a mutation, a repeat within 10 minutes replays the first answer (header `Board-Replayed: 1`).
 - Timestamps are ISO-8601 UTC strings.
+
+## Sign-in methods and mail (D66)
+
+The hub sends **no mail unless a mailer is configured**, and none is required. Sign-in is meant to be Google or GitHub (the OAuth phase comes next); the email one-time code exists only on a hub with a mailer (`BOARD_RESEND_API_KEY` + `BOARD_MAIL_FROM`).
+
+### `GET /api/auth/methods`
+
+**No auth**, rate limited (60 a minute per IP). → `{"google": false, "github": false, "email": true}`: booleans only, so the app shows the right sign-in buttons. `google`/`github` follow `BOARD_SIGNIN_METHODS`; `email` is true only when the hub has a mailer.
+
+Without a mailer:
+
+- `POST /api/auth/email/start` and `/verify` answer `404 METHOD_DISABLED` (nothing is written, nothing printed, no code exists). The email step-up for deleting an account or a team is then unavailable too, until the OAuth phase adds a re-authentication step-up.
+- Invites are still created and still bound to the invited address, but the hub sends nothing: the inviter gets the link and the code once and shares them (copy, or a prefilled `mailto:` draft in their own mail client). See `POST /api/teams/:id/invites`.
+
+An exposed hub (a `BOARD_PUBLIC_URL` off loopback, or a tunnel probe) must be https, behind cloudflared with `BOARD_TRUST_CF_IP=1`, and have at least one sign-in method (`BOARD_SIGNIN_METHODS` or a mailer); it never uses the console mailer.
 
 ## Credentials
 
@@ -71,7 +86,7 @@ The mail holds a 6-digit code, valid for 10 minutes and one use, with "Never sha
 
 For `client:'web'` the response also sets `__Host-buddy_flow` (10 min). That cookie binds the magic link to this browser.
 
-Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `429 RATE_LIMITED`.
+Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `404 METHOD_DISABLED` (no mailer on this hub), `429 RATE_LIMITED`.
 
 ### `POST /api/auth/email/verify`
 
@@ -105,6 +120,7 @@ No auth for sign-in. A delete flow needs the same user's credential.
   - `428 CONFIRM_REQUIRED`: see the magic-link rule above.
   - `429 RATE_LIMITED`.
   - `400 VALIDATION`: bad `form_factor` or an oversized name.
+  - `404 METHOD_DISABLED`: no mailer on this hub.
 
 ### `GET /api/account`
 
@@ -314,7 +330,7 @@ The invite mail (plain text) carries the team and inviter names, the link, an 8-
 
 ### `POST /api/teams/:id/invites`
 
-Admin. `{email, role}` (`role` defaults to `member`) → `{"invite": {id, email, role, expires_at}, "link": "https://<hub>/invite#inv_…"}`. The link is shown **once** (the hub can't show it again); the mail goes out at the same time.
+Admin. `{email, role}` (`role` defaults to `member`) → `{"invite": {id, email, role, expires_at}, "link": "https://<hub>/invite#inv_…", "code": "BCDF-GHJK", "mailed": true}`. The link and the code are shown **once** (the hub can't show them again). With a mailer the invite mail goes out at the same time (`mailed: true`); without one (D66) nothing is sent (`mailed: false`) and the app lets the inviter copy the link or code, or open a prefilled `mailto:` draft. Either way only the invited address can accept: a link forwarded to anyone else answers `WRONG_ACCOUNT`.
 
 ### `GET /api/teams/:id/invites`
 
@@ -326,7 +342,7 @@ Admin. `{}` → `{ok:true}`. The token dies at once. An unknown, used or already
 
 ### `POST /api/teams/:id/invites/:invite_id/resend`
 
-Admin (the same role ceiling). `{}` → `{invite, link}`: a **new** invite id and token, a fresh 7 days and a new mail; the old token dies. Works for an expired invite too.
+Admin (the same role ceiling). `{}` → `{invite, link, code, mailed}`: a **new** invite id, token and code, a fresh 7 days and (with a mailer) a new mail; the old token and code die. Works for an expired invite too.
 
 ### `POST /api/invites/preview`
 
@@ -378,6 +394,7 @@ Agreed with the app builder; nothing here exists on the hub yet.
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |
 | `QUOTA_EXCEEDED` | 403 | a plan limit (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
+| `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66) |
 | `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug; a second pending invite for one address (`invite_id`) |
 | `ALREADY_MEMBER` | 409 | inviting, or accepting an invite, for someone already in the team (`team`) |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |

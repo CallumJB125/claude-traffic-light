@@ -20,6 +20,7 @@ export const ERRORS = Object.freeze({
   EMAIL_UNVERIFIED: 403,    // accounts: team create / invite needs a verified email
   WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (extra: email_masked; D64)
   NOT_FOUND: 404,
+  METHOD_DISABLED: 404,     // accounts: that sign-in method is not configured on this hub (D66)
   ILLEGAL_TRANSITION: 409,
   FENCED: 409,
   CONFLICT: 409,

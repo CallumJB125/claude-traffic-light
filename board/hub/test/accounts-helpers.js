@@ -9,9 +9,9 @@ import { seedDev } from '../seed.js';
 import { outboxMailer } from '../identity/mailer.js';
 import { fakeClock, fakeGitHub, testConfig, FakeBrowser } from './helpers.js';
 
-export async function startAccounts({ clock = fakeClock(), config = {} } = {}) {
-  const mailer = outboxMailer();
-  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, ...config });
+// mailer: the outbox by default; null runs the hub with no mailer (D66).
+export async function startAccounts({ clock = fakeClock(), config = {}, mailer = outboxMailer() } = {}) {
+  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, ...config });
   const app = createApp(cfg, { clock, log: silentLogger, github: fakeGitHub(), timers: false, mailer });
   seedDev(app.hub);
   const addr = await app.listen(0, '127.0.0.1');

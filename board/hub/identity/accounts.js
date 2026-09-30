@@ -109,10 +109,22 @@ export class Accounts {
     return LOOPBACK_HOST.test(host) ? `http://${host}` : null;
   }
 
-  // ── email one-time codes ──────────────────────────────────────────────────
+  /** GET /api/auth/methods (no auth): which sign-in buttons to show (D66). Booleans only. */
+  methods({ ip }) {
+    limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
+    const m = this.hub.config.signinMethods ?? [];
+    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer };
+  }
+
+  // ── email one-time codes (only with a mailer, D66) ────────────────────────
+
+  requireMailer() {
+    if (!this.mailer) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
+  }
 
   /** POST /api/auth/email/start → {flow_id, expires_in}. Same answer for every address. */
   start(body, { ip, ident = null, req = null, res = null }) {
+    this.requireMailer();
     const purpose = body.purpose ?? 'signin';
     if (purpose !== 'signin' && purpose !== 'delete') throw new HubError('VALIDATION', "purpose must be 'signin' or 'delete'");
     let email;
@@ -169,6 +181,7 @@ export class Accounts {
 
   /** POST /api/auth/email/verify. */
   verify(body, { ip, ident = null, req = null, res = null }) {
+    this.requireMailer();
     limitOrThrow(this.hub, 'auth_verify_ip', ipKey(ip));
     const now = this.now();
     const flowId = typeof body.flow_id === 'string' ? body.flow_id : '';
@@ -452,7 +465,7 @@ export class Accounts {
         for (const m of members) this.hub.memberChanged(m.id);
       });
     });
-    if (email) {
+    if (email && this.mailer) {
       this.mailer.send({ to: email, subject: `Your ${BRAND.name} account was deleted`, text: `Your ${BRAND.name} account and its sign-in details were deleted. Cards and comments you wrote stay with their teams, shown as "Deleted user".\n\nIf you did not do this, reply to this email.\n` })
         .catch((e) => this.hub.log.warn('deletion mail failed', { mailer: this.mailer.kind, err: e.message }));
     }

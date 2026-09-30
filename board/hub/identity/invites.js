@@ -87,7 +87,11 @@ export class Invites {
 
   // ── admin side ────────────────────────────────────────────────────────────
 
-  /** POST /api/teams/:team_id/invites {email, role} → {invite, link}. The link (and so the token) is shown once. */
+  /**
+   * POST /api/teams/:team_id/invites {email, role} → {invite, link, code, mailed}.
+   * The link (and so the token) and the short code are shown once; the hub
+   * mails them only when it has a mailer (D66).
+   */
   create(member, body, { ip, req }) {
     if (!can(member, 'invite.create')) throw new HubError('FORBIDDEN', 'only admins can invite');
     const email = normalizeEmail(body.email);
@@ -135,10 +139,15 @@ export class Invites {
       this.db.insert('invites', inv);
       this.audit(action, { member, target: inv.id, detail: { role, email_ref: this.accounts.emailRef(email), ...(replaces ? { replaces } : {}) }, ip });
     });
-    const mail = inviteMail({ team: org.name, inviter: member.display_name, role, link, code: `${code.slice(0, 4)}-${code.slice(4)}`, email, expiresAt: inv.expires_at });
-    this.accounts.mailer.send({ to: email, ...mail, idempotencyKey: inv.id })
-      .catch((e) => this.hub.log.warn('invite mail failed', { mailer: this.accounts.mailer.kind, err: e.message }));
-    return { invite: this.view(inv), link };
+    const shown = `${code.slice(0, 4)}-${code.slice(4)}`;
+    // No mailer (D66): nothing is sent; the inviter shares the link or code themselves.
+    const mailer = this.accounts.mailer;
+    if (mailer) {
+      const mail = inviteMail({ team: org.name, inviter: member.display_name, role, link, code: shown, email, expiresAt: inv.expires_at });
+      mailer.send({ to: email, ...mail, idempotencyKey: inv.id })
+        .catch((e) => this.hub.log.warn('invite mail failed', { mailer: mailer.kind, err: e.message }));
+    }
+    return { invite: this.view(inv), link, code: shown, mailed: !!mailer };
   }
 
   /** GET /api/teams/:team_id/invites: pending ones only, never tokens. */
@@ -167,7 +176,7 @@ export class Invites {
     return { ok: true };
   }
 
-  /** POST /api/teams/:team_id/invites/:invite_id/resend → {invite, link}: a new token; the old one dies. */
+  /** POST /api/teams/:team_id/invites/:invite_id/resend → {invite, link, code, mailed}: a new token and code; the old ones die. */
   resend(member, id, { ip, req }) {
     if (!can(member, 'invite.create')) throw new HubError('FORBIDDEN', 'only admins can invite');
     const inv = this.teamInvite(member, id);
@@ -281,7 +290,7 @@ export class Invites {
   notifyInviter(inv, org, user) {
     const by = this.hub.member(inv.created_by);
     const to = by && !by.removed_at && by.user_id ? this.accounts.liveUser(by.user_id)?.primary_email : null;
-    if (!to) return;
+    if (!to || !this.accounts.mailer) return;
     const who = mailName(user.display_name);
     this.accounts.mailer.send({
       to,

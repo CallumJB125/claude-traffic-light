@@ -41,6 +41,11 @@ export function loadConfig(env = process.env) {
     resendApiKey: env.BOARD_RESEND_API_KEY || null,
     mailFrom: env.BOARD_MAIL_FROM || null,
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
+    consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
+    signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    accountsDev: flag(env.BOARD_ACCOUNTS_DEV),
+    authFailBudget: int(env.BOARD_AUTH_FAIL_BUDGET, 20),
+    mailDailyCap: int(env.BOARD_MAIL_DAILY_CAP, 2000),
     devSeed: flag(env.BOARD_DEV_SEED),
     devRepo: env.BOARD_DEV_REPO || null,
     devLoginSecret: env.BOARD_DEV_LOGIN_SECRET || null,
@@ -64,9 +69,21 @@ export function loadConfig(env = process.env) {
   return cfg;
 }
 
-// BOARD_AUTH=accounts (D51): the hub runs its own sign-in, so it must be
-// reachable only over https (a loopback bind may use http, for tests and a
-// local try-out), have its own key material, and a way to send the codes.
+// Reachable from outside: a BOARD_PUBLIC_URL naming a non-loopback host, or a tunnel probe.
+export function isExposed(cfg) {
+  if (cfg.tunnelProbeUrl) return true;
+  if (!cfg.publicUrl) return false;
+  try { return !isLoopback(new URL(cfg.publicUrl).hostname.replace(/^\[|\]$/g, '')); } catch { return true; }
+}
+
+export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
+
+// BOARD_AUTH=accounts (D51, D66): the hub runs its own sign-in. Exposed, it
+// must be https behind cloudflared (per-IP limits key on CF-Connecting-IP,
+// trusted only from a loopback peer) with at least one sign-in method; the
+// email code is optional (only with a real mailer) and the console mailer is
+// never allowed there. Without a public URL it is a loopback try-out, and only
+// with BOARD_ACCOUNTS_DEV=1.
 function validateAccounts(cfg) {
   const loop = isLoopback(cfg.bind);
   if (!cfg.secret) throw new Error('BOARD_AUTH=accounts needs BOARD_SECRET (at least 32 bytes)');
@@ -74,12 +91,24 @@ function validateAccounts(cfg) {
   if (cfg.publicUrl) {
     try { url = new URL(cfg.publicUrl); } catch { throw new Error(`BOARD_PUBLIC_URL is not a URL: ${cfg.publicUrl}`); }
   }
+  const exposed = isExposed(cfg);
+  if (!url && !(loop && cfg.accountsDev)) throw new Error('BOARD_AUTH=accounts needs BOARD_PUBLIC_URL (only a loopback bind with BOARD_ACCOUNTS_DEV=1 may do without)');
   if (!loop && url?.protocol !== 'https:') throw new Error('BOARD_AUTH=accounts needs an https BOARD_PUBLIC_URL (only a loopback bind may do without)');
-  if (url && url.protocol !== 'https:' && !isLoopback(url.hostname)) throw new Error('BOARD_PUBLIC_URL must be https unless it names a loopback host');
+  if (url && url.protocol !== 'https:' && !isLoopback(url.hostname.replace(/^\[|\]$/g, ''))) throw new Error('BOARD_PUBLIC_URL must be https unless it names a loopback host');
   if (cfg.trustCfIp && !loop) throw new Error('BOARD_TRUST_CF_IP needs a loopback bind (cloudflared on the same host is the only ingress)');
   if (cfg.resendApiKey && !cfg.mailFrom) throw new Error('BOARD_RESEND_API_KEY needs BOARD_MAIL_FROM');
-  if (!cfg.resendApiKey && !loop) throw new Error('BOARD_AUTH=accounts off loopback needs BOARD_RESEND_API_KEY and BOARD_MAIL_FROM (the console mailer is for loopback only)');
+  const methods = cfg.signinMethods ?? [];
+  const bad = methods.filter((m) => !SIGNIN_METHODS.includes(m));
+  if (bad.length) throw new Error(`BOARD_SIGNIN_METHODS takes ${SIGNIN_METHODS.join(', ')} (got ${bad.join(', ')})`);
+  if (cfg.consoleMailer && (exposed || !loop)) throw new Error('BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed');
+  if (exposed) {
+    if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
+    if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
+    if (!cfg.resendApiKey && !methods.length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM)');
+  }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
+  if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be a positive integer');
+  if (cfg.mailDailyCap != null && (!Number.isInteger(cfg.mailDailyCap) || cfg.mailDailyCap < 1)) throw new Error('BOARD_MAIL_DAILY_CAP must be a positive integer');
   if (cfg.downloadUrl) {
     let d;
     try { d = new URL(cfg.downloadUrl); } catch { throw new Error(`BOARD_DOWNLOAD_URL is not a URL: ${cfg.downloadUrl}`); }

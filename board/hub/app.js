@@ -21,7 +21,7 @@ import { createMailer } from './identity/mailer.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
 
-export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer = null } = {}) {
+export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
@@ -41,7 +41,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
   // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
   // to whoever first proves that email address.
-  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer ?? createMailer(config, { fetchImpl }) }) : null;
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });

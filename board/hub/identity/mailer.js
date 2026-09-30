@@ -1,7 +1,11 @@
-// Mailer (D55): send({to, subject, text}) → Promise. Three implementations:
-// Resend over its HTTP API (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM), a console
-// mailer for a loopback hub (prints to stderr for the person at the terminal,
-// never through the log), and an outbox that records mails for tests.
+// Mailer (D55, D66): send({to, subject, text}) → Promise. Optional: with none
+// the hub sends no mail at all (email codes are off, invites are shared by the
+// inviter). Three implementations: Resend over its HTTP API
+// (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM), a console mailer for a loopback
+// hub that is not exposed (BOARD_CONSOLE_MAILER=1; prints to stderr for the
+// person at the terminal, never through the log), and an outbox for tests.
+
+import { isExposed } from '../config.js';
 // Plain text only: no HTML built from user input (design §9.2).
 
 const RESEND_URL = 'https://api.resend.com/emails';
@@ -51,7 +55,9 @@ export function outboxMailer() {
   };
 }
 
+/** The configured mailer, or null (no mailer). Never the console one on an exposed hub. */
 export function createMailer(config, { fetchImpl } = {}) {
   if (config.resendApiKey) return resendMailer({ apiKey: config.resendApiKey, from: config.mailFrom, fetchImpl });
-  return consoleMailer();
+  if (config.consoleMailer && !isExposed(config)) return consoleMailer();
+  return null;
 }
