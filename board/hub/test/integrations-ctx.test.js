@@ -105,9 +105,8 @@ test('cardForBranch: another org\'s card on the same repo and branch is null; du
     const o = addOrg(h);
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-1', fence: 1 });
     assert.equal(ctx.cardForBranch('acme/app', theirs.branch), null);
-    // Their card's run recorded in OUR repo row (never legitimately possible) still isn't ours.
-    const cross = addRun(h, { boardId: o.board, repoId: h.ids.repo, member: o.admin, key: 'OTH-2', fence: 1 });
-    assert.equal(ctx.cardForBranch('acme/app', cross.branch), null);
+    // Their card pointing at OUR repo row is refused by the teams schema itself (migration 010).
+    assert.throws(() => addRun(h, { boardId: o.board, repoId: h.ids.repo, member: o.admin, key: 'OTH-2', fence: 1 }), /cross-team reference/);
     const a = addRun(h, { key: 'BDL-5', fence: 1 });
     assert.deepEqual(ctx.cardForBranch('acme/app', a.branch), { card_id: a.cardId, base_ref: 'main' });
     addRun(h, { key: 'BDL-6', branch: a.branch });
