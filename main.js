@@ -291,6 +291,8 @@ fs.mkdirSync(REQUESTS_DIR, { recursive: true });
 // session's folder. POST also needs the per-install token, written 0600 next
 // to the port file, so only something that can read your files can move a
 // light.
+const Smoke = require('./src/smoke.js');
+const AutoUpdate = require('./src/auto-update.js');
 const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = require('./src/signal-server.js')({
   rootDir: ROOT_DIR,
   sessionsDir: SESSIONS_DIR,
@@ -3042,6 +3044,9 @@ if (!gotLock) {
 app.whenReady().then(() => {
   if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
+  // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
+  const smokeReport = Smoke.reportPathFrom(process.argv);
+  if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (!IS_DEV_RUN && !areHooksInstalled()) installHooks();
@@ -3055,6 +3060,13 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
+  // Windows and Linux AppImage install updates themselves; macOS is notify-only
+  // until the app is signed. Reports through UpdateCheck once that lands.
+  if (!IS_DEV_RUN) {
+    let updateCheck = null;
+    try { updateCheck = require('./src/update-check.js'); } catch { /* notify layer not in this build */ }
+    AutoUpdate.start({ app, updateCheck });
+  }
   startSignalServer();
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
   every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');

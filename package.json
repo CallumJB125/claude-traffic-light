@@ -7,15 +7,17 @@
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
     "predist": "npm run calendar-helper && npm run voice-helper",
-    "dist": "electron-builder --mac",
+    "dist": "electron-builder -c electron-builder.config.js --mac",
     "test": "node --test test/*.test.js test/adapters/*.test.js && npm run test:remote",
     "test:remote": "npm --prefix remote test",
     "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "cameos": "python3 scripts/build-cameos.py",
-    "dist:win": "electron-builder --win --x64",
+    "dist:win": "electron-builder -c electron-builder.config.js --win",
+    "dist:linux": "electron-builder -c electron-builder.config.js --linux",
     "predist:mac": "npm run calendar-helper && npm run voice-helper",
-    "dist:mac": "electron-builder --mac",
+    "dist:mac": "electron-builder -c electron-builder.config.js --mac",
+    "smoke": "node scripts/smoke-installed.js",
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",
     "tune": "electron tools/tuning-main.js",
@@ -140,6 +142,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "electron-updater": "^6.8.9",
     "ws": "^8.22.0",
     "zod": "^4.6.2"
   }
