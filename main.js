@@ -2069,6 +2069,7 @@ function maybeRandomEvent(st) {
   win.webContents.send('event', milestone ? 'ufo' : names[Math.floor(Math.random() * names.length)]);
 }
 
+const LoginItem = require('./src/login-item.js').create({ app, name: require('./brand.js').name });
 function createTray() {
   if (tray) {
     tray.destroy();
@@ -2142,8 +2143,8 @@ function createTray() {
     {
       label: 'Open at Login',
       type: 'checkbox',
-      checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+      checked: LoginItem.get(),
+      click: (item) => LoginItem.set(item.checked),
     },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
@@ -3302,7 +3303,7 @@ app.whenReady().then(() => {
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
-    app.setLoginItemSettings({ openAtLogin: true });
+    LoginItem.set(true);
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(autoLaunchMarker, new Date().toISOString());
   }
