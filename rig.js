@@ -932,7 +932,8 @@
       svg.style.setProperty('--eye-color', /^#/.test(eyes) ? eyes : eyes === 'laser' ? '#ff3b30' : '#211f1c');
 
       const body = Characters.has(look.body) ? look.body : 'claude';
-      if (!current || current.body !== body) wearCharacter(body);
+      const bodyRev = Characters.revision(body);
+      if (!current || current.body !== body || current.bodyRev !== bodyRev) wearCharacter(body);
       svg.style.setProperty('--body-color', /^#[0-9a-f]{6}$/i.test(look.bodyColor || '') ? look.bodyColor : '#da7756');
       const effect = EFFECTS.includes(look.effect) ? look.effect : 'none';
       for (const e of EFFECTS) svg.classList.toggle(`effect-${e}`, effect === e);
@@ -1009,7 +1010,7 @@
       const nextBloom = lit && !groupFx && numText === '' ? `${lit}|${color}|${sign}` : '';
       if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign.sign-${sign} .lamp.on`));
       bloomKey = nextBloom;
-      current = { ...look, body, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
+      current = { ...look, body, bodyRev, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
       if (ambient) ambient.scan();
     }
 
@@ -1051,13 +1052,13 @@
     function nudgeCostume(costume) {
       const o = character.offsets && Object.prototype.hasOwnProperty.call(character.offsets, costume) ? character.offsets[costume] : null;
       nudged = !!o;
-      for (const [k, v] of [['--co-dx', o ? `${o.dx}px` : null], ['--co-dy', o ? `${o.dy}px` : null], ['--co-s', o ? String(o.s) : null]]) {
+      for (const [k, v] of [['--co-dx', o ? `${o.dx ?? 0}px` : null], ['--co-dy', o ? `${o.dy ?? 0}px` : null], ['--co-s', o ? String(o.s ?? 1) : null]]) {
         if (v == null) svg.style.removeProperty(k); else svg.style.setProperty(k, v);
       }
       fitAnchors();
     }
     function faceSquare() {
-      const f = character.anchors.faceBox;
+      const f = character.anchors.faceBox || Characters.REF.faceBox;
       const size = Math.min(f.w, f.h);
       return { x: f.x + (f.w - size) / 2, y: f.y + (f.h - size) / 2, size };
     }
@@ -1066,7 +1067,8 @@
     function fitAnchors() {
       const fit = Characters.anchorVars(character);
       svg.classList.toggle('char-fitted', fit.fitted || nudged);
-      if (!fit.fitted && !nudged && !wornPhoto) return;
+      // nothing to offset: clear the lot, so no later rule can read a stale one
+      if (!fit.fitted && !nudged && !wornPhoto) { for (const k of Object.keys(fit.css)) svg.style.removeProperty(k); return; }
       const vars = { ...fit.css, ...(wornPhoto ? photoAnchors(wornPhoto, faceSquare()) : {}) };
       for (const [k, v] of Object.entries(vars)) svg.style.setProperty(k, v);
     }
@@ -1810,14 +1812,18 @@
     // that aren't showing (a costume not worn, a pose's props at rest) sit at
     // opacity 0 and still come back from a hit test, so look through them
     // to the first one that paints.
-    function painted(el) {
-      for (let e = el; e && e !== svg; e = e.parentElement) {
-        const cs = getComputedStyle(e);
-        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) < 0.05) return false;
-      }
-      return true;
-    }
+    // Runs on every mouse move over the widget: each ancestor's style is read
+    // once per call, however many stacked parts share it.
     function solidAt(x, y) {
+      const seen = new Map();
+      const shows = (e) => {
+        if (!seen.has(e)) {
+          const cs = getComputedStyle(e);
+          seen.set(e, !(cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) < 0.05));
+        }
+        return seen.get(e);
+      };
+      const painted = (el) => { for (let e = el; e && e !== svg; e = e.parentElement) if (!shows(e)) return false; return true; };
       for (const el of document.elementsFromPoint(x, y)) {
         if (el === svg || !svg.contains(el)) return false;
         if (painted(el)) return true;

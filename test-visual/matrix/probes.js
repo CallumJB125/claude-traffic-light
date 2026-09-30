@@ -6,7 +6,7 @@
   const probes = [
     {
       // tall and thin, arms up, two marked legs
-      id: 'probe-tall', name: 'Tall probe', contract: 1, legs: true,
+      id: 'u-probe-tall', name: 'Tall probe', contract: 1, legs: true,
       anchors: {
         head: { x: 23, y: 22, w: 18, h: 24 }, hatLine: 22, ground: 68,
         eyes: { left: { x: 28, y: 31 }, right: { x: 36, y: 31 } }, mouth: { x: 32, y: 37 },
@@ -17,7 +17,7 @@
     },
     {
       // round, no hands, no legs, no mouth, one eye
-      id: 'probe-blob', name: 'Blob probe', contract: 1, legs: false, color: '#7fbf6a',
+      id: 'u-probe-blob', name: 'Blob probe', contract: 1, legs: false, color: '#7fbf6a',
       anchors: {
         head: { x: 14, y: 40, w: 36, h: 26 }, hatLine: 41, ground: 68,
         eyes: { single: { x: 32, y: 50 } }, mouth: null, hands: null,
@@ -27,7 +27,7 @@
     },
     {
       // wide and low, big eyes far apart, short legs
-      id: 'probe-wide', name: 'Wide probe', contract: 1, legs: true, color: '#a77b52',
+      id: 'u-probe-wide', name: 'Wide probe', contract: 1, legs: true, color: '#a77b52',
       anchors: {
         head: { x: 8, y: 44, w: 48, h: 16 }, hatLine: 44, ground: 68,
         eyes: { left: { x: 20, y: 50 }, right: { x: 44, y: 50 } }, mouth: { x: 32, y: 56 },
@@ -38,7 +38,7 @@
     },
     {
       // a screen: the face (and a photo) goes on it; no eyes or mouth of its own
-      id: 'probe-screen', name: 'Screen probe', contract: 1, legs: true, color: '#c9c2b0',
+      id: 'u-probe-screen', name: 'Screen probe', contract: 1, legs: true, color: '#c9c2b0',
       anchors: {
         head: { x: 12, y: 28, w: 40, h: 32 }, hatLine: 28, ground: 68,
         eyes: 'none', mouth: null,

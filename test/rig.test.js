@@ -749,3 +749,118 @@ test('rig.talking works the mouth over any pose, and the other mouths step aside
   assert.match(RIG_CSS, /\.rig\.talking \.talk-mouth \{ opacity: 1; animation: rig-talk-jaw /);
   assert.match(RIG_CSS, /\.rig\.talking :is\(\.grin, \.grumpy-mouth, \.cameo-lips\) \{ opacity: 0; \}\s*$/, 'last, so it beats the grin and munch mouths');
 });
+
+// ── Characters: state transitions ─────────────────────────────────────────
+const Characters = require('../characters/index.js');
+const TALL = {
+  id: 'u-tall', name: 'Tall', contract: 1, legs: true,
+  anchors: {
+    head: { x: 23, y: 30, w: 18, h: 20 }, hatLine: 30, ground: 68,
+    eyes: { left: { x: 28, y: 38 }, right: { x: 36, y: 38 } }, mouth: { x: 32, y: 44 },
+    hands: { left: { x: 4.5, y: 34 }, right: { x: 50, y: 49 } }, faceBox: { x: 23, y: 30, w: 18, h: 20 }, skinParts: ['body'],
+  },
+  sprite: { body: '<rect x="23" y="30" width="18" height="30" />' },
+  offsets: { tophat: { dy: 2 } },
+};
+const defineInWindow = (w, def) => w.eval(`BuddyCharacters.register(${JSON.stringify(def)})`);
+
+test('characters: only the worn character is in the rig, and swapping leaves exactly one body', () => {
+  const { svg, rig, w } = mount();
+  defineInWindow(w, TALL);
+  rig.setLook({ body: 'claude' });
+  assert.equal(svg.querySelectorAll('.body').length, 1);
+  assert.ok(svg.querySelector('.char-body .body-default'));
+  for (const b of ['ghost', 'u-tall', 'dog', 'claude']) {
+    rig.setLook({ body: b });
+    assert.equal(svg.querySelectorAll('.body').length, 1, b);
+    assert.deepEqual(classesWith(svg, 'body-'), [`body-${b}`]);
+  }
+});
+
+test('characters: going from a fitted character back to Claude clears every fitting', () => {
+  const { svg, rig, w } = mount();
+  defineInWindow(w, TALL);
+  rig.setLook({ body: 'u-tall', costume: 'tophat' });
+  assert.ok(svg.classList.contains('char-fitted'));
+  assert.equal(prop(svg, '--hat-dy'), '-9px');
+  assert.equal(prop(svg, '--co-dy'), '2px', 'the costume nudge is set');
+  rig.setLook({ body: 'claude', costume: 'tophat' });
+  assert.ok(!svg.classList.contains('char-fitted'));
+  for (const k of ['--eye-dx', '--eye-dy', '--eye-s', '--hat-dx', '--hat-dy', '--hat-s', '--mouth-dx', '--hand-l-dx', '--face-dx', '--co-dy', '--co-s']) assert.equal(prop(svg, k), '', `${k} is gone`);
+});
+
+test('characters: a costume nudge follows the costume, and a partial nudge defaults the rest', () => {
+  const { svg, rig, w } = mount();
+  defineInWindow(w, TALL);
+  rig.setLook({ body: 'u-tall', costume: 'tophat' });
+  assert.equal(prop(svg, '--co-dx'), '0px');
+  assert.equal(prop(svg, '--co-s'), '1');
+  rig.setLook({ body: 'u-tall', costume: 'crown' });
+  assert.equal(prop(svg, '--co-dy'), '', 'no nudge for another costume');
+});
+
+test('characters: an unknown body is Claude and is not re-worn on every look', () => {
+  const { svg, rig } = mount();
+  rig.setLook({ body: 'nope' });
+  assert.deepEqual(classesWith(svg, 'body-'), ['body-claude']);
+  const layer = svg.querySelector('.char-body').firstElementChild;
+  rig.setLook({ body: 'nope', lamp: 'red' });
+  assert.equal(svg.querySelector('.char-body').firstElementChild, layer, 'the same nodes: nothing redrawn');
+});
+
+test('characters: re-registering a worn character redraws it', () => {
+  const { svg, rig, w } = mount();
+  defineInWindow(w, TALL);
+  rig.setLook({ body: 'u-tall' });
+  assert.match(svg.querySelector('.char-body').innerHTML, /height="30"/);
+  defineInWindow(w, { ...TALL, sprite: { body: '<rect x="23" y="30" width="18" height="20" />' } });
+  rig.setLook({ body: 'u-tall' });
+  assert.match(svg.querySelector('.char-body').innerHTML, /height="20"/);
+});
+
+test('characters: changing body while a photo is worn re-seats the photo in the new face box', () => {
+  const { svg, rig, w } = mount();
+  defineInWindow(w, TALL);
+  const photo = { id: 'me', rev: 1, src: 'data:image/png;base64,AAAA', eyes: { x: 0.5, y: 0.4 }, mouth: { x: 0.5, y: 0.75 } };
+  rig.setLook({ body: 'claude', cameo: 'me', cameoPhoto: photo });
+  const img = svg.querySelector('.cameo-photo-img');
+  assert.deepEqual(['x', 'y', 'width', 'height'].map((k) => img.getAttribute(k)), ['17', '30', '30', '30']);
+  rig.setLook({ body: 'u-tall', cameo: 'me', cameoPhoto: photo });
+  assert.deepEqual(['x', 'y', 'width', 'height'].map((k) => img.getAttribute(k)), ['23', '31', '18', '18'], 'the 18×20 face box gives an 18 square, centred');
+});
+
+test('characters: a character with no face box still wears a photo (falls back to Claude’s)', () => {
+  const { svg, rig, w } = mount();
+  const noBox = JSON.parse(JSON.stringify(TALL));
+  noBox.id = 'u-nobox';
+  delete noBox.anchors.faceBox;
+  defineInWindow(w, noBox);
+  const photo = { id: 'me', rev: 1, src: 'data:image/png;base64,AAAA' };
+  assert.doesNotThrow(() => rig.setLook({ body: 'u-nobox', cameo: 'me', cameoPhoto: photo }));
+  assert.equal(svg.querySelector('.cameo-photo-img').getAttribute('width'), '30');
+});
+
+test('characters: rig.solidAt reports only parts that are painted, reading each style once', () => {
+  const { svg, rig, w } = mount();
+  rig.setLook({});
+  const doc = w.document;
+  const hidden = svg.querySelector('.costume-crown');
+  const shown = svg.querySelector('.body-default rect');
+  let reads = 0;
+  const realStyle = w.getComputedStyle.bind(w);
+  w.getComputedStyle = (el) => { reads += 1; return el === hidden || hidden.contains(el) ? { display: 'inline', visibility: 'visible', opacity: '0' } : { display: 'inline', visibility: 'visible', opacity: '1' }; };
+  doc.elementsFromPoint = () => [hidden.firstElementChild, hidden, svg.querySelector('.claude-body'), shown, svg, doc.body];
+  assert.equal(rig.solidAt(10, 10), true, 'looks through the invisible crown to the body under it');
+  assert.ok(reads < 10, `a handful of style reads, not one per stacked part's ancestors (${reads})`);
+  doc.elementsFromPoint = () => [hidden.firstElementChild, hidden, svg, doc.body];
+  assert.equal(rig.solidAt(10, 10), false, 'only the invisible crown and the svg background: click-through');
+  doc.elementsFromPoint = () => [doc.body];
+  assert.equal(rig.solidAt(10, 10), false);
+  w.getComputedStyle = realStyle;
+});
+
+test('characters: a talking no-mouth character is not held by the idle bob', () => {
+  const css = RIG_CSS;
+  const breathes = /\.rig\.breathes:not\(\[class\*=" pose-"\]\)[^{]*\{/.exec(css)[0];
+  assert.match(breathes, /:not\(\.char-no-mouth\.talking\)/);
+});

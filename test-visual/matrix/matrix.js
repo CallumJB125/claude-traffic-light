@@ -30,7 +30,7 @@
     mouth: () => ['grin', 'smoke', 'zyn', 'munch', 'selfie'].flatMap((p) => [
       { label: p, look: { pose: p }, freeze: 4500 },
       { label: `${p}+photo`, look: { pose: p, cameo: 'sample', cameoPhoto: PHOTO }, freeze: 4500 },
-    ]).concat([{ label: 'talking', look: {}, talking: true, freeze: 120 }, { label: 'grumpy', look: { grumpy: true } }]),
+    ]).concat([{ label: 'talking', look: {}, talking: true, freeze: 120 }, { label: 'idle+talking', look: {}, talking: true, breathes: true, freeze: 120 }, { label: 'grumpy', look: { grumpy: true } }]),
     sign: () => window.RIG_SIGNS.flatMap((s) => ['red', 'amber', 'green'].map((l) => ({ label: `${s} ${l}`, look: { sign: s, lamp: l } })))
       .concat([{ label: 'number', look: { number: 7 } }, { label: 'banner', look: { pose: 'banner', text: 'TESTS' }, freeze: 600 }, { label: 'bubble', look: { pose: 'bubble', text: 'BRB' }, freeze: 600 }]),
     routine: () => [
@@ -115,6 +115,7 @@
     grid.appendChild(cell);
     const rig = window.mountRig(stage);
     rig.setLook({ ...base, ...c.look });
+    if (c.breathes) rig.svg.classList.add('breathes'); // as the widget mounts it
     if (c.talking) rig.talking(true);
     if (c.celebrate) rig.celebrate();
     rigs.push({ rig, freeze: c.freeze || 0 });

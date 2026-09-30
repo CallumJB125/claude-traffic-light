@@ -255,9 +255,9 @@ function sanitizeSvg(markup) {
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 
-// source: 'builtin' | 'import' | 'hatch'. Only built-ins may carry css or
-// take a built-in id.
-function validateCharacter(input, { source = 'import', builtinIds = null } = {}) {
+// source: 'builtin' | 'import' | 'hatch'. Only built-ins may carry css;
+// everything else gets a u- id.
+function validateCharacter(input, { source = 'import' } = {}) {
   const errors = [];
   const warnings = [];
   const err = (path, code, message) => errors.push({ path, code, message });
@@ -266,9 +266,12 @@ function validateCharacter(input, { source = 'import', builtinIds = null } = {})
   const out = {};
   if (!isObj(input)) { err('', 'type', 'a character is a JSON object'); return { ok: false, errors, warnings, character: null }; }
 
-  if (typeof input.id !== 'string' || !ID.test(input.id)) err('id', 'id', 'id is 2–32 lowercase letters, digits and dashes, starting with a letter');
-  else if (source !== 'builtin' && (builtinIds || Contract.ids().filter(Contract.isBuiltin)).includes(input.id)) err('id', 'id-taken', `"${input.id}" is a built-in character`);
-  out.id = input.id;
+  // An import's id is namespaced (u-otter), so it can't take a built-in's
+  // id or a rig class, now or when a later release adds characters.
+  const bare = typeof input.id === 'string' && source !== 'builtin' ? input.id.replace(/^u-/, '') : input.id;
+  if (typeof bare !== 'string' || !ID.test(bare)) err('id', 'id', 'id is 2–32 lowercase letters, digits and dashes, starting with a letter');
+  else if (source === 'builtin' && bare.startsWith(Contract.USER_PREFIX)) err('id', 'id', `built-in ids never start with ${Contract.USER_PREFIX}`);
+  out.id = source === 'builtin' ? bare : `${Contract.USER_PREFIX}${bare}`;
   // no control, format (zero-width, bidi override) or markup characters
   const name = typeof input.name === 'string' ? input.name.replace(/[\p{Cc}\p{Cf}<>&"'`]/gu, '').trim() : '';
   if (!name || name.length > LIMITS.name) err('name', 'name', `name is 1–${LIMITS.name} characters`);

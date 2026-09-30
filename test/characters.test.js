@@ -178,13 +178,38 @@ test('validator: every built-in passes as a built-in (edge warnings allowed)', (
   }
 });
 
-test('validator: an import may not take a built-in id or carry CSS', () => {
-  const taken = validateCharacter(importable({ id: 'claude' }));
-  assert.equal(taken.ok, false);
-  assert.equal(taken.errors[0].code, 'id-taken');
+test('validator: imports are namespaced u-…, so they can never take a built-in id; and carry no CSS', () => {
+  const r = validateCharacter(importable({ id: 'claude' }));
+  assert.equal(r.ok, true);
+  assert.equal(r.character.id, 'u-claude', 'an import named claude is u-claude, not Claude');
+  assert.equal(validateCharacter(importable({ id: 'u-otter' })).character.id, 'u-otter', 'already prefixed stays put');
+  assert.equal(validateCharacter(importable({ id: 'default' })).character.id, 'u-default', 'and never the rig class body-default');
+  assert.equal(validateCharacter(importable({ id: 'u-' })).ok, false);
   const css = validateCharacter(importable({ css: '.rig { display: none }' }));
   assert.deepEqual(css.errors.map((e) => e.code), ['css-not-allowed']);
   assert.equal(css.character, null);
+  assert.equal(validateCharacter(claude(), { source: 'builtin' }).character.id, 'claude');
+  assert.equal(validateCharacter({ ...claude(), id: 'u-fox' }, { source: 'builtin' }).ok, false);
+});
+
+test('registry: built-ins are sealed and frozen; installed characters need a u- id; re-registering bumps the revision', () => {
+  assert.throws(() => Characters.register({ ...claude(), id: 'claude' }), /not an installed character id/);
+  assert.throws(() => Characters.register({ ...claude(), id: 'fox' }), /not an installed character id/);
+  assert.throws(() => Characters.register({ ...claude(), id: 'fox' }, { builtin: true }), /sealed/);
+  assert.ok(Object.isFrozen(Characters.get('claude')) && Object.isFrozen(Characters.get('claude').anchors));
+  const before = Characters.revision('u-test-rev');
+  Characters.register({ ...claude(), id: 'u-test-rev' });
+  Characters.register({ ...claude(), id: 'u-test-rev' });
+  assert.equal(Characters.revision('u-test-rev'), before + 2);
+  assert.equal(Characters.isBuiltin('u-test-rev'), false);
+});
+
+test('rules: a rule may name a built-in or an installed (u-) body, nothing else', () => {
+  const norm = (body) => Rules.normalizeRule({ id: 'r', name: 'r', when: { signal: ['tool-use'] }, then: { body } }).then.body;
+  assert.equal(norm('ghost'), 'ghost');
+  assert.equal(norm('u-otter'), 'u-otter');
+  assert.equal(norm('otter'), null);
+  assert.equal(norm('u-Bad Id'), null);
 });
 
 test('validator: the result is a fresh object of known fields with sanitised markup', () => {

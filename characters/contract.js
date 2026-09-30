@@ -46,18 +46,29 @@
   });
   const EYE_GAP = REF.eyes.right.x - REF.eyes.left.x;
 
+  // Installed and hatched characters live under u-<id> (validate.js adds the
+  // prefix), so they can never take a built-in's id, today's or a future one's.
+  const USER_PREFIX = 'u-';
   const registry = new Map();
   const builtins = new Set();
-  // Built-ins register from their own script; anything else (installed,
-  // hatched) must have been through characters/validate.js first.
+  const revs = new Map();
+  let sealed = false;
+  const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); } return o; };
+  // Built-ins register from their own scripts, then the set is sealed;
+  // anything else must have been through characters/validate.js first.
   function register(def, { builtin = false } = {}) {
     if (!def || typeof def.id !== 'string') throw new Error('character needs an id');
-    if (builtins.has(def.id) && !builtin) throw new Error(`"${def.id}" is a built-in character`);
-    registry.set(def.id, def);
+    if (builtin && sealed) throw new Error('built-in characters are sealed');
+    if (!builtin && (builtins.has(def.id) || !def.id.startsWith(USER_PREFIX))) throw new Error(`"${def.id}" is not an installed character id (${USER_PREFIX}…)`);
+    registry.set(def.id, deepFreeze(def));
     if (builtin) builtins.add(def.id);
+    // a re-import under the same id bumps its revision, so a rig wearing it redraws
+    revs.set(def.id, (revs.get(def.id) || 0) + 1);
     return def;
   }
+  const sealBuiltins = () => { sealed = true; };
   const isBuiltin = (id) => builtins.has(id);
+  const revision = (id) => revs.get(id) || 0;
   const get = (id) => registry.get(id) || null;
   const has = (id) => registry.has(id);
   const ids = () => Array.from(registry.keys());
@@ -132,5 +143,5 @@
     return `<g class="${cls}"${fill}>${inner}</g>`;
   }
 
-  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, register, isBuiltin, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
+  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, USER_PREFIX, register, sealBuiltins, isBuiltin, revision, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
 });

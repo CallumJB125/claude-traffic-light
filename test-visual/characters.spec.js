@@ -10,7 +10,7 @@ const PAGE = pathToFileURL(path.join(__dirname, 'matrix', 'matrix.html')).href;
 const AXES = ['costume', 'cameo', 'eyes', 'pose', 'mouth', 'sign', 'routine'];
 const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
 // test-only shapes (matrix/probes.js) that push the contract's edges
-const PROBES = ['probe-tall', 'probe-blob', 'probe-wide', 'probe-screen'];
+const PROBES = ['u-probe-tall', 'u-probe-blob', 'u-probe-wide', 'u-probe-screen'];
 
 let app;
 let page;
@@ -78,6 +78,6 @@ for (const body of [...BODIES, ...PROBES]) {
     expect(g.hit.face).toBe(true);
     expect(g.hit.corner).toBe(false);
     // invisible parts (unworn costumes, props at rest) never catch the mouse
-    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'probe-wide'].includes(body));
+    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'u-probe-wide'].includes(body));
   });
 }
