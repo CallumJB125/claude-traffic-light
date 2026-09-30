@@ -31,7 +31,6 @@ const DEFAULTS = {
 // main.js drops a request this old: the hook has long since timed out.
 const REQUEST_MAX_AGE_MS = 90000;
 const OVERRIDE_SIGNALS = { green: 'tool-use', amber: 'idle-nudge', red: 'limit-hit' };
-const AGENT_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
 const CHANNELS = ['lamp', 'lampFx', 'sign', 'lampShape', 'signFx', 'numberOf', 'screenFx', 'eyes', 'pose', 'costume', 'cameo', 'body', 'bodyColor', 'effect', 'pet', 'agents', 'agentsColor', 'sound', 'celebrate'];
 // A rule's `then` key → the look channel it fills (only `number` differs).
 const THEN_KEY = { numberOf: 'number' };
@@ -96,36 +95,20 @@ function readManualOverride(root, now = Date.now()) {
 // a file the widget ignores comes back with `live: false` and why, which is
 // usually the answer to "why isn't that session showing?".
 function classifySession(data, config, now, pendingIds = []) {
-  const signal = Rules.sessionSignal(data);
-  if (!signal) return { live: false, dropped: 'no signal', signal: null };
-  if (SessionState.processGone(data, os.hostname().split('.')[0])) return { live: false, dropped: `process ${data.claudePid} exited without a SessionEnd`, signal };
-  const presented = Rules.presentSignal(data, now, pendingIds);
-  const held = presented !== signal;
-  const eff = Rules.effectiveSignal({ ...data, signal: presented });
-  const source = held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
-  const workingStaleMs = config.workingStaleMinutes * 60 * 1000;
-  if (eff.turnSignal) {
-    let last = Math.max(Date.parse(data.updatedAt || '') || 0, Date.parse(data.agentsAt || '') || 0);
-    let keepAlive = -Infinity;
-    (Array.isArray(data.agents) ? data.agents : []).forEach((a, i) => {
-      const n = Rules.normalizeAgent(a, i);
-      if (!n || n.status !== 'working') return;
-      const since = Date.parse(n.since || '') || 0;
-      last = Math.max(last, since);
-      if (since && now - since < AGENT_KEEPALIVE_MS) keepAlive = Math.max(keepAlive, AGENT_KEEPALIVE_MS - (now - since));
-    });
-    const staleInMs = Math.max(workingStaleMs - (now - last), keepAlive);
-    const session = { ...data, ...eff };
-    return staleInMs < 0
-      ? { live: false, dropped: 'stale: finished turn whose working agents went quiet', signal, presented: eff.signal, held, source, staleInMs, session }
-      : { live: true, signal, presented: eff.signal, held, source, staleInMs, session };
-  }
-  const staleAfter = Rules.WAITING_ON_YOU.has(signal) ? config.waitingStaleHours * 3600000 : workingStaleMs;
-  const staleInMs = staleAfter - (now - new Date(data.updatedAt).getTime());
-  const session = { ...data, signal: presented };
-  return staleInMs < 0
-    ? { live: false, dropped: `stale: no update for over ${Rules.WAITING_ON_YOU.has(signal) ? `${config.waitingStaleHours} h (waiting signal)` : `${config.workingStaleMinutes} min (working signal)`}`, signal, presented, held, source, staleInMs, session }
-    : { live: true, signal, presented, held, source, staleInMs: Number.isNaN(staleInMs) ? null : staleInMs, session };
+  const c = Rules.classifySession(data, {
+    now,
+    pendingIds,
+    isGone: () => SessionState.processGone(data, os.hostname().split('.')[0]),
+    workingStaleMs: config.workingStaleMinutes * 60 * 1000,
+    waitingStaleMs: config.waitingStaleHours * 3600000,
+  });
+  if (c.dropped === 'no-signal') return { live: false, dropped: 'no signal', signal: null };
+  if (c.dropped === 'gone') return { live: false, dropped: `process ${data.claudePid} exited without a SessionEnd`, signal: c.signal };
+  const why = c.dropped === 'stale-agents' ? 'stale: finished turn whose working agents went quiet'
+    : c.dropped === 'stale' ? `stale: no update for over ${c.waiting ? `${config.waitingStaleHours} h (waiting signal)` : `${config.workingStaleMinutes} min (working signal)`}`
+    : null;
+  const out = { live: c.live, signal: c.signal, presented: c.presented, held: c.held, source: c.source, staleInMs: c.staleInMs, session: c.session };
+  return why ? { live: false, dropped: why, ...out } : out;
 }
 
 function scanSessions(root, config, now = Date.now(), pendingIds = []) {

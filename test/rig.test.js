@@ -59,8 +59,10 @@ test('rig: a lit lamp turns on its own slot on every sign plus the single-lamp s
   const { svg, rig } = mount();
   rig.setLook({ lamp: 'amber' });
   assert.deepEqual(onSlots(svg), ['amber', 'amber', 'amber', 'any']);
-  assert.equal(prop(svg, '--lamp-on'), '#f2a200');
-  assert.equal(prop(svg, '--lamp-glow'), 'rgba(242, 162, 0, 0.85)');
+  assert.equal(prop(svg, '--lamp-on'), 'var(--lamp-amber)');
+  assert.equal(prop(svg, '--lamp-glow'), 'color-mix(in srgb, var(--lamp-amber) 85%, transparent)');
+  rig.setLook({ lamp: 'amber', lampColor: '#f2a200' });
+  assert.equal(prop(svg, '--lamp-glow'), 'rgba(242, 162, 0, 0.85)', 'a rule colour glows in itself');
 });
 
 test('rig: lamp off lights nothing and falls back to the off colour with no glow', () => {
@@ -82,6 +84,34 @@ test('rig: only a plain green lamp pulses; a rule colour or effect stops the pul
   rig.setLook({ lamp: 'green', lampFx: 'strobe' });
   assert.equal(svg.querySelectorAll('.lamp.pulse').length, 0);
   assert.ok(svg.classList.contains('lampfx-strobe'));
+});
+
+// Colour is never the only cue: each state lamp has its own rhythm too, so
+// the single-lamp sign (no position to go by) still reads under colour blindness.
+test('rig: lamp rhythm — green breathes, amber holds, red blinks; a rule colour or effect owns the rhythm', () => {
+  const { svg, rig } = mount();
+  const cues = () => ['pulse', 'blink'].filter((c) => svg.querySelector(`.lamp.on[data-slot="any"].${c}`));
+  rig.setLook({ lamp: 'green' });
+  assert.deepEqual(cues(), ['pulse']);
+  rig.setLook({ lamp: 'amber' });
+  assert.deepEqual(cues(), []);
+  rig.setLook({ lamp: 'red' });
+  assert.deepEqual(cues(), ['blink']);
+  assert.equal(svg.querySelectorAll('.lamp.blink').length, 4, 'every sign blinks its red lamp');
+  rig.setLook({ lamp: 'red', lampColor: '#123456' });
+  assert.equal(svg.querySelectorAll('.lamp.blink').length, 0);
+  rig.setLook({ lamp: 'red', lampFx: 'breathe' });
+  assert.equal(svg.querySelectorAll('.lamp.blink').length, 0);
+  rig.setLook({ lamp: 'off' });
+  assert.equal(svg.querySelectorAll('.lamp.blink, .lamp.pulse').length, 0);
+});
+
+test('rig: the blink stays under three flashes a second and gives way to a ring under reduced motion', () => {
+  const blink = /\.rig \.lamp\.on\.blink \{ animation: rig-blink ([\d.]+)s steps\(1\) infinite; \}/.exec(RIG_CSS);
+  assert.ok(blink, 'blink rule');
+  assert.ok(Number(blink[1]) >= 1 / 3, 'WCAG 2.3.1: no more than three flashes per second');
+  assert.match(RIG_CSS, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rig \.lamp\.on\.blink \{ stroke: var\(--lamp-ring\)/);
+  assert.match(RIG_CSS, /prefers-reduced-motion: reduce\) \{[^}]*\.rig \.lamp,/, 'reduced motion stops lamp animations');
 });
 
 test('rig: group lamp effects light every lamp even with no lamp state, and swap cleanly', () => {

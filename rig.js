@@ -611,7 +611,8 @@
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
-  const SLOT_COLORS = { red: '#e2231a', amber: '#f2a200', green: '#2fae3e', blue: '#2f6bff', pink: '#f472b6' };
+  // The three state lamps take the colour-vision-safe palette from tokens.css.
+  const SLOT_COLORS = { red: 'var(--lamp-red)', amber: 'var(--lamp-amber)', green: 'var(--lamp-green)', blue: '#2f6bff', pink: '#f472b6' };
   const SIGNS = ['h3', 'v3', 'h1', 'h5'];
   const LAMP_SHAPES = ['square', 'round', 'heart', 'star', 'skull'];
   const SIGN_FX = ['none', 'wobble', 'spin', 'rattle', 'cracked', 'neon'];
@@ -671,6 +672,8 @@
         el.classList.toggle('on', !!on);
         // pulse is the original green behaviour unless a rule chose an effect
         el.classList.toggle('pulse', !!on && fx === 'none' && lit === 'green' && !look.lampColor);
+        // …and red blinks, so the states differ in rhythm as well as colour
+        el.classList.toggle('blink', !!on && fx === 'none' && lit === 'red' && !look.lampColor);
         const href = `#lamp-${shape}`;
         if (el.getAttribute('href') !== href) el.setAttribute('href', href);
         if (el.dataset.slot === 'blue' || el.dataset.slot === 'pink') el.style.setProperty('--slot-color', SLOT_COLORS[el.dataset.slot]);
@@ -690,7 +693,7 @@
         if (fx !== 'none') svg.classList.add(`lampfx-${fx}`);
       }
       svg.style.setProperty('--lamp-on', color || 'var(--lamp-off)');
-      svg.style.setProperty('--lamp-glow', color ? hexToRgba(color, 0.85) : 'transparent');
+      svg.style.setProperty('--lamp-glow', !color ? 'transparent' : color.startsWith('#') ? hexToRgba(color, 0.85) : `color-mix(in srgb, ${color} 85%, transparent)`);
 
       const eyes = look.eyes || 'default';
       svg.classList.toggle('eyes-closed', eyes === 'closed');

@@ -536,23 +536,8 @@ function writeJsonAtomic(file, obj, unchangedSince = null) {
 }
 
 // A finished turn whose subagents are still working stays live for as long as
-// they plausibly are: a long agent can go quiet for well over the working
-// window without having died.
-const AGENT_KEEPALIVE_MS = 6 * 60 * 60 * 1000;
-// Agent bookkeeping writes stamp `agentsAt`, not `updatedAt`, so it counts
-// as activity here.
-function workingAgentsStale(data, now, workingStaleMs) {
-  let last = Math.max(Date.parse(data.updatedAt || '') || 0, Date.parse(data.agentsAt || '') || 0);
-  let young = false;
-  (Array.isArray(data.agents) ? data.agents : []).forEach((a, i) => {
-    const n = Rules.normalizeAgent(a, i);
-    if (!n || n.status !== 'working') return;
-    const since = Date.parse(n.since || '') || 0;
-    last = Math.max(last, since);
-    if (since && now - since < AGENT_KEEPALIVE_MS) young = true;
-  });
-  return !young && now - last > workingStaleMs;
-}
+// they plausibly are (session-machine.js agentsStaleInMs).
+const AGENT_KEEPALIVE_MS = Rules.AGENT_KEEPALIVE_MS;
 
 // readSessions only hides stale files; this deletes them once no stale window
 // could show them any more (a file's mtime is never older than the times it
@@ -614,24 +599,13 @@ function readSessions(config, pendingIds = []) {
     try {
       const data = readSessionFile(f);
       if (!data) continue;
-      const signal = Rules.sessionSignal(data);
-      if (!signal) continue;
-      if (SessionState.processGone(data, LOCAL_HOST)) { logTransition(data, 'gone', 'process exited', now); continue; }
-      const presented = Rules.presentSignal(data, now, pendingIds);
-      const held = presented !== signal;
-      if (held) wakeWhenHoldEnds(data, now);
-      const eff = Rules.effectiveSignal({ ...data, signal: presented });
-      const source = held ? 'hysteresis-held' : eff.turnSignal ? 'promoted-agents' : (data.via || 'hook signal');
-      if (eff.turnSignal) {
-        if (workingAgentsStale(data, now, workingStaleMs)) continue;
-        logTransition(data, eff.signal, source, now);
-        sessions.push({ ...data, ...eff });
-        continue;
-      }
-      const staleAfter = WAITING_SIGNALS.has(signal) ? waitingStaleMs : workingStaleMs;
-      if (now - new Date(data.updatedAt).getTime() > staleAfter) continue;
-      logTransition(data, presented, source, now);
-      sessions.push({ ...data, signal: presented });
+      // The reader half of the session state machine (hooks/session-machine.js).
+      const c = Rules.classifySession(data, { now, pendingIds, isGone: () => SessionState.processGone(data, LOCAL_HOST), workingStaleMs, waitingStaleMs });
+      if (c.dropped === 'gone') logTransition(data, 'gone', 'process exited', now);
+      if (c.held) wakeWhenHoldEnds(data, now);
+      if (!c.live) continue;
+      logTransition(data, c.presented, c.source, now);
+      sessions.push(c.session);
     } catch {
       // skip unreadable/partially-written file
     }

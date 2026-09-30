@@ -47,3 +47,23 @@
 }
 
 :focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* ── Lamps ────────────────────────────────────────────────────────────────
+   The traffic-light palette, kept apart from the window tokens above. Built
+   in OKLCH for colour-vision safety, not for matching the UI's status hues:
+   a vermilion red, a yellow-leaning amber and a bluish green stay ≥ 13 ΔE
+   apart under simulated protanopia, deuteranopia and tritanopia (the old
+   #e2231a / #f2a200 / #2fae3e fell to 3.8 under protanopia), step in
+   lightness (red < green < amber) so even monochrome keeps them apart, and
+   each clears 3:1 against the unlit lamp. Colour is never the only cue:
+   position on the sign and the lamp's rhythm (green breathes, amber holds,
+   red blinks) carry the state too. The hex after each value is its sRGB
+   equivalent, which lights.html's swatches use; `node scripts/lamp-palette.js`
+   prints the check and test/lamp-palette.test.js enforces it. */
+:root {
+  --lamp-red: oklch(0.65 0.21 32); /* #f44b2f */
+  --lamp-amber: oklch(0.82 0.16 79); /* #fbb62b */
+  --lamp-green: oklch(0.69 0.12 174); /* #2db396 */
+  --lamp-off: oklch(0.3393 0.0234 302.7); /* #3a3542 */
+  --lamp-ring: #fff5d6;
+}

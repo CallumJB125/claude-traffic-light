@@ -1,13 +1,12 @@
 // What every writer of a session file shares: set-status.js (Claude Code
 // hooks), emit.js (other agents) and the app's /signal endpoint. Lives in
 // hooks/ because the packaged hooks run from Resources/hooks with nothing else
-// beside them; main.js requires it from here too. rules.js keeps a browser-side
-// copy of TURN_END (the Lights editor can't require this) and a test pins the
-// two together.
+// beside them; main.js requires it from here too. The lifecycle itself (which
+// signal a write leaves, and the clocks that go with it) is session-machine.js.
 const fs = require('fs');
+const Machine = require('./session-machine.js');
 
-// Signals that close a turn: the working-since clock stops on any of them.
-const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
+const { TURN_END, TRANSIENT_ASK_MS, userTouched } = Machine;
 
 // Hooks for one session can run at the same moment (parallel Agent calls fire
 // SubagentStart/Stop together) and each one reads the file, changes it and
@@ -116,33 +115,13 @@ function readJson(file) {
   }
 }
 
-// A notification ask this young may have been settled by auto mode's
-// classifier, not by you (rules.js TRANSIENT_ASK_MS sits it out too).
-const TRANSIENT_ASK_MS = 1200;
-
-// Did this event come from you acting, rather than Claude moving? The
-// "ignored for N minutes" signals count from the last such touch, so a
-// session working on its own (a ralph loop, a background agent) must not
-// reset them. A touch is: sending a prompt, opening or resuming a session,
-// denying a permission, or Claude carrying on after an ask you answered.
-function userTouched(prev, signal, { sessionSource = null, bookkeeping = false, now = Date.now() } = {}) {
-  if (bookkeeping) return false;
-  if (signal === 'prompt-submit' || signal === 'permission-denied') return true;
-  if (signal === 'session-start') return sessionSource !== 'compact';
-  if (prev && prev.signal === 'permission-ask' && !TURN_END.has(signal)) {
-    if (prev.askKind === 'request' || prev.askKind === 'question') return true;
-    const since = Date.parse(prev.signalSince || prev.updatedAt || '');
-    return !!since && now - since >= TRANSIENT_ASK_MS;
-  }
-  return false;
-}
-
 // The state step for a writer that only knows a bare signal (emit.js and the
-// /signal endpoint). Everything the hooks and the app's pollers store on the
-// file is carried through, so a bare signal never wipes it.
+// /signal endpoint): the machine's 'bare' writer, which skips the hook-only
+// guards. Everything the hooks and the app's pollers store on the file is
+// carried through, so a bare signal never wipes it.
 function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp }, nowIso = new Date().toISOString()) {
   const p = prev || {};
-  const changed = signal !== (p.signal ?? null);
+  const t = Machine.step(prev, { signal, writer: 'bare' }, nowIso);
   return {
     ...p,
     sessionId,
@@ -150,14 +129,14 @@ function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = nu
     source,
     hostApp: hostApp ?? p.hostApp,
     cwd: cwd || p.cwd || '',
-    signal,
+    signal: t.signal,
     tool,
-    prevSignal: changed ? (p.signal ?? null) : (p.prevSignal ?? null),
-    signalSince: changed ? nowIso : (p.signalSince || p.updatedAt || nowIso),
-    workingSince: signal === 'prompt-submit' ? nowIso : TURN_END.has(signal) ? null : (p.workingSince || nowIso),
+    prevSignal: t.prevSignal,
+    signalSince: t.signalSince,
+    workingSince: t.workingSince,
     tasks: p.tasks || { created: 0, done: 0 },
-    touchedAt: userTouched(prev, signal, { now: Date.parse(nowIso) }) ? nowIso : (p.touchedAt ?? null),
-    updatedAt: nowIso,
+    touchedAt: t.touchedAt,
+    updatedAt: t.updatedAt,
   };
 }
 
