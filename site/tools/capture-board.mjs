@@ -55,6 +55,19 @@ async function open({ scheme, at = base, width = 1440, height = 900 }) {
   await page.waitForTimeout(500);
   return page;
 }
+const rects = {};
+// where the story card (and its main action) sit in this frame, in CSS px of the 1440x900 page
+async function mark(page, name) {
+  rects[name] = await page.evaluate(() => {
+    const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+    const card = document.querySelector('[data-card-id="c-152"]');
+    const give = [...document.querySelectorAll('button')].find((b) => /^Give to Claude$/.test(b.textContent.trim()));
+    const btn = card ? (card.querySelector('button.primary, .btn-primary, button.btn') || card.querySelector('button')) : give;
+    const inView = (r) => r && r.y >= 0 && r.y + r.h <= 900;
+    const pick = (el) => { const r = el && box(el); return inView(r) ? r : null; };
+    return { card: pick(card), action: pick(btn), give: pick(give), actionText: btn ? btn.textContent.trim() : null };
+  });
+}
 async function shot(page, name, opts = {}) {
   const text = await page.evaluate(() => document.body.innerText);
   const hit = text.match(FORBIDDEN);
@@ -67,6 +80,7 @@ async function shot(page, name, opts = {}) {
 try {
   for (const scheme of ['dark', 'light']) {
     const page = await open({ scheme });
+    await mark(page, `board-${scheme}`);
     await shot(page, `board-${scheme}`);
     if (scheme === 'dark') {
       // the real card story on CHK-152: each frame is the real board at that step
@@ -76,7 +90,9 @@ try {
         await page.waitForTimeout(550);
         if (['queued', 'running', 'blocked', 'orphaned', 'handed_over', 'in_review', 'done'].includes(r.state) && !story.includes(r.state)) {
           story.push(r.state);
-          await shot(page, `story-${String(story.length).padStart(2, '0')}-${r.state}`);
+          const nm = `story-${String(story.length).padStart(2, '0')}-${r.state}`;
+          await mark(page, nm);
+          await shot(page, nm);
         }
       }
     }
@@ -105,6 +121,7 @@ try {
   await hub.close();
   await histHub.close();
 }
+fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ viewport: { w: 1440, h: 900 }, rects }, null, 1));
 if (problems.length) console.log(`problems:\n${[...new Set(problems)].join('\n')}`);
 if (leaks.length) { console.error(`LEAKS of the original fixtures (extend board-neutral.mjs):\n${leaks.join('\n')}`); process.exit(2); }
 

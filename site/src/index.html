@@ -10,63 +10,80 @@
 <div class="spine" aria-hidden="true"><i></i></div>
 <main id="main">
 
-<section class="hero">
+<section class="hero" id="top">
+  <canvas class="field" id="field" aria-hidden="true"></canvas>
+  <div class="hero-glow" id="hero-glow" aria-hidden="true"></div>
   <div class="wrap hero-grid">
-    <div>
-      <h1>The control plane for your coding agents.</h1>
-      <p class="lede">{{brand.name}} is a desktop app with a small pixel character who holds up a traffic light for every Claude Code, Codex, Cursor and Gemini session you run. The team board hands cards to agents and keeps them honest.</p>
-      <div class="hero-cta">
-        <a class="btn btn-os" href="/download" data-download-cta data-os-label>Download {{brand.name}}</a>
-        <a class="btn btn-ghost btn-os" href="#waitlist">Join the beta waitlist</a>
+    <div class="hero-copy">
+      <h1 class="lines" aria-label="The control plane for your coding agents."><span class="ln" aria-hidden="true"><span>The control</span></span><span class="ln" aria-hidden="true"><span>plane for your</span></span><span class="ln" aria-hidden="true"><span>coding agents.</span></span></h1>
+      <p class="lede rv">{{brand.name}} is a desktop app with a small pixel character who holds up a traffic light for every Claude Code, Codex, Cursor and Gemini session you run. The team board hands cards to agents and keeps them honest.</p>
+      <div class="hero-cta rv">
+        <a class="btn btn-os btn-light" href="/download" data-download-cta data-os-label>Download {{brand.name}}</a>
+        <a class="btn btn-ghost btn-os btn-ghost-light" href="#waitlist">Join the beta waitlist</a>
       </div>
-      <p class="hero-note">Download the desktop app now; the waitlist is for team-board invites. The beta is unsigned, so the first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
+      <p class="hero-note rv">Download the desktop app now; the waitlist is for team-board invites. The beta is unsigned, so the first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
     </div>
-    <div class="scene" id="scene" role="img" aria-label="An illustration of the Plexiform window and its widget. A card is given to Claude and moves across the board while the widget's lamp goes green, red for an approval, then amber when the work is ready.">
-      <div class="scene-glow" id="scene-glow"></div>
-      <div class="scene-inner" id="scene-inner" aria-hidden="true">
-        <div class="win" id="win">
-          <div class="win-bar"><i></i><i></i><i></i><span>{{brand.name}} · checkout service</span></div>
-          <div class="win-body" id="win-body">
-            <div class="wcol" data-col="todo"><p class="colh">To do</p><div class="slot"><div class="wc"><b>Rate-limit the export API</b><small>Mei</small></div></div><div class="slot"></div></div>
-            <div class="wcol" data-col="doing"><p class="colh">Doing</p><div class="slot"><div class="wc"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div><div class="slot"></div></div>
-            <div class="wcol" data-col="review"><p class="colh">Needs you</p><div class="slot"></div><div class="slot"></div></div>
-            <div class="wcol" data-col="done"><p class="colh">Done</p><div class="slot"><div class="wc"><b>Dark mode for settings</b><small>Merged</small></div></div><div class="slot"></div></div>
-            <div class="wc mcard" id="mcard"><b>Fix flaky test</b><small id="mcard-note">Unassigned</small><span class="bar"><i id="mcard-bar"></i></span><span class="give" id="give">Give to Claude</span></div>
-          </div>
-          <div class="ask" id="ask"><span>Claude wants to run <code>npm test</code></span><span class="ask-btn" id="ask-btn">Approve</span></div>
+    <div class="hero-stage" id="hero-stage">
+      <div class="frame frame-hero" id="hero-frame" role="img" aria-label="The real Plexiform board. A card is given to Claude and moves across the board while the widget's lamp goes green, red when an approval is needed, then amber when the work is ready.">
+        <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>{{brand.name}} · Checkout</span></div>
+        <div class="frame-shot" id="hero-shots" aria-hidden="true">
+          <img class="shot-layer is-on" src="/assets/board/board-dark-1x.webp" srcset="/assets/board/board-dark-1x.webp 1200w, /assets/board/board-dark.webp 2400w" sizes="(min-width: 980px) 52vw, 92vw" width="1440" height="900" alt="" fetchpriority="high" decoding="async" />
+          <img class="shot-layer" data-frame="queued" src="/assets/board/story-01-queued-1x.webp" srcset="/assets/board/story-01-queued-1x.webp 1200w, /assets/board/story-01-queued.webp 2400w" sizes="(min-width: 980px) 52vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+          <img class="shot-layer" data-frame="blocked" src="/assets/board/story-03-blocked-1x.webp" srcset="/assets/board/story-03-blocked-1x.webp 1200w, /assets/board/story-03-blocked.webp 2400w" sizes="(min-width: 980px) 52vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+          <img class="shot-layer" data-frame="review" src="/assets/board/story-06-in_review-1x.webp" srcset="/assets/board/story-06-in_review-1x.webp 1200w, /assets/board/story-06-in_review.webp 2400w" sizes="(min-width: 980px) 52vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+          <img class="shot-layer" data-frame="done" src="/assets/board/story-07-done-1x.webp" srcset="/assets/board/story-07-done-1x.webp 1200w, /assets/board/story-07-done.webp 2400w" sizes="(min-width: 980px) 52vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+          <span class="ring" id="hero-ring"></span>
+          <svg class="pointer" id="hero-pointer" viewBox="0 0 16 22" width="22" height="30"><path d="M1 1 L1 17 L5.2 13.2 L8 20 L10.6 18.9 L7.9 12.3 L13.5 12.3 Z" fill="#f2efe8" stroke="#15171c" stroke-width="1.4" stroke-linejoin="round"/></svg>
         </div>
-        <div class="widget" id="widget">
-          <div class="widget-rig" id="hero-rig"></div>
-          <div class="widget-cap"><i class="desk-lamp" id="desk-lamp"></i><b id="desk-state">Idle</b><span id="desk-detail">No agents running</span></div>
+      </div>
+      <div class="widget" id="hero-widget" data-lamp="off">
+        <div class="widget-glow"></div>
+        <div class="sprite-stack" id="hero-sprites" aria-hidden="true">
+          <div class="sprite is-on" data-state="off" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-off.webp" width="7296" height="588" alt="" /></div>
+          <div class="sprite" data-state="working" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-working.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite" data-state="approve" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-approve.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite" data-state="ready" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-ready.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite burst" data-state="burst" style="--n:20;--ms:1400"><img src="/assets/sprites/sheet-celebrate.webp" width="9120" height="588" alt="" loading=lazy /></div>
         </div>
-        <svg class="pointer" id="pointer" viewBox="0 0 16 22" width="22" height="30"><path d="M1 1 L1 17 L5.2 13.2 L8 20 L10.6 18.9 L7.9 12.3 L13.5 12.3 Z" fill="#f2efe8" stroke="#15171c" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        <div class="widget-cap" aria-hidden="true"><i class="desk-lamp"></i><b id="hero-state">Idle</b><span id="hero-detail">No agents running</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<div class="story" id="story">
+<div class="story" id="story" data-story>
   <div class="story-pin">
     <div class="wrap story-grid">
-      <div>
+      <div class="story-copy">
         <h2 id="story-h">Give a card to an agent and watch it happen.</h2>
         <ol class="story-steps" id="story-steps">
           <li class="on"><strong>Press Give to Claude</strong><span>On any card on your team's board. It runs on your Mac, in your repo.</span></li>
-          <li><strong>Watch the card move</strong><span>It goes to Doing the moment the agent starts, and it stays true.</span></li>
-          <li><strong>The lamp turns green</strong><span>Your widget shows the agent working. You can keep your own work going.</span></li>
-          <li><strong>Amber means your turn</strong><span>When it stops, a handover is waiting with what it did, and what's left.</span></li>
+          <li><strong>Watch the card move</strong><span>It goes to In progress the moment the agent starts, and it stays true.</span></li>
+          <li><strong>A question never hides in a terminal</strong><span>When the agent needs you, the card says so, and the widget turns red.</span></li>
+          <li><strong>Amber means your turn</strong><span>When it finishes there's a pull request to review and a handover with what it did.</span></li>
         </ol>
       </div>
-      <div class="stage-card" id="stage-card" aria-hidden="true">
-        <div class="stage-top"><span>Board: checkout service</span><span id="stage-lamp">idle</span></div>
-        <div class="cols" id="cols">
-          <div class="col"><p class="colh">To do</p><div class="card" data-card="a"><b>Fix flaky checkout test</b><small>Unassigned</small><div class="give" id="give2">Give to Claude</div></div><div class="card"><b>Rate-limit the export API</b><small>Mei</small></div></div>
-          <div class="col"><p class="colh">Doing</p><div class="card"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div>
-          <div class="col"><p class="colh">Done</p><div class="card"><b>Dark mode for settings</b><small>Shipped</small></div></div>
+      <div class="story-stage" id="story-stage">
+        <div class="frame frame-story" id="story-frame">
+          <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>{{brand.name}} · Checkout</span></div>
+          <div class="frame-shot" id="story-shots" aria-hidden="true">
+            <img class="shot-layer is-on" src="/assets/board/board-dark-1x.webp" srcset="/assets/board/board-dark-1x.webp 1200w, /assets/board/board-dark.webp 2400w" sizes="(min-width: 980px) 56vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+            <img class="shot-layer" data-frame="queued" src="/assets/board/story-01-queued-1x.webp" srcset="/assets/board/story-01-queued-1x.webp 1200w, /assets/board/story-01-queued.webp 2400w" sizes="(min-width: 980px) 56vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+            <img class="shot-layer" data-frame="blocked" src="/assets/board/story-03-blocked-1x.webp" srcset="/assets/board/story-03-blocked-1x.webp 1200w, /assets/board/story-03-blocked.webp 2400w" sizes="(min-width: 980px) 56vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+            <img class="shot-layer" data-frame="review" src="/assets/board/story-06-in_review-1x.webp" srcset="/assets/board/story-06-in_review-1x.webp 1200w, /assets/board/story-06-in_review.webp 2400w" sizes="(min-width: 980px) 56vw, 92vw" width="1440" height="900" alt="" loading="lazy" decoding="async" />
+            <span class="ring" id="story-ring"></span>
+            <svg class="pointer" id="story-pointer" viewBox="0 0 16 22" width="22" height="30"><path d="M1 1 L1 17 L5.2 13.2 L8 20 L10.6 18.9 L7.9 12.3 L13.5 12.3 Z" fill="#f2efe8" stroke="#15171c" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          </div>
         </div>
-        <div class="run card card-live" id="run" hidden><b>Fix flaky checkout test</b><small id="run-note">Claude · running</small></div>
-        <div class="handover" id="handover" hidden><b>Handover</b><br />Fixed the race in checkout.spec. One follow-up: the retry helper still swallows errors.</div>
-        <div class="story-rig" id="story-rig"></div>
+        <div class="widget widget-story" id="story-widget" data-lamp="off">
+          <div class="widget-glow"></div>
+          <div class="sprite-stack" id="story-sprites" aria-hidden="true">
+            <div class="sprite is-on" data-state="off" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-off.webp" width="7296" height="588" alt="" loading=lazy /></div>
+            <div class="sprite" data-state="working" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-working.webp" width="7296" height="588" alt="" loading=lazy /></div>
+            <div class="sprite" data-state="approve" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-approve.webp" width="7296" height="588" alt="" loading=lazy /></div>
+            <div class="sprite" data-state="ready" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-ready.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -75,16 +92,24 @@
 <section class="section" id="features" aria-labelledby="lamps-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="lamps-h">Three lamps tell you what every agent is doing.</h2>
-      <p class="lede">You shouldn't have to tab through terminals to find the one that's waiting. Press a lamp to see what the character does.</p>
+      <h2 id="lamps-h" class="rv">Three lamps tell you what every agent is doing.</h2>
+      <p class="lede rv">You shouldn't have to tab through terminals to find the one that's waiting. Press a lamp to see what the character does.</p>
     </div>
     <div class="lamps">
       <ul class="lamp-list" id="lamp-list">
-        <li><button class="lamp-btn" style="--c: var(--green)" data-look="green" aria-pressed="true"><i></i><strong>Green: working</strong><span>At least one session is busy. Leave it be.</span></button></li>
-        <li><button class="lamp-btn" style="--c: var(--amber)" data-look="amber" aria-pressed="false"><i></i><strong>Amber: your turn</strong><span>A turn finished, or an agent is waiting for your next prompt. A little confetti, too.</span></button></li>
-        <li><button class="lamp-btn" style="--c: var(--red)" data-look="red" aria-pressed="false"><i></i><strong>Red: blocked on you</strong><span>A permission prompt, a usage limit, or no network. Click the widget to jump to the session that needs you.</span></button></li>
+        <li><button class="lamp-btn" style="--c: var(--green)" data-look="working" aria-pressed="true"><i></i><strong>Green: working</strong><span>At least one session is busy. Leave it be.</span></button></li>
+        <li><button class="lamp-btn" style="--c: var(--amber)" data-look="ready" aria-pressed="false"><i></i><strong>Amber: your turn</strong><span>A turn finished, or an agent is waiting for your next prompt. A little confetti, too.</span></button></li>
+        <li><button class="lamp-btn" style="--c: var(--red)" data-look="approve" aria-pressed="false"><i></i><strong>Red: blocked on you</strong><span>A permission prompt, a usage limit, or no network. Click the widget to jump to the session that needs you.</span></button></li>
       </ul>
-      <div class="desk" id="lamp-desk" data-lamp="green"><div class="stage" id="lamp-rig" role="img" aria-label="The character reacting to the lamp you pick."></div></div>
+      <div class="lamp-stage" id="lamp-stage" data-lamp="working">
+        <div class="lamp-halo"></div>
+        <div class="sprite-stack" id="lamp-sprites" role="img" aria-label="The character reacting to the lamp you pick.">
+          <div class="sprite is-on" data-state="working" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-working.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite" data-state="ready" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-ready.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite" data-state="approve" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-approve.webp" width="7296" height="588" alt="" loading=lazy /></div>
+          <div class="sprite burst" data-state="burst" style="--n:20;--ms:1400"><img src="/assets/sprites/sheet-celebrate.webp" width="9120" height="588" alt="" loading=lazy /></div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -92,18 +117,25 @@
 <section class="section" aria-labelledby="board-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="board-h">A team board that lives next to your agents. <span class="tag tag-beta">Beta</span></h2>
-      <p class="lede">Cards, handovers and run progress sit in the same app as the lamps. When an agent dies mid-run, the card says so, and the handover tells you where it got to.</p>
+      <h2 id="board-h" class="rv">A team board that lives next to your agents. <span class="tag tag-beta">Beta</span></h2>
+      <p class="lede rv">Cards, handovers and run progress sit in the same app as the lamps. When an agent dies mid-run, the card says so, and the handover tells you where it got to.</p>
     </div>
-    <div class="board-wrap">
-      <div class="board" id="board" data-pre role="img" aria-label="Illustration of the team board with four columns of cards">
-        <div class="col"><p class="colh">Backlog</p><div class="card" style="--d:0ms"><b>Audit webhook retries</b><small>Unassigned</small></div><div class="card" style="--d:90ms"><b>Move uploads to the new bucket</b><small>Unassigned</small></div></div>
-        <div class="col"><p class="colh">Doing</p><div class="card card-live" style="--d:180ms"><b><i class="dot" style="--c:var(--green)"></i>Fix flaky checkout test</b><small>Claude on Ana's Mac</small></div><div class="card" style="--d:270ms"><b><i class="dot" style="--c:var(--green)"></i>Migrate invoices to v2</b><small>Codex on Kofi's Mac</small></div></div>
-        <div class="col"><p class="colh">Needs you</p><div class="card" style="--d:360ms"><b><i class="dot" style="--c:var(--amber)"></i>Rate-limit the export API</b><small>Waiting for your review</small></div></div>
-        <div class="col"><p class="colh">Done</p><div class="card" style="--d:450ms"><b>Dark mode for settings</b><small>Merged</small></div><div class="card" style="--d:540ms"><b>Fix login redirect</b><small>Merged</small></div></div>
+    <div class="tabs" role="tablist" aria-label="Board views" id="board-tabs">
+      <button role="tab" id="tab-board" aria-controls="tabs-shots" aria-selected="true" data-view="board" class="tab on">Board</button>
+      <button role="tab" id="tab-handover" aria-controls="tabs-shots" aria-selected="false" data-view="handover" class="tab">Handover</button>
+      <button role="tab" id="tab-table" aria-controls="tabs-shots" aria-selected="false" data-view="table" class="tab">Table</button>
+      <button role="tab" id="tab-dashboard" aria-controls="tabs-shots" aria-selected="false" data-view="dashboard" class="tab">Dashboard</button>
+    </div>
+    <div class="frame frame-tabs" id="tabs-frame">
+      <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>{{brand.name}} · Checkout</span></div>
+      <div class="frame-shot" id="tabs-shots" role="tabpanel" aria-labelledby="tab-board">
+        <picture class="shot-layer is-on" data-view="board"><source media="(prefers-color-scheme: light)" srcset="/assets/board/board-light-1x.webp 1200w, /assets/board/board-light.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" /><img src="/assets/board/board-dark-1x.webp" srcset="/assets/board/board-dark-1x.webp 1200w, /assets/board/board-dark.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" width="1440" height="900" alt="The board: cards in To do, In progress, Review and Done. Each card shows who is running it, what it needs, and what it costs." loading="lazy" decoding="async" /></picture>
+        <picture class="shot-layer" data-view="handover"><source media="(prefers-color-scheme: light)" srcset="/assets/board/handover-light-1x.webp 1200w, /assets/board/handover-light.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" /><img src="/assets/board/handover-dark-1x.webp" srcset="/assets/board/handover-dark-1x.webp 1200w, /assets/board/handover-dark.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" width="1440" height="900" alt="A card's handover: the current hypothesis, the plan, what is done, and the files touched, so anyone can pick it up." loading="lazy" decoding="async" /></picture>
+        <picture class="shot-layer" data-view="table"><source media="(prefers-color-scheme: light)" srcset="/assets/board/table-light-1x.webp 1200w, /assets/board/table-light.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" /><img src="/assets/board/table-dark-1x.webp" srcset="/assets/board/table-dark-1x.webp 1200w, /assets/board/table-dark.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" width="1440" height="900" alt="The table view: every card in a sortable, filterable list." loading="lazy" decoding="async" /></picture>
+        <picture class="shot-layer" data-view="dashboard"><source media="(prefers-color-scheme: light)" srcset="/assets/board/dashboard-light-1x.webp 1200w, /assets/board/dashboard-light.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" /><img src="/assets/board/dashboard-dark-1x.webp" srcset="/assets/board/dashboard-dark-1x.webp 1200w, /assets/board/dashboard-dark.webp 2400w" sizes="(min-width: 980px) 1100px, 94vw" width="1440" height="900" alt="The dashboard: cycle time, cards done per week, who finished the work, where cards wait, and cost per card." loading="lazy" decoding="async" /></picture>
       </div>
-      <p class="caption">An illustration, not a screenshot. The cards are made up.</p>
     </div>
+    <p class="caption">The real board, with sample data for an imaginary shop.</p>
     <ul class="facts grid-2" style="margin-top:36px">
       <li>Cards run on the assignee's own Mac, in their own repo, with their own Claude or Codex login. Nothing is proxied through us.</li>
       <li>Every run keeps a handover: a short narrative, recent actions, and the files and branch involved.</li>
@@ -116,7 +148,7 @@
 <section class="section" aria-labelledby="mesh-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="mesh-h">Agents that can talk to each other. <span class="tag tag-soon">Coming</span></h2>
+      <h2 id="mesh-h" class="rv">Agents that can talk to each other. <span class="tag tag-soon">Coming</span></h2>
       <p class="lede">Your Claude can ask a teammate's Claude a question, or hand a finished piece of work to the agent that needs it, through the board, with a human able to read every message.</p>
     </div>
     <svg class="plexus" id="mesh" viewBox="0 0 960 330" role="img" aria-label="Three teammates' desks connected in a triangle, with agent messages travelling between them.">
@@ -140,7 +172,7 @@
 <section class="section" aria-labelledby="int-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="int-h">GitHub today. Slack, Sentry, Linear and Jira next.</h2>
+      <h2 id="int-h" class="rv">GitHub today. Slack, Sentry, Linear and Jira next.</h2>
       <p class="lede">GitHub pull requests and builds light the widget today. The rest are on the way. {{brand.name}} is the hub; these are the things it listens to.</p>
     </div>
     <svg class="plexus" id="hub" viewBox="0 0 960 400" role="img" aria-label="{{brand.name}} in the middle, connected to GitHub, Slack, Sentry, Linear and Jira.">
@@ -165,13 +197,16 @@
 <section class="section" aria-labelledby="agents-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="agents-h">One desk for every agent, not just one vendor's.</h2>
+      <h2 id="agents-h" class="rv">One desk for every agent, not just one vendor's.</h2>
       <div class="prose" style="margin-top:22px"><p>Claude Code has the deepest support today. Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns all of them into the same lamps, so a Codex run and a Claude run look the same from across the room.</p><p>It works with the logins you already have. There is no shared key and no account to swap into.</p></div>
-      <div class="chips" aria-label="Agents">
-        <span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Cursor</span><span class="chip">Gemini</span>
+      <div class="chips" aria-label="Agents"><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Cursor</span><span class="chip">Gemini</span></div>
+    </div>
+    <div class="lamp-stage agents-stage" id="agents-stage" data-lamp="working">
+      <div class="lamp-halo"></div>
+      <div class="sprite-stack" role="img" aria-label="The character with a chip for each agent, coloured by what that agent is doing.">
+        <div class="sprite is-on" data-state="agents" style="--n:16;--ms:1600"><img src="/assets/sprites/sheet-agents.webp" width="7296" height="588" alt="" loading=lazy /></div>
       </div>
     </div>
-    <div class="desk" id="agents-desk" style="aspect-ratio: 1.3 / 1"><div class="stage" id="agents-rig" role="img" aria-label="The character with small agent chips, each coloured by what that agent is doing."></div></div>
   </div>
 </section>
 
@@ -182,7 +217,7 @@
       <figcaption class="caption">The Usage tab in the app, showing sample data.</figcaption>
     </figure>
     <div>
-      <h2 id="use-h">Know what your agents cost, and where. <span class="tag tag-beta">Beta</span></h2>
+      <h2 id="use-h" class="rv">Know what your agents cost, and where. <span class="tag tag-beta">Beta</span></h2>
       <div class="prose" style="margin-top:22px"><p>{{brand.name}} keeps its own daily record of your usage, so history reaches back past the month of transcripts Claude Code keeps. See spend by model, project and hour; watch cache hit rate; get a nudge when today is well above your usual.</p></div>
       <ul class="facts"><li>Set a daily or weekly budget and a runaway-session alert.</li><li>On a subscription, amounts are shown as API-equivalent dollars and labelled as not a bill.</li><li>Anything it can't price is counted and shown as unpriced, never dropped.</li></ul>
       
@@ -193,17 +228,24 @@
 <section class="section" aria-labelledby="char-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="char-h">A character that's yours.</h2>
-      <p class="lede">Buddy comes with friends. Give them costumes, eye moods and poses, or turn into a ghost when you hit a usage limit. Click one. More characters are coming, and so is a way to hatch your own. <span class="tag tag-soon">Hatch: coming</span></p>
+      <h2 id="char-h" class="rv">A character that's yours.</h2>
+      <p class="lede rv">Buddy comes with friends. Give them costumes, eye moods and poses, or turn into a ghost when you hit a usage limit. Click one. More characters are coming, and so is a way to hatch your own. <span class="tag tag-soon">Hatch: coming</span></p>
     </div>
-    <div class="gallery" id="gallery"></div>
+    <div class="gallery" id="gallery">
+      <button type="button" class="pet" data-body="claude" aria-label="Claude: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-claude.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-claude-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Claude</b></button>
+      <button type="button" class="pet" data-body="dog" aria-label="Dog: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-dog.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-dog-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Dog</b></button>
+      <button type="button" class="pet" data-body="cat" aria-label="Cat: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-cat.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-cat-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Cat</b></button>
+      <button type="button" class="pet" data-body="frog" aria-label="Frog: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-frog.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-frog-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Frog</b></button>
+      <button type="button" class="pet" data-body="robot" aria-label="Robot: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-robot.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-robot-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Robot</b></button>
+      <button type="button" class="pet" data-body="ghost" aria-label="Ghost: click to make it cheer"><span class="slot"><span class="sprite is-on" data-state="idle" style="--n:8;--ms:1600"><img src="/assets/sprites/sheet-ghost.webp" width="2432" height="392" alt="" loading="lazy" /></span><span class="sprite hit" data-state="hit" style="--n:8;--ms:800"><img src="/assets/sprites/sheet-ghost-hit.webp" width="2432" height="392" alt="" loading="lazy" /></span></span><b>Ghost</b></button>
+    </div>
   </div>
 </section>
 
 <section class="section" id="privacy" aria-labelledby="priv-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="priv-h">Almost everything stays on your computer.</h2>
+      <h2 id="priv-h" class="rv">Almost everything stays on your computer.</h2>
       <div class="prose" style="margin-top:22px"><p>The app sends no telemetry and no analytics, and the widget needs no account. Your prompts and Claude's replies are never stored by {{brand.name}}, and the conversation logs it reads to count tokens and cost never leave your computer.</p><p>Data leaves when you join a team board: your team's hub then receives your cards, handovers and run progress, with credential-like text and home-folder paths filtered out first, and signing in to a hub shares your account name and email with it. Sharing what you're working on with teammates is a separate opt-in.</p><p class="muted">This summary follows the beta's privacy notice, which is a draft pending legal review. Hub hosting, retention and deletion terms are being written.</p></div>
       <p style="margin-top:22px"><a class="btn btn-ghost" href="/privacy">Read the privacy notice</a></p>
     </div>
@@ -219,7 +261,7 @@
 <section class="section" id="beta" aria-labelledby="beta-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="beta-h">Private beta, for small teams.</h2>
+      <h2 id="beta-h" class="rv">Private beta, for small teams.</h2>
       <div class="prose" style="margin-top:22px"><p>The desktop app works on its own. The team board is where the beta needs you: a few small teams, each with an invite, using it for real work for a few weeks.</p><p>Pricing isn't announced yet. The waitlist hears first, before anything is charged.</p></div>
       <div class="hero-cta" style="margin-top:28px"><a class="btn" href="#waitlist">Join the waitlist</a><a class="btn btn-ghost" href="/download">See the downloads</a></div>
     </div>
@@ -233,7 +275,7 @@
 
 <section class="section" aria-labelledby="faq-h">
   <div class="wrap">
-    <h2 id="faq-h" style="margin-bottom:28px">Questions people ask first</h2>
+    <h2 id="faq-h" class="rv" style="margin-bottom:28px">Questions people ask first</h2>
     <div class="faq">
       <details><summary>Which agents does it work with?</summary><p>Claude Code, Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns each into the same lamps. Claude Code has the deepest support today.</p></details>
       <details><summary>Does it read my prompts or my code?</summary><p>It never stores prompts. It reads Claude Code's conversation logs on your Mac only to count tokens and cost, and keeps the numbers. Code stays in your repo.</p></details>
@@ -250,7 +292,7 @@
   <div class="wrap">
     <div class="cta-band">
       <div>
-        <h2 id="wl-h">Get a place in the beta.</h2>
+        <h2 id="wl-h" class="rv">Get a place in the beta.</h2>
         <p class="lede">Tell us where to send your invite. We'll only use your email about the beta.</p>
       </div>
       <form class="form" id="wl-form" action="/api/waitlist" method="post" novalidate>

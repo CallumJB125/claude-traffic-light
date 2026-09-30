@@ -103,7 +103,7 @@ test('feed: installers get absolute URLs on the feed host only, with a readable 
 });
 
 // ── the build ───────────────────────────────────────────────────────────
-test('build: every page builds from brand.js, links only to files that exist, and ships the real rig', () => {
+test('build: every page builds from brand.js, links only to files that exist, and ships no app code but brand.js', () => {
   const { build, DIST } = require('../build.js');
   const r = build();
   assert.ok(r.pages >= 5);
@@ -117,8 +117,7 @@ test('build: every page builds from brand.js, links only to files that exist, an
     assert.ok(!/Claude Buddy/.test(html.replace(/was called Claude Buddy[^<]*/g, '')), `${f} uses the old name`);
     for (const m of html.matchAll(/(?:src|href)="(\/assets\/[^"?]+)/g)) assert.ok(fs.existsSync(path.join(DIST, m[1])), `${f} links ${m[1]}`);
   }
-  for (const f of ['rig.js', 'rig.css', 'motion.js', 'brand.js', 'characters/contract.js', 'characters/builtin/core.js']) assert.ok(fs.existsSync(path.join(DIST, 'assets', 'app', f)), f);
-  assert.ok(!fs.existsSync(path.join(DIST, 'assets', 'app', 'tokens.css')), 'the app tokens would restyle the site');
+  assert.deepEqual(fs.readdirSync(path.join(DIST, 'assets', 'app')), ['brand.js'], 'the live rig and app tokens are not shipped');
   const headers = fs.readFileSync(path.join(DIST, '_headers'), 'utf8');
   assert.match(headers, /Content-Security-Policy: default-src 'self'/);
   assert.match(headers, new RegExp(Brand.urls.downloads.replace(/\./g, '\\.')));
@@ -201,7 +200,7 @@ test('site: the first-open steps match current macOS, and no page still tells pe
 
 test('site: dark mode never puts dark text on a dark surface (buttons, inputs and the band use fixed light values)', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'assets', 'site.css'), 'utf8');
-  for (const sel of ['.cta-band .form input', '.cta-band .btn', '.dl-card .btn', '.ask-btn']) {
+  for (const sel of ['.cta-band .form input', '.cta-band .btn', '.dl-card .btn']) {
     const rule = css.split('\n').find((l) => l.includes(sel) && /#15171c/.test(l));
     assert.ok(rule, `${sel} sets dark text`);
     assert.ok(!/var\(--paper\)/.test(rule.replace(/\.cta-band \.form label[^}]*\}/, '')), `${sel} must not take its background from --paper`);

@@ -2,8 +2,8 @@
 // `npm run build:site`, output directory `site/dist`). No bundler: pages are
 // HTML with {{placeholders}} filled from brand.js (the one place the name and
 // URLs live), partials are spliced in, asset links get a content hash, and the
-// real pixel rig (rig.js, motion.js, the characters) is copied in from the app
-// so the hero is the actual widget, not a picture of it.
+// product shots are captures of the real app (site/tools), so the only app file
+// the site ships is brand.js, which the invite preview reads.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -16,7 +16,7 @@ const SRC = path.join(__dirname, 'src');
 const DIST = path.join(__dirname, 'dist');
 const ROOT = path.join(__dirname, '..');
 
-const APP_FILES = ['brand.js', 'rig.js', 'rig.css', 'motion.js', 'characters/contract.js', 'characters/builtin/core.js'];
+const APP_FILES = ['brand.js'];
 
 function rmrf(p) { fs.rmSync(p, { recursive: true, force: true }); }
 function copyDir(from, to) {

@@ -1,0 +1,177 @@
+{
+ "viewport": {
+  "w": 1440,
+  "h": 900
+ },
+ "rects": {
+  "board-dark": {
+   "card": {
+    "x": 22,
+    "y": 700,
+    "w": 337,
+    "h": 153
+   },
+   "action": {
+    "x": 35,
+    "y": 790,
+    "w": 107,
+    "h": 28
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Give to Claude"
+  },
+  "story-01-queued": {
+   "card": {
+    "x": 22,
+    "y": 151,
+    "w": 337,
+    "h": 186
+   },
+   "action": {
+    "x": 35,
+    "y": 297,
+    "w": 62,
+    "h": 28
+   },
+   "give": {
+    "x": 35,
+    "y": 822,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Cancel"
+  },
+  "story-02-running": {
+   "card": null,
+   "action": null,
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Watch"
+  },
+  "story-03-blocked": {
+   "card": {
+    "x": 375,
+    "y": 149,
+    "w": 337,
+    "h": 241
+   },
+   "action": {
+    "x": 388,
+    "y": 350,
+    "w": 65,
+    "h": 28
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Answer"
+  },
+  "story-04-orphaned": {
+   "card": {
+    "x": 375,
+    "y": 624,
+    "w": 337,
+    "h": 225
+   },
+   "action": {
+    "x": 388,
+    "y": 809,
+    "w": 78,
+    "h": 28
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Take over"
+  },
+  "story-05-handed_over": {
+   "card": null,
+   "action": null,
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Give to Claude"
+  },
+  "story-06-in_review": {
+   "card": {
+    "x": 728,
+    "y": 149,
+    "w": 337,
+    "h": 208
+   },
+   "action": {
+    "x": 741,
+    "y": 317,
+    "w": 90,
+    "h": 28
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Open PR"
+  },
+  "story-07-done": {
+   "card": {
+    "x": 1081,
+    "y": 149,
+    "w": 337,
+    "h": 171
+   },
+   "action": {
+    "x": 1094,
+    "y": 187,
+    "w": 237,
+    "h": 18
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Rate-limit the order-lookup endpoint"
+  },
+  "board-light": {
+   "card": {
+    "x": 1081,
+    "y": 149,
+    "w": 337,
+    "h": 171
+   },
+   "action": {
+    "x": 1094,
+    "y": 187,
+    "w": 237,
+    "h": 18
+   },
+   "give": {
+    "x": 35,
+    "y": 629,
+    "w": 107,
+    "h": 28
+   },
+   "actionText": "Rate-limit the order-lookup endpoint"
+  }
+ }
+}

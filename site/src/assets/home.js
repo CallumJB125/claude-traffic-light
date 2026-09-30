@@ -1,290 +1,286 @@
-// The home page's motion. Everything here is lazy: the page is complete and
-// readable without it, and the real pixel rig (the app's own rig.js) is only
-// fetched once something that needs it is near the screen.
+// The home page's motion. The page is complete and readable without it: the
+// product is shown as captures of the real app (the board) and frames of the
+// real character (sprite sheets), so nothing here renders a live scene. What
+// moves is transforms and opacity only, driven from springs, and everything
+// off screen is paused.
 (function () {
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const $ = (id) => document.getElementById(id);
-  const APP = '/assets/app/';
-  const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
-
-  // ── the rig, loaded once ────────────────────────────────────────────────
-  let rigLoad = null;
-  function loadRig() {
-    if (rigLoad) return rigLoad;
-    const css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = `${APP}rig.css`;
-    document.head.append(css);
-    const add = (src) => new Promise((resolve, reject) => { const s = document.createElement('script'); s.src = `${APP}${src}`; s.onload = resolve; s.onerror = reject; document.head.append(s); });
-    // in order: the motion maths, the character contract, the built-ins, the rig
-    rigLoad = ['motion.js', 'characters/contract.js', 'characters/builtin/core.js', 'rig.js'].reduce((p, f) => p.then(() => add(f)), Promise.resolve()).then(() => window.mountRig);
-    return rigLoad;
-  }
-  // mount a rig into `node` the first time it comes within a screen of the viewport
-  function whenNear(node, run, margin = '300px') {
-    if (!node) return;
-    const io = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) { io.disconnect(); run(); } }, { rootMargin: margin });
-    io.observe(node);
-  }
-  // keep a rig's own clocks stopped while it is off screen or the tab is hidden
-  function tend(node, rig) {
-    let visible = true;
-    const sync = () => rig.setHidden(!visible || document.hidden);
-    const io = new IntersectionObserver((es) => { visible = es[es.length - 1].isIntersecting; sync(); }, { rootMargin: '80px' });
-    io.observe(node);
-    document.addEventListener('visibilitychange', sync);
-    return () => { io.disconnect(); document.removeEventListener('visibilitychange', sync); };
-  }
-  async function mount(node, look, opts) {
-    const mountRig = await loadRig();
-    const rig = mountRig(node, { ambient: true, ...opts });
-    rig.setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...look });
-    rig.blinks(true);
-    const untend = tend(node, rig);
-    rig.dispose = () => { untend(); rig.blinks(false); rig.setHidden(true); node.replaceChildren(); };
-    return rig;
-  }
-  // A rig that exists only while it is near the screen. Each one is hundreds of
-  // SVG nodes, and a long page of them is heavy on a phone, so far-away rigs
-  // are taken down and put back (with their last look) when you return.
-  // → { rig } holder; `ready(rig)` runs after every (re)mount.
-  function lazyRig(node, look, opts, ready) {
-    const holder = { rig: null, look: { ...look } };
-    let busy = false;
-    const io = new IntersectionObserver(async (es) => {
-      const near = es[es.length - 1].isIntersecting;
-      if (near && !holder.rig && !busy) {
-        busy = true;
-        holder.rig = await mount(node, holder.look, opts);
-        if (ready) ready(holder.rig);
-        busy = false;
-      } else if (!near && holder.rig) {
-        holder.look = { ...holder.rig.look };
-        holder.rig.dispose();
-        holder.rig = null;
-      }
-    }, { rootMargin: '700px 0px' });
-    io.observe(node);
-    return holder;
-  }
-
-  // ── hero: the product running on a loop ────────────────────────────────
-  // A fixed-size scene scaled to fit. A card is given to Claude, travels across
-  // the board on springs, the widget's real rig changes lamp as it goes, an
-  // approval interrupts, a pointer does the clicking, and the window tilts
-  // toward your cursor. Everything moves on springs, so it has mass. Springs
-  // write straight to element styles (never to inherited custom properties,
-  // which would restyle every node of the rig under them on each frame).
-  const scene = $('scene');
   const PX = window.PX;
-  const GLOW = { green: '#2fae3e', amber: '#f2a200', red: '#e2231a' };
+  const reduce = PX.reduce;
+  const clamp = PX.clamp;
   const sp = (init, opts, fn) => PX.spring(init, { ...opts, onUpdate: fn });
-  function sceneFit() { scene.style.setProperty('--k', String(scene.clientWidth / 560)); }
-  async function hero() {
-    sceneFit();
-    new ResizeObserver(sceneFit).observe(scene);
-    const rig = await mount($('hero-rig'), {});
-    const body = $('win-body');
-    const win = $('win');
-    const mcard = $('mcard');
-    const widget = $('widget');
-    const pointer = $('pointer');
-    const ask = $('ask');
-    const give = $('give');
-    const askBtn = $('ask-btn');
-    const barEl = $('mcard-bar');
-    const glow = $('scene-glow');
-    const colEl = (n) => body.querySelector(`[data-col="${n}"]`);
-    // where the traveller sits: slot `i` of a column, in body coordinates
-    const slotPos = (col, i) => { const c = colEl(col); const s2 = c.querySelectorAll('.slot')[i]; return { x: c.offsetLeft + s2.offsetLeft, y: c.offsetTop + s2.offsetTop }; };
-    const spot = (el) => { // the centre of an element, in scene design pixels
-      let x = el.offsetWidth / 2; let y = el.offsetHeight / 2;
-      for (let n = el; n && n.id !== 'scene-inner'; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
-      return { x, y };
-    };
-    const card = { x: 0, y: 0 };
-    const placeCard = () => { mcard.style.transform = `translate(${card.x}px, ${card.y}px)`; };
-    const mx = sp(0, { response: 0.6, damping: 0.72 }, (v) => { card.x = v; placeCard(); });
-    const my = sp(0, { response: 0.6, damping: 0.72 }, (v) => { card.y = v; placeCard(); });
-    const cur = { x: 0, y: 0, s: 1 };
-    const placeCur = () => { pointer.style.transform = `translate(${cur.x}px, ${cur.y}px) scale(${cur.s})`; };
-    const cx = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.x = v; placeCur(); });
-    const cy = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.y = v; placeCur(); });
-    const pscale = sp(1, { response: 0.22, damping: 0.7 }, (v) => { cur.s = v; placeCur(); });
-    const bar = sp(0, { response: 2.4, damping: 1, precision: 0.001 }, (v) => { barEl.style.transform = `scaleX(${v})`; });
-    const gbtn = sp(1, { response: 0.2, damping: 0.7 }, (v) => { give.style.transform = `scale(${v})`; });
-    const abtn = sp(1, { response: 0.2, damping: 0.7 }, (v) => { askBtn.style.transform = `scale(${v})`; });
-    const askY = sp(12, { response: 0.45, damping: 0.75 }, (v) => { ask.style.transform = `translateY(${v}px)`; });
-    const askO = sp(0, { response: 0.3, damping: 1 }, (v) => { ask.style.opacity = String(v); });
-    const glowO = sp(0, { response: 0.9, damping: 1 }, (v) => { glow.style.opacity = String(v); });
+  const fine = matchMedia('(hover: hover) and (pointer: fine)').matches;
 
-    const caption = (lamp, state, detail) => {
-      widget.dataset.lamp = lamp;
-      $('desk-state').textContent = state;
-      $('desk-detail').textContent = detail;
-      if (GLOW[lamp]) { glow.style.background = `radial-gradient(closest-side, color-mix(in srgb, ${GLOW[lamp]} 34%, transparent), transparent 72%)`; glowO.to(1); } else glowO.to(0);
+  // ── off-screen and hidden-tab pausing for every sprite, in one observer ──
+  const sprites = new IntersectionObserver((es) => { for (const e of es) e.target.classList.toggle('is-off-screen', !e.isIntersecting); }, { rootMargin: '120px 0px' });
+  document.querySelectorAll('.sprite-stack, .pet .slot').forEach((n) => sprites.observe(n));
+  document.addEventListener('visibilitychange', () => document.documentElement.classList.toggle('tab-hidden', document.hidden));
+
+  const setSprite = (stack, state) => { for (const s of stack.querySelectorAll('.sprite[data-state]')) s.classList.toggle('is-on', s.dataset.state === state); };
+  const burst = (el) => { if (!el || reduce) return; el.classList.remove('play'); void el.offsetWidth; el.classList.add('play'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('play'), 1450); };
+  const setFrame = (root, name) => { for (const l of root.querySelectorAll('.shot-layer')) l.classList.toggle('is-on', (l.dataset.frame || 'board') === name); };
+
+  // where the card and its button sit in each captured frame (measured when captured)
+  let RECTS = null;
+  const rects = fetch('/assets/board/manifest.json').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((m) => { RECTS = m; return m; });
+  const where = (frame, which) => { const r = RECTS && RECTS.rects[frame]; return r && (r[which] || r.card); };
+  const place = (shots, el, rect, dx = 0, dy = 0) => { // a rect in 1440x900 capture px, onto the shown frame
+    const k = shots.clientWidth / 1440;
+    return { x: (rect.x + rect.w / 2 + dx) * k, y: (rect.y + rect.h / 2 + dy) * k, w: rect.w * k, h: rect.h * k };
+  };
+
+  // ── reveals: one orchestrated entrance for the hero, a calm one elsewhere ──
+  const show = (n) => n.classList.add('in');
+  const hero = $('top');
+  requestAnimationFrame(() => {
+    const h1 = hero.querySelector('h1.lines');
+    if (h1) { h1.querySelectorAll('.ln > span').forEach((s, i) => s.style.setProperty('--rd', `${i * 90}ms`)); show(h1); }
+    hero.querySelectorAll('.rv').forEach((n, i) => { n.style.setProperty('--rd', `${260 + i * 110}ms`); show(n); });
+  });
+  const rvio = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { show(e.target); rvio.unobserve(e.target); } }, { rootMargin: '0px 0px -8% 0px' });
+  document.querySelectorAll('.rv').forEach((n) => { if (!hero.contains(n)) rvio.observe(n); });
+
+  // ── nav over the dark hero ──
+  const nav = document.querySelector('.nav');
+  if (nav) new IntersectionObserver((es) => nav.classList.toggle('on-dark', es[es.length - 1].isIntersecting), { rootMargin: '-40px 0px -100% 0px' }).observe(hero);
+
+  // ── the plexus field: a few dozen drifting nodes, joined when near, drawn on one canvas ──
+  const cv = $('field');
+  if (cv) {
+    const g = cv.getContext('2d');
+    let W = 0; let H = 0; let dpr = 1; let nodes = []; let raf = 0; let on = false;
+    const ptr = { x: -999, y: -999 };
+    const size = () => {
+      dpr = Math.min(devicePixelRatio || 1, 1.5);
+      W = cv.clientWidth; H = cv.clientHeight;
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const n = Math.round(clamp((W * H) / 26000, 18, 64));
+      nodes = Array.from({ length: n }, () => ({ x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22, r: 1 + Math.random() * 1.4 }));
     };
-    const goTo = (col, i) => { const p = slotPos(col, i); mx.to(p.x); my.to(p.y); };
-    const jumpTo = (col, i) => { const p = slotPos(col, i); mx.jump(p.x); my.jump(p.y); };
-    const aim = (el, dx = 0, dy = 0) => { const p = spot(el); cx.to(p.x + dx); cy.to(p.y + dy); };
-    let timers = [];
-    const later = (fn, ms) => { timers.push(setTimeout(fn, ms)); };
-    const press = (spr) => { spr.to(0.86); pscale.to(0.82); later(() => { spr.to(1); pscale.to(1); }, 130); };
-    const AGENTS = (st) => [{ name: 'claude', status: st }];
-    const reset = () => {
-      jumpTo('todo', 0);
-      mcard.style.transition = 'none'; mcard.style.opacity = '1';
-      give.style.display = '';
-      $('mcard-note').textContent = 'Unassigned';
-      barEl.parentElement.style.opacity = '0';
-      bar.jump(0); gbtn.jump(1); abtn.jump(1); askY.jump(12); askO.jump(0);
-      rig.setLook({ ...(rig.look || {}), lamp: 'off', pose: 'none', eyes: 'default', text: '', minions: [] });
-      caption('off', 'Idle', 'No agents running');
-      pointer.style.opacity = '0';
-      cx.jump(470); cy.jump(380);
+    const LINK = 150;
+    const frame = () => {
+      g.clearRect(0, 0, W, H);
+      for (const p of nodes) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < -20) p.x = W + 20; else if (p.x > W + 20) p.x = -20;
+        if (p.y < -20) p.y = H + 20; else if (p.y > H + 20) p.y = -20;
+      }
+      g.lineWidth = 1;
+      for (let band = 0; band < 3; band += 1) { // three alpha bands, so a few strokes cover every line
+        g.strokeStyle = `rgba(150, 178, 235, ${[0.07, 0.13, 0.22][band]})`;
+        g.beginPath();
+        for (let i = 0; i < nodes.length; i += 1) {
+          const a = nodes[i];
+          for (let j = i + 1; j < nodes.length; j += 1) {
+            const b = nodes[j];
+            const dx = a.x - b.x; const dy = a.y - b.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > LINK * LINK) continue;
+            const t = 1 - Math.sqrt(d2) / LINK;
+            if ((t < 0.34 ? 0 : t < 0.67 ? 1 : 2) !== band) continue;
+            g.moveTo(a.x, a.y); g.lineTo(b.x, b.y);
+          }
+          // the pointer is a node too: lines reach for it
+          const px = a.x - ptr.x; const py = a.y - ptr.y;
+          if (band === 2 && px * px + py * py < 170 * 170) { g.moveTo(a.x, a.y); g.lineTo(ptr.x, ptr.y); }
+        }
+        g.stroke();
+      }
+      g.fillStyle = 'rgba(200, 216, 250, 0.7)';
+      for (const p of nodes) { g.beginPath(); g.arc(p.x, p.y, p.r, 0, 6.283); g.fill(); }
+      raf = on && !reduce ? requestAnimationFrame(frame) : 0;
     };
-    // the loop: [ms, what happens]
-    const TIMELINE = [
-      [0, reset],
-      [900, () => { pointer.style.opacity = '1'; aim(give, 18, 8); }],
-      [2000, () => press(gbtn)],
-      [2250, () => { give.style.display = 'none'; $('mcard-note').textContent = 'Claude · running'; barEl.parentElement.style.opacity = '1'; bar.to(0.9); goTo('doing', 1); rig.setLook({ ...rig.look, lamp: 'green', pose: 'think', eyes: 'default', minions: AGENTS('working') }); caption('green', 'Working', '1 agent'); aim(widget, -40, -90); }],
-      [5400, () => { rig.setLook({ ...rig.look, lamp: 'red', pose: 'banner', eyes: 'surprised', text: 'APPROVE?' }); caption('red', 'Needs you', 'Permission to run a command'); askY.to(0); askO.to(1); later(() => aim(askBtn, 6, 4), 500); }],
-      [7300, () => press(abtn)],
-      [7500, () => { askY.to(12); askO.to(0); rig.setLook({ ...rig.look, lamp: 'green', pose: 'think', eyes: 'default', text: '' }); caption('green', 'Working', '1 agent'); aim(widget, -40, -90); }],
-      [9800, () => { bar.to(1); $('mcard-note').textContent = 'Ready for review'; goTo('review', 0); rig.setLook({ ...rig.look, lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: AGENTS('done') }); caption('amber', 'Your turn', 'Finished, ready for review'); rig.celebrate(); }],
-      [11800, () => aim(mcard, 40, 18)],
-      [12900, () => { press(gbtn); $('mcard-note').textContent = 'Merged'; goTo('done', 1); rig.setLook({ ...rig.look, lamp: 'green', pose: 'none', eyes: 'default', minions: [] }); caption('green', 'Idle', 'Nothing waiting'); }],
-      [14600, () => { pointer.style.opacity = '0'; }],
-      // fade the card out before the loop restarts, so it never snaps back
-      [15300, () => { mcard.style.transition = 'opacity 280ms ease'; mcard.style.opacity = '0'; }],
-    ];
-    const LOOP = 16200;
-    if (PX.reduce) { // one finished still frame, nothing moving
-      jumpTo('done', 1); give.style.display = 'none'; $('mcard-note').textContent = 'Merged';
-      rig.setLook({ ...rig.look, lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: [] });
-      caption('amber', 'Your turn', 'Finished, ready for review');
-      return;
+    const start = () => { if (on || reduce) return; on = true; if (!raf) raf = requestAnimationFrame(frame); };
+    const stop = () => { on = false; cancelAnimationFrame(raf); raf = 0; };
+    size();
+    if (reduce) { frame(); } else {
+      new IntersectionObserver((es) => { if (es[es.length - 1].isIntersecting && !document.hidden) start(); else stop(); }).observe(hero);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (hero.getBoundingClientRect().bottom > 0) start(); });
     }
+    let rw = innerWidth;
+    new ResizeObserver(() => { if (Math.abs(cv.clientWidth - W) > 2 || Math.abs(cv.clientHeight - H) > 40) { size(); if (reduce) frame(); } }).observe(cv);
+    if (fine) hero.addEventListener('pointermove', (e) => { const r = cv.getBoundingClientRect(); ptr.x = e.clientX - r.left; ptr.y = e.clientY - r.top; });
+    hero.addEventListener('pointerleave', () => { ptr.x = ptr.y = -999; });
+    void rw;
+  }
+
+  // ── hero: the real board, a card given to Claude, the real character reacting ──
+  const heroShots = $('hero-shots');
+  const heroFrame = $('hero-frame');
+  const widget = $('hero-widget');
+  const sprStack = $('hero-sprites');
+  const LAMPS = { off: 'rgba(127,155,209,0.22)', working: 'rgba(47,174,62,0.30)', ready: 'rgba(242,162,0,0.32)', approve: 'rgba(226,35,26,0.30)' };
+  const heroGlow = $('hero-glow');
+  const cap = { off: ['Idle', 'No agents running'], working: ['Working', '1 agent'], approve: ['Needs you', 'Permission to run a command'], ready: ['Your turn', 'Finished, ready for review'] };
+  const hero$ = {
+    ring: $('hero-ring'), pointer: $('hero-pointer'),
+    look(state) {
+      widget.dataset.lamp = state === 'off' ? '' : state;
+      setSprite(sprStack, state);
+      heroGlow.style.setProperty('--hg', LAMPS[state]);
+      $('hero-state').textContent = cap[state][0]; $('hero-detail').textContent = cap[state][1];
+    },
+  };
+  hero$.look('off');
+  // tilt + parallax: the window leans toward the cursor and drifts with scroll; the widget floats the other way (depth)
+  const t = { ry: 0, rx: 0, wx: 0, wy: 0, sy: 0 };
+  const paint = () => {
+    heroFrame.style.transform = `translate3d(0, ${t.sy}px, 0) rotateY(${t.ry}deg) rotateX(${t.rx}deg)`;
+    widget.style.transform = `translate3d(${t.wx}px, ${t.wy + t.sy * 1.7}px, 0)`;
+  };
+  if (!reduce) {
+    const ry = sp(-5, { response: 0.8, damping: 0.8 }, (v) => { t.ry = v; paint(); });
+    const rx = sp(2, { response: 0.8, damping: 0.8 }, (v) => { t.rx = v; paint(); });
+    const wx = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wx = v; paint(); });
+    const wy = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wy = v; paint(); });
+    const sy = sp(0, { response: 0.5, damping: 1 }, (v) => { t.sy = v; paint(); });
+    ry.jump(-5); rx.jump(2);
+    const stage = $('hero-stage');
+    if (fine) {
+      hero.addEventListener('pointermove', (e) => { const r = stage.getBoundingClientRect(); const u = clamp((e.clientX - r.left) / r.width, -0.2, 1.2) - 0.5; const v = clamp((e.clientY - r.top) / r.height, -0.2, 1.2) - 0.5; ry.to(-5 + u * 7); rx.to(2 - v * 5); wx.to(-u * 22); wy.to(-v * 16); });
+      hero.addEventListener('pointerleave', () => { ry.to(-5); rx.to(2); wx.to(0); wy.to(0); });
+    }
+    let q = false;
+    addEventListener('scroll', () => { if (q) return; q = true; requestAnimationFrame(() => { q = false; if (scrollY < innerHeight * 1.2) sy.to(-scrollY * 0.06); }); }, { passive: true });
+  } else { t.ry = -4; t.rx = 1; paint(); }
+
+  // the loop: [ms, what happens]. The card can't move between captured frames, so the
+  // frames crossfade and a ring marks where the action is.
+  const cx = sp(0, { response: 0.8, damping: 0.85 }, () => {}); void cx;
+  const cur = { x: 0, y: 0, s: 1, o: 0 };
+  const putPtr = () => { hero$.pointer.style.transform = `translate(${cur.x}px, ${cur.y}px) scale(${cur.s})`; hero$.pointer.style.opacity = String(cur.o); };
+  const px = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.x = v; putPtr(); });
+  const py = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.y = v; putPtr(); });
+  const ps = sp(1, { response: 0.22, damping: 0.7 }, (v) => { cur.s = v; putPtr(); });
+  const ringAt = (frame, which, on) => {
+    const r = where(frame, which);
+    if (!r || !on) { hero$.ring.style.opacity = '0'; return; }
+    const k = heroShots.clientWidth / 1440;
+    hero$.ring.style.width = `${r.w * k + 10}px`; hero$.ring.style.height = `${r.h * k + 10}px`;
+    hero$.ring.style.transform = `translate(${(r.x) * k - 5}px, ${(r.y) * k - 5}px)`;
+    hero$.ring.style.opacity = '1';
+  };
+  const aimAt = (frame, which, dx = 14, dy = 10) => { const r = where(frame, which); if (!r) return; const p = place(heroShots, null, r, dx, dy); px.to(p.x); py.to(p.y); };
+  let timers = [];
+  const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+  const tap = () => { ps.to(0.8); later(() => ps.to(1), 130); };
+  const TIMELINE = [
+    [0, () => { setFrame(heroShots, 'board'); hero$.look('off'); ringAt('', '', false); cur.o = 0; putPtr(); const p = place(heroShots, null, where('board-dark', 'give') || { x: 1000, y: 600, w: 10, h: 10 }, 220, 160); px.jump(p.x); py.jump(p.y); }],
+    [900, () => { cur.o = 1; putPtr(); aimAt('board-dark', 'give'); ringAt('board-dark', 'give', true); }],
+    [2000, () => tap()],
+    [2250, () => { ringAt('', '', false); setFrame(heroShots, 'queued'); hero$.look('working'); aimAt('story-01-queued', 'card', 60, 40); }],
+    [5400, () => { setFrame(heroShots, 'blocked'); hero$.look('approve'); ringAt('story-03-blocked', 'action', true); aimAt('story-03-blocked', 'action'); }],
+    [7300, () => tap()],
+    [7500, () => { ringAt('', '', false); setFrame(heroShots, 'queued'); hero$.look('working'); aimAt('story-01-queued', 'card', 60, 40); }],
+    [9800, () => { setFrame(heroShots, 'review'); hero$.look('ready'); burst($('hero-burst')); aimAt('story-06-in_review', 'card', 40, 30); }],
+    [12400, () => { setFrame(heroShots, 'done'); hero$.look('ready'); aimAt('story-07-done', 'card', 40, 30); }],
+    [14400, () => { cur.o = 0; putPtr(); }],
+  ];
+  const LOOP = 15600;
+  rects.then(() => {
+    if (reduce) { setFrame(heroShots, 'review'); hero$.look('ready'); return; }
     let running = false;
-    const play = () => { timers.forEach(clearTimeout); timers = TIMELINE.map(([t, fn]) => setTimeout(fn, t)); timers.push(setTimeout(play, LOOP)); };
+    const play = () => { timers.forEach(clearTimeout); timers = TIMELINE.map(([ms, fn]) => setTimeout(fn, ms)); timers.push(setTimeout(play, LOOP)); };
     const stop = () => { running = false; timers.forEach(clearTimeout); timers = []; };
     const go = () => { if (!running) { running = true; play(); } };
-    new IntersectionObserver((es) => { const on = es[es.length - 1].isIntersecting && !document.hidden; if (on) go(); else stop(); }).observe(scene);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (scene.getBoundingClientRect().bottom > 0) go(); });
-    addEventListener('resize', () => { if (!running) jumpTo('todo', 0); });
+    new IntersectionObserver((es) => { if (es[es.length - 1].isIntersecting && !document.hidden) go(); else stop(); }).observe(heroFrame);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (heroFrame.getBoundingClientRect().bottom > 0) go(); });
+  });
 
-    // depth: the window tilts toward the cursor (real perspective on the window
-    // itself) and the widget floats the other way
-    if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
-      const t = { ry: 0, rx: 0, wx: 0, wy: 0 };
-      const paint = () => { win.style.transform = `perspective(1400px) rotateY(${t.ry}deg) rotateX(${t.rx}deg)`; widget.style.transform = `translate(${t.wx}px, ${t.wy}px)`; };
-      const ry = sp(0, { response: 0.7, damping: 0.8 }, (v) => { t.ry = v; paint(); });
-      const rx = sp(0, { response: 0.7, damping: 0.8 }, (v) => { t.rx = v; paint(); });
-      const wx = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wx = v; paint(); });
-      const wy = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wy = v; paint(); });
-      scene.addEventListener('pointermove', (e) => { const r = scene.getBoundingClientRect(); const u = (e.clientX - r.left) / r.width - 0.5; const v = (e.clientY - r.top) / r.height - 0.5; ry.to(u * 7); rx.to(-v * 5); wx.to(-u * 16); wy.to(-v * 12); });
-      scene.addEventListener('pointerleave', () => { ry.to(0); rx.to(0); wx.to(0); wy.to(0); });
-    }
-  }
-  // load as soon as the browser is idle: the headline is already painted
-  (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(hero);
-
-  // ── the hand-off story, driven by scroll ───────────────────────────────
-  // Pinned and scroll-driven on wide, tall screens. On a phone or a short
-  // window there isn't room to pin four steps and a board, so it becomes the
-  // same story laid out as plain content, finished state showing.
+  // ── the hand-off story, driven by scroll ──
+  // Pinned and scroll-driven on wide, tall screens. On a phone or a short window there
+  // isn't room to pin, so it becomes the same story as plain content with the last frame showing.
   const story = $('story');
   if (story) {
-    const STATIC = PX.reduce || matchMedia('(max-width: 860px), (max-height: 720px)').matches;
+    const STATIC = reduce || matchMedia('(max-width: 860px), (max-height: 720px)').matches;
     const steps = [...$('story-steps').children];
-    const stage = $('stage-card');
     const pin = story.querySelector('.story-pin');
-    const run = $('run');
-    const runNote = $('run-note');
-    const stageLamp = $('stage-lamp');
-    const handover = $('handover');
-    const origin = stage.querySelector('[data-card="a"]');
-    const give = $('give2');
-    const cols = [...$('cols').querySelectorAll('.col')];
-    let rig = null;
+    const shots = $('story-shots');
+    const frame = $('story-frame');
+    const widget2 = $('story-widget');
+    const stack = $('story-sprites');
+    const ring = $('story-ring');
+    const ptrEl = $('story-pointer');
+    const FRAMES = ['board', 'queued', 'blocked', 'review'];
+    const FRAME_KEY = ['board-dark', 'story-01-queued', 'story-03-blocked', 'story-06-in_review'];
+    const SPR = ['off', 'working', 'approve', 'ready'];
     let last = -1;
-    let lastNote = '';
-    let pos = null;
-    const at = (el) => { const a = el.getBoundingClientRect(); const b = stage.getBoundingClientRect(); return { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height }; };
-    // where the card rides from and to: measured once (the stage is pinned, so scroll doesn't move it)
-    const measure = () => {
-      const from = at(origin);
-      const below = (colEl) => { const c = colEl.querySelector('.card:not([data-card])') || colEl.querySelector('.card'); const base = at(colEl); return { x: base.x + 10, y: c ? at(c).y + at(c).h + 8 : base.y + 36 }; };
-      pos = { from, doing: below(cols[1]), done: below(cols[2]) };
-      run.style.width = `${from.w}px`;
-    };
-    const LOOKS = [
-      { lamp: 'off', pose: 'none', eyes: 'default', minions: [] },
-      { lamp: 'off', pose: 'none', eyes: 'default', minions: [] },
-      { lamp: 'green', pose: 'think', eyes: 'default', minions: [{ name: 'claude', status: 'working' }] },
-      { lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: [{ name: 'claude', status: 'done' }] },
-    ];
-    const NOTES = ['Claude · starting', 'Claude · starting', 'Claude · running', 'Claude · finished'];
-    // scroll position is the target; the scene chases it on a spring, so it
-    // glides through a fast flick instead of jumping with every wheel tick
     const render = (p) => {
-      if (!pos) return;
-      const step = p < 0.22 ? 0 : p < 0.5 ? 1 : p < 0.78 ? 2 : 3;
+      const step = STATIC ? 3 : p < 0.2 ? 0 : p < 0.47 ? 1 : p < 0.74 ? 2 : 3;
       if (step !== last) {
         steps.forEach((li, i) => li.classList.toggle('on', STATIC || i === step));
-        stageLamp.textContent = ['idle', 'queued', 'working', 'your turn'][step];
-        if (rig) { rig.setLook({ ...(rig.look || {}), ...LOOKS[step] }); if (step === 3 && last === 2) rig.celebrate(); }
-        if (NOTES[step] !== lastNote) { lastNote = NOTES[step]; runNote.textContent = lastNote; }
-        handover.hidden = step < 3;
+        setFrame(shots, FRAMES[step]);
+        setSprite(stack, SPR[step]);
+        widget2.dataset.lamp = SPR[step] === 'off' ? '' : SPR[step];
+        if (step === 3 && last === 2) { const b = stack.querySelector('.burst'); burst(b); }
         last = step;
       }
-      const press = step === 0 ? Math.sin(PX.clamp(p / 0.22) * Math.PI) : 0;
-      give.style.transform = `scale(${1 - 0.1 * press})`;
-      const a = PX.clamp((p - 0.22) / 0.26);
-      const b = PX.clamp((p - 0.78) / 0.22);
-      const x = pos.from.x + (pos.doing.x - pos.from.x) * a + (pos.done.x - pos.doing.x) * b;
-      const y = pos.from.y + (pos.doing.y - pos.from.y) * a + (pos.done.y - pos.doing.y) * b;
-      run.hidden = p < 0.22;
-      origin.style.visibility = p < 0.22 ? 'visible' : 'hidden';
-      run.style.transform = `translate(${x}px, ${y}px)`;
+      if (STATIC) return;
+      // the pointer walks to the button through step 0, the ring pulses, then both let go
+      const r = where(FRAME_KEY[step], step === 0 ? 'give' : 'action') || where(FRAME_KEY[step], 'card');
+      if (r && RECTS) {
+        const k = shots.clientWidth / 1440;
+        const walk = step === 0 ? clamp(p / 0.18) : 1;
+        const from = { x: (r.x + r.w / 2) * k + 160 * (1 - walk), y: (r.y + r.h / 2) * k + 110 * (1 - walk) };
+        ptrEl.style.transform = `translate(${from.x + 10}px, ${from.y + 8}px) scale(${step === 0 && walk >= 1 ? 0.84 : 1})`;
+        ptrEl.style.opacity = step === 0 || step === 2 ? '1' : '0';
+        ring.style.width = `${r.w * k + 10}px`; ring.style.height = `${r.h * k + 10}px`;
+        ring.style.transform = `translate(${r.x * k - 5}px, ${r.y * k - 5}px)`;
+        ring.style.opacity = step === 0 || step === 2 ? '1' : '0';
+      }
+      // depth: the window settles from a tilt to flat as you read, the widget drifts up
+      const tilt = 6 * (1 - clamp(p / 0.5));
+      frame.style.transform = `rotateY(${-tilt}deg) rotateX(${tilt * 0.35}deg) translate3d(0, ${(0.5 - p) * 26}px, 0)`;
+      widget2.style.transform = `translate3d(0, ${(0.5 - p) * -40}px, 0)`;
     };
-    // the pin is the viewport tall (svh: stable while a phone's toolbar collapses)
-    const rawP = () => { const r = story.getBoundingClientRect(); return PX.clamp(-r.top / Math.max(1, story.offsetHeight - pin.offsetHeight)); };
+    const rawP = () => { const r = story.getBoundingClientRect(); return clamp(-r.top / Math.max(1, story.offsetHeight - pin.offsetHeight)); };
     const spr = PX.spring(0, { response: 0.32, damping: 0.92, precision: 0.0002, onUpdate: render });
-    if (STATIC) {
-      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[3]); last = -1; spr.jump(1); });
-    } else {
-      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[0]); last = -1; spr.jump(rawP()); });
+    rects.then(() => {
+      if (STATIC) { spr.jump(1); return; }
+      spr.jump(rawP());
       addEventListener('scroll', () => spr.to(rawP()), { passive: true });
-      // a phone's toolbar collapsing changes the height only: ignore that, re-measure real resizes
       let width = innerWidth;
-      addEventListener('resize', () => { if (innerWidth === width) return; width = innerWidth; measure(); spr.jump(rawP()); });
-    }
+      addEventListener('resize', () => { if (innerWidth === width) return; width = innerWidth; spr.jump(rawP()); });
+    });
   }
 
-  // ── the lamps you can press ────────────────────────────────────────────
+  // ── the lamps you can press ──
   const lampList = $('lamp-list');
   if (lampList) {
-    const LOOK = {
-      green: { lamp: 'green', pose: 'think', eyes: 'default', text: '' },
-      amber: { lamp: 'amber', pose: 'thumbs', eyes: 'happy', text: '' },
-      red: { lamp: 'red', pose: 'banner', eyes: 'surprised', text: 'APPROVE?' },
-    };
-    const h = lazyRig($('lamp-rig'), LOOK.green);
+    const stage = $('lamp-stage');
+    const stack = $('lamp-sprites');
     lampList.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-look]');
       if (!b) return;
       for (const x of lampList.querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
-      $('lamp-desk').dataset.lamp = b.dataset.look;
-      h.look = { ...h.look, ...LOOK[b.dataset.look] };
-      if (h.rig) { h.rig.setLook({ ...(h.rig.look || {}), ...LOOK[b.dataset.look] }); if (b.dataset.look === 'amber') h.rig.celebrate(); }
+      stage.dataset.lamp = b.dataset.look;
+      setSprite(stack, b.dataset.look);
+      if (b.dataset.look === 'ready') burst($('lamp-burst'));
+    });
+  }
+
+  // ── board tabs: the real views, crossfaded ──
+  const tabs = $('board-tabs');
+  if (tabs) {
+    const shots = $('tabs-shots');
+    const pick = (b) => {
+      for (const x of tabs.querySelectorAll('.tab')) { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', String(x === b)); x.tabIndex = x === b ? 0 : -1; }
+      for (const l of shots.querySelectorAll('.shot-layer')) l.classList.toggle('is-on', l.dataset.view === b.dataset.view);
+      shots.setAttribute('aria-labelledby', b.id);
+    };
+    tabs.querySelectorAll('.tab').forEach((x, i) => { x.tabIndex = i === 0 ? 0 : -1; });
+    tabs.addEventListener('click', (e) => { const b = e.target.closest('.tab'); if (b) pick(b); });
+    tabs.addEventListener('keydown', (e) => {
+      const all = [...tabs.querySelectorAll('.tab')]; const i = all.indexOf(document.activeElement);
+      if (i < 0 || !['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const n = e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + all.length) % all.length;
+      all[n].focus(); pick(all[n]);
     });
   }
 
   // ── reveals that mean something: cards arriving, bars growing, lines drawn
-  const live = (node, fn) => { if (!node) return; if (reduce) { fn(); return; } const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); fn(); } }, { threshold: 0.35 }); io.observe(node); };
-  live($('board'), () => $('board').removeAttribute('data-pre'));
   // the networks form as you scroll to them: edges draw, nodes pop on a spring.
   // Only what is on screen does any work; the pulses stop when it leaves.
   const nets = [];
@@ -310,34 +306,15 @@
     addEventListener('scroll', () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; for (const n of nets) if (n.visible) n.spring.to(n.target()); }); }, { passive: true });
   }
 
-  // ── agents: chips in every state ───────────────────────────────────────
-  lazyRig($('agents-rig'), { lamp: 'green', pose: 'think', minions: [{ name: 'claude', status: 'working' }, { name: 'codex', status: 'working' }, { name: 'cursor', status: 'waiting' }, { name: 'gemini', status: 'done' }] });
 
-  // ── characters: click one and it poses ─────────────────────────────────
+  // ── characters: click one and it cheers ──
   const gallery = $('gallery');
   if (gallery) {
-    const PETS = [['claude', 'Claude'], ['dog', 'Dog'], ['cat', 'Cat'], ['frog', 'Frog'], ['robot', 'Robot'], ['ghost', 'Ghost']];
-    const POSES = ['wave', 'cheer', 'spin', 'party', 'bounce', 'thumbs'];
-    let n = 0;
-    const cells = PETS.map(([body, name]) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pet';
-      b.setAttribute('aria-label', `${name}: click to make it pose`);
-      const slot = document.createElement('span');
-      slot.className = 'slot';
-      b.append(slot, document.createTextNode(name));
-      gallery.append(b);
-      return { b, slot, body };
-    });
-    cells.forEach((c) => {
-      const h = lazyRig(c.slot, { lamp: 'green', body: c.body });
-      c.b.addEventListener('click', () => {
-        if (!h.rig) return;
-        const pose = POSES[n++ % POSES.length];
-        h.rig.react({ pose, eyes: pose === 'party' || pose === 'cheer' ? 'star' : 'happy' }, 1800);
-        h.rig.celebrate();
-      });
+    gallery.addEventListener('click', (e) => {
+      const b = e.target.closest('.pet');
+      if (!b || reduce) return;
+      b.classList.remove('cheer'); void b.offsetWidth; b.classList.add('cheer');
+      clearTimeout(b._t); b._t = setTimeout(() => b.classList.remove('cheer'), 1650);
     });
   }
 })();
