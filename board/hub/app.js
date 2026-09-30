@@ -13,7 +13,7 @@ import { Hub, defaultClock } from './hub.js';
 import { Api } from './api.js';
 import { createAccessVerifier } from './auth.js';
 import { createGitHub, noGitHub } from './github.js';
-import { createHttpHandler, createUpgradeHandler, makeAuthMember } from './http.js';
+import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './http.js';
 import { createLogger } from './log.js';
 import { seedDev, bootstrapAdmin } from './seed.js';
 
@@ -34,7 +34,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   const api = new Api(hub);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const server = createServer(createHttpHandler({ hub, api, config }));
-  server.on('upgrade', createUpgradeHandler({ hub, config, wss, authMember: makeAuthMember({ hub, config }) }));
+  server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
   if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
   const intervals = [];

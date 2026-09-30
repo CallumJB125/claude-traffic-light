@@ -14,13 +14,18 @@ export class ApiError extends Error {
 
 export const requestId = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `r-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
+// One sign-in can belong to several orgs; the chosen one rides every call.
+let org = null;
+export const setOrg = (id) => { org = id ?? null; };
+export const currentOrg = () => org;
+
 async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {} } = {}) {
   let res;
   try {
     res = await fetchImpl(path, {
       method,
       credentials: 'same-origin',
-      headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...headers },
+      headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {

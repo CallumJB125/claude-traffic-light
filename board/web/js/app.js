@@ -2,7 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { api, errorText } from './api.js';
+import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, isHumanOwned } from './view.js';
 import { boardScreen, loadingScreen } from './render-board.js';
@@ -154,6 +154,12 @@ async function boot() {
   try {
     state.me = await api.me();
   } catch (err) {
+    // A sign-in in several orgs: the hub lists them; take ?org= or the first.
+    if (err.code === 'CONFLICT' && Array.isArray(err.extra?.orgs) && err.extra.orgs.length && !currentOrg()) {
+      const want = new URLSearchParams(location.search).get('org');
+      setOrg((err.extra.orgs.find((o) => o.id === want) ?? err.extra.orgs[0]).id);
+      return boot();
+    }
     state.auth = err.status === 403 ? 'forbidden' : 'signed_out';
     state.email = err.extra?.email ?? null;
     state.authError = err.status === 401 || err.status === 403 ? null : errorText(err);
@@ -167,7 +173,7 @@ async function boot() {
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · Claude Buddy`;
   socket?.close();
-  socket = connectBoard({ boardId: state.boardId, onMessage, onStatus });
+  socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
   update();
   openFromHash();
 }

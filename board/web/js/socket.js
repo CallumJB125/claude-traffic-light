@@ -4,7 +4,7 @@
 import { PROTOCOL_VERSION, WS_CLOSE, validate } from '../../shared/protocol.js';
 import { reconnectDelay } from '../../shared/liveness.js';
 
-export function connectBoard({ boardId, onMessage, onStatus, url, WebSocketImpl = globalThis.WebSocket, schedule = setTimeout, cancel = clearTimeout }) {
+export function connectBoard({ boardId, org = null, onMessage, onStatus, url, WebSocketImpl = globalThis.WebSocket, schedule = setTimeout, cancel = clearTimeout }) {
   let ws = null;
   let attempt = 0;
   let timer = null;
@@ -12,7 +12,7 @@ export function connectBoard({ boardId, onMessage, onStatus, url, WebSocketImpl 
   let wasOpen = false;
   let retryAt = null;
 
-  const wsUrl = url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/board`;
+  const wsUrl = url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/board${org ? `?org=${encodeURIComponent(org)}` : ''}`;
 
   function open() {
     timer = null;
@@ -42,7 +42,8 @@ export function connectBoard({ boardId, onMessage, onStatus, url, WebSocketImpl 
         onStatus({ status: ev.code === WS_CLOSE.PROTOCOL_UNSUPPORTED ? 'upgrade' : 'closed', attempt, retryAt: null });
         return;
       }
-      if (ev.code === WS_CLOSE.UNAUTHENTICATED) {
+      // Signed out, session expired, or no longer a member: re-check who we are.
+      if (ev.code === WS_CLOSE.UNAUTHENTICATED || ev.code === WS_CLOSE.REVOKED) {
         onStatus({ status: 'signed_out', attempt, retryAt: null });
         return;
       }

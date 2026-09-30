@@ -69,7 +69,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
 | `BOARD_DEV_REPO` | — | With `BOARD_DEV_SEED`: a git remote to add as the DEV board's repo |
-| `BOARD_BOOTSTRAP` | — | `github_login,github_id,email`: on a DB with no members, create the org, a board and this owner |
+| `BOARD_BOOTSTRAP` | — | `email` (Access one-time PIN, no GitHub identity) or `github_login,github_id,email`: on a DB with no members, create the org, a board and this owner |
 | `BOARD_BOOTSTRAP_BOARD` | `Team:BRD` | `Name:KEYPREFIX` for the bootstrap board |
 | `BOARD_RESTORE` | off | `1`: apply the restore fence bump (+1000, new epoch) at boot. A `<BOARD_DB>.restored` marker does the same |
 | `BOARD_TUNNEL_PROBE_URL` | — | Public URL of `/api/health`, probed every `BOARD_TUNNEL_PROBE_MS`. It counts as healthy only when the answer has the `Board-Protocol` header, so give `/api/health` an Access **Bypass** policy. While the probe fails, orphaning is suspended. Unset: the tunnel is assumed healthy |

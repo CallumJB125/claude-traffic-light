@@ -9,7 +9,7 @@ import { classifyPair, kindOf } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
-import { cardView, cardDetail, boardSnapshot } from './views.js';
+import { cardView, cardDetail, boardSnapshot, publicLogin, EMAIL_ONLY, emailOnlyIdentity } from './views.js';
 import { feedEvent, isFeedKind } from './hub.js';
 
 const ACTION_EVENTS = {
@@ -45,7 +45,7 @@ export class Api {
   }
 
   orgMember(member, id) {
-    const m = this.hub.member(id);
+    const m = this.hub.activeMember(id);
     if (!m || m.org_id !== member.org_id) throw new HubError('VALIDATION', 'unknown member');
     return m;
   }
@@ -439,24 +439,51 @@ export class Api {
     return { ok: true };
   }
 
+  // Access maps members by email only (any IdP, e.g. the one-time PIN), so a
+  // GitHub login/id is optional. Without one the row gets a private
+  // placeholder (never shown: publicMember reports github_login null).
   createMember(member, body) {
     this.requireAdmin(member);
-    const login = str(body.github_login, 100, 'github_login', { required: true });
     const email = str(body.email, 320, 'email', { required: true });
-    const display = str(body.display_name, 100, 'display_name') ?? login;
-    if (!Number.isSafeInteger(body.github_id)) throw new HubError('VALIDATION', 'github_id must be an integer');
+    if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new HubError('VALIDATION', 'email is not an address');
+    const given = str(body.github_login, 100, 'github_login');
+    if (given?.startsWith(EMAIL_ONLY)) throw new HubError('VALIDATION', 'bad github_login');
+    if (body.github_id != null && !Number.isSafeInteger(body.github_id)) throw new HubError('VALIDATION', 'github_id must be an integer');
+    const login = given ?? emailOnlyIdentity(email).github_login;
+    const githubId = body.github_id ?? emailOnlyIdentity(email).github_id;
+    const display = str(body.display_name, 100, 'display_name') ?? given ?? email.split('@')[0];
     const role = body.role ?? 'member';
     if (!['owner', 'admin', 'member', 'viewer'].includes(role)) throw new HubError('VALIDATION', 'bad role');
     if (role === 'owner' && member.role !== 'owner') throw new HubError('FORBIDDEN', 'only an owner can add an owner');
     const id = randomUUID();
     try {
-      this.db.insert('members', { id, org_id: member.org_id, github_id: body.github_id, github_login: login, email, display_name: display, role, created_at: this.hub.iso() });
+      this.db.insert('members', { id, org_id: member.org_id, github_id: githubId, github_login: login, email, display_name: display, role, created_at: this.hub.iso() });
     } catch (e) {
       if (/UNIQUE/.test(e.message)) throw new HubError('CONFLICT', 'member exists');
       throw e;
     }
     this.audit(member.id, 'member.create', id);
     return { member: publicMember(this.hub.member(id)) };
+  }
+
+  // Soft removal: no more sign-in, their devices are revoked and their live
+  // sockets closed. Runs, comments and the journal keep referring to the row.
+  removeMember(member, id) {
+    this.requireAdmin(member);
+    const m = this.hub.activeMember(id);
+    if (!m || m.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
+    if (m.id === member.id) throw new HubError('FORBIDDEN', 'you cannot remove yourself');
+    if (m.role === 'owner' && member.role !== 'owner') throw new HubError('FORBIDDEN', 'only an owner can remove an owner');
+    const now = this.hub.iso();
+    const devices = this.db.all('SELECT id FROM devices WHERE member_id = ? AND revoked_at IS NULL', m.id);
+    this.hub.txn(() => {
+      this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, m.id);
+      this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, m.id);
+      this.audit(member.id, 'member.remove', m.id);
+    });
+    for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'member removed');
+    this.hub.memberChanged(m.id);
+    return { ok: true };
   }
 
   audit(actor, action, target, detail = null) {
@@ -470,7 +497,7 @@ function stripErr(e) {
 }
 
 export function publicMember(m) {
-  return { id: m.id, github_login: m.github_login, display_name: m.display_name, role: m.role, avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null };
+  return { id: m.id, github_login: publicLogin(m), display_name: m.display_name, role: m.role, avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null };
 }
 
 function publicRepo(r) {

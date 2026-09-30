@@ -76,12 +76,27 @@ export function createHttpHandler({ hub, api, config }) {
   const etags = new Map();
 
   const authMember = makeAuthMember({ hub, config });
+  // The org a request's resource lives in: decides which member row answers
+  // when one sign-in belongs to several orgs.
+  const resourceOrg = (r, params) => {
+    const boardOrg = (boardId) => hub.board(boardId)?.org_id ?? null;
+    if (params.board_id) return boardOrg(params.board_id);
+    if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
+    if (r.pattern.startsWith('/api/permission-requests/')) {
+      const p = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
+      const c = p && hub.card(p.card_id);
+      return c ? boardOrg(c.board_id) : null;
+    }
+    if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
+    if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
+    return null;
+  };
 
   const routes = [];
   const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET' } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern });
   };
 
   route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
@@ -120,6 +135,7 @@ export function createHttpHandler({ hub, api, config }) {
   route('GET', '/api/repos', ({ member }) => api.listRepos(member));
   route('POST', '/api/repos', ({ member, body }) => api.createRepo(member, body));
   route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
+  route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
 
   async function serveFile(req, res, path) {
     let info;
@@ -178,7 +194,9 @@ export function createHttpHandler({ hub, api, config }) {
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
       }
       const body = r.mutating ? await readBody(req) : {};
-      const member = r.auth === 'member' ? await authMember(req) : null;
+      const member = r.auth === 'member'
+        ? await authMember(req, { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null })
+        : null;
       const rid = member && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       if (rid) {
         const hit = hub.cachedResponse(member.id, rid);
@@ -216,18 +234,21 @@ function refuse(socket, status, text) {
   socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
-export function createUpgradeHandler({ hub, config, wss, authMember }) {
+export function createUpgradeHandler({ hub, config, wss, authenticate }) {
   return async function onUpgrade(req, socket, head) {
-    const { pathname } = new URL(req.url, 'http://hub');
+    const { pathname, searchParams } = new URL(req.url, 'http://hub');
     socket.on('error', () => {});
     if (pathname === WS_PATHS.browser) {
       if (!sameOrigin(req, config.publicUrl)) return refuse(socket, 403, 'Forbidden');
-      let member = null;
+      let auth = null;
       let close = null;
-      try { member = await authMember(req); } catch { close = WS_CLOSE.UNAUTHENTICATED; }
+      try { auth = await authenticate(req); } catch (e) { close = e.code === 'FORBIDDEN' ? WS_CLOSE.REVOKED : WS_CLOSE.UNAUTHENTICATED; }
       return wss.handleUpgrade(req, socket, head, (ws) => {
-        if (close) { ws.close(close, 'unauthenticated'); return; }
-        new BrowserConn(hub, ws, member);
+        if (close) { ws.close(close, close === WS_CLOSE.REVOKED ? 'not a member of this board' : 'unauthenticated'); return; }
+        // Several orgs and no ?org=: the subscribed board's org decides (BrowserConn).
+        let member = null;
+        try { member = pickMember(hub, auth.candidates, { requestedOrg: searchParams.get('org') }); } catch { member = null; }
+        new BrowserConn(hub, ws, { member, candidates: auth.candidates, expMs: auth.exp_ms });
       });
     }
     if (pathname === WS_PATHS.runner) {
@@ -241,17 +262,52 @@ export function createUpgradeHandler({ hub, config, wss, authMember }) {
   };
 }
 
-export function makeAuthMember({ hub, config }) {
+/**
+ * → {candidates:[member], exp_ms}: every active member row this sign-in maps
+ * to (one per org), and when the Access session expires. Access maps only the
+ * verified `email` claim (any IdP: GitHub or the one-time PIN), never a
+ * GitHub identity.
+ */
+export function makeAuthenticate({ hub, config }) {
   return async (req) => {
     if (config.auth === 'dev') {
       const id = parseDevCookie(hub.secret, parseCookies(req.headers.cookie).board_dev);
-      const m = id && hub.member(id);
+      const m = id && hub.activeMember(id);
       if (!m) throw new HubError('UNAUTHENTICATED', 'not signed in');
-      return m;
+      return { candidates: [m], exp_ms: null };
     }
     const claims = await hub.access.verify(req.headers['cf-access-jwt-assertion']);
-    const m = typeof claims.email === 'string' ? hub.db.get('SELECT * FROM members WHERE lower(email) = lower(?) ORDER BY created_at LIMIT 1', claims.email) : null;
-    if (!m) throw new HubError('FORBIDDEN', 'not a member of this board');
-    return m;
+    const list = typeof claims.email === 'string' && claims.email
+      ? hub.db.all('SELECT * FROM members WHERE lower(email) = lower(?) AND removed_at IS NULL ORDER BY created_at', claims.email) : [];
+    if (!list.length) throw new HubError('FORBIDDEN', 'not a member of this board');
+    return { candidates: list, exp_ms: typeof claims.exp === 'number' ? claims.exp * 1000 : null };
   };
+}
+
+/**
+ * The member row that acts: the explicitly requested org (Board-Org header or
+ * ?org=), else the only one, else the one in the resource's org. Ambiguous
+ * with no resource → CONFLICT listing the orgs; never a silent pick.
+ */
+export function pickMember(hub, candidates, { resourceOrg = null, requestedOrg = null } = {}) {
+  const inOrg = (org) => candidates.find((m) => m.org_id === org) ?? null;
+  if (requestedOrg) {
+    const m = inOrg(requestedOrg);
+    if (!m) throw new HubError('FORBIDDEN', 'not a member of that org');
+    return m;
+  }
+  if (candidates.length === 1) return candidates[0];
+  if (resourceOrg) {
+    const m = inOrg(resourceOrg);
+    if (!m) throw new HubError('NOT_FOUND', 'not found');
+    return m;
+  }
+  throw new HubError('CONFLICT', 'this sign-in belongs to several orgs: choose one with ?org=<org_id> or the Board-Org header', {
+    orgs: candidates.map((m) => ({ id: m.org_id, name: hub.db.get('SELECT name FROM orgs WHERE id = ?', m.org_id)?.name ?? null, member_id: m.id })),
+  });
+}
+
+export function makeAuthMember({ hub, config }) {
+  const authenticate = makeAuthenticate({ hub, config });
+  return async (req, opts) => pickMember(hub, (await authenticate(req)).candidates, opts);
 }

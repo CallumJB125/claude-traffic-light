@@ -2,10 +2,20 @@
 // CardDetail (CONTRACT §5.3, §5.4). Ages are computed at send time on the hub
 // clocks; the web advances them itself.
 
+import { createHash } from 'node:crypto';
 import { ACTIVE } from '../shared/states.js';
 import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
 import { json } from './db.js';
+
+export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
+export const publicLogin = (m) => (m.github_login?.startsWith(EMAIL_ONLY) ? null : m.github_login);
+// The NOT NULL github columns of a member added by email only: a private
+// placeholder login and a stable negative id (never an avatar).
+export const emailOnlyIdentity = (email) => ({
+  github_login: `${EMAIL_ONLY}${email.toLowerCase()}`,
+  github_id: -Number.parseInt(createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 12), 16),
+});
 
 export function leaseView(hub, row) {
   if (!ACTIVE.has(row.run_state) || !row.active_run_id) return null;
@@ -129,12 +139,12 @@ export function cardView(hub, row, viewerId) {
 export function boardSnapshot(hub, boardId, viewerId) {
   const board = hub.board(boardId);
   const cards = hub.db.all('SELECT * FROM cards WHERE board_id = ? ORDER BY created_at, key', boardId);
-  const members = hub.db.all('SELECT * FROM members WHERE org_id = ? ORDER BY display_name', board.org_id);
+  const members = hub.db.all('SELECT * FROM members WHERE org_id = ? AND removed_at IS NULL ORDER BY display_name', board.org_id);
   return {
     board_id: boardId,
     board: { id: board.id, name: board.name, key_prefix: board.key_prefix, settings: json(board.settings, {}) },
     cards: cards.map((c) => cardView(hub, c, viewerId)),
-    members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: m.github_login, avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
+    members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: publicLogin(m), avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
   };
 }
 

@@ -32,7 +32,7 @@ board/
     schema.sql            SQLite schema = migration 001
     migrate.js            migration runner + applyRestoreBump (Node only)
     journal.js            append-only journal row kinds + replay() (§15)
-    migrations/           002_device_form_factor.sql, 003_journal.sql, 004_outbox_identity.sql
+    migrations/           002_device_form_factor.sql, 003_journal.sql, 004_outbox_identity.sql, 005_member_removal.sql
     test/                 node --test
   hub/                    board hub (Node ≥ 22.13, node:sqlite, ws). Serves web/ and shared/.
   runner/                 detached supervisor + hook shim + CLI (Node ≥ 22.13, ws)
@@ -77,7 +77,9 @@ Clocks: the hub judges every timeout on its **own** monotonic clock at receive t
 
 ### 4.1 Members (browsers)
 
-- **Production (`BOARD_AUTH=access`).** Cloudflare Access with GitHub as the only IdP sits in front of the hub. On every HTTP request and WS upgrade the hub verifies the `Cf-Access-Jwt-Assertion` header: RS256 against `https://<BOARD_ACCESS_TEAM>.cloudflareaccess.com/cdn-cgi/access/certs` (cached, refetched on unknown `kid`), `aud` contains `BOARD_ACCESS_AUD`, `exp` in the future. The verified `email` claim maps to `members.email` (case-insensitive) → the member. No match → `403 FORBIDDEN` ("not a member of this board"). Members are created by an admin with GitHub login + email (D4). Verification uses `node:crypto` only.
+- **Production (`BOARD_AUTH=access`).** Cloudflare Access sits in front of the hub, with any IdP (GitHub, or the one-time PIN email IdP used for the dogfood deploy): the hub reads only the verified `email` claim, never a GitHub identity claim. On every HTTP request and WS upgrade the hub verifies the `Cf-Access-Jwt-Assertion` header: RS256 against `https://<BOARD_ACCESS_TEAM>.cloudflareaccess.com/cdn-cgi/access/certs` (cached, refetched on unknown `kid`), `aud` contains `BOARD_ACCESS_AUD`, `exp` in the future. The verified `email` claim maps to `members.email` (case-insensitive) → the member. No match → `403 FORBIDDEN` ("not a member of this board"). Members are created by an admin with an email; GitHub login/id are optional (an email-only member has `github_login: null` on the wire) (D4). Verification uses `node:crypto` only. `BOARD_AUTH=access` without `BOARD_ACCESS_TEAM` and `BOARD_ACCESS_AUD` refuses to start.
+- **One sign-in, several orgs.** An email may be a member of several orgs (one `members` row each). The row that acts is: the org named by header `Board-Org` or query `?org=` (not a member there → `403`); else the only row; else the row in the org of the request's resource (the board, card, permission request, device or member in the path; none there → `404`); else `409 CONFLICT` with `error.orgs:[{id, name, member_id}]`, never a silent pick. The web retries with `?org=` (from its URL) or the first listed org and sends `Board-Org` on every call. Browser sockets take `?org=`; without it the subscribed board's org decides.
+- **Removal and expiry.** `DELETE /api/members/:id` (admin) soft-removes a member (`members.removed_at`, migration 005): they no longer authenticate, their devices are revoked (live runner sockets closed `4403`), and their live browser sockets are closed `4403`. Every browser `subscribe` re-reads membership, and the reaper re-checks open sockets each pass. Under Access a browser socket is closed `4401` when the JWT it connected with expires (`exp`); the web then re-authenticates.
 - **Local dev (`BOARD_AUTH=dev`).** Allowed **only** when the hub is bound to a loopback address; otherwise it refuses to start. **Dev auth must never sit behind any proxy or tunnel**: the hub refuses `BOARD_AUTH=dev` when `BOARD_PUBLIC_URL` or `BOARD_TUNNEL_PROBE_URL` is set. `POST /api/dev/login {github_login}` needs header `Board-Dev-Secret: <secret>` (`BOARD_DEV_LOGIN_SECRET`, else random per start; printed to stderr at startup as `http://<bind>:<port>/#dev_secret=<secret>`, which the web keeps in `sessionStorage`), is rate limited per IP (§5.2), and sets cookie `board_dev=<member_id>.<hmac>` (HttpOnly, SameSite=Strict, HMAC with the hub secret). `BOARD_DEV_SEED=1` creates org `dev`, board `DEV` (key prefix `DEV`), members `alice`/`bob` (negative github ids) and repo from `BOARD_DEV_REPO` if set.
 - Browsers never hold a token beyond the Access cookie (or the dev cookie). Mutating routes require `Content-Type: application/json` and reject a cross-origin `Origin` header (`403 FORBIDDEN`).
 
@@ -122,7 +124,8 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 | `GET /api/repos` / `POST /api/repos` | member / admin | `{request_id, url, short_name?, default_branch?}` | `{repo}`; `canonical_url = normalizeRemoteUrl(url)` | `VALIDATION` (null canonical) , `CONFLICT` |
 | `POST /api/boards/:board_id/repos` | admin | `{request_id, repo_id}` | `{ok}` | — |
 | `GET /api/boards/:board_id/journal?after_seq=&limit=` | member (board's org) | — | `{rows:[{seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload}], next_after_seq}`; this board's rows only, `seq` ascending, `limit` ≤ 1000 (default 200) | 404 |
-| `POST /api/members` | admin | `{request_id, github_login, github_id, email, display_name, role}` | `{member}` | `CONFLICT` |
+| `POST /api/members` | admin | `{request_id, email, role, display_name?, github_login?, github_id?}` | `{member}` | `CONFLICT`, `VALIDATION` |
+| `DELETE /api/members/:id` | admin (an owner for an owner; never yourself) | `{request_id}` | `{ok}` | `NOT_FOUND`, `FORBIDDEN` |
 
 **Rate limits** (`hub/ratelimit.js`, token buckets on the hub monotonic clock, `config.rateLimits` overrides): every mutating request is limited per client IP (`mutate_ip` 300/min; `/api/dev/login` uses `login_ip` 10/min instead), and after auth per member (`mutate_member` 120/min), with a tighter per-member bucket for the actions that start paid runs (`dispatch`, `retry`, `take_over_with_claude`: `dispatch_member` 30/min). A replayed `request_id` served from the D8 cache costs nothing. Over the limit: `429 RATE_LIMITED`, header `Retry-After: <s>`, body `error.retry_after_s`. The client IP is the socket address, or `CF-Connecting-IP` under `BOARD_AUTH=access` (the hub sits on loopback behind the tunnel).
 
@@ -149,7 +152,7 @@ Read-only push; every mutation goes over HTTP. Frames are JSON text. Server ping
 Client → hub (`browser→hub` in `protocol.SHAPES`):
 
 - `hello {protocol}` — first frame. Incompatible → `error{code:'PROTOCOL_UNSUPPORTED'}` then close `4426`.
-- `subscribe {board_id}` → hub replies `snapshot`, then streams patches for that board. One board per socket in Phase 1 (a second `subscribe` replaces the first).
+- `subscribe {board_id}` → hub replies `snapshot`, then streams patches for that board. One board per socket in Phase 1 (a second `subscribe` replaces the first). Membership is re-checked on every `subscribe`; a removed member's socket is closed `4403`.
 - `unsubscribe` `{board_id}`, `ping {}`.
 
 Hub → client (`hub→browser`):
@@ -506,7 +509,7 @@ Codes and HTTP statuses: `protocol.ERRORS`.
 | `BOOT_GRACE`, `TUNNEL_DOWN` | (503) | Hub-internal guard results from `step()`; the reaper just retries next tick. Never sent to clients |
 | `OUT_OF_SCOPE`, `GATE_CLOSED`, `HUB_UNREACHABLE`, `BAD_RUN_TOKEN` | — | Runner-local; returned to board-mcp/shim/CLI, never sent by the hub |
 
-WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded), `4429` runner over its frame rate (reconnect with backoff).
+WS close codes (`protocol.WS_CLOSE`): `4000` hub shutting down (reconnect), `4401` unauthenticated, `4403` revoked device or removed member, `4409` replaced by a newer connection of the same device, `4426` protocol unsupported (do not reconnect until upgraded), `4429` runner over its frame rate (reconnect with backoff).
 
 ## 9. Versioning
 
@@ -647,7 +650,7 @@ The reaper calls `timerEvent(snapshot)` for each card every second and feeds a n
 - **D1 ESM everywhere in `board/`.** `"type":"module"`, so shared modules load unchanged in the browser. The widget's CJS modules are reached with `createRequire`.
 - **D2 Hub node:sqlite, Node ≥ 22.13.** Unflagged there (added 22.5 behind a flag). Design §9.1 said `better-sqlite3`; the brief forbids native deps, so `node:sqlite` it is.
 - **D3 Only `hb` recovers a dark card; `activity` never does.** Delayed (replayed) activity never moves a card. Green after any recovery needs fresh, non-delayed activity (Power Nap guard, exit c).
-- **D4 Member identity = verified Access email → `members.email`.** Members are pre-registered by an admin with GitHub login + id + email. The GitHub id isn't read from Access claims in Phase 1: the claim shape is unverified (S3). Revisit after S3.
+- **D4 Member identity = verified Access email → `members.email`.** Members are pre-registered by an admin by email (GitHub login + id optional; the dogfood deploy uses the Access one-time PIN IdP). The GitHub id isn't read from Access claims in Phase 1: the claim shape is unverified (S3). Revisit after S3.
 - **D5 Double boot keeps `pre_reconnect_state`; `handing_over` rides through a boot** with its 3-min timer restarted (rows `19r`, `19h`).
 - **D6 Answers while dark are stored, not refused** (row `9d`). resume_to drops to `quiet` when nothing is left open, so a recovered card doesn't show a stale "Needs you".
 - **D7 Park, stop and timed-out handovers bump the fence immediately** (§5.3 law: every stop/park/takeover bumps). The run's final narrative and snapshot come in through the **salvage lane**, and are promoted to current when they come from the card's most recent run (§6.9). **D7b** `complete` is allowed from `quiet` as well as `running` (the MCP call is itself activity).

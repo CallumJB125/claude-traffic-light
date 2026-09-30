@@ -3,6 +3,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
+import { emailOnlyIdentity, EMAIL_ONLY } from './views.js';
 
 export function seedDev(hub, { repoUrl = null } = {}) {
   const db = hub.db;
@@ -35,20 +36,30 @@ export function seedDev(hub, { repoUrl = null } = {}) {
   });
 }
 
-// BOARD_BOOTSTRAP="github_login,github_id,email" and BOARD_BOOTSTRAP_BOARD="Name:PREFIX".
+// BOARD_BOOTSTRAP="email" (Access one-time PIN, no GitHub identity) or
+// "github_login,github_id,email"; BOARD_BOOTSTRAP_BOARD="Name:PREFIX".
 export function bootstrapAdmin(hub, spec, boardSpec = 'Team:BRD') {
   const db = hub.db;
   if (db.get('SELECT 1 AS x FROM members LIMIT 1')) return false;
-  const [login, gid, email] = String(spec).split(',').map((s) => s.trim());
-  if (!login || !Number.isSafeInteger(Number(gid)) || !email) throw new Error('BOARD_BOOTSTRAP must be "github_login,github_id,email"');
+  const parts = String(spec).split(',').map((s) => s.trim());
+  let login;
+  let gid;
+  let email;
+  if (parts.length === 1 && /^[^\s@]+@[^\s@]+$/.test(parts[0])) {
+    email = parts[0];
+    ({ github_login: login, github_id: gid } = emailOnlyIdentity(email));
+  } else {
+    [login, gid, email] = parts;
+    if (!login || !Number.isSafeInteger(Number(gid)) || !email) throw new Error('BOARD_BOOTSTRAP must be "email" or "github_login,github_id,email"');
+  }
   const [name, prefix] = String(boardSpec).split(':');
   const now = hub.iso();
   hub.txn(() => {
     const org = { id: randomUUID(), name: name || 'Team', created_at: now };
     db.insert('orgs', org);
     db.insert('boards', { id: randomUUID(), org_id: org.id, name: name || 'Team', key_prefix: (prefix || 'BRD').toUpperCase() });
-    db.insert('members', { id: randomUUID(), org_id: org.id, github_id: Number(gid), github_login: login, email, display_name: login, role: 'owner', created_at: now });
+    db.insert('members', { id: randomUUID(), org_id: org.id, github_id: Number(gid), github_login: login, email, display_name: login.startsWith(EMAIL_ONLY) ? email.split('@')[0] : login, role: 'owner', created_at: now });
   });
-  hub.log.info('bootstrap admin created', { github_login: login });
+  hub.log.info('bootstrap admin created', { email_only: login.startsWith(EMAIL_ONLY) });
   return true;
 }

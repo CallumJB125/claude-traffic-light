@@ -16,7 +16,7 @@ import { branchName, snapshotRef, RESTORE_BUMP } from '../shared/fence.js';
 import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
-import { FEED_KINDS } from '../shared/protocol.js';
+import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
@@ -153,6 +153,7 @@ export class Hub extends EventEmitter {
   run(id) { return id ? this.db.get('SELECT * FROM runs WHERE id = ?', id) : null; }
   latestRun(cardId) { return this.db.get('SELECT * FROM runs WHERE card_id = ? ORDER BY fence DESC LIMIT 1', cardId); }
   member(id) { return id ? this.db.get('SELECT * FROM members WHERE id = ?', id) : null; }
+  activeMember(id) { return id ? this.db.get('SELECT * FROM members WHERE id = ? AND removed_at IS NULL', id) : null; }
   memberName(id) { return this.member(id)?.display_name ?? null; }
   board(id) { return this.db.get('SELECT * FROM boards WHERE id = ?', id); }
   repo(id) { return id ? this.db.get('SELECT * FROM repos WHERE id = ?', id) : null; }
@@ -756,6 +757,7 @@ export class Hub extends EventEmitter {
     this.sweepRequestCache();
     this.sweepPendingCmds();
     this.limiter.sweep();
+    this.recheckBrowsers();
     await this.idle();
   }
 
@@ -777,6 +779,20 @@ export class Hub extends EventEmitter {
         b.send({ type: 'lease.tick', card_id: row.id, live, state_age_ms: Math.round(this.ageOf(row.state_since) ?? 0) });
       }
     }
+  }
+
+  // Long-lived browser sockets: closed at Access session expiry, and when the
+  // member is removed (memberChanged, and every reaper pass as a backstop).
+  recheckBrowsers(memberId = null) {
+    const now = this.wallMs();
+    for (const b of [...this.browsers]) {
+      if (b.expMs != null && now >= b.expMs) { b.close(WS_CLOSE.UNAUTHENTICATED, 'Access session expired'); continue; }
+      if (memberId == null || b.member?.id === memberId || b.candidates.some((c) => c.id === memberId)) b.recheck();
+    }
+  }
+
+  memberChanged(memberId) {
+    this.recheckBrowsers(memberId);
   }
 
   // ── browser broadcasts ────────────────────────────────────────────────────

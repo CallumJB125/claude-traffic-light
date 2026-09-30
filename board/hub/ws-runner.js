@@ -24,6 +24,7 @@ export async function authenticateRunner(hub, req) {
   const device = hub.db.get('SELECT * FROM devices WHERE token_hash = ?', sha256hex(token));
   if (!device) return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'unknown device token' };
   if (device.revoked_at) return { close: WS_CLOSE.REVOKED, reason: 'device revoked' };
+  if (!hub.activeMember(device.member_id)) return { close: WS_CLOSE.REVOKED, reason: 'member removed' };
   if (hub.config.auth === 'access') {
     try {
       const claims = await hub.access.verify(req.headers['cf-access-jwt-assertion']);
