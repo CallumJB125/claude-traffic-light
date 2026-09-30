@@ -7,12 +7,6 @@ const Rules = require('./rules.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
-// electron-builder drops a file from the asar when it is also an extraResource,
-// and router.js must be an extraResource so plain node can run it for the shim.
-const Router = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
-const RouterInstall = require('./router-install.js');
-const DelegationInstall = require('./delegation-install.js');
-const Delegate = require('./hooks/delegate.js');
 const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
 const HostApp = require('./hostapp.js');
@@ -20,6 +14,7 @@ const Motion = require('./motion.js');
 const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
 const Setup = require('./setup.js');
+const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const http = require('http');
 const crypto = require('crypto');
@@ -148,13 +143,6 @@ const DEFAULT_CONFIG = {
   agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
-  // Best guess at who pays per token: no API key in the environment usually
-  // means a subscription, where "% of your usage" reads better than dollars.
-  routerSubscriberView: !process.env.ANTHROPIC_API_KEY,
-  routerPolicy: 'balanced',
-  routerProjects: {},
-  // Mirrored to router/delegation.json, which is all hooks/delegate.js reads.
-  routerDelegation: { ...Delegate.DEFAULTS },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -180,10 +168,11 @@ function buildConfig() {
   } catch {
     // no config yet
   }
-  const config = { ...DEFAULT_CONFIG, ...saved };
+  // Keys of removed features (the router, delegation) are dropped, so an old
+  // config neither crashes nor carries them forward on the next save.
+  const config = { ...DEFAULT_CONFIG, ...Setup.dropRemovedKeys(saved) };
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
-  config.routerDelegation = Delegate.normalize({ ...DEFAULT_CONFIG.routerDelegation, ...(saved.routerDelegation && typeof saved.routerDelegation === 'object' ? saved.routerDelegation : {}) });
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -204,7 +193,7 @@ function buildConfig() {
 }
 
 function saveConfig(partial) {
-  const next = { ...loadConfig(), ...partial };
+  const next = Setup.dropRemovedKeys({ ...loadConfig(), ...partial });
   if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
   // Presets reach here from loadConfig or Lights, so their rules are current.
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
@@ -246,26 +235,6 @@ const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 // without node still lights up. An unpackaged dev run has no app binary worth
 // pinning into agent configs and falls back to plain `node`.
 const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: app.isPackaged ? process.execPath : null, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
-// The shim runs router.js with plain node, which can't read inside app.asar,
-// so the packaged copy is an extraResource like hooks/.
-const ROUTER_SCRIPT = app.isPackaged ? path.join(process.resourcesPath, 'router.js') : path.join(__dirname, 'router.js');
-// Dev runs never touch the real shell rc: switching routing on from one
-// installs into a sandbox HOME instead.
-const ROUTER_HOME = process.env.CLAUDE_TRAFFIC_LIGHT_ROUTER_HOME || (IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-router-dev-home') : os.homedir());
-const ROUTER_SANDBOXED = ROUTER_HOME !== os.homedir();
-const ROUTER_ROOT = ROUTER_SANDBOXED ? path.join(ROUTER_HOME, '.claude-traffic-light') : ROOT_DIR;
-function routerOpts() {
-  return {
-    home: ROUTER_HOME,
-    root: ROUTER_ROOT,
-    // A Finder-launched app may have no $SHELL; the passwd entry always does.
-    shellPath: process.env.SHELL || os.userInfo().shell,
-    env: ROUTER_SANDBOXED ? {} : process.env,
-    routerScript: ROUTER_SCRIPT,
-    electron: process.execPath,
-    configPath: CONFIG_FILE,
-  };
-}
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
@@ -569,7 +538,7 @@ function cameosChanged() {
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
-  const sessions = withAdvice(readSessions(config, requests.map((r) => r.sessionId)), config);
+  const sessions = readSessions(config, requests.map((r) => r.sessionId));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   if (previewLook && Date.now() < previewLook.expiresAt) {
@@ -596,73 +565,7 @@ function computeState(opts = {}) {
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), routed: routedModel(sessions), saved: savedToday(config), advice: pickAdvice(sessions), agentCount, pending, tasks, minions };
-}
-
-// ── Router advice for sessions that are already open ───────────────────────
-// The router never switches a running session; when the pick for it now is
-// cheaper than its model, it says so (Router tab, widget strip) and you type
-// /model. sessionId → { model last seen, advice, kept }. Outside dev runs it
-// is mirrored onto the session file, which set-status.js carries through.
-const adviceState = new Map();
-// { history, models, savings } from the last transcript read.
-let usageDerived = null;
-
-function withAdvice(sessions, config) {
-  const on = !!config.routerEnabled && !!usageDerived;
-  const live = new Set();
-  const out = sessions.map((s) => {
-    if (!s.sessionId || (s.source && s.source !== 'claude')) return s;
-    live.add(s.sessionId);
-    const seen = usageDerived && usageDerived.models.get(s.sessionId);
-    const current = (seen && seen.model) || s.model || null;
-    const st = adviceState.get(s.sessionId) || { model: null, advice: null, kept: !!s.adviceKept };
-    if (st.model && current && Router.switchedDown(st.model, current)) console.log(`[router] ${String(s.sessionId).slice(0, 8)} switched to ${Router.family(current)}`);
-    if (current) st.model = current;
-    st.advice = on ? Router.advise({ current, cwd: s.cwd, route: s.route, escalated: !!s.escalated, history: usageDerived.history, config }) : null;
-    adviceState.set(s.sessionId, st);
-    if (!IS_DEV_RUN && (JSON.stringify(s.routerAdvice || null) !== JSON.stringify(st.advice) || !!s.adviceKept !== st.kept)) mirrorAdvice(s, st);
-    return { ...s, routerAdvice: st.advice || undefined, adviceKept: st.kept || undefined };
-  });
-  for (const id of adviceState.keys()) if (!live.has(id)) adviceState.delete(id);
-  return out;
-}
-
-function mirrorAdvice(s, st) {
-  const file = path.join(SESSIONS_DIR, `${s.host}-${s.sessionId}.json`);
-  let readAt;
-  try { readAt = fs.statSync(file).mtimeMs; } catch { return; }
-  const cur = Agents.readJson(file);
-  if (!cur) return;
-  try { writeJsonAtomic(file, { ...cur, routerAdvice: st.advice || undefined, adviceKept: st.kept || undefined }, readAt); } catch { /* the session ended mid-poll */ }
-}
-
-// The widget's strip offers the most recently active advised session.
-function pickAdvice(sessions) {
-  const s = sessions.filter((x) => x.routerAdvice && !x.adviceKept)
-    .sort((a, b) => (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0))[0];
-  return s ? { sessionId: s.sessionId, model: s.routerAdvice.model, reason: s.routerAdvice.reason, project: Router.projectKey(s.cwd) } : null;
-}
-
-// The tooltip's "saved $N today": the low end, so it never overclaims.
-function savedToday(config) {
-  const s = usageDerived && usageDerived.savings;
-  if (!s || !s.on || !(s.today.low > 0)) return null;
-  if (config.routerSubscriberView) {
-    const pct = s.today.actual ? Math.round((s.today.low / (s.today.actual + s.today.low)) * 100) : 0;
-    return pct >= 1 ? `kept ${pct}% of today's usage` : null;
-  }
-  return `saved ${s.today.low >= 10 ? `$${Math.round(s.today.low)}` : `$${s.today.low.toFixed(2)}`} today`;
-}
-
-// The cheap model the most recently active routed session started on.
-function routedModel(sessions) {
-  let best = null;
-  for (const s of sessions) {
-    if (!s.route || s.escalated || (s.route.model !== 'sonnet' && s.route.model !== 'haiku')) continue;
-    if (!best || (Date.parse(s.updatedAt || '') || 0) > (Date.parse(best.updatedAt || '') || 0)) best = s;
-  }
-  return best ? (best.route.model === 'sonnet' ? 'Sonnet' : 'Haiku') : null;
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -1785,7 +1688,7 @@ function createTray() {
     { type: 'separator' },
     { label: 'What does this mean?…', click: createHelpWindow },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
-    { label: 'Router…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'router')); lightsWin?.webContents.send('show-view', 'router'); } },
+    { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
     { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
     { type: 'separator' },
@@ -2009,10 +1912,6 @@ function commitConfig(partial) {
   const before = loadConfig().askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
-  if ('routerDelegation' in partial) {
-    const d = loadConfig().routerDelegation;
-    try { DelegationInstall.writeFlag(delegationOpts(), d, d.enabled); } catch (err) { console.warn('[delegation] flag not written:', err.message); }
-  }
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
@@ -2060,7 +1959,7 @@ function runCcusage(args) {
 // the Stats tab used to be able to fan out a spawn per repaint.
 function getCosts() {
   // Transcript costs are recomputed from the usage memo every time so Spend
-  // never lags the Router; only a ccusage result is held for 5 minutes.
+  // never lags the Model mix; only a ccusage result is held for 5 minutes.
   if (Date.now() - costCache.at < COST_TTL_MS && costCache.data && costCache.data.source !== 'transcripts') return Promise.resolve(costCache.data);
   if (costInFlight) return costInFlight;
   costInFlight = computeCosts().finally(() => { costInFlight = null; });
@@ -2097,7 +1996,7 @@ function noteCostSource(source) {
 
 async function computeCosts() {
   // The transcripts are the source of truth, so Spend always agrees with the
-  // Router; ccusage is only asked when there are no transcripts to read.
+  // Model mix; ccusage is only asked when there are no transcripts to read.
   const turns = await getUsageTurns();
   if (turns.length) {
     noteCostSource('transcripts');
@@ -2158,28 +2057,20 @@ async function computeCosts() {
 }
 ipcMain.handle('get-costs', () => getCosts());
 
-// ── Router: per-turn usage read from the transcripts themselves ───────────
+// ── Usage: per-turn tokens read from the transcripts themselves ───────────
 const USAGE_TTL_MS = 60 * 1000;
-const ROUTER_BASELINE_FILE = path.join(ROOT_DIR, 'router-baseline.json');
 const usageFileCache = new Map();
 let usageMemo = { at: 0, turns: null };
 let usageInFlight = null;
 async function refreshUsage() {
   const t0 = Date.now();
-  // 61 days covers the Stats page's 60-day lookback, which also spans the
-  // Router's ranges and the 14-day baseline.
+  // 61 days covers the Stats page's 60-day lookback.
   const r = await Usage.readTurns({ since: Date.now() - 61 * 86400000, cache: usageFileCache });
   const ms = Date.now() - t0;
   // Live refreshes follow every burst of hook activity; only the first pass
   // and a slow one are worth a line.
   if (!usageMemo.turns || ms > 1000) console.log(`[usage] parsed ${r.parsed} files in ${ms} ms (${r.files} transcripts, ${r.turns.length} turns${r.skipped.length ? `, ${r.skipped.length} over the size cap` : ''})`);
   usageMemo = { at: Date.now(), turns: r.turns };
-  deriveUsage(r.turns);
-  // Nothing routes yet, so the baseline simply tracks the recent mix; once
-  // routing can be switched on it has to be frozen at that moment instead.
-  if (!IS_DEV_RUN) {
-    try { fs.writeFileSync(ROUTER_BASELINE_FILE, JSON.stringify(Usage.summarise(r.turns, { days: 1 }).baseline, null, 2)); } catch (err) { console.warn('[usage] baseline not saved:', err.message); }
-  }
   return r.turns;
 }
 function getUsageTurns() {
@@ -2188,245 +2079,22 @@ function getUsageTurns() {
   usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
   return usageInFlight;
 }
-ipcMain.handle('get-usage-summary', async (_e, opts) => Usage.summarise(await getUsageTurns(), { days: Number(opts?.days) === 30 ? 30 : 7 }));
 
-// What the advice, the tooltip and the Saved tile read between transcript
-// passes; each part is a few ms over ~50k turns.
-function deriveUsage(turns) {
-  const config = loadConfig();
-  let events = [];
-  try { events = DelegationInstall.readLog(delegationOpts(), Date.now() - 8 * 86400000); } catch { /* no log yet */ }
-  usageDerived = {
-    history: Usage.projectHistory(turns),
-    models: Usage.latestModels(turns),
-    savings: Usage.savings(turns, {
-      events,
-      routing: !!config.routerEnabled,
-      delegation: !!(config.routerDelegation && config.routerDelegation.enabled),
-      enabledAt: Date.parse(config.routerEnabledAt || '') || null,
-      switchedOnAt: Date.parse(config.routerSwitchedOnAt || '') || null,
-      frozen: RouterInstall.readFrozen(routerOpts()),
-    }),
-  };
-  return usageDerived;
-}
+// The Model mix card: read-only — which models your turns ran on, what they
+// cost, one recommendation line, and a note if an old router shim is still
+// in a shell rc (never edited from here).
+ipcMain.handle('model-mix', async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
 
-// Hook activity is what moves spend and savings, so each burst of it gets a
-// fresh read. The reader is incremental — a warm pass over ~500 transcripts
-// measured 16 ms — so the floor between reads only has to absorb bursts.
+// Hook activity is what moves spend, so each burst of it gets a fresh read
+// once something has asked for usage. The reader is incremental — a warm
+// pass over ~500 transcripts measured 16 ms — so the floor between reads
+// only has to absorb bursts.
 const USAGE_LIVE_MS = 3000;
 function refreshUsageLive() {
-  if (usageInFlight || Date.now() - usageMemo.at < USAGE_LIVE_MS) return;
-  const config = loadConfig();
-  // The first read is cold (seconds); leave it to whoever asks, unless the
-  // Router is on and the numbers are the point.
-  if (!usageMemo.turns && !config.routerEnabled && !config.routerDelegation.enabled) return;
-  const before = usageMemo.turns ? usageMemo.turns.length : -1;
+  if (!usageMemo.turns || usageInFlight || Date.now() - usageMemo.at < USAGE_LIVE_MS) return;
   usageInFlight = refreshUsage().finally(() => { usageInFlight = null; });
-  usageInFlight.then((turns) => {
-    if (turns.length === before) return;
-    stateMemo = { at: 0, key: null, value: null };
-    broadcastStatus();
-  }).catch((err) => console.warn('[usage] live refresh failed:', err.message));
+  usageInFlight.catch((err) => console.warn('[usage] live refresh failed:', err.message));
 }
-
-// Routing or delegation changed: advice, savings and every window follow now.
-function afterRoutingChange() {
-  if (usageMemo.turns) deriveUsage(usageMemo.turns);
-  stateMemo = { at: 0, key: null, value: null };
-  broadcastStatus();
-}
-
-ipcMain.handle('get-savings', async () => {
-  const turns = await getUsageTurns();
-  const d = deriveUsage(turns);
-  return { ...d.savings, subscriber: !!loadConfig().routerSubscriberView };
-});
-
-// ── Router, phase 1: the launcher shim ─────────────────────────────────────
-// The shim reads history.json rather than the transcripts, so it has to be
-// kept fresh from here.
-const ROUTER_HISTORY_MS = 5 * 60 * 1000;
-const routerFile = (name) => path.join(ROUTER_ROOT, 'router', name);
-
-async function refreshRouterHistory() {
-  const history = Usage.projectHistory(await getUsageTurns());
-  fs.mkdirSync(path.join(ROUTER_ROOT, 'router'), { recursive: true });
-  writeJsonAtomic(routerFile('history.json'), { at: history.at, days: history.days, projects: history.projects });
-  markEscalations(history.escalated);
-  return history;
-}
-
-// A session the router started cheap, whose transcript then moved up a
-// model, gets `escalated` in its file — that is what the rules' 'escalated'
-// signal reads. set-status.js carries the flag through its own writes.
-function markEscalations(escalated) {
-  let files = [];
-  try { files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
-  for (const f of files) {
-    const file = path.join(SESSIONS_DIR, f);
-    let readAt;
-    try { readAt = fs.statSync(file).mtimeMs; } catch { continue; }
-    const s = Agents.readJson(file);
-    if (!s || s.escalated || !s.route || !escalated[s.sessionId] || !['sonnet', 'haiku'].includes(s.route.model)) continue;
-    try { writeJsonAtomic(file, { ...s, escalated: true }, readAt); } catch { /* the session ended mid-poll */ }
-  }
-}
-
-function routerStatus() {
-  return { ...RouterInstall.status(routerOpts()), sandbox: ROUTER_SANDBOXED ? ROUTER_HOME : null, enabledAt: loadConfig().routerEnabledAt || null };
-}
-
-// Frozen once, on the first switch-on: the pre-routing mix every later
-// "since you switched on" saving is priced against.
-const baselineOf = (turns) => ({ ...Usage.summarise(turns, { days: 1 }).baseline, projects: Usage.projectMix(turns) });
-
-// The launcher alone (Router → advanced).
-ipcMain.handle('router-set-enabled', async (_e, on) => {
-  const opts = routerOpts();
-  if (!on) {
-    RouterInstall.uninstall(opts);
-    saveConfig({ routerEnabled: false });
-    console.log('[router] launcher switched off');
-    afterRoutingChange();
-    return routerStatus();
-  }
-  const turns = await getUsageTurns();
-  RouterInstall.freezeBaseline(opts, baselineOf(turns));
-  const st = RouterInstall.install(opts);
-  const now = new Date().toISOString();
-  saveConfig({ routerEnabled: true, routerEnabledAt: loadConfig().routerEnabledAt || now, routerSwitchedOnAt: now });
-  console.log('[router] launcher switched on', JSON.stringify({ shell: st.shell, rc: st.rcFile, shim: st.shim }));
-  await refreshRouterHistory();
-  afterRoutingChange();
-  return routerStatus();
-});
-
-// "Route my sessions": launcher and delegation together, in the order that
-// reaches the open sessions first — freeze the baseline, write the flag (the
-// open sessions' hooks act on it at their next tool call), write the agents,
-// install the shim (new sessions), then advice and a broadcast.
-ipcMain.handle('router-switch', async (_e, on) => {
-  const opts = routerOpts();
-  if (!on) {
-    RouterInstall.uninstall(opts);
-    let error = null;
-    try { DelegationInstall.uninstall(delegationOpts()); } catch (err) { error = err.message; }
-    saveConfig({ routerEnabled: false, routerDelegation: { ...loadConfig().routerDelegation, enabled: false } });
-    console.log('[router] switched off: launcher and delegation');
-    afterRoutingChange();
-    return { status: routerStatus(), delegation: delegationStatus(), error };
-  }
-  const turns = await getUsageTurns();
-  RouterInstall.freezeBaseline(opts, baselineOf(turns));
-  let deleg;
-  try { deleg = DelegationInstall.install(delegationOpts()); } catch (err) { deleg = { error: err.message }; }
-  const st = RouterInstall.install(opts);
-  const now = new Date().toISOString();
-  saveConfig({ routerEnabled: true, routerEnabledAt: loadConfig().routerEnabledAt || now, routerSwitchedOnAt: now, routerDelegation: { ...loadConfig().routerDelegation, enabled: !deleg.error } });
-  console.log('[router] switched on', JSON.stringify({ shell: st.shell, rc: st.rcFile, shim: st.shim, delegation: deleg.error || 'on', conflicts: deleg.conflicts || [] }));
-  await refreshRouterHistory();
-  afterRoutingChange();
-  return { status: routerStatus(), delegation: delegationStatus(), error: deleg.error || null, conflicts: deleg.conflicts || [] };
-});
-
-// "Switch this one": puts `/model <pick>` on the clipboard and brings that
-// session's terminal forward. You paste it; nothing is typed for you.
-async function copyModelSwitch(sessionId) {
-  const s = aggregateState({ ignoreTravel: true }).sessions.find((x) => x.sessionId === sessionId);
-  const st = adviceState.get(sessionId);
-  if (!s || !st || !st.advice) return { ok: false, feedback: 'nothing to switch' };
-  const command = `/model ${st.advice.model}`;
-  clipboard.writeText(command);
-  const activated = await activateTerminalApp(String(s.cwd || '').split('/').filter(Boolean).pop() || '', s.hostApp || null);
-  console.log(`[router] ${String(sessionId).slice(0, 8)} copied ${command}${activated ? ` → ${activated.app}` : ''}`);
-  return { ok: true, command, app: activated ? activated.app : null, feedback: 'Pasted? Press Enter.' };
-}
-ipcMain.handle('router-switch-session', (_e, sessionId) => copyModelSwitch(String(sessionId)));
-
-// "Keep": this session stays on its model and the strip stops asking.
-ipcMain.handle('advice-keep', (_e, sessionId) => {
-  const st = adviceState.get(String(sessionId));
-  if (!st) return false;
-  st.kept = true;
-  afterRoutingChange();
-  return true;
-});
-
-ipcMain.handle('router-reveal-shim', () => {
-  const st = RouterInstall.status(routerOpts());
-  if (!st.shimExists) return false;
-  shell.showItemInFolder(st.shim);
-  return true;
-});
-
-ipcMain.handle('router-overview', async () => {
-  const config = loadConfig();
-  const turns = await getUsageTurns();
-  const history = Usage.projectHistory(turns);
-  const projects = Object.entries(history.projects)
-    .filter(([, p]) => p.sessions)
-    .map(([name, p]) => ({ name, ...p, override: config.routerProjects?.[name] || 'auto', pick: Router.decide({ cwd: name, history, config }), learned: Router.learnProjectTier(p.learn) }))
-    .sort((a, b) => b.sessions - a.sessions || b.turns - a.turns);
-  const sessions = aggregateState({ ignoreTravel: true }).sessions
-    .filter((s) => !s.source || s.source === 'claude')
-    .map((s) => {
-      const a = adviceState.get(s.sessionId) || {};
-      return { sessionId: s.sessionId, project: Router.projectKey(s.cwd), route: s.route || null, escalated: !!s.escalated, signal: s.signal, model: Router.family(a.model), advice: a.advice || null, kept: !!a.kept, delegating: !!s.delegating };
-    });
-  const frozen = RouterInstall.readFrozen(routerOpts());
-  const enabledAt = Date.parse(config.routerEnabledAt || '') || null;
-  const since = enabledAt ? Usage.sinceRouting(turns, { since: enabledAt, frozen }) : null;
-  let events = [];
-  if (enabledAt) try { events = DelegationInstall.readLog(delegationOpts(), enabledAt); } catch { /* no log yet */ }
-  const review = enabledAt ? Usage.review(turns, { since: enabledAt, frozen, events }) : null;
-  const status = routerStatus();
-  const flag = DelegationInstall.readFlag(delegationOpts());
-  const summary = Router.summaryLine({ launcher: status.shimExists, delegation: !!(flag && flag.enabled), sessions });
-  return { status, policy: config.routerPolicy, projects, sessions, decisions: Router.readDecisions(routerFile('decisions.jsonl'), 20), since, review, summary, delegationOn: !!(flag && flag.enabled) };
-});
-
-// ── Router, phase 2: delegation ────────────────────────────────────────────
-// Subagents in ~/.claude/agents, delegate.js hooks in ~/.claude/settings.json
-// and the flag file. Dev runs install into the router's sandbox HOME, so they
-// never touch the real ~/.claude.
-function delegationOpts() {
-  return { home: ROUTER_HOME, root: ROUTER_ROOT, scriptPath: path.join(HOOKS_DIR, 'delegate.js'), config: loadConfig().routerDelegation };
-}
-
-function delegationStatus() {
-  return { ...DelegationInstall.status(delegationOpts()), sandbox: ROUTER_SANDBOXED ? ROUTER_HOME : null };
-}
-
-ipcMain.handle('delegation-set-enabled', (_e, on) => {
-  const opts = delegationOpts();
-  try {
-    const r = on ? DelegationInstall.install(opts) : DelegationInstall.uninstall(opts);
-    saveConfig({ routerDelegation: { ...loadConfig().routerDelegation, enabled: !!on }, ...(on ? { routerSwitchedOnAt: new Date().toISOString() } : {}) });
-    console.log(`[delegation] switched ${on ? 'on' : 'off'}`, JSON.stringify({ agents: r.agentsDir, conflicts: r.conflicts || [], legacyHooksRemoved: !!r.settingsChanged }));
-    afterRoutingChange();
-    return { ...delegationStatus(), conflicts: r.conflicts || [] };
-  } catch (err) {
-    console.warn('[delegation] switch failed:', err.message);
-    return { ...delegationStatus(), error: err.message };
-  }
-});
-
-// Status and log are instant; the diet waits on the transcripts, so it is
-// fetched on its own and the switch and knobs never sit behind a parse.
-ipcMain.handle('delegation-overview', () => {
-  try { return { status: delegationStatus(), presets: Delegate.PRESETS, log: DelegationInstall.readLog(delegationOpts(), Date.now() - 30 * 86400000).slice(-20).reverse() }; } catch (err) {
-    console.warn('[delegation] overview failed:', err.message);
-    return { error: err.message };
-  }
-});
-
-ipcMain.handle('delegation-diet', async (_e, opts) => {
-  const days = Number(opts?.days) === 30 ? 30 : 7;
-  const turns = await getUsageTurns();
-  const diet = Usage.contextDiet(DelegationInstall.readLog(delegationOpts(), Date.now() - days * 86400000), turns, { days });
-  return { ...diet, actual: Usage.summarise(turns, { days }).total.cost };
-});
 
 // ── Gestures on the avatar → the action the current state programmed ──────
 let snoozeTimer = null;
@@ -2550,7 +2218,7 @@ ipcMain.handle('import-rules', async () => {
 });
 
 // Claude integration: registers mcp-server.js in ~/.claude.json (user scope).
-// Dev runs register into a sandbox HOME, like the router.
+// Dev runs register into a sandbox HOME.
 function mcpOpts() {
   return {
     home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
@@ -2761,11 +2429,6 @@ app.whenReady().then(() => {
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (!IS_DEV_RUN && !areHooksInstalled()) installHooks();
-  // A moved or updated .app changes delegate.js's path; reinstalling is a
-  // no-op when nothing moved.
-  if (!IS_DEV_RUN && loadConfig().routerDelegation.enabled) {
-    try { DelegationInstall.install(delegationOpts()); } catch (err) { console.warn('[delegation] not refreshed:', err.message); }
-  }
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
@@ -2821,15 +2484,6 @@ app.whenReady().then(() => {
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 
   if (!IS_DEV_RUN) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
-  // Only while the shim exists: nothing reads history.json otherwise.
-  const routerTick = () => {
-    if (!RouterInstall.status(routerOpts()).shimExists) return;
-    refreshRouterHistory().catch((err) => console.warn('[router] history not refreshed:', err.message));
-  };
-  if (!DEMO) { setTimeout(routerTick, 15000); every(ROUTER_HISTORY_MS, routerTick, 'router-history'); }
-  // Advice and live savings need one transcript pass behind them.
-  if (!DEMO && (loadConfig().routerEnabled || loadConfig().routerDelegation.enabled)) setTimeout(() => getUsageTurns().then(afterRoutingChange).catch((err) => console.warn('[usage] warm-up failed:', err.message)), 5000);
-
   if (DIAG) startDiag();
   if (DEMO === 'knock') {
     // A session that is waiting on you, running in whatever terminal launched

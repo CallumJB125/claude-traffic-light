@@ -1,3 +1,6 @@
+// The model router is gone: what stays is the read-only Model mix card, the
+// note about a leftover shim block, and the (now opt-in, inert) rule signals
+// a routed session used to fire.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -5,298 +8,16 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const Router = require('../router.js');
-const RI = require('../router-install.js');
 const U = require('../usage.js');
 const R = require('../rules.js');
+const LeftoverShim = require('../src/leftover-shim.js');
 
-const ROUTER = path.join(__dirname, '..', 'router.js');
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 const HOST = os.hostname().split('.')[0];
 const NOW = new Date(2026, 8, 10, 12, 0, 0).getTime();
 const DAY = 86400000;
 const tmp = (p = 'ctl-router-') => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
-// ── decide ──────────────────────────────────────────────────────────────────
-const light = { projects: { bondly: { sessions: 5, medianTurns: 12, escalations: 0, lastEscalationAt: null } } };
-const heavy = { projects: { bondly: { sessions: 5, medianTurns: 90, escalations: 0, lastEscalationAt: null } } };
-const escalated = (ago) => ({ projects: { bondly: { sessions: 5, medianTurns: 12, escalations: 1, lastEscalationAt: NOW - ago } } });
-const d = (over = {}) => Router.decide({ cwd: '/Users/x/work/bondly', args: [], env: {}, history: light, config: {}, now: NOW, ...over });
-
-test('decide (a): your own --model / -m / --model=, the off switch and ANTHROPIC_MODEL are left alone', () => {
-  for (const args of [['--model', 'opus'], ['-m', 'haiku'], ['--model=sonnet'], ['-p', 'hi', '--model', 'opus']]) assert.equal(d({ args }).model, null, args.join(' '));
-  assert.equal(d({ env: { CLAUDE_TRAFFIC_LIGHT_ROUTER: 'off' } }).model, null);
-  assert.equal(d({ env: { CLAUDE_TRAFFIC_LIGHT_ROUTER: 'OFF' } }).reason, 'CLAUDE_TRAFFIC_LIGHT_ROUTER=off');
-  assert.equal(d({ env: { ANTHROPIC_MODEL: 'claude-opus-5' } }).model, null);
-  assert.equal(d({ args: ['-p', 'use the --model flag'] }).model, 'sonnet', 'a prompt that mentions --model is not the flag');
-});
-
-test('decide (a): resuming, subcommands, --help and --version are not new sessions', () => {
-  for (const args of [['--resume'], ['-r', 'abc'], ['--continue'], ['-c'], ['mcp', 'list'], ['update'], ['--version'], ['-h']]) assert.equal(d({ args }).model, null, args.join(' '));
-  assert.equal(d({ args: ['update the readme'] }).model, 'sonnet', 'a prompt starting with a subcommand word is still a prompt');
-});
-
-test('decide (b): a per-project override wins over every policy; auto falls through; names match case-insensitively', () => {
-  assert.equal(d({ config: { routerProjects: { bondly: 'haiku' }, routerPolicy: 'quality' } }).model, 'haiku');
-  assert.equal(d({ config: { routerProjects: { Bondly: 'opus' }, routerPolicy: 'frugal' } }).model, 'opus');
-  assert.match(d({ config: { routerProjects: { bondly: 'opus' } } }).reason, /bondly is set to Opus/);
-  assert.equal(d({ config: { routerProjects: { bondly: 'auto' } } }).model, 'sonnet');
-  assert.equal(d({ config: { routerProjects: { bondly: 'haiku' } }, args: ['--model', 'opus'] }).model, null, '--model still beats the override');
-});
-
-test('decide (c) balanced: light project → Sonnet; heavy, unknown or recently escalated → Opus', () => {
-  const l = d();
-  assert.deepEqual([l.model, l.policy], ['sonnet', 'balanced']);
-  assert.match(l.reason, /light project \(median 12 turns over 5 sessions\), no escalations in 7d/);
-  assert.equal(d({ history: heavy }).model, 'opus');
-  assert.equal(d({ history: null }).model, 'opus');
-  assert.equal(d({ cwd: '/elsewhere/new-thing' }).model, 'opus');
-  const e = d({ history: escalated(2 * DAY) });
-  assert.equal(e.model, 'opus');
-  assert.match(e.reason, /switched up/);
-  assert.equal(d({ history: escalated(8 * DAY) }).model, 'sonnet', 'the lesson lasts 7 days');
-  assert.equal(d({ config: { routerLightTurns: 10 } }).model, 'opus', 'the light threshold is configurable');
-});
-
-test('decide (c) frugal: Sonnet unless the project escalated in the last 7 days', () => {
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, history: heavy }).model, 'sonnet');
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, history: null }).model, 'sonnet');
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, history: escalated(DAY) }).model, 'opus');
-});
-
-test('decide (c) quality: Opus, even for a light project', () => {
-  assert.equal(d({ config: { routerPolicy: 'quality' } }).model, 'opus');
-  assert.equal(d({ config: { routerPolicy: 'nonsense' } }).policy, 'balanced');
-});
-
-test('decide (d): short -p prompts → Haiku under frugal, Sonnet otherwise; long or fenced prompts use the policy', () => {
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, args: ['-p', 'what is 2+2'] }).model, 'haiku');
-  assert.equal(d({ config: { routerPolicy: 'balanced' }, args: ['--print', 'what is 2+2'], history: heavy }).model, 'sonnet');
-  assert.equal(d({ config: { routerPolicy: 'quality' }, args: ['-p', 'what is 2+2'] }).model, 'sonnet');
-  assert.equal(d({ config: { routerPolicy: 'quality' }, args: ['-p', 'x'.repeat(400)] }).model, 'opus');
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, args: ['-p', 'fix\n```js\nx\n```'] }).model, 'sonnet');
-  assert.equal(d({ config: { routerPolicy: 'balanced' }, args: ['-p'], history: heavy }).model, 'opus', 'a prompt piped on stdin is unknown, not short');
-  assert.equal(d({ config: { routerPolicy: 'frugal' }, args: ['-p', '--output-format', 'json', 'hi'] }).model, 'haiku');
-});
-
-test('summariseArgs keeps flags but at most 80 characters of prompt text', () => {
-  const s = Router.summariseArgs(['-p', 'y'.repeat(200), '--output-format', 'json', '--append-system-prompt', 'secret stuff']);
-  assert.ok(s.includes('--output-format json'));
-  assert.ok(!s.includes('secret'));
-  assert.ok(s.length < 140, s);
-  assert.ok(!s.includes('y'.repeat(81)));
-});
-
-test('CLI: prints JSON, or model|reason with --sh, and appends a decision line', () => {
-  const home = tmp();
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ routerPolicy: 'frugal' }));
-  const run = (...a) => spawnSync(process.execPath, [ROUTER, 'decide', ...a], { encoding: 'utf8', env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_ROUTER: '', ANTHROPIC_MODEL: '' } });
-  const j = JSON.parse(run('--home', home, '--cwd', '/w/bondly', '--', '-p', 'hi').stdout);
-  assert.deepEqual(j, { model: 'haiku', reason: 'short one-shot prompt (-p)', policy: 'frugal' });
-  assert.equal(run('--sh', '--home', home, '--cwd', '/w/bondly', '--', '--model', 'opus').stdout, '|you picked the model (--model)\n');
-  const lines = fs.readFileSync(path.join(home, 'router', 'decisions.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(lines.length, 2);
-  assert.deepEqual(Object.keys(lines[0]).sort(), ['args_summary', 'at', 'cwd', 'model', 'policy', 'reason']);
-  assert.equal(Router.readDecisions(path.join(home, 'router', 'decisions.jsonl'))[0].model, null, 'newest first');
-});
-
-// ── install / uninstall ─────────────────────────────────────────────────────
-function opts(home, shell = '/bin/zsh', extra = {}) {
-  return { home, root: path.join(home, '.claude-traffic-light'), shellPath: shell, env: {}, platform: 'darwin', routerScript: ROUTER, electron: process.execPath, ...extra };
-}
-
-test('install: zsh — shim written executable, block appended once, idempotent both ways', () => {
-  const home = tmp();
-  fs.writeFileSync(path.join(home, '.zshrc'), 'export FOO=1\n');
-  const r = RI.install(opts(home));
-  assert.equal(r.installed, true);
-  assert.equal(r.shell, 'zsh');
-  assert.equal(r.rcFile, path.join(home, '.zshrc'));
-  assert.ok(fs.statSync(r.shim).mode & 0o111, 'executable');
-  const once = fs.readFileSync(r.rcFile, 'utf8');
-  assert.ok(once.startsWith('export FOO=1\n'));
-  assert.ok(once.includes(`export PATH='${r.binDir}'":$PATH"`));
-  assert.equal(RI.install(opts(home)).rcChanged, false, 'second install changes nothing');
-  assert.equal(fs.readFileSync(r.rcFile, 'utf8'), once);
-  assert.equal(once.split(RI.BEGIN).length, 2);
-  const off = RI.uninstall(opts(home));
-  assert.equal(off.installed, false);
-  assert.equal(fs.existsSync(r.shim), false);
-  assert.equal(fs.readFileSync(r.rcFile, 'utf8'), 'export FOO=1\n', 'rc back to how it was');
-  assert.deepEqual(RI.uninstall(opts(home)).rcChanged, [], 'second uninstall changes nothing');
-});
-
-test('install: a missing rc is created; bash on macOS prefers .bash_profile, Linux .bashrc', () => {
-  const zhome = tmp();
-  assert.equal(RI.install(opts(zhome)).rcHasBlock, true);
-  const bhome = tmp();
-  fs.writeFileSync(path.join(bhome, '.bashrc'), '# rc\n');
-  assert.equal(RI.install(opts(bhome, '/bin/bash')).rcFile, path.join(bhome, '.bashrc'), 'only .bashrc exists → use it');
-  const phome = tmp();
-  fs.writeFileSync(path.join(phome, '.bash_profile'), '# profile\n');
-  fs.writeFileSync(path.join(phome, '.bashrc'), '# rc\n');
-  assert.equal(RI.install(opts(phome, '/usr/local/bin/bash')).rcFile, path.join(phome, '.bash_profile'));
-  const lhome = tmp();
-  assert.equal(RI.install(opts(lhome, '/bin/bash', { platform: 'linux' })).rcFile, path.join(lhome, '.bashrc'));
-});
-
-test('install: fish uses fish_add_path in config.fish; uninstall strips every rc it finds', () => {
-  const home = tmp();
-  const r = RI.install(opts(home, '/opt/homebrew/bin/fish'));
-  assert.equal(r.rcFile, path.join(home, '.config', 'fish', 'config.fish'));
-  assert.match(fs.readFileSync(r.rcFile, 'utf8'), /fish_add_path --path --move --prepend '/);
-  // The user changed shells since switching on: the old block still goes.
-  fs.writeFileSync(path.join(home, '.zshrc'), `a\n${RI.rcBlock('zsh', r.binDir)}b\n`);
-  const off = RI.uninstall(opts(home, '/bin/zsh'));
-  assert.equal(off.rcChanged.length, 2);
-  assert.equal(fs.readFileSync(path.join(home, '.zshrc'), 'utf8'), 'a\nb\n');
-});
-
-test('install: an unknown shell still writes the shim, touches no rc; baseline is frozen once', () => {
-  const home = tmp();
-  const r = RI.install(opts(home, '/bin/tcsh', { baseline: { mix: { opus: { share: 1 } }, projects: {} } }));
-  assert.equal(r.shell, null);
-  assert.equal(r.shimExists, true);
-  assert.equal(r.installed, false);
-  const frozen = RI.readFrozen(opts(home));
-  assert.equal(frozen.mix.opus.share, 1);
-  RI.install(opts(home, '/bin/tcsh', { baseline: { mix: { sonnet: { share: 1 } } } }));
-  assert.equal(RI.readFrozen(opts(home)).mix.opus.share, 1, 'switching on again keeps the first baseline');
-  RI.uninstall(opts(home));
-  assert.ok(RI.readFrozen(opts(home)), 'switching off keeps it too');
-});
-
-test('install: a symlinked rc stays a symlink', () => {
-  const home = tmp();
-  const real = path.join(home, 'dotfiles-zshrc');
-  fs.writeFileSync(real, 'x\n');
-  fs.symlinkSync(real, path.join(home, '.zshrc'));
-  RI.install(opts(home));
-  assert.ok(fs.lstatSync(path.join(home, '.zshrc')).isSymbolicLink());
-  assert.ok(RI.hasBlock(fs.readFileSync(real, 'utf8')));
-});
-
-// ── the shim, end to end ────────────────────────────────────────────────────
-function shimWorld(extra = {}) {
-  const home = tmp('ctl-shim-');
-  const o = opts(home, '/bin/zsh', extra);
-  const r = RI.install(o);
-  const fakeBin = path.join(home, 'real bin');
-  fs.mkdirSync(fakeBin);
-  const out = path.join(home, 'argv.txt');
-  fs.writeFileSync(path.join(fakeBin, 'claude'), `#!/bin/sh\n{ for a in "$@"; do printf '%s\\n' "$a"; done; printf 'ROUTE=%s\\n' "\${CLAUDE_TRAFFIC_LIGHT_ROUTE:-}"; } > '${out}'\n`);
-  fs.chmodSync(path.join(fakeBin, 'claude'), 0o755);
-  const nodeDir = path.dirname(process.execPath);
-  const run = (args, { env = {}, pathDirs = [r.binDir, fakeBin, nodeDir, '/usr/bin', '/bin'], cwd = home } = {}) => {
-    fs.rmSync(out, { force: true });
-    const res = spawnSync(r.shim, args, { cwd, encoding: 'utf8', env: { HOME: home, PATH: pathDirs.join(':'), ...env } });
-    const lines = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n') : null;
-    return { ...res, argv: lines && lines.slice(0, -1), route: lines && lines[lines.length - 1].slice(6) };
-  };
-  return { home, o, r, run, fakeBin, nodeDir };
-}
-
-test('shim: prepends --model <pick>, exports the route, logs the decision', () => {
-  const w = shimWorld();
-  fs.writeFileSync(path.join(w.o.root, 'config.json'), JSON.stringify({ routerPolicy: 'frugal' }));
-  const res = w.run(['-p', 'hello there']);
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(res.argv, ['--model', 'haiku', '-p', 'hello there']);
-  assert.equal(res.route, 'haiku|short one-shot prompt (-p)');
-  const log = fs.readFileSync(path.join(w.o.root, 'router', 'decisions.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(log.length, 1);
-  assert.equal(log[0].model, 'haiku');
-  assert.equal(log[0].cwd, w.home);
-});
-
-test('shim: your own --model passes straight through with no route exported', () => {
-  const w = shimWorld();
-  const res = w.run(['--model', 'opus', 'do the thing'], { env: { CLAUDE_TRAFFIC_LIGHT_ROUTE: 'sonnet|stale from a parent session' } });
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(res.argv, ['--model', 'opus', 'do the thing']);
-  assert.equal(res.route, '');
-});
-
-test('shim: reads history.json for the project, keyed by $PWD', () => {
-  const w = shimWorld();
-  const proj = path.join(w.home, 'bondly');
-  fs.mkdirSync(proj);
-  fs.writeFileSync(path.join(w.o.root, 'router', 'history.json'), JSON.stringify({ projects: { bondly: { sessions: 3, medianTurns: 8, escalations: 0 } } }));
-  const res = w.run([], { cwd: proj });
-  assert.deepEqual(res.argv, ['--model', 'sonnet']);
-  assert.match(res.route, /^sonnet\|light project/);
-});
-
-test('shim: with no real claude on PATH it fails loudly', () => {
-  const w = shimWorld();
-  const res = w.run(['x'], { pathDirs: [w.r.binDir, w.nodeDir, '/usr/bin', '/bin'] });
-  assert.equal(res.status, 127);
-  assert.match(res.stderr, /can't find the real claude/);
-});
-
-test('shim: if the router cannot run, claude still starts, unrouted', () => {
-  const w = shimWorld({ routerScript: '/nonexistent/router.js' });
-  const res = w.run(['hi']);
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(res.argv, ['hi']);
-  assert.equal(res.route, '');
-});
-
-test('shim: with no node on PATH it runs the router through the app binary (ELECTRON_RUN_AS_NODE)', () => {
-  const w = shimWorld();
-  const res = w.run(['-p', 'hi'], { pathDirs: [w.r.binDir, w.fakeBin, '/usr/bin', '/bin'] });
-  assert.equal(res.status, 0, res.stderr);
-  assert.deepEqual(res.argv, ['--model', 'sonnet', '-p', 'hi']);
-});
-
-// ── usage: history, escalations, frozen-baseline savings ───────────────────
-const turn = (over) => ({ ts: NOW - DAY, sessionId: 's1', project: 'bondly', modelKey: 'sonnet', subagent: false, input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, ...over });
-
-test('projectHistory: sessions, median turns, subagent share and escalations per project', () => {
-  const turns = [
-    turn({ sessionId: 'a', ts: NOW - 3 * DAY }), turn({ sessionId: 'a', ts: NOW - 3 * DAY + 1 }),
-    turn({ sessionId: 'b' }), turn({ sessionId: 'b', ts: NOW - DAY + 1 }), turn({ sessionId: 'b', ts: NOW - DAY + 2, modelKey: 'opus' }), turn({ sessionId: 'b', ts: NOW - DAY + 3, modelKey: 'opus' }),
-    turn({ sessionId: 'b', subagent: true, modelKey: 'haiku' }),
-    turn({ sessionId: 'c', modelKey: 'opus' }), turn({ sessionId: 'c', ts: NOW - DAY + 5, modelKey: 'sonnet' }),
-    turn({ sessionId: 'old', ts: NOW - 9 * DAY }),
-    turn({ sessionId: 'x', project: 'other', modelKey: 'opus' }),
-  ];
-  const h = U.projectHistory(turns, { now: NOW });
-  const b = h.projects.bondly;
-  assert.equal(b.sessions, 3);
-  assert.equal(b.medianTurns, 2);
-  assert.equal(b.subagentShare, Math.round((1 / 9) * 1000) / 1000);
-  assert.equal(b.escalations, 1, 'sonnet→opus counts; opus→sonnet (c) does not');
-  assert.equal(b.lastEscalationAt, NOW - DAY + 2);
-  assert.deepEqual(Object.keys(h.escalated), ['b']);
-  assert.deepEqual([h.escalated.b.from, h.escalated.b.to], ['sonnet', 'opus']);
-  assert.equal(h.projects.other.escalations, 0);
-  // …and the router learns from it.
-  assert.equal(Router.decide({ cwd: '/w/bondly', history: h, config: { routerPolicy: 'frugal' }, now: NOW }).model, 'opus');
-});
-
-test('projectMix and sinceRouting: spend since switch-on vs the frozen mix, as a range', () => {
-  const before = [turn({ modelKey: 'opus', ts: NOW - 5 * DAY }), turn({ modelKey: 'opus', ts: NOW - 5 * DAY }), turn({ modelKey: 'sonnet', ts: NOW - 5 * DAY }), turn({ modelKey: 'opus', project: 'other', ts: NOW - 5 * DAY })];
-  const mix = U.projectMix(before, { now: NOW - 4 * DAY });
-  assert.equal(mix.bondly.turns, 3);
-  assert.ok(Math.abs(mix.bondly.mix.opus.share - 2 / 3) < 1e-9);
-  const frozen = { mix: { opus: { share: 1 } }, projects: mix };
-  // After: one bondly turn on Sonnet ($2 at 1M input); at the frozen mix
-  // it would have been 2/3 × $5 + 1/3 × $2 = $4.
-  const s = U.sinceRouting([...before, turn({ ts: NOW - DAY })], { since: NOW - 2 * DAY, frozen, now: NOW });
-  assert.equal(s.turns, 1);
-  assert.equal(s.actual, 2);
-  assert.equal(s.atBaseline, 4);
-  assert.equal(s.saved.high, 2);
-  assert.equal(s.saved.low, Math.round((4 / U.SLACK - 2) * 1e4) / 1e4);
-  // A project with no frozen mix of its own uses the overall one; a turn
-  // that cost more than its baseline counts against the saving in full.
-  const t = U.sinceRouting([turn({ project: 'fresh', modelKey: 'opus' })], { since: NOW - 2 * DAY, frozen: { mix: { sonnet: { share: 1 } } }, now: NOW });
-  assert.equal(t.saved.low, -3);
-  assert.equal(t.saved.high, -3);
-});
-
-// ── rules: the routing virtual signals ──────────────────────────────────────
 test('rules: routed-cheap fires for Sonnet/Haiku routes, escalated replaces it; both are listed', () => {
   const v = (s) => R.virtualSessions([{ signal: 'tool-use', cwd: '/w/bondly', ...s }]).map((x) => x.signal);
   assert.deepEqual(v({ route: { model: 'sonnet' } }), ['routed-cheap']);
@@ -312,87 +33,81 @@ test('rules: routed-cheap fires for Sonnet/Haiku routes, escalated replaces it; 
   assert.equal(look.lamp, 'green');
 });
 
-// ── hooks: the route rides in on the environment ────────────────────────────
-test('set-status: stores the route from CLAUDE_TRAFFIC_LIGHT_ROUTE and carries it (and escalated) through', () => {
-  const home = tmp('ctl-state-');
-  const file = path.join(home, 'sessions', `${HOST}-r1.json`);
-  const hook = (signal, env) => {
-    const r = spawnSync(process.execPath, [SET_STATUS, signal], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ROUTE: '', ...env }, input: JSON.stringify({ session_id: 'r1', cwd: '/w/bondly' }) });
-    assert.equal(r.status, 0, r.stderr.toString());
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  };
-  assert.deepEqual(hook('session-start', { CLAUDE_TRAFFIC_LIGHT_ROUTE: 'sonnet|light project, no escalations in 7d' }).route, { model: 'sonnet', reason: 'light project, no escalations in 7d' });
-  const s = JSON.parse(fs.readFileSync(file, 'utf8'));
-  fs.writeFileSync(file, JSON.stringify({ ...s, escalated: true }));
-  const later = hook('prompt-submit', {});
-  assert.equal(later.route.model, 'sonnet', 'carried through a hook without the env');
-  assert.equal(later.escalated, true);
-  const home2 = tmp('ctl-state-');
-  const r = spawnSync(process.execPath, [SET_STATUS, 'session-start'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home2, CLAUDE_TRAFFIC_LIGHT_ROUTE: 'gpt|nope' }, input: JSON.stringify({ session_id: 'r2' }) });
-  assert.equal(r.status, 0);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(home2, 'sessions', `${HOST}-r2.json`), 'utf8')).route, undefined, 'only real models');
+// ── set-status no longer carries router state ───────────────────────────────
+test('set-status: a leftover CLAUDE_TRAFFIC_LIGHT_ROUTE is ignored; no route, advice or delegation fields are written', () => {
+  const home = tmp();
+  const r = spawnSync(process.execPath, [SET_STATUS, 'tool-use'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ROUTE: 'sonnet|light project' }, input: JSON.stringify({ session_id: 'r1', cwd: '/w/p', tool_name: 'Bash' }) });
+  assert.equal(r.status, 0, r.stderr.toString());
+  const d = JSON.parse(fs.readFileSync(path.join(home, 'sessions', `${HOST}-r1.json`), 'utf8'));
+  assert.equal(d.signal, 'tool-use');
+  for (const k of ['route', 'escalated', 'delegated', 'delegating', 'routerAdvice', 'adviceKept']) assert.equal(d[k], undefined, k);
+  assert.equal(fs.existsSync(path.join(home, 'router')), false, 'nothing under router/');
 });
 
-// ── Open sessions: advice, switches, the status line ───────────────────────
-test('advise: a session on a pricier model than the pick gets advice; cheaper, unknown, escalated or moved-up ones do not', () => {
-  const a = (over) => Router.advise({ current: 'claude-opus-4-6', cwd: '/Users/x/work/bondly', history: light, config: {}, now: NOW, ...over });
-  assert.deepEqual(a({}), { model: 'sonnet', reason: 'light project (median 12 turns over 5 sessions), no escalations in 7d' });
-  assert.equal(a({ current: 'claude-sonnet-4-5-20250929' }), null, 'already on the pick');
-  assert.equal(a({ current: 'claude-haiku-4-5' }), null, 'already cheaper');
-  assert.equal(a({ current: null }), null);
-  assert.equal(a({ current: '<synthetic>' }), null);
-  assert.equal(a({ history: heavy }), null, 'heavy project: the pick is Opus');
-  assert.equal(a({ history: escalated(DAY) }), null, 'recently escalated project');
-  assert.equal(a({ escalated: true }), null);
-  assert.equal(a({ route: { model: 'sonnet' } }), null, 'you moved it up from the pick');
-  assert.equal(a({ config: { routerPolicy: 'quality' } }), null);
-  assert.equal(a({ config: { routerProjects: { bondly: 'opus' } } }), null);
-  assert.equal(a({ current: 'claude-fable-5', history: heavy }).model, 'opus');
-  assert.equal(a({ current: 'claude-sonnet-4-5', config: { routerProjects: { bondly: 'haiku' } } }).model, 'haiku');
+// ── Leftover shim: detected read-only, never edited ─────────────────────────
+test('leftover shim: an rc block is found and the exact removal command given; nothing is edited', () => {
+  const home = tmp();
+  const zshrc = path.join(home, '.zshrc');
+  const text = `export A=1\n\n${LeftoverShim.BEGIN}\nexport PATH='${home}/.claude-traffic-light/bin'":$PATH"\n${LeftoverShim.END}\n`;
+  fs.writeFileSync(zshrc, text);
+  fs.mkdirSync(path.join(home, '.claude-traffic-light', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude-traffic-light', 'bin', 'claude'), '#!/bin/sh\n');
+  const r = LeftoverShim.detect({ home, env: {}, platform: 'darwin' });
+  assert.deepEqual(r.files, [zshrc]);
+  assert.equal(r.command, `sed -i '' '/^# claude-buddy router >>>$/,/^# claude-buddy router <<<$/d' '${zshrc}' && rm -f '${home}/.claude-traffic-light/bin/claude'`);
+  assert.match(r.note, /~\/\.zshrc/);
+  assert.equal(fs.readFileSync(zshrc, 'utf8'), text, 'the rc file is untouched');
+  assert.match(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).command, /^sed -i '\/\^# claude/);
+  // The command really does remove exactly the block.
+  const run = spawnSync('/bin/sh', ['-c', LeftoverShim.detect({ home, env: {} }).command]);
+  assert.equal(run.status, 0, run.stderr.toString());
+  assert.equal(fs.readFileSync(zshrc, 'utf8'), 'export A=1\n\n');
+  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
 });
 
-test('switchedDown: only a move to a cheaper family counts', () => {
-  assert.equal(Router.switchedDown('claude-opus-4-6', 'claude-sonnet-4-5'), true);
-  assert.equal(Router.switchedDown('claude-sonnet-4-5', 'claude-haiku-4-5'), true);
-  assert.equal(Router.switchedDown('claude-sonnet-4-5', 'claude-opus-4-6'), false);
-  assert.equal(Router.switchedDown('claude-opus-4-5', 'claude-opus-4-6'), false);
-  assert.equal(Router.switchedDown(null, 'claude-sonnet-4-5'), false);
+test('leftover shim: bash, fish (XDG) and a clean home', () => {
+  const home = tmp();
+  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
+  const xdg = path.join(home, 'xdg');
+  fs.mkdirSync(path.join(xdg, 'fish'), { recursive: true });
+  fs.writeFileSync(path.join(xdg, 'fish', 'config.fish'), `${LeftoverShim.BEGIN}\nfish_add_path x\n${LeftoverShim.END}\n`);
+  fs.writeFileSync(path.join(home, '.bashrc'), `# mine\n${LeftoverShim.BEGIN}\nexport PATH=x\n${LeftoverShim.END}\n`);
+  const r = LeftoverShim.detect({ home, env: { XDG_CONFIG_HOME: xdg }, platform: 'linux' });
+  assert.deepEqual(r.files, [path.join(home, '.bashrc'), path.join(xdg, 'fish', 'config.fish')]);
+  assert.equal(r.shim, null);
+  assert.equal(r.command.split(' && ').length, 2);
 });
 
-test('summaryLine: open sessions delegating now and advised, then what new sessions do', () => {
-  const three = [{ delegating: true }, { delegating: true }, { delegating: true, advice: { model: 'sonnet' } }];
-  assert.equal(Router.summaryLine({ launcher: true, delegation: true, sessions: three }), 'On · 3 open sessions: 3 delegating now, 1 advised to switch to Sonnet · new sessions pick their model automatically');
-  assert.equal(Router.summaryLine({ launcher: true, delegation: true, sessions: [{ delegating: true }, { delegating: false }] }), 'On · 2 open sessions: 1 delegating now, 1 from its next tool call · new sessions pick their model automatically');
-  assert.equal(Router.summaryLine({ launcher: false, delegation: true, sessions: [] }), 'On · no open sessions · new sessions start on their usual model');
-  assert.equal(Router.summaryLine({ launcher: true, delegation: false, sessions: [{ delegating: true, advice: { model: 'haiku' } }] }), 'On · 1 open session: 1 advised to switch to Haiku · new sessions pick their model automatically');
-  assert.match(Router.summaryLine({}), /^Off/);
+// ── Model mix ───────────────────────────────────────────────────────────────
+const turn = (over) => ({ ts: NOW - 3600000, sessionId: 's', project: 'p', model: 'claude-opus-4-1', modelKey: 'opus', subagent: false, input: 100, output: 200, cacheRead: 20000, cacheWrite: 500, cacheWrite1h: 0, ...over });
+
+test('modelMix: per-model turns and cost today and over 7 days, oldest turns excluded', () => {
+  const turns = [
+    turn({}),
+    turn({ model: 'claude-sonnet-4-5', modelKey: 'sonnet' }),
+    turn({ ts: NOW - 3 * DAY }),
+    turn({ ts: NOW - 10 * DAY }),
+    turn({ model: 'gpt-x', modelKey: null }),
+  ];
+  const m = U.modelMix(turns, { now: NOW });
+  assert.equal(m.today.turns, 2);
+  assert.equal(m.week.turns, 3);
+  assert.deepEqual(m.week.models.map((x) => [x.name, x.turns]), [['opus', 2], ['sonnet', 1]]);
+  const opusCost = U.costOf(turn({}));
+  assert.equal(m.week.models[0].cost, Math.round(2 * opusCost * 100) / 100);
+  assert.ok(Math.abs(m.week.models[0].share - 2 / 3) < 1e-9);
 });
 
-test('latestModels: each session’s model as of its latest main-thread turn; subagents and unpriced models ignored', () => {
-  const t = (ts, sessionId, model, extra = {}) => ({ ts, sessionId, model, modelKey: U.modelKey(model), subagent: false, ...extra });
-  const m = U.latestModels([t(1, 'a', 'claude-opus-4-6'), t(3, 'a', 'claude-sonnet-4-5'), t(4, 'a', 'claude-haiku-4-5', { subagent: true }), t(5, 'a', '<synthetic>'), t(2, 'b', 'claude-opus-4-6')]);
-  assert.equal(m.get('a').model, 'claude-sonnet-4-5');
-  assert.equal(m.get('b').modelKey, 'opus');
-});
-
-test('savings: today and 7 days add routing since switch-on to the context diet; off; measuring right after switch-on', () => {
-  const turn = (ago) => ({ ts: NOW - ago, sessionId: 's', project: 'bondly', model: 'claude-sonnet-4-5', modelKey: 'sonnet', subagent: false, input: 0, output: 0, cacheRead: 1e6, cacheWrite: 0 });
-  const frozen = { mix: { opus: { share: 1 } } };
-  const turns = [turn(10 * DAY), turn(2 * DAY), turn(3600e3)];
-  // Each Sonnet turn: $0.20 actual vs $0.50 at the all-Opus baseline.
-  const events = [{ at: new Date(NOW - 1800e3).toISOString(), sessionId: 's', tokensAvoided: 1e6 }];
-  const s = U.savings(turns, { events, routing: true, delegation: true, enabledAt: NOW - 5 * DAY, switchedOnAt: NOW - 5 * DAY, frozen, now: NOW });
-  assert.equal(s.on, true);
-  assert.equal(s.measuring, false);
-  assert.deepEqual(s.today.routing, { low: 0.1704, high: 0.3, turns: 1 });
-  assert.deepEqual(s.today.diet, { low: 2.5, high: 2.5, events: 1 }, '1M tokens × $2.50 cache write, no turns after it');
-  assert.deepEqual([s.today.low, s.today.high, s.today.actual], [2.6704, 2.8, 0.2]);
-  assert.equal(s.week.routing.turns, 2, 'the 10-day-old turn is before switch-on and outside the week');
-  assert.deepEqual([s.week.low, s.week.high], [2.8407, 3.1]);
-
-  const off = U.savings(turns, { now: NOW });
-  assert.deepEqual([off.on, off.measuring, off.today.routing, off.today.low], [false, false, null, 0]);
-  const fresh = U.savings([], { routing: true, enabledAt: NOW - 60e3, switchedOnAt: NOW - 60e3, frozen, now: NOW });
-  assert.equal(fresh.measuring, true);
-  assert.equal(U.savings([], { routing: true, enabledAt: NOW - 60e3, switchedOnAt: NOW - U.MEASURING_MS - 1, frozen, now: NOW }).measuring, false);
+test('modelMix: the recommendation counts routine Opus turns and prices them at Sonnet, as a range', () => {
+  const routine = turn({});
+  const heavy = turn({ output: 3000, input: 9000 });
+  const m = U.modelMix([routine, routine, heavy, turn({ model: 'claude-sonnet-4-5', modelKey: 'sonnet' })], { now: NOW });
+  assert.deepEqual([m.opus.turns, m.opus.routine], [3, 2]);
+  const high = 2 * (U.costOf(routine) - U.costOf(routine, 'sonnet'));
+  const low = 2 * Math.max(0, U.costOf(routine) - U.costOf(routine, 'sonnet') * U.SLACK);
+  assert.equal(m.opus.saving.high, Math.round(high * 100) / 100);
+  assert.equal(m.opus.saving.low, Math.round(low * 100) / 100);
+  assert.match(m.recommendation, /^67% of your Opus turns in the last 7 days looked routine .* on Sonnet they would have cost about \$[\d.]+(–\$[\d.]+)? less\.$/);
+  assert.match(U.modelMix([heavy], { now: NOW }).recommendation, /well spent/);
+  assert.match(U.modelMix([], { now: NOW }).recommendation, /No Opus turns/);
 });

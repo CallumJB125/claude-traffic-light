@@ -6,10 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { dayKey } = require('./stats.js');
-// electron-builder drops a file from app.asar when it is also an
-// extraResource (router.js is, so the shim can run it under plain node);
-// fall back to the copy next to the asar when the in-asar one is missing.
-const { LEARN_DAYS } = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
 
 // USD per million tokens.
 const PRICES = {
@@ -270,341 +266,58 @@ function spend(turns, { days = 7, historyDays = 60, now = Date.now() } = {}) {
   };
 }
 
-// ── Router history ─────────────────────────────────────────────────────────
-// Cheapest first. A session whose main thread moves up this ladder is you
-// typing /model to a pricier model: the sign the cheap pick was wrong.
-const RANK = { haiku: 1, sonnet: 2, opus: 3, fable: 4, 'fable-5': 4 };
+// ── Model mix ──────────────────────────────────────────────────────────────
+// Read-only: which models your turns ran on and what they cost, today and
+// over the last 7 days, plus one recommendation. A "routine" turn is one that
+// wrote a short reply on little new context (a tool round-trip, a quick
+// answer): the kind a cheaper model usually handles as well.
+const ROUTINE_OUTPUT = 400;
+const ROUTINE_NEW_INPUT = 4000;
+const isRoutine = (t) => t.output <= ROUTINE_OUTPUT && t.input + t.cacheWrite <= ROUTINE_NEW_INPUT;
 const family = (k) => (k === 'fable-5' ? 'fable' : k);
-const median = (xs) => {
-  if (!xs.length) return 0;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
-
-// The first main-thread turn (of a session's, sorted by time) that ran on a
-// pricier model than the one before it → { i, from }, else null.
-function firstEscalation(sorted) {
-  let prev = null;
-  for (let i = 0; i < sorted.length; i += 1) {
-    const k = sorted[i].modelKey;
-    if (!RANK[k]) continue;
-    if (prev && RANK[k] > RANK[prev]) return { i, from: prev };
-    prev = k;
-  }
-  return null;
-}
-
-// Only a session that started on one of these tells the router anything: one
-// that started on Opus never tried a cheaper model, so it can't show that one
-// was enough (or wasn't).
-const CHEAP_STARTS = new Set(['haiku', 'sonnet']);
-const startedCheap = (sorted) => CHEAP_STARTS.has((sorted.find((t) => RANK[t.modelKey]) || {}).modelKey);
-
-// What learnProjectTier() reads, per project over the last `days`: main-thread
-// sessions that started cheap, and for each that switched up, the turn and
-// minute it did so.
-function learnStats(turns, { days = LEARN_DAYS, now = Date.now() } = {}) {
-  const from = now - days * DAY_MS;
-  const sessions = new Map();
-  for (const t of turns) {
-    if (t.ts < from || t.ts > now || t.subagent || !t.sessionId) continue;
-    if (!sessions.has(t.sessionId)) sessions.set(t.sessionId, []);
-    sessions.get(t.sessionId).push(t);
-  }
-  const out = {};
-  for (const list of sessions.values()) {
-    list.sort((a, b) => a.ts - b.ts);
-    if (!startedCheap(list)) continue;
-    const p = out[list[0].project] || (out[list[0].project] = { days, sessions: 0, escalations: [] });
-    p.sessions += 1;
-    const e = firstEscalation(list);
-    if (e) p.escalations.push({ turn: e.i + 1, minutes: Math.round((list[e.i].ts - list[0].ts) / 6000) / 10 });
-  }
-  return out;
-}
-
-const blankProject = () => ({ sessions: 0, medianTurns: 0, turns: 0, subagentTurns: 0, subagentShare: 0, escalations: 0, lastEscalationAt: null });
-
-// Per project over the last `days`: sessions, median main-thread turns per
-// session, subagent share of all turns and escalations, and `learn` (the last
-// `learnDays` of switch-ups); plus every escalated session by id. This is
-// what the router shim reads (as history.json).
-function projectHistory(turns, { days = 7, learnDays = LEARN_DAYS, now = Date.now() } = {}) {
-  const from = now - days * DAY_MS;
-  const projects = {};
-  const sessions = new Map();
-  for (const t of turns) {
-    if (t.ts < from || t.ts > now) continue;
-    const p = projects[t.project] || (projects[t.project] = blankProject());
-    p.turns += 1;
-    if (t.subagent) { p.subagentTurns += 1; continue; }
-    if (!t.sessionId) continue;
-    if (!sessions.has(t.sessionId)) sessions.set(t.sessionId, { project: t.project, turns: [] });
-    sessions.get(t.sessionId).turns.push(t);
-  }
-  const counts = {};
-  const escalated = {};
-  for (const [id, s] of sessions) {
-    (counts[s.project] || (counts[s.project] = [])).push(s.turns.length);
-    s.turns.sort((a, b) => a.ts - b.ts);
-    const e = firstEscalation(s.turns);
-    if (e) escalated[id] = { project: s.project, at: s.turns[e.i].ts, from: family(e.from), to: family(s.turns[e.i].modelKey) };
-  }
-  for (const [name, p] of Object.entries(projects)) {
-    p.sessions = (counts[name] || []).length;
-    p.medianTurns = median(counts[name] || []);
-    p.subagentShare = p.turns ? Math.round((p.subagentTurns / p.turns) * 1000) / 1000 : 0;
-  }
-  for (const e of Object.values(escalated)) {
-    const p = projects[e.project];
-    p.escalations += 1;
-    p.lastEscalationAt = Math.max(p.lastEscalationAt || 0, e.at);
-  }
-  // A project quiet this week but busy last week still has its lesson.
-  const learn = learnStats(turns, { days: learnDays, now });
-  for (const name of new Set([...Object.keys(projects), ...Object.keys(learn)])) {
-    (projects[name] || (projects[name] = blankProject())).learn = learn[name] || { days: learnDays, sessions: 0, escalations: [] };
-  }
-  return { at: now, days, projects, escalated };
-}
-
-// Each project's model mix (share of its turns per model) over the last
-// `days` — frozen when routing is switched on, so later spend can be priced
-// at the mix you had before.
-function projectMix(turns, { days = 14, now = Date.now() } = {}) {
-  const from = now - days * DAY_MS;
-  const out = {};
-  for (const t of turns) {
-    if (t.ts < from || t.ts > now || !PRICES[t.modelKey]) continue;
-    const p = out[t.project] || (out[t.project] = { turns: 0, mix: {} });
-    p.turns += 1;
-    p.mix[t.modelKey] = (p.mix[t.modelKey] || 0) + 1;
-  }
-  for (const p of Object.values(out)) for (const k of Object.keys(p.mix)) p.mix[k] = { turns: p.mix[k], share: p.mix[k] / p.turns };
-  return out;
-}
-
-function weightsOf(mix) {
-  if (!mix || typeof mix !== 'object') return null;
-  const w = Object.entries(mix).filter(([k, m]) => PRICES[k] && m && m.share > 0);
-  const sum = w.reduce((a, [, m]) => a + m.share, 0);
-  return sum ? w.map(([k, m]) => [k, m.share / sum]) : null;
-}
-
-// Spend since routing went on, against the same turns priced at the frozen
-// baseline mix (the project's own mix, else the overall one). A saving has
-// the Router's usual range: the baseline models might have needed up to
-// SLACK fewer tokens. A turn that cost more than its baseline counts in full.
-function baseCost(t, frozen, global) {
-  const w = weightsOf(frozen && frozen.projects && frozen.projects[t.project] && frozen.projects[t.project].mix) || global;
-  return w ? w.reduce((a, [k, share]) => a + share * costOf(t, k), 0) : costOf(t);
-}
-
-function sinceRouting(turns, { since, frozen, now = Date.now() } = {}) {
-  const global = weightsOf(frozen && frozen.mix);
-  let actual = 0, atBaseline = 0, low = 0, high = 0, count = 0;
-  for (const t of turns) {
-    if (t.ts < since || t.ts > now) continue;
-    const cost = costOf(t);
-    if (cost == null) continue;
-    const base = baseCost(t, frozen, global);
-    actual += cost;
-    atBaseline += base;
-    count += 1;
-    if (base > cost) { high += base - cost; low += Math.max(0, base / SLACK - cost); } else { high += base - cost; low += base - cost; }
-  }
-  const r = (n) => Math.round(n * 1e4) / 1e4;
-  return { since, to: now, turns: count, actual: r(actual), atBaseline: r(atBaseline), saved: { low: r(low), high: r(high) } };
-}
-
-// ── The review: what routing actually did since it went on ────────────────
-// Fewer sessions than this and the verdict is "not enough data yet".
-const REVIEW_MIN_SESSIONS = 5;
-// Escalations costing at least this share of the gross saving (routing plus
-// context diet, midpoints) are "eating most of the savings".
-const ESCALATION_EATS_SHARE = 0.5;
-
-// Spend since `since` split three ways: routing (every turn against the
-// frozen mix, as sinceRouting), the context diet, and escalations — the
-// turns of a session that started cheap from its switch-up on (Opus → Fable
-// is your call, not the router's), where they cost more than the
-// frozen mix would have. The first turn on the new model rewrote the prompt
-// cache; at the old mix that session would have read it, so its baseline
-// prices those tokens as cache reads. That rebuild is what learning costs.
-function review(turns, { since, frozen, events = [], now = Date.now() } = {}) {
-  const r = (n) => Math.round(n * 1e4) / 1e4;
-  const global = weightsOf(frozen && frozen.mix);
-  const inWindow = turns.filter((t) => t.ts >= since && t.ts <= now && costOf(t) != null);
-  const sessions = new Map();
-  for (const t of inWindow) {
-    if (t.subagent || !t.sessionId) continue;
-    if (!sessions.has(t.sessionId)) sessions.set(t.sessionId, []);
-    sessions.get(t.sessionId).push(t);
-  }
-  const bumped = new Set();
-  const byProject = {};
-  let escCost = 0, escSessions = 0;
-  for (const list of sessions.values()) {
-    list.sort((a, b) => a.ts - b.ts);
-    const e = startedCheap(list) && firstEscalation(list);
-    if (!e) continue;
-    const after = list.slice(e.i);
-    const extra = after.reduce((a, t, j) => a + costOf(t) - baseCost(j ? t : { ...t, cacheRead: t.cacheRead + t.cacheWrite, cacheWrite: 0, cacheWrite1h: 0 }, frozen, global), 0);
-    if (extra <= 0) continue;
-    for (const t of after) bumped.add(t);
-    escCost += extra;
-    escSessions += 1;
-    const p = byProject[list[0].project] || (byProject[list[0].project] = { name: list[0].project, cost: 0, sessions: 0 });
-    p.cost += extra;
-    p.sessions += 1;
-  }
-  let actual = 0, atBaseline = 0, low = 0, high = 0;
-  for (const t of inWindow) {
-    const cost = costOf(t);
-    const base = baseCost(t, frozen, global);
-    actual += cost;
-    atBaseline += base;
-    if (bumped.has(t)) continue;
-    high += base - cost;
-    low += base > cost ? Math.max(0, base / SLACK - cost) : base - cost;
-  }
-  const diet = contextDiet(events, turns, { from: since, now });
-  const net = { low: low + diet.low - escCost, high: high + diet.high - escCost };
-  const projects = Object.values(byProject).sort((a, b) => b.cost - a.cost).map((p) => ({ ...p, cost: r(p.cost) }));
-  const gross = Math.max(0, (low + high) / 2) + (diet.low + diet.high) / 2;
-  const n = sessions.size;
-  let verdict;
-  if (n < REVIEW_MIN_SESSIONS) verdict = { kind: 'early', text: `Not enough data yet (${n} session${n === 1 ? '' : 's'})` };
-  else if (escCost > 0 && escCost >= ESCALATION_EATS_SHARE * gross) verdict = { kind: 'escalations', project: projects[0].name, text: `Escalations are eating most of the savings — consider Quality-first for ${projects[0].name}` };
-  else if (net.low > 0) verdict = { kind: 'saving', text: 'Routing is saving you money' };
-  else if (net.high < 0) verdict = { kind: 'losing', text: 'Routing is costing you more than your old model mix' };
-  else verdict = { kind: 'unclear', text: 'Too close to call yet — savings and costs roughly cancel out' };
-  return {
-    since,
-    to: now,
-    sessions: n,
-    turns: inWindow.length,
-    actual: r(actual),
-    atBaseline: r(atBaseline),
-    routing: { low: r(low), high: r(high) },
-    diet: { low: diet.low, high: diet.high, events: diet.events },
-    escalations: { sessions: escSessions, cost: r(escCost), projects },
-    net: { low: r(net.low), high: r(net.high) },
-    verdict,
-  };
-}
-
-// ── Context diet ───────────────────────────────────────────────────────────
-// Tokens the delegate hook kept out of a session's context. Every token that
-// enters the context is written to the prompt cache once (low end) and then
-// re-read on every later turn until a compaction or /clear drops it (high
-// end adds that, at the session's median turns remaining).
-const promptSize = (t) => t.input + t.cacheRead + t.cacheWrite;
-
-// Main-thread turns after `ts` until the context resets: a prompt under half
-// the size of the one before it is a compaction or a /clear.
-function turnsRemaining(turns, ts) {
-  let n = 0;
-  let prev = null;
-  for (const t of turns) {
-    const size = promptSize(t);
-    if (t.ts <= ts) { prev = size; continue; }
-    if (prev != null && size < prev * 0.5) break;
-    n += 1;
-    prev = size;
-  }
-  return n;
-}
-
-function modelAt(turns, ts) {
-  let hit = null;
-  for (const t of turns) { if (t.ts > ts) break; hit = t.modelKey; }
-  return hit || (turns[0] && turns[0].modelKey) || null;
-}
-
-function contextDiet(events, turns, { days = 7, now = Date.now(), from = now - days * DAY_MS } = {}) {
-  const bySession = new Map();
-  const mix = {};
-  for (const t of turns) {
-    if (t.subagent || !t.sessionId || !PRICES[t.modelKey]) continue;
-    if (!bySession.has(t.sessionId)) bySession.set(t.sessionId, []);
-    bySession.get(t.sessionId).push(t);
-    if (t.ts >= from && t.ts <= now) mix[t.modelKey] = (mix[t.modelKey] || 0) + 1;
-  }
-  for (const list of bySession.values()) list.sort((a, b) => a.ts - b.ts);
-  const fallback = Object.entries(mix).sort((a, b) => b[1] - a[1])[0]?.[0] || 'opus';
-  const groups = new Map();
-  for (const e of events || []) {
-    const at = Date.parse(e && e.at);
-    const tokens = Number(e && e.tokensAvoided) || 0;
-    if (!at || at < from || at > now || tokens <= 0) continue;
-    const id = e.sessionId || 'unknown';
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push({ at, tokens });
-  }
-  let tokens = 0, low = 0, high = 0, count = 0;
-  for (const [id, evs] of groups) {
-    const list = bySession.get(id) || [];
-    const remaining = median(evs.map((e) => turnsRemaining(list, e.at)));
-    for (const e of evs) {
-      const p = PRICES[modelAt(list, e.at) || fallback];
-      const once = (e.tokens * p.cacheWrite) / 1e6;
-      low += once;
-      high += once + (e.tokens * p.cacheRead * remaining) / 1e6;
-      tokens += e.tokens;
-      count += 1;
-    }
-  }
-  const r = (n) => Math.round(n * 1e4) / 1e4;
-  return { days, from, to: now, events: count, sessions: groups.size, tokens, low: r(low), high: r(high) };
-}
-
-// ── Open sessions and live savings ─────────────────────────────────────────
-// Each session's model as of its latest main-thread turn: what /model last
-// set it to, once a turn has run on it.
-function latestModels(turns) {
-  const out = new Map();
-  for (const t of turns) {
-    if (t.subagent || !t.sessionId || !t.modelKey) continue;
-    const cur = out.get(t.sessionId);
-    if (!cur || t.ts >= cur.ts) out.set(t.sessionId, { model: t.model, modelKey: t.modelKey, ts: t.ts });
-  }
-  return out;
-}
-
 const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-// Right after switch-on there is nothing to measure yet; say so rather than $0.
-const MEASURING_MS = 5 * 60 * 1000;
 
-// Today and the last 7 local days: routing (spend since `enabledAt` against
-// the frozen baseline mix) plus the context diet, each a {low, high} range,
-// with `actual` spend in the window for the subscriber view's share.
-function savings(turns, { events = [], routing = false, delegation = false, enabledAt = null, switchedOnAt = null, frozen = null, now = Date.now() } = {}) {
-  const r4 = (n) => Math.round(n * 1e4) / 1e4;
-  const windowFrom = (from) => {
-    const rt = routing && enabledAt ? sinceRouting(turns, { since: Math.max(from, enabledAt), frozen, now }) : null;
-    const diet = contextDiet(events, turns, { from, now });
-    let actual = 0;
+function modelMix(turns, { now = Date.now() } = {}) {
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const windowOf = (from) => {
+    const models = {};
+    let cost = 0, count = 0;
     for (const t of turns) {
       if (t.ts < from || t.ts > now) continue;
       const c = costOf(t);
-      if (c != null) actual += c;
+      if (c == null) continue;
+      const m = models[family(t.modelKey)] || (models[family(t.modelKey)] = { turns: 0, cost: 0 });
+      m.turns += 1;
+      m.cost += c;
+      cost += c;
+      count += 1;
     }
-    return {
-      from,
-      low: r4((rt ? rt.saved.low : 0) + diet.low),
-      high: r4((rt ? rt.saved.high : 0) + diet.high),
-      actual: r4(actual),
-      routing: rt ? { low: rt.saved.low, high: rt.saved.high, turns: rt.turns } : null,
-      diet: { low: diet.low, high: diet.high, events: diet.events },
-    };
+    const list = Object.entries(models).map(([name, m]) => ({ name, turns: m.turns, cost: r2(m.cost), share: count ? m.turns / count : 0 })).sort((a, b) => b.cost - a.cost);
+    return { from, turns: count, cost: r2(cost), models: list };
   };
-  const today = windowFrom(startOfDay(now));
-  const week = windowFrom(startOfDay(now - 6 * DAY_MS));
-  const on = routing || delegation;
-  const measuring = on && switchedOnAt != null && now - switchedOnAt < MEASURING_MS && !(today.routing && today.routing.turns) && !today.diet.events;
-  return { on, routing, delegation, measuring, today, week };
+  const today = windowOf(startOfDay(now));
+  const weekFrom = startOfDay(now - 6 * DAY_MS);
+  const week = windowOf(weekFrom);
+  let opus = 0, routine = 0, low = 0, high = 0;
+  for (const t of turns) {
+    if (t.ts < weekFrom || t.ts > now || t.modelKey !== 'opus') continue;
+    opus += 1;
+    if (!isRoutine(t)) continue;
+    routine += 1;
+    const cost = costOf(t);
+    const sonnet = costOf(t, 'sonnet');
+    low += Math.max(0, cost - sonnet * SLACK);
+    high += Math.max(0, cost - sonnet);
+  }
+  const share = opus ? routine / opus : 0;
+  const money = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
+  const range = money(low) === money(high) ? money(high) : `${money(low)}–${money(high)}`;
+  const recommendation = !opus
+    ? 'No Opus turns in the last 7 days — nothing to suggest.'
+    : !routine
+      ? 'Your Opus turns in the last 7 days all did substantial work — Opus looks well spent.'
+      : `${Math.round(share * 100)}% of your Opus turns in the last 7 days looked routine (short reply, little new context); on Sonnet they would have cost about ${range} less.`;
+  return { today, week, opus: { turns: opus, routine, share, saving: { low: r2(low), high: r2(high) } }, recommendation };
 }
 
-module.exports = { PRICES, SLACK, MEASURING_MS, REVIEW_MIN_SESSIONS, ESCALATION_EATS_SHARE, modelKey, costOf, readTurns, summarise, spend, projectHistory, learnStats, projectMix, sinceRouting, review, contextDiet, turnsRemaining, latestModels, savings };
+module.exports = { PRICES, SLACK, ROUTINE_OUTPUT, ROUTINE_NEW_INPUT, modelKey, costOf, readTurns, summarise, spend, modelMix };

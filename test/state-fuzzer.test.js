@@ -17,8 +17,8 @@ const os = require('os');
 const path = require('path');
 
 const FUZZ_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-fuzz-'));
-// delegate.js (required by the hook) fixes its root at load; keep it off ~.
-process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(FUZZ_HOME, 'delegate-root');
+// The hook fixes its root at load; keep it off ~.
+process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(FUZZ_HOME, 'hook-root');
 
 const Rules = require('../rules.js');
 const Agents = require('../agents.js');

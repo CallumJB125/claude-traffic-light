@@ -209,41 +209,14 @@ function claudePid(cached) {
 const sessionId = (data && (data.session_id || data.sessionId)) || process.env.CLAUDE_SESSION_ID || 'unknown';
 const cwd = (data && data.cwd) || process.cwd();
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${sessionId}.json`);
-// delegate.js keeps {reads, trims, at} per session here (same file naming).
-const delegatedFile = path.join(ROOT_DIR, 'router', 'delegated', `${String(sessionId).replace(/[^\w.-]/g, '_').slice(0, 120)}.json`);
 
 if (signal === 'session-end') {
   fs.rmSync(file, { force: true });
-  fs.rmSync(delegatedFile, { force: true });
   process.exit(0);
 }
 
-// ── Delegation rides on this hook ──────────────────────────────────────────
-// Every session runs this script for every event, so calling delegate.js from
-// here reaches sessions that were already open when delegation went on.
-const Delegate = require('./delegate.js');
-const DELEGATE_EVENTS = { 'tool-use': 'PreToolUse', 'tool-done': 'PostToolUse', 'prompt-submit': 'UserPromptSubmit' };
-const flags = Delegate.readFlag();
-const delegationOn = !!flags && flags.enabled === true;
+// What this hook prints for Claude Code (the PermissionRequest decision).
 let hookOutput = null;
-if (delegationOn && DELEGATE_EVENTS[signal] && data) {
-  try {
-    const hso = Delegate.delegate(data.hook_event_name || DELEGATE_EVENTS[signal], data, flags);
-    if (hso) hookOutput = { hookSpecificOutput: hso };
-  } catch (e) {
-    process.stderr.write(`set-status: delegation skipped: ${e.message}\n`);
-  }
-}
-
-// Claude Code reads one JSON object from a hook's stdout, so this hook's own
-// reply (PermissionRequest) and delegation's are merged into one.
-function mergeOutput(a, b) {
-  if (!a || !b) return a || b;
-  const x = a.hookSpecificOutput || {};
-  const y = b.hookSpecificOutput || {};
-  const ctx = [x.additionalContext, y.additionalContext].filter(Boolean).join('\n');
-  return { ...a, ...b, hookSpecificOutput: { ...x, ...y, ...(ctx ? { additionalContext: ctx } : {}) } };
-}
 
 // fs.writeSync rather than process.stdout.write: stdout is a pipe, which is
 // asynchronous on macOS, and process.exit would cut a large reply short.
@@ -266,16 +239,6 @@ function modelOf(payload) {
   const m = payload && payload.model;
   const id = typeof m === 'string' ? m : m && typeof m === 'object' && typeof m.id === 'string' ? m.id : null;
   return id ? id.slice(0, 80) : null;
-}
-
-function readDelegated(prevValue) {
-  try {
-    const c = JSON.parse(fs.readFileSync(delegatedFile, 'utf8'));
-    if (!c.reads && !c.trims) return prevValue;
-    return { reads: Number(c.reads) || 0, trims: Number(c.trims) || 0, at: c.at || null };
-  } catch {
-    return prevValue;
-  }
 }
 
 // Which signal the session machine steps with, and how it came about, is the
@@ -336,17 +299,6 @@ function readPrev() {
   }
 }
 
-// The router shim exports CLAUDE_TRAFFIC_LIGHT_ROUTE="<model>|<reason>" before
-// it execs claude, and every hook process inherits claude's environment.
-function envRoute() {
-  const v = process.env.CLAUDE_TRAFFIC_LIGHT_ROUTE;
-  if (!v) return null;
-  const i = v.indexOf('|');
-  const model = (i < 0 ? v : v.slice(0, i)).trim();
-  if (!['opus', 'sonnet', 'haiku'].includes(model)) return null;
-  return { model, reason: i < 0 ? '' : v.slice(i + 1).slice(0, 200) };
-}
-
 const prevOnEntry = readPrev();
 // A background subagent's own tool hooks (and its denied calls) carry its agent_id.
 const fromSubagent = (/^tool-/.test(resolved) || resolved === 'permission-denied') && !!(data && data.agent_id);
@@ -403,19 +355,8 @@ function nextSession(prev, { hostApp, pid }) {
     // carry them through so a hook write never erases them.
     mode: prev?.mode ?? null,
     iteration: prev?.iteration ?? 0,
-    // The router's pick for this session; `escalated` is set by the app
-    // when the transcript shows you switched up from it.
-    route: envRoute() || prev?.route || undefined,
-    escalated: prev?.escalated || undefined,
-    // What delegate.js kept out of this session's context so far, and
-    // whether delegation was on when this session's hook last ran.
-    delegated: readDelegated(prev?.delegated || undefined),
-    delegating: delegationOn || undefined,
-    // Claude Code's own word on the model (the app prefers the transcript,
-    // which follows /model), and the app's advice for this open session.
+    // Claude Code's own word on the model.
     model: modelOf(data) || prev?.model || undefined,
-    routerAdvice: prev?.routerAdvice || undefined,
-    adviceKept: prev?.adviceKept || undefined,
     // When the session last moved, when its agents last did (bookkeeping
     // stamps agentsAt, not updatedAt), and when you last acted on it.
     updatedAt: t.updatedAt,
@@ -476,7 +417,7 @@ if (signal === 'permission-request') {
   }
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
-  hookOutput = mergeOutput(hookOutput, Claude.answer(decision));
+  hookOutput = Claude.answer(decision);
   finish();
 }
 

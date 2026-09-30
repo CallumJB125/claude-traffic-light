@@ -859,7 +859,7 @@
   window.lightsApi.onStatusChanged(() => {
     refreshLive();
     if ($('main').dataset.view === 'stats') renderStats();
-    else if ($('main').dataset.view === 'router') refreshRouterLive();
+    else if ($('main').dataset.view === 'mix') refreshMixLive();
   });
 
   // ── Save / revert / presets ────────────────────────────────────────────
@@ -876,7 +876,7 @@
     setTimeout(() => { if (!dirty) $('save-state').textContent = ''; }, 1500);
     renderList(); renderEditor(); renderStage();
   }
-  // Any other saveConfig rejection (toggles, router knobs) still gets a visible message.
+  // Any other saveConfig rejection (toggles) still gets a visible message.
   window.addEventListener('unhandledrejection', (e) => { flash(e.reason?.message || 'Something went wrong'); });
   $('save-btn').addEventListener('click', save);
   $('revert-btn').addEventListener('click', () => { rules = config.rules.map(R.normalizeRule); setDirty(false); if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
@@ -1164,7 +1164,7 @@
     if (!s) return;
     if (s.error) { $('presets').hidden = true; flash(s.error); return; }
     const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
-    const parts = [s.rules != null && n(s.rules, 'rule'), s.presets != null && n(s.presets, 'preset'), s.cameos && n(s.cameos, 'face'), s.settings.length && 'router & agent settings'].filter(Boolean);
+    const parts = [s.rules != null && n(s.rules, 'rule'), s.presets != null && n(s.presets, 'preset'), s.cameos && n(s.cameos, 'face'), s.settings.length && 'agent settings'].filter(Boolean);
     $('setup-summary').innerHTML = `<b>${escape(parts.join(', ') || 'Nothing usable in that file')}</b>`
       + (s.old ? '<br>From an older version — updated as it loads.' : '')
       + (s.dropped ? `<br>${n(s.dropped, 'face')} skipped (not a valid photo).` : '')
@@ -1211,17 +1211,17 @@
   function setView(v) {
     $('main').dataset.view = v;
     $('frame').dataset.view = v;
-    for (const k of ['rules', 'stats', 'router']) {
+    for (const k of ['rules', 'stats', 'mix']) {
       $(`view-${k}`).classList.toggle('on', v === k);
       $(`view-${k}`).setAttribute('aria-selected', v === k);
     }
     if (v === 'stats') renderStats();
-    if (v === 'router') renderRouter();
+    if (v === 'mix') renderMix();
   }
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
   $('view-stats').addEventListener('click', () => setView('stats'));
-  $('view-router').addEventListener('click', () => setView('router'));
+  $('view-mix').addEventListener('click', () => setView('mix'));
 
   let rangeDays = 7;
   let projectFilter = null;
@@ -1270,8 +1270,6 @@
     const sum = await window.lightsApi.getStats(rangeDays);
     if (!sum) return;
     paintStats(sum, null);
-    window.lightsApi.getUsageSummary({ days: rangeDays >= 30 ? 30 : 7 }).then(paintRouteHint);
-    window.lightsApi.getSavings().then(paintSaved);
     const costs = await window.lightsApi.getCosts();
     paintStats(await window.lightsApi.getStats(rangeDays) || sum, costs);
   }
@@ -1469,397 +1467,45 @@
     }
   }
 
-  // ── Router view ────────────────────────────────────────────────────────
-  let routerDays = 7;
-  let routerSum = null;
+  // ── Model mix view (read-only) ─────────────────────────────────────────
   const money = (v) => (v >= 100 ? `$${Math.round(v).toLocaleString('en-US')}` : usd(v));
-  const moneyRange = (lo, hi) => (money(lo) === money(hi) ? money(hi) : `${money(lo)}–${money(hi)}`);
-  // Savings over actual spend is the share of usage kept: with prices as
-  // the weights, that's what a subscriber's plan limits roughly track.
-  const pctRange = (lo, hi, base) => {
-    if (!base) return '0%';
-    const a = Math.round((lo / base) * 100);
-    const b = Math.round((hi / base) * 100);
-    return a === b ? `${b}%` : `${a}–${b}%`;
-  };
-  const MODEL_NAMES = { fable: 'Fable', 'fable-5': 'Fable 5 (legacy)', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+  const MODEL_NAMES = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+  const plural = (n, w) => `${Number(n || 0).toLocaleString('en-US')} ${w}${n === 1 ? '' : 's'}`;
 
-  // ── Router: the launcher (switch, policy, picks, live sessions, log) ──
-  let routerOv = null;
-  const ROUTE_NAMES = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
-  const POLICY_DESC = {
-    frugal: 'Sonnet for every session, Haiku for short one-shot prompts; Opus only for projects where you often switch up, early on (learned over 14 days).',
-    balanced: 'Sonnet for light projects, Opus for the rest. Projects where you often switch up get Opus; ones that never do get Haiku for short one-shot prompts.',
-    quality: 'Opus for every session; only short one-shot prompts (-p) go to Sonnet.',
-  };
-  const signedMoney = (v) => (v < 0 ? `−${money(-v)}` : money(v));
-  // "−$9.91–$109" reads as a subtraction; a range that crosses zero says "to".
-  const signedRange = (lo, hi) => (signedMoney(lo) === signedMoney(hi) ? signedMoney(hi) : `${signedMoney(lo)}${lo < 0 ? ' to ' : '–'}${signedMoney(hi)}`);
-
-  async function renderRouting() {
-    const ov = await window.lightsApi.routerOverview();
-    if (!ov) return;
-    routerOv = ov;
-    paintRouting(ov);
+  function paintMixWindow(id, w) {
+    $(`mix-${id}-cost`).textContent = money(w.cost);
+    $(`mix-${id}-turns`).textContent = plural(w.turns, 'turn');
+    const max = Math.max(...w.models.map((m) => m.cost), 0.0001);
+    $(`mix-${id}`).innerHTML = w.models.length ? w.models.map((m) => `<li><span class="name">${escape(MODEL_NAMES[m.name] || m.name)}</span><span class="ms">${Math.round(m.share * 100)}% of turns · ${money(m.cost)}</span><span class="bar"><i style="width:${Math.max(2, (m.cost / max) * 100)}%"></i></span></li>`).join('')
+      : '<li class="empty-small">No turns yet.</li>';
   }
 
-  function installLine(st) {
-    const where = st.sandbox ? ` (dev run: sandbox HOME ${st.sandbox})` : '';
-    if (st.installed) return `Installed for ${st.shell} — open a new terminal for it to take effect${where}`;
-    if (st.shimExists && !st.shell) return `Shim written, but your shell isn't zsh, bash or fish — put ${st.binDir} first on your PATH${where}`;
-    if (st.shimExists) return `Shim written, but ${st.rcFile} has no PATH line — switch off and on again${where}`;
-    return `Off — claude starts on its usual model${where}`;
-  }
-
-  // A switch's outcome that the summary line can't say (errors, conflicts).
-  let routerNote = null;
-  const switchNotes = {};
-  function paintRouting(ov) {
-    const st = ov.status;
-    const policy = config.routerPolicy || 'balanced';
-    $('router-enabled').checked = st.shimExists || !!ov.delegationOn;
-    $('router-install-line').textContent = routerNote || ov.summary;
-    $('router-launcher').checked = st.shimExists;
-    $('router-launcher-line').textContent = installLine(st);
-    $('router-show-shim').hidden = !st.shimExists;
-    Array.from($('router-policy').children).forEach((b) => { b.classList.toggle('on', b.dataset.policy === policy); b.setAttribute('aria-selected', b.dataset.policy === policy); });
-    $('router-policy-desc').textContent = POLICY_DESC[policy];
-
-    $('router-picks-empty').hidden = ov.projects.length > 0;
-    $('router-picks').hidden = !ov.projects.length;
-    $('router-picks').querySelector('tbody').innerHTML = ov.projects.slice(0, 12).map((p) => {
-      const auto = p.override === 'auto' ? p.pick.model : null;
-      const opt = (v, label) => `<option value="${v}"${p.override === v ? ' selected' : ''}>${label}</option>`;
-      return `<tr><td class="name"><span title="${escape(p.name)}">${escape(p.name)}</span></td><td>${p.sessions}</td><td>${Math.round(p.medianTurns)}</td><td title="${escape(p.learned && p.learned.label ? p.learned.label : '')}">${p.escalations || '—'}${p.learned && p.learned.label ? `<span class="learned ${p.learned.tier}">${p.learned.tier === 'quality' ? `learned: quality · ${Math.round(p.learned.rate * 100)}% of ${p.learned.sessions}` : p.learned.tier === 'cheap' ? `learned: cheap · ${p.learned.sessions} clean` : `learned: fine · ${p.learned.escalations}/${p.learned.sessions}${p.learned.timing === 'late' ? ', late' : ''}`}</span>` : ''}</td>`
-        + `<td><select class="select" data-project="${escape(p.name)}" title="${escape(p.pick.reason)}">${opt('auto', `Auto${auto ? ` · ${ROUTE_NAMES[auto]}` : ''}`)}${opt('opus', 'Opus')}${opt('sonnet', 'Sonnet')}${opt('haiku', 'Haiku')}</select></td></tr>`;
-    }).join('');
-
-    const overrides = config.routerProjects || {};
-    $('router-sessions').innerHTML = ov.sessions.length ? ov.sessions.map((s) => {
-      const r = s.route;
-      const what = !r ? 'not routed — started before routing, or you picked the model'
-        : s.escalated ? `${ROUTE_NAMES[r.model]} · you switched up since`
-        : `${ROUTE_NAMES[r.model]} · ${r.reason || ''}`;
-      const offer = r && r.model !== 'opus' && overrides[s.project] !== 'opus';
-      const now = s.model ? `on ${ROUTE_NAMES[s.model] || s.model}` : '';
-      const line = [now, what].filter(Boolean).join(' · ') + (s.delegating ? ' · delegating' : '');
-      const note = switchNotes[s.sessionId];
-      const advice = s.advice
-        ? `<div class="advice"><span>Would do fine on <b>${ROUTE_NAMES[s.advice.model] || escape(s.advice.model)}</b> — ${escape(s.advice.reason || '')}${s.kept ? ' · you kept it' : ''}</span><button class="btn" data-switch="${escape(s.sessionId)}" title="Copies /model ${escape(s.advice.model)} and brings that terminal forward">Switch this one</button>${note ? `<span class="pasted">${escape(note)}</span>` : ''}</div>`
-        : '';
-      return `<div class="rsess"><span><b>${escape(s.project || '—')}</b> · ${escape(line)}</span>${offer ? `<button class="btn ghost" data-opus="${escape(s.project)}">Use Opus next time</button>` : ''}${advice}</div>`;
-    }).join('') : '<div class="stats-sub">No sessions running.</div>';
-
-    $('router-decisions-empty').hidden = ov.decisions.length > 0;
-    $('router-decisions').hidden = !ov.decisions.length;
-    $('router-decisions').querySelector('tbody').innerHTML = ov.decisions.map((x) => {
-      const t = new Date(x.at);
-      const when = t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      const proj = String(x.cwd || '').split('/').filter(Boolean).pop() || '—';
-      return `<tr title="${escape(x.args_summary || '')}"><td class="name">${when}</td><td class="l">${escape(proj)}</td><td class="l">${x.model ? ROUTE_NAMES[x.model] || escape(x.model) : '—'}</td><td class="l why">${escape(x.reason || '')}</td></tr>`;
-    }).join('');
-
-    const since = ov.since;
-    $('saved-since').hidden = !config.routerEnabledAt || !since;
-    if (since) {
-      const sub = !!config.routerSubscriberView;
-      const date = new Date(config.routerEnabledAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
-      $('since-k').textContent = `Since you switched routing on (${date})`;
-      $('since-big').classList.toggle('neg', since.saved.high < 0);
-      if (!since.turns) {
-        $('since-big').textContent = '—';
-        $('since-line').textContent = 'No turns since then yet.';
-      } else if (sub) {
-        $('since-big').textContent = pctRange(since.saved.low, since.saved.high, since.atBaseline);
-        $('since-line').textContent = `of your usage kept vs your pre-routing model mix · ${since.turns.toLocaleString('en-US')} turns`;
-      } else {
-        $('since-big').textContent = signedRange(since.saved.low, since.saved.high);
-        $('since-line').textContent = `${money(since.actual)} actual vs ${money(since.atBaseline)} at your pre-routing model mix · ${since.turns.toLocaleString('en-US')} turns`;
-      }
+  async function renderMix() {
+    const mix = await window.lightsApi.modelMix();
+    if (!mix) return;
+    $('mix-loading').hidden = true;
+    $('mix-empty').hidden = mix.week.turns > 0;
+    $('mix-body').hidden = !mix.week.turns;
+    if (mix.week.turns) {
+      paintMixWindow('today', mix.today);
+      paintMixWindow('week', mix.week);
+      $('mix-rec').textContent = mix.recommendation;
     }
-
-    const rv = ov.review;
-    $('since-review').hidden = !rv || !since;
-    if (rv) {
-      const sub = !!config.routerSubscriberView;
-      const amount = (lo, hi) => (!sub ? signedRange(lo, hi) : hi < 0 ? `−${pctRange(-hi, -lo, rv.atBaseline)}` : pctRange(lo, hi, rv.atBaseline));
-      const paint = (id, lo, hi, tail) => { $(id).textContent = `${amount(lo, hi)}${tail ? ` · ${tail}` : ''}`; $(id).classList.toggle('neg', hi < 0); };
-      paint('rv-routing', rv.routing.low, rv.routing.high, `${num(rv.sessions)} session${rv.sessions === 1 ? '' : 's'}`);
-      paint('rv-diet', rv.diet.low, rv.diet.high, rv.diet.events ? `${num(rv.diet.events)} trim${rv.diet.events === 1 ? '' : 's'}` : 'off or none yet');
-      paint('rv-esc', -rv.escalations.cost, -rv.escalations.cost, rv.escalations.sessions ? `${num(rv.escalations.sessions)} session${rv.escalations.sessions === 1 ? '' : 's'} switched up` : 'none');
-      $('rv-verdict').textContent = rv.verdict.text;
+    const left = mix.leftoverShim;
+    $('mix-leftover').hidden = !left;
+    if (left) {
+      $('mix-leftover-note').textContent = left.note;
+      $('mix-leftover-cmd').textContent = left.command;
     }
   }
 
-  // One switch: launcher and delegation together.
-  $('router-enabled').addEventListener('change', async (e) => {
-    const on = e.target.checked;
-    e.target.disabled = true;
-    $('router-install-line').textContent = on ? 'Switching on…' : 'Switching off…';
-    let r = null;
-    try {
-      r = await window.lightsApi.routerSwitch(on);
-      config = await window.lightsApi.getConfig();
-    } finally {
-      e.target.disabled = false;
-    }
-    routerNote = r && r.error ? `Launcher on; delegation not: ${r.error}`
-      : r && r.conflicts && r.conflicts.length ? `You already have your own ${r.conflicts.map((f) => f.split('/').pop()).join(', ')} in ~/.claude/agents — delegation needs those names`
-      : null;
-    renderRouter();
-  });
-  $('router-launcher').addEventListener('change', async (e) => {
-    e.target.disabled = true;
-    $('router-launcher-line').textContent = e.target.checked ? 'Switching on…' : 'Switching off…';
-    try {
-      await window.lightsApi.routerSetEnabled(e.target.checked);
-      config = await window.lightsApi.getConfig();
-    } finally {
-      e.target.disabled = false;
-    }
-    renderRouting();
-  });
-  // The Saved panel, the sessions and the status line follow the hooks, at
-  // most every 3 s.
-  let routerRefreshAt = 0;
-  let routerRefreshTimer = null;
-  function refreshRouterLive() {
-    if (routerRefreshTimer) return;
-    routerRefreshTimer = setTimeout(() => { routerRefreshTimer = null; routerRefreshAt = Date.now(); renderRouter(); }, Math.max(0, routerRefreshAt + 3000 - Date.now()));
+  // Follows the hooks, at most every 3 s.
+  let mixRefreshAt = 0;
+  let mixRefreshTimer = null;
+  function refreshMixLive() {
+    if (mixRefreshTimer) return;
+    mixRefreshTimer = setTimeout(() => { mixRefreshTimer = null; mixRefreshAt = Date.now(); renderMix(); }, Math.max(0, mixRefreshAt + 3000 - Date.now()));
   }
-  $('router-show-shim').addEventListener('click', () => window.lightsApi.routerRevealShim());
-  $('router-policy').addEventListener('click', async (e) => {
-    const b = e.target.closest('button[data-policy]');
-    if (!b) return;
-    config = await window.lightsApi.saveConfig({ routerPolicy: b.dataset.policy });
-    renderRouting();
-  });
-  async function setProjectPick(name, pick) {
-    const next = { ...(config.routerProjects || {}) };
-    if (pick === 'auto') delete next[name]; else next[name] = pick;
-    config = await window.lightsApi.saveConfig({ routerProjects: next });
-    renderRouting();
-  }
-  $('router-picks').addEventListener('change', (e) => { const s = e.target.closest('select[data-project]'); if (s) setProjectPick(s.dataset.project, s.value); });
-  $('router-sessions').addEventListener('click', async (e) => {
-    const b = e.target.closest('button[data-opus]');
-    if (b) { setProjectPick(b.dataset.opus, 'opus'); return; }
-    const sw = e.target.closest('button[data-switch]');
-    if (!sw) return;
-    const r = await window.lightsApi.routerSwitchSession(sw.dataset.switch);
-    switchNotes[sw.dataset.switch] = r && r.ok ? `Copied ${r.command}${r.app ? ` · ${r.app} is in front` : ''} — Pasted? Press Enter.` : (r && r.feedback) || 'nothing to switch';
-    if (routerOv) paintRouting(routerOv);
-  });
-
-  // ── Router: delegation (keeps big files out of Claude's context) ──────
-  let delegOv = null;
-  let delegNote = null;
-  const DELEG_MODE_DESC = {
-    narrow: 'A whole-file read of a big file comes back as its first lines, with a note pointing Claude at buddy-reader.',
-    deny: 'A whole-file read of a big file is refused with that note instead, so Claude has to delegate or read a range.',
-  };
-  const shortPath = (p) => String(p || '').split('/').filter(Boolean).slice(-2).join('/') || '—';
-  const num = (v) => Number(v || 0).toLocaleString('en-US');
-  function delegWhat(e) {
-    const kept = e.tokensAvoided ? `, ≈ ${compact(e.tokensAvoided)} tokens kept out` : '';
-    if (e.kind === 'read-narrowed') return `Read ${shortPath(e.path)} — ${num(e.linesTotal)} lines, showed ${num(e.linesShown)}${kept}`;
-    if (e.kind === 'bash-narrowed') return `Shell read of ${shortPath(e.path)} — ${num(e.linesTotal)} lines, showed ${num(e.linesShown)}${kept}`;
-    if (e.kind === 'read-denied') return `Blocked ${e.tool === 'Bash' ? 'a shell read' : 'a read'} of ${shortPath(e.path)} — ${num(e.linesTotal)} lines${kept}`;
-    if (e.kind === 'output-trimmed') return `${e.tool || 'Tool'} output trimmed — ${num(e.charsTotal)} chars, kept ${num(e.charsShown)}${kept}`;
-    if (e.kind === 'policy-injected') return 'Told a new session about buddy-reader and buddy-worker';
-    return e.kind;
-  }
-  function delegLine(st) {
-    const where = st.sandbox ? ` (dev run: sandbox HOME ${st.sandbox})` : '';
-    if (delegNote) return `${delegNote}${where}`;
-    if (st.installed) {
-      return st.hooks || st.sandbox
-        ? `On — takes effect on the next tool call in every open session${where}`
-        : `On, but Claude Buddy's status hooks aren't in ${st.settingsPath}, so no session runs it yet`;
-    }
-    if (st.agents.some((a) => a.installed)) return `Partly installed — switch off and on again${where}`;
-    return `Off — Claude reads files whole${where}`;
-  }
-
-  let delegDiet = null;
-  async function renderDelegation() {
-    const days = routerDays;
-    const ov = await window.lightsApi.delegationOverview();
-    if (ov && !ov.error) { delegOv = ov; paintDelegation(ov); }
-    const diet = await window.lightsApi.delegationDiet({ days });
-    if (!diet || days !== routerDays) return;
-    delegDiet = diet;
-    paintDiet(diet);
-  }
-
-  function paintDelegation(ov) {
-    const st = ov.status;
-    const d = config.routerDelegation || {};
-    $('deleg-enabled').checked = !!st.installed;
-    $('deleg-line').textContent = delegLine(st);
-    const mode = d.mode === 'deny' ? 'deny' : 'narrow';
-    Array.from($('deleg-mode').children).forEach((b) => { b.classList.toggle('on', b.dataset.mode === mode); b.setAttribute('aria-selected', b.dataset.mode === mode); });
-    $('deleg-mode-desc').textContent = DELEG_MODE_DESC[mode];
-    const preset = d.preset || 'custom';
-    Array.from($('deleg-preset').children).forEach((b) => { b.classList.toggle('on', b.dataset.preset === preset); b.setAttribute('aria-selected', b.dataset.preset === preset); });
-    for (const k of ['readLines', 'peekLines', 'outputChars']) if (document.activeElement !== $(`deleg-${k}`)) $(`deleg-${k}`).value = d[k];
-    if (document.activeElement !== $('deleg-allow')) $('deleg-allow').value = (d.allow || []).join(', ');
-    $('deleg-log-empty').hidden = ov.log.length > 0;
-    $('deleg-log').hidden = !ov.log.length;
-    $('deleg-log').querySelector('tbody').innerHTML = ov.log.map((e) => {
-      const t = new Date(e.at);
-      const when = t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
-      return `<tr title="${escape(e.path || '')}"><td class="name">${when}</td><td class="l what">${escape(delegWhat(e))}</td></tr>`;
-    }).join('');
-    if (delegDiet) paintDiet(delegDiet);
-  }
-
-  function paintDiet(diet) {
-    $('diet').hidden = !diet.events && !(delegOv && delegOv.status.installed);
-    if (!diet.events) {
-      $('diet-big').textContent = '—';
-      $('diet-line').textContent = `Nothing kept out in the last ${diet.days} days yet.`;
-    } else if (config.routerSubscriberView) {
-      // A first week of trims is often a sliver of the plan; "0%" would read as nothing.
-      $('diet-big').textContent = diet.actual && diet.high / diet.actual < 0.005 ? '<1%' : pctRange(diet.low, diet.high, diet.actual);
-      $('diet-line').textContent = `of your usage over the last ${diet.days} days · ${compact(diet.tokens)} tokens kept out by ${num(diet.events)} trims in ${num(diet.sessions)} session${diet.sessions === 1 ? '' : 's'} · ${moneyRange(diet.low, diet.high)} on the API`;
-    } else {
-      $('diet-big').textContent = `${compact(diet.tokens)} tokens`;
-      $('diet-line').textContent = `≈ ${moneyRange(diet.low, diet.high)} over the last ${diet.days} days (≈ ${pctRange(diet.low, diet.high, diet.actual)} of ${money(diet.actual)}) · ${num(diet.events)} trims in ${num(diet.sessions)} session${diet.sessions === 1 ? '' : 's'}`;
-    }
-  }
-
-  async function saveDelegation(patch) {
-    config = await window.lightsApi.saveConfig({ routerDelegation: { ...(config.routerDelegation || {}), ...patch } });
-    config = await window.lightsApi.getConfig();
-    if (delegOv) paintDelegation(delegOv);
-  }
-  $('deleg-enabled').addEventListener('change', async (e) => {
-    const on = e.target.checked;
-    e.target.disabled = true;
-    $('deleg-line').textContent = on ? 'Switching on…' : 'Switching off…';
-    try {
-      const r = await window.lightsApi.delegationSetEnabled(on);
-      delegNote = r.error ? `Not switched on: ${r.error}`
-        : r.conflicts && r.conflicts.length ? `You already have your own ${r.conflicts.map((f) => f.split('/').pop()).join(', ')} in ~/.claude/agents — rename it and switch on again`
-        : null;
-      config = await window.lightsApi.getConfig();
-    } finally {
-      e.target.disabled = false;
-    }
-    renderDelegation();
-  });
-  $('deleg-mode').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-mode]');
-    if (b) saveDelegation({ mode: b.dataset.mode });
-  });
-  // A preset writes every knob; editing a knob afterwards reads back as Custom
-  // (the preset is derived from the knobs when the config is saved).
-  $('deleg-preset').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-preset]');
-    const p = b && delegOv && delegOv.presets && delegOv.presets[b.dataset.preset];
-    if (p) saveDelegation({ ...p });
-  });
-  for (const k of ['readLines', 'peekLines', 'outputChars']) {
-    $(`deleg-${k}`).addEventListener('change', (e) => { const v = Number(e.target.value); if (v > 0 || (k === 'outputChars' && v === 0 && e.target.value !== '')) saveDelegation({ [k]: v }); });
-  }
-  $('deleg-allow').addEventListener('change', (e) => saveDelegation({ allow: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) }));
-
-  async function renderRouter() {
-    renderRouting();
-    renderDelegation();
-    const days = routerDays;
-    const sum = await window.lightsApi.getUsageSummary({ days });
-    if (days !== routerDays || !sum) return;
-    routerSum = sum;
-    paintRouter(sum);
-  }
-
-  function paintRouter(sum) {
-    const sub = !!config.routerSubscriberView;
-    const t = sum.total;
-    $('router-subscriber').checked = sub;
-    $('router-loading').hidden = true;
-    $('router-empty').hidden = t.turns > 0;
-    $('router-body').hidden = !t.turns;
-    if (!t.turns) return;
-    const s = t.savings.sonnet;
-    const h = t.savings.haiku;
-    if (sub) {
-      $('saved-big').textContent = pctRange(s.low, s.high, t.cost);
-      $('saved-line').textContent = `of your usage over the last ${sum.days} days kept if every turn had run on Sonnet`;
-      $('saved-haiku').textContent = `All on Haiku: ${pctRange(h.low, h.high, t.cost)} · what this would cost on the API: ${moneyRange(s.low, s.high)} of ${money(t.cost)}`;
-    } else {
-      $('saved-big').textContent = moneyRange(s.low, s.high);
-      $('saved-line').textContent = `if every turn had run on Sonnet · ≈ ${pctRange(s.low, s.high, t.cost)} of ${money(t.cost)} actual over the last ${sum.days} days`;
-      $('saved-haiku').textContent = `All on Haiku: ${moneyRange(h.low, h.high)} (≈ ${pctRange(h.low, h.high, t.cost)})`;
-    }
-    const u = sum.unknown;
-    $('saved-unknown').textContent = u.turns ? ` ${u.turns} turn${u.turns === 1 ? '' : 's'} on unpriced models (${u.models.slice(0, 3).join(', ')}) left out.` : '';
-    document.querySelectorAll('#router .h-actual').forEach((th) => { th.textContent = sub ? 'Share' : 'Actual'; });
-    document.querySelectorAll('#router .h-if').forEach((th) => { th.textContent = sub ? 'Kept if Sonnet' : 'If Sonnet'; });
-    const actual = (r) => (sub ? pctRange(r.cost, r.cost, t.cost) : money(r.cost));
-    const ifSonnet = (r) => (sub ? pctRange(r.savings.sonnet.low, r.savings.sonnet.high, r.cost) : money(r.ifAll.sonnet));
-    const fill = (id, rows, cells) => {
-      $(id).querySelector('tbody').innerHTML = rows.map((r) => `<tr>${cells(r).map((c, i) => `<td${i ? '' : ' class="name"'}>${c}</td>`).join('')}</tr>`).join('');
-    };
-    fill('router-models', sum.byModel, (r) => [escape(MODEL_NAMES[r.name] || r.name), r.turns.toLocaleString('en-US'), compact(r.input), compact(r.output), compact(r.cacheRead), compact(r.cacheWrite), actual(r), ifSonnet(r)]);
-    fill('router-projects', sum.byProject.slice(0, 8), (r) => [`<span title="${escape(r.name)}">${escape(r.name)}</span>`, r.turns.toLocaleString('en-US'), compact(r.input + r.output + r.cacheRead + r.cacheWrite), actual(r), ifSonnet(r)]);
-  }
-
-  function paintRouteHint(sum) {
-    const hint = $('route-hint');
-    const t = sum && sum.total;
-    hint.hidden = !t || !t.turns;
-    if (hint.hidden) return;
-    const s = t.savings.sonnet;
-    hint.innerHTML = config.routerSubscriberView
-      ? `Routing could keep <b>${pctRange(s.low, s.high, t.cost)}</b> of your usage (last ${sum.days} days) →`
-      : `Routing could save <b>${moneyRange(s.low, s.high)}</b> over the last ${sum.days} days →`;
-  }
-
-  $('route-hint').addEventListener('click', () => setView('router'));
-
-  // Stats → Saved today: routing since switch-on plus the context diet.
-  function paintSaved(s) {
-    if (!s) return;
-    const v = $('today-saved');
-    const d = $('today-saved-d');
-    if (!s.on) {
-      v.textContent = '—';
-      d.innerHTML = 'Routing is off — <button type="button" class="linkish" data-go="router">turn it on in Router</button>';
-      return;
-    }
-    if (s.measuring) {
-      v.textContent = 'measuring…';
-      d.textContent = 'the first numbers land after a few turns';
-      return;
-    }
-    const mid = (w) => (w.low + w.high) / 2;
-    if (s.subscriber) {
-      // Share of what the window would have used without routing.
-      const share = (w) => pctRange(w.low, w.high, w.actual + Math.max(0, w.high));
-      v.textContent = share(s.today);
-      d.textContent = `of today's usage kept · 7 days ${share(s.week)}`;
-    } else {
-      v.textContent = signedMoney(mid(s.today));
-      d.textContent = `(${signedRange(s.today.low, s.today.high)}) · 7 days ${signedMoney(mid(s.week))}`;
-    }
-  }
-  $('today-saved-d').addEventListener('click', (e) => { if (e.target.closest('[data-go="router"]')) setView('router'); });
-  $('router-range').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-days]');
-    if (!b) return;
-    routerDays = Number(b.dataset.days);
-    Array.from($('router-range').children).forEach((x) => x.classList.toggle('on', x === b));
-    renderRouter();
-  });
-  $('router-subscriber').addEventListener('change', async (e) => {
-    config = await window.lightsApi.saveConfig({ routerSubscriberView: e.target.checked });
-    if (routerSum) paintRouter(routerSum);
-    if (routerOv) paintRouting(routerOv);
-    if (delegDiet) paintDiet(delegDiet);
-  });
 
   // ── Accessibility layer ────────────────────────────────────────────────
   // Roles, names and pressed/selected state are derived from the visual state
@@ -1914,9 +1560,9 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
-    if (q.get('view') === 'stats' || q.get('view') === 'router') setView(q.get('view'));
+    if (q.get('view') === 'stats' || q.get('view') === 'mix') setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
-    if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), router: $('router') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'router' ? 3000 : 400);
+    if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), mix: $('mix') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'mix' ? 3000 : 400);
     setDirty(false);
     await loadCameos();
     renderList(); renderEditor(); renderStage();

@@ -49,10 +49,10 @@
   #titlebar .tools { -webkit-app-region: no-drag; display: flex; gap: 6px; }
   #titlebar .view-seg { -webkit-app-region: no-drag; margin-left: 6px; }
   #main[data-view="stats"] #rules, #main[data-view="stats"] #right,
-  #main[data-view="router"] #rules, #main[data-view="router"] #right { display: none; }
+  #main[data-view="mix"] #rules, #main[data-view="mix"] #right { display: none; }
   #main:not([data-view="stats"]) #stats { display: none; }
-  #main:not([data-view="router"]) #router { display: none; }
-  #main[data-view="stats"], #main[data-view="router"] { grid-template-columns: 1fr; }
+  #main:not([data-view="mix"]) #mix { display: none; }
+  #main[data-view="stats"], #main[data-view="mix"] { grid-template-columns: 1fr; }
 
   #main {
     display: grid;
@@ -526,7 +526,7 @@
 
   /* Today strip: three hero numbers with a delta against the daily average */
   .today {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
     background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
   }
   .today .cell { background: var(--panel); padding: 10px 12px 11px; }
@@ -580,61 +580,21 @@
   .legend .sw.med { background: var(--accent); }
   .legend .sw.worst { background: var(--amber); }
 
-  /* ── Router view ─────────────────────────────────────────────────────── */
-  #router { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-  #router > * { flex: none; }
-  #router-body { display: flex; flex-direction: column; gap: 14px; }
-  #router-body[hidden] { display: none; }
-  .router-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-  .router-head .stats-sub { max-width: 60ch; margin-top: 2px; line-height: 1.45; }
-  .router-head .switch { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding-top: 2px; }
-  .router-head .switch small { color: var(--faint); font-size: 11px; }
-  .saved { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-  .saved .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
-  .saved .v { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.05; color: #4fbe5c; }
-  .saved .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 4px; }
-  .saved .d.sub { color: var(--faint); }
-  .saved .note { font-size: 11px; color: var(--faint); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-  table.days td.name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .route-hint { display: block; margin-top: 6px; padding: 0; background: none; border: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: left; transition: color var(--t); }
-  .route-hint b { color: #4fbe5c; font-weight: 600; }
-  .route-hint:hover { color: var(--text); }
-  #router-install-line, #router-launcher-line, #deleg-line { max-width: 34ch; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
-  .linkish { background: none; border: none; padding: 0; color: var(--muted); font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
-  .linkish:hover { color: var(--text); }
-  .router-policy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .saved .since { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-  .saved .v.small { font-size: 24px; }
-  .saved .v.neg { color: var(--amber); }
-  .saved .review { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .saved .review .k { margin-bottom: 2px; }
-  .saved .review .row { display: flex; justify-content: space-between; gap: 12px; }
-  .saved .review .row b { font-weight: 500; color: var(--text); white-space: nowrap; }
-  .saved .review .row b.neg { color: var(--amber); }
-  .saved .review .verdict { margin-top: 4px; color: var(--text); }
-  table.days .learned { display: block; font-size: 10px; color: var(--faint); white-space: nowrap; }
-  table.days .learned.quality { color: var(--amber); }
-  table.days .learned.cheap { color: #4fbe5c; }
-  #router-live { display: flex; flex-direction: column; gap: 14px; }
-  .router-head .switch .toggle.sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .rsess { flex-wrap: wrap; }
-  .rsess .advice { flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .rsess .advice .pasted { color: #4fbe5c; }
-  table.days th.l, table.days td.l { text-align: left; padding-left: 12px; }
-  table.days td.why { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  table.days .select { height: 22px; font-size: 12px; }
-  .rsess { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-  .rsess b { color: var(--text); font-weight: 500; }
-  .rsess .btn { height: 22px; font-size: 11px; flex: none; }
-  #delegation { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
-  .deleg-knobs { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--muted); }
-  .deleg-knobs label { display: inline-flex; align-items: center; gap: 6px; }
-  .deleg-knobs input { height: 24px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
-  .deleg-knobs input[type="number"] { width: 72px; }
-  .deleg-knobs input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
-  .deleg-knobs .allow { flex: 1 1 100%; }
-  .deleg-knobs .allow input { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
-  table.days td.what { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* ── Model mix view (read-only) ──────────────────────────────────────── */
+  #mix { padding: 14px 18px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #mix > * { flex: none; }
+  #mix .stats-sub { max-width: 64ch; line-height: 1.45; }
+  .mix-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .mix-card[hidden] { display: none; }
+  .mix-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .mix-card .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .mix-card .v { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 3px; line-height: 1.05; }
+  .mix-card .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 3px 0 8px; }
+  .mix-rec { font-size: 12px; color: var(--text); line-height: 1.45; padding-top: 10px; border-top: 1px solid var(--line); }
+  .mix-card .note { font-size: 11px; color: var(--faint); }
+  .mix-leftover { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .mix-leftover[hidden] { display: none; }
+  .mix-leftover code { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: 11px ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
   /* Presets popover */
   #presets {
@@ -809,7 +769,7 @@
     <div class="seg view-seg" role="tablist" aria-label="View">
       <button id="view-rules" class="on" role="tab" aria-controls="rules right">Rules</button>
       <button id="view-stats" role="tab" aria-controls="stats">Stats</button>
-      <button id="view-router" role="tab" aria-controls="router">Router</button>
+      <button id="view-mix" role="tab" aria-controls="mix">Model mix</button>
     </div>
     <span class="spacer"></span>
     <div class="tools">
@@ -1053,7 +1013,6 @@
         <div class="cell"><div class="k">Working today</div><div class="v" id="today-working">—</div><div class="d" id="today-working-d"></div></div>
         <div class="cell"><div class="k">Waiting on you</div><div class="v" id="today-waiting">—</div><div class="d" id="today-waiting-d"></div></div>
         <div class="cell"><div class="k">Cost today</div><div class="v" id="today-cost">—</div><div class="d" id="today-cost-d"></div></div>
-        <div class="cell"><div class="k">Saved today</div><div class="v" id="today-saved">—</div><div class="d" id="today-saved-d"></div></div>
       </div>
 
       <div class="stats-bar">
@@ -1121,7 +1080,6 @@
         <div>
           <div class="stats-title small">Spend — from your Claude Code transcripts</div>
           <div class="stats-sub" id="cost-totals">Loading…</div>
-          <button type="button" class="route-hint" id="route-hint" hidden></button>
           <ol id="cost-projects" class="projects" style="margin-top:8px"></ol>
         </div>
         <div>
@@ -1141,134 +1099,32 @@
       </div>
     </section>
 
-    <section id="router" role="tabpanel" aria-labelledby="view-router">
-      <div class="router-head">
-        <div>
-          <div class="stats-title">Router</div>
-          <div class="stats-sub">Picks the model once, as a session starts: Sonnet or Haiku where your history says that's enough, Opus where it isn't. Never mid-session, since each model keeps its own prompt cache. Pass <code>--model</code> yourself and it steps aside. Sessions already open start delegating on their next tool call, and get a nudge when a cheaper model would do — you decide.</div>
-        </div>
-        <div class="switch">
-          <label class="toggle"><input type="checkbox" id="router-enabled" /> Route my sessions</label>
-          <small id="router-install-line">Off</small>
-          <label class="toggle sub" title="The launcher: a claude shim on your PATH that picks --model for each new session"><input type="checkbox" id="router-launcher" /> New sessions pick their model</label>
-          <small id="router-launcher-line"></small>
-          <button class="linkish" id="router-show-shim" hidden>Show me the shim</button>
-        </div>
+    <section id="mix" role="tabpanel" aria-labelledby="view-mix">
+      <div>
+        <div class="stats-title">Model mix</div>
+        <div class="stats-sub">Which models your Claude Code turns ran on and what they cost, read from your transcripts at API prices. Read-only — Buddy never changes your model.</div>
       </div>
-
-      <div class="router-policy">
-        <div class="seg" id="router-policy" role="tablist" aria-label="Policy">
-          <button data-policy="frugal" role="tab">Frugal</button>
-          <button data-policy="balanced" role="tab">Balanced</button>
-          <button data-policy="quality" role="tab">Quality-first</button>
-        </div>
-        <span class="stats-sub" id="router-policy-desc"></span>
-      </div>
-
-      <div class="stats-bar">
-        <div class="seg" id="router-range" role="tablist" aria-label="Range">
-          <button data-days="7" class="on" role="tab">7d</button>
-          <button data-days="30" role="tab">30d</button>
-        </div>
-        <span class="spacer"></span>
-        <label class="toggle" title="Show savings as a share of your plan's usage instead of API dollars"><input type="checkbox" id="router-subscriber" /> Subscriber view</label>
-      </div>
-
-      <div class="stats-sub" id="router-loading">Reading transcripts…</div>
-      <div class="stats-sub" id="router-empty" hidden>No Claude Code transcripts in this range yet — the estimate appears once you've run a few sessions.</div>
-
-      <div id="router-body" hidden>
-        <div class="saved">
-          <div class="k">What routing would have saved</div>
-          <div class="v" id="saved-big">—</div>
-          <div class="d" id="saved-line"></div>
-          <div class="d sub" id="saved-haiku"></div>
-          <div class="note">Estimate — same token counts, cheaper prices; excludes quality effects. The range allows up to 35% more tokens and turns on the cheaper model.<span id="saved-unknown"></span></div>
-          <div class="since" id="saved-since" hidden>
-            <div class="k" id="since-k">Since you switched routing on</div>
-            <div class="v small" id="since-big">—</div>
-            <div class="d" id="since-line"></div>
-            <div class="review" id="since-review" hidden>
-              <div class="k">Since you turned it on — measured, not estimated</div>
-              <div class="row"><span>Routing — cheaper models picked</span><b id="rv-routing">—</b></div>
-              <div class="row"><span>Context diet — big files kept out</span><b id="rv-diet">—</b></div>
-              <div class="row" title="Sessions that switched up to a pricier model: from the switch on, what they cost beyond your old model mix, including rebuilding the prompt cache"><span>Escalations — what learning cost</span><b id="rv-esc">—</b></div>
-              <div class="verdict" id="rv-verdict"></div>
-            </div>
-          </div>
-          <div class="since" id="diet" hidden>
-            <div class="k">Context diet — kept out of Claude's context</div>
-            <div class="v small" id="diet-big">—</div>
-            <div class="d" id="diet-line"></div>
-            <div class="note">Estimate — low: those tokens written to the prompt cache once at the session's model price; high: also re-read on every later turn until the next compaction (that session's median turns left).</div>
-          </div>
-        </div>
-        <div>
-          <div class="stats-title small">By model used</div>
-          <table class="days" id="router-models"><thead><tr><th>Model</th><th>Turns</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th class="h-actual">Actual</th><th class="h-if">If Sonnet</th></tr></thead><tbody></tbody></table>
-        </div>
-        <div>
-          <div class="stats-title small">By project — top 8</div>
-          <table class="days" id="router-projects"><thead><tr><th>Project</th><th>Turns</th><th>Tokens</th><th class="h-actual">Actual</th><th class="h-if">If Sonnet</th></tr></thead><tbody></tbody></table>
-        </div>
-      </div>
-
-      <div id="router-live">
-        <div>
-          <div class="stats-title small">Projects — last 7 days</div>
-          <table class="days" id="router-picks"><thead><tr><th>Project</th><th>Sessions</th><th>Median turns</th><th>Escalations</th><th>Pick</th></tr></thead><tbody></tbody></table>
-          <div class="stats-sub" id="router-picks-empty" hidden>No Claude Code sessions in the last 7 days.</div>
-        </div>
-        <div>
-          <div class="stats-title small">Sessions now</div>
-          <div id="router-sessions"></div>
-        </div>
-        <div>
-          <div class="stats-title small">Decisions — last 20</div>
-          <table class="days" id="router-decisions"><thead><tr><th>When</th><th class="l">Project</th><th class="l">Model</th><th class="l">Why</th></tr></thead><tbody></tbody></table>
-          <div class="stats-sub" id="router-decisions-empty" hidden>No decisions yet — they appear as you start <code>claude</code> in a new terminal.</div>
-        </div>
-      </div>
-
-      <div id="delegation">
-        <div class="router-head">
+      <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
+      <div class="stats-sub" id="mix-empty" hidden>No Claude Code turns in the last 7 days yet.</div>
+      <div class="mix-card" id="mix-body" hidden>
+        <div class="mix-cols">
           <div>
-            <div class="stats-title">Delegation</div>
-            <div class="stats-sub">Keeps big files out of the expensive context. A whole-file read of a long file comes back as its first lines plus a pointer to <b>buddy-reader</b> (Haiku), which reads and summarises for Claude; oversized tool output is cut to its head. <b>buddy-worker</b> (Sonnet) takes mechanical writes. Hooks and subagents only — nothing leaves your machine.</div>
+            <div class="k">Today</div>
+            <div class="v" id="mix-today-cost">—</div>
+            <div class="d" id="mix-today-turns"></div>
+            <ol class="projects" id="mix-today"></ol>
           </div>
-          <div class="switch">
-            <label class="toggle"><input type="checkbox" id="deleg-enabled" /> Keep big files out of Claude's context</label>
-            <small id="deleg-line">Off</small>
+          <div>
+            <div class="k">Last 7 days</div>
+            <div class="v" id="mix-week-cost">—</div>
+            <div class="d" id="mix-week-turns"></div>
+            <ol class="projects" id="mix-week"></ol>
           </div>
         </div>
-        <div class="router-policy">
-          <div class="seg" id="deleg-preset" role="tablist" aria-label="Preset">
-            <button data-preset="light" role="tab" title="Big files over 800 lines, tool output never trimmed, buddy-reader only">Light</button>
-            <button data-preset="balanced" role="tab" title="Over 350 lines narrowed to 120, output over 24k chars trimmed">Balanced</button>
-            <button data-preset="aggressive" role="tab" title="Reads over 200 lines refused — always delegated; output over 12k trimmed">Aggressive</button>
-            <button data-preset="custom" role="tab" title="Set by the knobs below">Custom</button>
-          </div>
-          <span class="stats-sub">Takes effect on the next tool call in every open session.</span>
-        </div>
-        <div class="router-policy">
-          <div class="seg" id="deleg-mode" role="tablist" aria-label="Mode">
-            <button data-mode="narrow" role="tab">Narrow</button>
-            <button data-mode="deny" role="tab">Deny</button>
-          </div>
-          <span class="stats-sub" id="deleg-mode-desc"></span>
-        </div>
-        <div class="deleg-knobs">
-          <label>A file is big over <input type="number" id="deleg-readLines" min="20" step="10" /> lines</label>
-          <label>show its first <input type="number" id="deleg-peekLines" min="10" step="10" /> lines</label>
-          <label>trim tool output over <input type="number" id="deleg-outputChars" min="0" step="1000" title="0 = never trim" /> chars</label>
-          <label class="allow">Always read fully <input type="text" id="deleg-allow" placeholder=".md, package.json, docs/**/*.txt" spellcheck="false" /></label>
-        </div>
-        <div>
-          <div class="stats-title small">Delegation log — last 20</div>
-          <table class="days" id="deleg-log"><thead><tr><th>When</th><th class="l">What</th></tr></thead><tbody></tbody></table>
-          <div class="stats-sub" id="deleg-log-empty" hidden>Nothing yet — events appear as Claude reads big files with delegation on.</div>
-        </div>
+        <div class="mix-rec" id="mix-rec"></div>
+        <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
+      <div class="mix-leftover" id="mix-leftover" hidden><span id="mix-leftover-note"></span><code id="mix-leftover-cmd"></code></div>
     </section>
   </div>
 
@@ -1312,7 +1168,7 @@
   </div>
   <div class="menu-head">Whole setup</div>
   <div class="menu-share">
-    <button type="button" id="setup-export"><span>Export setup…</span><small>Rules, presets, router, agents and your faces in one file</small></button>
+    <button type="button" id="setup-export"><span>Export setup…</span><small>Rules, presets, agents and your faces in one file</small></button>
     <button type="button" id="setup-import"><span>Import setup…</span><small>Replace yours or merge in its presets and faces</small></button>
   </div>
   <div id="setup-choice" class="menu-choice" hidden>

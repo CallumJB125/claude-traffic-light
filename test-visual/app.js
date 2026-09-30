@@ -44,7 +44,6 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
       ...process.env,
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
-      CLAUDE_TRAFFIC_LIGHT_ROUTER_HOME: path.join(home, 'router-home'),
     },
   });
   const cleanup = async () => {

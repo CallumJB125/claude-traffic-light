@@ -1,16 +1,10 @@
-// A whole customisation as one portable file: rules, presets, router
-// settings, the agent display and the user's own cameo photos (base64 PNGs,
+// A whole customisation as one portable file: rules, presets, the agent
+// display and the user's own cameo photos (base64 PNGs,
 // never the shipped built-ins). Pure: main.js does the dialogs and hands the
 // plan to saveConfig and Cameos.importPhoto/removePhoto, which keep their own
 // invariants.
-const fs = require('fs');
-const path = require('path');
 const Rules = require('./rules.js');
 const Cameos = require('./cameos.js');
-const Delegate = require('./hooks/delegate.js');
-// router.js is excluded from app.asar because it is also an extraResource
-// (the shim runs it under plain node); fall back to the copy beside the asar.
-const Router = require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
 
 const KIND = 'claude-buddy-setup';
 // Bump with an entry in UPGRADES when the bundle's shape changes. Rules carry
@@ -21,12 +15,20 @@ const MAX_RULES = 300;
 const MAX_PRESETS = 100;
 const MAX_CAMEOS = 64;
 const MAX_PNG_BYTES = 1024 * 1024;
-const MAX_PROJECTS = 500;
 const CHIP_SIZES = ['small', 'normal', 'large'];
-const PROJECT_MODELS = ['opus', 'sonnet', 'haiku'];
+// Config keys of features that are gone (the model router and delegation).
+// A config or setup file that still carries them loads without them.
+const REMOVED_KEYS = ['routerEnabled', 'routerEnabledAt', 'routerSwitchedOnAt', 'routerPolicy', 'routerProjects', 'routerDelegation', 'routerSubscriberView'];
 const ITEM_ID = /^[\w-]{1,40}$/;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function dropRemovedKeys(config) {
+  if (!isObj(config)) return {};
+  const out = { ...config };
+  for (const k of REMOVED_KEYS) delete out[k];
+  return out;
+}
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined);
 
 // normalizeRule trusts its input's types (it .trim()s when.tool), so strings
@@ -73,16 +75,6 @@ function cleanConfig(c) {
   // A file whose rules all fail to parse must not wipe the user's.
   if (rules.length) out.rules = rules;
   if (Array.isArray(c.presets)) out.presets = cleanPresets(c.presets);
-  if (Router.POLICIES.includes(c.routerPolicy)) out.routerPolicy = c.routerPolicy;
-  if (isObj(c.routerProjects)) {
-    out.routerProjects = {};
-    for (const [k, v] of Object.entries(c.routerProjects).slice(0, MAX_PROJECTS)) if (k.length <= 1024 && PROJECT_MODELS.includes(v)) out.routerProjects[k] = v;
-  }
-  if (isObj(c.routerDelegation)) {
-    const d = c.routerDelegation;
-    const allow = Array.isArray(d.allow) ? d.allow.filter((s) => typeof s === 'string' && s.length <= 200) : [];
-    out.routerDelegation = Delegate.normalize({ ...Delegate.DEFAULTS, ...d, allow });
-  }
   for (const k of ['showAgents', 'agentRoster']) if (typeof c[k] === 'boolean') out[k] = c[k];
   if (isObj(c.agentKinds)) {
     out.agentKinds = {};
@@ -167,13 +159,9 @@ function summarize(parsed) {
 // → { partial (for saveConfig), remove (cameo ids), add ([{ id, entry, png }]) }.
 // replace: the file's settings, rules, presets and faces become the user's.
 // merge: only its presets and faces are added; rules and settings stay.
-// Either way a file never switches delegation on or off: that edits Claude
-// Code's hooks, which the user does from the Router tab.
 function planImport(parsed, { config, cameoIndex = {}, readPng = () => null }, mode) {
-  const enabled = !!config.routerDelegation?.enabled;
   if (mode === 'replace') {
     const partial = { ...parsed.config };
-    if (partial.routerDelegation) partial.routerDelegation = { ...partial.routerDelegation, enabled };
     const incoming = new Set(parsed.cameos.map((c) => c.id));
     const remove = parsed.hasCameos ? Object.keys(cameoIndex).filter((id) => !incoming.has(id)) : [];
     return { partial, remove, add: parsed.cameos };
@@ -222,6 +210,6 @@ function planImport(parsed, { config, cameoIndex = {}, readPng = () => null }, m
 }
 
 module.exports = {
-  KIND, SETUP_VERSION, MAX_BYTES, MAX_RULES, MAX_PRESETS, MAX_CAMEOS, MAX_PNG_BYTES,
+  KIND, SETUP_VERSION, REMOVED_KEYS, dropRemovedKeys, MAX_BYTES, MAX_RULES, MAX_PRESETS, MAX_CAMEOS, MAX_PNG_BYTES,
   cleanRules, cleanPresets, cleanConfig, cleanCameos, exportSetup, readSetup, summarize, planImport,
 };

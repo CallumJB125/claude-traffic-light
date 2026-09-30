@@ -17,7 +17,7 @@ const configPath = (home = os.homedir()) => path.join(home, '.claude.json');
 // How Claude Code should launch the server. A packaged app has no plain-node
 // copy of the SDK: mcp-server.js and its node_modules live inside app.asar,
 // which only Electron's own node can read, so it runs the app binary as node
-// (the same trick the router shim falls back on).
+// (the same trick the hook commands use).
 function launch({ packaged, execPath, appPath, dir, root }) {
   const env = root ? { CLAUDE_TRAFFIC_LIGHT_HOME: root } : {};
   return packaged

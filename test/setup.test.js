@@ -5,7 +5,6 @@ const os = require('os');
 const path = require('path');
 const Rules = require('../rules');
 const Cameos = require('../cameos');
-const Delegate = require('../hooks/delegate');
 const S = require('../setup');
 
 const BUILT = path.join(__dirname, '..', 'assets', 'cameos', 'built');
@@ -27,9 +26,10 @@ function sampleConfig(over = {}) {
     rules,
     rulesVersion: Rules.RULES_VERSION,
     presets: [{ id: 'p1', name: 'Mine', rules: rules.slice(0, 3) }],
+    // Router and delegation keys from before they were removed.
     routerPolicy: 'frugal',
     routerProjects: { '/code/app': 'opus', '/code/site': 'haiku' },
-    routerDelegation: Delegate.normalize({ ...Delegate.DEFAULTS, mode: 'deny', readLines: 500, allow: ['README.md'] }),
+    routerDelegation: { enabled: true, mode: 'deny', readLines: 500, allow: ['README.md'] },
     showAgents: false,
     agentRoster: true,
     agentKinds: { subagent: true, teammate: false, ralph: true, ultrawork: false },
@@ -59,9 +59,8 @@ test('export: a complete, versioned bundle of the setup keys and only the user\'
   assert.equal(b.v, S.SETUP_VERSION);
   assert.equal(b.rulesVersion, Rules.RULES_VERSION);
   assert.equal(b.exportedAt, '1970-01-01T00:00:00.000Z');
-  assert.deepEqual(Object.keys(b.config).sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'presets', 'routerDelegation', 'routerPolicy', 'routerProjects', 'rules', 'showAgents']);
+  assert.deepEqual(Object.keys(b.config).sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'presets', 'rules', 'showAgents'], 'removed router/delegation keys are not exported');
   assert.deepEqual(b.config.rules, sampleConfig().rules);
-  assert.deepEqual(b.config.routerProjects, { '/code/app': 'opus', '/code/site': 'haiku' });
   assert.deepEqual(b.cameos.map((c) => c.id).sort(), ['dad', 'neo'], 'shipped built-ins are not exported, a user replacement is');
   const dad = b.cameos.find((c) => c.id === 'dad');
   assert.deepEqual(Buffer.from(dad.png, 'base64'), photo('neo'));
@@ -73,19 +72,25 @@ test('export: a complete, versioned bundle of the setup keys and only the user\'
 test('round trip: export then replace-import into a fresh install reproduces the same state', () => {
   const src = cameoDir([['dad', 'neo', 'Dad', 5], ['mum', 'saylor', 'Mum', 7], ['powell', 'baker', 'Jay', 9]]);
   const first = exportFrom(sampleConfig(), src);
-  const fresh = { dir: tmp(), config: { rules: Rules.defaultRules(), presets: [], routerDelegation: { ...Delegate.DEFAULTS } } };
+  const fresh = { dir: tmp(), config: { rules: Rules.defaultRules(), presets: [] } };
   imp(first, fresh, 'replace');
   assert.deepEqual(exportFrom(fresh.config, fresh.dir), first);
   assert.deepEqual(Cameos.loadIndex(fresh.dir), Cameos.loadIndex(src));
   for (const id of ['dad', 'mum', 'powell']) assert.deepEqual(fs.readFileSync(path.join(fresh.dir, `${id}.png`)), fs.readFileSync(path.join(src, `${id}.png`)));
 });
 
-test('import never switches delegation on or off, but takes its tuning', () => {
-  const b = exportFrom(sampleConfig({ routerDelegation: Delegate.normalize({ ...Delegate.DEFAULTS, enabled: true, mode: 'deny' }) }), tmp());
-  const off = imp(b, { dir: tmp(), config: { routerDelegation: { ...Delegate.DEFAULTS } } }, 'replace');
-  assert.deepEqual([off.config.routerDelegation.enabled, off.config.routerDelegation.mode], [false, 'deny']);
-  const on = imp(exportFrom(sampleConfig(), tmp()), { dir: tmp(), config: { routerDelegation: { ...Delegate.DEFAULTS, enabled: true } } }, 'replace');
-  assert.equal(on.config.routerDelegation.enabled, true);
+test('config migration: an old config with router and delegation keys loads without them, and nothing else changes', () => {
+  const old = { ...sampleConfig(), routerEnabled: true, routerEnabledAt: '2026-09-01T00:00:00Z', routerSwitchedOnAt: 'x', routerSubscriberView: false, routerDelegation: 'garbage', routerProjects: null };
+  const cleaned = S.dropRemovedKeys(old);
+  for (const k of S.REMOVED_KEYS) assert.ok(!(k in cleaned), k);
+  assert.deepEqual(Object.keys(cleaned).sort(), Object.keys(old).filter((k) => !k.startsWith('router')).sort());
+  assert.equal(cleaned.roam, false);
+  assert.deepEqual(cleaned.rules, old.rules);
+  assert.equal(old.routerPolicy, 'frugal', 'the input is not mutated');
+  for (const bad of [null, undefined, 'x', 5, []]) assert.deepEqual(S.dropRemovedKeys(bad), {});
+  // An old setup file carrying them imports the rest.
+  const b = { kind: S.KIND, v: 1, rulesVersion: Rules.RULES_VERSION, config: { agentChipSize: 'small', routerPolicy: 'frugal', routerDelegation: { enabled: true } } };
+  assert.deepEqual(S.readSetup(JSON.stringify(b)).config, { agentChipSize: 'small' });
 });
 
 test('import rejects what is not a setup', () => {
@@ -129,10 +134,7 @@ test('import sanitises config: bad values dropped, unknown keys ignored, sizes c
   assert.equal(new Set(p.config.rules.map((r) => r.id)).size, p.config.rules.length);
   assert.deepEqual(p.config.presets.map((x) => x.name), ['ok', 'x'.repeat(30)]);
   assert.notEqual(p.config.presets[0].id, p.config.presets[1].id);
-  assert.equal(p.config.routerPolicy, undefined);
-  assert.deepEqual(p.config.routerProjects, { '/a': 'opus' });
-  assert.deepEqual(p.config.routerDelegation.allow, ['ok']);
-  assert.equal(p.config.routerDelegation.readLines, Delegate.DEFAULTS.readLines);
+  for (const k of ['routerPolicy', 'routerProjects', 'routerDelegation']) assert.ok(!(k in p.config), k);
   assert.equal(p.config.showAgents, undefined);
   assert.equal(p.config.agentRoster, false);
   assert.deepEqual(p.config.agentKinds, { subagent: false });
@@ -180,15 +182,15 @@ test('import sanitises faces through cameos.js rules: ids, entries, PNG shape, s
 });
 
 test('replace: the file\'s rules, presets, settings and faces become the user\'s', () => {
-  const theirs = exportFrom(sampleConfig({ routerPolicy: 'quality' }), cameoDir([['mum', 'saylor', 'Mum', 1]]));
-  const state = { dir: cameoDir([['dad', 'neo', 'Dad', 1], ['neo', 'powell', 'My Neo', 2]]), config: { rules: [{ id: 'mine' }], presets: [{ id: 'q', name: 'Q', rules: [] }], routerPolicy: 'frugal', roam: true } };
+  const theirs = exportFrom(sampleConfig({ agentChipSize: 'small' }), cameoDir([['mum', 'saylor', 'Mum', 1]]));
+  const state = { dir: cameoDir([['dad', 'neo', 'Dad', 1], ['neo', 'powell', 'My Neo', 2]]), config: { rules: [{ id: 'mine' }], presets: [{ id: 'q', name: 'Q', rules: [] }], agentChipSize: 'large', roam: true } };
   const plan = S.planImport(S.readSetup(JSON.stringify(theirs)), stateOf(state), 'replace');
   assert.deepEqual(plan.remove.sort(), ['dad', 'neo']);
   apply(plan, state);
   assert.deepEqual(Object.keys(Cameos.loadIndex(state.dir)), ['mum']);
   assert.deepEqual(state.config.rules, theirs.config.rules);
   assert.deepEqual(state.config.presets, theirs.config.presets);
-  assert.equal(state.config.routerPolicy, 'quality');
+  assert.equal(state.config.agentChipSize, 'small');
   assert.equal(state.config.roam, true, 'settings outside a setup are untouched');
 });
 
@@ -203,12 +205,12 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
   const shared = [Rules.normalizeRule({ id: 's', then: { lamp: 'green' } })];
   const state = {
     dir: cameoDir([['dad', 'neo', 'My dad', 1], ['same', 'baker', 'Same', 2], ['neo', 'powell', 'My Neo', 3]]),
-    config: { rules: mineRules, routerPolicy: 'frugal', presets: [{ id: 'p1', name: 'Shared', rules: shared }, { id: 'p2', name: 'Clash', rules: shared }] },
+    config: { rules: mineRules, agentChipSize: 'large', presets: [{ id: 'p1', name: 'Shared', rules: shared }, { id: 'p2', name: 'Clash', rules: shared }] },
   };
   const theirs = {
     kind: S.KIND, v: 1, rulesVersion: Rules.RULES_VERSION,
     config: {
-      rules: Rules.defaultRules(), routerPolicy: 'quality',
+      rules: Rules.defaultRules(), agentChipSize: 'small',
       presets: [
         { id: 'p1', name: 'shared', rules: shared }, // same as mine: skipped
         { id: 'p2', name: 'Clash', rules: [{ id: 'c', then: { cameo: 'dad' } }] }, // same name, different rules
@@ -228,7 +230,7 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
   assert.deepEqual(plan.add.map((c) => c.id), ['dad-2', 'mum'], 'an identical face and a built-in I replaced are skipped');
   apply(plan, state);
   assert.deepEqual(state.config.rules, mineRules);
-  assert.equal(state.config.routerPolicy, 'frugal');
+  assert.equal(state.config.agentChipSize, 'large');
   const idx = Cameos.loadIndex(state.dir);
   assert.deepEqual(Object.keys(idx).sort(), ['dad', 'dad-2', 'mum', 'neo', 'same']);
   assert.equal(idx.dad.name, 'My dad');
@@ -293,7 +295,7 @@ test('summarize: counts, settings, and every command the file\'s clicks would ru
   assert.equal(s.rules, Rules.defaultRules().length);
   assert.equal(s.presets, 1);
   assert.equal(s.cameos, 1);
-  assert.deepEqual(s.settings.sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'routerDelegation', 'routerPolicy', 'routerProjects', 'showAgents']);
+  assert.deepEqual(s.settings.sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'showAgents']);
   assert.deepEqual(s.commands.sort(), ['Focus', 'open -a Slack']);
   assert.equal(s.dropped, 0);
 });

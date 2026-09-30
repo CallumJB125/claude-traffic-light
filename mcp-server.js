@@ -4,7 +4,7 @@
 //
 // Runs standalone over stdio (`node mcp-server.js`) — no Electron. It reads
 // what main.js reads straight off disk (sessions/, requests/, config.json,
-// app.log, router/) and resolves the look with the same rules.js. What only
+// app.log) and resolves the look with the same rules.js. What only
 // the running app knows (a Lights preview, the walk to your terminal, the
 // OS's online flag) comes from its GET /status endpoint when it is up.
 //
@@ -25,8 +25,6 @@ const DEFAULTS = {
   showTasks: true,
   showAgents: true,
   agentKinds: { subagent: true, teammate: true, ralph: true, ultrawork: true },
-  routerPolicy: 'balanced',
-  routerProjects: {},
 };
 // main.js drops a request this old: the hook has long since timed out.
 const REQUEST_MAX_AGE_MS = 90000;
@@ -145,7 +143,7 @@ function guessOnline() {
 }
 
 // main.js computeState(), minus what only the running app holds (preview,
-// travel, router advice): manual override → pending ask → the rules.
+// travel): manual override → pending ask → the rules.
 function computeState({ root, now = Date.now(), online = guessOnline() }) {
   const config = loadConfig(root);
   const requests = readRequests(root, now);
@@ -379,65 +377,12 @@ function buddyPendingRequests({ root, now = Date.now() } = {}) {
   };
 }
 
-// main.js routerOpts()/delegationOpts() outside a dev run: the real HOME.
-function routerRoot(root) {
-  return { root, home: os.homedir() };
-}
-
-// router.js is excluded from app.asar because it is also an extraResource
-// (the shim runs it under plain node); fall back to the copy beside the asar.
-function requireRouter() {
-  return require(fs.existsSync(path.join(__dirname, 'router.js')) ? './router.js' : path.join(process.resourcesPath, 'router.js'));
-}
-
-function buddyRouterStatus({ root, limit = 20 } = {}) {
-  const Router = requireRouter();
-  const RouterInstall = require('./router-install.js');
-  const DelegationInstall = require('./delegation-install.js');
-  const config = loadConfig(root);
-  const opts = { ...routerRoot(root), shellPath: process.env.SHELL || os.userInfo().shell, env: process.env };
-  const flag = DelegationInstall.readFlag(opts);
-  const n = Math.max(1, Math.min(200, Number(limit) || 20));
-  return {
-    enabled: !!config.routerEnabled,
-    enabledAt: config.routerEnabledAt || null,
-    policy: config.routerPolicy,
-    projectOverrides: config.routerProjects || {},
-    launcher: RouterInstall.status(opts),
-    delegation: { enabled: !!(flag && flag.enabled), flag },
-    decisions: Router.readDecisions(path.join(root, 'router', 'decisions.jsonl'), n),
-    delegations: DelegationInstall.readLog(opts).slice(-n).reverse(),
-  };
-}
-
-// main.js deriveUsage() + get-savings, read fresh from the transcripts.
-async function buddySavings({ root, now = Date.now(), projectsDir } = {}) {
+// The Lights → Model mix card, read fresh from the transcripts: model mix
+// and cost today and over 7 days, and the one recommendation line.
+async function buddyModelMix({ now = Date.now(), projectsDir } = {}) {
   const Usage = require('./usage.js');
-  const RouterInstall = require('./router-install.js');
-  const DelegationInstall = require('./delegation-install.js');
-  const config = loadConfig(root);
-  const opts = routerRoot(root);
-  const { turns, files, skipped } = await Usage.readTurns({ since: now - 61 * 86400000, ...(projectsDir ? { root: projectsDir } : {}) });
-  let events = [];
-  try { events = DelegationInstall.readLog(opts, now - 8 * 86400000); } catch { /* no log yet */ }
-  const frozen = RouterInstall.readFrozen(opts);
-  const enabledAt = Date.parse(config.routerEnabledAt || '') || null;
-  const out = {
-    subscriber: config.routerSubscriberView ?? !process.env.ANTHROPIC_API_KEY,
-    savings: Usage.savings(turns, {
-      events,
-      routing: !!config.routerEnabled,
-      delegation: !!(config.routerDelegation && config.routerDelegation.enabled),
-      enabledAt,
-      switchedOnAt: Date.parse(config.routerSwitchedOnAt || '') || null,
-      frozen,
-      now,
-    }),
-    transcripts: { files, turns: turns.length, overSizeCap: skipped.length },
-  };
-  // The routing review (escalation cost included) exists once router phase 3 has landed.
-  if (typeof Usage.review === 'function' && enabledAt) out.review = Usage.review(turns, { since: enabledAt, frozen, events, now });
-  return out;
+  const { turns, files, skipped } = await Usage.readTurns({ since: now - 8 * 86400000, ...(projectsDir ? { root: projectsDir } : {}) });
+  return { ...Usage.modelMix(turns, { now }), transcripts: { files, turns: turns.length, overSizeCap: skipped.length } };
 }
 
 const TOOLS = [
@@ -446,8 +391,7 @@ const TOOLS = [
   { name: 'buddy_why', description: 'Explain why a rule is or is not firing, or who owns a look channel, against the live session set. `query` is a rule id, a rule name (or part of one), or a channel: lamp, pose, eyes, costume, cameo, effect, pet, body, sign, sound, …', input: (z) => ({ query: z.string().describe('rule id, rule name, or channel name') }), run: (a, c) => buddyWhy({ ...c, query: a.query }) },
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
   { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
-  { name: 'buddy_savings', description: 'Model-routing and context-diet savings as the widget computes them (today, 7 and 30 days), plus the routing review with escalation cost when available. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddySavings(c) },
-  { name: 'buddy_router_status', description: 'Model router: on/off, policy, per-project overrides, launcher and delegation install state, and the latest routing decisions and delegations.', input: (z) => ({ limit: z.number().int().min(1).max(200).optional().describe('how many decisions (default 20)') }), run: (a, c) => buddyRouterStatus({ ...c, limit: a.limit }) },
+  { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
   { name: 'buddy_answer_request', description: 'Answer a pending permission request exactly as the widget\'s Allow/Deny buttons do. This approves or denies a tool call in ANOTHER Claude Code session — only do it when the user has asked you to.', input: (z) => ({ id: z.string().describe('request id from buddy_pending_requests'), decision: z.enum(['allow', 'deny']) }), readOnly: false, run: (a, c) => answerRequest(c.root, a.id, a.decision) },
 ];
@@ -474,7 +418,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddySavings, buddyRouterStatus, buddyPendingRequests };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

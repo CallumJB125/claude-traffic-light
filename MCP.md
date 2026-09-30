@@ -34,8 +34,7 @@ Every tool returns JSON.
 | `buddy_why` | `query`: a rule id, a rule name or a channel. Says why that rule is or isn't firing (which `when` clause failed for each session, or which higher rule cut it off), or who owns the channel |
 | `buddy_rules` | The rules in priority order, with a compact when/then |
 | `buddy_recent_transitions` | Parsed `[state]` lines from `app.log`, newest first (`limit`, `session`) |
-| `buddy_savings` | Routing and context-diet savings, plus the routing review with escalation cost once routing is on |
-| `buddy_router_status` | Router on/off, policy, per-project overrides, launcher and delegation state, recent decisions |
+| `buddy_model_mix` | Which models your turns ran on and what they cost (today, last 7 days), plus the read-only Opus→Sonnet recommendation line |
 | `buddy_pending_requests` | Permission requests waiting on the widget's Allow/Deny |
 | `buddy_answer_request` | Answers one of those requests (`id`, `allow`/`deny`) by writing the same file the widget's buttons write |
 

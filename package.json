@@ -51,13 +51,8 @@
       "overlay-preload.js",
       "stats.js",
       "usage.js",
-      "router.js",
-      "router-install.js",
       "mcp-server.js",
       "mcp-install.js",
-      "delegation-install.js",
-      "agents/**/*",
-      "bin/**/*",
       "agents.js",
       "tray.html",
       "tray-preload.js"
@@ -70,10 +65,6 @@
       {
         "from": "adapters",
         "to": "adapters"
-      },
-      {
-        "from": "router.js",
-        "to": "router.js"
       }
     ],
     "mac": {
