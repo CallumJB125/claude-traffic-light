@@ -102,7 +102,7 @@ function parseIntent(text) {
 // ── Answers ────────────────────────────────────────────────────────────────
 // Short and spoken: no symbols, folder names read as words, at most three
 // things named, the rest counted.
-const folder = (cwd) => String(cwd || '').split('/').filter(Boolean).pop() || '';
+const { folderOf: folder } = require('../rules.js');
 const spoken = (name) => String(name || '').replace(/[-_.]+/g, ' ').trim() || 'a session';
 const nameOf = (s) => spoken(folder(s.cwd));
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

@@ -263,3 +263,24 @@ test('toCsv emits a header and one row per day', () => {
   assert.match(csv[3], /"alpha"/);
   assert.match(csv[3], /1\.5000/);
 });
+
+test('folderOf: last segment of a POSIX or Windows path; POSIX paths split on / only', () => {
+  const Rules = require('../rules.js');
+  const cases = [
+    ['/Users/me/proj', 'proj'],
+    ['/Users/me/proj/', 'proj'],
+    ['/Users/me/odd\\name', 'odd\\name'],
+    ['C:\\Users\\me\\proj', 'proj'],
+    ['C:\\Users\\me\\proj\\', 'proj'],
+    ['C:/Users/me/proj', 'proj'],
+    ['\\\\server\\share\\proj', 'proj'],
+    ['', ''],
+    [null, ''],
+  ];
+  for (const [p, want] of cases) {
+    assert.equal(Rules.folderOf(p), want, String(p));
+    assert.equal(S.project(p), want || 'unknown', `stats.project(${p}) matches Rules.folderOf`);
+  }
+  assert.equal(Rules.cwdMatches('proj', 'C:\\work\\proj'), true);
+  assert.equal(Rules.cwdMatches('bond*', 'D:\\src\\bondly-wt'), true);
+});

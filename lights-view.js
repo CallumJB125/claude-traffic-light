@@ -497,7 +497,7 @@
 
     const sel = $('sound');
     const soundOpts = [['', 'No sound'], ...R.SOUNDS.map((x) => [x, x === 'beep' ? 'System beep' : x])];
-    if (r.then.sound && r.then.sound.startsWith('file:')) soundOpts.push([r.then.sound, r.then.sound.slice(5).split('/').pop()]);
+    if (r.then.sound && r.then.sound.startsWith('file:')) soundOpts.push([r.then.sound, R.folderOf(r.then.sound.slice(5))]);
     sel.innerHTML = soundOpts.map(([v, l]) => `<option value="${escape(v)}">${escape(l)}</option>`).join('');
     sel.value = r.then.sound || '';
     $('sound-play').disabled = !r.then.sound;
@@ -1177,7 +1177,7 @@
     try { offerRules(await decodeShare($('share-code').value), 'Loaded shared rules — Save to keep them'); }
     catch (err) { flash(err.message); }
   });
-  $('share-export').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.exportRules(rules.map(R.normalizeRule)); if (r) flash(`Exported to ${r.split('/').pop()}`); });
+  $('share-export').addEventListener('click', async (e) => { e.stopPropagation(); $('presets').hidden = true; const r = await window.lightsApi.exportRules(rules.map(R.normalizeRule)); if (r) flash(`Exported to ${R.folderOf(r)}`); });
   $('share-import').addEventListener('click', async (e) => { e.stopPropagation(); const r = await window.lightsApi.importRules(); if (r && Array.isArray(r.rules)) offerRules(r.rules, 'Imported — Save to keep them'); else { $('presets').hidden = true; if (r && r.error) flash(r.error); } });
   // Whole setup: export writes what's saved; import shows what the file holds
   // (and any commands its clicks run) before the user picks merge or replace.
