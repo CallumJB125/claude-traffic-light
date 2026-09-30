@@ -98,3 +98,18 @@ test('WS frame caps: a flooding browser gets RATE_LIMITED errors; a flooding run
     r.terminate();
   } finally { await h.destroy(); }
 });
+
+test('sweep keeps an hourly bucket until it would have refilled: waiting 11 min does not reset agent_card_member', () => {
+  let now = 0;
+  const rl = new RateLimiter({ now: () => now });
+  const take = () => rl.take('agent_card_member', 'm1').ok;
+  for (let i = 0; i < 20; i++) assert.equal(take(), true, `create ${i + 1}`);
+  now += 11 * 60_000;
+  rl.sweep();
+  // 11 min at 20/h refills 3.67 tokens: calls 21-23 ride that refill, not a fresh bucket of 20.
+  assert.deepEqual([take(), take(), take(), take()], [true, true, true, false], 'the 24th is RATE_LIMITED');
+  rl.take('mutate_member', 'x');
+  now += 3_600_001;
+  rl.sweep();
+  assert.equal(rl.buckets.size, 0, 'idle past max(10 min, per_ms): swept');
+});

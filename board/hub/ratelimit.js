@@ -41,9 +41,14 @@ export class RateLimiter {
     return { ok: false, retry_after_ms: Math.ceil((1 - b.tokens) / rate) };
   }
 
+  // A bucket may go only once it would have refilled anyway: an hourly rule
+  // swept after 10 idle minutes would come back full and could be waited out.
   sweep() {
     const now = this.now();
-    for (const [k, b] of this.buckets) if (now - b.at > IDLE_SWEEP_MS) this.buckets.delete(k);
+    for (const [k, b] of this.buckets) {
+      const per = this.limits[k.slice(0, k.indexOf('|'))]?.per_ms ?? 0;
+      if (now - b.at > Math.max(IDLE_SWEEP_MS, per)) this.buckets.delete(k);
+    }
   }
 }
 
