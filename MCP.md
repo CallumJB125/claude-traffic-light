@@ -36,7 +36,8 @@ Every tool returns JSON.
 | `buddy_recent_transitions` | Parsed `[state]` lines from `app.log`, newest first (`limit`, `session`) |
 | `buddy_model_mix` | Which models your turns ran on and what they cost (today, last 7 days), plus the read-only Opus→Sonnet recommendation line |
 | `buddy_pending_requests` | Permission requests waiting on the widget's Allow/Deny |
-| `buddy_answer_request` | Answers one of those requests (`id`, `allow`/`deny`) by writing the same file the widget's buttons write |
+
+Every tool is read-only. There is deliberately no tool that answers a permission request: a session that is waiting on a prompt can't call tools, so such a tool could only ever approve *another* session's tool call, and the server can't tell which session is calling it. Answer at the widget (or, later, from a paired phone).
 
 The server works out the look from disk with the same `rules.js` the widget uses. Some things only the running app knows: a Lights preview, the walk to your terminal, and Electron's online flag. For those, `buddy_status` also asks the app's local `GET /status` endpoint and reports `app.agrees`.
 

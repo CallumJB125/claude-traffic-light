@@ -1,0 +1,18 @@
+{
+  "name": "@claude-buddy/remote",
+  "version": "0.1.0",
+  "description": "Security core for Buddy on your phone: device pairing, signed remote permission decisions, remote deny-list, relay contract.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./node": "./src/node/index.js"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

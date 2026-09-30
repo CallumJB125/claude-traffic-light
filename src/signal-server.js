@@ -11,6 +11,8 @@ const { app } = require('electron');
 const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
 const Adapters = require('../adapters/index.js');
+const Answer = require('../hooks/answer-file.js');
+const { describeRequest } = require('./request-view.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
 const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -100,6 +102,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
 
   // ── Pending permission requests (from the PermissionRequest hook) ──────────
   function readRequests() {
+    Answer.sweep(requestsDir);
     let files = [];
     try { files = fs.readdirSync(requestsDir).filter((f) => f.endsWith('.json')); } catch { return []; }
     const out = [];
@@ -107,18 +110,15 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       try {
         const r = JSON.parse(fs.readFileSync(path.join(requestsDir, f), 'utf8'));
         if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
-        out.push(r);
+        out.push({ ...r, view: describeRequest(r) });
       } catch { /* partial write */ }
     }
     return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   }
 
+  // First answer wins (desk, MCP or phone); see hooks/answer-file.js.
   function answerRequest(id, decision) {
-    if (!/^[\w.-]+$/.test(id) || !['allow', 'deny'].includes(decision)) return false;
-    const req = path.join(requestsDir, `${id}.json`);
-    if (!fs.existsSync(req)) return false;
-    fs.writeFileSync(path.join(requestsDir, `${id}.answer`), decision);
-    return true;
+    return Answer.writeAnswer(requestsDir, id, decision, { by: 'desk' }).ok;
   }
 
   return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest };

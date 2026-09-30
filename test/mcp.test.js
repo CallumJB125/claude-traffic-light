@@ -152,7 +152,7 @@ test('buddy_recent_transitions: parses [state] lines newest first, across the ro
   assert.equal(M.buddyRecentTransitions({ root, limit: 1 }).transitions.length, 1);
 });
 
-test('buddy_pending_requests + buddy_answer_request: the widget\'s own answer file', () => {
+test('buddy_pending_requests lists waiting requests; nothing in the server can answer them', () => {
   const req = { id: 'h-a-1', sessionId: 'a', cwd: '/w/a', tool: 'Bash', summary: 'ls', createdAt: iso(5000) };
   const expired = { id: 'h-b-1', sessionId: 'b', cwd: '/w/b', tool: 'Bash', summary: 'ls', createdAt: iso(120000) };
   const root = fixture({ config: { askFromWidget: true }, requests: [req, expired] });
@@ -161,13 +161,9 @@ test('buddy_pending_requests + buddy_answer_request: the widget\'s own answer fi
   assert.deepEqual(p.requests.map((r) => r.id), ['h-a-1']);
   assert.equal(p.requests[0].answered, false);
   assert.equal(p.requests[0].ageMs, 5000);
-
-  assert.equal(M.answerRequest(root, 'h-a-1', 'maybe').ok, false);
-  assert.equal(M.answerRequest(root, '../../etc', 'allow').ok, false);
-  assert.equal(M.answerRequest(root, 'h-nope', 'allow').ok, false);
-  assert.deepEqual(M.answerRequest(root, 'h-a-1', 'allow'), { ok: true, id: 'h-a-1', decision: 'allow' });
-  assert.equal(fs.readFileSync(path.join(root, 'requests', 'h-a-1.answer'), 'utf8'), 'allow');
-  assert.equal(M.buddyPendingRequests({ root, now: NOW }).requests[0].answered, true);
+  assert.equal(M.answerRequest, undefined);
+  assert.ok(!M.TOOLS.some((t) => /answer/.test(t.name)));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'requests')).sort(), ['h-a-1.json', 'h-b-1.json']);
 });
 
 test('buddy_model_mix: reads transcripts from the given projects dir', async () => {
@@ -201,12 +197,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes exactly the ten buddy_ tools', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_pending_requests', 'buddy_answer_request']);
-  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['buddy_answer_request']);
+test('the server exposes exactly the nine buddy_ tools, all read-only', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_pending_requests']);
+  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), []);
 });
 
-test('stdio: the server starts, lists ten tools and answers buddy_status end to end', async () => {
+test('stdio: the server starts, lists nine tools and answers buddy_status end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -220,7 +216,7 @@ test('stdio: the server starts, lists ten tools and answers buddy_status end to 
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 9);
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);
     assert.equal(st.sessionCount, 1);

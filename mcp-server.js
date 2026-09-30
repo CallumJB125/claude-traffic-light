@@ -71,19 +71,6 @@ function readRequests(root, now = Date.now()) {
   return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 }
 
-// The widget's Allow/Deny (main.js answerRequest): the blocked hook in
-// hooks/set-status.js polls for `<id>.answer` and hands its text to Claude Code.
-function answerRequest(root, id, decision) {
-  id = String(id || '');
-  decision = String(decision || '');
-  if (!/^[\w.-]+$/.test(id)) return { ok: false, error: 'bad request id' };
-  if (!['allow', 'deny'].includes(decision)) return { ok: false, error: 'decision must be "allow" or "deny"' };
-  const dir = path.join(root, 'requests');
-  if (!fs.existsSync(path.join(dir, `${id}.json`))) return { ok: false, error: 'no such pending request (answered, timed out, or never existed)' };
-  fs.writeFileSync(path.join(dir, `${id}.answer`), decision);
-  return { ok: true, id, decision };
-}
-
 function readManualOverride(root, now = Date.now()) {
   const data = readJson(path.join(root, 'manual-override.json'));
   if (!data || (data.expiresAt && now > data.expiresAt)) return null;
@@ -451,7 +438,6 @@ const TOOLS = [
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Buddy, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
-  { name: 'buddy_answer_request', description: 'Answer a pending permission request exactly as the widget\'s Allow/Deny buttons do. This approves or denies a tool call in ANOTHER Claude Code session — only do it when the user has asked you to.', input: (z) => ({ id: z.string().describe('request id from buddy_pending_requests'), decision: z.enum(['allow', 'deny']) }), readOnly: false, run: (a, c) => answerRequest(c.root, a.id, a.decision) },
 ];
 
 async function main() {
@@ -476,7 +462,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, answerRequest, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

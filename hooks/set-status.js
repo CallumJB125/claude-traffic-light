@@ -15,6 +15,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// Claude Code kills a hook at its configured timeout; everything this hook
+// does (stdin, ps lookups, the wait for an answer) must fit inside it.
+const HOOK_START = Date.now();
+const LOOKUP_DEADLINE = HOOK_START + Number(process.env.CLAUDE_TRAFFIC_LIGHT_LOOKUP_MS || 4000);
+// Per-call timeout for a ps/tmux lookup: never past the lookup budget.
+const lookupTimeout = () => Math.min(1500, LOOKUP_DEADLINE - Date.now());
+
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const HOST_TAG = os.hostname().split('.')[0];
@@ -126,7 +133,8 @@ function tmuxClientPid() {
     const args = ['display-message', '-p'];
     if (process.env.TMUX_PANE) args.push('-t', process.env.TMUX_PANE);
     args.push('#{client_pid}');
-    const pid = Number(execFileSync('tmux', args, { encoding: 'utf8', timeout: 1500 }).trim());
+    if (lookupTimeout() <= 0) return null;
+    const pid = Number(execFileSync('tmux', args, { encoding: 'utf8', timeout: lookupTimeout() }).trim());
     return Number.isFinite(pid) && pid > 1 ? pid : null;
   } catch {
     return null;
@@ -139,8 +147,9 @@ function appFromProcessTree() {
   let pid = tmuxClientPid() || process.ppid;
   for (let depth = 0; depth < 16 && pid > 1; depth += 1) {
     let line;
+    if (lookupTimeout() <= 0) return null;
     try {
-      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 1500 }).trim();
+      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: lookupTimeout() }).trim();
     } catch {
       return null;
     }
@@ -193,8 +202,9 @@ function claudePid(cached) {
   let pid = ppid;
   for (let depth = 0; depth < 3 && pid > 1; depth += 1) {
     let line;
+    if (lookupTimeout() <= 0) return null;
     try {
-      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 1500 }).trim();
+      line = execFileSync('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: lookupTimeout() }).trim();
     } catch {
       return null;
     }
@@ -390,31 +400,43 @@ function appIsUp() {
 // can see it, then wait for an answer file. Answer → print the decision for
 // Claude Code. No answer in time → exit silently, so the normal dialog shows.
 if (signal === 'permission-request') {
-  const waitMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
+  const askMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
+  // Nothing to bind an answer to: an unreadable payload must never become a
+  // request whose Allow would release some other input.
+  const input = data?.tool_input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) finish();
   // Nobody is listening for a request if the app is down: skip the 55s wait.
-  if (waitMs > 0 && !appIsUp()) finish();
-  fs.mkdirSync(REQUESTS_DIR, { recursive: true });
-  const id = `${HOST_TAG}-${sessionId}-${Date.now()}`;
-  const reqFile = path.join(REQUESTS_DIR, `${id}.json`);
-  const ansFile = path.join(REQUESTS_DIR, `${id}.answer`);
-  const input = data?.tool_input || {};
+  if (askMs > 0 && !appIsUp()) finish();
+  const Answer = require('./answer-file.js');
+  // Stop waiting early enough to answer before Claude Code's own timeout
+  // (the installed PermissionRequest timeout) kills this hook.
+  const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || (Claude.OPTIONAL_EVENTS.find(([e]) => e === 'PermissionRequest')?.[2] || 60) * 1000;
+  const waitUntil = Math.min(Date.now() + askMs, HOOK_START + hookTimeoutMs - Answer.HOOK_MARGIN_MS);
+  fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
+  // Random, not a timestamp: parallel tool calls in one session would share
+  // a millisecond id, and one answer would release the other call.
+  const id = `${HOST_TAG}-${require('crypto').randomUUID()}`;
+  const { req: reqFile, ans: ansFile } = Answer.paths(REQUESTS_DIR, id);
+  let toolInputHash = null;
+  try { toolInputHash = Answer.hashToolInput(input); } catch { finish(); }
   const summary = typeof input.command === 'string' ? input.command
     : typeof input.file_path === 'string' ? input.file_path
     : typeof input.url === 'string' ? input.url
     : Object.keys(input).length ? JSON.stringify(input) : '';
-  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), createdAt: new Date().toISOString() }, null, 2));
-  const deadline = Date.now() + waitMs;
+  fs.writeFileSync(reqFile, JSON.stringify({ id, sessionId, host: HOST_TAG, cwd, tool: data?.tool_name || 'tool', summary: summary.slice(0, 200), toolInput: input, toolInputHash, createdAt: new Date().toISOString() }, null, 2), { flag: 'wx', mode: 0o600 });
+  const deadline = waitUntil;
   let decision = null;
+  let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < deadline) {
-    try {
-      decision = fs.readFileSync(ansFile, 'utf8').trim();
-      break;
-    } catch {
-      Atomics.wait(sleeper, 0, 0, 150);
-    }
+    if (fs.existsSync(ansFile)) { decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash); answered = true; break; }
+    Atomics.wait(sleeper, 0, 0, 150);
   }
+  // The last word: either our timeout marker lands first, or an answer that
+  // raced the deadline is already there and is honoured.
+  if (!answered && !Answer.claimTimeout(REQUESTS_DIR, id)) decision = Answer.consumeAnswer(REQUESTS_DIR, id, toolInputHash);
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
   hookOutput = Claude.answer(decision);
