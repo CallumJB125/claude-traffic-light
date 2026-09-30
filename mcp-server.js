@@ -492,6 +492,41 @@ async function buddyUsageHistory({ root, range = '30d', groupBy = 'day', now = D
   };
 }
 
+// The Health panel's checks, run from here. What only the running app knows
+// (is its signal server up?) comes from GET /status; the hooks are compared
+// with what this copy of Buddy would install.
+function hookRuntime(root, dir = __dirname, execPath = process.execPath) {
+  const Runtime = require('./adapters/runtime.js');
+  // Packaged, this file sits in Resources/app.asar and the hooks in Resources/hooks.
+  const packaged = /\.asar$/.test(dir);
+  return Runtime.make({ execPath: packaged ? execPath : null, hooksDir: path.join(packaged ? path.dirname(dir) : dir, 'hooks'), dataDir: root });
+}
+
+async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, runtime = hookRuntime(root), projectsDir, statfs, mcpConnected = false } = {}) {
+  const Health = require('./src/health.js');
+  const McpInstall = require('./mcp-install.js');
+  const port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
+  const liveStatus = live === undefined ? await fetchLive(port) : live;
+  const packaged = /\.asar$/.test(__dirname);
+  const report = Health.runChecks({
+    now, home, root, runtime, projectsDir, statfs, mcpConnected,
+    askFromWidget: !!loadConfig(root).askFromWidget,
+    version: require('./package.json').version,
+    mcp: McpInstall.status({ home, entry: McpInstall.launch({ packaged, execPath: process.execPath, appPath: __dirname, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) }),
+    signal: liveStatus ? { listening: true, port } : { running: false, port },
+  });
+  const lastHook = report.checks.find((c) => c.id === 'last-hook');
+  // The answer lands in a transcript: paths and names are scrubbed like a bug report's.
+  const { scrub } = require('./src/scrub.js');
+  const clean = (x) => (x ? scrub(x, { home }) : x);
+  return {
+    ...report,
+    checks: report.checks.map((c) => ({ ...c, detail: clean(c.detail), ...(c.next ? { next: clean(c.next) } : {}) })),
+    ...(lastHook.status === 'ok' ? {} : { likelyCause: clean(Health.likelyCause(report.checks)) }),
+    note: 'status is ok, warn, fail or info. `fix` names a one-click fix in Buddy Preferences → Health (the tray menu\'s Health…); `next` is what to do by hand. Nothing here is fixed for you.',
+  };
+}
+
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Claude Buddy widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
@@ -502,6 +537,7 @@ const TOOLS = [
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Buddy, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
+  { name: 'buddy_health', description: 'Is Buddy set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Buddy offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
 ];
 
@@ -527,7 +563,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, hookRuntime };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });

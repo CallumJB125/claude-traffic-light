@@ -32,6 +32,7 @@ Plexiform reads these on your computer and never uploads them:
 - Spend: worked out from your Claude Code conversation logs, in a background thread, on your computer. Nothing is sent anywhere.
 - Calendar and focus status (see below), and terminal details: to jump to a session's terminal, Plexiform records in the session file the terminal's identifiers (seven environment values, the terminal device, and the folder at session start).
 - Voice: your speech is turned into text on your device. Audio is never written to disk and the spoken words are never logged.
+- Copy diagnostics (Preferences → Health): puts a text report on your clipboard only when you click it: the health check results, the app, Electron and OS versions, and recent startup, warning and error lines from `app.log`. Home paths are replaced by `~`; folder, repo, host and user names are hashed or removed; tokens, keys, email and IP addresses are redacted. It never includes prompts, conversation logs or session contents, and nothing is sent anywhere: you choose where to paste it.
 
 Everything below lives in `~/.claude-traffic-light` on your computer:
 
@@ -44,6 +45,7 @@ Everything below lives in `~/.claude-traffic-light` on your computer:
 - `git-signals.json`: recent pull request and build events with their titles and links, the ids of events already shown, your GitHub login, branch names, local folder paths and the logins of reviewers. It holds no passwords or tokens.
 - `busy-ics-cache.json` (only with a calendar subscription link): event times and the repeat rules, status and free/busy flags of those events, plus a fingerprint (SHA-256) of the link, never the link itself. Meeting titles are kept only if you turned on "show meeting name".
 - `away.json`: a recap written after any busy spell, including a Focus one (Focus reading is on by default). It lists session ids, folder paths, tool names, the names of rules that held a notification, and why you were busy: the Focus mode's name, or the meeting's title only if you turned on "show meeting name" (up to 60 characters). It is deleted when you dismiss it or it expires.
+- `last-hook.json`: only the time of the newest hook event and which agent sent it (such as "claude"), so Preferences → Health can show the last hook event after your sessions end.
 - `app.log` and `app.log.old`: diagnostic log. It can contain project folder names, repo names and pull request numbers, file paths (which include your OS username) and notification titles. It never contains prompt text.
 - `token` and `port`: the details of the connection on this computer (see below).
 - `bin/buddy-hook` (`bin\buddy-hook.cmd` on Windows): a small launcher that Claude Code's hooks call.
@@ -145,6 +147,7 @@ PROPOSED, not built: let you choose how many days of stats to keep.
 - **Rules:** in the Lights window, the share menu → Export rules.
 - **Setup:** in the Lights window, Export setup, which bundles your settings, rules, presets and face photos into one file. It contains the photos you added, so be careful who you share it with.
 - The Privacy section in Preferences has shortcuts for the stats and setup exports.
+- **Diagnostics:** Preferences → Health → Copy diagnostics (see "What stays on your machine"). Removing personal details is best effort, so read the report before you paste it somewhere public.
 
 ## Delete your data
 
