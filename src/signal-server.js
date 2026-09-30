@@ -12,6 +12,7 @@ const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
 const Adapters = require('../adapters/index.js');
 const Answer = require('../hooks/answer-file.js');
+const { describeRequest } = require('./request-view.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
 const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -109,7 +110,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       try {
         const r = JSON.parse(fs.readFileSync(path.join(requestsDir, f), 'utf8'));
         if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
-        out.push(r);
+        out.push({ ...r, view: describeRequest(r) });
       } catch { /* partial write */ }
     }
     return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
