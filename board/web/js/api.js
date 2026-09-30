@@ -34,7 +34,11 @@ async function call(method, path, body, { fetchImpl = globalThis.fetch, headers 
     throw new ApiError(0, { error: { code: 'NETWORK', message: "Can't reach the board." } });
   }
   onResponse?.(res);
-  const text = await res.text();
+  let text;
+  // A timeout can land mid-body as well as mid-connect.
+  try { text = await res.text(); } catch {
+    throw new ApiError(0, { error: { code: 'NETWORK', message: "Can't reach the board." } });
+  }
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!res.ok) throw new ApiError(res.status, data);

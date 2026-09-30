@@ -358,7 +358,6 @@ test('pullJournal pages to the end, then appends only new rows', async () => {
   assert.deepEqual(p.calls, [0, 7, 14]);
   assert.equal(res.fold.lastSeq, 20);
   assert.equal(res.offset, 1234);
-  assert.equal(res.restarted, false);
   const p2 = pager(rows);
   const res2 = await pullJournal(res.fold, p2.fetchPage, { pageSize: 7 });
   assert.equal(p2.calls[0], 20, 'the refresh starts after the last folded seq');
@@ -366,23 +365,16 @@ test('pullJournal pages to the end, then appends only new rows', async () => {
   assert.deepEqual(windowMetrics(res2.fold, NOW), windowMetrics(foldRows(emptyFold(), rows), NOW));
 });
 
-test('pullJournal: rows from a new hub epoch drop the held fold and re-read from 0', async () => {
+test('pullJournal: rows from many hub epochs (one per boot) are just rows, never a re-read', async () => {
   const j = journal();
-  claudeCard(j, 'a', { created: 5 * DAY, dispatched: 4 * DAY, claimed: 4 * DAY - HOUR, review: 3 * DAY, done: 2 * DAY });
-  const old = j.rows.map((r) => ({ ...r, hub_epoch: 'e1' }));
-  const held = (await pullJournal(emptyFold(), pager(old).fetchPage)).fold;
-  // A restore: the journal now ends earlier and new rows reuse seqs under a new epoch.
-  const restored = [...old.slice(0, 3), { seq: 4, card_id: 'z', at_hub: at(HOUR), kind: 'card.create', hub_epoch: 'e2', payload: { key: 'BDL-9', title: 'New' } },
-    ...Array.from({ length: 10 }, (_, i) => ({ seq: 5 + i, card_id: 'z', at_hub: at(HOUR - i), kind: 'comment.create', hub_epoch: 'e2', payload: {} }))];
-  const p = pager(restored);
-  const res = await pullJournal(held, p.fetchPage);
-  assert.equal(res.restarted, true);
-  assert.deepEqual(p.calls, [old.length, 0]);
-  assert.ok(res.fold.cards.has('z'));
-  assert.ok(!res.fold.cards.get('a').done_at, 'the rolled-back done is gone');
-  assert.equal(res.fold.epoch, 'e2');
-  // A full read across epochs never loops.
-  const again = await pullJournal(emptyFold(), pager(restored).fetchPage, { pageSize: 5 });
-  assert.equal(again.restarted, false);
-  assert.equal(again.fold.lastSeq, restored.length);
+  for (let i = 0; i < 4; i++) claudeCard(j, `c${i}`, { created: 5 * DAY, dispatched: 4 * DAY, claimed: 4 * DAY - HOUR, review: 3 * DAY, done: 2 * DAY + i });
+  const rows = j.rows.map((r, i) => ({ ...r, hub_epoch: `e${Math.floor(i / 5)}` }));
+  const p = pager(rows.slice(0, 12));
+  const held = (await pullJournal(emptyFold(), p.fetchPage, { pageSize: 5 })).fold;
+  const p2 = pager(rows);
+  const res = await pullJournal(held, p2.fetchPage, { pageSize: 5 });
+  assert.equal(p2.calls[0], 12, 'continues after the last seq across an epoch change');
+  assert.ok(!p2.calls.includes(0));
+  assert.equal(res.fold.lastSeq, rows.length);
+  assert.deepEqual(windowMetrics(res.fold, NOW), windowMetrics(foldRows(emptyFold(), rows), NOW));
 });

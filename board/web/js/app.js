@@ -174,9 +174,8 @@ function resetDashboard() {
   cardMemo = null;
 }
 
-// A new hub epoch (restart or restore) may have rewritten history the fold
-// already holds; the page check in pullJournal can't see a restore whose new
-// rows sit below our last seq, so the welcome frame's epoch drops it too.
+// A new hub epoch (a restart, or a restore that may have rewritten history
+// the fold holds) drops the fold: one full re-read per restart.
 function onHubEpoch(epoch) {
   const prev = state.dash.epoch;
   if (prev && epoch && prev !== epoch) {

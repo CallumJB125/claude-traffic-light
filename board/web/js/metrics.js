@@ -62,7 +62,7 @@ export function clockOffset(dateHeader, sentAt, receivedAt) {
 
 // ── fold ─────────────────────────────────────────────────────────────────────
 
-export const emptyFold = () => ({ cards: new Map(), lastSeq: 0, epoch: null, version: 0 });
+export const emptyFold = () => ({ cards: new Map(), lastSeq: 0, version: 0 });
 
 function newHistory(id) {
   return { card_id: id, key: null, title: null, first_start: null, done_at: null, done_by: null, state: null, open: null, waits: [] };
@@ -124,7 +124,6 @@ export function foldRows(fold, rows) {
     if (r.seq != null && r.seq === prev) continue;
     prev = r.seq ?? prev;
     if (r.seq != null) fold.lastSeq = Math.max(fold.lastSeq, r.seq);
-    if (r.hub_epoch) fold.epoch = r.hub_epoch;
     if (r.card_id == null || !KEPT.has(r.kind)) continue;
     const t = typeof r.at_hub === 'number' ? r.at_hub : Date.parse(r.at_hub);
     if (!Number.isFinite(t)) continue;
@@ -140,31 +139,22 @@ export const histories = (rows) => foldRows(emptyFold(), rows).cards;
 
 /**
  * Read the journal from the fold's last seq to the end, a page at a time.
- * fetchPage(afterSeq, limit) → {rows, next_after_seq, offset_ms?}. When the
- * first new rows come from another hub epoch (a restart, or a restore that
- * may reuse seqs), the held fold is dropped and the journal re-read from 0.
+ * fetchPage(afterSeq, limit) → {rows, next_after_seq, offset_ms?}. A hub
+ * restart or restore is the caller's to catch (the WS welcome's hub_epoch):
+ * rows carry a new epoch after every boot, so it says nothing here.
  */
 export async function pullJournal(fold, fetchPage, { pageSize = 1000, maxPages = 1000 } = {}) {
   let offset = null;
-  let restarted = false;
-  let first = true;
   for (let i = 0; i < maxPages; i++) {
     const after = fold.lastSeq;
     const page = await fetchPage(after, pageSize);
     if (page?.offset_ms != null) offset = page.offset_ms;
     const rows = page?.rows ?? [];
-    const epoch = rows.find((r) => r.hub_epoch)?.hub_epoch;
-    if (first && after > 0 && fold.epoch && epoch && epoch !== fold.epoch && !restarted) {
-      fold = emptyFold();
-      restarted = true;
-      continue;
-    }
-    first = false;
     foldRows(fold, rows);
     if (Number.isSafeInteger(page?.next_after_seq)) fold.lastSeq = Math.max(fold.lastSeq, page.next_after_seq);
     if (rows.length < pageSize || fold.lastSeq === after) break;
   }
-  return { fold, offset, restarted };
+  return { fold, offset };
 }
 
 // ── metrics ──────────────────────────────────────────────────────────────────
