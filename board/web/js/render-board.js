@@ -196,7 +196,10 @@ const THEME_ICON = { system: 'auto', dark: 'moon', light: 'sun' };
 const THEME_LABEL = { system: 'Theme: match system', dark: 'Theme: dark', light: 'Theme: light' };
 
 export function topBar(model, lamps) {
-  const me = model.me?.member;
+  // /api/me is publicMember ({display_name, github_login}); snapshot members
+  // are {name, login}. Normalise so the avatar and label never fall back to "?".
+  const m = model.me?.member;
+  const me = m && { ...m, name: m.display_name ?? m.name ?? m.github_login ?? m.login ?? null, login: m.github_login ?? m.login ?? null };
   const conn = model.conn.status;
   return h('header', { class: 'topbar' },
     h('div', { class: 'brand' },

@@ -111,3 +111,10 @@ test('board screen shows the view switcher with the current view pressed', () =>
   assert.equal(byClass(v, 'board').length, 0);
   assert.equal(byClass(v, 'tableview').length, 1);
 });
+
+test('top bar shows the signed-in member from /api/me (display_name/github_login), never "?"', () => {
+  const v = boardScreen(model([], { me: { member: { id: 'm-you', display_name: 'callumbaker', github_login: null, role: 'owner' } } }));
+  const me = byClass(v, 'me')[0];
+  assert.match(textOf(me), /callumbaker/);
+  assert.equal(textOf(byClass(me, 'avatar-initials')[0]), 'C');
+});
