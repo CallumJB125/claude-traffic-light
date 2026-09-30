@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -2299,7 +2299,7 @@ let spendReqId = 0;
 function spendRead(since) {
   if (spendWorker === null) {
     try {
-      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
+      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js')); // privacy-flow: local-worker
       spendWorker.unref();
       spendWorker.on('message', (m) => {
         if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
@@ -2493,8 +2493,8 @@ async function runAction(action, st) {
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
-      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
     case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };

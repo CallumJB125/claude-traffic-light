@@ -2,33 +2,40 @@
 
 # Claude Buddy privacy notice
 
-Claude Buddy is a desktop app that watches your AI coding sessions and shows their state as a small light. This page says what it reads, what it stores, and what (very little) ever leaves your computer. Things that are planned but not built yet are labelled **Not yet shipped**.
+Claude Buddy is a desktop app that watches your AI coding sessions and shows their state as a small light. This page says what it reads, what it keeps, and what (very little) ever leaves your computer. Things that are planned but not built yet are labelled **Not yet shipped**.
+
+## In short
+
+- **On by default:** checking GitHub for pull requests and builds through your own GitHub login (only if you have the `gh` tool signed in), and reading your Focus / Do Not Disturb status on this computer.
+- **Off by default:** calendar, calendar subscription link, voice questions to Claude, answering permission prompts from Buddy, and remote devices.
+- **Never:** telemetry or analytics, crash reports (until you opt in, and that is not built yet), or update checks (not built yet). Nothing is sent to us.
 
 ## What stays on your machine
 
-Buddy reads these locally and never uploads them:
+Buddy reads these on your computer and never uploads them:
 
-- Your Claude Code transcripts in `~/.claude/projects`, read to work out tokens and spend. Only counts and costs are kept, not the text.
-- Your prompts and Claude's replies. Buddy never stores your prompts. Hooks from Claude Code (and from Cursor, Codex or Gemini if you connected them) tell Buddy that a prompt was submitted or a tool ran, and that feeds the session state below.
+- Your Claude Code conversation logs (the files in `~/.claude/projects`), read to work out tokens and spend. Only counts and costs are kept, not the text.
+- Your prompts and Claude's replies. Buddy never stores your prompts. Claude Code (and Cursor, Codex or Gemini if you connected them) tells Buddy through small add-ons called hooks that a prompt was sent or a tool ran, and that feeds the session state below.
 - Session state: for each session, the folder it runs in, its state, the current tool name, the model name, task counts, and the labels of agents it started (up to 40 characters of the agent's type or of the description the model wrote). When a turn fails, it also keeps up to 120 characters of the error or of Claude's last reply, which can therefore contain a snippet of Claude's own words.
-- Permission requests, only if you turned on "Answer permission prompts from the widget" (off by default). Then, when Claude asks permission, Buddy briefly holds the full tool input (the whole command, file path, URL or agent instructions) together with a SHA-256 hash of it, so your answer is bound to exactly what was shown. A command can contain secrets you typed into it. The file is readable only by you (mode 0600, in a folder set to 0700), is deleted when you answer, and any left behind is swept after about 75 seconds while Buddy is running.
+- Permission requests, only if you turned on "Answer permission prompts from the widget" (off by default). Then, when Claude asks permission, Buddy briefly holds the full tool input (the whole command, file path, web address or agent instructions) together with a fingerprint of it (SHA-256), so your answer applies to exactly what was shown. A command can contain secrets you typed into it. The file is readable only by you and is deleted when you answer. If you don't answer, the hook removes it itself when it gives up (after about 55 seconds), and any left behind is swept after about 75 seconds while Buddy is running.
 - Your settings, rules, and any face photos you add as cameos.
 - Git and CI results fetched with your own `gh` login (see the next section).
-- Spend: worked out from your transcripts, in a background thread, on your machine. Nothing is sent anywhere.
-- Calendar and focus status (see below), and terminal details: to jump to a session's terminal, Buddy records in the session file the terminal's identifiers (seven environment values, the tty, and the folder at session start).
-- Voice questions: your speech is turned into text on your device. Audio is never written to disk and transcripts are never logged.
+- Spend: worked out from your Claude Code conversation logs, in a background thread, on your computer. Nothing is sent anywhere.
+- Calendar and focus status (see below), and terminal details: to jump to a session's terminal, Buddy records in the session file the terminal's identifiers (seven environment values, the terminal device, and the folder at session start).
+- Voice: your speech is turned into text on your device. Audio is never written to disk and the spoken words are never logged.
 
 Everything below lives in `~/.claude-traffic-light` on your computer:
 
 - `sessions/`: one small file per live session.
-- `requests/`: pending permission previews and your answers.
+- `requests/`: pending permission requests and your answers.
 - `config.json`: your settings and rules.
 - `stats.json`: per-day and per-project counts, times and costs, keyed by folder name.
 - `cameos/`, including `cameos/index.json`: photos you add and their names.
-- `git-signals.json`: recent pull request and CI events (repo names, titles, links), seen event ids and ETags. It holds no tokens.
-- `busy-ics-cache.json` and `away.json` (only if you use the calendar feed or "while you were away"): busy times and a SHA-256 of the feed address, never the address itself. Meeting titles are kept only if you turned on "show meeting name". `away.json` is deleted when you dismiss it or it expires.
+- `git-signals.json`: recent pull request and build events with their titles and links, the ids of events already shown, your GitHub login, branch names, local folder paths and the logins of reviewers. It holds no passwords or tokens.
+- `busy-ics-cache.json` (only with a calendar subscription link): event times and the repeat rules, status and free/busy flags of those events, plus a fingerprint (SHA-256) of the link, never the link itself. Meeting titles are kept only if you turned on "show meeting name".
+- `away.json`: a recap written after any busy spell, including a Focus one (Focus reading is on by default). It lists session ids, folder paths, tool names and the names of rules that held a notification. It is deleted when you dismiss it or it expires.
 - `app.log` and `app.log.old`: diagnostic log. It can contain project folder names, repo names and pull request numbers, file paths (which include your OS username) and notification titles. It never contains prompt text.
-- `token` and `port`: the local connection details (see below).
+- `token` and `port`: the details of the connection on this computer (see below).
 - `bin/buddy-hook` (`bin\buddy-hook.cmd` on Windows): a small launcher that Claude Code's hooks call.
 - `window-bounds.json`, `manual-override.json`, and first-run marker files.
 
@@ -38,17 +45,31 @@ Electron (the framework Buddy is built on) also keeps its own app data in `~/Lib
 
 Today, nothing is sent to us. There is no account, no telemetry, no analytics, no crash reporting and no update check in the app. The complete list of outbound flows:
 
-- **GitHub, through your own `gh` login (ON by default).** <!-- flow:gh-poll files=src/github-signals.js --> This does nothing unless the GitHub command-line tool `gh` is installed and logged in. If it is, about every 90 seconds while a session is open (every 10 minutes when idle), Buddy runs `gh api` to ask GitHub (read-only GET requests) for your user, your workflow runs, reviews on your open pull requests and review requests addressed to you, for the repos your session folders belong to. Nothing is sent anywhere else. The request goes from your computer to api.github.com using your existing login. Buddy has no GitHub token of its own and we receive nothing. GitHub can see which repos you are working in and when, as it would for any `gh` use. Buddy also runs `git remote` and `git branch` locally to find the repo. To turn it off: Preferences → Git and CI → untick "Light up for pull requests and CI", then Save.
+- **GitHub, through your own `gh` login (ON by default).** <!-- flow:gh-poll files=src/github-signals.js --> This does nothing unless the GitHub command-line tool `gh` is installed and signed in. If it is, about every 90 seconds while a session is open (every 10 minutes when idle), Buddy asks GitHub (read-only requests) for your user, your workflow runs, reviews on your open pull requests and review requests addressed to you, for the repos your session folders belong to. Repos you list under "Also watch" in Preferences are checked even when no session is open. GitHub can see which repos you are working in and when, as it would for any use of `gh`. Nothing is sent anywhere else. Buddy has no GitHub token of its own and we receive nothing. Buddy also asks `git` locally which repo and branch a folder is on. A developer setting (`CLAUDE_BUDDY_GH`) can point Buddy at a different `gh` program. To turn it off: Preferences → Git and CI → untick "Light up for pull requests and CI", then Save.
 - **Open in browser.** The tray menu's "Open Claude" opens claude.ai in your browser. <!-- flow:rule-url files=main.js --> A rule action of type "open URL" opens whatever address you set. <!-- flow:os-settings files=src/terminal.js --> Buddy can also open your operating system's privacy settings page to help you grant a permission. These are ordinary visits that you trigger.
-- **Your own rule actions.** A rule can run a shell command or a Shortcut you wrote. Whatever those do is up to you.
+- **Your own rule actions.** <!-- flow:rule-command files=main.js --> A rule can run a shell command or a Shortcut you wrote. Whatever those do is up to you.
 - **Your AI tools themselves.** Claude Code, and Cursor, Codex or Gemini if connected, send your prompts to their providers under those providers' own terms. Buddy is separate and does not change or see that traffic.
-- **Local connections only.** Buddy listens on `127.0.0.1` only (never the network). Sending it signals requires a secret token saved in `~/.claude-traffic-light/token`, and browser requests are refused. One exception: `GET /status` needs no token, so any program running as you on your computer can ask for your live sessions' folders, their states and update times, and whether a budget is exceeded. Web pages and other computers cannot. We plan to require the token there too. <!-- flow:local-server files=main.js,src/signal-server.js --><!-- flow:local-probe files=hooks/set-status.js --><!-- flow:local-mcp files=mcp-server.js --> The spend part of that answer is only a level and a count of runaway sessions. The optional Claude integration (MCP) talks to that local port.
-- **Sound and speech.** Buddy plays sounds and speaks using your operating system (`afplay`, `say`, Windows speech). Nothing is sent anywhere.
-- **Usage costs.** Spend is worked out from your transcripts on your machine. If there are none, Buddy may run `ccusage` in offline mode, which also reads locally.
-- **Calendar (OFF by default).** <!-- flow:calendar-helper files=main.js --> One click in Preferences turns it on and macOS then asks for permission. A small helper bundled with Buddy reads only event start and end times and whether you are shown as busy, plus titles only if you turned on "show meeting name". Nothing leaves your machine. Focus status is read from `~/Library/DoNotDisturb` when readable, or from a Shortcut you name, run locally.
-- **Calendar feed (OFF until you enter an address).** <!-- flow:ics-feed files=main.js,src/busy-watch.js --> If you paste an ICS feed address, Buddy fetches it over HTTPS about once an hour, and only from that address (http and file addresses are rejected). The feed's owner sees your request as with any calendar app. Only busy times are cached, with a SHA-256 of the address, never the address. Titles are kept only if you opted in.
-- **Jumping to a terminal.** <!-- flow:terminal-jump files=hooks/set-status.js,src/focus/index.js --> Buddy runs local programs (`osascript`, `kitten`, `wezterm`, `tmux`, `open`, `ps`) to find and focus the terminal of a session. Nothing leaves your machine.
-- **Voice questions.** Speech to text happens on your device using Apple's on-device recognition, and it fails rather than use Apple's servers. Asking free-form questions is OFF by default. If you turn it on, <!-- flow:voice-ask files=src/voice-helper.js --> Buddy runs your own `claude -p --model haiku` under your own login with a cleaned environment, and sends only session states, project names, today's spend and recent transitions to Anthropic through your account, under Anthropic's terms.
+- **Connections on this computer only.** Buddy listens only for programs on this computer, never on the network. <!-- flow:local-server files=main.js,src/signal-server.js --><!-- flow:local-probe files=hooks/set-status.js --> Sending it signals requires a secret token saved in `~/.claude-traffic-light/token`, and requests from web pages are refused. One exception: the status page needs no token, so any program running as you on your computer can ask for your live sessions' folders, their states and update times, and a spend level with a count of runaway sessions. Web pages and other computers cannot. We plan to require the token there too. <!-- flow:local-mcp files=mcp-server.js --> The optional Claude integration talks to that same local connection.
+- **Sound and speech.** <!-- flow:local-sound files=src/sound.js --> Buddy plays sounds and speaks using your operating system. Nothing is sent anywhere.
+- **Usage costs.** <!-- flow:local-worker files=main.js --> Spend is worked out on your computer. If there are no conversation logs, Buddy may run `ccusage` in offline mode, which also reads locally.
+- **Calendar (OFF by default).** <!-- flow:calendar-helper files=main.js --> One click in Preferences turns it on and macOS then asks for permission. A small helper bundled with Buddy reads only event start and end times and whether you are shown as busy, plus titles only if you turned on "show meeting name". Nothing leaves your computer.
+- **Focus status (ON by default, local only).** Buddy reads your Focus / Do Not Disturb status from `~/Library/DoNotDisturb` when it is readable, or from a Shortcut you name, run on your computer. Nothing leaves your computer. To turn it off, untick "A Focus or Do Not Disturb is on" in Preferences.
+- **Calendar subscription link (OFF until you enter one).** <!-- flow:ics-feed files=main.js,src/busy-watch.js --> If you paste a calendar subscription link (an ICS feed), Buddy fetches it over HTTPS about every 10 minutes and works out repeating events about once an hour. It contacts only that address (http and file addresses are rejected) and follows redirects the calendar provider sends. The provider sees your requests, as with any calendar app.
+- **Jumping to a terminal.** <!-- flow:terminal-jump files=hooks/set-status.js,src/focus/index.js,src/terminal.js --> Buddy runs local programs (`osascript`, `kitten`, `wezterm`, `tmux`, `open`, `ps`) to find and focus the terminal of a session. Nothing leaves your computer.
+- **Voice questions to Claude (OFF by default).** Turning your speech into text happens on your device using Apple's on-device recognition, and it fails rather than use Apple's servers. Asking free-form questions is a separate switch. If you turn it on, <!-- flow:voice-ask files=src/voice-helper.js --> Buddy runs your own `claude` program under your own login, with a cleaned environment (only your home folder, path, user name, language and temp folder), and sends to Anthropic through your account: your spoken question as text (up to 500 characters), the name of each session's folder, what each session is doing (which can include a tool name, for example "wants permission to use Bash"), the number of live agents, today's spend, and the recent state changes. It runs with no tools, nothing saved, a spend cap of 5 US cents per question, and in a temporary folder that is deleted afterwards. It is under Anthropic's terms for your account.
+
+### Technical details
+
+For readers who want the exact terms:
+
+- "Fingerprint" is a SHA-256 hash.
+- "Readable only by you" is file mode 0600, in a folder with mode 0700.
+- "Hooks" are the commands Claude Code runs on events; Buddy's is `bin/buddy-hook`.
+- "Asks GitHub" means `gh api` GET requests to api.github.com. Buddy keeps the ETags GitHub returns in memory only, not on disk.
+- "A connection on this computer only" is an HTTP server bound to 127.0.0.1. The no-token page is `GET /status`. The token is the `x-buddy-token` header, and the `port` file records the port. The optional Claude integration is an MCP server.
+- "Calendar subscription link" is an ICS feed (also written webcal://). The cache stores event times plus UID, RRULE, EXDATE, STATUS and TRANSP fields.
+- "Terminal device" is the tty.
+- Voice questions run `claude -p --model haiku` with `--tools ''`, `--no-session-persistence` and `--max-budget-usd 0.05`.
 
 ### Not yet shipped
 

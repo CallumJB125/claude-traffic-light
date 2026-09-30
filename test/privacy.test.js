@@ -47,7 +47,13 @@ test('numbered lists render as <ol>, and HTML comments never show', () => {
   assert.equal(render('<!-- flow:x -->'), '');
 });
 
-// ── Outbound network guard ────────────────────────────────────────────────
+// ── Outbound network tripwire ─────────────────────────────────────────────
+// THIS IS A TRIPWIRE, NOT A SECURITY BOUNDARY. It is a line-based pattern
+// scan: it catches honest mistakes (someone adds a fetch, a new dependency, a
+// shell-out to curl) and makes them a deliberate, documented decision. It
+// cannot stop code written to evade it (string building, eval, a bundled
+// dependency). Review still matters.
+//
 // HOW TO ADD A NEW OUTBOUND FLOW: put `// privacy-flow: <slug>` at the end of
 // the line that opens the channel, and add `<!-- flow:<slug> files=<path>[,<path>] -->`
 // to the PRIVACY.md section that says who receives what, and whether it is
@@ -55,14 +61,14 @@ test('numbered lists render as <ol>, and HTML comments never show', () => {
 // no matching PRIVACY.md entry fails, and so does a PRIVACY.md entry no code
 // line uses.
 const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add `<!-- flow:<slug> files=<path> -->` to the matching PRIVACY.md section.';
-// remote/ (phone relay) is not packaged or wired in; the package-files test below fails if that changes.
+// remote/ (phone relay) is not packaged or wired in; the packaging test below fails if that changes.
 const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git', 'remote']);
 function shipped(dir = ROOT, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) shipped(p, out);
-    else if (/\.(js|mjs|cjs|html)$/.test(e.name) && e.name !== 'playwright.config.js') out.push(p);
+    else if (/\.(js|mjs|cjs|html|css|swift)$/.test(e.name) && e.name !== 'playwright.config.js') out.push(p);
   }
   return out;
 }
@@ -72,50 +78,86 @@ const blank = (m) => m.replace(/[^\n]/g, ' ');
 function linesOf(text) {
   return text.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, blank).split('\n').map((l) => ({ raw: l, code: /^\s*\/\//.test(l) ? '' : l }));
 }
-const MOD = '(?:node:)?(?:https?|http2|net|tls|dgram|undici|ws)';
+const NOT_LITERAL = '(?:[^\'"`\\s)\\]]|`[^`]*\\$\\{)';
+const MOD = '(?:node:)?(?:https?|http2|net|tls|dgram|dns|undici|ws)';
 const CHANNEL = new RegExp([
-  `require\\(\\s*['"]${MOD}['"]\\s*\\)`, `\\bfrom\\s+['"]${MOD}['"]`, `\\bimport\\(\\s*['"]${MOD}['"]`,
-  '\\brequire\\(\\s*[^\'"`\\s)]', '\\brequire\\(\\s*`[^`]*\\$\\{', '\\bimport\\(\\s*[^\'"`\\s)]',
-  '\\bnet\\.(?:request|fetch|connect|createConnection)\\b', '\\btls\\.connect\\b', '\\bhttps?\\.(?:request|get)\\b',
-  'new ClientRequest', '\\bfetch\\(', 'new WebSocket', 'XMLHttpRequest', 'sendBeacon',
+  `require\\(\\s*['"]${MOD}['"]\\s*\\)`, `\\bfrom\\s+['"]${MOD}['"]`,
+  `\\brequire\\(\\s*${NOT_LITERAL}`, '\\bimport\\(\\s*\\S',
+  '\\bnet\\.(?:request|fetch|connect|createConnection)\\b', '\\btls\\.connect\\b', '\\bhttps?\\.(?:request|get)\\b', '\\bdns\\.(?:lookup|resolve\\w*)\\b',
+  'require\\(\\s*[\'"]electron[\'"]\\s*\\)\\s*\\.\\s*net\\b', '\\{[^}]*\\bnet\\b[^}]*\\}\\s*=\\s*require\\(\\s*[\'"]electron[\'"]',
+  'new ClientRequest', '\\bfetch\\(', 'Reflect\\.apply\\(\\s*(?:globalThis\\.|window\\.)?fetch', 'new WebSocket', 'new EventSource', 'EventSource\\(',
+  `new Worker\\(\\s*${NOT_LITERAL}`, 'XMLHttpRequest', 'sendBeacon',
   'globalThis\\s*\\[', '\\bglobal\\s*\\[', 'window\\s*\\[',
   'autoUpdater', 'electron-updater', 'update-electron-app', 'crashReporter', 'Sentry\\.init', '@sentry/',
-  'loadURL\\(\\s*[`\'"]https?:', 'openExternal\\(\\s*[^\'"`\\s]',
+  `(?:loadURL|downloadURL)\\(\\s*${NOT_LITERAL}`, '(?:loadURL|downloadURL)\\(\\s*[\'"`]https?:', `openExternal\\(\\s*${NOT_LITERAL}`,
+  '@import\\b', 'url\\(\\s*[\'"]?(?:https?:)?//',
+  'do shell script',
   // a shell told to run a network tool, or git talking to a remote
   '\\b(?:sh|zsh|bash|cmd|powershell)[\'"`]\\s*,\\s*\\[[^\\]]*\\b(?:curl|wget|ssh|scp|nc|ncat|ftp|telnet|gh)\\b',
   '[\'"`]git[\'"`]\\s*,\\s*\\[[^\\]]*[\'"`](?:fetch|pull|push|clone|ls-remote|remote\\s+update)[\'"`]',
-  // child_process reached through an alias: { execFile: ef } = require('child_process')
-  '\\{[^}]*\\b(?:exec|spawn)\\w*\\s*:\\s*\\w+[^}]*\\}\\s*=\\s*require\\(\\s*[\'"](?:node:)?child_process',
+  // a shell or powershell running a computed command, and node -e with computed code
+  `(?:sh|zsh|bash|powershell|cmd)[\'"\`]\\s*,\\s*\\[[^\\]]*[\'"\`][-/]\\w*[cC][\'"\`]\\s*,\\s*${NOT_LITERAL}`,
+  `process\\.execPath\\s*,\\s*\\[\\s*['"\`]-e['"\`]\\s*,\\s*${NOT_LITERAL}`,
+  // Swift
+  'URLSession', 'NSURLConnection', 'NWConnection', 'URLRequest',
 ].join('|'));
-const EXEC_NAMES = 'execFile|execFileSync|exec|execSync|spawn|spawnSync|fork';
+const EXEC_NAMES = ['execFile', 'execFileSync', 'exec', 'execSync', 'spawn', 'spawnSync', 'fork'];
+const EXEC_RE = EXEC_NAMES.join('|');
 // Binaries that only ever work on this machine. Anything else, or a computed
 // name, must carry a marker. Absolute paths count only from system locations.
 const LOCAL_BINS = new Set(['afplay', 'say', 'powershell', 'osascript', 'tmux', 'ps', 'git', 'open', 'cmd', 'zsh', 'sh', 'shortcuts', 'ccusage', 'pbcopy', 'kitten', 'wezterm', 'tailscale', 'process.execPath']);
 const LOCAL_PATHS = new Set(['/Applications/Tailscale.app/Contents/MacOS/Tailscale']);
 const SYSTEM_DIRS = /^\/(?:usr\/(?:local\/)?bin|bin|usr\/sbin|sbin|opt\/homebrew\/bin)\//;
 function localBin(bin) {
-  if (LOCAL_PATHS.has(bin)) return true;
-  if (LOCAL_BINS.has(bin)) return true;
+  if (LOCAL_PATHS.has(bin) || LOCAL_BINS.has(bin)) return true;
   return SYSTEM_DIRS.test(bin) && LOCAL_BINS.has(bin.replace(SYSTEM_DIRS, ''));
 }
-// `x.exec(` is usually a RegExp; a regex literal or an obviously-regex name is exempt.
-const REGEXISH = /(?:\/[gimsuy]*|\b(?:re|rx|regex|regexp|pattern)\w*|[A-Z][A-Z0-9_]+)$/;
-function opensChannel(code, importsCp) {
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Identifiers a file binds from child_process / electron's net / fetch, so
+// later CALLS of an alias are caught and not only the line that bound it.
+function bindingsOf(text) {
+  const b = { execCalls: new Set(), receivers: new Set(['child_process', 'childProcess', 'cp']), netNames: new Set(), fetchCalls: new Set() };
+  const CP = "(?:node:)?child_process";
+  for (const m of text.matchAll(new RegExp(`\\{([^}]*)\\}\\s*=\\s*require\\(\\s*['"]${CP}['"]\\s*\\)`, 'g'))) {
+    for (const part of m[1].split(',')) {
+      const [orig, alias] = part.split(':').map((x) => x.trim());
+      if (orig && EXEC_NAMES.includes(orig)) b.execCalls.add(alias || orig);
+    }
+  }
+  for (const m of text.matchAll(new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*require\\(\\s*['"]${CP}['"]\\s*\\)(?:\\.(${EXEC_RE}))?`, 'g'))) (m[2] ? b.execCalls : b.receivers).add(m[1]);
+  for (const m of text.matchAll(new RegExp(`import\\s+(?:\\*\\s+as\\s+)?(\\w+)\\s+from\\s+['"]${CP}['"]`, 'g'))) b.receivers.add(m[1]);
+  for (const m of text.matchAll(/\{([^}]*)\}\s*=\s*require\(\s*['"]electron['"]\s*\)/g)) {
+    for (const part of m[1].split(',')) { const [orig, alias] = part.split(':').map((x) => x.trim()); if (orig === 'net') b.netNames.add(alias || 'net'); }
+  }
+  for (const m of text.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:globalThis\.|window\.|global\.)?fetch\b(?!\s*\()/g)) b.fetchCalls.add(m[1]);
+  return b;
+}
+function opensChannel(code, b = bindingsOf('')) {
   if (CHANNEL.test(code)) return true;
-  const call = new RegExp(`(?:(^|[^\\w.])(${EXEC_NAMES})|(\\S*?)\\.(${EXEC_NAMES}))\\(\\s*(['"\`])?([^'"\`,)]*)`, 'g');
-  for (const m of code.matchAll(call)) {
-    const member = m[4] !== undefined;
-    // a bare exec( in a file with no child_process is an injected wrapper (its definition is what gets tagged),
-    // unless it names a literal binary: then the binary itself is checked.
-    if (!member && /function\s*$/.test(code.slice(0, m.index + (m[1] || '').length))) continue;
-    if (!member && !importsCp && !m[5]) continue;
-    if (member && m[4] === 'exec' && REGEXISH.test(m[3] || '')) continue;
-    const bin = m[5] ? m[6].trim().split(/\s+/)[0] : (m[6].trim() === 'process.execPath' ? 'process.execPath' : null);
-    if (!bin || !localBin(bin)) return true;
+  for (const n of b.netNames) if (new RegExp(`(?<![\\w.])${escRe(n)}\\.(?:request|fetch|connect|createConnection)\\b`).test(code)) return true;
+  for (const f of b.fetchCalls) if (new RegExp(`(?<![\\w.])${escRe(f)}\\(`).test(code)) return true;
+  const inline = (recv) => /require\(\s*['"](?:node:)?child_process['"]\s*\)$/.test(recv) || b.receivers.has(recv.split(/[\s(,=]/).pop());
+  const execBin = (quote, arg) => {
+    const bin = quote ? arg.trim().split(/\s+/)[0] : (arg.trim() === 'process.execPath' ? 'process.execPath' : null);
+    return !bin || !localBin(bin);
+  };
+  // member calls on a known child_process binding: cp.spawn(x), require('child_process').execFile(x)
+  for (const m of code.matchAll(new RegExp(`(\\S*?)\\.(${EXEC_RE})\\(\\s*(['"\`])?([^'"\`,)]*)`, 'g'))) {
+    if (inline(m[1]) && execBin(m[3], m[4])) return true;
+  }
+  // bare calls: destructured/aliased names from this file's child_process import
+  for (const name of b.execCalls) {
+    for (const m of code.matchAll(new RegExp(`(?<![\\w.])${escRe(name)}\\(\\s*(['"\`])?([^'"\`,)]*)`, 'g'))) {
+      if (/function\s*$/.test(code.slice(0, m.index))) continue;
+      if (execBin(m[1], m[2])) return true;
+    }
+  }
+  // a bare call naming a literal non-local binary counts even where the function is injected
+  for (const m of code.matchAll(new RegExp(`(?<![\\w.])(?:${EXEC_RE})\\(\\s*(['"\`])([^'"\`,)]*)`, 'g'))) {
+    if (!localBin(m[2].trim().split(/\s+/)[0])) return true;
   }
   return false;
 }
-const importsChildProcess = (text) => /(?:require\(\s*|from\s+)['"](?:node:)?child_process['"]/.test(text);
 // <!-- flow:slug files=a.js,b.js -->
 const flows = new Map([...privacy.matchAll(/<!-- flow:([\w-]+) files=([^\s>]+) -->/g)].map((m) => [m[1], new Set(m[2].split(','))]));
 const files = shipped();
@@ -125,9 +167,9 @@ function audit(list) {
   const problems = [];
   const used = new Set();
   for (const { file, text } of list) {
-    const cp = importsChildProcess(text);
+    const b = bindingsOf(text);
     linesOf(text).forEach(({ raw, code }, i) => {
-      if (!code || !opensChannel(code, cp)) return;
+      if (!code || !opensChannel(code, b)) return;
       const where = `${file}:${i + 1}`;
       const slug = (raw.match(/privacy-flow:\s*([\w-]+)/) || [])[1];
       if (!slug) return problems.push(`${where} opens a network or process channel without a privacy-flow marker: ${code.trim().slice(0, 90)}`);
@@ -145,23 +187,53 @@ test('every line that opens a network channel is tagged and documented in PRIVAC
   assert.deepEqual(problems, [], `\n${problems.join('\n')}\n${HOW}`);
 });
 
+// Does a packaging glob (electron-builder style) cover this repo path? Good enough for a tripwire.
+function globMatches(pattern, file) {
+  const re = pattern.replace(/^\.\//, '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0000').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\u0000/g, '(?:.*/)?');
+  return new RegExp(`^${re}(?:/.*)?$`).test(file);
+}
+function packaged(pkg, file) {
+  const b = pkg.build || {};
+  const entries = [...(b.files || []), ...(b.extraResources || []), ...(b.extraFiles || [])];
+  for (const os of ['mac', 'win', 'linux']) entries.push(...(b[os]?.files || []), ...(b[os]?.extraResources || []), ...(b[os]?.extraFiles || []));
+  let included = false;
+  for (const e of entries) {
+    const pat = typeof e === 'string' ? e : (e.from || '');
+    if (pat.startsWith('!')) { if (globMatches(pat.slice(1), file)) included = false; } else if (globMatches(pat, file)) included = true;
+  }
+  return included;
+}
 test('the phone relay (remote/) stays out of the app package until it is documented', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  const listed = JSON.stringify([...(pkg.build.files || []), ...(pkg.build.extraResources || [])]);
-  assert.ok(!/remote/.test(listed), 'remote/ is being packaged: remove it from SKIP_DIRS and document its flows');
+  for (const f of ['remote/src/relay.js', 'remote/package.json', 'remote']) assert.ok(!packaged(pkg, f), `${f} is being packaged: remove remote from SKIP_DIRS and document its flows`);
+  assert.ok(packaged({ build: { files: ['**/*'] } }, 'remote/src/relay.js'), 'self-check: a catch-all glob covers remote/');
+  assert.ok(packaged({ build: { mac: { extraResources: [{ from: 'remote', to: 'r' }] } } }, 'remote/src/relay.js'), 'self-check: per-OS extraResources');
+  assert.ok(!packaged({ build: { files: ['**/*', '!remote/**'] } }, 'remote/src/relay.js'), 'self-check: negation');
 });
 
 test('the guard catches what it should', () => {
-  const bad = ["require('node:https')", "require('ws')", "import x from 'undici'", "const m = await import(name)", "require(modName)", "fetch(u)", "globalThis['fe' + 'tch'](u)",
-    "net.connect(1)", "tls.connect(1)", "new ClientRequest(u)", "win.loadURL(`https://x`)", "Sentry.init({})", "require('electron-updater')",
-    "execFile('curl', [u])", "execFile(bin, args)", "cp.spawn(cmd)", "cp.spawn(cmd.execPath)", "child.execFile('x')", "util.exec('curl x')", "const { execFile: ef } = require('child_process')",
-    "execFile('/bin/zsh', ['-c', 'curl x'])", "execFile('sh', ['-c', 'wget x'])", "execFile('git', ['fetch'])", "shell.openExternal(url)", "spawn('/tmp/x/open', [])"];
-  for (const b of bad) assert.ok(opensChannel(b, true), b);
-  const ok = ["execFile('git', ['status'])", "execFileSync('/bin/ps', [])", "spawn(process.execPath, ['x'])", "execFile('/usr/bin/osascript', [])", "shell.openExternal('https://claude.ai')",
-    "HOOK.exec(line)", "/a/g.exec(s)", "re.exec(line)", "net.isOnline()", "win.loadFile('a.html')", "exec(file)", "execFile('/Applications/Tailscale.app/Contents/MacOS/Tailscale', ['status'])"];
-  for (const o of ok) assert.ok(!opensChannel(o, false), o);
-  assert.ok(!opensChannel("exec(file)", false) && opensChannel("exec(file)", true), 'bare exec( counts only where child_process is imported');
-  assert.ok(opensChannel("spawn('claude', args)", false), 'a literal non-local binary counts even when spawn is injected');
+  const flagged = (code, text = code) => opensChannel(code, bindingsOf(text));
+  const bad = ["require('node:https')", "require('ws')", "require('dns')", "import x from 'undici'", "const m = await import(name)", "await import('x')", "require(modName)", "fetch(u)", "globalThis['fe' + 'tch'](u)",
+    "net.connect(1)", "tls.connect(1)", "dns.lookup(h)", "new ClientRequest(u)", "new EventSource(u)", "new Worker(file)", "win.loadURL(u)", "win.loadURL(`https://x`)", "s.downloadURL(u)", "Sentry.init({})", "require('electron-updater')",
+    "const { request } = require('electron').net", "const { app, net } = require('electron')", "@import url(x.css);", "background: url(https://x/y.png)",
+    "execFile('curl', [u])", "cp.spawn(cmd)", "require('child_process').spawn(cmd)", "childProcess.execFile('x')",
+    "execFile('/bin/zsh', ['-c', 'curl x'])", "execFile('sh', ['-c', 'wget x'])", "execFile('/bin/zsh', ['-lc', action.arg])", "execFile('powershell', ['-NoProfile', '-c', `Speak('${t}')`])", "execFile('git', ['fetch'])",
+    "spawnSync(process.execPath, ['-e', probe])", "osascript -e 'do shell script \"curl x\"'", "shell.openExternal(url)", "spawn('/tmp/x/open', [])", "spawn('claude', args)",
+    "URLSession.shared.dataTask(with: u)", "let c = NWConnection(host: h, port: p, using: .tcp)"];
+  for (const b of bad) assert.ok(flagged(b), b);
+  // aliases: the binding line and the later calls
+  const cpAlias = "const { execFile: ef } = require('child_process');\nef(bin, args);";
+  assert.ok(flagged('ef(bin, args)', cpAlias), 'call of a destructured alias');
+  assert.ok(flagged('sp(cmd)', "const sp = require('child_process').spawn;"), 'call of a spawn alias');
+  assert.ok(flagged('c.execFile(cmd)', "const c = require('child_process');"), 'member of a renamed child_process');
+  assert.ok(flagged('n.request(o)', "const { net: n } = require('electron');"), 'renamed electron net');
+  assert.ok(flagged('f(u)', 'const f = fetch;'), 'call of a fetch alias');
+  assert.ok(flagged('Reflect.apply(fetch, null, [u])'), 'Reflect.apply(fetch');
+  const ok = ["execFile('git', ['status'])", "execFileSync('/bin/ps', [])", "spawn(process.execPath, ['x'])", "execFile('/usr/bin/osascript', [])", "shell.openExternal('https://claude.ai')", "win.loadFile('a.html')",
+    "HOOK.exec(line)", "/a/g.exec(s)", "re.exec(line)", "match.exec(s)", "tokenRe.exec(s)", "line.exec(s)", "ctx.exec(file, args)", "net.isOnline()", "exec(file)",
+    "execFile('/Applications/Tailscale.app/Contents/MacOS/Tailscale', ['status'])", "execFile('/bin/zsh', ['-c', 'echo hi'])", "import('./x.js')".replace('import', 'Import'), "execFile('osascript', ['-e', script])"];
+  for (const o of ok) assert.ok(!flagged(o), o);
+  assert.ok(!flagged('exec(file)', "const x = 1;"), 'a bare exec( with no child_process binding is an injected wrapper');
 });
 
 test('a flow slug cannot be reused in a file PRIVACY.md does not list for it', () => {
@@ -182,15 +254,16 @@ test('the local server only listens on loopback', () => {
 
 test('every external hostname in shipped code is documented in PRIVACY.md', () => {
   const ignore = new Set(['127.0.0.1', 'localhost', 'www.w3.org']);
+  const missing = new Set();
   for (const f of files) {
     const code = linesOf(fs.readFileSync(f, 'utf8')).map((l) => l.code).join('\n');
     for (const m of code.matchAll(/https?:\/\/([a-z0-9][a-z0-9.-]*[a-z0-9])/gi)) {
       const host = m[1].toLowerCase();
       if (ignore.has(host)) continue;
-      const esc = host.replace(/\./g, '\\.');
-      assert.match(privacy, new RegExp(`(?<![\\w.-])${esc}(?![\\w-])`), `${host} (in ${rel(f)}) is not mentioned in PRIVACY.md`);
+      if (!new RegExp(`(?<![\\w.-])${host.replace(/\./g, '\\.')}(?![\\w-])`).test(privacy)) missing.add(`${host} (in ${rel(f)})`);
     }
   }
+  assert.deepEqual([...missing], [], 'hosts not mentioned in PRIVACY.md');
 });
 
 test('the shipped dependency list is an allow-list', () => {
