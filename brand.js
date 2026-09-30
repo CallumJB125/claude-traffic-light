@@ -34,9 +34,8 @@
       download: `${SITE}/download`,
       privacy: `${SITE}/privacy`,
       hub: HUB,
-      // where the app looks for updates. A GitHub Release until the download
-      // host is live; then https://download.plexiform.dev (a one-line change)
-      updates: 'https://github.com/CallumJB125/claude-traffic-light/releases/latest/download',
+      // where the app looks for updates: the release host (electron-updater reads latest*.yml here)
+      updates: 'https://download.plexiform.dev',
     }),
     scheme: SCHEME,
     legacySchemes: Object.freeze(LEGACY_SCHEMES),
