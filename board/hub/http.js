@@ -81,6 +81,7 @@ export function createHttpHandler({ hub, api, config }) {
   route('GET', '/api/me', ({ member }) => api.me(member));
   route('GET', '/api/boards/:board_id', ({ member, params }) => api.snapshot(member, params.board_id));
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
+  route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body }) => api.createCard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));

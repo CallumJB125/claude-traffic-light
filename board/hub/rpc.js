@@ -70,10 +70,13 @@ const METHODS = {
     const id = randomUUID();
     const res = hub.apply(row.id, { type: 'block', fence: row.fence, kind: params.kind }, {
       ctx: { require_plan_approval: hub.labels(row).includes(PLAN_APPROVAL_LABEL) },
-      pre: () => hub.db.insert('asks', {
-        id, run_id: run.id, card_id: row.id, kind: params.kind, text: clip(params.text, 2000),
-        options: params.options ? JSON.stringify(params.options.slice(0, 10).map((o) => clip(o, 200))) : null, state: 'open', created_at: hub.iso(),
-      }),
+      pre: () => {
+        hub.db.insert('asks', {
+          id, run_id: run.id, card_id: row.id, kind: params.kind, text: clip(params.text, 2000),
+          options: params.options ? JSON.stringify(params.options.slice(0, 10).map((o) => clip(o, 200))) : null, state: 'open', created_at: hub.iso(),
+        });
+        hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'ask.create', payload: { ask_id: id, kind: params.kind } });
+      },
     });
     if (!res.ok) throw new HubError(res.error.code, res.error.message);
     return { ask_id: id };
@@ -117,6 +120,7 @@ const METHODS = {
     const paths = [...new Set(params.paths.filter(relPath))].slice(0, 200);
     hub.txn(() => {
       hub.db.run('UPDATE runs SET planned_paths = ? WHERE id = ?', JSON.stringify(paths), run.id);
+      hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'plan.declare', payload: { paths } });
       if (params.summary) hub.feed(row.id, 'plan_declared', { summary: clip(params.summary, 500), paths: paths.slice(0, 20) }, { run });
     });
     hub.recomputeOverlaps(run.repo_id);
@@ -153,10 +157,13 @@ const METHODS = {
     const approvers = [...new Set([run.on_behalf_of, run.dispatched_by, ...hub.assignees(row.id), ...(repoPolicy?.approvals_from ?? [])].filter(Boolean))];
     const id = randomUUID();
     const res = hub.apply(row.id, { type: 'block', fence: row.fence, kind: 'permission' }, {
-      pre: () => hub.db.insert('permission_requests', {
-        id, run_id: run.id, card_id: row.id, tool: clip(params.tool_name, 100), input_summary: clip(params.input_summary ?? '', 300),
-        state: 'open', approvers: JSON.stringify(approvers), created_at: hub.iso(),
-      }),
+      pre: () => {
+        hub.db.insert('permission_requests', {
+          id, run_id: run.id, card_id: row.id, tool: clip(params.tool_name, 100), input_summary: clip(params.input_summary ?? '', 300),
+          state: 'open', approvers: JSON.stringify(approvers), created_at: hub.iso(),
+        });
+        hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'permission.create', payload: { permission_request_id: id, tool: clip(params.tool_name, 100) } });
+      },
     });
     if (!res.ok) throw new HubError(res.error.code, res.error.message);
     return { permission_request_id: id };
@@ -173,6 +180,7 @@ const METHODS = {
     const withdrawable = row.run_state === 'blocked' || row.resume_to === 'blocked';
     hub.txn(() => {
       hub.db.run("UPDATE permission_requests SET state = 'cancelled', answered_at = ? WHERE id = ? AND state = 'open'", hub.iso(), pr.id);
+      hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'permission.cancel', payload: { permission_request_id: pr.id } });
       if (withdrawable) {
         const res = hub.apply(row.id, { type: 'withdraw', fence: row.fence }, { ctx: { open_asks_remaining: open } });
         if (!res.ok) throw new HubError(res.error.code, res.error.message);
@@ -215,6 +223,7 @@ async function attachEvidence(hub, device, msg) {
         result: params.kind === 'test_run' ? params.result ?? null : null, verification, verified_at: verified ? hub.iso() : null, created_at: hub.iso(),
       });
       hub.feed(row.id, 'evidence', { kind: params.kind, ref: params.ref, verification, result: params.result ?? null }, { run: again.run });
+      hub.journal({ board_id: row.board_id, card_id: row.id, run_id: again.run.id, actor_kind: 'runner', actor_id: device.id, kind: 'evidence.create', payload: { evidence_id: id, kind: params.kind, ref: params.ref, verification, result: params.result ?? null } });
       hub.later(() => hub.broadcastCard(row.id));
     });
     return { evidence_id: id, verification };

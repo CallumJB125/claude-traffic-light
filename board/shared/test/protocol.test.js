@@ -18,6 +18,11 @@ test('CONTRACT.md names every message type, outbox kind, fact kind, error code, 
   assert.deepEqual(missing, []);
 });
 
+test('CONTRACT.md names every journal kind (§15)', async () => {
+  const { JOURNAL_KINDS } = await import('../journal.js');
+  assert.deepEqual(JOURNAL_KINDS.filter((k) => !CONTRACT.includes(`\`${k}\``)), []);
+});
+
 test('CONTRACT.md documents every transition row id', () => {
   const missing = TRANSITIONS.map((r) => r.id).filter((id) => !CONTRACT.includes(`\`${id}\``));
   assert.deepEqual(missing, []);
@@ -80,4 +85,20 @@ test('every states.js feed effect is a FeedEvent kind', async () => {
   const kinds = [...src.matchAll(/feed\('([a-z_]+)'/g)].map((m) => m[1]);
   assert.ok(kinds.length > 20);
   assert.deepEqual([...new Set(kinds)].filter((k) => !FEED_KINDS.includes(k)), []);
+});
+
+test('journal.replay: create → update → transitions → restore bump', async () => {
+  const { replay } = await import('../journal.js');
+  const rows = [
+    { seq: 1, card_id: 'c1', kind: 'card.create', payload: { key: 'K-1', title: 't', labels: '[]', column_name: 'todo' } },
+    { seq: 2, card_id: 'c1', kind: 'card.update', payload: JSON.stringify({ fields: { title: ['t', 'T'] } }) },
+    { seq: 3, card_id: 'c1', kind: 'card.transition', payload: { state: { run_state: 'queued', column_name: 'todo', fence: 0 } } },
+    { seq: 4, card_id: 'c1', kind: 'card.transition', payload: { state: { run_state: 'claimed', column_name: 'in_progress', fence: 1 } } },
+    { seq: 5, card_id: 'c1', kind: 'ask.create', payload: {} },
+    { seq: 6, card_id: null, kind: 'hub.restore_bump', payload: { bump: 1000 } },
+    { seq: 7, card_id: 'zz', kind: 'card.update', payload: { fields: { title: ['a', 'b'] } } },
+  ];
+  const c = replay(rows).get('c1');
+  assert.deepEqual([c.title, c.run_state, c.column_name, c.fence], ['T', 'claimed', 'in_progress', 1001]);
+  assert.equal(replay(rows).size, 1);
 });

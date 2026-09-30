@@ -99,8 +99,14 @@ test('orphaned runner that returns: RECOVER to quiet, relabelled, orphan notific
     assert.equal(ack.runs[0].current, true);
     assert.equal(h.card(run.card_id).run_state, 'quiet');
     assert.equal(view(h, run.card_id).live.green, false, 'not green after recovery');
-    const orphanEv = h.db.get("SELECT payload FROM events WHERE card_id = ? AND kind = 'orphaned'", run.card_id);
-    assert.equal(JSON.parse(orphanEv.payload).relabel, 'was asleep');
+    // Append-only relabel (P-1): a new row joins onto the orphaned line; the feed shows it.
+    const orphanEv = h.db.get("SELECT id, payload FROM events WHERE card_id = ? AND kind = 'orphaned'", run.card_id);
+    assert.equal(JSON.parse(orphanEv.payload).relabel, undefined, 'the orphaned row is never rewritten');
+    const rl = h.db.get("SELECT payload FROM events WHERE card_id = ? AND kind = 'orphan_relabel'", run.card_id);
+    assert.deepEqual(JSON.parse(rl.payload), { event_id: orphanEv.id, relabel: 'was asleep' });
+    const feed = (await h.api(await h.login('alice'), 'GET', `/api/cards/${run.card_id}`)).body.feed;
+    assert.equal(feed.find((e) => e.kind === 'orphaned').text, 'Orphaned (was asleep)');
+    assert.ok(h.db.get("SELECT 1 AS x FROM journal WHERE card_id = ? AND kind = 'feed.relabel'", run.card_id));
 
     await r2.out({ kind: 'activity', ...runMsg(run), source: 'replay' }, { delayed: true });
     assert.equal(h.card(run.card_id).run_state, 'quiet', 'delayed activity never moves a card');

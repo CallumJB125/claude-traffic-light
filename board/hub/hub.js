@@ -7,11 +7,12 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
-import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL } from '../shared/states.js';
+import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
+import { CARD_STATE } from '../shared/journal.js';
 import {
   timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
 } from '../shared/liveness.js';
-import { branchName, snapshotRef } from '../shared/fence.js';
+import { branchName, snapshotRef, RESTORE_BUMP } from '../shared/fence.js';
 import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
@@ -70,8 +71,10 @@ export class Hub extends EventEmitter {
     const epoch = randomUUID();
     const marker = this.config.dbPath && this.config.dbPath !== ':memory:' ? `${this.config.dbPath}.restored` : null;
     const restored = this.config.restore || (marker && existsSync(marker));
+    this.epoch = epoch;
     if (restored) {
       applyRestoreBump(this.db.raw, epoch, this.iso());
+      this.journal({ board_id: null, actor_kind: 'system', kind: 'hub.restore_bump', payload: { bump: RESTORE_BUMP } });
       if (marker && existsSync(marker)) unlinkSync(marker);
       this.log.warn('restore bump applied', { hub_epoch: epoch });
     } else {
@@ -160,6 +163,16 @@ export class Hub extends EventEmitter {
   canWrite(m) { return !!m && m.role !== 'viewer'; }
   cardSpentCents(cardId) { return this.db.get('SELECT COALESCE(SUM(cost_cents), 0) AS s FROM runs WHERE card_id = ?', cardId).s; }
 
+  // ── journal (P-1): append-only, same transaction as the change ─────────────
+  /** {board_id? (else from card_id), card_id?, run_id?, actor_kind, actor_id?, kind, payload} */
+  journal({ board_id, card_id = null, run_id = null, actor_kind = 'system', actor_id = null, kind, payload = {} }) {
+    const board = board_id !== undefined ? board_id : this.db.get('SELECT board_id FROM cards WHERE id = ?', card_id)?.board_id ?? null;
+    this.db.insert('journal', {
+      board_id: board, card_id, run_id, at_hub: this.iso(), hub_epoch: this.epoch ?? null,
+      actor_kind, actor_id, kind, payload: JSON.stringify(payload),
+    });
+  }
+
   // ── apply: step() + effects in one transaction ────────────────────────────
   /**
    * Must run inside the card's board queue. opts: {ctx, actor (member id),
@@ -181,12 +194,28 @@ export class Hub extends EventEmitter {
         this.writeCard(env);
         for (const e of res.effects) this.effect(e, env);
         this.cleanupAsks(env);
+        this.journalTransition(env);
       });
     } catch (e) {
       if (e instanceof HubError) return { ok: false, error: { code: e.code, message: e.message, ...e.extra } };
       throw e;
     }
     return { ...res, row: this.card(cardId), run_id: env.newRunId ?? env.runId };
+  }
+
+  journalTransition(env) {
+    const { row, res, event, actor, device } = env;
+    const after = this.card(row.id);
+    const state = {};
+    for (const f of CARD_STATE) state[f] = after[f] ?? null;
+    const src = EVENTS[event.type];
+    this.journal({
+      board_id: row.board_id, card_id: row.id, run_id: env.newRunId ?? env.runId ?? null,
+      actor_kind: src === 'human' ? 'member' : src === 'runner' ? 'runner' : 'system',
+      actor_id: src === 'human' ? actor : src === 'runner' ? device?.id ?? null : null,
+      kind: 'card.transition',
+      payload: { rule: res.rule, event: event.type, from: res.from, to: res.to, state, effects: res.effects.map((e) => e.type) },
+    });
   }
 
   writeCard(env) {
@@ -315,8 +344,13 @@ export class Hub extends EventEmitter {
         break;
       }
       case 'relabel_orphan': {
-        const ev = this.db.get("SELECT id, payload FROM events WHERE card_id = ? AND kind = 'orphaned' ORDER BY id DESC LIMIT 1", cardId);
-        if (ev) this.db.run('UPDATE events SET payload = ? WHERE id = ?', JSON.stringify({ ...json(ev.payload, {}), relabel: 'was asleep' }), ev.id);
+        // Append-only: a relabel row that feedEvent() joins onto the orphaned line.
+        const ev = this.db.get("SELECT id FROM events WHERE card_id = ? AND kind = 'orphaned' ORDER BY id DESC LIMIT 1", cardId);
+        if (ev) {
+          this.db.insert('events', { card_id: cardId, run_id: env.runId ?? null, kind: 'orphan_relabel', payload: JSON.stringify({ event_id: ev.id, relabel: 'was asleep' }), actor: null, at_hub: now, delayed: 0 });
+          this.journal({ board_id: row.board_id, card_id: cardId, run_id: env.runId ?? null, kind: 'feed.relabel', payload: { event_id: ev.id, relabel: 'was asleep' } });
+          this.later(() => this.broadcastEvent(cardId, ev.id));
+        }
         break;
       }
       case 'restart_state_timer':
@@ -358,6 +392,7 @@ export class Hub extends EventEmitter {
       seeded_from_handover: seed.handover_version ?? null,
     });
     this.db.run("UPDATE dispatches SET state = 'claimed', run_id = ? WHERE request_id = ?", id, d.request_id);
+    this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id } });
     this.db.run('UPDATE cards SET active_run_id = ? WHERE id = ?', id, row.id);
     env.newRunId = id;
     env.runId = id;
@@ -745,6 +780,7 @@ export class Hub extends EventEmitter {
     const version = (prev?.version ?? 0) + 1;
     next.version = version;
     this.db.insert('handovers', { card_id: cardId, version, run_id: run?.id ?? null, fence: run?.fence ?? null, sections: JSON.stringify(next), written_by, provenance, created_at: this.iso() });
+    this.journal({ card_id: cardId, run_id: run?.id ?? null, actor_kind: written_by === 'claude' ? 'runner' : 'member', actor_id: written_by === 'claude' ? run?.device_id ?? null : null, kind: 'handover.version', payload: { version, written_by, provenance } });
     this.later(() => this.broadcastCard(cardId));
     return version;
   }
@@ -949,7 +985,10 @@ export function feedEvent(hub, ev) {
   else if (ev.kind === 'subagent') text = data.summary;
   else if (ev.kind === 'file') text = `${data.op} ${data.path}`;
   else if (ev.kind === 'command') text = `${data.cmd} · exit ${data.exit ?? '?'}`;
-  else if (ev.kind === 'orphaned' && data.relabel) text = `Orphaned (${data.relabel})`;
+  else if (ev.kind === 'orphaned') {
+    const rl = hub.db.get("SELECT payload FROM events WHERE card_id = ? AND kind = 'orphan_relabel' AND json_extract(payload, '$.event_id') = ? ORDER BY id DESC LIMIT 1", ev.card_id, ev.id);
+    if (rl) text = `Orphaned (${json(rl.payload, {}).relabel})`;
+  }
   else if (ev.kind === 'failed' && data.reason) text = `Failed: ${data.reason}`;
   return {
     id: ev.id, kind: ev.kind, at_age_ms: hub.ageOf(ev.at_hub), actor_name: ev.actor ? hub.memberName(ev.actor) : null,

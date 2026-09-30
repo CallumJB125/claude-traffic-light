@@ -81,6 +81,16 @@ export class Api {
     return { doc: h.doc, ages: h.ages, markdown: h.markdown };
   }
 
+  // GET /api/boards/:id/journal — this board's rows only (every card on it is in the board's repos).
+  journalPage(member, boardId, { after_seq, limit } = {}) {
+    this.boardFor(member, boardId);
+    const after = Number.isSafeInteger(Number(after_seq)) ? Number(after_seq) : 0;
+    const n = Math.min(Math.max(Number.isSafeInteger(Number(limit)) ? Number(limit) : 200, 1), 1000);
+    const rows = this.db.all('SELECT * FROM journal WHERE board_id = ? AND seq > ? ORDER BY seq LIMIT ?', boardId, after, n)
+      .map((j) => ({ ...j, payload: json(j.payload, {}) }));
+    return { rows, next_after_seq: rows.length ? rows.at(-1).seq : after };
+  }
+
   alerts(member, boardId) {
     const snap = this.snapshot(member, boardId);
     return {
@@ -140,6 +150,10 @@ export class Api {
           created_by: member.id, created_at: now, updated_at: now, state_since: now,
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
+        const c = this.hub.card(id);
+        this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload: {
+          key: c.key, title, body: text, acceptance, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
+        } });
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
       });
@@ -177,8 +191,12 @@ export class Api {
         for (const a of body.assignees) this.orgMember(member, a);
       }
       this.hub.txn(() => {
+        const fields = {};
+        for (const k of Object.keys(set)) if (set[k] !== row[k]) fields[k] = [row[k], set[k]];
+        if ('assignees' in body) fields.assignees = [this.hub.assignees(cardId), [...new Set(body.assignees)]];
         set.version = row.version + 1;
         set.updated_at = this.hub.iso();
+        this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.update', payload: { fields, request_id: body.request_id ?? null } });
         const keys = Object.keys(set);
         this.db.run(`UPDATE cards SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => set[k]), cardId);
         if ('assignees' in body) {
@@ -253,7 +271,12 @@ export class Api {
           if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd > 0)) throw new HubError('VALIDATION', 'budget_usd must be > 0');
           const cents = Math.round(body.budget_usd * 100);
           ctx.policy_ok = this.policyOk(row, cents);
-          if (!existing) opts.pre = () => this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
+          if (!existing && cents !== row.budget_cents) {
+            opts.pre = () => {
+              this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
+              this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: me, kind: 'card.update', payload: { fields: { budget_cents: [row.budget_cents, cents] }, request_id: body.request_id } });
+            };
+          }
         }
         break;
       }
@@ -283,6 +306,7 @@ export class Api {
         opts.pre = () => {
           const r = this.db.run("UPDATE asks SET state = 'answered', answer = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state = 'open'", answer, me, this.hub.iso(), ask.id);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'already answered');
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, run_id: ask.run_id, actor_kind: 'member', actor_id: me, kind: 'ask.answer', payload: { ask_id: ask.id, by: me } });
         };
         break;
       }
@@ -320,6 +344,7 @@ export class Api {
         pre: () => {
           const r = this.db.run("UPDATE permission_requests SET state = ?, scope = ?, answered_by = ?, answered_at = ? WHERE id = ? AND state IN ('open','parked')", state, scope, member.id, this.hub.iso(), prId);
           if (Number(r.changes) === 0) throw new HubError('ALREADY_ANSWERED', 'another approver answered first');
+          this.hub.journal({ card_id: cardId, run_id: pr.run_id, actor_kind: 'member', actor_id: member.id, kind: 'permission.answer', payload: { permission_request_id: prId, decision: body.decision, scope } });
         },
       });
       if (!res.ok) throw new HubError(res.error.code, res.error.message, stripErr(res.error));
@@ -336,6 +361,7 @@ export class Api {
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
     this.db.insert('comments', { id, card_id: cardId, author_member_id: member.id, source: 'web', trusted: 1, body, for_agent: for_agent ? 1 : 0, reply_to: replyTo, created_at: this.hub.iso() });
+    this.hub.journal({ card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'comment.create', payload: { comment_id: id, source: 'web', for_agent: !!for_agent } });
     return id;
   }
 

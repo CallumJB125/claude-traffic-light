@@ -396,6 +396,7 @@ export class RunnerConn {
         if (['pushed', 'push_failed', 'held'].includes(m.status)) {
           hub.db.run('UPDATE runs SET snapshot_status = ?, last_snapshot_sha = COALESCE(?, last_snapshot_sha), snapshot_ref = COALESCE(?, snapshot_ref), snapshot_reason = ?, snapshot_at = ? WHERE id = ?',
             m.status, m.sha ?? null, m.ref ?? null, m.reason == null ? null : clip(m.reason, 300), hub.iso(), run.id);
+          hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: this.device_id, kind: 'run.snapshot', payload: { status: m.status, sha: m.sha ?? null, ref: m.ref ?? null } });
           hub.later(() => hub.broadcastCard(row.id));
         }
         break;
@@ -417,6 +418,7 @@ export class RunnerConn {
         const id = randomUUID();
         const replyTo = m.reply_to && hub.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', m.reply_to, row.id) ? m.reply_to : null;
         hub.db.insert('comments', { id, card_id: row.id, author_run_id: run.id, source: 'agent', trusted: 1, body: clip(m.text, 10_000), for_agent: 0, reply_to: replyTo, created_at: hub.iso() });
+        hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: this.device_id, kind: 'comment.create', payload: { comment_id: id, source: 'agent', for_agent: false } });
         rec('comment', { comment_id: id, by_agent: true });
         break;
       }
@@ -542,6 +544,7 @@ export class RunnerConn {
         if (promote && msg.kind === 'snapshot' && typeof p.sha === 'string') {
           hub.db.run('UPDATE runs SET last_snapshot_sha = ?, snapshot_ref = COALESCE(?, snapshot_ref), snapshot_status = ?, snapshot_reason = ?, snapshot_at = ? WHERE id = ?',
             p.sha, typeof p.ref === 'string' ? p.ref : null, ['pushed', 'push_failed', 'held'].includes(p.status) ? p.status : 'pushed', 'post_fence', hub.iso(), run.id);
+          hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: this.device_id, kind: 'run.snapshot', payload: { status: p.status ?? 'pushed', sha: p.sha, ref: typeof p.ref === 'string' ? p.ref : null, provenance: 'post_fence' } });
           promoted = true;
         }
         const text = msg.kind === 'note' ? clip(p.text ?? p.note ?? '', 500) : msg.kind === 'handover' ? 'final handover narrative (after fence)' : `snapshot ${String(p.sha ?? '?').slice(0, 7)}`;

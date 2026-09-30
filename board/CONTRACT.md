@@ -31,7 +31,8 @@ board/
     protocol.js           PROTOCOL_VERSION, error codes, message shapes, validate()
     schema.sql            SQLite schema = migration 001
     migrate.js            migration runner + applyRestoreBump (Node only)
-    migrations/           002_device_form_factor.sql …
+    journal.js            append-only journal row kinds + replay() (§15)
+    migrations/           002_device_form_factor.sql, 003_journal.sql
     test/                 node --test
   hub/                    board hub (Node ≥ 22.13, node:sqlite, ws). Serves web/ and shared/.
   runner/                 detached supervisor + hook shim + CLI (Node ≥ 22.13, ws)
@@ -69,6 +70,7 @@ Clocks: the hub judges every timeout on its **own** monotonic clock at receive t
 | `cardface.js` | `cardFace(view, {elapsed_ms, connection_lost})`, `sponsorLine`, `alertsFor`, `agentName`, `PILLS` | web (and hub tests) |
 | `handover.js` | `SECTIONS`, `AGENT_WRITABLE`, `applyPatch`, `mergeHandover`, `renderMarkdown`, `syncAges`, `howToTakeOver`, `handoffMemoryText` | hub (store/render/seed), web (render JSON form) |
 | `protocol.js` | `PROTOCOL_VERSION`, `ERRORS`, `httpStatus`, `WS_CLOSE`, `WS_PATHS`, `SHAPES`, `OUTBOX_SHAPES`, `FACT_KINDS`, `FEED_KINDS`, `OUTBOX_KINDS`, `RPC_METHODS`, `RUNNER_ONLY_RPC`, `MCP_TOOLS`, `MCP_OUTBOX_TOOLS`, `HOOK_EVENTS`, `RUNNER_COMMANDS`, `validate(channel, msg)`, `compatible` | all |
+| `journal.js` | `JOURNAL_KINDS`, `CARD_STATE`, `replay(rows)` | hub (writes), tests/replay |
 | `migrate.js` | `migrate(db, opts)`, `loadMigrations`, `currentVersion`, `applyRestoreBump` | hub |
 
 ## 4. Identity and auth
@@ -119,6 +121,7 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 | `GET /api/devices` / `POST /api/devices` / `DELETE /api/devices/:id` | member (own devices; admin all) | `{request_id, name}` | list / `{device_id, device_token}` (once) / `{ok}` | `FORBIDDEN` |
 | `GET /api/repos` / `POST /api/repos` | member / admin | `{request_id, url, short_name?, default_branch?}` | `{repo}`; `canonical_url = normalizeRemoteUrl(url)` | `VALIDATION` (null canonical) , `CONFLICT` |
 | `POST /api/boards/:board_id/repos` | admin | `{request_id, repo_id}` | `{ok}` | — |
+| `GET /api/boards/:board_id/journal?after_seq=&limit=` | member (board's org) | — | `{rows:[{seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload}], next_after_seq}`; this board's rows only, `seq` ascending, `limit` ≤ 1000 (default 200) | 404 |
 | `POST /api/members` | admin | `{request_id, github_login, github_id, email, display_name, role}` | `{member}` | `CONFLICT` |
 
 **Actions** (`:action` → `states.js` event; the hub builds `ctx` per §10.2):
@@ -659,6 +662,7 @@ The reaper calls `timerEvent(snapshot)` for each card every second and feeds a n
   - **SCRUB=1** ($0.036): `system/init.permissionMode = "default"`. `ls`, `node --version` and `git status` ran (read-only, or the explicit git allow rule); `npm test`, the redirect and the `env` pipeline each went to `mcp__board__approval`, i.e. **3 of 6 routine sandboxed commands would have waited for a human**. So (a) `sandbox.autoAllowBashIfSandboxed` does **not** auto-allow under the forced `default` mode. (b) Explicit allow rules do work per command (the `Bash(git …)` rules), but every build/test/redirect/pipe shape would need one: an endless per-repo list, rejected. Bash saw no `BOARD_RUN_TOKEN`.
   - **SCRUB unset** ($0.053): `permissionMode = "acceptEdits"`, **0 approvals**, all six ran sandboxed, and a sandboxed `git commit` passed. (c) What SCRUB bought: Bash's `env` then listed `BOARD_RUN_TOKEN` (and the CLI's own `CLAUDE_CODE_MESSAGING_TOKEN`). So the fix is to keep secrets out of the env, not to scrub it: the run token moved to `<run_dir>/hook.token` (hook shim) and `mcp.json` (board-mcp only); `ANTHROPIC_API_KEY` moved to `apiKeyHelper` + `<run_dir>/api.key`; the private `BOARD_HOME` files are sandbox `denyRead` and disallowed for Read/Edit/Write. The env allowlist (D15) had no other secret. Residual: `CLAUDE_CODE_MESSAGING_TOKEN` is visible to Bash (the CLI's own local socket token, not a member credential). `apiKeyHelper` is unit-tested but not yet exercised live (the test member uses a subscription login).
 - **D27 Repo identity = the configured origin URL** (`git config --get remote.origin.url`), not `git remote get-url` (§6.8). Deviation from design §9.4 #1, which named `get-url`: insteadOf is a local transport rewrite, and the member's configured name is the identity. Tests and the e2e harness rely on it (a bare remote reached through `insteadOf`).
+- **D29 (P-1) One append-only journal, written in the same transaction as every mutation** (§15). Lean: no hash chain, no blob store, no bus cursors yet; comment bodies are not copied into it. Migration numbered 003 (002 was already taken by the device form factor).
 - **D28 Plan approval is the card label `plan-approval`** (`states.PLAN_APPROVAL_LABEL`); the hub derives `ctx.require_plan_approval` and `offer.require_plan_approval` from it.
 
 ## 13. Phase 1 exit criteria → tests
@@ -689,3 +693,27 @@ Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas
 - Money: cents (integer) in the DB, USD (number) on the wire.
 - Every file a builder writes under `~/.board` is created 0600 (dirs 0700) and written atomically (temp + rename).
 - No `console.log` debugging left behind; the hub and runner log JSON lines to stderr (`{t, level, msg, …}`) and never log tokens, run tokens, device tokens or card bodies at `info`.
+
+## 15. Journal (P-1, D29)
+
+`journal` (migration 003) is the append-only record of every mutation: `{seq, board_id, card_id?, run_id?, at_hub, hub_epoch, actor_kind:'member'|'runner'|'system', actor_id, kind, payload}`. Triggers `RAISE(ABORT)` on UPDATE and DELETE. Every row is written by `hub.journal()` **in the same transaction** as the change it records. `events` stays the UI feed; the journal is the record of truth for replay (and later the bus, webhooks and time travel).
+
+| `kind` | Written by | `payload` |
+|---|---|---|
+| `card.create` | `POST …/cards` | `{key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, assignees, request_id}` |
+| `card.update` | `PATCH /api/cards/:id` (every changed field), dispatch `budget_usd` | `{fields:{name:[before, after]}, request_id}` |
+| `card.transition` | `hub.apply()` for every applied `step()` (not the pure no-ops, e.g. `n-hb`) | `{rule, event, from, to, state:{CARD_STATE after}, effects:[type]}`; `actor_kind` from `states.EVENTS` (human → member, runner → runner/device, timer/system → system) |
+| `run.create` | claim (`run_create` effect) | `{fence, device_id, branch, snapshot_ref, dispatch_request_id}` |
+| `run.snapshot` | outbox `snapshot`, promoted salvage snapshot | `{status, sha, ref, provenance?}` |
+| `ask.create` / `ask.answer` | `board_ask_human` rpc / `answer` action | `{ask_id, kind}` / `{ask_id, by}` |
+| `permission.create` / `permission.answer` / `permission.cancel` | `approval` rpc / answer route / `approval_cancel` rpc | `{permission_request_id, tool}` / `{…, decision, scope}` / `{permission_request_id}` |
+| `handover.version` | every `handovers` insert | `{version, written_by, provenance}` |
+| `evidence.create` | `board_attach_evidence` | `{evidence_id, kind, ref, verification, result}` |
+| `plan.declare` | `board_declare_plan` | `{paths}` |
+| `comment.create` | web and agent comments | `{comment_id, source, for_agent}` (no body) |
+| `feed.relabel` | `relabel_orphan` effect | `{event_id, relabel}` |
+| `hub.restore_bump` | boot with restore (`board_id` NULL) | `{bump}` |
+
+`journal.replay(rows)` rebuilds every card's `CARD_STATE` + title/labels/budget/repo from `card.create`, `card.update`, `card.transition` and `hub.restore_bump` alone. Tests: `hub/test/journal.test.js` (triggers, coverage, API, restore) and the e2e chaos run (`test/e2e/`), which replays the journal and compares it with the live `cards` table.
+
+The orphan relabel no longer rewrites an `events` row: `relabel_orphan` appends an internal `orphan_relabel` event `{event_id, relabel}` that `feedEvent` joins onto the orphaned line.
