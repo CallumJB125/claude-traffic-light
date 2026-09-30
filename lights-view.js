@@ -1031,17 +1031,11 @@
     set('permission', { pose: 'knock', lampFx: 'pulse' });
     set('limit', { body: 'robot', eyes: 'x', lampFx: 'sos' });
     set('done', { pose: 'thumbs', screenFx: 'confetti' });
-    // An accent only: sits just above the lamp owner, so any agent rule's eyes win.
-    d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } });
-    // He munches the big file Buddy kept out; a running agent's banner still wins.
-    d.splice(d.findIndex((x) => x.id === 'routed'), 0, { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { pose: 'munch' } });
     return d;
   };
   PRESETS.focus = () => {
     const d = R.defaultRules().filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id));
     const set = (id, then) => { const r = d.find((x) => x.id === id); if (r) Object.assign(r.then, then); };
-    d.splice(d.findIndex((x) => x.id === 'working'), 0, { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#93c5fd' } });
-    d.splice(d.findIndex((x) => x.id === 'routed'), 0, { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { eyes: 'happy' } });
     set('limit', { pose: 'none', lampColor: '#ffffff' });
     set('permission', { pose: 'none', sound: null, lampColor: '#ffffff', lampFx: 'breathe' });
     set('working', { pose: 'none', lampColor: '#d4d4d4', lampFx: 'breathe' });

@@ -18,19 +18,25 @@ const NOW = new Date(2026, 8, 10, 12, 0, 0).getTime();
 const DAY = 86400000;
 const tmp = (p = 'ctl-router-') => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
-test('rules: routed-cheap fires for Sonnet/Haiku routes, escalated replaces it; both are listed', () => {
-  const v = (s) => R.virtualSessions([{ signal: 'tool-use', cwd: '/w/bondly', ...s }]).map((x) => x.signal);
-  assert.deepEqual(v({ route: { model: 'sonnet' } }), ['routed-cheap']);
-  assert.deepEqual(v({ route: { model: 'haiku' } }), ['routed-cheap']);
-  assert.deepEqual(v({ route: { model: 'opus' } }), []);
-  assert.deepEqual(v({}), []);
-  assert.deepEqual(v({ route: { model: 'sonnet' }, escalated: true }), ['escalated']);
-  for (const id of ['routed-cheap', 'escalated']) assert.ok(R.SIGNALS.some((s) => s.id === id && s.kind === 'virtual'));
-  assert.ok(!R.defaultRules().some((r) => r.when.signal.includes('routed-cheap') || r.when.signal.includes('escalated')), 'opt-in only');
-  const rule = { id: 'rc', name: 'Routed cheap', when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } };
-  const { look } = R.resolve([rule, ...R.defaultRules()], [{ signal: 'tool-use', tool: 'Bash', route: { model: 'sonnet' }, updatedAt: new Date().toISOString() }]);
-  assert.equal(look.eyes, '#2dd4bf');
-  assert.equal(look.lamp, 'green');
+test('rules v6: the router signals are gone, and saved rules using them are dropped or disabled', () => {
+  for (const id of ['routed-cheap', 'escalated', 'delegated-read']) assert.ok(!R.SIGNALS.some((s) => s.id === id), id);
+  assert.equal(R.RULES_VERSION, 6);
+  const saved = [
+    { id: 'routed', name: 'Routed cheap', enabled: true, when: { signal: ['routed-cheap'] }, then: { eyes: '#2dd4bf' } },
+    { id: 'delegated', name: 'Buddy delegated a read', enabled: true, when: { signal: ['delegated-read'] }, then: { pose: 'munch' } },
+    { id: 'mine', name: 'Mine', enabled: true, when: { signal: ['escalated'] }, then: { pose: 'wave' } },
+    { id: 'mix', name: 'Mix', enabled: true, when: { signal: ['stop', 'routed-cheap'] }, then: { pose: 'wave' } },
+    ...R.defaultRules(),
+  ].map(R.normalizeRule);
+  const out = R.migrateRules(saved, 5);
+  assert.ok(!out.some((r) => r.id === 'routed' || r.id === 'delegated'), 'default rules using them are dropped');
+  const mine = out.find((r) => r.id === 'mine');
+  assert.equal(mine.enabled, false);
+  assert.deepEqual(mine.when.signal, []);
+  const mix = out.find((r) => r.id === 'mix');
+  assert.equal(mix.enabled, true);
+  assert.deepEqual(mix.when.signal, ['stop']);
+  assert.equal(R.migrateRules(saved, 6), saved);
 });
 
 // ── set-status no longer carries router state ───────────────────────────────
