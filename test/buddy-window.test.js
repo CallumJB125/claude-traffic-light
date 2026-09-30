@@ -420,3 +420,258 @@ test('creds for another hub are ignored', async () => {
   });
   assert.equal(other.status().enrolled, false);
 });
+
+// ── Buddy accounts (client against the mock hub) ─────────────────────────
+
+const { createAccountClient, ROUTES, parseInvite, routeInvite, bearerScope, maskEmail } = require('../buddy-window/accounts');
+const { createMockAccountsHub, MAX_ATTEMPTS } = require('../buddy-window/mock-accounts-hub');
+
+function memStore() {
+  let v = null;
+  return { load: () => v, save: (o) => { v = JSON.parse(JSON.stringify(o)); }, clear: () => { v = null; }, peek: () => v };
+}
+
+async function withHub(fn) {
+  const hub = createMockAccountsHub();
+  const origin = await hub.listen();
+  try { await fn(hub, origin); } finally { await hub.close(); }
+}
+
+async function signIn(hub, origin, email, extra = {}) {
+  const store = memStore();
+  const c = createAccountClient({ origin, store, ...extra });
+  assert.equal((await c.startEmail(email)).ok, true);
+  const r = await c.verifyCode(hub.lastCode(email), { deviceName: 'Test Mac', platform: 'darwin' });
+  assert.equal(r.ok, true, r.error);
+  return { c, store, r };
+}
+
+test('ROUTES: every endpoint is one [method, path] row', () => {
+  for (const [name, [method, p]] of Object.entries(ROUTES)) {
+    assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(method), name);
+    assert.match(p, /^\/api\//, name);
+  }
+});
+
+test('accounts: email + 6-digit code signs in; the device token is sealed in the store, never returned', async () => withHub(async (hub, origin) => {
+  const store = memStore();
+  const c = createAccountClient({ origin, store });
+  assert.match((await c.startEmail('nope')).error, /email/);
+  assert.equal((await c.startEmail(' Callum@Example.com ')).ok, true);
+  assert.equal(c.pendingEmail(), 'callum@example.com');
+  assert.match((await c.verifyCode('12')).error, /6 digits/);
+  const code = hub.lastCode('callum@example.com');
+  const r = await c.verifyCode(`${code.slice(0, 3)} ${code.slice(3)}`, { deviceName: 'Mac' });
+  assert.equal(r.ok, true);
+  assert.equal(r.user.email, 'callum@example.com');
+  assert.deepEqual(r.teams, []);
+  assert.ok(!JSON.stringify(r).includes('bdt_'), 'no token in the result');
+  assert.match(store.peek().token, /^bdt_/);
+  assert.equal(store.peek().hub, origin);
+  assert.equal(c.signedIn(), true);
+  const me = await c.me();
+  assert.equal(me.user.email, 'callum@example.com');
+  assert.deepEqual(me.teams, []);
+}));
+
+test('accounts: wrong codes are counted; the flow dies after the limit; codes expire after 10 minutes', async () => withHub(async (hub, origin) => {
+  const c = createAccountClient({ origin, store: memStore() });
+  await c.startEmail('a@example.com');
+  const good = hub.lastCode('a@example.com');
+  const wrong = good === '000000' ? '111111' : '000000';
+  for (let i = 1; i < MAX_ATTEMPTS; i += 1) assert.match((await c.verifyCode(wrong)).error, /isn’t right/);
+  assert.match((await c.verifyCode(wrong)).error, /Too many wrong codes/);
+  assert.match((await c.verifyCode(good)).error, /Start again/, 'the flow is gone');
+  await c.startEmail('a@example.com');
+  hub.setNow(Date.now() + 10 * 60_000 + 1);
+  assert.match((await c.verifyCode(hub.lastCode('a@example.com'))).error, /expired/);
+}));
+
+test('accounts: a 401 means the token was revoked: wiped, signed-out callback, plain error', async () => withHub(async (hub, origin) => {
+  let signedOut = 0;
+  const { c, store } = await signIn(hub, origin, 'b@example.com', { onSignedOut: () => { signedOut += 1; } });
+  hub.revokeAll('b@example.com');
+  const r = await c.me();
+  assert.equal(r.ok, false);
+  assert.equal(r.signedOut, true);
+  assert.match(r.error, /signed out/);
+  assert.equal(store.peek(), null);
+  assert.equal(signedOut, 1);
+  assert.equal((await c.createTeam('x')).signedOut, true, 'no request without a token');
+}));
+
+test('accounts: a token saved for another hub is never sent', async () => withHub(async (hub, origin) => {
+  const seen = [];
+  const store = memStore();
+  store.save({ hub: 'https://evil.example.com', token: 'bdt_other_hub' });
+  const c = createAccountClient({ origin, store, fetchImpl: async (u, init) => { seen.push(init.headers); return fetch(u, init); } });
+  assert.equal(c.signedIn(), false);
+  assert.equal((await c.me()).signedOut, true);
+  assert.equal(seen.length, 0);
+  await c.previewInvite('inv_x');
+  assert.ok(seen.every((h) => !h.Authorization));
+}));
+
+test('accounts: network failure is a sentence, not a thrown fetch error', async () => {
+  const c = createAccountClient({ origin: 'https://buddy.example.com', store: memStore(), fetchImpl: async () => { throw new TypeError('fetch failed'); } });
+  const r = await c.startEmail('a@example.com');
+  assert.deepEqual(r, { ok: false, error: 'Couldn’t reach buddy.example.com. Check the address and your connection.' });
+});
+
+test('accounts: create a team, invite by email, second user previews and accepts; wrong account and reuse are refused', async () => withHub(async (hub, origin) => {
+  const owner = await signIn(hub, origin, 'owner@example.com');
+  const t = await owner.c.createTeam('Bondly');
+  assert.equal(t.ok, true);
+  assert.equal(t.team.role, 'owner');
+  assert.equal(t.board.name, 'Bondly');
+  const teamId = t.team.id;
+  const inv = await owner.c.invite(teamId, 'Sam@Example.com', 'member');
+  assert.equal(inv.ok, true);
+  assert.equal(inv.invite.email, 'sam@example.com');
+  assert.match(inv.code, /^inv_/);
+  assert.equal((await owner.c.listInvites(teamId)).invites.length, 1);
+
+  const other = await signIn(hub, origin, 'other@example.com');
+  const pv = await other.c.previewInvite(inv.code);
+  assert.deepEqual({ team: pv.team_name, role: pv.role, inviter: pv.inviter_name }, { team: 'Bondly', role: 'member', inviter: 'Owner' });
+  const wrong = await other.c.acceptInvite({ t: inv.code });
+  assert.equal(wrong.code, 'WRONG_ACCOUNT');
+  assert.equal(wrong.detail.email_masked, 's…@example.com');
+
+  const sam = await signIn(hub, origin, 'sam@example.com');
+  assert.equal(sam.r.ok, true);
+  const pending = (await sam.c.me()).pending_invites;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].team_name, 'Bondly');
+  const acc = await sam.c.acceptInvite({ inviteId: pending[0].id });
+  assert.equal(acc.ok, true);
+  assert.equal(acc.team.id, teamId);
+  assert.deepEqual((await sam.c.me()).teams.map((x) => [x.name, x.role]), [['Bondly', 'member']]);
+  assert.match((await sam.c.acceptInvite({ t: inv.code })).error, /isn’t valid any more/);
+  const members = (await owner.c.listMembers(teamId)).members;
+  assert.deepEqual(members.map((m) => m.email).sort(), ['owner@example.com', 'sam@example.com']);
+  assert.equal((await owner.c.listInvites(teamId)).invites.length, 0);
+}));
+
+test('accounts: roles: members cannot manage; the last owner cannot be demoted or removed', async () => withHub(async (hub, origin) => {
+  const owner = await signIn(hub, origin, 'o@example.com');
+  const teamId = (await owner.c.createTeam('T')).team.id;
+  const inv = await owner.c.invite(teamId, 'm@example.com', 'member');
+  const m = await signIn(hub, origin, 'm@example.com');
+  await m.c.acceptInvite({ t: inv.code });
+  const list = (await owner.c.listMembers(teamId)).members;
+  const me = list.find((x) => x.email === 'o@example.com');
+  const them = list.find((x) => x.email === 'm@example.com');
+  const r = await owner.c.setRole(teamId, me.id, 'admin');
+  assert.equal(r.code, 'LAST_OWNER');
+  assert.match(r.error, /at least one owner/);
+  assert.equal((await owner.c.removeMember(teamId, me.id)).code, 'LAST_OWNER');
+  assert.match((await m.c.setRole(teamId, them.id, 'admin')).error, /permission/);
+  assert.match((await m.c.invite(teamId, 'x@example.com', 'member')).error, /permission/);
+  assert.equal((await owner.c.setRole(teamId, them.id, 'owner')).ok, true);
+  assert.equal((await owner.c.setRole(teamId, me.id, 'admin')).ok, true, 'fine once there is another owner');
+  assert.match((await owner.c.setRole(teamId, them.id, 'boss')).error, /Pick a role/);
+}));
+
+test('accounts: revoke and resend invites; a revoked code is refused with a plain sentence', async () => withHub(async (hub, origin) => {
+  const owner = await signIn(hub, origin, 'o@example.com');
+  const teamId = (await owner.c.createTeam('T')).team.id;
+  const a = await owner.c.invite(teamId, 'x@example.com', 'guest');
+  const b = await owner.c.invite(teamId, 'x@example.com', 'guest'); // resend replaces
+  const live = (await owner.c.listInvites(teamId)).invites;
+  assert.deepEqual(live.map((i) => i.id), [b.invite.id]);
+  assert.match((await owner.c.previewInvite(a.code)).error, /isn’t valid any more/);
+  assert.equal((await owner.c.revokeInvite(teamId, b.invite.id)).ok, true);
+  assert.equal((await owner.c.listInvites(teamId)).invites.length, 0);
+  assert.match((await owner.c.previewInvite(b.code)).error, /isn’t valid any more/);
+  assert.match((await owner.c.previewInvite('inv_nope')).error, /isn’t valid any more/);
+}));
+
+test('accounts: already a member gets a clear answer with the team', async () => withHub(async (hub, origin) => {
+  const owner = await signIn(hub, origin, 'o@example.com');
+  const team = (await owner.c.createTeam('T')).team;
+  const inv = await owner.c.invite(team.id, 'o2@example.com', 'member');
+  const o2 = await signIn(hub, origin, 'o2@example.com');
+  await o2.c.acceptInvite({ t: inv.code });
+  const again = await owner.c.invite(team.id, 'o2@example.com', 'member');
+  const r = await o2.c.acceptInvite({ t: again.code });
+  assert.equal(r.code, 'ALREADY_MEMBER');
+  assert.equal(r.detail.team.id, team.id);
+}));
+
+test('accounts: sign out revokes on the hub and forgets locally; delete account needs a fresh emailed code', async () => withHub(async (hub, origin) => {
+  const a = await signIn(hub, origin, 'a@example.com');
+  const token = a.store.peek().token;
+  assert.equal((await a.c.signOut()).revoked, true);
+  assert.equal(a.store.peek(), null);
+  const res = await fetch(`${origin}/api/account`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.status, 401, 'the old token is dead on the hub');
+
+  const d = await signIn(hub, origin, 'd@example.com');
+  assert.match((await d.c.deleteAccount('123456')).error, /new code/);
+  assert.equal((await d.c.startStepUp()).ok, true);
+  const code = hub.lastCode('d@example.com');
+  assert.equal((await d.c.deleteAccount(code)).ok, true);
+  assert.equal(d.store.peek(), null);
+  const again = await signIn(hub, origin, 'd@example.com');
+  assert.deepEqual((await again.c.me()).teams, [], 'a fresh account');
+}));
+
+// ── invite links ───────────────────────────────────────────────────────────
+
+const httpsOnly = (s) => normalizeHubUrl(s);
+
+test('invite links: the accepted shapes', () => {
+  const T = 'inv_AbC-123_xyz';
+  assert.deepEqual(parseInvite(`claudebuddy://join?hub=https://buddy.example.com&t=${T}`, { normalizeHub: httpsOnly }), { hub: 'https://buddy.example.com', token: T });
+  assert.deepEqual(parseInvite(`claudebuddy://join?hub=https%3A%2F%2Fbuddy.example.com%2F&t=${T}`, { normalizeHub: httpsOnly }), { hub: 'https://buddy.example.com', token: T });
+  assert.deepEqual(parseInvite(`claudebuddy://invite/${T}`, { normalizeHub: httpsOnly }), { hub: null, token: T });
+  assert.deepEqual(parseInvite(`claudebuddy://invite?t=${T}`, { normalizeHub: httpsOnly }), { hub: null, token: T });
+  assert.deepEqual(parseInvite(`https://buddy.example.com/invite#${T}`, { normalizeHub: httpsOnly }), { hub: 'https://buddy.example.com', token: T });
+  assert.deepEqual(parseInvite(`https://buddy.example.com/invite/${T}`, { normalizeHub: httpsOnly }), { hub: 'https://buddy.example.com', token: T });
+  assert.deepEqual(parseInvite(`  ${T}  `, { normalizeHub: httpsOnly }), { hub: null, token: T });
+});
+
+test('invite links: anything else is ignored', () => {
+  const T = 'inv_ok';
+  const bad = [
+    '', 'x'.repeat(201), `claudebuddy://invite/${'a'.repeat(201)}`, 'claudebuddy://invite/a+b', 'claudebuddy://invite/a%2Fb',
+    'claudebuddy://invite/a.b', `claudebuddy://invite/${T}/more`, 'claudebuddy://invite/', 'claudebuddy://invite?t=',
+    `claudebuddy://join?t=${T}`, `claudebuddy://join?hub=http://buddy.example.com&t=${T}`, `claudebuddy://join?hub=https://127.0.0.1&t=${T}`,
+    `claudebuddy://join?hub=https://buddy.example.com/evil&t=${T}`, `claudebuddy://join?hub=https://u:p@buddy.example.com&t=${T}`,
+    `claudebuddy://join/x?hub=https://buddy.example.com&t=${T}`, `claudebuddy://settings?t=${T}`, `javascript:alert(1)`,
+    `http://buddy.example.com/invite/${T}`, `http://buddy.example.com/invite#${T}`, `https://buddy.example.com/other#${T}`, `https://buddy.example.com/invite?x=1#${T}`, 'https://buddy.example.com/invite#', `https://buddy.example.com/other/${T}`, `file:///invite/${T}`, `claudebuddy://invite/<script>`,
+  ];
+  for (const s of bad) assert.equal(parseInvite(s, { normalizeHub: httpsOnly }), null, s);
+});
+
+test('invite routing: unknown hub → confirm; known + signed out → sign in; known + signed in → preview', () => {
+  const known = ['https://buddy.example.com'];
+  const signedIn = (h) => h === 'https://buddy.example.com';
+  assert.deepEqual(routeInvite({ hub: 'https://evil.example.com', token: 't' }, { knownHubs: known, signedIn }), { action: 'confirm', hub: 'https://evil.example.com' });
+  assert.deepEqual(routeInvite({ hub: 'https://buddy.example.com', token: 't' }, { knownHubs: known, signedIn: () => false }), { action: 'signin', hub: 'https://buddy.example.com' });
+  assert.deepEqual(routeInvite({ hub: 'https://buddy.example.com', token: 't' }, { knownHubs: known, signedIn }), { action: 'preview', hub: 'https://buddy.example.com' });
+  // No hub in the link: the last known hub, else ask.
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: known, signedIn, lastHub: 'https://buddy.example.com' }), { action: 'preview', hub: 'https://buddy.example.com' });
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: [], signedIn }), { action: 'need-hub' });
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: ['https://a.example.com', 'https://b.example.com'], signedIn }), { action: 'need-hub' });
+  // A stale lastHub that isn't known any more is not trusted.
+  assert.deepEqual(routeInvite({ hub: null, token: 't' }, { knownHubs: [], lastHub: 'https://evil.example.com', signedIn }), { action: 'need-hub' });
+  assert.equal(maskEmail('callum@example.com'), 'c…@example.com');
+});
+
+test('bearer scope: the exact hub origin and its WebSocket twin, never another host, port or scheme', () => {
+  const s = bearerScope('https://buddy.example.com');
+  assert.deepEqual(s.urls, ['https://buddy.example.com/*', 'wss://buddy.example.com/*']);
+  for (const u of ['https://buddy.example.com/', 'https://buddy.example.com/api/me?x=1', 'wss://buddy.example.com/ws/board?org=t', 'https://buddy.example.com:443/x']) assert.equal(s.matches(u), true, u);
+  for (const u of ['http://buddy.example.com/', 'ws://buddy.example.com/ws', 'https://buddy.example.com:8443/', 'wss://buddy.example.com:8443/',
+    'https://evil.buddy.example.com/', 'https://buddy.example.com.evil.com/', 'https://evilbuddy.example.com/', 'https://u:p@buddy.example.com/',
+    'https://other.example.com/', 'file:///x', 'not a url']) assert.equal(s.matches(u), false, u);
+  const l = bearerScope('http://127.0.0.1:5123');
+  assert.deepEqual(l.urls, ['http://127.0.0.1:5123/*', 'ws://127.0.0.1:5123/*']);
+  assert.equal(l.matches('http://127.0.0.1:5123/api'), true);
+  assert.equal(l.matches('ws://127.0.0.1:5123/ws/board'), true);
+  assert.equal(l.matches('http://127.0.0.1:5124/api'), false);
+  assert.equal(l.matches('http://localhost:5123/api'), false);
+  assert.throws(() => bearerScope('https://buddy.example.com/path'));
+});
