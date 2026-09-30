@@ -24,6 +24,22 @@ const FOCUS_GRACE_FAILS = 2;
 const BACK_MS = 2 * 60 * 1000; // how long 'back-from-busy' holds after a busy spell
 const RECAP_MS = 60 * 60 * 1000; // an undismissed recap goes stale after this
 const ICS_MAX_BYTES = 5 * 1024 * 1024;
+const ICS_MAX_REDIRECTS = 3;
+
+// The feed URL is a secret (it grants read access to a calendar), so a
+// redirect may never take it — or the response — off HTTPS.
+async function fetchHttpsOnly(url, signal, fetchImpl = fetch) {
+  let current = url;
+  for (let hop = 0; hop <= ICS_MAX_REDIRECTS; hop += 1) {
+    const res = await fetchImpl(current, { signal, redirect: 'manual' });
+    if (!(res.status >= 300 && res.status < 400)) return res;
+    const next = res.headers.get('location');
+    if (!next) throw new Error(`HTTP ${res.status} without a location`);
+    current = new URL(next, current).toString();
+    if (!/^https:\/\//i.test(current)) throw new Error('redirected off HTTPS — refused');
+  }
+  throw new Error('too many redirects');
+}
 
 module.exports = function busyWatch(deps) {
   const {
@@ -161,7 +177,7 @@ module.exports = function busyWatch(deps) {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), ICS_TIMEOUT_MS);
     try {
-      const res = await fetch(url, { signal: abort.signal });
+      const res = await fetchHttpsOnly(url, abort.signal, fetch);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await readCapped(res);
       if (!/BEGIN:VCALENDAR/.test(text)) throw new Error('not a calendar feed');
@@ -331,3 +347,4 @@ module.exports = function busyWatch(deps) {
 };
 
 module.exports.BACK_MS = BACK_MS;
+module.exports.fetchHttpsOnly = fetchHttpsOnly;

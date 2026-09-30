@@ -627,3 +627,19 @@ test('help: explains held pings only once a busy source works', () => {
   assert.match(busy.text, /busy \(Calendar\)/);
   assert.equal(Help.explain({ ...state, away: { headline: '1 done' } }, []).away, '1 done');
 });
+
+test('ICS fetch refuses redirects off HTTPS and follows HTTPS ones', async () => {
+  const { fetchHttpsOnly } = require('../src/busy-watch.js');
+  const resp = (status, location) => ({ status, ok: status < 300, headers: { get: (h) => (h === 'location' ? location : null) } });
+  const routes = {
+    'https://a.test/cal.ics': resp(302, 'https://b.test/cal.ics'),
+    'https://b.test/cal.ics': resp(200),
+    'https://c.test/cal.ics': resp(301, 'http://evil.test/cal.ics'),
+    'https://d.test/cal.ics': resp(302, '/loop'),
+    'https://d.test/loop': resp(302, '/loop'),
+  };
+  const fake = async (u, opts) => { assert.equal(opts.redirect, 'manual'); return routes[u]; };
+  assert.equal((await fetchHttpsOnly('https://a.test/cal.ics', null, fake)).status, 200);
+  await assert.rejects(fetchHttpsOnly('https://c.test/cal.ics', null, fake), /off HTTPS/);
+  await assert.rejects(fetchHttpsOnly('https://d.test/cal.ics', null, fake), /too many redirects/);
+});
