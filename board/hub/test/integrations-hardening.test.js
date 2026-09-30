@@ -151,3 +151,43 @@ test('M-2: a retry while the first attempt still runs is 503 + Retry-After; once
     assert.equal(calls, 2);
   } finally { await h.close(); }
 });
+
+test('M-2: ackEarly answers 200 before the handler runs, keeps the lease while it runs, and audits a failure (default off)', async () => {
+  const h = await accessHub();
+  try {
+    let gate;
+    let calls = 0;
+    const conn = connect(h, 'm2b', {
+      ackEarly: true,
+      handleWebhook: async () => {
+        calls += 1;
+        await new Promise((resolve, reject) => { gate = { resolve, reject }; });
+      },
+    });
+    const send = (id) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'cf-connecting-ip': '192.0.2.60', 'x-ok': '1', 'x-id': id }, body: JSON.stringify({ id }) });
+    const first = await Promise.race([send('slack-evt-1'), tick(2000).then(() => null)]);
+    assert.ok(first, 'answered while the handler is still running');
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { ok: true, accepted: true });
+    await tick(50);
+    assert.equal(calls, 1);
+    assert.equal((await send('slack-evt-1')).status, 503, 'the same lease: a retry is in progress');
+    gate.reject(new Error('upstream said no'));
+    await h.hub.idle();
+    const audit = h.db.all("SELECT action, decision, error, external_ref, detail FROM integration_audit WHERE connection_id = ? AND action = 'webhook'", conn.id).map((r) => ({ ...r }));
+    assert.deepEqual(audit, [{ action: 'webhook', decision: 'failed', error: 'handler_failed', external_ref: null, detail: '{}' }]);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = ?', 'm2b').n, 0, 'released: a manual redelivery runs it');
+    assert.equal(h.app.integrations.get(conn.id).health.last_error, 'handler_failed');
+    // Success settles the lease as done.
+    const ok = send('slack-evt-2');
+    assert.equal((await ok).status, 200);
+    await tick(50);
+    gate.resolve();
+    await h.hub.idle();
+    assert.deepEqual([...new Set(h.db.all('SELECT state FROM inbound_dedupe WHERE provider = ?', 'm2b').map((r) => r.state))], ['done']);
+    assert.equal((await send('slack-evt-2')).status, 200);
+    assert.equal(calls, 2, 'a finished delivery is a duplicate');
+    assert.throws(() => probe('m2c', { ackEarly: 'yes' }), /ackEarly is a boolean/);
+    assert.throws(() => probe('m2d', { ackEarly: true, handleWebhook: undefined, verify: undefined }), /ackEarly/);
+  } finally { await h.close(); }
+});

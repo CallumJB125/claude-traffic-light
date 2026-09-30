@@ -33,6 +33,12 @@
 //   // and return a dedupe key (delivery id) for replay protection.
 //   verify({ headers, rawBody, secrets, now }) → { ok: true, dedupe_key } | { ok: false, reason },
 //   async handleWebhook({ headers, payload, ctx }) → void,
+//   // Optional, default false: answer 200 once the delivery is verified and
+//   // leased, then run handleWebhook (same lease, timeout and ctx). For a
+//   // provider that needs an answer within seconds (Slack: 3 s). A failure then
+//   // reaches no provider retry: it is audited (action 'webhook', 'failed' +
+//   // code) and the lease released, so a manual redelivery runs it.
+//   ackEarly: false,
 //
 //   // Bus consumer: board events (journal rows, CONTRACT §15) this connector reacts to.
 //   consumes: ['card.transition', 'card.notify', …],
@@ -100,6 +106,7 @@ export function defineConnector(spec) {
     } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
+  if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);

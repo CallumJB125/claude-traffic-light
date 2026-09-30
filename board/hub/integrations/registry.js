@@ -642,34 +642,56 @@ export function createIntegrations({
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
       .finally(() => controller.abort(handlerEnded()));
-    try {
-      await withTimeout(running, handlerTimeoutMs, controller);
-    } catch (e) {
-      if (e?.code === 'TIMEOUT') {
-        // The handler may still be running: the lease stays (a retry answers
-        // in_progress) and the row settles when it really ends, or the lease
-        // expires and a later retry takes it over.
-        running.then(done, release);
-        setHealth(c.id, false, 'handler_timeout');
-        warn('integration webhook handler timed out', c, e);
+    // → the answer; with ackEarly nobody hears it, so a failure is also audited.
+    const settle = async () => {
+      try {
+        await withTimeout(running, handlerTimeoutMs, controller);
+      } catch (e) {
+        if (conn.ackEarly) deadLetter(c, e);
+        if (e?.code === 'TIMEOUT') {
+          // The handler may still be running: the lease stays (a retry answers
+          // in_progress) and the row settles when it really ends, or the lease
+          // expires and a later retry takes it over.
+          running.then(done, release);
+          setHealth(c.id, false, 'handler_timeout');
+          warn('integration webhook handler timed out', c, e);
+          return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+        }
+        if (e instanceof ActorUnavailable) {
+          // An admin has to reconnect it; the provider's retries would fail the same way.
+          done();
+          setHealth(c.id, false, 'actor_unavailable');
+          warn('integration acts as a removed member', c, e);
+          return { status: 200, body: { ok: true, skipped: true } };
+        }
+        // Released: the provider's retry (or, after an early ack, a manual
+        // redelivery) gets another go.
+        release();
+        setHealth(c.id, false, errCode(e));
+        warn('integration webhook handler failed', c, e);
         return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
       }
-      if (e instanceof ActorUnavailable) {
-        // An admin has to reconnect it; the provider's retries would fail the same way.
-        done();
-        setHealth(c.id, false, 'actor_unavailable');
-        warn('integration acts as a removed member', c, e);
-        return { status: 200, body: { ok: true, skipped: true } };
-      }
-      // Released: the provider's retry gets another go.
-      release();
-      setHealth(c.id, false, errCode(e));
-      warn('integration webhook handler failed', c, e);
-      return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
-    }
-    done();
-    setHealth(c.id, true);
-    return { status: 200, body: { ok: true } };
+      done();
+      setHealth(c.id, true);
+      return { status: 200, body: { ok: true } };
+    };
+    if (!conn.ackEarly) return settle();
+    // Acknowledged before the handler runs (a provider that needs an answer
+    // within seconds); the hub waits for it on shutdown like a board queue.
+    const bg = settle().catch((e) => warn('integration webhook settle failed', c, e));
+    hub.inflight.add(bg);
+    bg.finally(() => hub.inflight.delete(bg));
+    return { status: 200, body: { ok: true, accepted: true } };
+  }
+
+  // A delivery acknowledged early whose handler failed: no provider retry is
+  // coming, so the audit log is where an admin sees it (a short code only).
+  function deadLetter(c, e) {
+    try {
+      db.insert('integration_audit', {
+        id: randomUUID(), connection_id: c.id, action: 'webhook', decision: 'failed', error: errCode(e), card_id: null, external_ref: null, detail: '{}', undo: null, at: now(),
+      });
+    } catch (err) { warn('integration dead letter not recorded', c, err); }
   }
 
   // ── OAuth / app-install connect ─────────────────────────────────────────
