@@ -468,7 +468,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           if (verifiedPairs.size > readLimits.verifiedMax) verifiedPairs.delete(verifiedPairs.keys().next().value);
         }
         if (out.status === 401) return failed(out.status, out.body);
-        return sendJson(res, out.status, out.body);
+        return sendJson(res, out.status, out.body, out.headers);
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
         hub.log.error('integration webhook failed', { connection_id: hook[1], err: redact(e?.message ?? e) });

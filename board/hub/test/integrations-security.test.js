@@ -117,7 +117,11 @@ test('H2: two concurrent deliveries with one id run once (lease); an expired lea
     const delivery = randomUUID();
     const [a, b] = await Promise.all([post(reg, conn, issue('ISS-C1', 'Concurrent'), { delivery }), post(reg, conn, issue('ISS-C1', 'Concurrent'), { delivery })]);
     assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Concurrent'").length, 1);
-    assert.deepEqual([a.body, b.body].map((x) => JSON.stringify(x)).sort(), [JSON.stringify({ ok: true }), JSON.stringify({ ok: true, in_progress: true })].sort());
+    // The retry of a delivery still running is 503 + Retry-After (hardening M-2), never 200.
+    assert.deepEqual([a.status, b.status].sort(), [200, 503]);
+    const busy = a.status === 503 ? a : b;
+    assert.equal(busy.body.in_progress, true);
+    assert.equal(busy.headers['retry-after'], String(busy.body.retry_after_s));
     assert.equal(h.db.get('SELECT state FROM inbound_dedupe WHERE dedupe_key = ?', `${conn.id}:${delivery}`).state, 'done');
     assert.deepEqual((await post(reg, conn, issue('ISS-C1'), { delivery })).body, { ok: true, duplicate: true });
     // A crashed handler's lease (in the past) doesn't block the retry forever.
@@ -130,7 +134,10 @@ test('H2: two concurrent deliveries with one id run once (lease); an expired lea
     const live = randomUUID();
     const future = new Date(h.hub.wallMs() + 60_000).toISOString();
     h.db.run("INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES ('fake', ?, ?, 'processing', ?)", `${conn.id}:${live}`, past, future);
-    assert.deepEqual((await post(reg, conn, issue('ISS-C3', 'Leased'), { delivery: live })).body, { ok: true, in_progress: true });
+    const leased = await post(reg, conn, issue('ISS-C3', 'Leased'), { delivery: live });
+    assert.equal(leased.status, 503);
+    assert.deepEqual(leased.body, { ok: false, in_progress: true, retry_after_s: 60 });
+    assert.deepEqual(leased.headers, { 'retry-after': '60' });
     assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Leased'").length, 0);
   } finally { await h.close(); }
 });

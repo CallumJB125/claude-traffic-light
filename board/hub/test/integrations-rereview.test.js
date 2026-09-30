@@ -314,7 +314,9 @@ test('L-a: a timed-out webhook handler keeps its lease, sees its signal abort, a
     assert.equal(signal.aborted, true);
     const row = () => h.db.get("SELECT state FROM inbound_dedupe WHERE provider = 'slow'");
     assert.equal(row().state, 'processing', 'the lease stays while the handler may still run');
-    assert.deepEqual((await hookPost(reg, conn, 'd1')).body, { ok: true, in_progress: true });
+    const retry = await hookPost(reg, conn, 'd1');
+    assert.equal(retry.status, 503);
+    assert.equal(retry.body.in_progress, true);
     assert.equal(calls, 1, 'no concurrent retry');
     release();
     await new Promise((r) => setImmediate(r));

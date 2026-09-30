@@ -123,3 +123,31 @@ test('M-1: a body that does not arrive by the deadline is cut with 408 and frees
     held.req.destroy();
   } finally { await h.close(); }
 });
+
+// ── M-2 ───────────────────────────────────────────────────────────────────
+
+test('M-2: a retry while the first attempt still runs is 503 + Retry-After; once that attempt fails, the next retry runs', async () => {
+  const h = await accessHub();
+  try {
+    let calls = 0;
+    let fail;
+    const conn = connect(h, 'm2a', {
+      handleWebhook: async () => {
+        calls += 1;
+        if (calls === 1) await new Promise((_, reject) => { fail = reject; });
+      },
+    });
+    const send = () => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'cf-connecting-ip': '192.0.2.50', 'x-ok': '1', 'x-id': 'same-delivery' }, body: '{"n":1}' });
+    const first = send();
+    await tick();
+    const retry = await send();
+    assert.equal(retry.status, 503, 'never 200: the provider must send it again');
+    const after = Number(retry.headers.get('retry-after'));
+    assert.ok(after >= 1 && after <= 60);
+    assert.deepEqual(await retry.json(), { ok: false, in_progress: true, retry_after_s: after });
+    fail(new Error('upstream broke'));
+    assert.equal((await first).status, 500);
+    assert.equal((await send()).status, 200, 'the released delivery runs on the next retry');
+    assert.equal(calls, 2);
+  } finally { await h.close(); }
+});

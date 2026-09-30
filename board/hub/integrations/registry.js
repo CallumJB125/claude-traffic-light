@@ -565,7 +565,7 @@ export function createIntegrations({
 
   /**
    * Lease a delivery under all its keys: → {ok:true, until} (we run it),
-   * {dup:'done'} when any key is done, {dup:'busy'} when any is leased.
+   * {dup:'done'} when any key is done, {dup:'busy', until} when any is leased.
    * A lease that outlived its handler (crash, hang) is taken over.
    */
   function reserve(provider, keys) {
@@ -575,7 +575,8 @@ export function createIntegrations({
     return db.tx(() => {
       const rows = keys.map((k) => db.get('SELECT state, lease_until FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ?', provider, k));
       if (rows.some((r) => r?.state === 'done')) return { dup: 'done' };
-      if (rows.some((r) => r && !(r.lease_until < t))) return { dup: 'busy' };
+      const busy = rows.filter((r) => r && !(r.lease_until < t)).map((r) => r.lease_until).sort();
+      if (busy.length) return { dup: 'busy', until: busy.at(-1) };
       for (const k of keys) {
         db.run(`INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES (?, ?, ?, 'processing', ?)
           ON CONFLICT (provider, dedupe_key) DO UPDATE SET received_at = excluded.received_at, lease_until = excluded.lease_until`, provider, k, t, until);
@@ -591,7 +592,7 @@ export function createIntegrations({
   }
 
   /**
-   * → {status, body, verified?}. Never echoes why a signature failed to the
+   * → {status, body, headers?, verified?}. Never echoes why a signature failed to the
    * caller. `verified`: the signature checked out (the HTTP layer trusts that
    * sender's address a little more).
    */
@@ -625,7 +626,13 @@ export function createIntegrations({
     const keys = [`${c.id}:${String(v.dedupe_key).slice(0, 200)}`, `${c.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
     const lease = reserve(c.provider, keys);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
-    if (lease.dup === 'busy') return { status: 200, body: { ok: true, in_progress: true } };
+    // Never 200: the first attempt may still fail and release the delivery,
+    // and a provider that got 200 for the retry would never send it again.
+    if (lease.dup === 'busy') {
+      const left = Math.ceil((Date.parse(lease.until) - hub.wallMs()) / 1000);
+      const s = Number.isFinite(left) ? Math.min(60, Math.max(1, left)) : 60;
+      return { status: 503, body: { ok: false, in_progress: true, retry_after_s: s }, headers: { 'retry-after': String(s) } };
+    }
     const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", c.provider, ...keys, lease.until);
     const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', c.provider, ...keys, lease.until);
     // Spent only by verified deliveries that will run: whoever merely knows
