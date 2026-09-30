@@ -58,6 +58,8 @@ test('settings: a new pairing shows its code once, in its own panel', async () =
   await section.locator('#remote-pair').click();
   await expect(section.locator('#remote-code')).toBeVisible();
   await expect(section.locator('#remote-code-text')).toContainText('buddy-pair-v1.laptop-');
+  await expect(section.locator('#remote-code-host')).toHaveText('laptop');
+  await expect(section.locator('#remote-code')).toContainText("It's this device's key");
   await expect(section.locator('#remote-list li')).toContainText('Waiting for the device to use its code');
   await settings.waitForTimeout(300);
   // The code is random every run.
@@ -74,9 +76,15 @@ test('settings: revoke asks once more, in danger colours, and says so aloud', as
   await revoke.click();
   await expect(revoke).toHaveText('Revoke now?');
   await expect(revoke).toHaveClass(/armed/);
-  await expect(section.locator('#remote-pair-status')).toHaveText('Click again to revoke devbox. Its key stops working at once.');
+  const note = section.locator('#remote-list li .revoke-note');
+  await expect(note).toHaveText('Click again to revoke devbox. Its key stops working at once.');
+  await expect(note).toHaveAttribute('aria-live', 'polite');
   await settings.mouse.move(0, 0);
   await shot(section, 'settings-remote-revoke-armed.png');
+  // Left alone, it disarms and the note goes with it.
+  await expect(revoke).toHaveText('Revoke', { timeout: 6000 });
+  await expect(note).toHaveText('');
+  await revoke.click();
   await revoke.click();
   await expect(section.locator('#remote-list li')).toHaveCount(0);
   expect(JSON.parse(fs.readFileSync(path.join(h.home, 'devices.json'), 'utf8')).devices).toEqual([]);

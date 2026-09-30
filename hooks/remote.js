@@ -58,11 +58,18 @@ function backingOff(rootDir = ROOT_DIR, now = Date.now()) {
   try { return now < Number(JSON.parse(fs.readFileSync(path.join(rootDir, STATE_FILE), 'utf8')).downUntil); } catch { return false; }
 }
 
-function noteResult(rootDir, r, now = Date.now()) {
+// Only an answer signed by the desktop, and not a sluggish one, counts as
+// the desktop being there: silence, an unsigned answer (whatever holds the
+// port isn't Buddy) or one slower than half the timeout all back off. A
+// signed refusal (400, 429) is the desktop, up.
+function healthy(r, elapsedMs, timeoutMs) {
+  return !!r.authentic && elapsedMs <= timeoutMs / 2;
+}
+
+function noteResult(rootDir, ok, error, now = Date.now()) {
   const file = path.join(rootDir, STATE_FILE);
   try {
-    // A refusal (401, 400) means the desktop is up; only silence backs off.
-    if (!r.status) fs.writeFileSync(file, JSON.stringify({ downUntil: now + BACKOFF_MS, error: r.error || null }));
+    if (!ok) fs.writeFileSync(file, JSON.stringify({ downUntil: now + BACKOFF_MS, error: error || null }));
     else if (fs.existsSync(file)) fs.rmSync(file, { force: true });
   } catch { /* best effort */ }
 }
@@ -94,9 +101,38 @@ async function send(kind, fields, { rootDir = ROOT_DIR, ignoreBackoff = false } 
   const config = loadConfig(rootDir);
   if (!config) return { ok: false, skipped: 'not paired' };
   if (!ignoreBackoff && backingOff(rootDir)) return { ok: false, skipped: 'desktop unreachable, backing off' };
+  const started = Date.now();
   const r = await Transport.create(config).send(Protocol.envelope(kind, config.device, fields));
-  noteResult(rootDir, r);
+  const elapsed = Date.now() - started;
+  noteResult(rootDir, healthy(r, elapsed, config.timeoutMs), r.error || (r.status ? (r.authentic ? `slow answer (${elapsed} ms)` : `unsigned HTTP ${r.status}`) : null));
   return r;
+}
+
+// At most this many detached senders at once. A burst of hooks while the
+// desktop is slow would otherwise pile up one process each; past the cap an
+// event is dropped, and the next event or heartbeat carries the state.
+const MAX_SENDERS = 4;
+// A slot older than this belongs to a sender that died without freeing it
+// (every sender exits within its timeout).
+const SLOT_STALE_MS = 10000;
+const slotsDir = (rootDir) => path.join(rootDir, 'senders');
+
+// Claims a free slot file (exclusive create, so two hooks can't share one).
+function claimSlot(rootDir, now = Date.now()) {
+  const dir = slotsDir(rootDir);
+  try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { return null; }
+  for (let i = 0; i < MAX_SENDERS; i += 1) {
+    const slot = path.join(dir, `slot-${i}`);
+    try { fs.writeFileSync(slot, String(process.pid), { flag: 'wx' }); return slot; } catch { /* taken */ }
+    try {
+      if (now - fs.statSync(slot).mtimeMs > SLOT_STALE_MS) {
+        fs.rmSync(slot, { force: true });
+        fs.writeFileSync(slot, String(process.pid), { flag: 'wx' });
+        return slot;
+      }
+    } catch { /* taken again, or gone */ }
+  }
+  return null;
 }
 
 // For a hook: hand the events to a detached sender and exit 0 at once, so no
@@ -105,12 +141,16 @@ async function send(kind, fields, { rootDir = ROOT_DIR, ignoreBackoff = false } 
 function dispatchThenExit(source, events, { rootDir = ROOT_DIR } = {}) {
   const list = events.filter((e) => e && e.sessionId && Protocol.validSeq(e.seq)).slice(0, Protocol.MAX_EVENTS).map((e) => wireEvent(source, e));
   if (!list.length || !loadConfig(rootDir) || backingOff(rootDir)) process.exit(0);
+  const slot = claimSlot(rootDir);
+  if (!slot) process.exit(0);
   const exit = () => process.exit(0);
   setTimeout(exit, 250);
   try {
     const { spawn } = require('child_process');
-    const child = spawn(process.execPath, [__filename, '__send'], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: rootDir } });
-    child.on('error', exit);
+    // The slot on the command line (it names nothing secret) so a sender
+    // is attributable in `ps`.
+    const child = spawn(process.execPath, [__filename, '__send', slot], { detached: true, stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: rootDir } });
+    child.on('error', () => { fs.rmSync(slot, { force: true }); exit(); });
     child.unref();
     // The whole envelope fits a pipe buffer, so this lands at once.
     child.stdin.end(JSON.stringify({ kind: 'session', fields: { events: list } }), exit);
@@ -120,6 +160,8 @@ function dispatchThenExit(source, events, { rootDir = ROOT_DIR } = {}) {
 // The detached half: read the job, send it, record whether the desktop
 // answered. Always exits.
 function senderMain() {
+  const slot = process.argv[3];
+  if (slot && path.dirname(slot) === slotsDir(ROOT_DIR)) process.on('exit', () => { try { fs.rmSync(slot, { force: true }); } catch {} });
   let text = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (c) => { if (text.length < Protocol.MAX_BODY_BYTES) text += c; });
@@ -265,10 +307,15 @@ function readCode(say) {
   }
   if (!process.stdin.isTTY) return new Promise((resolve) => { let t = ''; process.stdin.on('data', (c) => { t += c; }); process.stdin.on('end', () => resolve(t)); });
   const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  process.stdout.write('Pairing code (from Buddy → Preferences → Remote devices; not shown as you paste): ');
-  // Don't echo the code: it is the device's key.
-  rl._writeToOutput = () => {};
-  return new Promise((resolve) => rl.question('', (a) => { rl.close(); process.stdout.write('\n'); resolve(a); }));
+  // The prompt goes out through readline (which redraws the line and would
+  // wipe anything written before it); after that nothing is echoed, since
+  // the code is the device's key.
+  let muted = false;
+  rl._writeToOutput = (text) => { if (!muted) rl.output.write(text); };
+  return new Promise((resolve) => {
+    rl.question('Pairing code (from Buddy → Preferences → Remote devices; not shown as you paste): ', (a) => { rl.close(); process.stdout.write('\n'); resolve(a); });
+    muted = true;
+  });
 }
 
 function targetConfig(arg) {
@@ -336,4 +383,4 @@ if (require.main === module) {
   cli(process.argv.slice(2)).then((code) => { if (code !== null) process.exit(code); }, (e) => { console.error(clean(e.message)); process.exit(1); });
 }
 
-module.exports = { ROOT_DIR, BACKOFF_MS, SWEEP_AFTER_MS, configPath, isPaired, loadConfig, saveConfig, backingOff, nextSeq, wireEvent, send, dispatchThenExit, agentPid, liveSessions, heartbeat, reporterHooks, installHooks, uninstallHooks, localBuddy, routeProblem, hasTailnetAddress, cli };
+module.exports = { ROOT_DIR, BACKOFF_MS, MAX_SENDERS, claimSlot, healthy, SWEEP_AFTER_MS, configPath, isPaired, loadConfig, saveConfig, backingOff, nextSeq, wireEvent, send, dispatchThenExit, agentPid, liveSessions, heartbeat, reporterHooks, installHooks, uninstallHooks, localBuddy, routeProblem, hasTailnetAddress, cli };

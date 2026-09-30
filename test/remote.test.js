@@ -116,6 +116,42 @@ test('protocol: unknown device, malformed or duplicated headers are one flat 401
   assert.equal(Protocol.verify({ headers: { ...good.headers, [Protocol.HEADERS.device]: '../etc' }, body: good.body, lookup, nonces }).status, 401);
 });
 
+test('protocol: a stepped-back wall clock cannot replay a request older than the device\'s latest', () => {
+  const nonces = Protocol.nonceCaches();
+  const T0 = 1790000000000;
+  const R0 = signed({ v: 1 }, { now: T0 });
+  const dev = { ...registry['devbox-a1b2c3'] };
+  const look = () => dev;
+  assert.equal(Protocol.verify({ ...R0, lookup: look, nonces, now: T0, mono: 0 }).ok, true);
+  // Legitimate traffic moves the device's high-water mark on.
+  const later = Protocol.verify({ ...signed({ v: 1 }, { now: T0 + 120000 }), lookup: look, nonces, now: T0 + 120000, mono: 120000 });
+  assert.equal(later.ok, true);
+  dev.highTs = later.ts;
+  // 126 s on the monotonic clock: R0's nonce has expired. The wall clock has stepped back.
+  for (const back of [66000, 125000]) {
+    const r = Protocol.verify({ ...R0, lookup: look, nonces, now: T0 + 126000 - back, mono: 126000 });
+    assert.equal(r.ok, false, `wall -${back / 1000} s`);
+    assert.match(r.error, /older than this device/);
+  }
+  // A fresh request within 60 s of the mark still passes.
+  assert.equal(Protocol.verify({ ...signed({ v: 1 }, { now: T0 + 70000 }), lookup: look, nonces, now: T0 + 70000, mono: 127000 }).ok, true);
+});
+
+test('registry: the high-water mark survives a restart', async () => {
+  const root = tmp('ctl-desk-');
+  let t = 1790000000000;
+  const first = devices(root, { now: () => t }).R;
+  const p = first.pair('devbox');
+  const t0 = t;
+  for (const at of [t0, t0 + 30000, t0 + 120000]) { t = at; assert.equal((await ping(first, p, at)).code, 200); }
+  const stored = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).devices[0];
+  assert.ok(stored.highTs >= t0 + 110000, `persisted ${stored.highTs - t0}`);
+  t = t0 + 130000;
+  const again = devices(root, { now: () => t }).R;
+  const old = await ping(again, p, 1790000000000 + 30000);
+  assert.equal(old.code, 401, 'within skew of a stepped-back clock, but older than the mark');
+});
+
 test('protocol: responses are signed over the request nonce, status and body', () => {
   const parts = { nonce: 'a'.repeat(32), status: 200, body: '{"ok":true}' };
   const sig = Protocol.signResponse(TOKEN, parts);
@@ -144,9 +180,13 @@ test('protocol: pairing codes, allowed urls, session ids', () => {
   for (const bad of ['', '.', '..', '...', '../x', 'a/b', 'a\\b', 'x'.repeat(121), 7, null, '%2e%2e']) assert.equal(Protocol.validSessionId(bad), false, String(bad));
 });
 
-test('protocol: the display sanitiser drops control, zero-width, separator and bidi characters', () => {
-  const nasty = [0x1b, 0x7f, 0x85, 0xad, 0x61c, 0x180e, 0x200b, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2066, 0x2069, 0xfeff, 0xfff9, 0xfffb];
-  assert.equal(Protocol.displayString(`a${nasty.map((c) => ch(c)).join('')}b`, 100), 'ab');
+test('protocol: the display sanitiser drops control, zero-width, separator, bidi, tag and filler characters', () => {
+  const nasty = [0x1b, 0x7f, 0x85, 0xad, 0x34f, 0x61c, 0x17b4, 0x17b5, 0x180e, 0x200b, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2066, 0x2069, 0x2800, 0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xffa0, 0xfff9, 0xfffb, 0xe0000, 0xe0041, 0xe007f, 0xe0100, 0xe01ef];
+  assert.equal(Protocol.displayString(`a${nasty.map((c) => String.fromCodePoint(c)).join('')}b`, 100), 'ab');
+  assert.equal(Protocol.displayString(`a${ch(0xa0)}b${ch(0x202f)}c`, 100), 'a b c', 'no-break spaces read as spaces');
+  const face = String.fromCodePoint(0x1f600);
+  assert.equal(Protocol.displayString(`x${face}y`, 2), `x${face}`, 'cut by code point, never mid surrogate pair');
+  assert.equal(Protocol.displayString(face.repeat(3), 1), face);
   assert.equal(Protocol.displayString('/srv/äpp', 100), '/srv/äpp');
   assert.equal(Protocol.displayString('x'.repeat(10), 4), 'xxxx');
 });
@@ -394,6 +434,47 @@ test('events: out-of-order events are dropped by seq, and an ended session stays
   assert.equal(R.readSessions().length, 0, 'a late event can\'t resurrect it');
   R.apply(d, env(device.id, { events: [ev({ seq: 111, signal: 'session-start' })] }));
   assert.equal(R.readSessions().length, 1, 'a newer start can');
+});
+
+test('ordering: a session-end older than what the desktop holds is dropped', () => {
+  const { R } = devices();
+  const { device } = R.pair('devbox');
+  const d = R.lookup(device.id);
+  R.apply(d, env(device.id, { events: [ev({ seq: 200, signal: 'tool-use' })] }));
+  assert.deepEqual(R.apply(d, env(device.id, { events: [ev({ seq: 150, signal: 'session-end' })] })).body, { ok: true, applied: 0 });
+  assert.equal(R.readSessions().length, 1, 'a stale end arriving late does not end the live session');
+  R.apply(d, env(device.id, { events: [ev({ seq: 201, signal: 'session-end' })] }));
+  assert.equal(R.readSessions().length, 0);
+});
+
+test('ordering: an ended session stays ended across a desktop restart', () => {
+  const root = tmp('ctl-desk-');
+  const first = devices(root).R;
+  const { device } = first.pair('devbox');
+  first.apply(first.lookup(device.id), env(device.id, { events: [ev({ seq: 300, signal: 'tool-use' })] }));
+  first.apply(first.lookup(device.id), env(device.id, { events: [ev({ seq: 310, signal: 'session-end' })] }));
+  assert.equal(fs.statSync(path.join(first.remoteDir, device.id, 'ended')).mode & 0o777, 0o600);
+  const again = devices(root).R;
+  const d = again.lookup(device.id);
+  assert.deepEqual(again.apply(d, env(device.id, { events: [ev({ seq: 305, signal: 'tool-done' })] })).body, { ok: true, applied: 0 });
+  assert.equal(again.readSessions().length, 0, 'the late event did not resurrect it');
+  again.apply(d, env(device.id, { events: [ev({ seq: 311, signal: 'session-start' })] }));
+  assert.equal(again.readSessions().length, 1, 'a newer start still can');
+  assert.equal(again.list()[0].sessions, 1, 'the tombstone file is not counted as a session');
+});
+
+test('atomicity: a batch whose second session is locked writes neither', () => {
+  const { R } = devices();
+  const { device } = R.pair('devbox');
+  const d = R.lookup(device.id);
+  R.apply(d, env(device.id, { events: [ev({ sessionId: 'a', seq: 10 }), ev({ sessionId: 'b', seq: 10 })] }));
+  const lockB = `${fileOf(R, device.id, 'claude', 'b')}.lock`;
+  fs.writeFileSync(lockB, 'someone');
+  const r = R.apply(d, env(device.id, { events: [ev({ sessionId: 'a', seq: 20, signal: 'stop' }), ev({ sessionId: 'b', seq: 20, signal: 'stop' })] }));
+  fs.rmSync(lockB);
+  assert.equal(r.status, 503);
+  assert.deepEqual(R.readSessions().map((s) => s.signal).sort(), ['tool-use', 'tool-use'], 'a was not written either');
+  assert.equal(fs.existsSync(`${fileOf(R, device.id, 'claude', 'a')}.lock`), false, 'and its lock was released');
 });
 
 test('events: remote strings are display-only; pids, host apps and blocking asks are never taken', () => {
@@ -847,16 +928,110 @@ test('hook: an unreachable desktop backs off: the next hook sends nothing', asyn
   } finally { hang.close(); }
 });
 
-test('hook: a refusal (bad key) is not mistaken for a down desktop', async () => {
+test('backoff: only an authentic, prompt answer clears it; unsigned or slow answers set it', async () => {
+  assert.equal(Remote.healthy({ authentic: true, status: 200 }, 100, 800), true);
+  assert.equal(Remote.healthy({ authentic: true, status: 400 }, 100, 800), true, 'a signed refusal is the desktop, up');
+  assert.equal(Remote.healthy({ authentic: false, status: 200 }, 10, 800), false, 'unsigned');
+  assert.equal(Remote.healthy({ authentic: true, status: 200 }, 401, 800), false, 'slower than half the timeout');
+  assert.equal(Remote.healthy({ error: 'ECONNREFUSED' }, 1, 800), false);
   const desk = await deviceListener();
   try {
-    const home = tmp('ctl-reporter-');
-    Remote.saveConfig(home, { url: `http://127.0.0.1:${desk.port}`, device: 'devbox-a1b2c3', token: TOKEN });
-    await runEmit(home, ['--adapter', 'claude', 'PreToolUse'], payload());
-    await new Promise((r) => setTimeout(r, 400));
-    assert.equal(Remote.backingOff(home), false);
-    assert.equal(desk.R.readSessions().length, 0);
+    // A key the desktop doesn't know: its 401 can't be signed, so it backs off.
+    const stranger = tmp('ctl-reporter-');
+    Remote.saveConfig(stranger, { url: `http://127.0.0.1:${desk.port}`, device: 'devbox-a1b2c3', token: TOKEN });
+    await Remote.send('ping', {}, { rootDir: stranger, ignoreBackoff: true });
+    assert.equal(Remote.backingOff(stranger), true);
+    // A paired device's signed 400 doesn't.
+    const rep = pairReporter(desk);
+    const r = await Remote.send('bogus', {}, { rootDir: rep.home, ignoreBackoff: true });
+    assert.equal(r.status, 400);
+    assert.equal(r.authentic, true);
+    assert.equal(Remote.backingOff(rep.home), false);
+    // The real desktop behind a link that answers slower than half the timeout.
+    const slow = net.createServer((c) => { const up = net.connect(desk.port, '127.0.0.1'); c.pipe(up); up.on('data', (d) => setTimeout(() => c.write(d), 300)); up.on('end', () => setTimeout(() => c.end(), 320)); c.on('error', () => {}); up.on('error', () => {}); }).listen(0, '127.0.0.1');
+    await new Promise((res) => slow.once('listening', res));
+    const lagged = tmp('ctl-reporter-');
+    Remote.saveConfig(lagged, { url: `http://127.0.0.1:${slow.address().port}`, device: rep.device, token: rep.token, timeoutMs: 500 });
+    const lr = await Remote.send('ping', {}, { rootDir: lagged, ignoreBackoff: true });
+    assert.equal(lr.authentic, true);
+    assert.equal(Remote.backingOff(lagged), true, 'answered, signed, but too slowly');
+    slow.close();
   } finally { desk.close(); }
+});
+
+test('senders: at most four detached senders at once; stale slots are reclaimed', () => {
+  const root = tmp('ctl-reporter-');
+  const slots = [0, 1, 2, 3, 4].map(() => Remote.claimSlot(root));
+  assert.equal(slots.filter(Boolean).length, Remote.MAX_SENDERS);
+  assert.equal(slots[4], null);
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(slots[0], old, old);
+  assert.equal(Remote.claimSlot(root), slots[0], 'a slot its sender never freed');
+});
+
+// A sender's command line carries its slot, which lives under its reporter's
+// data dir: that tells this test's senders from any other test's.
+function sendersRunning(home) {
+  let out = '';
+  try { out = require('child_process').execFileSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8', maxBuffer: 1 << 24 }); } catch {}
+  return out.split('\n').filter((l) => l.includes(`${REMOTE_CLI} __send`) && l.includes(home)).length;
+}
+
+test('senders: 100 hooks in a second against a desktop that never answers keep the peak at 4 or fewer', { skip: process.platform === 'win32' }, async () => {
+  const hole = http.createServer(() => {});
+  await new Promise((r) => hole.listen(0, '127.0.0.1', r));
+  const home = tmp('ctl-pileup-');
+  Remote.saveConfig(home, { url: `http://127.0.0.1:${hole.address().port}`, device: 'devbox-a1b2c3', token: TOKEN, timeoutMs: 2000 });
+  let peak = 0;
+  const sampler = setInterval(() => { peak = Math.max(peak, sendersRunning(home)); }, 50);
+  try {
+    const runs = [];
+    for (let i = 0; i < 100; i++) {
+      runs.push(runEmit(home, ['--adapter', 'claude', 'PreToolUse'], payload({ session_id: `pile-${i % 5}` })));
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const res = await Promise.all(runs);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.deepEqual([...new Set(res.map((r) => r.code))], [0]);
+    console.log(`# pile-up: peak concurrent senders ${peak}`);
+    assert.ok(peak <= Remote.MAX_SENDERS, `peak ${peak}`);
+  } finally { clearInterval(sampler); hole.closeAllConnections(); hole.close(); }
+});
+
+test('cli: on a terminal the pairing prompt stays visible and the pasted code is never echoed', { skip: process.platform === 'win32' }, async () => {
+  const py = require('child_process').spawnSync('python3', ['-c', 'import pty'], { encoding: 'utf8' });
+  if (py.status !== 0) return;
+  const home = tmp('ctl-home-');
+  const code = Protocol.pairingCode('probe-1', 'b'.repeat(64));
+  const script = [
+    'import os, pty, time, select, sys',
+    'pid, fd = pty.fork()',
+    'if pid == 0:',
+    `    os.execvpe(${JSON.stringify(process.execPath)}, ['node', ${JSON.stringify(REMOTE_CLI)}, 'pair', 'http://127.0.0.1:9', '--no-hooks'], dict(os.environ, HOME=${JSON.stringify(home)}, CLAUDE_TRAFFIC_LIGHT_HOME=${JSON.stringify(path.join(home, '.ctl'))}, BUDDY_PAIRING_CODE=''))`,
+    'out = b""',
+    'def drain(t):',
+    '    global out',
+    '    end = time.time() + t',
+    '    while time.time() < end:',
+    '        r, _, _ = select.select([fd], [], [], 0.05)',
+    '        if r:',
+    '            try: out += os.read(fd, 4096)',
+    '            except OSError: return',
+    'drain(1.5)',
+    'before = out; out = b""',
+    `os.write(fd, ${JSON.stringify(code.slice(0, 20))}.encode()); drain(0.4)`,
+    `os.write(fd, ${JSON.stringify(code.slice(20))}.encode() + b"\\r"); drain(2.5)`,
+    'sys.stdout.write(repr(before.decode(errors="replace")) + "\\n" + repr(out.decode(errors="replace")))',
+  ].join('\n');
+  const run = require('child_process').spawnSync('python3', ['-c', script], { encoding: 'utf8', timeout: 20000 });
+  assert.equal(run.status, 0, run.stderr);
+  const [before, after] = run.stdout.split('\n');
+  // Readline would redraw with ESC[1G ESC[0J; the prompt must survive it.
+  assert.match(before, /Pairing code/);
+  assert.equal(/\\x1b\[0J/.test(before.split('Pairing code').pop()), false, 'nothing wipes the prompt after it');
+  assert.equal(after.includes('bbbbbbbb'), false, 'the key was echoed');
+  assert.equal(after.includes('buddy-pair'), false, 'the code was echoed');
+  assert.match(after, /Saved/);
 });
 
 // ── How remote sessions read ────────────────────────────────────────────────

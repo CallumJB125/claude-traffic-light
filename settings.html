@@ -147,6 +147,10 @@
   #remote-code { display: flex; flex-direction: column; gap: 6px; padding: var(--space-2); background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); }
   #remote-code[hidden] { display: none; }
   #remote-list button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #remote-list li { flex-wrap: wrap; }
+  #remote-list .revoke-note { flex-basis: 100%; text-align: right; font-size: var(--text-xs); color: var(--danger-text); }
+  #remote-list .revoke-note:empty { display: none; }
+  .remote-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
   #remote-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); user-select: all; }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
@@ -387,13 +391,17 @@
     </div>
     <div class="hint" id="remote-pair-status" role="status" aria-live="polite"></div>
     <div id="remote-code" hidden>
-      <div class="hint">Shown once. On <b id="remote-code-name"></b>, run <code>node hooks/remote.js pair http://127.0.0.1:<span class="remote-port">47173</span></code> from a Buddy checkout and paste:</div>
+      <div class="hint">Shown once. To connect <b id="remote-code-name"></b>:</div>
+      <ol class="hint remote-steps">
+        <li>On this Mac, open a tunnel to it: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> <span id="remote-code-host"></span></code></li>
+        <li>On <span id="remote-code-where"></span>, in the folder where you downloaded Claude Buddy, run <code>node hooks/remote.js pair http://127.0.0.1:<span class="remote-port">47173</span></code> and paste this code:</li>
+      </ol>
       <pre id="remote-code-text"></pre>
       <div class="row"><button type="button" class="secondary" id="remote-copy">Copy code</button><button type="button" class="secondary" id="remote-done">Done</button></div>
-      <div class="hint">The code works once, within 10 minutes. Copied, it leaves the clipboard after a minute. Lost it? Revoke the device and pair again.</div>
+      <div class="hint">Use it within 10 minutes. It's this device's key: keep it private; if it leaks, revoke and pair again. Copied, it leaves the clipboard after a minute.</div>
     </div>
     <ul id="remote-list" aria-label="Paired devices"></ul>
-    <div class="hint">Reach this Mac with a tunnel from here: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> devbox</code>. Every event is signed with the device's own key; revoking stops it at once.</div>
+    <div class="hint">Reach this Mac with a tunnel from here: <code>ssh -o ExitOnForwardFailure=yes -N -R 127.0.0.1:<span class="remote-port">47173</span>:127.0.0.1:<span class="remote-port">47173</span> &lt;host&gt;</code>. Every event is signed with the device's own key; revoking stops it at once.</div>
     <div class="hint" id="remote-listener" role="status" aria-live="polite"></div>
     <label class="row"><input type="checkbox" id="remoteTailscale" aria-describedby="remote-tailnet" /> Also accept devices over Tailscale</label>
     <div class="hint" id="remote-tailnet">Listens on this Mac's Tailscale address only, for signed device events and nothing else.</div>
@@ -656,18 +664,23 @@
         const revoke = document.createElement('button');
         revoke.type = 'button'; revoke.className = 'secondary'; revoke.textContent = 'Revoke';
         revoke.setAttribute('aria-label', `Revoke ${d.name}`);
+        // Said beside the button it's about, and gone again when it disarms.
+        const note = document.createElement('span');
+        note.className = 'revoke-note';
+        note.setAttribute('role', 'status');
+        note.setAttribute('aria-live', 'polite');
         revoke.addEventListener('click', async () => {
           if (!revoke.dataset.armed) {
             revoke.dataset.armed = '1'; revoke.textContent = 'Revoke now?'; revoke.classList.add('armed');
-            remoteEl('pair-status').textContent = `Click again to revoke ${d.name}. Its key stops working at once.`;
-            setTimeout(() => { delete revoke.dataset.armed; revoke.textContent = 'Revoke'; revoke.classList.remove('armed'); }, 4000);
+            note.textContent = `Click again to revoke ${d.name}. Its key stops working at once.`;
+            setTimeout(() => { delete revoke.dataset.armed; revoke.textContent = 'Revoke'; revoke.classList.remove('armed'); note.textContent = ''; }, 4000);
             return;
           }
           const r = await window.settingsApi.remoteRevoke(d.id);
           remoteEl('pair-status').textContent = r.revoked ? `Revoked ${d.name}. Its key no longer works.` : `${d.name} was already gone.`;
           showRemote(r);
         });
-        li.append(who, revoke);
+        li.append(who, revoke, note);
         return li;
       }));
       const lb = v.loopback || {};
@@ -683,6 +696,9 @@
       remoteEl('pair-status').textContent = `Paired ${r.paired.name}.`;
       remoteEl('name').value = '';
       remoteEl('code-name').textContent = r.paired.name;
+      remoteEl('code-where').textContent = r.paired.name;
+      // The name as the ssh host when it can be one; otherwise say what goes there.
+      remoteEl('code-host').textContent = /^[A-Za-z0-9._-]+$/.test(r.paired.name) ? r.paired.name : `<${r.paired.name}'s address>`;
       remoteEl('code-text').textContent = r.code;
       remoteEl('code').hidden = false;
       showRemote(r);

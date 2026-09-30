@@ -116,10 +116,13 @@ function verify({ headers, body, lookup, nonces, now = Date.now(), mono = monoMs
   // about which device ids exist.
   if (!known || !good) return deny(401, 'bad signature');
   if (Math.abs(now - Number(ts)) > MAX_SKEW_MS) return deny(401, 'timestamp outside the 60 s window (check both clocks)');
+  // Past the nonce's life, a wall clock stepped back could let an old
+  // request's timestamp pass again; the device's own latest one bounds it.
+  if (Number.isFinite(entry.highTs) && Number(ts) < entry.highTs - MAX_SKEW_MS) return deny(401, 'older than this device\'s recent requests');
   const seen = nonces.check(device, nonce, mono);
   if (seen === 'replay') return deny(401, 'replayed request');
   if (seen === 'full') return { ...deny(429, 'too many requests'), device: entry, nonce };
-  return { ok: true, device: entry, nonce };
+  return { ok: true, device: entry, nonce, ts: Number(ts) };
 }
 
 const pairingCode = (device, token) => `${PAIR_PREFIX}.${device}.${token}`;
@@ -157,11 +160,15 @@ function envelope(kind, device, fields = {}, now = Date.now()) {
   return { v: VERSION, kind, device, sentAt: new Date(now).toISOString(), ...fields };
 }
 
-// Control, zero-width, line/paragraph separator and bidi characters, so a
-// string from another machine can't rearrange, hide or fake what the widget,
-// a notification, a log line or a terminal shows.
-const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb]/g;
-const displayString = (v, max) => (typeof v === 'string' ? v.replace(UNSAFE_CHARS, '').slice(0, max) : '');
+// Control, zero-width, line/paragraph separator, bidi, tag, variation
+// selector and blank-looking filler characters, so a string from another
+// machine can't rearrange, hide or fake what the widget, a notification, a
+// log line or a terminal shows.
+const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u17b4-\u17b5\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
+// No-break spaces read as spaces; anything wider is cut by code point, so
+// a surrogate pair is never split in half.
+const SPACES = /[\u00a0\u202f]/g;
+const displayString = (v, max) => (typeof v === 'string' ? Array.from(v.replace(SPACES, ' ').replace(UNSAFE_CHARS, '')).slice(0, max).join('') : '');
 
 module.exports = {
   VERSION, MAX_SKEW_MS, NONCE_TTL_MS, NONCES_PER_DEVICE, MAX_BODY_BYTES, MAX_EVENTS, MAX_HEARTBEAT_SESSIONS, HEADERS, DEVICE_ID, TOKEN, SOURCE,

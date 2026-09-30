@@ -22,9 +22,12 @@ remote.js heartbeat --every 30 ── state of each live session ─────
 
 1. **Pair on the desktop.** Open Preferences → Remote devices, name the
    machine, and click **Pair**. Buddy shows a pairing code once
-   (`buddy-pair-v1.<device id>.<64 hex>`). The code *is* the device's key.
-   It must be used within 10 minutes, and once copied it is cleared from the
-   clipboard after a minute. If you lose it, revoke the device and pair again.
+   (`buddy-pair-v1.<device id>.<64 hex>`). Use it within 10 minutes. The
+   code *is* the device's key and keeps working from any machine that has
+   it, so keep it private. If it leaks or you lose it, revoke the device and
+   pair again. Once copied, it is cleared from the clipboard after a minute.
+   The panel shows the tunnel command for that device first, then the pair
+   command.
 2. **Open a path from the reporter to the desktop.** See the recipes below.
 3. **Install reporter mode on the other machine.** It needs a Buddy checkout
    and Node 18+:
@@ -156,6 +159,10 @@ The desktop checks the signature (constant-time) before it parses the body.
 An unknown device id is checked against a dummy key, so it costs the same.
 It then:
 - rejects skew over 60 s either way,
+- rejects a timestamp more than 60 s older than the latest one it has
+  accepted from that device (its high-water mark, kept in `devices.json` to
+  within 10 s). Once a nonce has expired, a wall clock stepped back can't let
+  an old request through,
 - rejects a nonce that device has used in the last 125 s (2 × skew + 5 s,
   on the monotonic clock, so a wall-clock step can't expire one early). Each
   device has its own nonce cache of up to 1000 entries. A full cache refuses
@@ -182,9 +189,10 @@ unsigned 401.
 - The whole request, including the per-device session cap (64), is checked
   before anything is written. One bad event rejects it all.
 - `seq` is per session and only goes up (`max(now ms, last + 1)`, kept in the
-  reporter's session file). The desktop drops any event or heartbeat entry
-  that isn't newer than what it holds. A session-end leaves a tombstone, so
-  a late event can't bring the session back.
+  reporter's session file). The desktop drops any event or heartbeat entry,
+  a session-end included, that isn't newer than what it holds. A session-end
+  leaves a tombstone in the device's `ended` file (0600, the latest 256), so
+  not even a late event after a restart can bring the session back.
 - A heartbeat entry creates or updates the session only when it is newer.
   Otherwise it just vouches that the session is still alive.
 - Only the signal, the tool's name and the folder leave the reporter. The
@@ -220,9 +228,13 @@ retrofitted onto every hook.
   `sessionId: "remote:<device id>:<source>-<id>"`. `host` and `deviceName`
   are the device's name, for display only. A device can't be named after
   this machine. Log lines show `<device>:<id prefix>`.
-- `cwd` and `tool` are display strings. Control, zero-width,
-  line/paragraph-separator and bidi characters are stripped, and length is
-  capped. The same goes for the device's name.
+- `cwd` and `tool` are display strings. Buddy strips:
+  - control, zero-width, line/paragraph-separator and bidi characters
+  - tag characters, variation selectors, CGJ, the Hangul/Braille/Khmer
+    blanks and U+180E
+
+  No-break spaces become plain spaces, and length is capped by code point,
+  so a character is never cut in half. The same goes for the device's name.
 - Remote sessions are left out of everything that acts on this machine:
   - terminal jumps and "go to the session that needs me" (which instead says
     "waiting on <device>")
@@ -242,12 +254,19 @@ retrofitted onto every hook.
   it is gone. The pid check happens on the reporter, where it works. Sessions
   that no heartbeat has vouched for use the usual working/waiting stale
   windows. The device list counts live sessions only.
-- **Back-off.** When a send gets no answer at all (timeout, refused
-  connection), the reporter records it, and hooks skip dispatching for 30 s.
-  A refusal such as a 401 doesn't count, because the desktop is up. The
+- **Back-off.** Only an answer signed by the desktop, arriving within half
+  the timeout, counts as the desktop being there. A signed refusal (400,
+  429) counts too, since the desktop is up. Silence, an unsigned or wrongly
+  signed answer, or a slow one makes hooks skip dispatching for 30 s. The
   heartbeat ignores the back-off and re-syncs state once the path is back.
-- Writes to a remote session never wait. If another writer holds its lock,
-  the request gets a 503, and the next event or heartbeat carries the state.
+- **Sender cap.** At most four detached senders run at once. Each claims a
+  slot file in `~/.claude-traffic-light/senders/`, and a slot older than
+  10 s is reclaimed. Past the cap an event is dropped, and the next event or
+  heartbeat carries the state.
+- Writes to a remote session never wait. A request takes every lock it
+  needs first and writes only if it got them all. If any lock is held, it
+  writes nothing and gets a 503, and the next event or heartbeat carries the
+  state.
   Refreshes of the widget are debounced to one per 200 ms.
 - The heartbeat also deletes the reporter's own session files once their
   agent is gone and they're a day old.
@@ -295,9 +314,10 @@ the device key:**
 - `devices.json` (desktop) and `remote.json` (reporter) are written 0600 with
   an atomic rename. The desktop keeps the raw key, because an HMAC can't be
   verified from a hash.
-- The pairing code is shown once, expires after 10 minutes if unused, isn't
-  echoed when pasted, and is cleared from the clipboard a minute after
-  **Copy code**. Settings drops it on **Done**.
+- The pairing code is the device's key. It is shown once, stops working if
+  unused for 10 minutes (once used, it works until revoked), isn't echoed
+  when pasted (the prompt stays visible), and is cleared from the clipboard
+  a minute after **Copy code**. Settings drops it on **Done**.
 - Setup export never includes either file.
 - A full enrollment-key exchange, so the code isn't the long-term key, is on
   the backlog.
