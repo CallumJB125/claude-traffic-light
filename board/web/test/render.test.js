@@ -57,7 +57,7 @@ test('card renders key, repo@branch, pill label + reason, sponsor, activity, bud
   assert.match(textOf(byClass(n, 'pill')[0]), /^Running.*Alice's Claude · editing deals\.ts$/);
   assert.match(t, /Runs on Alice's MacBook Pro · Alice's claude account/);
   assert.match(t, /Alice's Claude · 5s ago/);
-  assert.match(t, /\$1\.20 \/ \$5/);
+  assert.match(t, /\$1\.20\/\$5/);
   const chip = byClass(n, 'chip-overlap')[0];
   assert.equal(textOf(chip), 'overlaps BDL-2 · deals.ts', 'the ⚠ glyph is drawn as an icon, not text');
 });

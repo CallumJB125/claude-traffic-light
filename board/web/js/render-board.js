@@ -8,6 +8,7 @@ import { VIEWS } from './views.js';
 import { selectionBar } from './dnd.js';
 import { filterBar } from './render-filters.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
+import { cardChips } from './chips.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -107,7 +108,23 @@ export function cardActions(face, view, busy) {
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;
 }
 
-export function card({ view, face }, model) {
+// Proof, handover age and cost as one row of small chips (chips.js decides which).
+function chipRow(chips) {
+  if (!chips.length) return null;
+  return h('div', { class: 'card-chips' }, chips.map((c) => {
+    const body = [
+      c.icon ? icon(c.icon, 'icon-xs') : null,
+      c.ratio != null ? h('span', { class: 'cchip-meter', 'aria-hidden': 'true' }, h('span', { class: 'cchip-fill', style: { '--ratio': String(c.ratio) } })) : null,
+      h('span', { class: 'cchip-text num' }, c.text),
+    ];
+    const props = { key: c.id, class: `cchip cchip-${c.id}`, 'data-tone': c.tone, title: c.title };
+    return c.href
+      ? h('a', { ...props, href: c.href, target: '_blank', rel: 'noopener noreferrer' }, body)
+      : h('span', props, body);
+  }));
+}
+
+export function card({ view, face, elapsed_ms = 0 }, model) {
   const members = model.members;
   const assignees = (view.assignee_ids ?? []).map((id) => members.get(id));
   const owner = view.run?.owner ? members.get(view.run.owner.member_id) ?? view.run.owner : null;
@@ -122,6 +139,7 @@ export function card({ view, face }, model) {
   const labels = (view.labels ?? []).filter((l) => !/^via:[a-z0-9-]{2,32}$/.test(l));
   const picked = model.selection?.has(view.id);
   const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
+  const chips = cardChips(view, face, { elapsed_ms });
   const pending = view.pending === true;
   const draggable = human && !model.readOnly && !pending;
 
@@ -145,7 +163,7 @@ export function card({ view, face }, model) {
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
-  pill(face),
+  pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
@@ -153,8 +171,7 @@ export function card({ view, face }, model) {
   face.overlap_chip ? h('button', { type: 'button', class: 'chip chip-overlap', 'data-action': 'open', 'data-card': view.id, 'data-section': 'overlaps' },
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
   labels.length ? h('div', { class: 'card-labels' }, labels.map((l) => h('span', { class: 'label' }, l))) : null,
-  // An unspent budget on a card nobody is running is noise; the drawer and the Give dialog show it.
-  face.budget && (view.run || view.budget?.spent_usd > 0) ? budgetBar(face.budget) : null,
+  chipRow(chips),
   model.readOnly || pending ? null : cardActions(face, view, model.busy),
   human && !pending && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
 }
