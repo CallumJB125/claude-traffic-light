@@ -1,0 +1,225 @@
+// Claude CLI backend: spawn with the isolation profile, parse stream-json,
+// stdin injection, control_request interrupt and the stop recipe (§6.7).
+import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import crypto from 'node:crypto';
+import { INTERRUPT_WAIT_MS, STOP_GRACE_MS } from '../../shared/liveness.js';
+import { lstartOf, killTree, processTable, treeGroups, killGroups, isAlive } from '../procs.js';
+import { buildArgv, userMessage, interruptRequest } from '../launch.js';
+import { lineReader } from '../util.js';
+
+/**
+ * Normalised events (design §3.2.2):
+ *  init {session_id, tools, mcp_servers}
+ *  tool_start {id, name, input} · tool_end {id, ok}
+ *  assistant {text} · result {subtype, is_error, total_cost_usd, num_turns, terminal_reason, permission_denials, result}
+ *  rate_limit {info} · control_response {request_id, subtype} · compact {} · exit {code, signal, sawResult}
+ */
+export class ClaudeBackend extends EventEmitter {
+  constructor({ bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume = false, log, boardHome = null,
+    interruptWaitMs = INTERRUPT_WAIT_MS, stopGraceMs = STOP_GRACE_MS }) {
+    super();
+    Object.assign(this, { bin, cwd, env, runDir, sessionId, budgetUsd, maxTurns, systemPrompt, model, resume, log, boardHome, interruptWaitMs, stopGraceMs });
+    this.child = null;
+    this.pid = null;
+    this.lstart = null;
+    this.pgid = null;
+    this.exited = false;
+    this.exitInfo = null;
+    this.sawResult = false;
+    this.turnActive = false;
+    this.stopping = false;
+  }
+
+  argv() {
+    return buildArgv({ runDir: this.runDir, sessionId: this.sessionId, resume: this.resume, budgetUsd: this.budgetUsd,
+      maxTurns: this.maxTurns, systemPrompt: this.systemPrompt, model: this.model, boardHome: this.boardHome });
+  }
+
+  start(firstPromptText) {
+    const child = spawn(this.bin, this.argv(), { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    this.child = child;
+    this.pid = child.pid;
+    this.lstart = lstartOf(child.pid);
+    this.pgid = child.pid;   // detached ⇒ own session and process group
+    child.stdin.on('error', () => { /* EPIPE after exit */ });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', lineReader((l) => this.#onLine(l)));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (d) => this.log?.debug('claude stderr', { text: String(d).slice(0, 500) }));
+    child.on('error', (err) => {
+      this.log?.error('claude spawn error', { err: err.message });
+      if (!this.exited) this.#exit(null, null, err.message);
+    });
+    child.on('exit', (code, signal) => this.#exit(code, signal));
+    if (firstPromptText) this.send(firstPromptText);
+    return this;
+  }
+
+  #exit(code, signal, error) {
+    if (this.exited) return;
+    this.exited = true;
+    this.turnActive = false;
+    this.exitInfo = { code, signal, error: error ?? null, sawResult: this.sawResult };
+    this.emit('exit', this.exitInfo);
+  }
+
+  #onLine(line) {
+    let m;
+    try { m = JSON.parse(line); } catch { return; }
+    this.emit('raw', m);
+    switch (m.type) {
+      case 'system':
+        if (m.subtype === 'init') {
+          this.sessionId = m.session_id ?? this.sessionId;
+          this.emit('init', { session_id: m.session_id, tools: m.tools ?? [], mcp_servers: m.mcp_servers ?? [], model: m.model });
+        } else if (m.subtype === 'compact_boundary') this.emit('compact', {});
+        break;
+      case 'assistant': {
+        this.turnActive = true;
+        for (const c of m.message?.content ?? []) {
+          if (c.type === 'tool_use') this.emit('tool_start', { id: c.id, name: c.name, input: c.input ?? {} });
+          else if (c.type === 'text' && c.text) this.emit('assistant', { text: c.text });
+        }
+        break;
+      }
+      case 'user':
+        if (m.isReplay) break;
+        for (const c of Array.isArray(m.message?.content) ? m.message.content : []) {
+          if (c.type === 'tool_result') this.emit('tool_end', { id: c.tool_use_id, ok: !c.is_error });
+        }
+        break;
+      case 'result':
+        this.sawResult = true;
+        this.turnActive = false;
+        this.emit('result', {
+          subtype: m.subtype, is_error: !!m.is_error, total_cost_usd: m.total_cost_usd, num_turns: m.num_turns,
+          terminal_reason: m.terminal_reason ?? null, permission_denials: m.permission_denials ?? [], result: m.result ?? null,
+          errors: m.errors ?? null,
+        });
+        break;
+      case 'rate_limit_event':
+        this.emit('rate_limit', { info: m.rate_limit_info ?? {} });
+        break;
+      case 'control_response':
+        this.emit('control_response', { request_id: m.response?.request_id, subtype: m.response?.subtype });
+        break;
+      default:
+        break;
+    }
+  }
+
+  alive() {
+    return !!this.child && !this.exited;
+  }
+
+  #write(s) {
+    if (!this.alive() || this.child.stdin.destroyed || this.child.stdin.writableEnded) return false;
+    this.child.stdin.write(s);
+    return true;
+  }
+
+  send(text) {
+    const ok = this.#write(userMessage(text));
+    if (ok) this.turnActive = true;
+    return ok;
+  }
+
+  // stream-json interrupt; SIGINT if no control_response within 2 s (D16).
+  interrupt() {
+    if (!this.alive()) return Promise.resolve(false);
+    const id = `int-${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      let done = false;
+      const onResp = (r) => {
+        if (r.request_id !== id || done) return;
+        done = true; clearTimeout(t); this.off('control_response', onResp); resolve(true);
+      };
+      const t = setTimeout(() => {
+        if (done) return;
+        done = true; this.off('control_response', onResp);
+        if (this.alive()) { try { process.kill(this.pid, 'SIGINT'); } catch { /* gone */ } }
+        resolve(false);
+      }, 2000);
+      this.on('control_response', onResp);
+      if (!this.#write(interruptRequest(id))) { clearTimeout(t); done = true; this.off('control_response', onResp); resolve(false); }
+    });
+  }
+
+  endInput() {
+    if (this.child && !this.child.stdin.writableEnded) { try { this.child.stdin.end(); } catch { /* closed */ } }
+  }
+
+  #waitExit(ms) {
+    if (this.exited) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { this.off('exit', on); resolve(false); }, ms);
+      const on = () => { clearTimeout(t); resolve(true); };
+      this.once('exit', on);
+    });
+  }
+
+  #waitTurnEnd(ms) {
+    if (!this.turnActive || this.exited) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (v) => { clearTimeout(t); this.off('result', onR); this.off('exit', onR); resolve(v); };
+      const onR = () => done(true);
+      const t = setTimeout(() => done(false), ms);
+      this.once('result', onR);
+      this.once('exit', onR);
+    });
+  }
+
+  /**
+   * Stop recipe: interrupt → wait ≤ 5 s → end stdin → SIGTERM → after 10 s,
+   * if pid + lstart still match, SIGKILL + kill every descendant pgid. Any
+   * descendant group seen before SIGTERM that is still alive afterwards is
+   * killed too (tool trees reparent to 1 and outlive claude, spike 5b).
+   */
+  async stop() {
+    if (this.stopping) return this.#waitExit(this.interruptWaitMs + this.stopGraceMs + 5000);
+    this.stopping = true;
+    if (!this.alive()) { this.#reapLeftovers(); return true; }
+    if (this.turnActive) {
+      await this.interrupt();
+      await this.#waitTurnEnd(this.interruptWaitMs);
+    }
+    const before = treeGroups(this.pid, processTable());
+    this.#leftovers = before.groups.filter((g) => g !== this.pgid);
+    this.endInput();
+    try { process.kill(this.pid, 'SIGTERM'); } catch { /* gone */ }
+    const exited = await this.#waitExit(this.stopGraceMs);
+    if (!exited || (isAlive(this.pid) && lstartOf(this.pid) === this.lstart)) {
+      killTree(this.pid, this.lstart);
+      await this.#waitExit(2000);
+    }
+    this.#reapLeftovers();
+    return true;
+  }
+
+  #leftovers = [];
+
+  // Remember the tool tree's process groups while claude is alive: after an
+  // unexpected SIGKILL they reparent to 1 and can no longer be found.
+  refreshTree() {
+    if (!this.alive()) return;
+    const groups = treeGroups(this.pid, processTable()).groups.filter((g) => g !== this.pgid);
+    this.#leftovers = [...new Set([...this.#leftovers, ...groups])];
+  }
+
+  // After an unexpected exit: kill the tool trees that outlived claude.
+  reap() {
+    this.#reapLeftovers();
+  }
+
+  #reapLeftovers() {
+    const alive = this.#leftovers.filter((g) => { try { process.kill(-g, 0); return true; } catch { return false; } });
+    killGroups(alive, 'SIGKILL');
+  }
+
+  // Immediate hard kill (gate close escalation, orphan).
+  kill() {
+    if (!this.pid) return;
+    killTree(this.pid, this.lstart);
+  }
+}

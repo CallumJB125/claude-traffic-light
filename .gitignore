@@ -9,3 +9,4 @@ assets/icon-1024.png
 test-results/
 native/bin/
 native/voice/build/
+board/node_modules
