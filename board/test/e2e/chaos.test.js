@@ -213,7 +213,8 @@ test('partition: gate G pauses the runner before the card orphans; takeover by a
     const db = s.db();
     try {
       const late = db.prepare("SELECT kind FROM events WHERE run_id = ? AND id > (SELECT MAX(id) FROM events WHERE card_id = ? AND kind = 'taken_over')").all(runA.id, card.id).map((x) => x.kind);
-      assert.ok(late.every((k) => k === 'salvage'), `after the takeover the zombie only salvages (${late.join(',')})`);
+      // Its stale outbox entries are acked and dropped: one visible salvage line, the rest internal.
+      assert.ok(late.every((k) => k === 'salvage' || k === 'outbox_dropped'), `after the takeover the zombie only salvages (${late.join(',')})`);
     } finally { db.close(); }
     finish(s, { [card.id]: tl });
   } finally {
