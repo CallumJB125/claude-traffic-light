@@ -1,5 +1,6 @@
 // Stands in for the app's signal server wherever a blocking hook needs one:
-// the per-install token in <home>/token, and POST /request-key into a real
+// the per-install token in <home>/token, the token proof on POST
+// /request-key/challenge, and POST /request-key into a real
 // requestKeys store (hooks/answer-file.js), so tests answer with the key the
 // hook handed over, as the app does. It runs in its own process, so a test
 // may drive the hook with spawnSync without starving the server; the keys it
@@ -22,6 +23,10 @@ const srv = require('http').createServer((q, r) => {
   q.on('end', () => {
     let d = {};
     try { d = JSON.parse(body); } catch {}
+    if (q.method === 'POST' && q.url === '/request-key/challenge') {
+      r.writeHead(200, { connection: 'close', 'content-type': 'application/json' });
+      return r.end(JSON.stringify({ proof: A.requestKeyProof(token, q.socket.localPort, String(d.nonce)) }));
+    }
     const ok = takeKeys === '1' && q.method === 'POST' && q.url === '/request-key' && q.headers['x-buddy-token'] === token && keys.register(d.id, d.key);
     if (ok) { seen[d.id] = d.key; fs.writeFileSync(keysFile, JSON.stringify(seen)); }
     r.writeHead(ok ? 200 : 409, { connection: 'close' });

@@ -418,11 +418,14 @@ function writeSession(proc) {
   withLock(file, () => writeJsonAtomic(file, nextSession(readPrev(), proc)));
 }
 
-// Hand the app this request's answer key over its signal server (POST
-// /request-key with the per-install token). This is also the liveness check:
-// no app, or an app that won't take the key, means nobody can answer, so the
-// hook doesn't wait. A child keeps this script's flow synchronous; the key
-// and token go over its stdin, never argv.
+// Hand the app this request's answer key over its signal server. This is also
+// the liveness check: no app, or an app that won't take the key, means nobody
+// can answer, so the hook doesn't wait. The port file can be rewritten by any
+// same-user process, so the listener first proves it holds the token (a
+// challenge on a random nonce, answered with requestKeyProof for the port we
+// connected to); only then do the key and the token go to it (POST
+// /request-key). A child keeps this script's flow synchronous; the key and
+// token go over its stdin, never argv.
 function registerKey(id, keyHex) {
   try {
     // The app records the port it actually bound (demo modes use others).
@@ -432,10 +435,15 @@ function registerKey(id, keyHex) {
       if (Number.isInteger(filePort) && filePort > 0 && filePort < 65536) port = filePort;
     } catch {}
     const token = fs.readFileSync(path.join(ROOT_DIR, 'token'), 'utf8').trim();
-    const post = `let i='';process.stdin.on('data',(d)=>{i+=d}).on('end',()=>{const a=JSON.parse(i);const b=JSON.stringify({id:a.id,key:a.key});`
-      + `require('http').request({host:'127.0.0.1',port:a.port,path:'/request-key',method:'POST',headers:{'content-type':'application/json','x-buddy-token':a.token,'content-length':Buffer.byteLength(b)}},`
-      + `(r)=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1)).end(b)})`;
-    const input = JSON.stringify({ port, token, id, key: keyHex });
+    const post = `const http=require('http'),crypto=require('crypto');let i='';process.stdin.on('data',(d)=>{i+=d}).on('end',()=>{const a=JSON.parse(i);`
+      + `const send=(p,body,headers,cb)=>{const b=JSON.stringify(body);http.request({host:'127.0.0.1',port:a.port,path:p,method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(b),...headers}},`
+      + `(r)=>{let t='';r.on('data',(d)=>{if(t.length<4096)t+=d}).on('end',()=>cb(r.statusCode,t))}).on('error',()=>process.exit(1)).end(b)};`
+      + `const nonce=crypto.randomBytes(32).toString('hex');`
+      + `send('/request-key/challenge',{nonce},{},(code,t)=>{let proof='';try{proof=String(JSON.parse(t).proof)}catch{}`
+      + `const want=Buffer.from(require(a.lib).requestKeyProof(a.token,a.port,nonce),'hex');const got=Buffer.from(/^[0-9a-f]{64}$/.test(proof)?proof:'','hex');`
+      + `if(code!==200||got.length!==want.length||!crypto.timingSafeEqual(want,got))process.exit(1);`
+      + `send('/request-key',{id:a.id,key:a.key},{'x-buddy-token':a.token},(c)=>process.exit(c===200?0:1))})})`;
+    const input = JSON.stringify({ port, token, id, key: keyHex, lib: path.join(__dirname, 'answer-file.js') });
     return require('child_process').spawnSync(process.execPath, ['-e', post], { input, timeout: 1500, stdio: ['pipe', 'ignore', 'ignore'] }).status === 0;
   } catch { return false; }
 }

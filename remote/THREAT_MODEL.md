@@ -92,8 +92,16 @@ buttons and the phone path):
 ```
 
 **Per-request key.** Before `<id>.json` exists, the hook generates 32 random
-bytes and POSTs them to the running app (`POST /request-key` on the local
-signal server, token-protected; first registration per id wins). The key is
+bytes and hands them to the running app over the local signal server. It
+finds the server through `~/.claude-traffic-light/port` (written 0600,
+atomically, by the app), and before sending anything secret it makes the
+listener prove it holds the per-install token: the hook sends a random
+nonce (no secret) to `POST /request-key/challenge`, the server replies
+`HMAC-SHA256(token, "buddy.request-key.v1|" ‖ its own port ‖ "|" ‖ nonce)`,
+and the hook checks it with a timing-safe compare for the port it connected
+to (so a listener can't relay the challenge to the real app and reuse the
+answer). Only then does it `POST /request-key` with `{id, key}`,
+token-authenticated; first registration per id wins. The key is
 held in the app's memory only (`requestKeys`) and never written to disk. Every
 answer carries `mac = HMAC-SHA256(key, canonical answer fields)`; the hook
 verifies it with a timing-safe compare against the key it kept in memory. No
@@ -155,22 +163,35 @@ otherwise `unknown` ("not applied — check at your desk").
   desktop-signed (notices, challenges, completions, results).
 - **B3 hub ↔ desktop app**: untrusted. Nothing the hub delivers is acted on
   unless device-signed and verified against the local registry.
-- **B4 desktop app ↔ waiting hook**: local filesystem (`~/.claude-traffic-light/requests`)
-  plus the per-request key over the local signal server. Other same-user
-  processes are out of scope (they can already run the tool themselves),
-  **except the agent itself**: a Claude Code session that can write under
-  `$HOME` (acceptEdits, or an allowed Bash) must not be able to approve its own
-  permission prompt, least of all with a session-wide rule. It is covered by
-  (1) the per-request key: reading `requests/` gives nothing to sign with, so
-  a forged `<id>.answer` is refused and the terminal prompt stays; and (2) the
-  deny rule the hook installer adds to `~/.claude/settings.json`,
-  `Edit(~/.claude-traffic-light/**)` (Edit rules cover every built-in file
-  editing tool, Write included; removed on uninstall), so its file tools
-  can't touch Buddy's state at all. Residual: an agent that can run arbitrary
-  code as the user could read the token and race the hook's key registration
-  for an id it can't yet know (random UUID, registered before the request file
-  exists), or talk to the app as a same-user process — the general same-user
-  case above.
+- **B4 desktop app ↔ waiting hook**: local filesystem (`~/.claude-traffic-light/requests`,
+  `port`, `token`) plus the per-request key over the local signal server.
+  The question is whether the agent can approve its own permission prompt,
+  least of all with a session-wide rule. The answer depends on what the agent
+  can already do:
+  - **Protected: an agent limited to Claude Code's file tools** (Read, Edit,
+    Write…, including under acceptEdits) **and sandboxed Bash** (writes
+    confined to the project, no listener it can point Buddy at). It can
+    read `requests/` but that gives nothing to sign with, so a forged
+    `<id>.answer` is refused and the terminal prompt stays; the request file
+    is bound by `decisionHash` (kind, channel, tool, input, suggestions), so
+    editing it only gets the request dropped; and the
+    deny rule the hook installer adds to `~/.claude/settings.json`,
+    `Edit(~/.claude-traffic-light/**)` (Edit rules cover every built-in file
+    editing tool, Write included), keeps its file tools out of Buddy's state
+    altogether.
+  - **Not protected: unsandboxed Bash or any other arbitrary code execution
+    as the user.** Such an agent can read `token` and talk to the app like
+    the app's own hook, or rewrite `port` and run a listener that holds the
+    token too, so the challenge (which stops a listener that *doesn't* know
+    the token, e.g. whatever grabbed port 47172 after the app quit) no longer
+    helps; it can also race the hook's key registration or read the app's
+    memory. None of that is worth defending further: an agent with that
+    power can run the tool call it is asking about directly, without any
+    prompt. What stays exposed there is exactly that: an allow (including a
+    session rule) can be forged, and the terminal prompt is not a boundary.
+    The real bound for such agents is Claude Code's own permission rules and
+    the sandbox, not Buddy.
+  - Other same-user processes are out of scope for the same reason.
 
 ## 5. What the hub can and cannot do
 
@@ -219,7 +240,7 @@ otherwise `unknown` ("not applied — check at your desk").
 | T3 | Tampering | Hub alters what the phone displays | Desktop-signed `buddy.request`; phone recomputes the hash from the displayed input before signing |
 | T4 | Tampering | Parser differentials (duplicate keys, number forms) | Canonical round-trip check; strict JCS subset; schema with exact key set |
 | T5 | Tampering | Registry / identity files edited | 0600 files in 0700 dir; a corrupt registry fails loudly. Local same-user attacker out of scope |
-| T6 | Tampering | The agent (or any same-user writer) forges `<id>.answer`, or edits `<id>.json` to change what the answer applies | Per-request key held only in the app's memory; HMAC-SHA256 over the whole answer, timing-safe verify in the hook; `decisionHash` binds kind, channel, tool, input and suggestions; a suggestion index is bound to that suggestion's hash; installer deny rule `Edit(~/.claude-traffic-light/**)` (§4 B4) |
+| T6 | Tampering | The agent forges `<id>.answer`, edits `<id>.json` to change what the answer applies, or rewrites `port` to collect the key | Covers agents limited to file tools or sandboxed Bash (§4 B4): per-request key held only in the app's memory; HMAC-SHA256 over the whole answer, timing-safe verify in the hook; `decisionHash` binds kind, channel, tool, input and suggestions; a suggestion index is bound to that suggestion's hash; the key goes only to a listener that proves the token for its own port (challenge, §1); port file 0600; installer deny rule `Edit(~/.claude-traffic-light/**)`. **Not covered:** an agent with unsandboxed Bash or other code execution can read the token (or be the listener), so it can forge an allow; it could equally run the tool itself |
 | R1 | Repudiation | "I never approved that" / who approved; log tampering | Audit event per outcome with deviceId, device name, owner, requestId, card, tool, input **hash**, reason, rule, and the signed decision envelope as evidence; events are hash-chained (`seq`, `prevHash`, `hash`); unauthenticated junk is rate-limited (20/min, overflow counted) |
 | I1 | Info disclosure | Request content visible to the hub | Accepted for v1 (R3); audit logs carry only the hash |
 | I2 | Info disclosure | Pairing secret leaks via the hub | Secret never sent; only HMAC tags cross the hub (tested) |

@@ -71,6 +71,28 @@ test('L1: answerRequest answers allow/deny for a tool permission only, never a p
   assert.equal(JSON.parse(await done).hookSpecificOutput.decision.behavior, 'deny');
 });
 
+test('H1: the port file is 0600; /request-key/challenge proves the token for this port without revealing it', async () => {
+  const { home } = await realServer();
+  const portFile = path.join(home, 'port');
+  assert.equal(fs.statSync(portFile).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(home).filter((f) => f.includes('.tmp.')), [], 'no temp file left');
+  const port = Number(fs.readFileSync(portFile, 'utf8'));
+  const nonce = 'ab'.repeat(32);
+  const ask = (body) => new Promise((resolve, reject) => {
+    const b = JSON.stringify(body);
+    require('http').request({ host: '127.0.0.1', port, path: '/request-key/challenge', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }, agent: false }, (r) => {
+      let t = ''; r.on('data', (d) => { t += d; }).on('end', () => resolve({ status: r.statusCode, body: t }));
+    }).on('error', reject).end(b);
+  });
+  const ok = await ask({ nonce });
+  assert.equal(ok.status, 200);
+  const token = fs.readFileSync(path.join(home, 'token'), 'utf8');
+  assert.equal(JSON.parse(ok.body).proof, A.requestKeyProof(token, port, nonce));
+  assert.notEqual(JSON.parse(ok.body).proof, A.requestKeyProof(token, port + 1, nonce), 'bound to the port');
+  assert.equal(ok.body.includes(token), false);
+  assert.equal((await ask({ nonce: 'x' })).status, 400);
+});
+
 test('signal server: POST /request-key takes a key once, token-protected; the desk answers with it', async () => {
   const { home, api } = await realServer();
   assert.equal((await post(home, '/request-key', { id: 'mac-x', key: 'ab'.repeat(32) })).status, 200);

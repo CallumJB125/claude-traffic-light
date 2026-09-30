@@ -122,6 +122,13 @@ function macOk(key, a) {
   return crypto.timingSafeEqual(want, Buffer.from(a.mac, 'hex'));
 }
 
+// Before handing over a key, the hook makes whatever listens on the port it
+// found prove it holds the per-install token: it sends a random nonce (no
+// secret) to POST /request-key/challenge and expects this HMAC back. The
+// server's own port is in it, so a fake listener can't relay the challenge to
+// the real app and replay the answer from a different port.
+const requestKeyProof = (token, port, nonce) => crypto.createHmac('sha256', String(token)).update(`buddy.request-key.v1|${port}|${nonce}`, 'utf8').digest('hex');
+
 // App side: the per-request keys hooks hand over the signal server, kept in
 // memory only. First registration for an id wins (the hook registers before
 // the id is visible anywhere); keys live no longer than any hook can wait.
@@ -274,4 +281,4 @@ function sweep(dir, { maxAgeMs = 10 * 60 * 1000, staleRequestMs = STALE_REQUEST_
   }
 }
 
-module.exports = { HOOK_MARGIN_MS, STALE_REQUEST_MS, DECISIONS, canonicalize, hashToolInput, decisionHashOf, requestIntact, answerMac, macOk, requestKeys, paths, createExclusive, cleanExtra, writeAnswer, awaitTaken, consumeAnswer, consumeAnswerDetail, claimTimeout, sweep, ID_RE };
+module.exports = { HOOK_MARGIN_MS, STALE_REQUEST_MS, DECISIONS, canonicalize, hashToolInput, decisionHashOf, requestIntact, answerMac, macOk, requestKeyProof, requestKeys, paths, createExclusive, cleanExtra, writeAnswer, awaitTaken, consumeAnswer, consumeAnswerDetail, claimTimeout, sweep, ID_RE };

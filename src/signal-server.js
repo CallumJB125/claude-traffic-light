@@ -62,6 +62,13 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       const host = String(req.headers.host || '').replace(/:\d+$/, '');
       if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
       if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
+      // Unauthenticated on purpose: the hook asks before it trusts this
+      // listener with the token (hooks/answer-file.js requestKeyProof).
+      if (req.method === 'POST' && req.url === '/request-key/challenge') {
+        return readBody(req, done, (d) => (typeof d.nonce === 'string' && /^[0-9a-f]{64}$/.test(d.nonce)
+          ? done(200, { proof: Answer.requestKeyProof(SIGNAL_TOKEN, req.socket.localPort, d.nonce) })
+          : done(400, { error: 'nonce must be 64 hex chars' })));
+      }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
       if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
@@ -96,7 +103,12 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       // The token first, so whoever sees the port can already read it; chmod
       // too, since the mode only applies when the file is created.
       try { fs.writeFileSync(tokenFile, SIGNAL_TOKEN, { mode: 0o600 }); fs.chmodSync(tokenFile, 0o600); } catch {}
-      try { fs.writeFileSync(portFile, String(server.address().port)); } catch {}
+      // 0600 and atomic: a hook never reads half a port number.
+      try {
+        const tmp = `${portFile}.tmp.${crypto.randomBytes(8).toString('hex')}`;
+        fs.writeFileSync(tmp, String(server.address().port), { flag: 'wx', mode: 0o600 });
+        fs.renameSync(tmp, portFile);
+      } catch {}
       // Only the instance that bound the port owns these files.
       app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
