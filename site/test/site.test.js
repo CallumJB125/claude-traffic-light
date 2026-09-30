@@ -43,7 +43,7 @@ test('waitlist: a filled honeypot gets a yes and keeps nothing; form posts work;
   const { onRequestPost } = loadFn();
   const WAITLIST = kv();
   const env = { WAITLIST };
-  const bot = await onRequestPost({ request: post({ email: 'bot@spam.com', company: 'Acme' }), env });
+  const bot = await onRequestPost({ request: post({ email: 'bot@spam.com', hp: 'Acme' }), env });
   assert.equal(bot.status, 200);
   assert.equal(WAITLIST.m.has('email:bot@spam.com'), false);
   const form = await onRequestPost({ request: post('email=f%40x.io&uses=Cursor', { type: 'application/x-www-form-urlencoded' }), env });
@@ -130,7 +130,7 @@ test('site: no fake proof, no invented numbers, and nothing claimed that is not 
   const src = fs.readdirSync(path.join(__dirname, '..', 'src')).filter((f) => f.endsWith('.html')).map((f) => fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8')).join('\n');
   assert.ok(!/testimonial|trusted by|as seen in|\d+,?\d*\+? (users|teams|developers)/i.test(src));
   // the planned things say so, next to the claim
-  assert.match(src, /Agents that can talk to each other\.<span class="tag tag-soon">Coming<\/span>/);
+  assert.match(src, /Agents that can talk to each other\. <span class="tag tag-soon">Coming<\/span>/);
   assert.match(src, /<span class="tag tag-soon">Hatch: coming<\/span>/);
   assert.match(src, /An illustration of how it is planned to work\. Not shipped yet\./);
 });
@@ -181,4 +181,50 @@ test('build: the phone companion says it is coming until the flag says it is liv
     assert.match(on, /Add to Home Screen/);
     assert.ok(!/Coming<\/span>/.test(on.split('first-open')[0].split('id="phone"')[1] || ''), 'the tag changes when it is live');
   } finally { build(); }
+});
+
+test('site: the first-open steps match current macOS, and no page still tells people to double-click or only right-click', () => {
+  const dir = path.join(__dirname, '..', 'src');
+  const all = fs.readdirSync(dir).filter((f) => f.endsWith('.html')).map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]);
+  for (const [f, html] of all) assert.ok(!/Double-clicking won't offer/.test(html), `${f} still has the old macOS line`);
+  const dl = all.find(([f]) => f === 'download.html')[1];
+  assert.match(dl, /Privacy &amp; Security/);
+  assert.match(dl, /Open Anyway/);
+  assert.match(dl, /On macOS 14 and earlier, right-click/);
+  assert.match(dl, /xattr -dr com\.apple\.quarantine/);
+  assert.match(dl, /libfuse2/);
+  const invite = all.find(([f]) => f === 'invite-preview.html')[1];
+  assert.match(invite, /Open Anyway/);
+  assert.match(invite, /Four quick steps/);
+  assert.equal((invite.match(/<ol class="steps"[\s\S]*?<\/ol>/)[0].match(/<li/g) || []).length, 4, 'the page counts its steps right');
+});
+
+test('site: dark mode never puts dark text on a dark surface (buttons, inputs and the band use fixed light values)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'assets', 'site.css'), 'utf8');
+  for (const sel of ['.cta-band .form input', '.cta-band .btn', '.dl-card .btn', '.ask-btn']) {
+    const rule = css.split('\n').find((l) => l.includes(sel) && /#15171c/.test(l));
+    assert.ok(rule, `${sel} sets dark text`);
+    assert.ok(!/var\(--paper\)/.test(rule.replace(/\.cta-band \.form label[^}]*\}/, '')), `${sel} must not take its background from --paper`);
+  }
+  assert.match(css, /\.cta-band \.form-msg\.ok \{ color: #7ee08a; \}/);
+});
+
+test('site: the illustration columns are paragraphs, so the page heading outline has no gaps, and the nav marks the current page', () => {
+  const { build, DIST } = require('../build.js');
+  build();
+  const home = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+  assert.ok(!/<h4/.test(home));
+  const levels = [...home.matchAll(/<h([1-6])[ >]/g)].map((m) => Number(m[1]));
+  levels.forEach((l, i) => { if (i) assert.ok(l <= levels[i - 1] + 1, `heading order jumps to h${l} after h${levels[i - 1]}`); });
+  assert.match(fs.readFileSync(path.join(DIST, 'docs.html'), 'utf8'), /<a href="\/docs" aria-current="page">/);
+});
+
+test('waitlist: the honeypot is a field browsers do not autofill, and the page and function agree on its name', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
+  const fn = fs.readFileSync(path.join(__dirname, '..', 'functions', 'api', 'waitlist.js'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'src', 'assets', 'site.js'), 'utf8');
+  assert.match(html, /name="hp_trap_field"/);
+  assert.ok(!/name="(company|website|url|name|phone)"/.test(html.match(/<form[\s\S]*?<\/form>/)[0]));
+  assert.match(js, /hp: form\.hp_trap_field\.value/);
+  assert.match(fn, /data\.hp/);
 });

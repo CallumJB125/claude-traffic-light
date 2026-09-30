@@ -9,7 +9,7 @@
   try {
     B.inviteUrl(token); // refuses anything a link can't carry
     link.href = B.deepLink('invite', { token });
-    document.getElementById('invite-line').textContent = 'Three quick steps. Keep this page open, because you\'ll come back to this link.';
+    document.getElementById('invite-line').textContent = 'Four quick steps. Keep this page open, because you\'ll come back to this link.';
   } catch {
     link.setAttribute('aria-disabled', 'true');
     link.removeAttribute('href');

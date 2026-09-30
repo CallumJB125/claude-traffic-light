@@ -72,6 +72,8 @@ function build({ live } = {}) {
       if (v == null || typeof v === 'object') throw new Error(`${f}: no value for {{${key}}}`);
       return raw ? String(v) : esc(v);
     });
+    // the nav link to this page says so
+    html = html.replace(new RegExp(`(<a href="${meta.path}")(?= |>)`), '$1 aria-current="page"');
     fs.writeFileSync(path.join(DIST, f), html);
     if (!meta.noindex) pages.push(meta);
   }

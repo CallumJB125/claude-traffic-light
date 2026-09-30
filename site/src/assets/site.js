@@ -43,38 +43,52 @@
   window.PX = { spring, reduce, clamp: (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v)) };
 
   // ── magnetic buttons ────────────────────────────────────────────────────
-  // A big button leans toward a nearby pointer and settles back on a spring.
-  // It uses the individual `translate` property, so the press and hover
-  // transforms in the stylesheet still compose. Mouse only.
+  // A big button leans toward a nearby pointer and settles back on a spring
+  // (well damped: a button shouldn't wobble). It uses the individual
+  // `translate` property, so the press and hover transforms in the stylesheet
+  // still compose. One pointer listener for all of them; mouse only.
   if (!reduce && matchMedia('(hover: hover) and (pointer: fine)').matches) {
-    for (const el of document.querySelectorAll('.btn:not(.btn-small)')) {
-      const sx = spring(0, { response: 0.45, damping: 0.6, precision: 0.01 });
-      const sy = spring(0, { response: 0.45, damping: 0.6, precision: 0.01 });
-      const put = () => { el.style.translate = sx.x || sy.x ? `${sx.x.toFixed(2)}px ${sy.x.toFixed(2)}px` : ''; };
-      sx.step = ((orig) => (dt) => { orig(dt); put(); })(sx.step);
-      sy.step = ((orig) => (dt) => { orig(dt); put(); })(sy.step);
-      let inside = false;
-      addEventListener('pointermove', (e) => {
-        if (e.pointerType !== 'mouse') return;
-        const r = el.getBoundingClientRect();
-        const dx = e.clientX - (r.left + r.width / 2);
-        const dy = e.clientY - (r.top + r.height / 2);
-        const near = Math.abs(dx) < r.width / 2 + 56 && Math.abs(dy) < r.height / 2 + 56;
-        if (near) { inside = true; sx.to(Math.max(-9, Math.min(9, dx * 0.22))); sy.to(Math.max(-7, Math.min(7, dy * 0.3))); }
-        else if (inside) { inside = false; sx.to(0); sy.to(0); }
-      }, { passive: true });
-      document.addEventListener('pointerleave', () => { sx.to(0); sy.to(0); });
-    }
+    const btns = [...document.querySelectorAll('.btn:not(.btn-small)')].map((el) => {
+      const b = { el, x: 0, y: 0, near: false };
+      const put = () => { el.style.translate = b.x || b.y ? `${b.x.toFixed(2)}px ${b.y.toFixed(2)}px` : ''; };
+      b.sx = spring(0, { response: 0.45, damping: 0.85, precision: 0.01, onUpdate: (v) => { b.x = v; put(); } });
+      b.sy = spring(0, { response: 0.45, damping: 0.85, precision: 0.01, onUpdate: (v) => { b.y = v; put(); } });
+      return b;
+    });
+    let queued = null;
+    addEventListener('pointermove', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      queued = e;
+      if (queued && !addEventListener.busy) {
+        addEventListener.busy = true;
+        requestAnimationFrame(() => {
+          addEventListener.busy = false;
+          const ev = queued;
+          for (const b of btns) {
+            const r = b.el.getBoundingClientRect();
+            // the rect includes the current lean; take it out so the target doesn't chase itself
+            const dx = ev.clientX - (r.left - b.x + r.width / 2);
+            const dy = ev.clientY - (r.top - b.y + r.height / 2);
+            const near = Math.abs(dx) < r.width / 2 + 56 && Math.abs(dy) < r.height / 2 + 56;
+            if (near) { b.near = true; b.sx.to(Math.max(-9, Math.min(9, dx * 0.22))); b.sy.to(Math.max(-7, Math.min(7, dy * 0.3))); }
+            else if (b.near) { b.near = false; b.sx.to(0); b.sy.to(0); }
+          }
+        });
+      }
+    }, { passive: true });
+    document.documentElement.addEventListener('mouseleave', () => { for (const b of btns) { b.near = false; b.sx.to(0); b.sy.to(0); } });
   }
 
   const nav = document.querySelector('.nav');
   const root = document.documentElement;
+  const spineFill = document.querySelector('.spine i');
   let queued = false;
   function frame() {
     queued = false;
     if (nav) nav.classList.toggle('scrolled', window.scrollY > 8);
     const max = root.scrollHeight - window.innerHeight;
-    root.style.setProperty('--page', max > 0 ? String(Math.min(1, window.scrollY / max)) : '1');
+    // written straight to the element: a custom property on the root would restyle every node on the page
+    if (spineFill) spineFill.style.transform = `scaleY(${max > 0 ? Math.min(1, window.scrollY / max) : 1})`;
   }
   addEventListener('scroll', () => { if (!queued) { queued = true; requestAnimationFrame(frame); } }, { passive: true });
   addEventListener('resize', frame);
@@ -84,6 +98,7 @@
   function detectOS() {
     const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
     const ua = navigator.userAgent || '';
+    if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return 'other'; // an iPad says Macintosh
     if (/mac/i.test(p) || /Macintosh/.test(ua)) return 'mac';
     if (/win/i.test(p) || /Windows/.test(ua)) return 'win';
     if (/linux|x11/i.test(p) || /Linux/.test(ua)) return /Android/.test(ua) ? 'other' : 'linux';
@@ -102,14 +117,15 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = form.email.value.trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { say('That email doesn\'t look right. Check it and try again.', 'err'); form.email.focus(); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { form.email.setAttribute('aria-invalid', 'true'); say('That email doesn\'t look right. Check it and try again.', 'err'); form.email.focus(); return; }
+      form.email.removeAttribute('aria-invalid');
       const btn = form.querySelector('button');
       btn.disabled = true;
       say('Sending…');
       try {
-        const res = await fetch(form.action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, uses: form.uses.value, company: form.company.value }) });
+        const res = await fetch(form.action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, uses: form.uses.value, hp: form.hp_trap_field.value }) });
         const body = await res.json().catch(() => ({}));
-        if (res.ok) { say('You\'re on the list. We\'ll email your invite.', 'ok'); form.reset(); }
+        if (res.ok) { say('You\'re on the list. We\'ll email you if a spot opens for your team.', 'ok'); form.reset(); }
         else say(body.error || 'That didn\'t go through. Try again in a minute.', 'err');
       } catch {
         say('We couldn\'t reach the server. Try again, or email us.', 'err');

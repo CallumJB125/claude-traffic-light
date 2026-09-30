@@ -19,7 +19,7 @@
         <a class="btn btn-os" href="/download" data-download-cta data-os-label>Download {{brand.name}}</a>
         <a class="btn btn-ghost btn-os" href="#waitlist">Join the beta waitlist</a>
       </div>
-      <p class="hero-note">Private beta for small teams. Unsigned for now, so the first open takes one extra click: <a href="/download#first-open">here's how</a>.</p>
+      <p class="hero-note">Download the desktop app now; the waitlist is for team-board invites. The beta is unsigned, so the first open takes a few extra clicks: <a href="/download#first-open">here's how</a>.</p>
     </div>
     <div class="scene" id="scene" role="img" aria-label="An illustration of the Plexiform window and its widget. A card is given to Claude and moves across the board while the widget's lamp goes green, red for an approval, then amber when the work is ready.">
       <div class="scene-glow" id="scene-glow"></div>
@@ -27,10 +27,10 @@
         <div class="win" id="win">
           <div class="win-bar"><i></i><i></i><i></i><span>{{brand.name}} · checkout service</span></div>
           <div class="win-body" id="win-body">
-            <div class="wcol" data-col="todo"><h4>To do</h4><div class="slot"><div class="wc"><b>Rate-limit the export API</b><small>Mei</small></div></div><div class="slot"></div></div>
-            <div class="wcol" data-col="doing"><h4>Doing</h4><div class="slot"><div class="wc"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div><div class="slot"></div></div>
-            <div class="wcol" data-col="review"><h4>Needs you</h4><div class="slot"></div><div class="slot"></div></div>
-            <div class="wcol" data-col="done"><h4>Done</h4><div class="slot"><div class="wc"><b>Dark mode for settings</b><small>Merged</small></div></div><div class="slot"></div></div>
+            <div class="wcol" data-col="todo"><p class="colh">To do</p><div class="slot"><div class="wc"><b>Rate-limit the export API</b><small>Mei</small></div></div><div class="slot"></div></div>
+            <div class="wcol" data-col="doing"><p class="colh">Doing</p><div class="slot"><div class="wc"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div><div class="slot"></div></div>
+            <div class="wcol" data-col="review"><p class="colh">Needs you</p><div class="slot"></div><div class="slot"></div></div>
+            <div class="wcol" data-col="done"><p class="colh">Done</p><div class="slot"><div class="wc"><b>Dark mode for settings</b><small>Merged</small></div></div><div class="slot"></div></div>
             <div class="wc mcard" id="mcard"><b>Fix flaky test</b><small id="mcard-note">Unassigned</small><span class="bar"><i id="mcard-bar"></i></span><span class="give" id="give">Give to Claude</span></div>
           </div>
           <div class="ask" id="ask"><span>Claude wants to run <code>npm test</code></span><span class="ask-btn" id="ask-btn">Approve</span></div>
@@ -45,7 +45,7 @@
   </div>
 </section>
 
-<div class="story" id="story" aria-labelledby="story-h">
+<div class="story" id="story">
   <div class="story-pin">
     <div class="wrap story-grid">
       <div>
@@ -60,9 +60,9 @@
       <div class="stage-card" id="stage-card" aria-hidden="true">
         <div class="stage-top"><span>Board: checkout service</span><span id="stage-lamp">idle</span></div>
         <div class="cols" id="cols">
-          <div class="col"><h4>To do</h4><div class="card" data-card="a"><b>Fix flaky checkout test</b><small>Unassigned</small><div class="give" id="give2">Give to Claude</div></div><div class="card"><b>Rate-limit the export API</b><small>Mei</small></div></div>
-          <div class="col"><h4>Doing</h4><div class="card"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div>
-          <div class="col"><h4>Done</h4><div class="card"><b>Dark mode for settings</b><small>Shipped</small></div></div>
+          <div class="col"><p class="colh">To do</p><div class="card" data-card="a"><b>Fix flaky checkout test</b><small>Unassigned</small><div class="give" id="give2">Give to Claude</div></div><div class="card"><b>Rate-limit the export API</b><small>Mei</small></div></div>
+          <div class="col"><p class="colh">Doing</p><div class="card"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div>
+          <div class="col"><p class="colh">Done</p><div class="card"><b>Dark mode for settings</b><small>Shipped</small></div></div>
         </div>
         <div class="run card card-live" id="run" hidden><b>Fix flaky checkout test</b><small id="run-note">Claude · running</small></div>
         <div class="handover" id="handover" hidden><b>Handover</b><br />Fixed the race in checkout.spec. One follow-up: the retry helper still swallows errors.</div>
@@ -92,23 +92,23 @@
 <section class="section" aria-labelledby="board-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="board-h">A team board that lives next to your agents.<span class="tag tag-beta">Beta</span></h2>
+      <h2 id="board-h">A team board that lives next to your agents. <span class="tag tag-beta">Beta</span></h2>
       <p class="lede">Cards, handovers and run progress sit in the same app as the lamps. When an agent dies mid-run, the card says so, and the handover tells you where it got to.</p>
     </div>
     <div class="board-wrap">
-      <div class="board" id="board" data-pre aria-label="Illustration of the team board with four columns of cards">
-        <div class="col"><h4>Backlog</h4><div class="card" style="--d:0ms"><b>Audit webhook retries</b><small>Unassigned</small></div><div class="card" style="--d:90ms"><b>Move uploads to the new bucket</b><small>Unassigned</small></div></div>
-        <div class="col"><h4>Doing</h4><div class="card card-live" style="--d:180ms"><b><i class="dot" style="--c:var(--green)"></i>Fix flaky checkout test</b><small>Claude on Ana's Mac</small></div><div class="card" style="--d:270ms"><b><i class="dot" style="--c:var(--green)"></i>Migrate invoices to v2</b><small>Codex on Kofi's Mac</small></div></div>
-        <div class="col"><h4>Needs you</h4><div class="card" style="--d:360ms"><b><i class="dot" style="--c:var(--amber)"></i>Rate-limit the export API</b><small>Waiting for your review</small></div></div>
-        <div class="col"><h4>Done</h4><div class="card" style="--d:450ms"><b>Dark mode for settings</b><small>Merged</small></div><div class="card" style="--d:540ms"><b>Fix login redirect</b><small>Merged</small></div></div>
+      <div class="board" id="board" data-pre role="img" aria-label="Illustration of the team board with four columns of cards">
+        <div class="col"><p class="colh">Backlog</p><div class="card" style="--d:0ms"><b>Audit webhook retries</b><small>Unassigned</small></div><div class="card" style="--d:90ms"><b>Move uploads to the new bucket</b><small>Unassigned</small></div></div>
+        <div class="col"><p class="colh">Doing</p><div class="card card-live" style="--d:180ms"><b><i class="dot" style="--c:var(--green)"></i>Fix flaky checkout test</b><small>Claude on Ana's Mac</small></div><div class="card" style="--d:270ms"><b><i class="dot" style="--c:var(--green)"></i>Migrate invoices to v2</b><small>Codex on Kofi's Mac</small></div></div>
+        <div class="col"><p class="colh">Needs you</p><div class="card" style="--d:360ms"><b><i class="dot" style="--c:var(--amber)"></i>Rate-limit the export API</b><small>Waiting for your review</small></div></div>
+        <div class="col"><p class="colh">Done</p><div class="card" style="--d:450ms"><b>Dark mode for settings</b><small>Merged</small></div><div class="card" style="--d:540ms"><b>Fix login redirect</b><small>Merged</small></div></div>
       </div>
       <p class="caption">An illustration, not a screenshot. The cards are made up.</p>
     </div>
     <ul class="facts grid-2" style="margin-top:36px">
       <li>Cards run on the assignee's own Mac, in their own repo, with their own Claude or Codex login. Nothing is proxied through us.</li>
       <li>Every run keeps a handover: a short narrative, recent actions, and the files and branch involved.</li>
-      <li>A permission prompt never hides in a terminal. Approve or deny it from the widget.</li>
-      <li>Text passes a redaction filter for credentials and home-folder paths before it leaves your machine.</li>
+      <li>A permission prompt never hides in a terminal. Once you turn it on, you can approve or deny it from the widget.</li>
+      <li>Text passes a filter for credential-like strings and home-folder paths before it leaves your machine.</li>
     </ul>
   </div>
 </section>
@@ -116,7 +116,7 @@
 <section class="section" aria-labelledby="mesh-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="mesh-h">Agents that can talk to each other.<span class="tag tag-soon">Coming</span></h2>
+      <h2 id="mesh-h">Agents that can talk to each other. <span class="tag tag-soon">Coming</span></h2>
       <p class="lede">Your Claude can ask a teammate's Claude a question, or hand a finished piece of work to the agent that needs it, through the board, with a human able to read every message.</p>
     </div>
     <svg class="plexus" id="mesh" viewBox="0 0 960 330" role="img" aria-label="Three teammates' desks connected in a triangle, with agent messages travelling between them.">
@@ -140,7 +140,7 @@
 <section class="section" aria-labelledby="int-h">
   <div class="wrap">
     <div class="section-head">
-      <h2 id="int-h">It plugs into where the work already is.</h2>
+      <h2 id="int-h">GitHub today. Slack, Sentry, Linear and Jira next.</h2>
       <p class="lede">GitHub pull requests and builds light the widget today. The rest are on the way. {{brand.name}} is the hub; these are the things it listens to.</p>
     </div>
     <svg class="plexus" id="hub" viewBox="0 0 960 400" role="img" aria-label="{{brand.name}} in the middle, connected to GitHub, Slack, Sentry, Linear and Jira.">
@@ -166,7 +166,7 @@
   <div class="wrap grid-2">
     <div>
       <h2 id="agents-h">One desk for every agent, not just one vendor's.</h2>
-      <div class="prose" style="margin-top:22px"><p>Claude Code reports through its hooks, and so do Codex, Cursor and Gemini. {{brand.name}} turns all of them into the same lamps, so a Codex run and a Claude run look the same from across the room.</p><p>It works with the logins you already have. There is no shared key and no account to swap into.</p></div>
+      <div class="prose" style="margin-top:22px"><p>Claude Code has the deepest support today. Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns all of them into the same lamps, so a Codex run and a Claude run look the same from across the room.</p><p>It works with the logins you already have. There is no shared key and no account to swap into.</p></div>
       <div class="chips" aria-label="Agents">
         <span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Cursor</span><span class="chip">Gemini</span>
       </div>
@@ -177,19 +177,15 @@
 
 <section class="section" aria-labelledby="use-h">
   <div class="wrap grid-2 flip">
-    <div class="chart" id="usage-chart" data-pre>
-      <svg viewBox="0 0 560 240" role="img" aria-label="Sample chart: daily cost stacked by model, with one spike">
-        <g class="ax"><line x1="40" x2="548" y1="200" y2="200"/><line x1="40" x2="548" y1="140" y2="140" opacity=".5"/><line x1="40" x2="548" y1="80" y2="80" opacity=".5"/><line x1="40" x2="548" y1="20" y2="20" opacity=".5"/></g>
-        <g class="tick"><text x="34" y="204" text-anchor="end">$0</text><text x="34" y="144" text-anchor="end">$20</text><text x="34" y="84" text-anchor="end">$40</text><text x="34" y="24" text-anchor="end">$60</text><text x="40" y="222">Mon</text><text x="548" y="222" text-anchor="end">Sun</text></g>
-        <g id="bars"></g>
-      </svg>
-      <div class="chart-legend"><span><i style="background:#3987e5"></i>Opus</span><span><i style="background:#d95926"></i>Sonnet</span><span><i style="background:#199e70"></i>Haiku</span></div>
-    </div>
+    <figure class="shot" id="usage-shot">
+      <div class="shot-frame"><img src="/assets/shots/usage-tiles.png" width="1054" height="111" alt="The Usage tab's headline tiles: cost, turns, tokens and cache hit rate, each with its change and a trend line." loading="lazy" decoding="async" /><img src="/assets/shots/usage-cost.png" width="1054" height="398" alt="The Usage tab's cost chart: daily cost stacked by model, with one spike." loading="lazy" decoding="async" /></div>
+      <figcaption class="caption">The Usage tab in the app, showing sample data.</figcaption>
+    </figure>
     <div>
-      <h2 id="use-h">Know what your agents cost, and where.<span class="tag tag-beta">Beta</span></h2>
+      <h2 id="use-h">Know what your agents cost, and where. <span class="tag tag-beta">Beta</span></h2>
       <div class="prose" style="margin-top:22px"><p>{{brand.name}} keeps its own daily record of your usage, so history reaches back past the month of transcripts Claude Code keeps. See spend by model, project and hour; watch cache hit rate; get a nudge when today is well above your usual.</p></div>
       <ul class="facts"><li>Set a daily or weekly budget and a runaway-session alert.</li><li>On a subscription, amounts are shown as API-equivalent dollars and labelled as not a bill.</li><li>Anything it can't price is counted and shown as unpriced, never dropped.</li></ul>
-      <p class="caption">The chart is sample data.</p>
+      
     </div>
   </div>
 </section>
@@ -198,7 +194,7 @@
   <div class="wrap">
     <div class="section-head">
       <h2 id="char-h">A character that's yours.</h2>
-      <p class="lede">Buddy comes with friends. Give them costumes, eye moods and poses, or turn into a ghost when you hit a usage limit. Click one. More characters are coming, and so is a way to hatch your own.<span class="tag tag-soon">Hatch: coming</span></p>
+      <p class="lede">Buddy comes with friends. Give them costumes, eye moods and poses, or turn into a ghost when you hit a usage limit. Click one. More characters are coming, and so is a way to hatch your own. <span class="tag tag-soon">Hatch: coming</span></p>
     </div>
     <div class="gallery" id="gallery"></div>
   </div>
@@ -207,8 +203,8 @@
 <section class="section" id="privacy" aria-labelledby="priv-h">
   <div class="wrap grid-2">
     <div>
-      <h2 id="priv-h">What stays on your Mac is almost everything.</h2>
-      <div class="prose" style="margin-top:22px"><p>No telemetry. No analytics. No account needed to use the widget. Your prompts and Claude's replies are never stored by {{brand.name}}, and the conversation logs it reads to count tokens and cost never leave your computer.</p><p>The one time data leaves is when you join a team board: your team's hub then receives your cards, handovers and run progress, with credential-like text and home-folder paths filtered out first. Sharing what you're working on with teammates is a separate opt-in.</p></div>
+      <h2 id="priv-h">Almost everything stays on your computer.</h2>
+      <div class="prose" style="margin-top:22px"><p>The app sends no telemetry and no analytics, and the widget needs no account. Your prompts and Claude's replies are never stored by {{brand.name}}, and the conversation logs it reads to count tokens and cost never leave your computer.</p><p>Data leaves when you join a team board: your team's hub then receives your cards, handovers and run progress, with credential-like text and home-folder paths filtered out first, and signing in to a hub shares your account name and email with it. Sharing what you're working on with teammates is a separate opt-in.</p><p class="muted">This summary follows the beta's privacy notice, which is a draft pending legal review. Hub hosting, retention and deletion terms are being written.</p></div>
       <p style="margin-top:22px"><a class="btn btn-ghost" href="/privacy">Read the privacy notice</a></p>
     </div>
     <ul class="facts">
@@ -230,7 +226,7 @@
     <ul class="facts">
       <li>Install it today on a Mac. Windows and Linux builds appear on the download page as they're published.</li>
       <li>A phone companion, to approve a permission prompt when you're away from your desk, is coming.</li>
-      <li>Every change is written up in the <a href="/changelog">changelog</a>, and the <a href="/docs">docs</a> say exactly what it adds to your machine.</li>
+      <li>Every change is written up in the <a href="/changelog">changelog</a>, and the <a href="/docs">docs</a> list what it adds to Claude Code's settings.</li>
     </ul>
   </div>
 </section>
@@ -241,11 +237,11 @@
     <div class="faq">
       <details><summary>Which agents does it work with?</summary><p>Claude Code, Codex, Cursor and Gemini report their state through hooks, and {{brand.name}} turns each into the same lamps. Claude Code has the deepest support today.</p></details>
       <details><summary>Does it read my prompts or my code?</summary><p>It never stores prompts. It reads Claude Code's conversation logs on your Mac only to count tokens and cost, and keeps the numbers. Code stays in your repo.</p></details>
-      <details><summary>What does it send to you?</summary><p>Nothing. There's no telemetry or analytics. If you join a team board, your team's hub receives what the board needs, described in the <a href="/privacy">privacy notice</a>.</p></details>
-      <details><summary>Why do I have to right-click to open it?</summary><p>The beta isn't signed with an Apple Developer ID yet, so macOS asks you to confirm the first time. <a href="/download#first-open">The steps are on the download page.</a></p></details>
+      <details><summary>What does the app send out?</summary><p>No telemetry and no analytics. If you join a team board, your team's hub receives what the board needs and your account details, described in the <a href="/privacy">privacy notice</a>.</p></details>
+      <details><summary>Why does the first open take extra steps?</summary><p>The beta isn't signed with an Apple Developer ID yet, so macOS asks you to allow it once in System Settings. <a href="/download#first-open">The steps are on the download page.</a></p></details>
       <details><summary>Is there a Windows or Linux version?</summary><p>Builds are being prepared. The <a href="/download">download page</a> lists whatever is published right now.</p></details>
       <details><summary>Who is Buddy?</summary><p>The pixel character. {{brand.name}} was called Claude Buddy while it was being built; the character kept the name.</p></details>
-      <details><summary>How do I get in?</summary><p>Join the waitlist below. Beta spots go to small teams first.</p></details>
+      <details><summary>How do I get in?</summary><p>You can install the desktop app now. Joining a team board needs an invite: join the waitlist below, and beta spots go to small teams first.</p></details>
     </div>
   </div>
 </section>
@@ -255,14 +251,14 @@
     <div class="cta-band">
       <div>
         <h2 id="wl-h">Get a place in the beta.</h2>
-        <p class="lede">Tell us where to send your invite. We'll only use your email for the beta.</p>
+        <p class="lede">Tell us where to send your invite. We'll only use your email about the beta.</p>
       </div>
       <form class="form" id="wl-form" action="/api/waitlist" method="post" novalidate>
-        <label>Email<input type="email" name="email" autocomplete="email" required placeholder="you@company.com" /></label>
-        <label>What do you use most?
+        <label>Email<input type="email" name="email" autocomplete="email" required placeholder="you@company.com" aria-describedby="wl-msg" /></label>
+        <label>What do you use most? (optional)
           <select name="uses"><option value="">Choose one</option><option>Claude Code</option><option>Codex</option><option>Cursor</option><option>Gemini</option><option>More than one</option></select>
         </label>
-        <input class="hp" type="text" name="company" tabindex="-1" autocomplete="off" aria-hidden="true" />
+        <input class="hp" type="text" name="hp_trap_field" tabindex="-1" autocomplete="off" aria-hidden="true" />
         <button class="btn" type="submit">Join the waitlist</button>
         <p class="form-msg" id="wl-msg" role="status" aria-live="polite"></p>
       </form>

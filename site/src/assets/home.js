@@ -72,71 +72,72 @@
   // A fixed-size scene scaled to fit. A card is given to Claude, travels across
   // the board on springs, the widget's real rig changes lamp as it goes, an
   // approval interrupts, a pointer does the clicking, and the window tilts
-  // toward your cursor. Everything moves on springs, so it has mass.
+  // toward your cursor. Everything moves on springs, so it has mass. Springs
+  // write straight to element styles (never to inherited custom properties,
+  // which would restyle every node of the rig under them on each frame).
   const scene = $('scene');
   const PX = window.PX;
-  const L = { off: 'off', green: 'green', amber: 'amber', red: 'red' };
   const GLOW = { green: '#2fae3e', amber: '#f2a200', red: '#e2231a' };
-  function sceneFit() { const k = scene.clientWidth / 560; scene.style.setProperty('--k', String(k)); }
+  const sp = (init, opts, fn) => PX.spring(init, { ...opts, onUpdate: fn });
+  function sceneFit() { scene.style.setProperty('--k', String(scene.clientWidth / 560)); }
   async function hero() {
     sceneFit();
     new ResizeObserver(sceneFit).observe(scene);
     const rig = await mount($('hero-rig'), {});
     const body = $('win-body');
+    const win = $('win');
     const mcard = $('mcard');
     const widget = $('widget');
     const pointer = $('pointer');
     const ask = $('ask');
+    const give = $('give');
+    const askBtn = $('ask-btn');
+    const barEl = $('mcard-bar');
+    const glow = $('scene-glow');
     const colEl = (n) => body.querySelector(`[data-col="${n}"]`);
     // where the traveller sits: slot `i` of a column, in body coordinates
-    const slotPos = (col, i) => { const c = colEl(col); const s = c.querySelectorAll('.slot')[i]; return { x: c.offsetLeft + s.offsetLeft, y: c.offsetTop + s.offsetTop }; };
+    const slotPos = (col, i) => { const c = colEl(col); const s2 = c.querySelectorAll('.slot')[i]; return { x: c.offsetLeft + s2.offsetLeft, y: c.offsetTop + s2.offsetTop }; };
     const spot = (el) => { // the centre of an element, in scene design pixels
       let x = el.offsetWidth / 2; let y = el.offsetHeight / 2;
       for (let n = el; n && n.id !== 'scene-inner'; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
       return { x, y };
     };
-    const mx = PX.spring(0, { response: 0.6, damping: 0.72 });
-    const my = PX.spring(0, { response: 0.6, damping: 0.72 });
-    const place = () => { mcard.style.transform = `translate(${mx.x}px, ${my.x}px)`; };
-    mx.step = ((o) => (dt) => { o(dt); place(); })(mx.step);
-    my.step = ((o) => (dt) => { o(dt); place(); })(my.step);
-    const cx = PX.spring(0, { response: 0.75, damping: 0.85 });
-    const cy = PX.spring(0, { response: 0.75, damping: 0.85 });
-    const pscale = PX.spring(1, { response: 0.22, damping: 0.6 });
-    const cur = () => { pointer.style.transform = `translate(${cx.x}px, ${cy.x}px) scale(${pscale.x})`; };
-    [cx, cy, pscale].forEach((sp) => { sp.step = ((o) => (dt) => { o(dt); cur(); })(sp.step); });
-    const bar = PX.spring(0, { response: 2.4, damping: 1, precision: 0.001 });
-    bar.step = ((o) => (dt) => { o(dt); $('mcard-bar').style.transform = `scaleX(${bar.x})`; })(bar.step);
-    const gbtn = PX.spring(1, { response: 0.2, damping: 0.6 });
-    gbtn.step = ((o) => (dt) => { o(dt); $('give').style.transform = `scale(${gbtn.x})`; })(gbtn.step);
-    const abtn = PX.spring(1, { response: 0.2, damping: 0.6 });
-    abtn.step = ((o) => (dt) => { o(dt); $('ask-btn').style.transform = `scale(${abtn.x})`; })(abtn.step);
-    const askY = PX.spring(12, { response: 0.45, damping: 0.75 });
-    const askO = PX.spring(0, { response: 0.3, damping: 1 });
-    askY.step = ((o) => (dt) => { o(dt); ask.style.transform = `translateY(${askY.x}px)`; })(askY.step);
-    askO.step = ((o) => (dt) => { o(dt); ask.style.opacity = String(askO.x); })(askO.step);
-    const glowO = PX.spring(0, { response: 0.9, damping: 1 });
-    glowO.step = ((o) => (dt) => { o(dt); scene.style.setProperty('--glow-o', String(glowO.x)); })(glowO.step);
+    const card = { x: 0, y: 0 };
+    const placeCard = () => { mcard.style.transform = `translate(${card.x}px, ${card.y}px)`; };
+    const mx = sp(0, { response: 0.6, damping: 0.72 }, (v) => { card.x = v; placeCard(); });
+    const my = sp(0, { response: 0.6, damping: 0.72 }, (v) => { card.y = v; placeCard(); });
+    const cur = { x: 0, y: 0, s: 1 };
+    const placeCur = () => { pointer.style.transform = `translate(${cur.x}px, ${cur.y}px) scale(${cur.s})`; };
+    const cx = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.x = v; placeCur(); });
+    const cy = sp(0, { response: 0.75, damping: 0.85 }, (v) => { cur.y = v; placeCur(); });
+    const pscale = sp(1, { response: 0.22, damping: 0.7 }, (v) => { cur.s = v; placeCur(); });
+    const bar = sp(0, { response: 2.4, damping: 1, precision: 0.001 }, (v) => { barEl.style.transform = `scaleX(${v})`; });
+    const gbtn = sp(1, { response: 0.2, damping: 0.7 }, (v) => { give.style.transform = `scale(${v})`; });
+    const abtn = sp(1, { response: 0.2, damping: 0.7 }, (v) => { askBtn.style.transform = `scale(${v})`; });
+    const askY = sp(12, { response: 0.45, damping: 0.75 }, (v) => { ask.style.transform = `translateY(${v}px)`; });
+    const askO = sp(0, { response: 0.3, damping: 1 }, (v) => { ask.style.opacity = String(v); });
+    const glowO = sp(0, { response: 0.9, damping: 1 }, (v) => { glow.style.opacity = String(v); });
 
     const caption = (lamp, state, detail) => {
       widget.dataset.lamp = lamp;
       $('desk-state').textContent = state;
       $('desk-detail').textContent = detail;
-      if (GLOW[lamp]) { scene.style.setProperty('--glow', `color-mix(in srgb, ${GLOW[lamp]} 34%, transparent)`); glowO.to(1); } else glowO.to(0);
+      if (GLOW[lamp]) { glow.style.background = `radial-gradient(closest-side, color-mix(in srgb, ${GLOW[lamp]} 34%, transparent), transparent 72%)`; glowO.to(1); } else glowO.to(0);
     };
     const goTo = (col, i) => { const p = slotPos(col, i); mx.to(p.x); my.to(p.y); };
-    const jumpTo = (col, i) => { const p = slotPos(col, i); mx.jump(p.x); my.jump(p.y); place(); };
+    const jumpTo = (col, i) => { const p = slotPos(col, i); mx.jump(p.x); my.jump(p.y); };
     const aim = (el, dx = 0, dy = 0) => { const p = spot(el); cx.to(p.x + dx); cy.to(p.y + dy); };
-    const press = (sp) => { sp.to(0.86); setTimeout(() => sp.to(1), 130); pscale.to(0.82); setTimeout(() => pscale.to(1), 130); };
+    let timers = [];
+    const later = (fn, ms) => { timers.push(setTimeout(fn, ms)); };
+    const press = (spr) => { spr.to(0.86); pscale.to(0.82); later(() => { spr.to(1); pscale.to(1); }, 130); };
     const AGENTS = (st) => [{ name: 'claude', status: st }];
     const reset = () => {
       jumpTo('todo', 0);
-      mcard.classList.remove('gone');
-      $('give').style.display = '';
+      mcard.style.transition = 'none'; mcard.style.opacity = '1';
+      give.style.display = '';
       $('mcard-note').textContent = 'Unassigned';
-      $('mcard-bar').parentElement.style.opacity = '0';
-      bar.jump(0); gbtn.jump(1); abtn.jump(1);
-      askY.jump(12); askO.jump(0);
+      barEl.parentElement.style.opacity = '0';
+      bar.jump(0); gbtn.jump(1); abtn.jump(1); askY.jump(12); askO.jump(0);
       rig.setLook({ ...(rig.look || {}), lamp: 'off', pose: 'none', eyes: 'default', text: '', minions: [] });
       caption('off', 'Idle', 'No agents running');
       pointer.style.opacity = '0';
@@ -145,43 +146,44 @@
     // the loop: [ms, what happens]
     const TIMELINE = [
       [0, reset],
-      [900, () => { pointer.style.opacity = '1'; aim($('give'), 18, 8); }],
+      [900, () => { pointer.style.opacity = '1'; aim(give, 18, 8); }],
       [2000, () => press(gbtn)],
-      [2250, () => { $('give').style.display = 'none'; $('mcard-note').textContent = 'Claude · running'; $('mcard-bar').parentElement.style.opacity = '1'; bar.to(0.9); goTo('doing', 1); rig.setLook({ ...rig.look, lamp: 'green', pose: 'think', eyes: 'default', minions: AGENTS('working') }); caption('green', 'Working', '1 agent'); aim(widget, -40, -90); }],
-      [5400, () => { rig.setLook({ ...rig.look, lamp: 'red', pose: 'banner', eyes: 'surprised', text: 'APPROVE?' }); caption('red', 'Needs you', 'Permission to run a command'); askY.to(0); askO.to(1); setTimeout(() => aim($('ask-btn'), 6, 4), 500); }],
+      [2250, () => { give.style.display = 'none'; $('mcard-note').textContent = 'Claude · running'; barEl.parentElement.style.opacity = '1'; bar.to(0.9); goTo('doing', 1); rig.setLook({ ...rig.look, lamp: 'green', pose: 'think', eyes: 'default', minions: AGENTS('working') }); caption('green', 'Working', '1 agent'); aim(widget, -40, -90); }],
+      [5400, () => { rig.setLook({ ...rig.look, lamp: 'red', pose: 'banner', eyes: 'surprised', text: 'APPROVE?' }); caption('red', 'Needs you', 'Permission to run a command'); askY.to(0); askO.to(1); later(() => aim(askBtn, 6, 4), 500); }],
       [7300, () => press(abtn)],
       [7500, () => { askY.to(12); askO.to(0); rig.setLook({ ...rig.look, lamp: 'green', pose: 'think', eyes: 'default', text: '' }); caption('green', 'Working', '1 agent'); aim(widget, -40, -90); }],
       [9800, () => { bar.to(1); $('mcard-note').textContent = 'Ready for review'; goTo('review', 0); rig.setLook({ ...rig.look, lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: AGENTS('done') }); caption('amber', 'Your turn', 'Finished, ready for review'); rig.celebrate(); }],
-      [11800, () => { aim(mcard, 40, 18); }],
+      [11800, () => aim(mcard, 40, 18)],
       [12900, () => { press(gbtn); $('mcard-note').textContent = 'Merged'; goTo('done', 1); rig.setLook({ ...rig.look, lamp: 'green', pose: 'none', eyes: 'default', minions: [] }); caption('green', 'Idle', 'Nothing waiting'); }],
       [14600, () => { pointer.style.opacity = '0'; }],
+      // fade the card out before the loop restarts, so it never snaps back
+      [15300, () => { mcard.style.transition = 'opacity 280ms ease'; mcard.style.opacity = '0'; }],
     ];
     const LOOP = 16200;
     if (PX.reduce) { // one finished still frame, nothing moving
-      jumpTo('done', 1); $('give').style.display = 'none'; $('mcard-note').textContent = 'Merged';
+      jumpTo('done', 1); give.style.display = 'none'; $('mcard-note').textContent = 'Merged';
       rig.setLook({ ...rig.look, lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: [] });
       caption('amber', 'Your turn', 'Finished, ready for review');
       return;
     }
-    let timers = [];
     let running = false;
     const play = () => { timers.forEach(clearTimeout); timers = TIMELINE.map(([t, fn]) => setTimeout(fn, t)); timers.push(setTimeout(play, LOOP)); };
-    const stop = () => { running = false; timers.forEach(clearTimeout); };
+    const stop = () => { running = false; timers.forEach(clearTimeout); timers = []; };
     const go = () => { if (!running) { running = true; play(); } };
     new IntersectionObserver((es) => { const on = es[es.length - 1].isIntersecting && !document.hidden; if (on) go(); else stop(); }).observe(scene);
     document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (scene.getBoundingClientRect().bottom > 0) go(); });
     addEventListener('resize', () => { if (!running) jumpTo('todo', 0); });
 
-    // depth: the window tilts toward the cursor and the widget floats the other way
+    // depth: the window tilts toward the cursor (real perspective on the window
+    // itself) and the widget floats the other way
     if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
-      const ry = PX.spring(0, { response: 0.7, damping: 0.8 });
-      const rx = PX.spring(0, { response: 0.7, damping: 0.8 });
-      const wx = PX.spring(0, { response: 0.9, damping: 0.8 });
-      const wy = PX.spring(0, { response: 0.9, damping: 0.8 });
-      const tilt = () => { scene.style.setProperty('--ry', `${ry.x}deg`); scene.style.setProperty('--rx', `${rx.x}deg`); widget.style.setProperty('--wx', `${wx.x}px`); widget.style.setProperty('--wy', `${wy.x}px`); };
-      for (const sp of [ry, rx, wx, wy]) sp.step = ((o) => (dt) => { o(dt); tilt(); })(sp.step);
-      const w = document.getElementById('win');
-      scene.addEventListener('pointermove', (e) => { const r = scene.getBoundingClientRect(); const u = (e.clientX - r.left) / r.width - 0.5; const v = (e.clientY - r.top) / r.height - 0.5; ry.to(u * 7); rx.to(-v * 5); wx.to(-u * 16); wy.to(-v * 12); w.style.setProperty('--ry', `${u * 7}deg`); });
+      const t = { ry: 0, rx: 0, wx: 0, wy: 0 };
+      const paint = () => { win.style.transform = `perspective(1400px) rotateY(${t.ry}deg) rotateX(${t.rx}deg)`; widget.style.transform = `translate(${t.wx}px, ${t.wy}px)`; };
+      const ry = sp(0, { response: 0.7, damping: 0.8 }, (v) => { t.ry = v; paint(); });
+      const rx = sp(0, { response: 0.7, damping: 0.8 }, (v) => { t.rx = v; paint(); });
+      const wx = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wx = v; paint(); });
+      const wy = sp(0, { response: 0.9, damping: 0.8 }, (v) => { t.wy = v; paint(); });
+      scene.addEventListener('pointermove', (e) => { const r = scene.getBoundingClientRect(); const u = (e.clientX - r.left) / r.width - 0.5; const v = (e.clientY - r.top) / r.height - 0.5; ry.to(u * 7); rx.to(-v * 5); wx.to(-u * 16); wy.to(-v * 12); });
       scene.addEventListener('pointerleave', () => { ry.to(0); rx.to(0); wx.to(0); wy.to(0); });
     }
   }
@@ -189,16 +191,25 @@
   (window.requestIdleCallback || ((f) => setTimeout(f, 200)))(hero);
 
   // ── the hand-off story, driven by scroll ───────────────────────────────
+  // Pinned and scroll-driven on wide, tall screens. On a phone or a short
+  // window there isn't room to pin four steps and a board, so it becomes the
+  // same story laid out as plain content, finished state showing.
   const story = $('story');
   if (story) {
+    const STATIC = PX.reduce || matchMedia('(max-width: 860px), (max-height: 720px)').matches;
     const steps = [...$('story-steps').children];
     const stage = $('stage-card');
+    const pin = story.querySelector('.story-pin');
     const run = $('run');
+    const runNote = $('run-note');
+    const stageLamp = $('stage-lamp');
+    const handover = $('handover');
     const origin = stage.querySelector('[data-card="a"]');
-    const give = $('give2') || story.querySelector('.give');
+    const give = $('give2');
     const cols = [...$('cols').querySelectorAll('.col')];
     let rig = null;
     let last = -1;
+    let lastNote = '';
     let pos = null;
     const at = (el) => { const a = el.getBoundingClientRect(); const b = stage.getBoundingClientRect(); return { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height }; };
     // where the card rides from and to: measured once (the stage is pinned, so scroll doesn't move it)
@@ -206,6 +217,7 @@
       const from = at(origin);
       const below = (colEl) => { const c = colEl.querySelector('.card:not([data-card])') || colEl.querySelector('.card'); const base = at(colEl); return { x: base.x + 10, y: c ? at(c).y + at(c).h + 8 : base.y + 36 }; };
       pos = { from, doing: below(cols[1]), done: below(cols[2]) };
+      run.style.width = `${from.w}px`;
     };
     const LOOKS = [
       { lamp: 'off', pose: 'none', eyes: 'default', minions: [] },
@@ -213,15 +225,18 @@
       { lamp: 'green', pose: 'think', eyes: 'default', minions: [{ name: 'claude', status: 'working' }] },
       { lamp: 'amber', pose: 'thumbs', eyes: 'happy', minions: [{ name: 'claude', status: 'done' }] },
     ];
+    const NOTES = ['Claude · starting', 'Claude · starting', 'Claude · running', 'Claude · finished'];
     // scroll position is the target; the scene chases it on a spring, so it
     // glides through a fast flick instead of jumping with every wheel tick
     const render = (p) => {
       if (!pos) return;
       const step = p < 0.22 ? 0 : p < 0.5 ? 1 : p < 0.78 ? 2 : 3;
       if (step !== last) {
-        steps.forEach((li, i) => li.classList.toggle('on', i === step));
-        $('stage-lamp').textContent = ['idle', 'queued', 'working', 'your turn'][step];
+        steps.forEach((li, i) => li.classList.toggle('on', STATIC || i === step));
+        stageLamp.textContent = ['idle', 'queued', 'working', 'your turn'][step];
         if (rig) { rig.setLook({ ...(rig.look || {}), ...LOOKS[step] }); if (step === 3 && last === 2) rig.celebrate(); }
+        if (NOTES[step] !== lastNote) { lastNote = NOTES[step]; runNote.textContent = lastNote; }
+        handover.hidden = step < 3;
         last = step;
       }
       const press = step === 0 ? Math.sin(PX.clamp(p / 0.22) * Math.PI) : 0;
@@ -232,20 +247,19 @@
       const y = pos.from.y + (pos.doing.y - pos.from.y) * a + (pos.done.y - pos.doing.y) * b;
       run.hidden = p < 0.22;
       origin.style.visibility = p < 0.22 ? 'visible' : 'hidden';
-      run.style.width = `${pos.from.w}px`;
       run.style.transform = `translate(${x}px, ${y}px)`;
-      $('run-note').textContent = step < 2 ? 'Claude · starting' : step === 2 ? 'Claude · running' : 'Claude · finished';
-      $('handover').hidden = step < 3;
     };
-    const rawP = () => { const r = story.getBoundingClientRect(); return PX.clamp(-r.top / Math.max(1, r.height - innerHeight)); };
-    const sp = PX.spring(0, { response: 0.32, damping: 0.92, precision: 0.0002, onUpdate: render });
-    const onScroll = () => sp.to(rawP());
-    if (PX.reduce) {
-      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[3]); steps.forEach((li) => li.classList.add('on')); $('handover').hidden = false; });
+    // the pin is the viewport tall (svh: stable while a phone's toolbar collapses)
+    const rawP = () => { const r = story.getBoundingClientRect(); return PX.clamp(-r.top / Math.max(1, story.offsetHeight - pin.offsetHeight)); };
+    const spr = PX.spring(0, { response: 0.32, damping: 0.92, precision: 0.0002, onUpdate: render });
+    if (STATIC) {
+      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[3]); last = -1; spr.jump(1); });
     } else {
-      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[0]); last = -1; sp.jump(rawP()); });
-      addEventListener('scroll', onScroll, { passive: true });
-      addEventListener('resize', () => { measure(); sp.jump(rawP()); });
+      whenNear(story, async () => { measure(); rig = await mount($('story-rig'), LOOKS[0]); last = -1; spr.jump(rawP()); });
+      addEventListener('scroll', () => spr.to(rawP()), { passive: true });
+      // a phone's toolbar collapsing changes the height only: ignore that, re-measure real resizes
+      let width = innerWidth;
+      addEventListener('resize', () => { if (innerWidth === width) return; width = innerWidth; measure(); spr.jump(rawP()); });
     }
   }
 
@@ -271,7 +285,9 @@
   // ── reveals that mean something: cards arriving, bars growing, lines drawn
   const live = (node, fn) => { if (!node) return; if (reduce) { fn(); return; } const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); fn(); } }, { threshold: 0.35 }); io.observe(node); };
   live($('board'), () => $('board').removeAttribute('data-pre'));
-  // the networks form as you scroll to them: edges draw, nodes pop on a spring
+  // the networks form as you scroll to them: edges draw, nodes pop on a spring.
+  // Only what is on screen does any work; the pulses stop when it leaves.
+  const nets = [];
   for (const id of ['mesh', 'hub']) {
     const svg = $(id);
     if (!svg) continue;
@@ -279,37 +295,19 @@
     const nodes = [...svg.querySelectorAll('.node')];
     const paint = (p) => {
       edges.forEach((e, i) => e.style.setProperty('--off', String(1 - PX.clamp((p - 0.12 - i * 0.07) / 0.4))));
-      nodes.forEach((n, i) => { const t = PX.clamp((p - i * 0.06) / 0.3); const sc = 0.7 + 0.3 * t; n.style.transform = `scale(${sc})`; n.style.opacity = String(Math.min(1, t * 1.6)); });
-      if (p > 0.7) svg.setAttribute('data-live', ''); else svg.removeAttribute('data-live');
+      nodes.forEach((n, i) => { const t = PX.clamp((p - i * 0.06) / 0.3); n.style.transform = `scale(${0.7 + 0.3 * t})`; n.style.opacity = String(Math.min(1, t * 1.6)); });
+      svg.toggleAttribute('data-live', p > 0.7 && net.visible);
     };
-    const sp = PX.spring(0, { response: 0.5, damping: 0.78, precision: 0.0005, onUpdate: paint });
-    const target = () => { const r = svg.getBoundingClientRect(); return PX.clamp((innerHeight - r.top) / (innerHeight * 0.75 + r.height * 0.3)); };
+    const net = { svg, visible: false, spring: PX.spring(0, { response: 0.5, damping: 0.8, precision: 0.0005, onUpdate: paint }), paint };
+    net.target = () => { const r = svg.getBoundingClientRect(); return PX.clamp((innerHeight - r.top) / (innerHeight * 0.75 + r.height * 0.3)); };
     if (PX.reduce) { paint(1); continue; }
     paint(0);
-    addEventListener('scroll', () => sp.to(target()), { passive: true });
-    sp.jump(target());
+    new IntersectionObserver((es) => { net.visible = es[es.length - 1].isIntersecting; if (net.visible) net.spring.to(net.target()); else svg.removeAttribute('data-live'); }, { rootMargin: '120px' }).observe(svg);
+    nets.push(net);
   }
-
-  // sample usage chart: drawn from numbers here, labelled as a sample on the page
-  const bars = $('bars');
-  if (bars) {
-    const DAYS = [[6, 3, 1], [9, 5, 2], [12, 6, 2], [8, 7, 3], [22, 14, 5], [10, 5, 2], [4, 2, 1]];
-    const COL = ['#3987e5', '#d95926', '#199e70'];
-    const NS = 'http://www.w3.org/2000/svg';
-    DAYS.forEach((d, i) => {
-      let y = 200;
-      const x = 52 + i * 70;
-      d.forEach((v, k) => {
-        const h = v * 3;
-        y -= h;
-        const r = document.createElementNS(NS, 'rect');
-        r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', 46); r.setAttribute('height', h);
-        r.setAttribute('rx', k === d.length - 1 ? 4 : 0); r.setAttribute('fill', COL[k]); r.setAttribute('stroke', '#1c1a1f'); r.setAttribute('stroke-width', 2); r.setAttribute('paint-order', 'stroke');
-        r.setAttribute('class', 'bar'); r.style.setProperty('--d', `${i * 70 + k * 40}ms`);
-        bars.append(r);
-      });
-    });
-    live($('usage-chart'), () => $('usage-chart').removeAttribute('data-pre'));
+  if (nets.length) {
+    let queued = false;
+    addEventListener('scroll', () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; for (const n of nets) if (n.visible) n.spring.to(n.target()); }); }, { passive: true });
   }
 
   // ── agents: chips in every state ───────────────────────────────────────

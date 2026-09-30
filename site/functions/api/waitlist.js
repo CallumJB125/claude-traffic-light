@@ -29,7 +29,7 @@ export async function onRequestPost({ request, env }) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return json({ error: 'Could not read that.' }, 400);
 
   // a bot filled the hidden field: say yes, keep nothing
-  if (typeof data.company === 'string' && data.company.trim()) return json({ ok: true });
+  if (typeof data.hp === 'string' && data.hp.trim()) return json({ ok: true });
 
   const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
   if (email.length > 254 || !EMAIL.test(email)) return json({ error: 'That email doesn\'t look right.' }, 400);

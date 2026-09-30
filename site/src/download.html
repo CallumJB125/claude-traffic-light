@@ -49,10 +49,12 @@
         <h3>On a Mac</h3>
         <ol class="steps">
           <li><strong>Open the download</strong> and drag {{brand.name}} into Applications.</li>
-          <li><strong>Right-click</strong> {{brand.name}} in Applications and choose <strong>Open</strong>. Double-clicking won't offer the option.</li>
-          <li>In the box that appears, choose <strong>Open</strong> again.</li>
-          <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries. <strong>Restart any Claude Code sessions</strong> that were already running.</li>
+          <li><strong>Open it.</strong> macOS says it can't check the app for malware. Choose <strong>Done</strong>.</li>
+          <li>Open <strong>System Settings</strong>, then <strong>Privacy &amp; Security</strong>. Scroll to <strong>Security</strong> and choose <strong>Open Anyway</strong> next to {{brand.name}}, then enter your password.</li>
+          <li>Open {{brand.name}} again and choose <strong>Open</strong>. You only do this once.</li>
+          <li>{{brand.name}} adds its hooks to Claude Code's settings the first time it runs, appending only its own entries, and turns on Open at Login (switch it off from the tray menu and it stays off). <strong>Restart any Claude Code sessions</strong> that were already running.</li>
         </ol>
+        <p class="note">On macOS 14 and earlier, right-click the app and choose <strong>Open</strong> instead. If macOS says the app "is damaged", run <code>xattr -dr com.apple.quarantine /Applications/{{brand.name}}.app</code> in Terminal, then open it.</p>
       </div>
       <div>
         <h3>On Windows</h3>
@@ -62,7 +64,7 @@
           <li>Restart any Claude Code sessions that were already running.</li>
         </ol>
         <h3 style="margin-top:28px">On Linux</h3>
-        <ol class="steps"><li>Make the AppImage executable and run it, or install the .deb with your package manager.</li></ol>
+        <ol class="steps"><li>Make the AppImage executable (<code>chmod +x</code>) and run it. On a recent Ubuntu it also needs <code>libfuse2</code>. Or install the .deb with your package manager.</li></ol>
       </div>
     </div>
 
