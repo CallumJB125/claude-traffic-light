@@ -32,6 +32,7 @@ const SHAPES = {
   person: () => [h('circle', { cx: 8, cy: 5.5, r: 2.5 }), P('M3.25 13.25c.6-2.4 2.4-3.75 4.75-3.75s4.15 1.35 4.75 3.75')],
   queue: () => [P('M3 4.5h10M3 8h10M3 11.5h6')],
   dot: () => [h('circle', { cx: 8, cy: 8, r: 2.5, fill: 'currentColor', stroke: 'none' })],
+  plug: () => [P('M6 2.5v3M10 2.5v3M4.25 5.5h7.5v2.25a3.75 3.75 0 0 1-7.5 0zM8 11.5v2.25')],
   columns: () => [h('rect', { x: 2.75, y: 3, width: 3, height: 10, rx: 1 }), h('rect', { x: 6.5, y: 3, width: 3, height: 7, rx: 1 }), h('rect', { x: 10.25, y: 3, width: 3, height: 8.5, rx: 1 })],
   chart: () => [P('M2.75 2.75v10.5h10.5'), P('M5.25 10.25l2.5-3.25 2.25 2 3-4.25')],
   rows: () => [h('rect', { x: 2.75, y: 3, width: 10.5, height: 10, rx: 1.5 }), P('M2.75 6.5h10.5M2.75 9.75h10.5M6.25 3v10')],

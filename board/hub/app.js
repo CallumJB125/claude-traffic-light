@@ -3,6 +3,10 @@
 // self-probe) → graceful shutdown. Tests build this with a fake clock and
 // drive hub.tick() themselves (timers: false).
 
+import { loadKey, loadPreviousKey } from './vault.js';
+import { createBus } from './bus.js';
+import { createIntegrations } from './integrations/registry.js';
+import { connectorsFor } from './integrations/index.js';
 import { createServer } from 'node:http'; // privacy-flow: local-board-hub
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer } from 'ws'; // privacy-flow: local-board-hub
@@ -38,10 +42,22 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();
+  // D41: a hub outside the desktop app loads its integrations key from
+  // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
+  if (config.auth !== 'local') {
+    const key = loadKey({ dataDir: config.dataDir, hasParentPort: !!process.parentPort });
+    const previous = loadPreviousKey({ hasParentPort: !!process.parentPort });
+    if (key) hub.setVaultKey(key, previous);
+  }
 
   const api = new Api(hub);
+  // Integrations (D40/D41): consumers read the journal through the bus.
+  const bus = createBus({ db, log });
+  hub.on('journal', () => bus.poke());
+  const integrations = createIntegrations({ hub, api, bus, log, fetchImpl });
+  for (const c of connectorsFor(config)) integrations.register(c);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
-  const server = createServer(createHttpHandler({ hub, api, config }));
+  const server = createServer(createHttpHandler({ hub, api, config, integrations }));
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
   if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
@@ -72,10 +88,11 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       intervals.push(setInterval(probe, config.tunnelProbeMs));
     }
     for (const i of intervals) i.unref?.();
+    bus.start();
   }
 
   return {
-    hub, api, server, db, config, devLoginSecret: hub.devLoginSecret,
+    hub, api, server, db, config, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -93,6 +110,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     async close({ graceMs = config.shutdownGraceMs ?? 5000 } = {}) {
       if (closed) return;
       closed = true;
+      bus.stop();
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
       const grace = () => new Promise((r) => setTimeout(r, graceMs).unref());

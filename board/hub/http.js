@@ -13,7 +13,8 @@ import { publicMember } from './api.js';
 import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
-import { clientIp, limitOrThrow } from './ratelimit.js';
+import { clientIp, failBucketKey, limitOrThrow } from './ratelimit.js';
+import { redact } from './log.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
@@ -40,7 +41,7 @@ function sendJson(res, status, body, headers = {}) {
 }
 
 // Dispatch-like actions start paid agent runs: a tighter per-member limit.
-const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
+export const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
 
 const retryHeader = (e) => (e.code === 'RATE_LIMITED' && e.extra?.retry_after_s ? { 'retry-after': String(e.extra.retry_after_s) } : {});
 
@@ -78,8 +79,26 @@ async function readBody(req) {
   }
 }
 
-export function createHttpHandler({ hub, api, config }) {
+// The provider's redirect lands here in the connect window: text only, no
+// script, nothing from the query echoed back. kind: ok | error.
+const CONNECT_TITLE = { ok: 'Connected', error: 'Not connected' };
+function sendConnectPage(res, status, text, kind, headers = {}) {
+  const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p><p>You can close this window and go back to Buddy.</p></body></html>`;
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
+  res.end(body);
+}
+
+export function createHttpHandler({ hub, api, config, integrations = null }) {
+  // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
+  const publicBase = (req) => {
+    if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
+    // Only loopback hubs may use the request's Host: a public hub needs a fixed URL.
+    if (config.auth === 'dev' || config.auth === 'local') return `http://${req.headers.host}`;
+    throw new HubError('POLICY_DENIED', 'set BOARD_PUBLIC_URL to connect integrations');
+  };
   const etags = new Map();
+  const webhookReads = new Set(); // (connection|ip) pairs over their failure budget with a body read in flight
 
   const authMember = makeAuthMember({ hub, config });
   // The org a request's resource lives in: decides which member row answers
@@ -95,6 +114,7 @@ export function createHttpHandler({ hub, api, config }) {
     }
     if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
+    if (r.pattern.startsWith('/api/integrations/:id')) return hub.db.get('SELECT org_id FROM connections WHERE id = ?', params.id)?.org_id ?? null;
     return null;
   };
 
@@ -145,6 +165,65 @@ export function createHttpHandler({ hub, api, config }) {
   route('POST', '/api/members', ({ member, body }) => api.createMember(member, body));
   route('DELETE', '/api/members/:id', ({ member, params }) => api.removeMember(member, params.id));
 
+  // ── integrations (I1, D41; buddy-builder-5) ──────────────────────────────
+  // Team-level: members see what's connected and its health; admins connect,
+  // configure and disconnect. Secrets never appear in any response.
+  if (integrations) {
+    const own = (member, id) => {
+      const c = integrations.get(id);
+      if (!c || c.status === 'revoked' || integrations.orgOf(id) !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
+      return c;
+    };
+    // Members may read what's connected (by design, D42), but a connector's
+    // config (channel ids, repo lists, …) is the admins' business.
+    const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
+    route('GET', '/api/integrations', ({ member }) => ({
+      available: integrations.connectors(), connections: integrations.list(member.org_id).map((c) => forMember(member, c)), vault: hub.vault.available,
+    }));
+    route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
+      api.requireAdmin(member);
+      const conn = integrations.connectors().find((c) => c.id === params.provider);
+      if (!conn || conn.connect !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
+      const token = String(body.token ?? '').trim();
+      if (!token || token.length > 4096) throw new HubError('VALIDATION', 'paste the token');
+      let v;
+      try { v = await integrations.verifyToken(params.provider, token); } catch (e) {
+        // Provider/connector text never reaches the user (it can carry request details).
+        hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
+        throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
+      }
+      return { connection: integrations.createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
+    });
+    // OAuth / app install (D42): the callback needs this cookie back. A
+    // browser tab has it already; the desktop app's connect window (its own
+    // session) gets `bind` through the window name and sets it itself.
+    route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
+      api.requireAdmin(member);
+      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+      const { name, value, path, secure, max_age_s } = out.cookie;
+      res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
+      return { url: out.url, bind: out.bind };
+    });
+    route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      const patch = {};
+      if (body.autonomy !== undefined) patch.autonomy = body.autonomy;
+      if (body.config !== undefined) patch.config = body.config;
+      return { connection: integrations.setSettings(params.id, patch) };
+    });
+    route('DELETE', '/api/integrations/:id', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      integrations.revokeConnection(params.id, member.id);
+      return { ok: true };
+    });
+    route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
+      own(member, params.id);
+      return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
+    });
+  }
+
   async function serveFile(req, res, path) {
     let info;
     try { info = await stat(path); } catch { info = null; }
@@ -183,6 +262,65 @@ export function createHttpHandler({ hub, api, config }) {
     const url = new URL(req.url, 'http://hub');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    // These two paths bypass Cloudflare Access (providers can't sign in):
+    // the signed state and the webhook signature are their only auth.
+    const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
+    if (cb) {
+      try {
+        const base = publicBase(req);
+        // Only the variant this hub sets: on https the plain name is ignored.
+        const ck = integrations.bindCookie(cb[1], base);
+        let bind = null;
+        try { bind = parseCookies(req.headers.cookie)[ck.name] ?? null; } catch { bind = null; }
+        const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: base, bindCookie: bind });
+        const clear = bind != null ? { 'set-cookie': `${ck.name}=; HttpOnly; SameSite=Lax; Path=${ck.path}; Max-Age=0${ck.secure ? '; Secure' : ''}` } : {};
+        if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
+        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear);
+      } catch (e) {
+        hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
+        return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
+      }
+    }
+    const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
+    if (hook) {
+      try {
+        // Unknown or inactive → 404 before a byte of the body is read.
+        if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
+        // Failures are counted per (connection, client IP) and never refuse a
+        // delivery before its signature is checked: a provider's shared egress
+        // IPs also carry anyone's forged posts. A pair over its failure budget
+        // gets one body read at a time instead, so a flood can't fan out reads.
+        const failKey = `${hook[1]}|${failBucketKey(clientIp(req, config))}`;
+        const overBudget = !hub.limiter.peek('webhook_fail_ip', failKey).ok;
+        if (overBudget && webhookReads.has(failKey)) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: 1 });
+        const failed = (status, body) => {
+          const t = hub.limiter.take('webhook_fail_ip', failKey);
+          if (t.ok || status === 413) return sendJson(res, status, body);
+          const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
+          return sendJson(res, 429, { error: { code: 'RATE_LIMITED', message: 'too many failed deliveries', retry_after_s: s } }, { 'retry-after': String(s) });
+        };
+        const chunks = [];
+        if (overBudget) webhookReads.add(failKey);
+        try {
+          let n = 0;
+          for await (const c of req) {
+            n += c.length;
+            if (n > MAX_BODY) return failed(413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+            chunks.push(c);
+          }
+        } finally {
+          if (overBudget) webhookReads.delete(failKey);
+        }
+        // webhook() spends webhook_conn only once the signature is verified.
+        const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
+        if (out.status === 401) return failed(out.status, out.body);
+        return sendJson(res, out.status, out.body);
+      } catch (e) {
+        if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
+        hub.log.error('integration webhook failed', { connection_id: hook[1], err: redact(e?.message ?? e) });
+        return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
+      }
+    }
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         const p = staticPath(url.pathname);
