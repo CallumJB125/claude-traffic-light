@@ -247,8 +247,8 @@ export function createIntegrations({
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
     }
 
-    // The member an integration acts as goes through the same Api methods,
-    // per-member rate limit and D8 replay cache as a browser would; the
+    // The member an integration acts as goes through the same Api methods
+    // and D8 replay cache as a browser would (limits per connection); the
     // journal and feed name the integration (D42, §15). `live()` is the
     // act() scope: every call on the handle checks it, so a stashed handle
     // is dead once run() returns.
@@ -265,11 +265,11 @@ export function createIntegrations({
     function actAs(memberId, { live, action: actName, track, external_ref }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
-      const call = (body, fn) => {
+      const call = (body, fn, rule = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn));
+        return track(callLive(body, fn, rule));
       };
-      const callLive = async (body, fn) => {
+      const callLive = async (body, fn, rule) => {
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -280,7 +280,10 @@ export function createIntegrations({
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
           return hit.body;
         }
-        limitOrThrow(hub, 'mutate_member', member.id);
+        // The connection's own buckets, never mutate_member: a public source
+        // (any Slack user, issues on a public repo) must not 429 the person's own browser.
+        limitOrThrow(hub, 'integration_conn', c.id);
+        if (rule) limitOrThrow(hub, rule, c.id);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
@@ -293,7 +296,7 @@ export function createIntegrations({
       };
       return {
         member: { id: first.id, role: first.role },
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body))),
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn'),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
           return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));

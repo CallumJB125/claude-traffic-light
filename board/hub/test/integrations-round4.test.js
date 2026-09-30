@@ -175,3 +175,41 @@ test('M-2: an integration’s card.create journals hashes and ids, never the tit
     assert.equal(JSON.parse(h.db.get("SELECT payload FROM journal WHERE kind = 'card.create' AND card_id = ?", mine.body.card.id).payload).title, 'Mine');
   } finally { await h.close(); }
 });
+
+// ── M-3 ───────────────────────────────────────────────────────────────────
+
+test('M-3: an integration spends its own integration_conn bucket, never the member’s mutate_member', async () => {
+  const h = await hubWith({ config: { rateLimits: { mutate_member: { capacity: 3, per_ms: 60_000 }, integration_conn: { capacity: 5, per_ms: 60_000 } } } });
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('flood'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'flood', external_id: 'w1' });
+    const ctx = reg.ctxFor(conn.id);
+    const create = () => ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, { request_id: randomUUID(), title: 'From outside' }));
+    for (let i = 0; i < 5; i += 1) await create();
+    await assert.rejects(create(), (e) => e.code === 'RATE_LIMITED');
+    const alice = await h.login('alice');
+    for (let i = 0; i < 3; i += 1) {
+      const r = await h.api(alice, 'POST', `/api/boards/${h.ids.board}/cards`, { request_id: randomUUID(), title: `Mine ${i}` });
+      assert.equal(r.status, 200, 'the admin’s own browser is untouched by the flood');
+    }
+  } finally { await h.close(); }
+});
+
+test('M-3: at most 20 cards an hour per connection: the 21st is RATE_LIMITED and its act() is audited failed', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('cap'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'cap', external_id: 'w1' });
+    const ctx = reg.ctxFor(conn.id);
+    const create = (n) => ctx.act('card.create', { external_ref: `I-${n}` }, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, { request_id: `issue-${n}`, title: `Issue ${n}` }));
+    for (let i = 1; i <= 20; i += 1) assert.equal((await create(i)).decision, 'auto');
+    await assert.rejects(create(21), (e) => e.code === 'RATE_LIMITED' && /retry in \d+ s/.test(e.message));
+    assert.deepEqual({ ...h.db.get("SELECT decision, error FROM integration_audit WHERE external_ref = 'I-21'") }, { decision: 'failed', error: 'rate_limited' });
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title LIKE 'Issue %'").n, 20);
+    // Comments are not cards: they are still allowed (integration_conn only).
+    const cardId = h.db.get("SELECT id FROM cards WHERE title = 'Issue 1'").id;
+    await ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).comment(cardId, { request_id: randomUUID(), body: 'still here' }));
+  } finally { await h.close(); }
+});
