@@ -51,6 +51,7 @@ export class ActorUnavailable extends Error {
 }
 
 const tagged = (message, healthCode) => Object.assign(new Error(message), { healthCode });
+const handlerEnded = () => new Error('this handler has ended');
 
 // Health and audit keep a short code (members can read them), never provider text.
 function errCode(e) {
@@ -204,6 +205,7 @@ export function createIntegrations({
     // Retries with backoff on network errors, 5xx and 429 (honouring Retry-After);
     // records health. Never logs bodies or headers.
     async function retryingFetch(url, init = {}) {
+      if (signal?.aborted) throw handlerEnded();
       let last;
       if (signal && !init.signal) init = { ...init, signal };
       for (let i = 0; i < FETCH_TRIES; i += 1) {
@@ -247,11 +249,14 @@ export function createIntegrations({
     // journal and feed name the integration (D42, §15). `live()` is the
     // act() scope: every call on the handle checks it, so a stashed handle
     // is dead once run() returns.
-    function actAs(memberId, { live, action: actName }) {
+    function actAs(memberId, { live, action: actName, track }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name };
-      const call = async (body, fn) => {
-        if (!live()) throw new Error('this act() scope has ended');
+      const call = (body, fn) => {
+        if (!live()) return Promise.reject(new Error('this act() scope has ended'));
+        return track(callLive(body, fn));
+      };
+      const callLive = async (body, fn) => {
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -319,6 +324,7 @@ export function createIntegrations({
      * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
+      if (signal?.aborted) throw handlerEnded();
       const mode = autonomyOf(action);
       const base = {
         connection_id: c.id, action, card_id: cardInOrg(meta?.card_id)?.id ?? null,
@@ -332,11 +338,21 @@ export function createIntegrations({
       let open = true;
       const live = () => open && !signal?.aborted;
       const guard = (fn) => (...args) => { if (!live()) throw new Error('this act() scope has ended'); return fn(...args); };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action })), link: guard(link) };
+      // Calls run() started without awaiting: settled before the scope closes,
+      // so none of them lands on the board after act() returned.
+      const pending = new Set();
+      const track = (p) => { pending.add(p); return p; };
+      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track })), link: guard(link) };
       let decision = 'failed';
       let error = 'handler_failed';
       try {
-        const out = await run(scope);
+        let out;
+        try {
+          out = await run(scope);
+        } finally {
+          open = false;
+        }
+        for (const r of await Promise.allSettled(pending)) if (r.status === 'rejected') throw r.reason;
         decision = 'auto';
         error = null;
         return { done: true, decision: 'auto', result: out };
@@ -356,6 +372,7 @@ export function createIntegrations({
      * Never call it from inside a withBoard callback on the same board.
      */
     async function systemEvent(type, { kind, external_id, pr = null, by = null, external_ref = null }) {
+      if (signal?.aborted) throw handlerEnded();
       if (!conn.systemEvents.includes(type)) throw new Error(`${conn.id} may not raise ${type}`);
       const prN = Number.isSafeInteger(pr) && pr > 0 ? pr : null;
       const byLogin = typeof by === 'string' && GITHUB_LOGIN.test(by) ? by : null;
@@ -446,7 +463,9 @@ export function createIntegrations({
     const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key = ? AND lease_until = ?", c.provider, key, lease.until);
     const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ? AND lease_until = ?', c.provider, key, lease.until);
     const controller = new AbortController();
-    const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }));
+    // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
+    const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
+      .finally(() => controller.abort(handlerEnded()));
     try {
       await withTimeout(running, handlerTimeoutMs, controller);
     } catch (e) {
@@ -555,7 +574,8 @@ export function createIntegrations({
       // A timed-out call may still be acting: never run the row again beside it.
       if (inflight.has(name)) throw Object.assign(new Error('handler_busy: the previous call has not ended'), { busy: true });
       const controller = new AbortController();
-      const running = Promise.resolve().then(() => conn.onEvent(r, ctxFor(cur, controller.signal)));
+      const running = Promise.resolve().then(() => conn.onEvent(r, ctxFor(cur, controller.signal)))
+        .finally(() => controller.abort(handlerEnded()));
       inflight.set(name, running);
       const settled = () => { if (inflight.get(name) === running) inflight.delete(name); };
       running.then(settled, settled);
