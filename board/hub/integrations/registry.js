@@ -11,12 +11,14 @@
 //
 // A connector never gets the DB, the vault key, or another connection's secrets.
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { HubError } from '../db.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { AUTONOMY } from './connector.js';
 
 const MAX_BODY = 1024 * 1024;
+const STATE_TTL_MS = 10 * 60_000;
+const b64 = (x) => Buffer.from(x).toString('base64url');
 const FETCH_TIMEOUT_MS = 10_000;
 const FETCH_TRIES = 4;
 
@@ -238,6 +240,48 @@ export function createIntegrations({ hub, api, bus = null, log, fetchImpl = glob
     return { status: 200, body: { ok: true } };
   }
 
+  // ── OAuth / app-install connect ─────────────────────────────────────────
+  // `state` = payload.HMAC(hub secret): the admin, their team and the provider,
+  // 10 minutes, single use. The callback trusts nothing else in the query.
+
+  const mac = (payload) => createHmac('sha256', hub.secret).update(`integration-state|${payload}`).digest('base64url');
+  const redirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/callback`;
+
+  function oauthStart({ member, provider, publicUrl }) {
+    const conn = connectors.get(provider);
+    if (!conn || conn.connect.kind === 'token') throw new HubError('NOT_FOUND', 'no such integration');
+    if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
+    const payload = b64(JSON.stringify({ m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS }));
+    const state = `${payload}.${mac(payload)}`;
+    return { url: conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, provider), config: {} }) };
+  }
+
+  /** → {ok:true, connection} | {ok:false, error} (error is safe to show). */
+  async function oauthCallback({ provider, query, publicUrl }) {
+    const conn = connectors.get(provider);
+    if (!conn || conn.connect.kind === 'token') return { ok: false, error: 'Unknown integration.' };
+    const [payload, sig] = String(query.get('state') ?? '').split('.');
+    const want = payload ? mac(payload) : '';
+    if (!payload || !sig || sig.length !== want.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return { ok: false, error: 'This link is not valid. Start again from Buddy.' };
+    const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
+    if (!st || st.p !== provider || Date.now() > st.e) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    if (db.get('SELECT 1 FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ?', 'oauth_state', st.n)) return { ok: false, error: 'This link was already used. Start again from Buddy.' };
+    db.run('INSERT INTO inbound_dedupe (provider, dedupe_key, received_at) VALUES (?, ?, ?)', 'oauth_state', st.n, now());
+    const member = hub.member(st.m);
+    if (!member || member.removed_at || member.org_id !== st.o || !['owner', 'admin'].includes(member.role)) return { ok: false, error: 'Only a team admin can connect this.' };
+    if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
+    let v;
+    try { v = await conn.connect.exchange({ query, redirectUri: redirectFor(publicUrl, provider), config: {}, fetch: fetchImpl }); } catch (e) {
+      log?.warn?.('integration connect failed', { integration: provider, err: e.message });
+      return { ok: false, error: 'The provider did not accept the connection. Try again.' };
+    }
+    try {
+      return { ok: true, connection: createConnection({ orgId: member.org_id, memberId: member.id, provider, ...v }) };
+    } catch (e) {
+      return { ok: false, error: e instanceof HubError ? e.message : 'Could not save the connection.' };
+    }
+  }
+
   // ── registration ────────────────────────────────────────────────────────
 
   function register(conn) {
@@ -282,6 +326,8 @@ export function createIntegrations({ hub, api, bus = null, log, fetchImpl = glob
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC LIMIT ?', id, Math.min(500, limit))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),
     webhook,
+    oauthStart,
+    oauthCallback,
     ctxFor: (id) => { const c = row(id); return c ? ctxFor(c) : null; },
   };
 }

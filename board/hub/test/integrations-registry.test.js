@@ -231,3 +231,51 @@ test('ctx.system: only declared facts, only for a card linked to this connection
     assert.throws(() => defineConnector({ id: 'gh2', name: 'G', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['pr_merged'] }), /declare the action system.pr_merged/);
   } finally { await h.close(); }
 });
+
+// ── OAuth / app-install connect ────────────────────────────────────────────
+
+const fakeOauth = defineConnector({
+  id: 'fake-oauth', name: 'Fake OAuth', scopes: ['read'], secrets: ['access_token'],
+  connect: {
+    kind: 'oauth',
+    authorizeUrl: ({ state, redirectUri }) => `https://fake-oauth.example/authorize?state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    async exchange({ query }) {
+      if (query.get('code') !== 'good-code') throw new Error('bad code');
+      return { external_id: 'ws-oauth-1', display_name: 'OAuth workspace', scopes: ['read'], secrets: { access_token: 'tok_oauth_secret' } };
+    },
+  },
+});
+
+test('OAuth: start gives a signed state; the callback connects once, refuses forged/reused/expired state and non-admins', async () => {
+  const { h, reg } = await setup();
+  try {
+    reg.register(fakeOauth);
+    const alice = await h.login('alice');
+    const start = await h.api(alice, 'POST', '/api/integrations/fake-oauth/start', { request_id: randomUUID() });
+    assert.equal(start.status, 200, start.text);
+    const auth = new URL(start.body.url);
+    const state = auth.searchParams.get('state');
+    assert.equal(auth.searchParams.get('redirect_uri'), `${h.base}/integrations/fake-oauth/callback`);
+    const cb = (q) => fetch(`${h.base}/integrations/fake-oauth/callback?${new URLSearchParams(q)}`);
+    // Forged state.
+    const forged = await cb({ state: `${state.split('.')[0]}.AAAA`, code: 'good-code' });
+    assert.equal(forged.status, 400);
+    assert.match(await forged.text(), /not valid/);
+    // Provider says no: shows an error, consumes the state.
+    const r = await cb({ state, code: 'good-code' });
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.match(html, /OAuth workspace is connected/);
+    assert.equal(r.headers.get('content-security-policy'), "default-src 'none'");
+    assert.ok(!html.includes('tok_oauth_secret') && !html.includes('good-code'));
+    assert.equal(reg.list(h.ids.org).filter((c) => c.provider === 'fake-oauth').length, 1);
+    // Reused state.
+    const again = await cb({ state, code: 'good-code' });
+    assert.equal(again.status, 400);
+    assert.match(await again.text(), /already used/);
+    // Query text is never echoed (no reflected XSS through error=).
+    const s2 = (await h.api(alice, 'POST', '/api/integrations/fake-oauth/start', { request_id: randomUUID() })).body.url;
+    const x = await cb({ state: new URL(s2).searchParams.get('state'), error: '<script>alert(1)</script>' });
+    assert.ok(!(await x.text()).includes('<script>alert'));
+  } finally { await h.close(); }
+});

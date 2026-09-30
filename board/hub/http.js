@@ -78,7 +78,23 @@ async function readBody(req) {
   }
 }
 
+// The provider's redirect lands here in the connect window: text only, no
+// script, nothing from the query echoed back.
+function sendConnectPage(res, status, text, ok) {
+  const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${ok ? 'Connected' : 'Not connected'} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${ok ? 'ok' : 'error'}"><h1>${ok ? 'Connected' : 'Not connected'}</h1><p>${esc(text)}</p><p>You can close this window and go back to Buddy.</p></body></html>`;
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION) });
+  res.end(body);
+}
+
 export function createHttpHandler({ hub, api, config, integrations = null }) {
+  // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
+  const publicBase = (req) => {
+    if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
+    // Only loopback hubs may use the request's Host: a public hub needs a fixed URL.
+    if (config.auth === 'dev' || config.auth === 'local') return `http://${req.headers.host}`;
+    throw new HubError('POLICY_DENIED', 'set BOARD_PUBLIC_URL to connect integrations');
+  };
   const etags = new Map();
 
   const authMember = makeAuthMember({ hub, config });
@@ -168,6 +184,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       try { v = await integrations.verifyToken(params.provider, token); } catch (e) { throw new HubError('VALIDATION', e.message); }
       return { connection: integrations.createConnection({ orgId: member.org_id, memberId: member.id, provider: params.provider, ...v }) };
     });
+    route('POST', '/api/integrations/:provider/start', ({ member, params, req }) => {
+      api.requireAdmin(member);
+      return integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+    });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
       own(member, params.id);
@@ -226,6 +246,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const url = new URL(req.url, 'http://hub');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
+    if (cb) {
+      const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: publicBase(req) });
+      return sendConnectPage(res, out.ok ? 200 : 400, out.ok ? `${out.connection.display_name ?? 'The integration'} is connected.` : out.error, out.ok);
+    }
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
     if (hook) {
       try {
