@@ -64,7 +64,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
       // Unauthenticated on purpose: the hook asks before it trusts this
       // listener with the token (hooks/answer-file.js requestKeyProof).
-      if (req.method === 'POST' && req.url === '/request-key/challenge') {
+      if (req.method === 'POST' && req.url === '/request-key/challenge') { // privacy-flow: request-key
         return readBody(req, done, (d) => (typeof d.nonce === 'string' && /^[0-9a-f]{64}$/.test(d.nonce)
           ? done(200, { proof: Answer.requestKeyProof(SIGNAL_TOKEN, req.socket.localPort, d.nonce) })
           : done(400, { error: 'nonce must be 64 hex chars' })));
@@ -73,7 +73,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
-      if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' })));
+      if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' }))); // privacy-flow: request-key
       readBody(req, done, (d) => {
         if (!KNOWN_SIGNALS.has(d.signal)) return done(400, { error: 'unknown signal', known: [...KNOWN_SIGNALS] });
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';

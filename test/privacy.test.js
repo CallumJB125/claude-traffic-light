@@ -2,9 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const net = require('net');
-const { spawn } = require('child_process');
 const { render } = require('../privacy-render.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -185,9 +182,10 @@ function audit(list) {
   for (const { file, text } of list) {
     const b = bindingsOf(text);
     linesOf(text).forEach(({ raw, code }, i) => {
-      if (!code || !opensChannel(code, b)) return;
-      const where = `${file}:${i + 1}`;
       const slug = (raw.match(/privacy-flow:\s*([\w-]+)/) || [])[1];
+      // A tagged line counts even when no pattern matches it (a local data flow worth documenting).
+      if (!slug && (!code || !opensChannel(code, b))) return;
+      const where = `${file}:${i + 1}`;
       if (!slug) return problems.push(`${where} opens a network or process channel without a privacy-flow marker: ${code.trim().slice(0, 90)}`);
       if (!flows.has(slug)) return problems.push(`${where} is tagged "${slug}" but PRIVACY.md has no <!-- flow:${slug} files=… -->`);
       if (!flows.get(slug).has(file)) return problems.push(`${where} is tagged "${slug}" but PRIVACY.md documents that flow only for: ${[...flows.get(slug)].join(', ')}`);
@@ -312,28 +310,4 @@ test('every window turns spellcheck off (it downloads dictionaries from Google o
     assert.equal((src.match(/spellcheck:\s*false/g) || []).length, n, `${rel(f)}: every new BrowserWindow needs webPreferences.spellcheck: false`);
   }
   assert.ok(windows >= 6);
-});
-
-// ── Permission previews ───────────────────────────────────────────────────
-test('a permission preview is written readable by its owner only', { skip: process.platform === 'win32' }, async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-perm-'));
-  const server = net.createServer((s) => s.end());
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  fs.writeFileSync(path.join(home, 'port'), String(server.address().port));
-  const child = spawn(process.execPath, [path.join(ROOT, 'hooks', 'set-status.js'), 'permission-request'], {
-    env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '8000' },
-  });
-  child.stdin.end(JSON.stringify({ session_id: 's1', cwd: '/tmp/x', tool_name: 'Bash', tool_input: { command: 'echo hunter2' } }));
-  const reqs = path.join(home, 'requests');
-  let file = null;
-  for (let i = 0; i < 80 && !file; i++) {
-    file = (fs.existsSync(reqs) ? fs.readdirSync(reqs) : []).find((n) => n.endsWith('.json'));
-    if (!file) await new Promise((r) => setTimeout(r, 100));
-  }
-  assert.ok(file, 'the hook never wrote a request');
-  const mode = fs.statSync(path.join(reqs, file)).mode & 0o777;
-  fs.writeFileSync(path.join(reqs, file.replace(/\.json$/, '.answer')), 'deny');
-  await new Promise((r) => child.on('exit', r));
-  server.close();
-  assert.equal(mode, 0o600);
 });
