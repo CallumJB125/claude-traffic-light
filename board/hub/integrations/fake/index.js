@@ -40,7 +40,7 @@ export default defineConnector({
   async handleWebhook({ payload, ctx }) {
     // A linked PR merged → the card's own pr_merged fact (never a card id from the payload).
     if (payload.event === 'pr.merged') {
-      await ctx.system.event('pr_merged', { kind: 'pr', external_id: String(payload.pr?.id ?? ''), pr: payload.pr?.number, by: payload.pr?.merged_by });
+      await ctx.system.event('pr_merged', { kind: 'pr', external_id: String(payload.pr?.id ?? ''), pr: payload.pr?.number, by: payload.pr?.merged_by, repo: payload.pr?.repo });
       return;
     }
     if (payload.event !== 'issue.opened') return;

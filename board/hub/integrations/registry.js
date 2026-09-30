@@ -18,6 +18,7 @@ import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY, cleanLinkStatus } from './connector.js';
+import { prNumberOf } from '../github.js';
 
 const MAX_BODY = 1024 * 1024;
 const STATE_TTL_MS = 10 * 60_000;
@@ -59,6 +60,7 @@ function canonRepo(repo) {
   if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
   return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
 }
+const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
@@ -377,8 +379,38 @@ export function createIntegrations({
       return card && hub.board(card.board_id)?.org_id === c.org_id ? card : null;
     };
 
+    // The newest link of `kind` this connection has on a card of its org.
+    const linkedByCard = (cardId, kind) => (cardInOrg(cardId)
+      ? db.get('SELECT external_id FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind))?.external_id ?? null
+      : null);
+
+    /**
+     * The card's newest hub_verified PR evidence (what the merge poll acts
+     * on): {number, repo?, url?} | null. `repo` ('owner/name' on github.com,
+     * else 'host/owner/name') only when the evidence ref names one.
+     */
+    function verifiedPr(cardId) {
+      if (!cardInOrg(cardId)) return null;
+      const ref = String(db.get("SELECT ref FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", cardId)?.ref ?? '').trim();
+      const number = prNumberOf(ref);
+      if (number == null) return null;
+      const at = ref.lastIndexOf('/pull/');
+      if (at === -1) return { number };
+      const canon = normalizeRemoteUrl(ref.slice(0, at));
+      // A ref that names a repo we cannot read binds to nothing.
+      if (!canon) return null;
+      return { number, repo: shortRepo(canon), ...(/^https:\/\//i.test(ref) ? { url: ref } : {}) };
+    }
+
     function link(cardId, kind, externalId, url = null) {
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      // One PR per card per connection: a second one (a decoy from the same
+      // branch into another base) must not become a handle on the card.
+      if (String(kind) === 'pr') {
+        const have = linkedByCard(cardId, 'pr');
+        if (have === String(externalId)) return;
+        if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
+      }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         cardId, c.id, String(kind), String(externalId), url == null ? null : String(url).slice(0, 500), now());
     }
@@ -461,7 +493,7 @@ export function createIntegrations({
      * link. Applied like the merge poll, audited in the same transaction.
      * Never call it from inside a withBoard callback on the same board.
      */
-    async function systemEvent(type, { kind, external_id, pr = null, by = null, external_ref = null }) {
+    async function systemEvent(type, { kind, external_id, pr = null, by = null, repo = null, external_ref = null }) {
       if (signal?.aborted) throw handlerEnded();
       if (!conn.systemEvents.includes(type)) throw new Error(`${conn.id} may not raise ${type}`);
       const prN = Number.isSafeInteger(pr) && pr > 0 ? pr : null;
@@ -472,15 +504,33 @@ export function createIntegrations({
       if (hub.inBoard(card.board_id)) throw new Error('ctx.system.event was called inside the board queue of its own card (it would deadlock)');
       const action = `system.${type}`;
       const mode = autonomyOf(action);
-      const audit = (decision) => db.insert('integration_audit', {
-        id: randomUUID(), connection_id: c.id, action, decision, card_id: card.id,
+      const audit = (decision, error = null) => db.insert('integration_audit', {
+        id: randomUUID(), connection_id: c.id, action, decision, error, card_id: card.id,
         external_ref: String(external_ref ?? external_id).slice(0, 200), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
       });
+      // Bound to the PR the hub verified, like the merge poll: any other PR
+      // from the card's branch (another base, a decoy closed unmerged) is not
+      // the card's review.
+      const refusal = () => {
+        const v = verifiedPr(card.id);
+        if (!v) return 'no_verified_pr';
+        if (prN !== v.number) return 'not_the_verified_pr';
+        if (v.repo) {
+          const want = canonRepo(v.repo);
+          if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
+        }
+        return null;
+      };
+      const refused = refusal();
+      if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
       const via = { connection_id: c.id, member_id: null, name: conn.name };
       // hub.txn (not db.tx): the outermost transaction flushes apply()'s
       // after-commit work (broadcasts, notifies, the bus poke).
       return hub.withBoard(card.board_id, () => hub.actVia(via, () => hub.txn(() => {
+        // Evidence may have changed while this waited on the board queue.
+        const late = refusal();
+        if (late) { audit('failed', late); return { done: false, reason: late }; }
         const r = hub.apply(card.id, { type, pr: prN, by: byLogin }, { actor: c.id });
         if (!r.ok) return { done: false, reason: r.error.code };
         audit('auto');
@@ -499,6 +549,8 @@ export function createIntegrations({
       // A pure read (writes nothing, links nothing), so it lives on ctx, not
       // in an act() scope: the handler links what it finds inside act().
       cardForBranch,
+      verifiedPr,
+      linkedByCard,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),

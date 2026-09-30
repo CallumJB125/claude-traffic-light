@@ -201,13 +201,165 @@ test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is 
     await ctx.act('card.create', {}, async (s) => { s.link(r.cardId, 'pr', 'PR-7'); s.linkStatus(r.cardId, 'pr', 'PR-7', { state: 'draft', checks: 'none' }); });
     assert.deepEqual(view().pr_link_status, { state: 'draft', checks: 'none', review: null });
     h.clock.advance(1000);
-    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-8'));
+    // One pr link per card per connection: the newer one comes from a second connection.
+    const second = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: 'fake-workspace-2', secrets: {} });
+    const ctx2 = reg.ctxFor(second.id);
+    await ctx2.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-8'));
     assert.equal(view().pr_link_status, null, 'the newest pr link has no status yet');
-    await ctx.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-8', { review: 'approved' }));
+    await ctx2.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-8', { review: 'approved' }));
     assert.deepEqual(view().pr_link_status, { state: null, checks: null, review: 'approved' });
     // A revoked connection's links stop speaking for the card.
+    reg.revokeConnection(second.id, h.ids.alice);
+    assert.deepEqual(view().pr_link_status, { state: 'draft', checks: 'none', review: null });
     reg.revokeConnection(conn.id, h.ids.alice);
     assert.equal(view().pr_link_status, null);
+  } finally { await h.close(); }
+});
+
+// ── PR events are bound to the hub-verified PR ──────────────────────────────
+
+// What board_attach_evidence leaves once the hub checked the PR with GitHub.
+function addEvidence(h, cardId, ref, { verification = 'hub_verified', kind = 'pr' } = {}) {
+  h.clock.advance(1000);
+  const t = h.hub.iso();
+  h.db.run('INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    randomUUID(), cardId, kind, ref, verification, verification === 'hub_verified' ? t : null, t);
+}
+
+const prConnector = defineConnector({
+  id: 'fake-prs', name: 'Fake PRs', scopes: [], secrets: [], hosts: [],
+  connect: { kind: 'token', verifyToken: async () => ({ external_id: 'w-prs' }) },
+  systemEvents: ['pr_merged', 'pr_closed'],
+  actions: { 'link.pr': { default: 'auto' }, 'system.pr_merged': { default: 'auto' }, 'system.pr_closed': { default: 'auto' } },
+});
+
+// A card in review whose run pushed `board/<KEY>-r1`, with PR `external_id` linked by this connection.
+async function inReview(h, reg, key) {
+  if (!reg.connectors().some((c) => c.id === 'fake-prs')) reg.register(prConnector);
+  const conn = reg.list(h.ids.org).find((c) => c.provider === 'fake-prs') ?? reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake-prs', external_id: 'w-prs' });
+  const ctx = reg.ctxFor(conn.id);
+  const r = addRun(h, { key, fence: 1 });
+  h.db.run("UPDATE cards SET run_state = 'in_review', column_name = 'in_review' WHERE id = ?", r.cardId);
+  const column = () => h.db.get('SELECT column_name FROM cards WHERE id = ?', r.cardId).column_name;
+  return { conn, ctx, ...r, column };
+}
+
+test('system.event: a decoy PR merged from the card\'s branch into another base does not move the card; the verified PR does', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { conn, ctx, cardId, branch, column } = await inReview(h, reg, 'BDL-60');
+    addEvidence(h, cardId, 'https://github.com/acme/app/pull/10');
+    // #11: same board branch, into `scratch`, merged by someone with push access.
+    const found = ctx.cardForBranch('acme/app', branch);
+    assert.equal(found.card_id, cardId);
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-11'));
+    const decoy = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 11, repo: 'acme/app', by: 'mallory' });
+    assert.deepEqual(decoy, { done: false, reason: 'not_the_verified_pr' });
+    assert.equal(column(), 'in_review', 'review was not bypassed');
+    const a = reg.audit(conn.id)[0];
+    assert.deepEqual([a.action, a.decision, a.error, a.card_id], ['system.pr_merged', 'failed', 'not_the_verified_pr', cardId]);
+    // The verified PR's number in another repo is not it either.
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 10, repo: 'evil/app' })).reason, 'not_the_verified_pr');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 10 })).reason, 'not_the_verified_pr', 'the evidence names a repo: the event must too');
+    assert.equal(column(), 'in_review');
+    // The verified PR #10 (repo compared case-insensitively) moves it.
+    const ok = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 10, repo: 'Acme/App', by: 'octo' });
+    assert.equal(ok.done, true);
+    assert.equal(column(), 'done');
+  } finally { await h.close(); }
+});
+
+test('system.event: a decoy closed unmerged does not send the card back to To do; the verified PR closing does', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { ctx, cardId, column } = await inReview(h, reg, 'BDL-61');
+    addEvidence(h, cardId, '#10');
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-12'));
+    assert.deepEqual(await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'not_the_verified_pr' });
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12' })).reason, 'not_the_verified_pr', 'no pr number is never the verified one');
+    assert.equal(column(), 'in_review');
+    // Evidence '#10' names no repo: the number alone binds it.
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10 })).done, true);
+    assert.equal(column(), 'todo');
+  } finally { await h.close(); }
+});
+
+test('system.event: a card with no hub_verified PR evidence is never moved by an integration (self-reported, other kinds and older PRs do not count)', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { conn, ctx, cardId, column } = await inReview(h, reg, 'BDL-62');
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-10'));
+    const ev = () => ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-10', pr: 10, repo: 'acme/app' });
+    assert.deepEqual(await ev(), { done: false, reason: 'no_verified_pr' });
+    addEvidence(h, cardId, '#10', { verification: 'self_reported' });
+    addEvidence(h, cardId, 'https://github.com/acme/app/commit/abc', { kind: 'commit' });
+    assert.deepEqual(await ev(), { done: false, reason: 'no_verified_pr' });
+    assert.equal(column(), 'in_review');
+    assert.deepEqual(reg.audit(conn.id).slice(0, 2).map((a) => [a.decision, a.error]), [['failed', 'no_verified_pr'], ['failed', 'no_verified_pr']]);
+    // The newest verified PR is the one: #10 superseded by #14.
+    addEvidence(h, cardId, '#10');
+    addEvidence(h, cardId, '#14');
+    assert.equal((await ev()).reason, 'not_the_verified_pr');
+    assert.equal(column(), 'in_review');
+    // Even with autonomy 'ask' a decoy records no suggestion: it is refused first.
+    reg.setSettings(conn.id, { autonomy: { 'system.pr_merged': 'ask' } });
+    assert.equal((await ev()).reason, 'not_the_verified_pr');
+    assert.equal(reg.audit(conn.id)[0].decision, 'failed');
+  } finally { await h.close(); }
+});
+
+test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo?, url?}); null without one or for another org\'s card', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-63', fence: 1 });
+    assert.equal(ctx.verifiedPr(r.cardId), null);
+    addEvidence(h, r.cardId, '#7', { verification: 'self_reported' });
+    assert.equal(ctx.verifiedPr(r.cardId), null);
+    addEvidence(h, r.cardId, '7');
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 7 });
+    addEvidence(h, r.cardId, 'https://github.com/Acme/App/pull/9');
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 9, repo: 'acme/app', url: 'https://github.com/Acme/App/pull/9' });
+    addEvidence(h, r.cardId, 'https://ghe.example.com/acme/app/pull/12/');
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 12, repo: 'ghe.example.com/acme/app', url: 'https://ghe.example.com/acme/app/pull/12/' });
+    addEvidence(h, r.cardId, 'not a pr');
+    assert.equal(ctx.verifiedPr(r.cardId), null, 'the newest is unreadable: nothing, not an older one');
+    const o = addOrg(h);
+    const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-9', fence: 1 });
+    addEvidence(h, theirs.cardId, '#3');
+    assert.equal(ctx.verifiedPr(theirs.cardId), null);
+    assert.equal(ctx.verifiedPr('no-such-card'), null);
+    assert.equal(ctx.verifiedPr(null), null);
+  } finally { await h.close(); }
+});
+
+test('link: at most one live pr link per card per connection (same id is a no-op); linkedByCard reads it, scoped to this connection and org', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-64', fence: 1 });
+    assert.equal(ctx.linkedByCard(r.cardId, 'pr'), null);
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-10'));
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-10'));
+    await assert.rejects(ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-11')), (e) => e.code === 'CONFLICT');
+    assert.equal(reg.audit(conn.id)[0].error, 'conflict');
+    assert.equal(ctx.linked('pr', 'PR-11'), null);
+    assert.equal(ctx.linkedByCard(r.cardId, 'pr'), 'PR-10');
+    // Other kinds are not limited.
+    await ctx.act('card.create', {}, async (s) => { s.link(r.cardId, 'issue', 'ISS-1'); s.link(r.cardId, 'issue', 'ISS-2'); });
+    assert.equal(ctx.linkedByCard(r.cardId, 'issue'), 'ISS-2');
+    // Another connection has its own pr link on the same card; neither sees the other's.
+    const second = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: 'fake-workspace-2', secrets: {} });
+    const ctx2 = reg.ctxFor(second.id);
+    assert.equal(ctx2.linkedByCard(r.cardId, 'pr'), null);
+    await ctx2.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-11'));
+    assert.equal(ctx2.linkedByCard(r.cardId, 'pr'), 'PR-11');
+    assert.equal(ctx.linkedByCard(r.cardId, 'pr'), 'PR-10');
+    // Another org's card reads null even if a row names it.
+    const o = addOrg(h);
+    const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-10', fence: 1 });
+    h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso());
+    assert.equal(ctx.linkedByCard(theirs.cardId, 'pr'), null);
   } finally { await h.close(); }
 });
 

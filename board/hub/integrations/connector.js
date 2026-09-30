@@ -52,6 +52,7 @@
 //   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
 //   // declared as action `system.<event>`. Only for a card linked to this
 //   // connection (the act() scope's link); never from a card id or key in the payload.
+//   // Applied only for the card's hub-verified PR (ctx.verifiedPr): pass its `pr` and `repo`.
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
 //   async health(ctx) → { ok, detail? },
