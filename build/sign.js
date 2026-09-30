@@ -15,7 +15,15 @@ function withHelperEntitlements(optionsForFile) {
 
 async function sign(opts) {
   const { sign: defaultSign } = require('app-builder-lib/out/codeSign/macCodeSign');
-  return defaultSign({ ...opts, optionsForFile: withHelperEntitlements(opts.optionsForFile) });
+  // With no Developer ID in the keychain electron-builder passes no identity
+  // and the signer refuses; fall back to ad-hoc, which is what builds did
+  // before this hook existed.
+  const adHoc = !opts.identity;
+  return defaultSign({
+    ...opts,
+    ...(adHoc ? { identity: '-', identityValidation: false } : {}),
+    optionsForFile: withHelperEntitlements(opts.optionsForFile),
+  });
 }
 
 module.exports = sign;
