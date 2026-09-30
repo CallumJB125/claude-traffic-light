@@ -5,7 +5,7 @@
 // file never sees a socket except through hub.closeCredSockets.
 
 import { createHash, createHmac, hkdfSync, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import { isIP } from 'node:net';
+import { isIP } from 'node:net'; // privacy-flow: hub-server
 import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { FailureBudget, ipKey, limitOrThrow, netKey, v6groups } from '../ratelimit.js';
@@ -24,6 +24,9 @@ export const SESSION_ROTATE_MS = 86_400_000;
 const ROTATE_GRACE_MS = 60_000;
 const TOUCH_MS = 60_000;
 const LIVE_FLOWS_PER_EMAIL = 3;
+// Step-ups: deleting the account, deleting a team (L-H). One can't be spent on the other.
+export const STEP_UP_PURPOSES = Object.freeze(['delete', 'delete_team']);
+const PURPOSES = new Set(['signin', ...STEP_UP_PURPOSES]);
 const CLIENTS = new Set(['buddy_desktop', 'web']);
 const FORM_FACTORS = new Set(['laptop', 'desktop']);
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
@@ -49,6 +52,13 @@ export function normalizeEmail(v) {
   const e = canonEmail(v);
   if (e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new HubError('VALIDATION', 'email is not an address');
   return e;
+}
+
+/** The mailbox an address delivers to: `a+tag@x` and `a@x` are one (M-C; mail-rate keys only). */
+export function mailbox(email) {
+  const at = email.lastIndexOf('@');
+  const local = email.slice(0, at).replace(/\+.*$/, '');
+  return `${local || email.slice(0, at)}${email.slice(at)}`;
 }
 
 export function maskEmail(e) {
@@ -88,6 +98,27 @@ export class Accounts {
     this.canonicaliseStored();
     // Wrong codes per address, every network together (H2).
     this.failures = new FailureBudget({ now: () => hub.mono(), budget: hub.config.authFailBudget ?? 20 });
+    this.seedFailures();
+  }
+
+  // Wrong codes count against the address, except on a step-up: those only
+  // ever come from the signed-in user, so they count against that user, and a
+  // third party guessing sign-in codes can't block a deletion (M-A).
+  budgetKey(f) { return f.purpose === 'signin' ? f.email : `delete|${f.user_id}`; }
+
+  // The budget lives in memory: a restart re-reads the last 24 h of wrong codes
+  // from login_flows (L-B), except those a later successful code cleared.
+  seedFailures() {
+    const rows = this.db.all(`SELECT f.email, f.purpose, f.user_id, f.attempts, f.created_at FROM login_flows f
+      WHERE f.attempts > 0 AND f.created_at > ? AND NOT EXISTS (SELECT 1 FROM login_flows v
+        WHERE v.email = f.email AND v.purpose = f.purpose AND v.verified_at IS NOT NULL AND v.verified_at >= f.created_at)`, this.at(-86_400_000));
+    for (const f of rows) this.failures.seed(this.budgetKey(f), f.attempts, this.hub.mono() - (this.hub.ageOf(f.created_at) ?? 0));
+  }
+
+  /** Has this address an account (a verified email identity or a live user)? */
+  hasAccount(email) {
+    return !!(this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
+      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email));
   }
 
   now() { return this.hub.iso(); }
@@ -125,10 +156,17 @@ export class Accounts {
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
 
   // The hub-wide daily cap on the mails anyone can make it send (sign-in
-  // codes, invites, lockout notices; M2). Takes one when there is one.
-  mailBudget() {
-    if (this.hub.limiter.take('mail_global', 'all').ok) return true;
-    this.hub.log.warn('daily mail cap reached: mail not sent (BOARD_MAIL_DAILY_CAP)');
+  // codes, invites, lockout notices; M2). Takes one when there is one. Mail to
+  // an address without an account may use only half of it, so a flood of
+  // made-up addresses can't stop existing accounts signing in (M-C).
+  mailBudget(email) {
+    const lim = this.hub.limiter;
+    const known = this.hasAccount(email);
+    if ((known || lim.peek('mail_global_new', 'all').ok) && lim.take('mail_global', 'all').ok) {
+      if (!known) lim.take('mail_global_new', 'all');
+      return true;
+    }
+    this.hub.log.warn('daily mail cap reached: mail not sent (BOARD_MAIL_DAILY_CAP)', { new_addresses_only: !known });
     return false;
   }
 
@@ -140,11 +178,11 @@ export class Accounts {
   start(body, { ip, ident = null, req = null, res = null }) {
     this.requireMailer();
     const purpose = body.purpose ?? 'signin';
-    if (purpose !== 'signin' && purpose !== 'delete') throw new HubError('VALIDATION', "purpose must be 'signin' or 'delete'");
+    if (!PURPOSES.has(purpose)) throw new HubError('VALIDATION', "purpose must be 'signin', 'delete' or 'delete_team'");
     let email;
     let client;
     let userId = null;
-    if (purpose === 'delete') {
+    if (purpose !== 'signin') {
       if (!ident) throw new HubError('UNAUTHENTICATED', 'sign in first');
       email = ident.user.primary_email;
       if (!email) throw new HubError('FORBIDDEN', 'this account has no email address');
@@ -162,13 +200,15 @@ export class Accounts {
     const flowId = b64url(randomBytes(18));
     const out = { flow_id: flowId, expires_in: FLOW_TTL_MS / 1000 };
     const lim = this.hub.limiter;
-    const mine = `${email}|${netKey(ip)}`;
-    if (!lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', email).ok) {
+    // Per mailbox (+tags folded, M-C); a step-up per user, so nobody else can use up its buckets (M-A).
+    const box = purpose === 'signin' ? mailbox(email) : `delete|${userId}`;
+    const mine = `${box}|${netKey(ip)}`;
+    if (!lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok) {
       // Same answer, no mail, no row: a verify on this flow_id fails like a wrong code.
       this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'email_rate' }, ip });
       return out;
     }
-    if (!this.mailBudget()) {
+    if (!this.mailBudget(email)) {
       this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'mail_cap' }, ip });
       return out;
     }
@@ -207,28 +247,31 @@ export class Accounts {
     const code = typeof body.code === 'string' ? body.code.trim() : '';
     const invalid = (msg = 'that code is wrong or has expired: ask for a new one', extra = {}) => new HubError('INVALID_TOKEN', msg, extra);
     const f = flowId ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
-    if (!f || f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
-    // The address's failure budget (H2): locked means no code is even checked.
-    const locked = this.failures.lockedFor(f.email);
+    // A suppressed start made no row: its flow_id answers like a fresh one (L-G).
+    if (!f) throw invalid(undefined, { attempts_left: MAX_ATTEMPTS });
+    if (f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
+    // The failure budget (H2): locked means no code is even checked.
+    const budget = this.budgetKey(f);
+    const locked = this.failures.lockedFor(budget);
     if (locked) {
       const s = Math.max(1, Math.ceil(locked / 1000));
       throw new HubError('RATE_LIMITED', `too many wrong codes for this address; retry in ${s} s`, { retry_after_s: s });
     }
-    limitOrThrow(this.hub, 'auth_verify_email', `${f.email}|${netKey(ip)}`);
+    limitOrThrow(this.hub, 'auth_verify_email', `${f.purpose === 'signin' ? f.email : budget}|${netKey(ip)}`);
     if (!/^\d{6}$/.test(code) || !safeEqual(this.codeHash(f.id, code), f.code_hash)) {
       const attempts = f.attempts + 1;
       const dead = attempts >= MAX_ATTEMPTS;
-      const exhausted = this.failures.fail(f.email);
+      const exhausted = this.failures.fail(budget);
       this.hub.txn(() => {
         this.db.run('UPDATE login_flows SET attempts = ?, dead_at = ? WHERE id = ?', attempts, dead ? now : null, f.id);
         this.audit('auth.code.failed', { user: f.user_id, target: f.id, detail: { attempts, dead }, ip });
-        if (exhausted) this.audit('auth.lockout', { user: f.user_id, detail: { email_ref: this.emailRef(f.email), retry_after_s: Math.ceil(this.failures.lockedFor(f.email) / 1000) }, ip });
+        if (exhausted) this.audit('auth.lockout', { user: f.user_id, detail: { email_ref: this.emailRef(f.email), purpose: f.purpose, retry_after_s: Math.ceil(this.failures.lockedFor(budget) / 1000) }, ip });
       });
-      if (exhausted) this.lockNotice(f.email);
+      if (exhausted && f.purpose === 'signin') this.lockNotice(f.email);
       throw invalid(dead ? 'too many wrong codes: ask for a new one' : undefined, { attempts_left: MAX_ATTEMPTS - attempts });
     }
-    this.failures.reset(f.email);
-    if (f.purpose === 'delete') return this.stepUp(f, { ip, ident });
+    this.failures.reset(budget);
+    if (f.purpose !== 'signin') return this.stepUp(f, { ip, ident });
     // A magic link opened in another browser than the one that asked could be
     // someone mailing you their own link (login CSRF): ask first (design §4.3).
     if (f.client === 'web' && body.via === 'link' && body.confirm !== true) {
@@ -247,9 +290,7 @@ export class Accounts {
       };
       if (device.form_factor != null && !FORM_FACTORS.has(device.form_factor)) throw new HubError('VALIDATION', "form_factor must be 'laptop' or 'desktop'");
     }
-    const known = this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", f.email)
-      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', f.email);
-    if (!known) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
+    if (!this.hasAccount(f.email)) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
     let out;
     let cookie = null;
     this.hub.txn(() => {
@@ -284,9 +325,7 @@ export class Accounts {
   // guessing its codes; an address without one gets nothing.
   lockNotice(email) {
     if (!this.mailer) return;
-    const has = this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
-      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
-    if (!has || !this.hub.limiter.take('auth_lock_notice', email).ok || !this.mailBudget()) return;
+    if (!this.hasAccount(email) || !this.hub.limiter.take('auth_lock_notice', mailbox(email)).ok || !this.mailBudget(email)) return;
     this.mailer.send({
       to: email,
       subject: `Someone is trying sign-in codes for your ${BRAND.name} account`,
@@ -473,21 +512,15 @@ export class Accounts {
   }
 
   /**
-   * DELETE /api/account {flow_id}: needs a 'delete' flow this user verified
-   * in the last 5 minutes (design §10.2, minimal): revoke every credential,
-   * drop identities and flows, tombstone the user, soft-remove and
-   * pseudonymise every membership. Journal rows keep pointing at member ids.
+   * The step-up that deleting an account ('delete') or a team ('delete_team')
+   * needs: a flow of that purpose this user started and verified in the last
+   * 5 minutes, not used yet. → the flow, or STEP_UP_REQUIRED.
    */
-  /**
-   * The step-up that deleting an account or a team needs: a purpose:'delete'
-   * flow this user started and verified in the last 5 minutes, not used yet.
-   * → the flow, or STEP_UP_REQUIRED.
-   */
-  requireStepUp(userId, flowId) {
+  requireStepUp(userId, flowId, purpose = 'delete') {
     const f = typeof flowId === 'string' ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     const age = f?.verified_at ? this.hub.ageOf(f.verified_at) : null;
-    if (!f || f.purpose !== 'delete' || f.user_id !== userId || f.consumed_at || age == null || age > STEP_UP_MS) {
-      throw new HubError('STEP_UP_REQUIRED', "confirm with a fresh email code first (start + verify with purpose 'delete')", { max_age_s: STEP_UP_MS / 1000 });
+    if (!f || f.purpose !== purpose || f.user_id !== userId || f.consumed_at || age == null || age > STEP_UP_MS) {
+      throw new HubError('STEP_UP_REQUIRED', `confirm with a fresh email code first (start + verify with purpose '${purpose}')`, { max_age_s: STEP_UP_MS / 1000, purpose });
     }
     return f;
   }
@@ -499,9 +532,21 @@ export class Accounts {
     }
   }
 
+  /**
+   * DELETE /api/account {flow_id}: needs a 'delete' flow this user verified
+   * in the last 5 minutes (design §10.2, minimal), then eraseUser.
+   */
   deleteAccount(ident, body, { ip }) {
-    const user = ident.user;
-    this.requireStepUp(user.id, body.flow_id);
+    this.requireStepUp(ident.user.id, body.flow_id);
+    return this.eraseUser(ident.user, { ip });
+  }
+
+  /**
+   * Revoke every credential, drop identities and flows, tombstone the user,
+   * soft-remove and pseudonymise every membership (journal rows keep pointing
+   * at member ids). Also the operator's `hub/admin.js delete-user` (by: 'operator').
+   */
+  eraseUser(user, { ip = null, by = null } = {}) {
     const soleOwner = this.db.all(`SELECT o.id, o.name FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.role = 'owner' AND m.removed_at IS NULL AND o.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.role = 'owner' AND x.removed_at IS NULL)
@@ -546,7 +591,7 @@ export class Accounts {
         this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, m.id);
         this.hub.invites?.revokeWhere('created_by', m.id, 'inviter_deleted');
       }
-      this.audit('user.deleted', { user: user.id, detail: { memberships: members.length }, ip });
+      this.audit('user.deleted', { user: user.id, detail: { memberships: members.length, ...(by ? { by } : {}) }, ip });
       this.hub.later(() => {
         for (const c of creds) this.hub.closeCredSockets(c, 'account deleted');
         for (const d of runnerDevices) {
@@ -590,6 +635,12 @@ function codeMail({ purpose, client, code, deviceName, platform, link }) {
     return {
       subject: `${code} confirms deleting your ${BRAND.name} account`,
       text: `Someone signed in to your ${BRAND.name} account asked to delete it.\n\nYour confirmation code: ${code}\n\nIt expires in 10 minutes and works once.\n\n${warn}\n\nIf this wasn't you, don't use the code, and sign out your devices.\n`,
+    };
+  }
+  if (purpose === 'delete_team') {
+    return {
+      subject: `${code} confirms deleting a ${BRAND.name} team`,
+      text: `Someone signed in to your ${BRAND.name} account asked to delete a team you own. Deleting a team removes it, its boards and its cards for every member.\n\nYour confirmation code: ${code}\n\nIt expires in 10 minutes, works once, and confirms deleting a team only (not your account).\n\n${warn}\n\nIf this wasn't you, don't use the code, and sign out your devices.\n`,
     };
   }
   return {

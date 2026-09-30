@@ -13,6 +13,8 @@ import { FailureBudget } from '../ratelimit.js';
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 const MIN = 60_000;
 const DAY = 86_400_000;
+// CF-Connecting-IP is trusted (and proxy headers accepted) only on an exposed hub (L-A).
+const EXPOSED = Object.freeze({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false });
 
 test('desktop sign-up = sign-in: code mail names the device, token is shown once and stored only hashed', async () => {
   const h = await startAccounts();
@@ -172,7 +174,7 @@ const ROOMY = { capacity: 1e9, per_ms: 60_000 };
 const roomy = (extra = {}) => ({ rateLimits: { auth_start_ip: ROOMY, auth_verify_ip: ROOMY, login_ip: ROOMY, auth_start_global: ROOMY, ...extra } });
 
 test('H2 failure budget: at most 20 wrong codes a day per address (case/space variants included), then a lockout the right code cannot pass; one notice mail', async () => {
-  const h = await startAccounts({ config: { trustCfIp: true, ...roomy() } });
+  const h = await startAccounts({ config: { ...EXPOSED, ...roomy() } });
   try {
     assert.equal((await h.signIn('victim@x.test')).status, 200, 'the address has an account');
     let guesses = 0;
@@ -246,7 +248,7 @@ test('H2 failure budget: failures, not attempts; a right code resets it; lockout
 });
 
 test('M1: an attacker exhausting the per-address start/verify limits from one network does not silence the owner on another', async () => {
-  const h = await startAccounts({ config: { trustCfIp: true, ...roomy() } });
+  const h = await startAccounts({ config: { ...EXPOSED, ...roomy() } });
   try {
     const from = (ip) => ({ 'cf-connecting-ip': ip });
     const X = '198.51.100.7';
@@ -605,7 +607,8 @@ test('audit: every auth event is recorded, with no address, code or token in it'
 });
 
 test('M2: device name and platform in the mail are plain and link-free; a hub-wide daily cap bounds sign-in and invite mails', async () => {
-  const h = await startAccounts({ config: { mailDailyCap: 3 } });
+  // 6 a day, of which 3 may go to addresses without an account (M-C): all of these are new.
+  const h = await startAccounts({ config: { mailDailyCap: 6 } });
   try {
     await h.start('jo@example.com', { device_name: 'evil.com/refund - call +1 555 0100 "now"\u202e', platform: 'https://evil.com/x <b>' });
     const t = h.mailer.last('jo@example.com').text;
@@ -613,8 +616,8 @@ test('M2: device name and platform in the mail are plain and link-free; a hub-wi
     assert.match(t, /on "evil\[\.\]com\/refund - call \+1 555 0100 now"/);
     assert.match(t, /\(evil\[\.\]com\/x b\)/);
 
-    const alice = await h.signIn('alice@dev.local');   // mail 2 of 3
-    await h.start('p@example.com');                     // mail 3 of 3
+    const alice = await h.signIn('alice@dev.local');   // new-address mail 2 of 3
+    await h.start('p@example.com');                     // new-address mail 3 of 3
     const n = h.mailer.sent.length;
     const quiet = await h.start('q@example.com');
     assert.equal(quiet.status, 200, 'same answer');
@@ -635,7 +638,7 @@ test('M2: device name and platform in the mail are plain and link-free; a hub-wi
 
 test('L2: per-IP limits key IPv6 clients by their /64 (login_ip, mutate_ip, invite preview)', async () => {
   const two = { capacity: 2, per_ms: 60 * MIN };
-  const h = await startAccounts({ config: { trustCfIp: true, rateLimits: { login_ip: two, invite_preview_ip: { capacity: 100, per_ms: MIN } } } });
+  const h = await startAccounts({ config: { ...EXPOSED, rateLimits: { login_ip: two, invite_preview_ip: { capacity: 100, per_ms: MIN } } } });
   try {
     const from = (ip) => h.call('POST', '/api/invites/preview', { body: { t: 'x' }, headers: { 'cf-connecting-ip': ip } });
     assert.equal((await from('2001:db8:1:2::1')).status, 400);

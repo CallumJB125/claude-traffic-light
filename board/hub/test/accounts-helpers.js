@@ -58,9 +58,9 @@ export async function startAccounts({ clock = fakeClock(), config = {}, mailer =
       const c = v.cookies.find((x) => x.startsWith('__Host-buddy_session='));
       return { cookie: c && c.split(';')[0], csrf: v.body?.csrf_token, body: v.body, res: v };
     },
-    // A verified purpose:'delete' step-up for a desktop token → its flow_id.
-    async stepUp(token, email) {
-      const s = await h.call('POST', '/api/auth/email/start', { token, body: { purpose: 'delete' } });
+    // A verified step-up ('delete', or 'delete_team') for a desktop token → its flow_id.
+    async stepUp(token, email, purpose = 'delete') {
+      const s = await h.call('POST', '/api/auth/email/start', { token, body: { purpose } });
       const v = await h.call('POST', '/api/auth/email/verify', { token, body: { flow_id: s.body.flow_id, code: h.codeFor(email) } });
       if (v.status !== 200) throw new Error(`step-up ${email}: ${v.text}`);
       return s.body.flow_id;

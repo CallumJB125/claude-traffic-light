@@ -48,6 +48,11 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
+  // Deleting an account or a team needs a step-up the hub can't send without
+  // a mailer (or, next, an OAuth re-auth): say so, and how an operator erases.
+  if (hub.accounts && !hub.accounts.mailer && !config.signinMethods?.length && db.get('SELECT 1 AS x FROM users WHERE deleted_at IS NULL LIMIT 1')) {
+    log.warn('account and team deletion is unavailable: no mailer and no OAuth sign-in method for the step-up; an operator can erase with `node hub/admin.js delete-user <email>` or `delete-team <slug>`');
+  }
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();

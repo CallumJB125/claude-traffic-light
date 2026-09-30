@@ -107,7 +107,7 @@ function validateAccounts(cfg) {
     if (!cfg.resendApiKey && !methods.length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
-  if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be a positive integer');
+  if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');
   if (cfg.mailDailyCap != null && (!Number.isInteger(cfg.mailDailyCap) || cfg.mailDailyCap < 1)) throw new Error('BOARD_MAIL_DAILY_CAP must be a positive integer');
   if (cfg.downloadUrl) {
     let d;

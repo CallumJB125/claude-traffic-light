@@ -139,7 +139,7 @@ export class Invites {
     const shown = `${code.slice(0, 4)}-${code.slice(4)}`;
     // No mailer (D66): nothing is sent; the inviter shares the link or code themselves.
     const mailer = this.accounts.mailer;
-    const mailed = !!mailer && this.accounts.mailBudget();
+    const mailed = !!mailer && this.accounts.mailBudget(email);
     if (mailed) {
       const mail = inviteMail({ team: org.name, inviter: member.display_name, role, link, code: shown, email, expiresAt: inv.expires_at });
       mailer.send({ to: email, ...mail, idempotencyKey: inv.id })

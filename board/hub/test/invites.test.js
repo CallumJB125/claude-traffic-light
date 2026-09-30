@@ -130,7 +130,7 @@ test('generic errors: garbage, unknown, used, expired, withdrawn and deleted-tea
     await both(tokenOf(expired.body.link));
     const bTok = fx.B.inviteToken;
     const slug = fx.db.get('SELECT slug FROM orgs WHERE id = ?', fx.B.team).slug;
-    assert.equal((await fx.as(users.ub, 'DELETE', `/api/teams/${fx.B.team}`, { confirm_slug: slug, flow_id: await fx.h.stepUp(users.ub.token, users.ub.email) })).status, 200);
+    assert.equal((await fx.as(users.ub, 'DELETE', `/api/teams/${fx.B.team}`, { confirm_slug: slug, flow_id: await fx.h.stepUp(users.ub.token, users.ub.email, 'delete_team') })).status, 200);
     assert.ok(fx.db.get('SELECT revoked_at FROM invites WHERE id = ?', fx.B.invite).revoked_at, 'team deletion withdraws its invites');
     await both(bTok);
     assert.equal(new Set(bodies).size, 1, 'one identical answer');

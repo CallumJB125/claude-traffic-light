@@ -23,7 +23,7 @@ import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
-import { RateLimiter } from './ratelimit.js';
+import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
 
@@ -63,9 +63,15 @@ export class Hub extends EventEmitter {
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
     this.secret = config.secret ?? this.loadSecret();
     this.vaultKey = null;
+    // Half of the daily mail cap stays for addresses that already have an account (M-C).
+    const mailCap = config.rateLimits?.mail_global?.capacity ?? config.mailDailyCap ?? DEFAULT_LIMITS.mail_global.capacity;
     this.limiter = new RateLimiter({
       now: () => this.mono(),
-      limits: { ...(config.mailDailyCap ? { mail_global: { capacity: config.mailDailyCap, per_ms: 86_400_000 } } : {}), ...config.rateLimits },
+      limits: {
+        mail_global: { capacity: mailCap, per_ms: 86_400_000 },
+        mail_global_new: { capacity: Math.max(1, Math.floor(mailCap / 2)), per_ms: 86_400_000 },
+        ...config.rateLimits,
+      },
     });
     this.presence = new Presence(this);   // D37b, memory only
   }

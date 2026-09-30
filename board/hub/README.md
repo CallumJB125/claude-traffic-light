@@ -40,6 +40,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | File | Role |
 |---|---|
 | `server.js` | Entry point: config, listen, SIGTERM/SIGINT → graceful shutdown |
+| `admin.js` | Operator erasure (accounts mode, on the hub host): `delete-user <email>`, `delete-team <slug>` without a step-up (ACCOUNTS-API.md `DELETE /api/account`) |
 | `app.js` | Wiring: DB → Hub → HTTP/WS → timers (reaper, merge poll, tunnel probe) → close |
 | `config.js` | Env → config, validation (dev auth only on loopback) |
 | `db.js` | `node:sqlite` wrapper (WAL, savepoint-nested `tx`, bind sanitising), `HubError` |
@@ -74,8 +75,8 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_ACCOUNTS_DEV` | off | `accounts`, loopback bind only: allow running with no `BOARD_PUBLIC_URL` (a local try-out and tests) |
 | `BOARD_RESEND_API_KEY` | — | `accounts`, optional: Resend API key (sending access); with it the hub mails email sign-in codes and invites. Removed from the environment once read. Unset: no mailer, `/api/auth/email/*` answer `404 METHOD_DISABLED` and invites are shared by the inviter (D66) |
 | `BOARD_CONSOLE_MAILER` | off | `accounts`, loopback bind and not exposed only: print mails to stderr instead (a local try-out) |
-| `BOARD_AUTH_FAIL_BUDGET` | `20` | `accounts`: wrong email codes per address per 24 h before it is locked out (the lockout doubles on each exhaustion, up to 24 h) |
-| `BOARD_MAIL_DAILY_CAP` | `2000` | `accounts`: sign-in, invite and notice mails the hub sends per day, all addresses together; over it, sign-in starts are silent and invites are not mailed |
+| `BOARD_AUTH_FAIL_BUDGET` | `20` | `accounts`: wrong email codes per address per 24 h before it is locked out (the lockout doubles on each exhaustion, up to 24 h); 1–100 |
+| `BOARD_MAIL_DAILY_CAP` | `2000` | `accounts`: sign-in, invite and notice mails the hub sends per day, all addresses together, at most half of them to addresses without an account; over it, sign-in starts are silent and invites are not mailed |
 | `BOARD_MAIL_FROM` | — | `accounts` with Resend: the From address, e.g. `Plexiform <signin@mail.example.com>` |
 | `BOARD_DOWNLOAD_URL` | — | `accounts`: https URL of the desktop app download. `/download` (the invite page's "Download Plexiform for Mac" button) redirects there; unset → `404` |
 | `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
@@ -122,6 +123,22 @@ dbs:
 To restore: stop the hub, run `litestream restore -o /srv/board/data/board.db s3://bucket/board`,
 `touch /srv/board/data/board.db.restored`, then start the hub. The marker triggers
 the +1000 fence bump, so a zombie runner holding a pre-restore fence is always FENCED.
+
+## Deleting accounts and teams without a mailer
+
+Deleting an account or a team needs an email-code step-up, so a `BOARD_AUTH=accounts`
+hub with no mailer (and no OAuth sign-in method) logs a warning at start and the
+operator erases on the hub host, with the hub's environment:
+
+```sh
+node hub/admin.js delete-user <email>
+node hub/admin.js delete-team <slug>
+```
+
+The same transaction as `DELETE /api/account` / `DELETE /api/teams/:id`, without the
+step-up (audit `by: "operator"`). It opens the database directly: stop the hub
+first, or rely on its 5 s `busy_timeout`. The OAuth re-auth step-up (next phase)
+removes the need for it.
 
 ## Additive routes (not in CONTRACT §5.2)
 

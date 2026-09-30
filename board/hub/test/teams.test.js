@@ -193,17 +193,17 @@ test('rename (admin) and soft delete (owner, confirm_slug + step-up): the team 4
     db.insert('devices', { id: dev, member_id: A.s, name: 'mbp', kind: 'runner', token_hash: randomUUID(), created_at: fx.h.hub.iso() });
     assert.equal((await as(users.aadmin, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha' })).status, 403, 'admins cannot delete');
     assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'wrong' })).status, 400);
-    // M4: the slug is not enough; a fresh purpose:'delete' step-up (5 min, single use) is needed too.
+    // M4: the slug is not enough; a fresh purpose:'delete_team' step-up (5 min, single use) is needed too.
     const noStep = await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha' });
     assert.equal(noStep.status, 401);
     assert.equal(noStep.body.error.code, 'STEP_UP_REQUIRED');
-    const stale = await fx.h.stepUp(users.ua.token, users.ua.email);
+    const stale = await fx.h.stepUp(users.ua.token, users.ua.email, 'delete_team');
     fx.h.clock.advance(5 * 60_000 + 1);
     assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: stale })).body.error.code, 'STEP_UP_REQUIRED', 'stale');
-    const adminStep = await fx.h.stepUp(users.aadmin.token, users.aadmin.email);
+    const adminStep = await fx.h.stepUp(users.aadmin.token, users.aadmin.email, 'delete_team');
     assert.equal((await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: adminStep })).body.error.code, 'STEP_UP_REQUIRED', "someone else's step-up");
     fx.h.clock.advance(15 * 60_000);
-    const flow = await fx.h.stepUp(users.ua.token, users.ua.email);
+    const flow = await fx.h.stepUp(users.ua.token, users.ua.email, 'delete_team');
     const d = await as(users.ua, 'DELETE', `/api/teams/${A.team}`, { confirm_slug: 'alpha', flow_id: flow });
     assert.equal(d.status, 200, d.text);
     assert.equal(Date.parse(d.body.purge_after) - Date.parse(fx.h.hub.iso()), 7 * 86_400_000);
@@ -236,7 +236,7 @@ test('a deleted team\'s integrations stop: connection revoked, secrets erased, i
   try {
     const { as, users, B, db } = fx;
     assert.equal(db.get('SELECT status FROM connections WHERE id = ?', B.connection).status, 'active');
-    const flow = await fx.h.stepUp(users.ub.token, users.ub.email);
+    const flow = await fx.h.stepUp(users.ub.token, users.ub.email, 'delete_team');
     const slug = db.get('SELECT slug FROM orgs WHERE id = ?', B.team).slug;
     assert.equal((await as(users.ub, 'DELETE', `/api/teams/${B.team}`, { confirm_slug: slug, flow_id: flow })).status, 200);
     assert.equal(db.get('SELECT status FROM connections WHERE id = ?', B.connection).status, 'revoked');

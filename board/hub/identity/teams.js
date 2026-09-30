@@ -153,19 +153,28 @@ export class Teams {
     if (!can(member, 'team.delete')) throw new HubError('FORBIDDEN', 'only an owner can delete the team');
     const o = this.org(member.org_id);
     if (body.confirm_slug !== o.slug) throw new HubError('VALIDATION', 'confirm_slug must be the team slug');
-    // Like deleting the account: a fresh email code first (M4).
-    const step = this.accounts.requireStepUp(member.user_id, body.flow_id);
+    // Like deleting the account: a fresh email code first (M4), of its own purpose (L-H).
+    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team');
+    return this.deleteTeam(o, { member, ip, step });
+  }
+
+  /**
+   * Soft-delete a team: every device of its members revoked, pending invites
+   * withdrawn, integrations revoked, purge in 7 days. Also the operator's
+   * `hub/admin.js delete-team` (no member, no step-up).
+   */
+  deleteTeam(o, { member = null, ip = null, step = null } = {}) {
     const now = this.hub.iso();
     const members = this.db.all('SELECT id FROM members WHERE org_id = ? AND removed_at IS NULL', o.id);
     const devices = this.db.all('SELECT d.id FROM devices d JOIN members m ON m.id = d.member_id WHERE m.org_id = ? AND d.revoked_at IS NULL', o.id);
     const purgeAfter = new Date(this.hub.wallMs() + PURGE_AFTER_MS).toISOString();
     this.hub.txn(() => {
-      this.accounts.consumeStepUp(step);
+      if (step) this.accounts.consumeStepUp(step);
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.hub.revokeDeletedTeamConnections(now);
-      this.audit('team.delete', member, { ip, target: o.id, detail: { purge_after: purgeAfter } });
+      this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });
       this.hub.later(() => {
         for (const d of devices) {
           this.hub.runners.get(d.id)?.close(4403, 'team deleted');

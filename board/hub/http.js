@@ -10,7 +10,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, httpStatus, WS_CLOSE, WS_PATHS } from '../shared/protocol.js';
 import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
-import { isLoopback } from './config.js';
+import { isExposed, isLoopback } from './config.js';
 import { publicMember } from './api.js';
 import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
@@ -31,7 +31,8 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const PROXY_HEADERS = ['cf-connecting-ip', 'cf-ray', 'cf-access-jwt-assertion', 'x-forwarded-for', 'forwarded'];
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
-const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local';
+// Accounts mode without a public URL or tunnel is a loopback try-out (L-A): the same rule.
+const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
 const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html' };

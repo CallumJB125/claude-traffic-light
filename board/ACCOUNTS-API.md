@@ -54,18 +54,26 @@ There are two, and only two, credentials.
 
 | Rule | Limit | Over the limit |
 |---|---|---|
-| start, per address **and requesting network** (/24, IPv6 /64) | 3 / 15 min and 10 / h | **same `200 {flow_id}` answer**, no mail sent; verify on that flow_id → `INVALID_TOKEN` |
-| start, per address from every network together | 40 / h | the same silent answer |
+| start, per mailbox **and requesting network** (/24, IPv6 /64) | 3 / 15 min and 10 / h | **same `200 {flow_id}` answer**, no mail sent; verify on that flow_id → `INVALID_TOKEN` |
+| start, per mailbox from every network together | 40 / h | the same silent answer |
 | start, per IP | 20 / h | `429` |
 | start, whole hub | 500 / h | `429` |
 | verify, per IP | 10 / 10 min | `429` |
 | verify, per address and requesting network (every attempt) | 10 / 15 min | `429` for that network only |
-| **wrong codes per address** (the failure budget, every network together) | 20 in any 24 h (`BOARD_AUTH_FAIL_BUDGET`) | `429` on every verify for that address, **even with the right code** (it isn't checked), until the rolling day frees a slot; each exhaustion also locks for 1 h, doubling per exhaustion up to 24 h. A right code resets it. When it runs out for an address that has an account, that address gets one mail a day: "Someone is trying sign-in codes for your account" |
+| **wrong codes per address** (the failure budget, every network together) | 20 in any 24 h (`BOARD_AUTH_FAIL_BUDGET`, 1–100) | `429` on every verify for that address, **even with the right code** (it isn't checked), until the rolling day frees a slot; each exhaustion also locks for 1 h, doubling per exhaustion up to 24 h. A right code resets it. When it runs out for an address that has an account, that address gets one mail a day: "Someone is trying sign-in codes for your account" |
 | wrong codes per flow | 5 | the flow dies; `INVALID_TOKEN` from then on |
-| mails the hub sends (sign-in, invites, notices), whole hub | 2000 / day (`BOARD_MAIL_DAILY_CAP`) | sign-in: the silent answer; invites: created but not mailed (`mailed: false`) |
+| mails the hub sends (sign-in, invites, notices), whole hub | 2000 / day (`BOARD_MAIL_DAILY_CAP`), of which at most half to addresses that have no account yet | sign-in: the silent answer; invites: created but not mailed (`mailed: false`) |
 | new users, per IP | 10 / day | `429` on the verify that would create the user |
 | any mutation, per IP | 300 / min | `429` |
 | any mutation, per signed-in user or member | 120 / min | `429` |
+
+A **mailbox** is the address with any `+tag` removed (`jo+1@example.com` and `jo@example.com` share the start limits and the lockout notice); the failure budget and the account stay per address. Keeping half the daily mail cap for addresses that already have an account means a flood of made-up addresses can stop new sign-ups for the day but not existing users signing in or confirming a deletion.
+
+The failure budget lives in hub memory, bounded at 20 000 addresses (least recently failed first out) and swept at most once a minute. At start the hub re-reads the last 24 h of wrong codes from the sign-in flows, except those a later right code for the same address cleared, so a restart does not lift a lockout.
+
+Step-ups (`purpose:'delete'` and `'delete_team'`) only ever come from the signed-in user, so their start limits, their verify limit and their wrong codes are counted per user, not per address: someone who locks your address out of email-code sign-in cannot stop you confirming a deletion from a device you are already signed in on, and a wrong step-up code never sends the lockout notice.
+
+A hub without `BOARD_PUBLIC_URL` or a tunnel (the loopback try-out, `BOARD_ACCOUNTS_DEV=1`) serves direct loopback requests only, like `BOARD_AUTH=dev`: a request with a proxy header (`CF-Connecting-IP`, `X-Forwarded-For`, …) or a non-loopback `Host` gets `403`.
 
 IPv6 clients are keyed by their /64. Behind cloudflared (`BOARD_TRUST_CF_IP=1`, required once exposed), the client IP is `CF-Connecting-IP`. Pairing the per-address limits with the requesting network means someone else hammering your address from their network can't stop you from getting a code on yours; the lockout itself counts only wrong codes. (Anyone who knows your address can still spend its failure budget and pause email-code sign-in for it; the notice mail says so, and Google/GitHub sign-in is unaffected.)
 
@@ -73,7 +81,7 @@ IPv6 clients are keyed by their /64. Behind cloudflared (`BOARD_TRUST_CF_IP=1`, 
 
 ### `POST /api/auth/email/start`
 
-No auth for `purpose:'signin'`. `purpose:'delete'` needs the Bearer token (or the cookie + CSRF token).
+No auth for `purpose:'signin'`. `purpose:'delete'` and `purpose:'delete_team'` need the Bearer token (or the cookie + CSRF token).
 
 ```json
 { "email": "jo@example.com", "client": "buddy_desktop", "device_name": "Jo's MacBook Pro", "platform": "darwin-arm64", "purpose": "signin" }
@@ -81,7 +89,7 @@ No auth for `purpose:'signin'`. `purpose:'delete'` needs the Bearer token (or th
 
 - `client`: `'buddy_desktop'` (default) or `'web'`.
 - `device_name` (≤ 100 chars) and `platform` (≤ 50) are optional. The mail names them ("This signs in Plexiform for desktop on "Jo's MacBook Pro" (darwin-arm64)") so a phished user can see what they would be approving. Whoever starts the flow chooses them, so they are cleaned like invite names: one line, ≤ 60 / 30 characters, no control characters, quotes or angle brackets, schemes stripped and domains defanged (`evil[.]com/refund`).
-- `purpose`: `'signin'` (default) or `'delete'` (step-up for account deletion). For `'delete'`, `email` and `client` are ignored: the code goes to the signed-in account's own address.
+- `purpose`: `'signin'` (default), `'delete'` (step-up for deleting the account) or `'delete_team'` (step-up for deleting a team). For the step-ups, `email` and `client` are ignored: the code goes to the signed-in account's own address. Each step-up is spent only by its own action: a `'delete_team'` code never deletes the account, and a `'delete'` code never deletes a team. The `'delete_team'` mail says "Someone signed in to your account asked to delete a team you own", never "your account".
 
 → `200 {"flow_id": "<24 chars>", "expires_in": 600}`. The answer is the same whether or not an account exists, and whether or not the per-address limit silently dropped the mail.
 
@@ -120,7 +128,7 @@ No auth for sign-in. A delete flow needs the same user's credential.
 - **The linking trade-off.** An address is the only thing that ties such a pre-made member row (or an invite) to a person. If an admin typed the wrong address, whoever proves that address (by a code sent to it, or later by a Google/GitHub account verified for it) gets that membership. Addresses are compared in one canonical form (trimmed, lower-cased with full Unicode). Only an email identity (a code sent to the address) or the account's own verified primary address proves an address; a GitHub identity carried over from the Access era never does.
 - Magic link (web only): the page at `/auth/email` reads the fragment and POSTs `{flow_id, code, via:'link'}`. A browser without the matching `__Host-buddy_flow` cookie gets `428 CONFIRM_REQUIRED {email_masked:"j•••@example.com"}`, and the page asks "Sign in as j•••@example.com?" before re-POSTing with `confirm:true`. A link scanner's GET only loads the page, because the fragment never reaches the server, so it consumes nothing.
 - Errors:
-  - `400 INVALID_TOKEN`: one generic answer for an unknown, wrong, used, expired or dead flow. After a wrong code it includes `attempts_left`.
+  - `400 INVALID_TOKEN`: one generic answer for an unknown, wrong, used, expired or dead flow. After a wrong code it includes `attempts_left`; a flow_id with no flow behind it (made up, or a start the limits silenced) answers `attempts_left: 5`.
   - `428 CONFIRM_REQUIRED`: see the magic-link rule above.
   - `429 RATE_LIMITED`.
   - `400 VALIDATION`: bad `form_factor` or an oversized name.
@@ -197,10 +205,19 @@ Afterwards no table holds the address (audit rows only ever carry a keyed hash o
 
 Errors:
 
-- `401 STEP_UP_REQUIRED {max_age_s: 300}`: no fresh verified delete flow.
+- `401 STEP_UP_REQUIRED {max_age_s: 300, purpose: 'delete'}`: no fresh verified delete flow.
 - `409 CONFLICT {sole_owner_of: [{id, name}]}`: the user is the only owner of a team that has other members.
 
-Teams where the user was the only member are soft-deleted with the account (see `DELETE /api/teams/:id`). Not yet (P5): stopping the user's active runs, purging those teams, and "also erase my comments".
+Teams where the user was the only member are soft-deleted with the account (see `DELETE /api/teams/:id`), and their integrations are revoked.
+
+**Without a mailer** the hub can't send the step-up code, so a user can't delete their account or team from the app; the hub logs a warning at start when it has users, no mailer and no OAuth sign-in method. The operator erases on the hub host, with the hub's environment:
+
+```sh
+node hub/admin.js delete-user <email>   # the same transaction as DELETE /api/account, no step-up
+node hub/admin.js delete-team <slug>    # the same as DELETE /api/teams/:id
+```
+
+It opens the database file directly and refuses when there is none (not the hub host) or the hub isn't `BOARD_AUTH=accounts`. Stop the hub first, or rely on its 5 s SQLite `busy_timeout`; a running hub's open sockets close at their next credential check. Audit rows record `by: "operator"`. The OAuth re-auth step-up (next phase) lets a user without a mailer confirm in the app, and removes the need for the CLI. Not yet (P5): stopping the user's active runs, purging those teams, and "also erase my comments".
 
 ### `/ws/board` (WebSocket)
 
@@ -285,9 +302,9 @@ Admin. `{name}` → `{team}`.
 
 ### `DELETE /api/teams/:id`
 
-Owner. `{"confirm_slug": "<the team's slug>", "flow_id": "…"}` → `{ok:true, purge_after}`. Like `DELETE /api/account`, it needs a **step-up**: a `purpose:'delete'` flow this user started and verified within the last 5 minutes (`start {purpose:'delete'}`, the code from the mail, `verify {flow_id, code}`), which this spends (single use). A wrong slug → `400 VALIDATION`; no fresh, unused step-up → `401 STEP_UP_REQUIRED {max_age_s: 300}`.
+Owner. `{"confirm_slug": "<the team's slug>", "flow_id": "…"}` → `{ok:true, purge_after}`. Like `DELETE /api/account`, it needs a **step-up**: a `purpose:'delete_team'` flow this user started and verified within the last 5 minutes (`start {purpose:'delete_team'}`, the code from the mail, `verify {flow_id, code}`), which this spends (single use). A `'delete'` (account) step-up is refused. A wrong slug → `400 VALIDATION`; no fresh, unused step-up → `401 STEP_UP_REQUIRED {max_age_s: 300, purpose: 'delete_team'}`.
 
-Soft delete: from that moment every route for the team, its boards and cards answers `404`, it drops out of `/api/account`, runner devices enrolled in it are revoked (their sockets close `4403`), and browser sockets subscribed to its boards close `4403`. The hard purge 7 days later is P5 (not built); there is no restore route yet.
+Soft delete: from that moment every route for the team, its boards and cards answers `404`, it drops out of `/api/account`, runner devices enrolled in it are revoked (their sockets close `4403`), browser sockets subscribed to its boards close `4403`, and its integrations are revoked with their stored secrets erased (their webhooks answer `404`). The hard purge 7 days later is P5 (not built); there is no restore route yet.
 
 ### `POST /api/teams/:id/boards`
 
@@ -394,7 +411,7 @@ Agreed with the app builder; nothing here exists on the hub yet.
 | `VALIDATION` | 400 | bad body |
 | `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code); an invite token, id or code that is unknown, used, expired, withdrawn or not yours |
 | `UNAUTHENTICATED` | 401 | no, unknown or revoked credential |
-| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused verified delete flow (`max_age_s`) |
+| `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused verified step-up of its purpose (`max_age_s`, `purpose`: `'delete'` / `'delete_team'`) |
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrate, loadMigrations, currentVersion, applyRestoreBump } from '../migrate.js';
+import { migrate, loadMigrations, currentVersion, applyRestoreBump, directives } from '../migrate.js';
 import { step, toDb, STATES, DARK } from '../states.js';
 
 const NOW = '2026-09-30T10:00:00.000Z';
@@ -139,6 +139,26 @@ test('migrate: `-- migrate: rebuilds` is refused after a higher version, applies
     assert.deepEqual(migrate(db2, { migrations: loadMigrations(dir) }), [1, 2, 5, 8, 9]);
     assert.equal(db2.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 't_guard'").get().n, 1);
     assert.equal(db2.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: directives are read from the whole leading comment block, past a BOM and blank lines (L-E)', () => {
+  assert.deepEqual([...directives('\uFEFF-- migrate: rebuilds\nSELECT 1;')], ['rebuilds']);
+  assert.deepEqual([...directives('\n\r\n-- 014: a note first\n--\n-- migrate: foreign_keys=off, rebuilds\r\nSELECT 1;')], ['foreign_keys=off', 'rebuilds']);
+  assert.deepEqual([...directives('SELECT 1;\n-- migrate: rebuilds\n')], [], 'after the first SQL line it is just a comment');
+  assert.deepEqual([...directives('/* block */\n-- migrate: rebuilds')], [], 'only -- comments open the block');
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), 'CREATE TABLE t (x INTEGER);');
+    writeFileSync(join(dir, '009_later.sql'), 'CREATE TABLE u (x INTEGER);');
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: loadMigrations(dir) });
+    writeFileSync(join(dir, '008_bom.sql'), '\uFEFF\n-- A rebuild saved with a BOM by an editor.\n-- migrate: rebuilds\nCREATE TABLE t_new (x INTEGER);');
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /008_bom rebuilds tables and cannot be applied after version 9/);
+    const db2 = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db2, { migrations: loadMigrations(dir) }), [1, 2, 8, 9], 'in order the BOM file applies (the BOM is stripped)');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

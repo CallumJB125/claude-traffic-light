@@ -28,6 +28,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // verify attempts per address AND network; the lockout is the failure budget
   auth_lock_notice: { capacity: 1, per_ms: 86_400_000 },      // "someone is trying codes" mail, per address
   mail_global: { capacity: 2000, per_ms: 86_400_000 },        // sign-in, invite and notice mails, whole hub (BOARD_MAIL_DAILY_CAP)
+  mail_global_new: { capacity: 1000, per_ms: 86_400_000 },    // … of which mail to addresses without an account (half the cap; M-C)
   signup_ip: { capacity: 10, per_ms: 86_400_000 },            // new users per IP
   team_create_user: { capacity: 3, per_ms: 86_400_000 },      // POST /api/teams (design §9.1)
   invite_team: { capacity: 20, per_ms: 86_400_000 },          // invites sent (create + resend), per team
@@ -95,11 +96,14 @@ export class RateLimiter {
  * rolling `windowMs`. Each exhaustion also locks the key for lockBaseMs,
  * doubling per exhaustion up to lockCapMs (the count of exhaustions decays
  * two windows after the last lock ends, or on reset()). Counts failures, never attempts.
+ * Idle keys are swept at most once a minute; past `maxKeys` the least recently
+ * failed key goes first (memory stays bounded under a spray of addresses).
  */
 export class FailureBudget {
-  constructor({ now, budget = 20, windowMs = 86_400_000, lockBaseMs = 3_600_000, lockCapMs = 86_400_000 }) {
-    Object.assign(this, { now, budget, windowMs, lockBaseMs, lockCapMs });
-    this.keys = new Map();   // key → {fails:[mono], k: exhaustions, until: lock end}
+  constructor({ now, budget = 20, windowMs = 86_400_000, lockBaseMs = 3_600_000, lockCapMs = 86_400_000, maxKeys = 20_000, sweepMs = 60_000 }) {
+    Object.assign(this, { now, budget, windowMs, lockBaseMs, lockCapMs, maxKeys, sweepMs });
+    this.keys = new Map();   // key → {fails:[mono], k: exhaustions, until: lock end}; least recently failed first
+    this.sweptAt = -Infinity;
   }
 
   state(key) {
@@ -121,17 +125,37 @@ export class FailureBudget {
     return Math.max(0, rolling, e.until - now);
   }
 
+  // The entry for key, made the most recent; sweeps and evicts first.
+  touch(key) {
+    const now = this.now();
+    if (now - this.sweptAt >= this.sweepMs) {
+      this.sweptAt = now;
+      for (const k of [...this.keys.keys()]) this.state(k);
+    }
+    const e = this.state(key) ?? { fails: [], k: 0, until: 0 };
+    this.keys.delete(key);
+    this.keys.set(key, e);
+    while (this.keys.size > this.maxKeys) this.keys.delete(this.keys.keys().next().value);
+    return e;
+  }
+
   /** Record a failure → true when it exhausted the budget (a lockout began). */
   fail(key) {
     const now = this.now();
-    if (this.keys.size > 50_000) for (const k of [...this.keys.keys()]) this.state(k);
-    const e = this.state(key) ?? { fails: [], k: 0, until: 0 };
-    this.keys.set(key, e);
+    const e = this.touch(key);
     e.fails.push(now);
     if (e.fails.length < this.budget) return false;
     e.k += 1;
     e.until = now + Math.min(this.lockCapMs, this.lockBaseMs * 2 ** (e.k - 1));
     return true;
+  }
+
+  /** Restore `n` failures recorded at monotonic time `at` (a restart must not unlock). */
+  seed(key, n, at) {
+    const e = this.touch(key);
+    for (let i = 0; i < n; i++) e.fails.push(at);
+    e.fails.sort((a, b) => a - b);
+    this.state(key);
   }
 
   reset(key) { this.keys.delete(key); }

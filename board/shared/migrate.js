@@ -8,7 +8,7 @@
 // shipped version not yet in schema_migrations is applied, even one lower than
 // a version already applied (a reserved 007 that lands after 009).
 //
-// A file whose first line is `-- migrate: foreign_keys=off` (table rebuilds,
+// A file whose leading comments carry `-- migrate: foreign_keys=off` (table rebuilds,
 // SQLite's 12-step procedure) runs with foreign keys off, which only works
 // outside a transaction; a foreign_key_check before COMMIT rolls it back if the
 // rebuild broke a reference.
@@ -23,10 +23,19 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// First-line directives: `-- migrate: foreign_keys=off rebuilds` (space or comma separated).
-function directives(sql) {
-  const m = /^--[ \t]*migrate:[ \t]*([^\r\n]*)/.exec(sql);
-  return new Set(m ? m[1].trim().split(/[\s,]+/).filter(Boolean) : []);
+// Directives: `-- migrate: foreign_keys=off rebuilds` (space or comma
+// separated), anywhere in the file's leading comment block (blank lines and
+// other comments may come first; a BOM is ignored). The first SQL line ends it.
+export function directives(sql) {
+  const out = new Set();
+  for (const line of sql.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    if (!t.startsWith('--')) break;
+    const m = /^--[ \t]*migrate:[ \t]*(.*)$/.exec(t);
+    if (m) for (const d of m[1].trim().split(/[\s,]+/).filter(Boolean)) out.add(d);
+  }
+  return out;
 }
 
 export function loadMigrations(dir = join(HERE, 'migrations')) {
@@ -37,7 +46,7 @@ export function loadMigrations(dir = join(HERE, 'migrations')) {
       if (!m) continue;
       const version = Number(m[1]);
       if (version <= 1) throw new Error(`migration ${f}: versions start at 002`);
-      list.push({ version, name: m[2], sql: readFileSync(join(dir, f), 'utf8') });
+      list.push({ version, name: m[2], sql: readFileSync(join(dir, f), 'utf8').replace(/^\uFEFF/, '') });
     }
   }
   for (let i = 1; i < list.length; i++) {
