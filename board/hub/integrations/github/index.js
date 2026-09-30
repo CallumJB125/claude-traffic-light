@@ -10,14 +10,14 @@
 // from a manifest (connect.manifestForm), so Callum approves one screen.
 
 import { defineConnector } from '../connector.js';
-import { verify as verifyWebhook, factsOf } from './webhook.js';
+import { verify as verifyWebhook, factsOf, EVENTS } from './webhook.js';
 
 const API = 'https://api.github.com';
 
 // What the card face shows, in the registry's allowlisted words.
 const STATE = (f) => (f.kind === 'pr.merged' ? 'merged' : f.kind === 'pr.closed' ? 'closed' : f.draft ? 'draft' : 'open');
-const CHECKS = { success: 'passing', failure: 'failing', pending: 'pending', neutral: 'none' };
-const REVIEW = { approved: 'approved', changes_requested: 'changes_requested', commented: null };
+const CHECKS = { success: 'passing', failure: 'failing', pending: 'pending' };
+const REVIEW = { approved: 'approved', changes_requested: 'changes_requested', dismissed: 'none', commented: null };
 
 export function manifest({ redirectUri, webhookUrl, name }) {
   return {
@@ -32,26 +32,42 @@ export function manifest({ redirectUri, webhookUrl, name }) {
   };
 }
 
-// The card a fact belongs to: its existing link, or (only for a PR from a
-// board branch in the same repo) the card whose run made that branch.
-function cardFor(ctx, f) {
-  const linked = f.pr_id ? ctx.linked('pr', f.pr_id) : null;
-  if (linked) return { card: linked, linked: true };
-  if (f.branch && f.repo && typeof ctx.cardForBranch === 'function') {
-    const card = ctx.cardForBranch(f.repo, f.branch);
-    if (card) return { card, linked: false };
-  }
-  return null;
+// A board branch's card, and the base its PR must target to count. Until the
+// registry says which base a run meant (cardForBranch → {card_id, base_ref},
+// builder-5), that is the repo's default branch: a PR from the board branch
+// into a throwaway base is not the card's PR.
+function boardCard(ctx, f) {
+  if (!f.branch || !f.repo || typeof ctx.cardForBranch !== 'function') return null;
+  const r = ctx.cardForBranch(f.repo, f.branch);
+  const card = r && typeof r === 'object' ? r.card_id : r;
+  const base = r && typeof r === 'object' ? r.base_ref : f.default_branch;
+  return card && typeof base === 'string' && base ? { card, base } : null;
 }
 
-async function linkAndStatus(ctx, f, status) {
-  const hit = cardFor(ctx, f);
-  if (!hit) return;
+// The card a fact belongs to: its existing link, or (firstLink, only for a PR
+// from a board branch in the same repo into that branch's base) the card
+// whose run made that branch, unless that card already has a PR.
+function cardFor(ctx, f, firstLink) {
+  const linked = f.pr_id ? ctx.linked('pr', f.pr_id) : null;
+  if (linked) return { card: linked, linked: true };
+  if (!firstLink) return null;
+  const b = boardCard(ctx, f);
+  if (!b || f.base_ref !== b.base) return null;
+  if (typeof ctx.linkedByCard === 'function') {
+    const has = ctx.linkedByCard(b.card, 'pr');
+    if (Array.isArray(has) ? has.length : has) return null;
+  }
+  return { card: b.card, linked: false };
+}
+
+async function linkAndStatus(ctx, f, status, firstLink = false) {
+  const hit = cardFor(ctx, f, firstLink);
+  if (!hit) return null;
   await ctx.act(hit.linked ? 'pr.status' : 'pr.link', { external_ref: f.pr_id, detail: { pr: f.number } }, async (s) => {
     if (!hit.linked) s.link(hit.card, 'pr', f.pr_id, f.url);
     s.linkStatus(hit.card, 'pr', f.pr_id, status);
   });
-  return hit.card;
+  return hit;
 }
 
 export async function apply(ctx, facts) {
@@ -60,7 +76,7 @@ export async function apply(ctx, facts) {
     switch (f.kind) {
       case 'pr.opened':
       case 'pr.updated':
-        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}) });
+        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}) }, true);
         break;
       case 'pr.review': {
         const review = REVIEW[f.review];
@@ -69,14 +85,17 @@ export async function apply(ctx, facts) {
       }
       case 'pr.merged':
       case 'pr.closed': {
-        const card = await linkAndStatus(ctx, f, { state: STATE(f) });
-        if (card) await ctx.system.event(f.kind === 'pr.merged' ? 'pr_merged' : 'pr_closed', { kind: 'pr', external_id: f.pr_id, pr: f.number, by: f.by });
+        // Never a first link: a PR the board never saw open can't close a card.
+        const hit = await linkAndStatus(ctx, f, { state: STATE(f) });
+        if (!hit) break;
+        // Its base may have been edited since it was linked.
+        const b = boardCard(ctx, f);
+        const base = b && b.card === hit.card ? b.base : f.default_branch;
+        if (f.base_ref && f.base_ref === base) await ctx.system.event(f.kind === 'pr.merged' ? 'pr_merged' : 'pr_closed', { kind: 'pr', external_id: f.pr_id, pr: f.number, by: f.by });
         break;
       }
       case 'pr.checks':
-        for (const pr of f.prs) {
-          if (ctx.linked('pr', pr.pr_id)) await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
-        }
+        for (const pr of f.prs) await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
         break;
       default:
     }
@@ -127,6 +146,7 @@ export default defineConnector({
 
   async handleWebhook({ headers, payload, ctx }) {
     const event = String(headers?.['x-github-event'] ?? '');
+    if (!EVENTS.includes(event)) return;
     await apply(ctx, factsOf(event, payload));
   },
 
