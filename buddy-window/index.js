@@ -271,11 +271,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     if (!win || !page) return;
     const myGen = gen;
     if (!hubInfo) {
-      if (hubStatus.state !== 'ready') showInfo(page);
+      if (hubStatus.state !== 'ready' || getTeamHub()) showInfo(page);
       if (!hubLoading) { const p = resolveHub().finally(() => { if (hubLoading === p) hubLoading = null; }); hubLoading = p; }
       try {
         const h = await hubLoading;
-        if (myGen !== gen) return selected === page.id ? showHubPage(page) : undefined;
+        if (myGen !== gen) return undefined; // the newer caller (switch/connect) owns the load
         // A hub that restarted while we set its cookie has a new URL: start
         // over against the new one rather than adopt a dead one. (hubLoading
         // is already cleared here; the crash budget bounds the loop.)
@@ -360,10 +360,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   async function connectTo(arg) {
     let origin;
     try { origin = normalizeHubUrl(arg?.url); } catch (err) { return { ok: false, error: err.message }; }
-    const probe = await probeHub(origin, teamPartition(origin));
+    // A throwaway, in-memory session: a signed-in partition would answer 200
+    // and hide the Access team we must pin.
+    const probe = await probeHub(origin, `board-probe-${crypto.randomUUID()}`);
     if (!probe.ok) return probe;
     const name = String(arg?.name ?? '').trim() || new URL(origin).host;
-    const ws = store.add({ url: origin, name, accessTeam: probe.accessTeam });
+    const known = store.list().find((w) => w.url === origin);
+    const ws = store.add({ url: origin, name, accessTeam: probe.accessTeam ?? known?.accessTeam ?? null });
     log('connected team hub', { host: new URL(origin).host, access: !!probe.accessTeam });
     forgetHub();
     select('board');
@@ -375,9 +378,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const ws = store.get(id);
     if (!ws || ws.kind !== 'team') return;
     // Signing out = forgetting this hub's cookies and storage; the next visit signs in again.
-    await session.fromPartition(teamPartition(ws.url)).clearStorageData().catch(() => {});
+    forgetHub(); // close the live page first so it can't write anything back
+    const ses = session.fromPartition(teamPartition(ws.url));
+    await Promise.allSettled([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache()]);
     store.remove(id);
-    forgetHub();
     select('board');
   }
 
@@ -422,7 +426,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       onClosed();
     });
     layout();
-    select(pageId ?? selected);
+    if (!pageId && selected === 'connect') showConnect(); else select(pageId ?? selected);
   }
 
   return {
