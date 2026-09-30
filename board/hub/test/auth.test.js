@@ -46,6 +46,7 @@ test('Access verifier: valid token, wrong aud, expired, bad signature, unknown k
   await assert.rejects(v.verify(jwt(k1, { aud: ['other'] })), /wrong audience/);
   await assert.rejects(v.verify(jwt(k1, { exp: Math.floor(now / 1000) - 5 })), /expired/);
   await assert.rejects(v.verify(jwt(k1, { iss: 'https://evil.cloudflareaccess.com' })), /wrong issuer/);
+  await assert.rejects(v.verify(jwt(k1, { iss: undefined })), /wrong issuer/, 'iss is required');
   const t = jwt(k1, { email: 'x' }).split('.');
   await assert.rejects(v.verify(`${t[0]}.${Buffer.from('{"email":"admin"}').toString('base64url')}.${t[2]}`), /bad signature/);
   await assert.rejects(v.verify(jwt(k1, {}, { alg: 'HS256' })), /unsupported alg/);

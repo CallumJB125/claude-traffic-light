@@ -91,7 +91,7 @@ export function createAccessVerifier({ team, aud, fetchImpl = globalThis.fetch, 
     const t = now() / 1000;
     if (typeof claims.exp !== 'number' || claims.exp <= t) throw bad('expired');
     if (typeof claims.nbf === 'number' && claims.nbf > t + 60) throw bad('not yet valid');
-    if (claims.iss && claims.iss !== issuer) throw bad('wrong issuer');
+    if (claims.iss !== issuer) throw bad('wrong issuer');
     return claims;
   }
 
