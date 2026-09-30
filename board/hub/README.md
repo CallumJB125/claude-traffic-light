@@ -63,12 +63,15 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_PORT` | `8787` | Listen port. `0` picks a free port; the log (and `board.listening`, below) reports the real one |
 | `BOARD_DATA_DIR` | `board/hub/data` (gitignored) | Directory for the DB (created if missing) |
 | `BOARD_DB` | `$BOARD_DATA_DIR/board.db` | SQLite file (WAL: `board.db-wal`, `board.db-shm` next to it) |
-| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT), `dev` (cookie stub, loopback bind only; startup fails otherwise) or `local` (the hub embedded in the desktop app, D35: `BOARD_BIND` must be `127.0.0.1`, `::1` or `localhost`, and `BOARD_PUBLIC_URL`, `BOARD_TUNNEL_PROBE_URL` and `BOARD_DEV_SEED` must be unset) |
+| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT), `dev` (cookie stub, loopback bind only; startup fails otherwise), `local` (the hub embedded in the desktop app, D35: `BOARD_BIND` must be `127.0.0.1`, `::1` or `localhost`, and `BOARD_PUBLIC_URL`, `BOARD_TUNNEL_PROBE_URL` and `BOARD_DEV_SEED` must be unset) or `accounts` (the hub's own email-code sign-in, desktop device tokens and web sessions, D51–D58, `ACCOUNTS-API.md`: needs `BOARD_SECRET`, and off a loopback bind an https `BOARD_PUBLIC_URL` plus `BOARD_RESEND_API_KEY` and `BOARD_MAIL_FROM`) |
 | `BOARD_LOCAL_SECRET` | random per start | With `BOARD_AUTH=local`, **tests only**: the `board_local` cookie value (≥ 32 bytes). Unset: 32 random bytes (hex) per launch, sent only in the parentPort `board.listening` message, never logged or printed |
 | `BOARD_ACCESS_TEAM` | — | Access team name: certs at `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Required for `access` |
 | `BOARD_ACCESS_AUD` | — | The Access application AUD tag. Required for `access` |
 | `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta` |
 | `BOARD_PUBLIC_URL` | — | Public origin, e.g. `https://board.example.com`. Accepted as a same-origin `Origin` for mutations and WS upgrades |
+| `BOARD_TRUST_CF_IP` | off | `accounts` only, loopback bind only: take the client IP for rate limits from `CF-Connecting-IP` (cloudflared on the same host) |
+| `BOARD_RESEND_API_KEY` | — | `accounts`: Resend API key (sending access) for sign-in codes; removed from the environment once read. Unset: codes are printed to stderr (loopback bind only) |
+| `BOARD_MAIL_FROM` | — | `accounts` with Resend: the From address, e.g. `Buddy <signin@mail.example.com>` |
 | `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
 | `BOARD_DEV_REPO` | — | With `BOARD_DEV_SEED`: a git remote to add as the DEV board's repo |

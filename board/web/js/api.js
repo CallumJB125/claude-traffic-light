@@ -18,6 +18,9 @@ export const requestId = () => (globalThis.crypto?.randomUUID ? crypto.randomUUI
 let org = null;
 export const setOrg = (id) => { org = id ?? null; };
 export const currentOrg = () => org;
+// Accounts mode with a cookie session: every mutation carries X-CSRF-Token (from /api/me).
+let csrf = null;
+export const setCsrf = (t) => { csrf = t ?? null; };
 
 async function call(method, path, body, { fetchImpl = globalThis.fetch, headers = {} } = {}) {
   let res;
@@ -25,7 +28,7 @@ async function call(method, path, body, { fetchImpl = globalThis.fetch, headers 
     res = await fetchImpl(path, {
       method,
       credentials: 'same-origin',
-      headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...headers },
+      headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' }), ...(org ? { 'Board-Org': org } : {}), ...(csrf && method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {

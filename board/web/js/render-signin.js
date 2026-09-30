@@ -3,7 +3,7 @@
 import { h } from './h.js';
 import { pixelClaude } from './icons.js';
 
-export function signinScreen({ status, error, devLogin, devSecretKnown = false, busy, email }) {
+export function signinScreen({ status, error, devLogin, devSecretKnown = false, busy, email, accounts = false }) {
   const forbidden = status === 'forbidden';
   return h('div', { class: 'app app-center' },
     h('main', { class: 'signin', 'aria-labelledby': 'signin-title' },
@@ -11,10 +11,12 @@ export function signinScreen({ status, error, devLogin, devSecretKnown = false, 
       h('h1', { id: 'signin-title' }, forbidden ? 'Not on this board yet' : 'Sign in to the board'),
       forbidden
         ? h('p', null, `${email ? `You're signed in as ${email}, but that` : 'Your account'} isn't a member of this board. Ask a board admin to add your GitHub login and email.`)
-        : h('p', null, 'The team board sits behind Cloudflare Access. Sign in with GitHub to see cards and give work to Claude.'),
+        : h('p', null, accounts ? 'Sign in with your email to see cards and give work to Claude.' : 'The team board sits behind Cloudflare Access. Sign in with GitHub to see cards and give work to Claude.'),
       forbidden
-        ? h('a', { class: 'btn', href: '/cdn-cgi/access/logout' }, 'Sign in with another account')
-        : h('a', { class: 'btn btn-primary', href: '/', 'data-action': 'access-login' }, 'Sign in with GitHub'),
+        ? (accounts ? null : h('a', { class: 'btn', href: '/cdn-cgi/access/logout' }, 'Sign in with another account'))
+        : accounts
+          ? h('a', { class: 'btn btn-primary', href: '/signin' }, 'Sign in with email')
+          : h('a', { class: 'btn btn-primary', href: '/', 'data-action': 'access-login' }, 'Sign in with GitHub'),
       error ? h('p', { class: 'form-error', role: 'alert' }, error) : null,
       devLogin && !forbidden ? h('form', { class: 'devlogin', 'data-form': 'devlogin', 'aria-labelledby': 'devlogin-title' },
         h('h2', { id: 'devlogin-title' }, 'Dev login'),

@@ -13,6 +13,14 @@ export const DEFAULT_LIMITS = Object.freeze({
   dispatch_member: { capacity: 30, per_ms: 60_000 },   // dispatch, retry, take_over_with_claude
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
+  // BOARD_AUTH=accounts (ACCOUNTS-API.md "Rate limits"; design §9.1)
+  auth_start_email: { capacity: 3, per_ms: 15 * 60_000 },     // over: silent (same answer, no mail)
+  auth_start_email_hour: { capacity: 10, per_ms: 3_600_000 }, // over: silent
+  auth_start_ip: { capacity: 20, per_ms: 3_600_000 },
+  auth_start_global: { capacity: 500, per_ms: 3_600_000 },
+  auth_verify_ip: { capacity: 10, per_ms: 10 * 60_000 },
+  auth_verify_email: { capacity: 10, per_ms: 15 * 60_000 },   // every verify attempt; empty = that email is locked out
+  signup_ip: { capacity: 10, per_ms: 86_400_000 },            // new users per IP
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
 });
@@ -63,9 +71,11 @@ export function limitOrThrow(hub, rule, key) {
 
 // Behind Cloudflare Tunnel every request comes from cloudflared on loopback;
 // the edge's CF-Connecting-IP is the client. Only trusted with Access in front
-// and from a loopback peer (cloudflared), never from a direct connection.
+// (or BOARD_TRUST_CF_IP in accounts mode) and from a loopback peer
+// (cloudflared), never from a direct connection.
 export function clientIp(req, config) {
   const peer = String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
-  const cf = config.auth === 'access' && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
+  const trusted = config.auth === 'access' || (config.auth === 'accounts' && config.trustCfIp);
+  const cf = trusted && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
   return typeof cf === 'string' && cf ? cf : peer;
 }

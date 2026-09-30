@@ -37,6 +37,9 @@ export function loadConfig(env = process.env) {
     accessAud: env.BOARD_ACCESS_AUD || null,
     secret: env.BOARD_SECRET || null,
     publicUrl: env.BOARD_PUBLIC_URL || null,
+    trustCfIp: flag(env.BOARD_TRUST_CF_IP),
+    resendApiKey: env.BOARD_RESEND_API_KEY || null,
+    mailFrom: env.BOARD_MAIL_FROM || null,
     devSeed: flag(env.BOARD_DEV_SEED),
     devRepo: env.BOARD_DEV_REPO || null,
     devLoginSecret: env.BOARD_DEV_LOGIN_SECRET || null,
@@ -55,12 +58,32 @@ export function loadConfig(env = process.env) {
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
   };
   delete env.BOARD_LOCAL_SECRET;
+  delete env.BOARD_RESEND_API_KEY;
   validateConfig(cfg);
   return cfg;
 }
 
+// BOARD_AUTH=accounts (D51): the hub runs its own sign-in, so it must be
+// reachable only over https (a loopback bind may use http, for tests and a
+// local try-out), have its own key material, and a way to send the codes.
+function validateAccounts(cfg) {
+  const loop = isLoopback(cfg.bind);
+  if (!cfg.secret) throw new Error('BOARD_AUTH=accounts needs BOARD_SECRET (at least 32 bytes)');
+  let url = null;
+  if (cfg.publicUrl) {
+    try { url = new URL(cfg.publicUrl); } catch { throw new Error(`BOARD_PUBLIC_URL is not a URL: ${cfg.publicUrl}`); }
+  }
+  if (!loop && url?.protocol !== 'https:') throw new Error('BOARD_AUTH=accounts needs an https BOARD_PUBLIC_URL (only a loopback bind may do without)');
+  if (url && url.protocol !== 'https:' && !isLoopback(url.hostname)) throw new Error('BOARD_PUBLIC_URL must be https unless it names a loopback host');
+  if (cfg.trustCfIp && !loop) throw new Error('BOARD_TRUST_CF_IP needs a loopback bind (cloudflared on the same host is the only ingress)');
+  if (cfg.resendApiKey && !cfg.mailFrom) throw new Error('BOARD_RESEND_API_KEY needs BOARD_MAIL_FROM');
+  if (!cfg.resendApiKey && !loop) throw new Error('BOARD_AUTH=accounts off loopback needs BOARD_RESEND_API_KEY and BOARD_MAIL_FROM (the console mailer is for loopback only)');
+  if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
+}
+
 export function validateConfig(cfg) {
-  if (!['access', 'dev', 'local'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local, got ${cfg.auth}`);
+  if (!['access', 'dev', 'local', 'accounts'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local (or accounts), got ${cfg.auth}`);
+  if (cfg.auth === 'accounts') validateAccounts(cfg);
   // Local = the hub embedded in the desktop app: only its own window may reach it.
   if (cfg.auth === 'local') {
     if (!LOCAL_BINDS.has(cfg.bind)) throw new Error(`BOARD_AUTH=local needs BOARD_BIND=127.0.0.1, ::1 or localhost (got ${cfg.bind})`);
@@ -74,6 +97,7 @@ export function validateConfig(cfg) {
   if (cfg.auth === 'dev' && !isLoopback(cfg.bind)) throw new Error(`BOARD_AUTH=dev is allowed only on a loopback bind (BOARD_BIND=${cfg.bind})`);
   // Behind a proxy or tunnel every request arrives from loopback, so the
   // loopback check on /api/dev/login proves nothing there: refuse outright.
+  if (cfg.auth === 'dev' && cfg.trustCfIp) throw new Error('BOARD_AUTH=dev must never sit behind a proxy or tunnel: unset BOARD_TRUST_CF_IP');
   if (cfg.auth === 'dev' && (cfg.publicUrl || cfg.tunnelProbeUrl)) throw new Error('BOARD_AUTH=dev must never sit behind a proxy or tunnel: unset BOARD_PUBLIC_URL and BOARD_TUNNEL_PROBE_URL, or use BOARD_AUTH=access');
   if (cfg.devLoginSecret != null && Buffer.byteLength(cfg.devLoginSecret) < 16) throw new Error('BOARD_DEV_LOGIN_SECRET must be at least 16 bytes');
   if (cfg.auth === 'access' && (!cfg.accessTeam || !cfg.accessAud)) throw new Error('BOARD_AUTH=access needs BOARD_ACCESS_TEAM and BOARD_ACCESS_AUD');

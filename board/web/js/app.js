@@ -2,7 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
-import { api, errorText, setOrg, currentOrg } from './api.js';
+import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, isHumanOwned } from './view.js';
 import { boardScreen, loadingScreen } from './render-board.js';
@@ -107,7 +107,7 @@ function toasts() {
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -167,6 +167,7 @@ async function boot() {
     return;
   }
   state.auth = 'ok';
+  setCsrf(state.me.csrf_token);
   const wanted = new URLSearchParams(location.search).get('board');
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;

@@ -90,6 +90,8 @@ export class Hub extends EventEmitter {
     this.epoch = epoch;
     if (restored) {
       applyRestoreBump(this.db.raw, epoch, this.iso());
+      // A restored DB may hold sessions revoked after the backup: all cookie sessions die (accounts, A13).
+      this.db.setMeta('session_epoch', Number(this.db.meta('session_epoch') ?? 1) + 1);
       this.journal({ board_id: null, actor_kind: 'system', kind: 'hub.restore_bump', payload: { bump: RESTORE_BUMP } });
       if (marker && existsSync(marker)) unlinkSync(marker);
       this.log.warn('restore bump applied', { hub_epoch: epoch });
@@ -803,6 +805,16 @@ export class Hub extends EventEmitter {
 
   memberChanged(memberId) {
     this.recheckBrowsers(memberId);
+  }
+
+  // Accounts: a device token or cookie session was revoked (sign-out, device
+  // revoke, account deletion): its browser sockets hear why, then close 4401.
+  closeCredSockets(cred, reason = 'signed out') {
+    for (const b of [...this.browsers]) {
+      if (b.cred?.kind !== cred.kind || b.cred.id !== cred.id) continue;
+      b.send({ type: 'session.revoked' });
+      b.close(WS_CLOSE.UNAUTHENTICATED, reason);
+    }
   }
 
   // ── browser broadcasts ────────────────────────────────────────────────────

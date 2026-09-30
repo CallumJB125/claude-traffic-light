@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Sign in · Claude Buddy</title>
+  <link rel="icon" href="/web/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/web/app.css">
+  <script type="module" src="/web/js/signin.js"></script>
+</head>
+<body>
+  <div class="app app-center">
+    <main class="signin" aria-labelledby="signin-title">
+      <h1 id="signin-title">Sign in to Buddy</h1>
+      <p id="signin-lead">We'll email you a 6-digit code. No password.</p>
+      <form id="email-form" class="signin-form">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" class="input" autocomplete="email" required>
+        <button type="submit" class="btn btn-primary">Email me a code</button>
+      </form>
+      <form id="code-form" class="signin-form" hidden>
+        <label for="code">Code from the email</label>
+        <input id="code" name="code" class="input num" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+        <button type="submit" class="btn btn-primary">Sign in</button>
+      </form>
+      <div id="confirm" hidden>
+        <p id="confirm-text"></p>
+        <button id="confirm-yes" type="button" class="btn btn-primary">Sign in</button>
+      </div>
+      <p id="signin-error" class="form-error" role="alert" hidden></p>
+      <noscript><p class="noscript">Signing in needs JavaScript.</p></noscript>
+    </main>
+  </div>
+</body>
+</html>

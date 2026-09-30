@@ -16,8 +16,10 @@ import { createGitHub, noGitHub } from './github.js';
 import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './http.js';
 import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
+import { Accounts } from './identity/accounts.js';
+import { createMailer } from './identity/mailer.js';
 
-export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) {
+export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer = null } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
   if (config.auth !== 'local' && db.meta('local_member')) {
@@ -35,6 +37,9 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // board_local cookie; never logged or printed.
   hub.localSecret = config.auth === 'local' ? (config.localSecret ?? randomBytes(32).toString('hex')) : null;
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
+  // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
+  // to whoever first proves that email address.
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer ?? createMailer(config, { fetchImpl }) }) : null;
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();

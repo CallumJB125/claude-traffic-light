@@ -12,12 +12,16 @@ const PING_MS = 20_000;
 export class BrowserConn {
   // member: the resolved member, or null when the sign-in belongs to several
   // orgs and none was requested (the subscribed board's org decides).
-  constructor(hub, ws, { member = null, candidates = member ? [member] : [], expMs = null } = {}) {
+  // user + cred: BOARD_AUTH=accounts (the device token or cookie session the
+  // socket was opened with; revoking it closes the socket).
+  constructor(hub, ws, { member = null, candidates = member ? [member] : [], expMs = null, user = null, cred = null } = {}) {
     this.hub = hub;
     this.ws = ws;
     this.member = member;
     this.candidates = candidates;
     this.expMs = expMs;
+    this.user = user;
+    this.cred = cred;
     this.boardId = null;
     this.helloed = false;
     this.ticks = new Map();
@@ -39,8 +43,18 @@ export class BrowserConn {
   }
 
   // Called when membership may have changed: close if the member is gone.
+  // Accounts: every live membership of the user, read fresh (a user with no
+  // team yet keeps the socket; subscribe just finds nothing). Other modes:
+  // the member rows the sign-in mapped to at upgrade, still active.
+  liveCandidates() {
+    if (this.user) return this.hub.db.all('SELECT * FROM members WHERE user_id = ? AND removed_at IS NULL', this.user.id);
+    return this.candidates.map((c) => this.hub.activeMember(c.id)).filter(Boolean);
+  }
+
   recheck() {
-    const alive = this.candidates.map((c) => this.hub.activeMember(c.id)).filter(Boolean);
+    if (this.cred && !this.hub.accounts?.credValid(this.cred)) { this.close(WS_CLOSE.UNAUTHENTICATED, 'signed out'); return; }
+    const alive = this.liveCandidates();
+    if (this.user && !this.member) { this.candidates = alive; return; }
     if (!alive.length || (this.member && !alive.some((c) => c.id === this.member.id))) { this.revoked(); return; }
     this.candidates = alive;
     if (this.member) this.member = alive.find((c) => c.id === this.member.id);
@@ -79,7 +93,11 @@ export class BrowserConn {
         return;
       }
       this.helloed = true;
-      this.send({ type: 'welcome', protocol: PROTOCOL_VERSION, hub_epoch: this.hub.epoch, member: publicMember(this.member ?? this.candidates[0]) });
+      const m = this.member ?? this.candidates[0];
+      this.send({
+        type: 'welcome', protocol: PROTOCOL_VERSION, hub_epoch: this.hub.epoch, member: m ? publicMember(m) : null,
+        ...(this.user ? { user: { id: this.user.id, display_name: this.user.display_name } } : {}),
+      });
       return;
     }
     if (!this.helloed) {
@@ -89,11 +107,11 @@ export class BrowserConn {
     switch (msg.type) {
       case 'subscribe': {
         // Membership is re-read on every subscribe: a removed member gets nothing.
-        const alive = this.candidates.map((c) => this.hub.activeMember(c.id)).filter(Boolean);
-        if (!alive.length) { this.revoked(); return; }
+        const alive = this.liveCandidates();
+        if (!alive.length && !this.user) { this.revoked(); return; }
         this.candidates = alive;
         const board = this.hub.board(msg.board_id);
-        const m = board && (this.member ? alive.find((c) => c.id === this.member.id && c.org_id === board.org_id) : alive.find((c) => c.org_id === board.org_id));
+        const m = board && (this.member && !this.user ? alive.find((c) => c.id === this.member.id && c.org_id === board.org_id) : alive.find((c) => c.org_id === board.org_id));
         if (!m) {
           this.send({ type: 'error', code: 'NOT_FOUND', message: 'board not found' });
           return;
