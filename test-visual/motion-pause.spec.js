@@ -80,6 +80,28 @@ test('a state that changed while paused is on the widget the moment it resumes',
   await expect.poll(() => widget.evaluate(() => document.querySelector('svg.rig').classList.contains('pose-sleep'))).toBe(true);
 });
 
+// A worn character's own layers (.char-*) are injected after mount; the
+// ambient clock must take their loops too (the dog's wag, 0.35 s), and the
+// gate must hold them.
+test('a non-default character: its layer loops ride the ambient clock and hold while hidden', async () => {
+  await widget.evaluate(() => window.trafficLight.openLights());
+  const lights = await windowByFile(h.app, 'lights.html');
+  await lights.waitForLoadState('load');
+  await lights.evaluate(() => window.lightsApi.previewOnWidget({ lamp: 'green', eyes: 'default', pose: 'none', body: 'dog' }, 20000));
+  await expect.poll(() => widget.evaluate(() => document.querySelector('svg.rig').classList.contains('body-dog'))).toBe(true);
+  const charLoops = () => widget.evaluate(() => document.querySelector('svg.rig').getAnimations({ subtree: true })
+    .filter((a) => a.effect.getTiming().iterations === Infinity && a.effect.target.closest('[class^="char-"]'))
+    .map((a) => a.playState));
+  await expect.poll(charLoops).toEqual(['paused']);
+  await main(hideWidget);
+  await expect.poll(paused).toBe(true);
+  expect(await loopsHeld()).toBe(true);
+  await main(showWidget);
+  await expect.poll(paused).toBe(false);
+  expect(await loopsHeld()).toBe(false);
+  await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).close());
+});
+
 // The editor mounts a live rig per picker tile (~165); only the few in view
 // may animate, and a minimised editor holds everything.
 test('the Lights editor animates only what is in view, and holds while minimised', async () => {

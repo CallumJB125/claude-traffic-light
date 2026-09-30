@@ -36,7 +36,7 @@
     // idle loops are sampled at this rate instead of every display frame;
     // stepped loops wake only when their frame actually changes; fast smooth
     // loops (a flame's flicker) get a finer grid that still lands on every
-    // slow frame, so both cost one wake-up together
+    // slow frame, so both cost one wake-up together (a tail's wag, a flame)
     ambient: { fps: 6, minMs: 1000, fastFps: 12, fastMinMs: 300 },
   };
 

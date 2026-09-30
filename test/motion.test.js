@@ -249,6 +249,8 @@ test('ambientPlan: quick smooth loops (the fire flicker) take the fast grid; too
   assert.equal(M.ambientPlan(smooth, 250, 'normal', 1000, 300), null);
   assert.equal(M.ambientPlan(smooth, 400, 'normal', 1000), null, 'no fast floor: as before');
   const A = M.MOTION.ambient;
+  assert.deepEqual(M.ambientPlan(smooth, 400, 'alternate', A.minMs, A.fastMinMs), { stepped: false, fast: true }, 'the fire flicker');
+  assert.deepEqual(M.ambientPlan(smooth, 350, 'alternate', A.minMs, A.fastMinMs), { stepped: false, fast: true }, "the dog's wag");
   assert.equal(A.fastFps % A.fps, 0, 'every slow frame is also a fast frame, so the two grids share wake-ups');
 });
 

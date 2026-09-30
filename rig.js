@@ -1329,7 +1329,10 @@
       }
       function scan() {
         scanQueued = false;
-        if (!enabled || !Mo()) return;
+        // Travelling (a run to the Dock, a garden walk): the legs' quick
+        // swing is the motion itself, so what starts now keeps the display
+        // clock; the next scan after arriving takes loops over again.
+        if (!enabled || !Mo() || svg.matches('.walking, .pose-run')) return;
         const t = now();
         for (const a of frozen) {
           const el = a.effect && a.effect.target;
