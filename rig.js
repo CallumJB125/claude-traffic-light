@@ -807,7 +807,7 @@
       // A newly lit lamp (a different slot or colour) blooms; group effects
       // and number mode light no single lamp, so nothing blooms for them.
       const nextBloom = lit && !groupFx && numText === '' ? `${lit}|${color}|${sign}` : '';
-      if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign-${sign} .lamp.on`));
+      if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign.sign-${sign} .lamp.on`));
       bloomKey = nextBloom;
       current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
       if (ambient) ambient.scan();

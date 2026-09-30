@@ -114,6 +114,18 @@ test('rig: the blink stays under three flashes a second and gives way to a ring 
   assert.match(RIG_CSS, /prefers-reduced-motion: reduce\) \{[^}]*\.rig \.lamp,/, 'reduced motion stops lamp animations');
 });
 
+test('rig: the bloom centres on the lit lamp of the sign in use, not the first sign', () => {
+  const { w, svg, rig } = mount();
+  w.Element.prototype.animate = () => ({ cancel() {} });
+  w.Element.prototype.getAnimations = () => [];
+  const bloom = svg.querySelector('.lamp-bloom');
+  rig.setLook({ lamp: 'amber', sign: 'v3' });
+  rig.setLook({ lamp: 'red', sign: 'v3' });
+  const red = svg.querySelector('.sign.sign-v3 .lamp[data-slot="red"]');
+  assert.equal(Number(bloom.getAttribute('cx')), Number(red.getAttribute('x')) + Number(red.getAttribute('width')) / 2);
+  assert.equal(Number(bloom.getAttribute('cy')), Number(red.getAttribute('y')) + Number(red.getAttribute('height')) / 2);
+});
+
 // A later @keyframes of the same name silently replaces the earlier one for
 // every rule that uses it (the red lamp once blinked fully dark on the eyes'
 // blink frames).
