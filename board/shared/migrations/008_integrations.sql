@@ -1,6 +1,26 @@
+-- migrate: rebuilds
 -- Integrations framework (D41): connections per org, sealed secrets, identity
 -- links for acting from another tool, card links, routing, inbound replay
 -- protection, and the journal actor kind 'integration' (§15).
+--
+-- This migration REBUILDS `journal` and `comments` (DROP + RENAME), and DROP
+-- TABLE silently drops every trigger and index on the table. It recreates
+-- only the ones it knows (journal_board_seq, journal_card_seq,
+-- journal_no_update, journal_no_delete). A migration is plain SQL here (no
+-- dynamic SQL to re-run saved definitions), so any OTHER trigger or index on
+-- either table (e.g. the accounts branch's xteam_comments_ins/upd, if its
+-- 009-011 were ever applied before this) makes 008 abort, rolled back, rather
+-- than lose it. A trigger or view elsewhere that names either table aborts at
+-- the RENAME for the same reason. The first line tells a gap-filling runner
+-- not to apply this after later migrations.
+CREATE TEMP TABLE _m008_guard (n INTEGER NOT NULL);
+CREATE TEMP TRIGGER _m008_guard_check BEFORE INSERT ON _m008_guard WHEN NEW.n > 0 BEGIN
+  SELECT RAISE(ABORT, '008 rebuilds journal and comments and would drop triggers or indexes it does not recreate: apply 008 before any migration that adds them');
+END;
+INSERT INTO _m008_guard SELECT COUNT(*) FROM sqlite_master
+  WHERE tbl_name IN ('journal', 'comments') AND type IN ('trigger', 'index') AND sql IS NOT NULL
+    AND name NOT IN ('journal_board_seq', 'journal_card_seq', 'journal_no_update', 'journal_no_delete');
+DROP TABLE _m008_guard;
 
 -- An integration's own actions are journaled as actor_kind 'integration',
 -- actor_id = the connection id. SQLite can't widen a CHECK in place, so the
