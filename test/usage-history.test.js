@@ -312,3 +312,24 @@ test('history worker: a backfill marker without the record (restored or partly d
     assert.ok(w.threadId >= 0, 'the worker is still up');
   } finally { await w.terminate(); }
 });
+
+test('privacy: nothing that leaves the machine (phone, hub, board, presence, recap) can read the usage record', () => {
+  // The record keys projects by their full path. It is read by the app's own
+  // windows and the local MCP server only; a remote-facing module that names it
+  // is a leak in waiting, so any such reference fails here and has to be argued.
+  const root = path.join(__dirname, '..');
+  const outward = ['remote/src', 'board/hub', 'board/shared', 'board/runner', 'board/web', 'board/plugin', 'board/mcp', 'src/recap.js', 'src/presence.js'];
+  const hits = [];
+  const walk = (p) => {
+    let st;
+    try { st = fs.statSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      for (const e of fs.readdirSync(p)) if (e !== 'node_modules' && e !== 'dist') walk(path.join(p, e));
+    } else if (/\.(js|mjs|cjs|html|ts)$/.test(p)) {
+      const src = fs.readFileSync(p, 'utf8');
+      if (/usage-history|usage[\\/]daily|UsageHistory|history\.tick|buddy_usage_history/.test(src)) hits.push(path.relative(root, p));
+    }
+  };
+  for (const d of outward) walk(path.join(root, d));
+  assert.deepEqual(hits, []);
+});

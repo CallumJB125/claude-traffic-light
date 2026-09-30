@@ -197,12 +197,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes exactly the nine buddy_ tools, all read-only', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_pending_requests']);
+test('the server exposes exactly the ten buddy_ tools, all read-only', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_pending_requests']);
   assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), []);
 });
 
-test('stdio: the server starts, lists nine tools and answers buddy_status end to end', async () => {
+test('stdio: the server starts, lists ten tools and answers buddy_status end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -216,7 +216,7 @@ test('stdio: the server starts, lists nine tools and answers buddy_status end to
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 9);
+    assert.equal(tools.length, 10);
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);
     assert.equal(st.sessionCount, 1);
@@ -278,4 +278,34 @@ test('mcp-install: creates the file when missing; never clobbers an unparsable f
   assert.throws(() => McpInstall.install({ home: taken, entry }), /isn't Claude Buddy's/);
   assert.equal(McpInstall.uninstall({ home: taken }).changed, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taken, '.claude.json'), 'utf8')), theirs);
+});
+
+test('buddy_usage_history answers from the permanent record, by range and group, with folder names only', async () => {
+  const History = require('../usage-history.js');
+  const root = fixture({ config: { ...base, spend: { mode: 'api' } } });
+  const at = (t) => new Date(t).getTime();
+  const turn = (id, ts, model, cwd, out) => ({ id, ts: at(ts), sessionId: 's', cwd, project: cwd.split('/').pop(), model, input: 0, output: out, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 });
+  const store = History.open({ root });
+  History.record(store, [
+    turn('a', '2026-08-10T10:00:00', 'claude-opus-5-5', '/Users/me/secret-client/alpha', 1e6),
+    turn('b', '2026-08-20T10:00:00', 'claude-sonnet-5-5', '/Users/me/other/alpha', 1e6),
+    turn('c', '2026-09-02T10:00:00', 'claude-opus-5-5', '/Users/me/secret-client/beta', 1e6),
+    turn('d', '2026-08-11T10:00:00', 'mystery-9', '/Users/me/x/gamma', 1000),
+  ]);
+  History.flush(store);
+  const now = at('2026-09-30T12:00:00');
+  const aug = await M.buddyUsageHistory({ root, range: '2026-08', groupBy: 'family', now });
+  assert.deepEqual(aug.range, { from: '2026-08-01', to: '2026-08-31' });
+  assert.deepEqual(aug.rows.map((r) => [r.key, r.turns, r.cost]), [['opus', 1, 25], ['sonnet', 1, 10], ['unpriced', 1, 0]]);
+  assert.match(aug.summary, /^\$35\.00 across 3 turns from 2026-08-01 to 2026-08-31\. 1 turn on unpriced models \(mystery-9\)/);
+  const byProject = await M.buddyUsageHistory({ root, range: 'all', groupBy: 'project', now });
+  assert.deepEqual(byProject.rows.map((r) => r.key).sort(), ['alpha', 'beta', 'gamma']);
+  assert.equal(byProject.rows.find((r) => r.key === 'alpha').turns, 2, 'same folder name merges');
+  assert.doesNotMatch(JSON.stringify(byProject), /\/Users\/me|secret-client/);
+  assert.equal((await M.buddyUsageHistory({ root, range: '2026-09-01..2026-09-30', now })).total.turns, 1);
+  await assert.rejects(M.buddyUsageHistory({ root, range: '2020-01-01..2026-09-30', now }), /between 1 and 400 days/);
+  await assert.rejects(M.buddyUsageHistory({ root, range: 'last week', now }), /range is/);
+  await assert.rejects(M.buddyUsageHistory({ root, groupBy: 'cwd', now }), /groupBy is/);
+  const empty = await M.buddyUsageHistory({ root: fixture({ config: base }), now });
+  assert.match(empty.summary, /Nothing is recorded yet/);
 });
