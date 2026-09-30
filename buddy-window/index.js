@@ -16,8 +16,8 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron');
-const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, pageForHubUrl, orgOfUrl } = require('./pages');
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron');
+const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition, hostOf } = require('./workspaces');
 const { createAccountClient, parseInvite, routeInvite, maskEmail, bearerScope } = require('./accounts');
@@ -712,7 +712,12 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
-    wc.setWindowOpenHandler(({ url }) => { if (decide(url) === 'external') shell.openExternal(url); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
+    wc.setWindowOpenHandler(({ url, frameName }) => {
+      const d = openDecision({ url, frameName }, { hubOrigin: h.origin, accessTeam: h.accessTeam });
+      if (d === 'connect') openConnect(url, h);
+      else if (d === 'external') shell.openExternal(url);
+      return { action: 'deny' };
+    });
     const guard = (e, url) => {
       const d = decide(url);
       if (d === 'allow') return;
@@ -742,6 +747,43 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (win && isHubPage(selected)) select(selected);
     });
     return view;
+  }
+
+  // The Integrations page's provider sign-in (GitHub, Slack…), in an app
+  // window on its own partition: never the hub's, so the bearer header can't
+  // reach a provider, and the provider's cookies stay out of the board.
+  let connectWin = null;
+  function openConnect(url, h) {
+    if (connectWin && !connectWin.isDestroyed()) { connectWin.loadURL(url).catch(() => {}); connectWin.focus(); return; }
+    const ses = session.fromPartition('persist:integration-auth');
+    hardenSession(ses);
+    const w = new BrowserWindow({
+      width: 560, height: 720, title: 'Connect', autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
+      webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
+    });
+    connectWin = w;
+    const wc = w.webContents;
+    wc.setWindowOpenHandler(({ url: u }) => { if (/^https:/.test(u)) shell.openExternal(u); return { action: 'deny' }; });
+    // Provider logins hop between https hosts freely; the callback is on the hub.
+    const ok = (u) => /^https:/.test(u) || isConnectCallback(u, h.origin);
+    const guard = (e, u) => { if (!ok(u)) e.preventDefault(); };
+    wc.on('will-navigate', guard);
+    wc.on('will-redirect', guard);
+    wc.on('will-attach-webview', (e) => e.preventDefault());
+    let closing = false;
+    wc.on('did-finish-load', () => {
+      if (closing || !isConnectCallback(wc.getURL(), h.origin)) return;
+      closing = true;
+      // Long enough to read "Connected" (or the error) on the callback page.
+      setTimeout(() => {
+        if (!w.isDestroyed()) w.close();
+        if (selected === 'integrations' && hubInfo?.origin === h.origin && hubView && !hubView.webContents.isDestroyed()) {
+          hubView.webContents.loadURL(hubPageUrl(hubInfo.url, pageById('integrations'), { org: hubInfo.org })).catch(() => {});
+        }
+      }, 1500);
+    });
+    w.on('closed', () => { if (connectWin === w) connectWin = null; });
+    w.loadURL(url).catch(() => {});
   }
 
   async function showHubPage(page) {

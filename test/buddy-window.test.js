@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -47,6 +47,24 @@ test('the hub view only navigates within its origin (+ the team Access login)', 
   assert.equal(navDecision('javascript:alert(1)', o), 'deny');
   assert.equal(navDecision('not a url', o), 'deny');
   assert.equal(navDecision('https://pistor.cloudflareaccess.com/', { hubOrigin: o.hubOrigin }), 'external');
+});
+
+test('window.open from the hub view: buddy-connect (https) gets the in-app connect window; nothing else does', () => {
+  const o = { hubOrigin: 'https://buddy.example.com' };
+  assert.equal(openDecision({ url: 'https://github.com/login/oauth/authorize?x=1', frameName: 'buddy-connect' }, o), 'connect');
+  assert.equal(openDecision({ url: 'https://slack.com/oauth/v2/authorize', frameName: 'buddy-connect' }, o), 'connect');
+  assert.equal(openDecision({ url: 'http://github.com/login', frameName: 'buddy-connect' }, o), 'deny');
+  assert.equal(openDecision({ url: 'javascript:alert(1)', frameName: 'buddy-connect' }, o), 'deny');
+  assert.equal(openDecision({ url: 'https://github.com/o/r', frameName: '' }, o), 'external');
+  assert.equal(openDecision({ url: 'https://github.com/o/r', frameName: 'other' }, o), 'external');
+  assert.equal(openDecision({ url: 'https://buddy.example.com/x', frameName: '' }, o), 'deny', 'no second hub window');
+  assert.equal(openDecision({ url: 'file:///etc/passwd', frameName: '' }, o), 'deny');
+  assert.equal(isConnectCallback('https://buddy.example.com/integrations/github/callback?code=x&state=y', o.hubOrigin), true);
+  assert.equal(isConnectCallback('https://buddy.example.com/integrations/slack/callback/', o.hubOrigin), true);
+  assert.equal(isConnectCallback('https://evil.example.com/integrations/github/callback', o.hubOrigin), false);
+  assert.equal(isConnectCallback('https://buddy.example.com/integrations/github', o.hubOrigin), false);
+  assert.equal(isConnectCallback('https://buddy.example.com/integrations/../callback', o.hubOrigin), false);
+  assert.equal(hubPageUrl(o.hubOrigin, pageById('integrations'), { org: 't1' }), 'https://buddy.example.com/?org=t1&view=integrations');
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────

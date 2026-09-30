@@ -22,7 +22,7 @@ const PAGES = [
     ] },
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: 'Standalone Claude tasks you started from Buddy, with their messages. Being built by buddy-builder-2.' },
-  { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'soon', group: 'team', blurb: 'Connect Slack, GitHub, Sentry and more to the board.' },
+  { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'window', window: 'mix', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'soon', group: 'you', blurb: 'Borrow a teammate’s Claude setup. Being built by buddy-builder-4.' },
@@ -76,6 +76,27 @@ function navDecision(targetUrl, { hubOrigin, accessTeam = null }) {
   return 'deny';
 }
 
+/**
+ * A window.open from the hub view. The Integrations page opens a provider's
+ * sign-in as `window.open(url, 'buddy-connect')`: that (https only) gets an
+ * in-app window on its own partition; everything else is navDecision's call.
+ */
+function openDecision({ url, frameName }, opts) {
+  if (frameName === 'buddy-connect') {
+    try { return new URL(url).protocol === 'https:' ? 'connect' : 'deny'; } catch { return 'deny'; }
+  }
+  const d = navDecision(url, opts);
+  return d === 'allow' ? 'deny' : d;
+}
+
+/** Has the connect window come back to the hub's integration callback page? */
+function isConnectCallback(url, hubOrigin) {
+  try {
+    const u = new URL(url);
+    return u.origin === hubOrigin && /^\/integrations\/[a-z0-9_-]{1,40}\/callback\/?$/i.test(u.pathname);
+  } catch { return false; }
+}
+
 /** Which sidebar entry does a hub URL correspond to (for in-page view switches)? */
 function pageForHubUrl(url) {
   let v = null;
@@ -84,4 +105,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, pageForHubUrl, orgOfUrl };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl, orgOfUrl };
