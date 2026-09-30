@@ -20,6 +20,10 @@ import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
+  if (config.auth !== 'local' && db.meta('local_member')) {
+    db.close();
+    throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
+  }
   const hub = new Hub({ db, config, clock, log, github: gh });
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.

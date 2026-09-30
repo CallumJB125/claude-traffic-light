@@ -71,7 +71,10 @@ export function bootstrapAdmin(hub, spec, boardSpec = 'Team:BRD') {
 export function seedLocal(hub, boardSpec = 'Me:ME') {
   const db = hub.db;
   const existing = db.meta('local_member');
-  if (existing) return existing;
+  if (existing) {
+    if (!hub.activeMember(existing)) throw new Error('local owner missing or removed');
+    return existing;
+  }
   if (db.get('SELECT 1 AS x FROM members LIMIT 1')) throw new Error('BOARD_AUTH=local needs a database it created (this one already has members)');
   let user;
   try { user = userInfo().username; } catch { user = process.env.USER || process.env.USERNAME || 'me'; }

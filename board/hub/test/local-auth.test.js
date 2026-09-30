@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -16,7 +16,7 @@ import WebSocket from 'ws';
 import { createApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { silentLogger } from '../log.js';
-import { fakeClock, fakeGitHub, testConfig, FakeRunner, FakeBrowser } from './helpers.js';
+import { fakeClock, fakeGitHub, testConfig, startHub, FakeRunner, FakeBrowser } from './helpers.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = resolve(HERE, '..', 'server.js');
@@ -194,21 +194,22 @@ test('server.js under a parentPort: startup errors send board.fatal and exit non
     assert.equal(await bad.exited, 2);
 
     const blocker = await startLocal();
-    const busy = runServer({ BOARD_AUTH: 'local', BOARD_PORT: String(blocker.port), BOARD_DATA_DIR: dataDir, BOARD_LOCAL_SECRET: SECRET });
+    const busy = runServer({ BOARD_AUTH: 'local', BOARD_PORT: String(blocker.port), BOARD_DATA_DIR: dataDir});
     const f = await busy.message();
     assert.equal(f.type, 'board.fatal');
     assert.match(f.message, /EADDRINUSE/);
     assert.notEqual(await busy.exited, 0);
-    assert.ok(!busy.out.stderr.includes(SECRET));
     await blocker.app.close({ graceMs: 200 });
     rmSync(blocker.cfg.dataDir, { recursive: true, force: true });
 
-    const dev = runServer({ BOARD_AUTH: 'dev', BOARD_PORT: '0', BOARD_DATA_DIR: dataDir });
+    const devDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+    const dev = runServer({ BOARD_AUTH: 'dev', BOARD_PORT: '0', BOARD_DATA_DIR: devDir });
     const d = await dev.message();
     assert.equal(d.type, 'board.listening');
     assert.equal('local_secret' in d, false);
     dev.child.kill('SIGTERM');
     await dev.exited;
+    rmSync(devDir, { recursive: true, force: true });
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
@@ -228,5 +229,85 @@ test('server.js without a parentPort behaves as before (no message, starts norma
   } finally {
     s.child.kill('SIGKILL');
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('L1: a database created in local mode refuses to start in dev/access mode, and dev login never yields a local: member', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  try {
+    const h = await startLocal({ dataDir });
+    await h.app.close({ graceMs: 200 });
+    for (const auth of ['dev', 'access']) {
+      const cfg = testConfig({ auth, dataDir, dbPath: join(dataDir, 'board.db'), ...(auth === 'access' ? { accessTeam: 't', accessAud: 'a' } : {}) });
+      assert.throws(() => createApp(cfg, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false }), /belongs to the desktop app/);
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+
+  const d = await startHub();
+  try {
+    d.db.insert('members', { id: randomUUID(), org_id: d.ids.org, github_id: -5, github_login: 'local:evil', email: null, display_name: 'evil', role: 'owner', created_at: new Date().toISOString() });
+    const res = await fetch(`${d.base}/api/dev/login`, { method: 'POST', headers: { 'content-type': 'application/json', ...d.devHeaders }, body: JSON.stringify({ github_login: 'local:evil' }) });
+    assert.equal(res.status, 404);
+    assert.equal(res.headers.get('set-cookie'), null);
+  } finally {
+    await d.close?.();
+  }
+});
+
+test('L2: BOARD_LOCAL_SECRET is refused under a parentPort and scrubbed from the environment after loading', () => {
+  process.parentPort = {};
+  try {
+    assert.throws(() => loadConfig({ BOARD_AUTH: 'local', BOARD_PORT: '0', BOARD_LOCAL_SECRET: SECRET }), /tests only/);
+    assert.doesNotThrow(() => loadConfig({ BOARD_AUTH: 'local', BOARD_PORT: '0' }));
+  } finally {
+    delete process.parentPort;
+  }
+  process.env.BOARD_LOCAL_SECRET = SECRET;
+  process.env.BOARD_AUTH = 'local';
+  process.env.BOARD_PORT = '0';
+  assert.equal(loadConfig().localSecret, SECRET);
+  assert.equal(process.env.BOARD_LOCAL_SECRET, undefined);
+  delete process.env.BOARD_AUTH;
+  delete process.env.BOARD_PORT;
+});
+
+test('L3: a stored local owner that is missing or removed is fatal at startup', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  try {
+    const h = await startLocal({ dataDir });
+    const id = h.app.hub.localMemberId;
+    h.app.db.run('UPDATE members SET removed_at = ? WHERE id = ?', new Date().toISOString(), id);
+    await h.app.close({ graceMs: 200 });
+    const cfg = testConfig({ auth: 'local', localSecret: SECRET, devLoginSecret: null, dataDir, dbPath: join(dataDir, 'board.db') });
+    assert.throws(() => createApp(cfg, { clock: fakeClock(), log: silentLogger, github: fakeGitHub(), timers: false }), /local owner missing or removed/);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('L4: createMember rejects a local: github_login like email:', async () => {
+  const h = await startHub();
+  try {
+    const cookie = await h.login('alice');
+    for (const github_login of ['local:x', 'email:x']) {
+      const r = await h.api(cookie, 'POST', '/api/members', { request_id: randomUUID(), email: 'pat@example.com', github_login, role: 'member' });
+      assert.equal(r.status, 400, github_login);
+    }
+  } finally {
+    await h.close?.();
+  }
+});
+
+test('db file is created 0600 in a 0700 data dir', async () => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), 'board-local-')), 'nested');
+  try {
+    const h = await startLocal({ dataDir });
+    await h.app.close({ graceMs: 200 });
+    assert.equal(statSync(dataDir).mode & 0o777, 0o700);
+    assert.equal(statSync(join(dataDir, 'board.db')).mode & 0o777, 0o600);
+  } finally {
+    rmSync(dirname(dataDir), { recursive: true, force: true });
   }
 });

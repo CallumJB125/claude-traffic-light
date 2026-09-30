@@ -9,7 +9,7 @@ import { classifyPair, kindOf } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
-import { cardView, cardDetail, boardSnapshot, publicLogin, EMAIL_ONLY, emailOnlyIdentity } from './views.js';
+import { cardView, cardDetail, boardSnapshot, publicLogin, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
 import { feedEvent, isFeedKind } from './hub.js';
 
 const ACTION_EVENTS = {
@@ -447,7 +447,7 @@ export class Api {
     const email = str(body.email, 320, 'email', { required: true });
     if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new HubError('VALIDATION', 'email is not an address');
     const given = str(body.github_login, 100, 'github_login');
-    if (given?.startsWith(EMAIL_ONLY)) throw new HubError('VALIDATION', 'bad github_login');
+    if (given?.startsWith(EMAIL_ONLY) || given?.startsWith(LOCAL_ONLY)) throw new HubError('VALIDATION', 'bad github_login');
     if (body.github_id != null && !Number.isSafeInteger(body.github_id)) throw new HubError('VALIDATION', 'github_id must be an integer');
     const login = given ?? emailOnlyIdentity(email).github_login;
     const githubId = body.github_id ?? emailOnlyIdentity(email).github_id;

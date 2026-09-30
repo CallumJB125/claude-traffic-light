@@ -54,6 +54,7 @@ export function loadConfig(env = process.env) {
     logLevel: env.BOARD_LOG_LEVEL || 'info',
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
   };
+  delete env.BOARD_LOCAL_SECRET;
   validateConfig(cfg);
   return cfg;
 }
@@ -66,6 +67,7 @@ export function validateConfig(cfg) {
     if (cfg.publicUrl || cfg.tunnelProbeUrl) throw new Error('BOARD_AUTH=local must never sit behind a proxy or tunnel: unset BOARD_PUBLIC_URL and BOARD_TUNNEL_PROBE_URL');
     if (cfg.devSeed) throw new Error('BOARD_AUTH=local does not take BOARD_DEV_SEED');
   }
+  if (cfg.localSecret != null && process.parentPort) throw new Error('BOARD_LOCAL_SECRET is for tests only: the desktop app generates its own per-launch secret');
   if (cfg.localSecret != null && cfg.auth !== 'local') throw new Error('BOARD_LOCAL_SECRET needs BOARD_AUTH=local');
   if (cfg.localSecret != null && Buffer.byteLength(cfg.localSecret) < 32) throw new Error('BOARD_LOCAL_SECRET must be at least 32 bytes');
   if (cfg.devSeed && cfg.auth !== 'dev') throw new Error('BOARD_DEV_SEED needs BOARD_AUTH=dev');

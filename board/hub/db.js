@@ -4,7 +4,7 @@
 // string/Uint8Array, so every call goes through bind().
 
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { migrate } from '../shared/migrate.js';
 
@@ -20,8 +20,10 @@ export class HubError extends Error {
 
 export function openDb(path, { now } = {}) {
   const memory = path === ':memory:';
-  if (!memory) mkdirSync(dirname(path), { recursive: true });
+  if (!memory) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fresh = !memory && !existsSync(path);
   const raw = new DatabaseSync(path);
+  if (fresh) chmodSync(path, 0o600);
   raw.exec('PRAGMA busy_timeout = 5000');
   migrate(raw, { wal: !memory, now });
   if (!memory) raw.exec('PRAGMA synchronous = NORMAL');
