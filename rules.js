@@ -7,10 +7,14 @@
 // session, set these visual channels. Rules apply top-down; the first rule
 // that lights a lamp is the state, and rules above it may layer accents — so
 // "subagent running" can recolour the eyes while "working" owns the lamp.
+//
+// Which signal a session is showing — the session lifecycle — is the state
+// machine in hooks/session-machine.js; this file builds looks on top of it.
+// The Lights editor loads that file with a <script> tag before this one.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.TrafficLightRules = factory();
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./hooks/session-machine.js'));
+  else root.TrafficLightRules = factory(root.SessionMachine);
+})(typeof self !== 'undefined' ? self : this, function (Machine) {
   const SIGNALS = [
     { id: 'prompt-submit', label: 'You send a prompt', hook: 'UserPromptSubmit', kind: 'working' },
     { id: 'tool-use', label: 'Claude uses a tool', hook: 'PreToolUse', kind: 'working', tool: true },
@@ -44,24 +48,15 @@
 
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
-  // Signals that mean Claude is waiting on the person: a permission ask, a
-  // limit, a finished turn, the idle nudge that follows it, or a failed turn
-  // (nothing happens until the person retries).
-  const WAITING = new Set(['permission-ask', 'limit-hit']);
-  const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 'turn-failed']);
-  // Signals that close a turn: the working-since clock stops on any of them.
-  const TURN_END = new Set(['stop', 'idle-nudge', 'permission-ask', 'limit-hit', 'session-start', 'turn-failed', 'permission-denied']);
-  // A turn that has ended while its subagents are still working hasn't really
-  // ended; only a finished/idle turn is promoted — a permission ask or a limit
-  // still needs the person whatever the agents are doing. A denial has had
-  // its answer, so it doesn't.
-  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge', 'permission-denied']);
+  // Signal sets, owned by the state machine: WAITING (blocked on you),
+  // WAITING_ON_YOU (your turn in any form), TURN_END (the turn is over).
+  const { WAITING, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, sessionSignal } = Machine;
   // ── Other agents ──────────────────────────────────────────────────────────
   // A session file may carry `agents` (every subagent / teammate / ralph or
   // ultrawork worker it knows about) and `mode` (the OMC execution mode).
   // Anything that has finished stops counting as live.
   const AGENT_KINDS = ['subagent', 'teammate', 'ralph', 'ultrawork'];
-  const AGENT_STATUSES = ['working', 'waiting', 'done'];
+  const AGENT_STATUSES = Machine.AGENT_STATUSES;
   const MODES = ['ralph', 'team', 'ultrawork'];
   // Router picks below Opus; a session carrying one fires 'routed-cheap'.
   const CHEAP_ROUTES = new Set(['sonnet', 'haiku']);
@@ -95,35 +90,6 @@
       });
     }
     return out;
-  }
-
-  // The signal a session should be read as: a finished turn with a subagent
-  // still working is presented as that agent's tool use, so the working rules
-  // (and "Subagent running") keep firing instead of "Task finished".
-  function effectiveSignal(session) {
-    const signal = sessionSignal(session);
-    const tool = session.tool || null;
-    if (PROMOTABLE_TURN_END.has(signal) && liveAgents([session]).some((a) => a.status === 'working')) {
-      return { signal: 'tool-use', tool: 'Agent', turnSignal: signal };
-    }
-    return { signal, tool, turnSignal: null };
-  }
-
-  // A permission ask that only came from a Notification can be resolved by
-  // auto mode's classifier within a second, so the widget sits it out for
-  // this long first. A blocking PermissionRequest (askKind 'request' or still
-  // in the pending list) and an AskUserQuestion are real waits and show at once.
-  const TRANSIENT_ASK_MS = 1200;
-
-  // The signal the widget should show for a session right now.
-  function presentSignal(session, now = Date.now(), pendingIds = []) {
-    const signal = sessionSignal(session);
-    if (signal !== 'permission-ask') return signal;
-    if (session.askKind === 'question' || session.askKind === 'request') return signal;
-    if ([...pendingIds].includes(session.sessionId)) return signal;
-    const since = Date.parse(session.signalSince || session.updatedAt || '');
-    if (!since || now - since >= TRANSIENT_ASK_MS) return signal;
-    return session.prevSignal && session.prevSignal !== 'permission-ask' ? session.prevSignal : 'tool-use';
   }
 
   // Keeps the agents whose kind is switched on; a kind missing from `kinds`
@@ -246,9 +212,6 @@
 
   // macOS system sounds, by name; 'beep' is the system alert; 'file:<path>' plays a chosen file.
   const SOUNDS = ['beep', 'Glass', 'Pop', 'Funk', 'Hero', 'Submarine', 'Sosumi', 'Blow', 'Ping', 'Purr'];
-
-  // Legacy session files (pre-rules) wrote a colour instead of a signal.
-  const LEGACY_STATE_TO_SIGNAL = { green: 'tool-use', amber: 'permission-ask', red: 'limit-hit', done: 'stop' };
 
   // Seasonal costume for a date, or null. Applied by the app only when no
   // rule set a costume, and only if the seasonal toggle is on.
@@ -442,11 +405,6 @@
     return tool.toLowerCase() === pattern.toLowerCase();
   }
 
-  function sessionSignal(session) {
-    if (session.signal) return session.signal;
-    return LEGACY_STATE_TO_SIGNAL[session.state] || null;
-  }
-
   // Project scope: matches the folder name (last path segment) or a prefix
   // with `*` — 'bondly*' covers every bondly worktree.
   function cwdMatches(pattern, cwd) {
@@ -573,5 +531,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, RULES_VERSION, migrateRules, normalizeRule, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, DELEGATED_MS, defaultRules, RULES_VERSION, migrateRules, normalizeRule, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid };
 });

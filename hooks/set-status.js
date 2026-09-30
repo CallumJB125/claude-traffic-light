@@ -21,7 +21,8 @@ const HOST_TAG = os.hostname().split('.')[0];
 
 const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'turn-failed', 'stop', 'session-start', 'compact', 'notification', 'session-end', 'task-created', 'task-done', 'permission-request'];
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
-const { TURN_END, withLock, writeJsonAtomic, userTouched } = require('./session-state.js');
+const { withLock, writeJsonAtomic } = require('./session-state.js');
+const Machine = require('./session-machine.js');
 // Sessions started under an older install still call `<colour> <reason>`
 // (e.g. `green tool-use`); the reason is the signal we want.
 const LEGACY_REASONS = { 'prompt-submit': 'prompt-submit', 'tool-use': 'tool-use', notification: 'notification', stop: 'stop', 'session-end': 'session-end' };
@@ -380,18 +381,13 @@ function envRoute() {
 const prevOnEntry = readPrev();
 // A background subagent's own tool hooks carry its agent_id.
 const fromSubagent = /^tool-/.test(resolved) && !!(data && data.agent_id);
-const isTask = resolved === 'task-created' || resolved === 'task-done';
 
-function derive(prev) {
-  const turnOver = !!prev && TURN_END.has(prev.signal);
-  // Task events are always bookkeeping. Once the turn is over, so is anything a
-  // background agent does — it must not look like the turn restarted.
-  const bookkeeping = isTask || (turnOver && (resolved === 'subagent-start' || resolved === 'subagent-done' || fromSubagent));
-  // Claude Code's idle nudge fires ~60 s after any turn end, a failed one
-  // included; it must not turn "the network dropped" into "waiting for you".
-  // A permission ask or a limit still means something, so only the nudge is held.
-  const keepFailed = prev?.signal === 'turn-failed' && resolved === 'idle-nudge';
-  return { turnOver, bookkeeping, keepFailed };
+// Which signal this write leaves, and the clocks that go with it, is the
+// session state machine's call (session-machine.js TRANSITIONS): task events
+// and a background agent after the turn ended are bookkeeping, and the idle
+// nudge after a failed turn keeps the failure.
+function stepOf(prev, now) {
+  return Machine.step(prev, { signal: resolved, fromSubagent, writer: 'hook', sessionSource: data?.source }, now);
 }
 
 // StopFailure carries error (rate_limit, server_error, unknown, …),
@@ -408,35 +404,30 @@ function failureOf(payload) {
 
 function nextSession(prev, { hostApp, pid }) {
   const now = new Date().toISOString();
-  const { turnOver, bookkeeping, keepFailed } = derive(prev);
-  const workingSince = turnOver && bookkeeping ? (prev.workingSince ?? null)
-    : resolved === 'prompt-submit' ? now : TURN_END.has(resolved) ? null : (prev?.workingSince || now);
+  const t = stepOf(prev, now);
   // Task progress for the current turn: created/done counts, reset per prompt.
   let tasks = resolved === 'prompt-submit' ? { created: 0, done: 0 } : (prev?.tasks || { created: 0, done: 0 });
   if (resolved === 'task-created') tasks = { ...tasks, created: tasks.created + 1 };
   if (resolved === 'task-done') tasks = { ...tasks, done: Math.min(tasks.created, tasks.done + 1) };
-  const signalOut = bookkeeping || keepFailed ? (prev?.signal || 'tool-use') : resolved;
+  const signalOut = t.signal;
   const failure = signalOut !== 'turn-failed' ? { failReason: undefined, failKind: undefined }
     : resolved === 'turn-failed' ? failureOf(data)
     : { failReason: prev?.failReason ?? null, failKind: prev?.failKind || 'error' };
-  const changed = signalOut !== (prev?.signal ?? null);
   // A permission notification after the turn ended has no tool call of the
   // main thread behind it (a background agent's, or a stale prompt) — tag it
   // so the app's log shows it.
-  const viaOut = bookkeeping || keepFailed ? (prev?.via ?? null)
+  const viaOut = t.held ? (prev?.via ?? null)
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
   const agents = updateAgents(prev?.agents, resolved, data, now);
   return {
     sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),
-    // What the session showed before this signal, and since when this one
-    // has held — the app shows a young notification ask as prevSignal.
-    prevSignal: changed ? (prev?.signal ?? null) : (prev?.prevSignal ?? null),
-    signalSince: changed ? now : (prev?.signalSince || prev?.updatedAt || now),
-    askKind: bookkeeping || keepFailed ? (prev?.askKind ?? null) : askKind,
+    prevSignal: t.prevSignal,
+    signalSince: t.signalSince,
+    askKind: t.held ? (prev?.askKind ?? null) : askKind,
     via: viaOut,
     ...failure,
-    workingSince, tasks, agents,
+    workingSince: t.workingSince, tasks, agents,
     // Execution mode and ralph iteration are owned by the app's OMC watcher;
     // carry them through so a hook write never erases them.
     mode: prev?.mode ?? null,
@@ -454,12 +445,11 @@ function nextSession(prev, { hostApp, pid }) {
     model: modelOf(data) || prev?.model || undefined,
     routerAdvice: prev?.routerAdvice || undefined,
     adviceKept: prev?.adviceKept || undefined,
-    // updatedAt means "the session last moved" (ignored-N timers, last-touch
-    // guard); bookkeeping must not bump it, so it stamps agentsAt instead.
-    updatedAt: bookkeeping && prev?.updatedAt ? prev.updatedAt : now,
-    agentsAt: bookkeeping ? now : (prev?.agentsAt ?? null),
-    // When you last acted on this session; ignored-N counts from here.
-    touchedAt: userTouched(prev, resolved, { sessionSource: data?.source, bookkeeping: bookkeeping || keepFailed, now: Date.parse(now) }) ? now : (prev?.touchedAt ?? null),
+    // When the session last moved, when its agents last did (bookkeeping
+    // stamps agentsAt, not updatedAt), and when you last acted on it.
+    updatedAt: t.updatedAt,
+    agentsAt: t.agentsAt,
+    touchedAt: t.touchedAt,
   };
 }
 
@@ -530,7 +520,7 @@ if (signal === 'permission-request') {
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
 if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done') {
   const prev = prevOnEntry;
-  const agentChurn = derive(prev).bookkeeping && fromSubagent;
+  const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
   if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }

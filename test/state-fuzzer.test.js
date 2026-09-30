@@ -3,7 +3,7 @@
 // Long random runs of realistic hook events go through the REAL code paths:
 // hooks/set-status.js (executed in-process against a virtual clock, so a run
 // of 80 events and five idle minutes takes milliseconds, not minutes),
-// main.js's own readSessions / workingAgentsStale / syncAgents (lifted out of
+// main.js's own readSessions / syncAgents (lifted out of
 // main.js's source, since main.js needs Electron to load), agents.js's team
 // scan and rules.js's resolve. Invariants are checked at every event and on
 // the app's 2 s poll grid.
@@ -95,7 +95,7 @@ const MAIN_PIPELINE = new Function('fs', 'path', 'Rules', 'Agents', 'SessionStat
   const LOCAL_HOST = ${JSON.stringify(HOST)};
   function logTransition() {}
   function wakeWhenHoldEnds() {}
-  ${['readSessionFile', 'writeJsonAtomic', 'workingAgentsStale', 'readSessions', 'syncAgents'].map(extractFn).join('\n')}
+  ${['readSessionFile', 'writeJsonAtomic', 'readSessions', 'syncAgents'].map(extractFn).join('\n')}
   return { readSessions, syncAgents, sessionFileCache };
 `);
 
