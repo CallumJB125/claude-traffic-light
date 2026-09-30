@@ -425,6 +425,43 @@ test('state survives a restart: seen ids stop a replay, live events keep showing
   assert.equal(G.readState(path.join(tmp(), 'missing.json')), null);
 });
 
+test('restart: events restored inside their hold show again but are marked announced, so they never re-sound', async () => {
+  const a = poller();
+  await a.p.tick({ sessions: SESSIONS, config: {} });
+  assert.ok(a.p.active().every((e) => !e.restored), 'fresh events are not restored');
+  const b = poller({ stateFile: a.stateFile, now: NOW + 60000 });
+  assert.ok(b.p.active().length && b.p.active().every((e) => e.restored));
+  const rules = R.defaultRules().map(R.normalizeRule);
+  const { look, owned } = R.resolve(rules, [], NOW + 60000, { git: b.p.active() });
+  assert.equal(look.sound, 'Funk');
+  assert.equal(G.soundKey(look, owned, rules, b.p.active()).restored, true);
+  // A new failure after the restart does sound: its own key, not restored.
+  b.p.ingest([{ id: 'run:acme/widget:1100:1:failure', signal: 'ci-failed', repo: 'acme/widget', at: new Date(NOW + 60000).toISOString() }]);
+  const after = R.resolve(rules, [], NOW + 60000, { git: b.p.active() });
+  const k = G.soundKey(after.look, after.owned, rules, b.p.active());
+  assert.equal(k.restored, false);
+  assert.match(k.key, /1100/);
+});
+
+test('soundKey: each new git event sounds once; a session rule keeps its plain key', () => {
+  const rules = R.defaultRules().map(R.normalizeRule);
+  const e1 = { id: 'a', signal: 'ci-failed', firedAt: 1 };
+  const e2 = { id: 'b', signal: 'ci-failed', firedAt: 2 };
+  const r1 = R.resolve(rules, [], NOW, { git: [e1] });
+  const k1 = G.soundKey(r1.look, r1.owned, rules, [e1]).key;
+  const r2 = R.resolve(rules, [], NOW, { git: [e1, e2] });
+  assert.notEqual(G.soundKey(r2.look, r2.owned, rules, [e1, e2]).key, k1, 'a second failure during the first one\'s hold sounds again');
+  assert.equal(G.soundKey(r1.look, r1.owned, rules, [e1]).key, k1, 'the same event never twice');
+  const ask = R.resolve(rules, [{ signal: 'permission-ask', cwd: '/w' }], NOW, { git: [e1] });
+  assert.deepEqual(G.soundKey(ask.look, ask.owned, rules, [e1]), { key: 'beep:permission', restored: false });
+  assert.deepEqual(G.soundKey({ sound: null }, {}, rules, [e1]), { key: null, restored: false });
+});
+
+test('git events never raise a macOS notification (only session states do)', () => {
+  const r = Help.notifications(new Set(), { sessions: [], pending: [], offline: false, git: [{ signal: 'ci-failed' }] }, {});
+  assert.deepEqual(r.fire, []);
+});
+
 test('ingest (the hub/webhook path) shares dedupe, freshness and hold with polling', async () => {
   const { p } = poller();
   const hub = p.ingest([{ id: 'run:acme/widget:1001:1:failure', signal: 'ci-failed', repo: 'acme/widget', at: '2026-09-30T11:55:00Z' }, { id: 'x', signal: 'bogus', repo: 'acme/widget' }, { id: 'old', signal: 'ci-passed', repo: 'acme/widget', at: '2026-09-29T00:00:00Z' }]);

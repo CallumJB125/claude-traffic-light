@@ -2352,8 +2352,8 @@ function maybePlayAlertSound() {
   const config = loadConfig();
   const { look, reason, owned } = aggregateState();
   if (reason === 'preview') return;
-  const key = look.sound ? `${look.sound}:${owned.sound}` : null;
-  if (config.soundOnAmber && key && key !== lastSoundKey) playSound(look.sound);
+  const { key, restored } = GitSignals.soundKey(look, owned, config.rules, config.gitSignals !== false ? git.active() : []);
+  if (config.soundOnAmber && key && key !== lastSoundKey && !restored) playSound(look.sound);
   lastSoundKey = key;
 }
 

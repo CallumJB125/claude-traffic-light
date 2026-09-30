@@ -216,7 +216,8 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   try {
     const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     if (saved && typeof saved === 'object') {
-      st.events = Array.isArray(saved.events) ? saved.events.filter((e) => e && SIGNALS.includes(e.signal)).slice(-30) : [];
+      // Already announced before the restart: shown again, but never re-sounded.
+      st.events = Array.isArray(saved.events) ? saved.events.filter((e) => e && SIGNALS.includes(e.signal)).slice(-30).map((e) => ({ ...e, restored: true })) : [];
       st.seen = saved.seen && typeof saved.seen === 'object' ? saved.seen : {};
     }
   } catch { /* first run */ }
@@ -446,6 +447,21 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
   return { tick, due, ingest, active, status, pause, request };
 }
 
+// The alert-sound memory key for a resolved look. When a git rule owns the
+// sound, the newest live event it answers to is part of the key, so each new
+// event sounds once; `restored` says that event was announced before a
+// restart and must stay quiet.
+function soundKey(look, owned, rules, events) {
+  if (!look || !look.sound) return { key: null, restored: false };
+  const base = `${look.sound}:${owned && owned.sound}`;
+  const rule = (rules || []).find((r) => r.id === (owned && owned.sound));
+  const sigs = rule && rule.when ? (rule.when.signal || []).filter((x) => SIGNALS.includes(x)) : [];
+  const mine = sigs.length ? (events || []).filter((e) => sigs.includes(e.signal)) : [];
+  if (!mine.length) return { key: base, restored: false };
+  const newest = mine.reduce((a, b) => (b.firedAt > a.firedAt ? b : a));
+  return { key: `${base}:${newest.id}:${newest.firedAt}`, restored: !!newest.restored };
+}
+
 // For readers without the poller (mcp-server.js): the state file main.js writes.
 function readState(stateFile, t = Date.now()) {
   let saved = null;
@@ -455,4 +471,4 @@ function readState(stateFile, t = Date.now()) {
   return { ...rest, active: saved.state === 'disabled' ? [] : activeEvents(events, t), recent: (Array.isArray(events) ? events : []).slice(-10).reverse() };
 }
 
-module.exports = { SIGNALS, validSegment, REPO_SKIP_MS, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, lastPagePath, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
+module.exports = { SIGNALS, validSegment, REPO_SKIP_MS, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, lastPagePath, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState, soundKey };

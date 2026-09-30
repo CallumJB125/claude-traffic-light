@@ -15,6 +15,10 @@ Only runs you triggered (`actor=<your login>`) count. A workflow is a deploy whe
 name is in Preferences → Git and CI → Deploy workflows, or, with that empty, when the
 name contains deploy, release or publish (but not "notes", "drafter" or "changelog").
 
+Git events never raise a macOS notification. Each new event plays its rule's sound once
+(Preferences → "Play a sound" permitting); events restored from the state file after a
+restart, still inside their hold, show again but stay silent.
+
 Each event fires once (deduped by run id + attempt + conclusion, review id, or
 repo#PR for a review request) and shows for 10 minutes (failures, reviews) or 2 minutes
 (passes). Anything older than 15 minutes is never fired, so a restart or a newly watched
