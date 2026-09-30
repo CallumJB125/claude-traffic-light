@@ -128,26 +128,7 @@ const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
-// Errors otherwise vanish: a packaged app has no visible terminal, so a
-// crash left zero evidence. Tee console output to a small rotating file
-// instead — capped so a busy session can't grow it unbounded.
-if (!IS_DEV_RUN) {
-  const LOG_FILE = path.join(ROOT_DIR, 'app.log');
-  const LOG_MAX_BYTES = 512 * 1024;
-  try { fs.mkdirSync(ROOT_DIR, { recursive: true }); } catch { /* already there */ }
-  for (const method of ['log', 'warn', 'error']) {
-    const orig = console[method].bind(console);
-    console[method] = (...args) => {
-      orig(...args);
-      try {
-        const stat = fs.existsSync(LOG_FILE) ? fs.statSync(LOG_FILE) : null;
-        if (stat && stat.size > LOG_MAX_BYTES) fs.renameSync(LOG_FILE, `${LOG_FILE}.old`);
-        const line = `${new Date().toISOString()} [${method}] ${args.map((a) => (a instanceof Error ? a.stack : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
-        fs.appendFileSync(LOG_FILE, line);
-      } catch { /* logging must never be why the app breaks */ }
-    };
-  }
-}
+require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
 
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
@@ -786,24 +767,7 @@ function withNumber(look, sessions, tasks) {
 }
 
 // ── Sounds ──────────────────────────────────────────────────────────────────
-function playSound(name) {
-  if (!name) return;
-  win?.webContents.send('sound-flash');
-  if (name === 'beep') { shell.beep(); return; }
-  if (IS_WIN) {
-    if (!name.startsWith('file:')) { shell.beep(); return; }
-    execFile('powershell', ['-NoProfile', '-c', `(New-Object Media.SoundPlayer '${name.slice(5).replace(/'/g, "''")}').PlaySync()`], () => {});
-    return;
-  }
-  const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
-  if (!fs.existsSync(file)) { shell.beep(); return; }
-  execFile('afplay', [file], () => {});
-}
-
-function speak(text) {
-  if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => {});
-  else execFile('say', [text], () => {});
-}
+const { playSound, speak } = require('./src/sound.js')({ getWin: () => win });
 
 function createWindow() {
   const saved = readBounds();
