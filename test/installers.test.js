@@ -1,17 +1,16 @@
 // Installers and updates: the electron-builder config, the R2 release plan,
-// auto-update wiring, and the smoke test's refusal to run on a real home.
+// and the smoke test's refusal to run on a real home (the updater itself:
+// test/updater-*.test.js).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { EventEmitter } = require('events');
 
 const Brand = require('../brand.js');
 const config = require('../electron-builder.config.js');
 const pkg = require('../package.json');
 const R2 = require('../scripts/release-r2.js');
-const AutoUpdate = require('../src/auto-update.js');
 const Smoke = require('../src/smoke.js');
 
 test('installer names say the brand; productName and appId wait for Stage 2', () => {
@@ -63,39 +62,6 @@ test('R2 is skipped cleanly when its secrets are not set', () => {
   const full = R2.config({ R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'plexiform-releases' });
   assert.equal(full.endpoint, 'https://acc.r2.cloudflarestorage.com');
   assert.equal(full.env.AWS_DEFAULT_REGION, 'auto');
-});
-
-test('auto-update runs only where an unsigned app can update itself', () => {
-  assert.equal(AutoUpdate.supported({ platform: 'win32', env: {}, packaged: true }), true);
-  assert.equal(AutoUpdate.supported({ platform: 'linux', env: { APPIMAGE: '/x.AppImage' }, packaged: true }), true);
-  assert.equal(AutoUpdate.supported({ platform: 'linux', env: {}, packaged: true }), false);
-  assert.equal(AutoUpdate.supported({ platform: 'darwin', env: {}, packaged: true }), false);
-  assert.equal(AutoUpdate.supported({ platform: 'win32', env: {}, packaged: false }), false);
-});
-
-test('auto-update reports through UpdateCheck and never restarts by itself', async () => {
-  const au = Object.assign(new EventEmitter(), { checked: 0, installed: 0, checkForUpdates() { this.checked++; return Promise.resolve(); }, quitAndInstall() { this.installed++; } });
-  const reports = [];
-  let restart = null;
-  let external = false;
-  const updateCheck = { report: (s) => reports.push(s), onRestart: (fn) => { restart = fn; }, useExternalSource: () => { external = true; } };
-  const timers = [];
-  const handle = AutoUpdate.start({ app: { isPackaged: true, getVersion: () => '1.0.0' }, updateCheck, updater: au, platform: 'win32', env: {}, setTimer: (fn) => { timers.push(fn); return {}; }, setRepeat: () => ({}) });
-  assert.ok(handle && external);
-  assert.equal(au.allowDowngrade, true);
-  assert.equal(au.autoInstallOnAppQuit, true);
-  await timers[0]();
-  assert.equal(au.checked, 1);
-  au.emit('update-available', { version: '1.1.0' });
-  au.emit('download-progress', { percent: 42.4 });
-  au.emit('update-downloaded', { version: '1.1.0' });
-  assert.deepEqual(reports.map((r) => r.state), ['downloading', 'downloading', 'ready']);
-  assert.equal(reports[1].progress, 42);
-  assert.equal(au.installed, 0, 'no restart until asked');
-  restart();
-  assert.equal(au.installed, 1);
-  au.emit('error', new Error('boom'));
-  assert.equal(reports.at(-1).state, 'error');
 });
 
 test('the smoke test refuses a real home or data folder', () => {

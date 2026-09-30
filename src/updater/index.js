@@ -56,8 +56,8 @@ function register(ipcMain, service) {
   ipcMain.handle('updater:revert', command(() => service.revert()));
 }
 
-function backendFor({ app, fetch, platform, env, userData }) {
-  if (!app.isPackaged) return null;
+function backendFor({ app, fetch, platform, env, userData, dev }) {
+  if (dev || !app.isPackaged) return null;
   if (platform === 'win32' || (platform === 'linux' && env.APPIMAGE)) return require('./electron-updater.js').create({ platform }); // privacy-flow: auto-update
   if (platform === 'linux') return require('./deb.js').create({ fetch, userData, downloadsDir: app.getPath('downloads') });
   if (platform === 'darwin') return MacSwap.create({ fetch, userData, execPath: process.execPath, quit: () => app.quit() });
@@ -67,24 +67,28 @@ function backendFor({ app, fetch, platform, env, userData }) {
 let service = null;
 
 /**
- * deps: { app, ipcMain, net (Electron), isBusy () → reason|null, argv? }
- * A dev run gets the IPC and manual checks but no back-end and no schedule.
+ * deps: { app, ipcMain, net (Electron), isBusy () → reason|null, dev?, argv? }
+ * A dev or unpackaged run gets the IPC and manual checks, but no back-end
+ * (it must never swap node_modules' Electron.app) and no schedule.
  */
-function start({ app, ipcMain, net, isBusy, argv = process.argv, platform = process.platform, env = process.env }) {
+function start({ app, ipcMain, net, isBusy, dev = false, argv = process.argv, platform = process.platform, env = process.env }) {
   const fetch = (url, init) => net.fetch(url, init); // privacy-flow: auto-update
   const userData = app.getPath('userData');
+  // Fails closed: with no key every manifest is refused as unsigned.
+  let keys = [];
+  try { keys = loadShippedKeys(); } catch (err) { console.warn('[updater] no update key:', err.message); }
   service = createService({
     fetch,
-    keys: loadShippedKeys(),
+    keys,
     feedBase: Brand.urls.updates,
     currentVersion: app.getVersion(),
     userData,
-    backend: backendFor({ app, fetch, platform, env, userData }),
+    backend: backendFor({ app, fetch, platform, env, userData, dev }),
     isBusy,
     argv,
   });
   register(ipcMain, service);
-  if (app.isPackaged) service.start();
+  if (!dev && app.isPackaged) service.start();
   return service;
 }
 
