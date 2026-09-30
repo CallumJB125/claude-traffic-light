@@ -12,6 +12,7 @@
 // Anything that doesn't fit its kind yields null: the hook prints nothing and
 // the normal terminal prompt stays in charge. Nothing here ever decides on
 // its own; the only answers are the ones a person chose.
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { hashToolInput } = require('./answer-file.js');
@@ -51,19 +52,47 @@ function suggestionLabel(s) {
   return `Allow ${rules.join(', ')} for this session`;
 }
 // Too broad to grant from a click, even for one session: a whole-tool rule for
-// a tool that runs or writes anything, a wildcard rule, or a directory that is
-// the filesystem root, the home directory or above it, relative, or has `..`.
-const WHOLE_TOOL_DENIED = new Set(['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch']);
+// a tool that runs or writes anything; a tool name that isn't a plain name
+// (MCP's mcp__server__tool is); a rule that is all wildcard once `*`, `:`,
+// `/`, `~`, `.` and blanks are taken out (Bash(* *), Edit(//**)…), or has
+// invisible characters; any domain for WebFetch; a prefix rule for a shell or
+// interpreter (Bash(sh:*) is Bash(*)). Narrow prefix rules like Bash(npm:*)
+// stay.
+const WHOLE_TOOL_DENIED = new Set(['bash', 'write', 'edit', 'multiedit', 'notebookedit', 'webfetch']);
+const TOOL_NAME = /^[A-Za-z][\w-]*$/;
+const RUNS_ANYTHING = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'csh', 'tcsh', 'fish', 'env', 'sudo', 'doas', 'xargs', 'eval', 'exec', 'command', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'osascript', 'node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'lua']);
 function broadRule(r) {
-  const content = typeof r.ruleContent === 'string' ? r.ruleContent.trim() : null;
-  if (content === null) return WHOLE_TOOL_DENIED.has(r.toolName);
-  return content === '' || content === '*' || content === ':*';
+  if (typeof r.toolName !== 'string' || !TOOL_NAME.test(r.toolName)) return true;
+  if (typeof r.ruleContent !== 'string') return WHOLE_TOOL_DENIED.has(r.toolName.toLowerCase());
+  const content = r.ruleContent;
+  if (/[\p{Cc}\p{Cf}]/u.test(content.replace(/[\t\n\r]/g, ' ').trim())) return true;
+  if (/^[\s*:/~.\p{Z}]*$/u.test(content)) return true;
+  if (r.toolName.toLowerCase() === 'webfetch' && /^\s*domain:[\s*.]*$/i.test(content)) return true;
+  if (r.toolName.toLowerCase() !== 'bash') return false;
+  const first = content.trim().split(/[\s:]/)[0].split('/').pop().toLowerCase();
+  return RUNS_ANYTHING.has(first);
 }
+
+// Directories are compared after resolving symlinks (and case-insensitively on
+// macOS, whose disk usually is): never home, anything above it, the Data volume
+// that mirrors it, ~/.claude*, or ~/.ssh.
+const real = (p) => {
+  try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+};
 function broadDirectory(d, home = os.homedir()) {
-  if (typeof d !== 'string' || !path.isAbsolute(d) || d.includes('..')) return true;
-  const dir = path.resolve(d);
-  const h = path.resolve(home);
-  return dir === h || h.startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
+  if (typeof d !== 'string' || !path.isAbsolute(d) || d.split(/[\\/]/).includes('..') || /[\p{Cc}\p{Cf}]/u.test(d)) return true;
+  const fold = (p) => (process.platform === 'darwin' || process.platform === 'win32' ? p.toLowerCase() : p);
+  const dir = fold(real(d));
+  const h = fold(real(home));
+  const under = (child, parent) => child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+  if (under(h, dir)) return true;
+  if (/^\/system\/volumes\/data(\/|$)/.test(fold(dir))) return true;
+  const rel = path.relative(h, dir);
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+    const top = rel.split(path.sep)[0];
+    if (top.startsWith('.claude') || top === '.ssh') return true;
+  }
+  return false;
 }
 const narrow = (s) => (s.type !== 'addRules' || !s.rules.some(broadRule)) && (s.type !== 'addDirectories' || !s.directories.some((d) => broadDirectory(d)));
 
