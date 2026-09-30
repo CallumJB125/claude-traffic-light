@@ -170,6 +170,10 @@ hook config for:
   one notify command, so if another tool already set one Buddy leaves it and says so
 - **Gemini CLI** — `hooks` in `~/.gemini/settings.json` (best effort)
 
+Claude Code's own hooks always run `set-status.js`. Posting Claude's payload to
+`/hook/claude` (or `emit.js --adapter claude`) works but records less — no host
+app, model, subagent list, cost or permission answers — and nothing installs it.
+
 Anything else — ChatGPT desktop via a Shortcut, a script, another IDE — can
 POST to the local endpoint or run the emitter. The endpoint is for local
 programs, not web pages: it sends no CORS headers, refuses any request with

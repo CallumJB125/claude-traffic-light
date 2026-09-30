@@ -4,6 +4,11 @@
 // event. set-status.js is the runtime (host app, pid, subagents, the blocking
 // PermissionRequest); it resolves signals through resolveSignal() below, the
 // same step normalize() gives /hook/claude and `emit.js --adapter claude`.
+//
+// Limitation: /hook/claude and `emit.js --adapter claude` go through
+// applyBareSignal, which records less than set-status.js (no host app, model,
+// subagent list, cost, or PermissionRequest answer). Nothing installs either
+// route for Claude Code; the installed hooks always run set-status.js.
 const path = require('path');
 const Runtime = require('./runtime.js');
 
