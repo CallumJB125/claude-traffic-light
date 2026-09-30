@@ -38,6 +38,7 @@
       "lights-view.js",
       "lights-preload.js",
       "rig.js",
+      "characters/**/*",
       "rig.css",
       "tokens.css",
       "motion.js",
