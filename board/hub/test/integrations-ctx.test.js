@@ -642,7 +642,8 @@ test('manifest: /start returns {form, bind} (state in the action, callback + web
   try {
     const alice = await h.login('alice');
     const before = await fetch(`${h.base}/`);
-    assert.ok(!before.headers.get('content-security-policy').includes('form-action'), 'no manifest connector: CSP unchanged');
+    // The hub offers GitHub (a manifest connector) out of the box: its form may post to github.com and nowhere else.
+    assert.match(before.headers.get('content-security-policy'), /; form-action 'self' https:\/\/github\.com$/);
     const seen = [];
     reg.register(manifestConnector({ seen }));
     const start = await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
@@ -658,7 +659,7 @@ test('manifest: /start returns {form, bind} (state in the action, callback + web
     assert.match(manifest.hook_attributes.url, new RegExp(`^${h.base}/integrations/[0-9a-f-]{36}/webhook$`));
     assert.deepEqual(seen[0].config, {}, 'no existing connection: empty config');
     const csp = (await fetch(`${h.base}/`)).headers.get('content-security-policy');
-    assert.match(csp, /; form-action 'self' https:\/\/fake-app\.example$/);
+    assert.match(csp, /; form-action 'self' (?:https:\/\/github\.com https:\/\/fake-app\.example|https:\/\/fake-app\.example https:\/\/github\.com)$/);
     assert.match(csp, /^default-src 'self'/);
   } finally { await h.close(); }
 });

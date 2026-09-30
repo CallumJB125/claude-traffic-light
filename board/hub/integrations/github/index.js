@@ -1,0 +1,142 @@
+// GitHub connector (I2), first slice: a pull request opened from a branch the
+// board created is linked to its card, its status (open/draft, checks,
+// review) is kept on the card, and merging it moves the card to Done through
+// the state machine's own pr_merged fact. Everything here is a fact, so every
+// action defaults to 'auto'; nothing speaks for a person or writes to GitHub.
+//
+// Links come only from ctx.cardForBranch (a recorded run branch in a repo of
+// this team's boards), never from text in a PR title or body, and never from
+// a fork (webhook.js drops a fork PR's branch). Connect is a GitHub App made
+// from a manifest (connect.manifestForm), so Callum approves one screen.
+
+import { defineConnector } from '../connector.js';
+import { verify as verifyWebhook, factsOf } from './webhook.js';
+
+const API = 'https://api.github.com';
+
+// What the card face shows, in the registry's allowlisted words.
+const STATE = (f) => (f.kind === 'pr.merged' ? 'merged' : f.kind === 'pr.closed' ? 'closed' : f.draft ? 'draft' : 'open');
+const CHECKS = { success: 'passing', failure: 'failing', pending: 'pending', neutral: 'none' };
+const REVIEW = { approved: 'approved', changes_requested: 'changes_requested', commented: null };
+
+export function manifest({ redirectUri, webhookUrl, name }) {
+  return {
+    name,
+    url: 'https://plexiform.dev',
+    hook_attributes: { url: webhookUrl, active: true },
+    redirect_url: redirectUri,
+    callback_urls: [redirectUri],
+    public: false,
+    default_permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' },
+    default_events: ['pull_request', 'pull_request_review', 'check_suite'],
+  };
+}
+
+// The card a fact belongs to: its existing link, or (only for a PR from a
+// board branch in the same repo) the card whose run made that branch.
+function cardFor(ctx, f) {
+  const linked = f.pr_id ? ctx.linked('pr', f.pr_id) : null;
+  if (linked) return { card: linked, linked: true };
+  if (f.branch && f.repo && typeof ctx.cardForBranch === 'function') {
+    const card = ctx.cardForBranch(f.repo, f.branch);
+    if (card) return { card, linked: false };
+  }
+  return null;
+}
+
+async function linkAndStatus(ctx, f, status) {
+  const hit = cardFor(ctx, f);
+  if (!hit) return;
+  await ctx.act(hit.linked ? 'pr.status' : 'pr.link', { external_ref: f.pr_id, detail: { pr: f.number } }, async (s) => {
+    if (!hit.linked) s.link(hit.card, 'pr', f.pr_id, f.url);
+    s.linkStatus(hit.card, 'pr', f.pr_id, status);
+  });
+  return hit.card;
+}
+
+export async function apply(ctx, facts) {
+  for (const f of facts) {
+    if (ctx.signal?.aborted) return;
+    switch (f.kind) {
+      case 'pr.opened':
+      case 'pr.updated':
+        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}) });
+        break;
+      case 'pr.review': {
+        const review = REVIEW[f.review];
+        if (review) await linkAndStatus(ctx, f, { review });
+        break;
+      }
+      case 'pr.merged':
+      case 'pr.closed': {
+        const card = await linkAndStatus(ctx, f, { state: STATE(f) });
+        if (card) await ctx.system.event(f.kind === 'pr.merged' ? 'pr_merged' : 'pr_closed', { kind: 'pr', external_id: f.pr_id, pr: f.number, by: f.by });
+        break;
+      }
+      case 'pr.checks':
+        for (const pr of f.prs) {
+          if (ctx.linked('pr', pr.pr_id)) await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
+        }
+        break;
+      default:
+    }
+  }
+}
+
+export default defineConnector({
+  id: 'github',
+  name: 'GitHub',
+  scopes: ['pull_requests:read', 'checks:read', 'metadata:read'],
+  secrets: ['app_private_key', 'webhook_secret'],
+  hosts: ['api.github.com', 'github.com'],
+
+  connect: {
+    kind: 'app_install',
+    // Creating the app is a POST form on github.com: one visible button, no
+    // auto-submit. Reconnecting goes through the same form.
+    formHost: 'github.com',
+    manifestForm({ state, redirectUri, webhookUrl, config }) {
+      const org = typeof config?.org === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(config.org) ? config.org : null;
+      const action = org ? `https://github.com/organizations/${org}/settings/apps/new?state=${encodeURIComponent(state)}` : `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`;
+      const name = String(config?.appName ?? 'Plexiform').slice(0, 34);
+      return { action, fields: { manifest: JSON.stringify(manifest({ redirectUri, webhookUrl, name })) } };
+    },
+    // The manifest callback: trade the one-time code for the app's credentials.
+    async exchange({ query, fetch }) {
+      const code = String(query?.code ?? '');
+      if (!/^[A-Za-z0-9]{1,100}$/.test(code)) throw new Error('bad manifest code');
+      const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } });
+      if (!res.ok) throw new Error(`manifest conversion failed: ${res.status}`);
+      const app = await res.json();
+      if (!app?.id || !app?.pem || !app?.webhook_secret || !/^[a-z0-9-]{1,34}$/.test(app?.slug ?? '')) throw new Error('manifest conversion returned an incomplete app');
+      return {
+        external_id: String(app.owner?.id ?? app.id),
+        display_name: String(app.owner?.login ?? app.name ?? 'GitHub').slice(0, 80),
+        scopes: ['pull_requests:read', 'checks:read', 'metadata:read'],
+        secrets: { app_private_key: app.pem, webhook_secret: app.webhook_secret },
+        settings: { app_id: app.id, app_slug: app.slug },
+        next_url: `https://github.com/apps/${app.slug}/installations/new`,
+      };
+    },
+  },
+
+  verify({ headers, rawBody, secrets }) {
+    const r = verifyWebhook({ headers, rawBody, secrets });
+    return r.ok ? { ok: true, dedupe_key: r.dedupe_key } : { ok: false, reason: r.reason };
+  },
+
+  async handleWebhook({ headers, payload, ctx }) {
+    const event = String(headers?.['x-github-event'] ?? '');
+    await apply(ctx, factsOf(event, payload));
+  },
+
+  systemEvents: ['pr_merged', 'pr_closed'],
+  actions: {
+    'system.pr_merged': { default: 'auto' },
+    'system.pr_closed': { default: 'auto' },
+    'pr.link': { default: 'auto', reversible: true },
+    'pr.status': { default: 'auto', reversible: true },
+  },
+
+  async health() { return { ok: true }; },
+});

@@ -189,7 +189,7 @@ test('HTTP: members list (no secrets), admins connect by token / configure / dis
     const bob = await h.login('bob');
     const list = await h.api(alice, 'GET', '/api/integrations');
     assert.equal(list.status, 200);
-    assert.deepEqual(list.body.available.map((c) => c.id), ['fake']);
+    assert.deepEqual(list.body.available.map((c) => c.id), ['fake', 'github']);
     assert.equal(list.body.vault, true);
     const roles = Object.fromEntries(h.db.all('SELECT id, role FROM members').map((m) => [m.id, m.role]));
     const [admin, other] = roles[h.ids.alice] === 'member' ? [bob, alice] : [alice, bob];
