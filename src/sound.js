@@ -7,6 +7,8 @@ const { execFile } = require('child_process');
 const PowerShell = require('./powershell.js');
 
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
+const LinuxAudio = require('./linux-audio.js');
 
 module.exports = ({ getWin }) => {
   function playSound(name) {
@@ -18,6 +20,7 @@ module.exports = ({ getWin }) => {
       PowerShell.run(PowerShell.SCRIPTS.playSound, [name.slice(5)], {}, () => {}); // privacy-flow: local-sound
       return;
     }
+    if (IS_LINUX) { LinuxAudio.play(name.startsWith('file:') ? name.slice(5) : null, { exists: fs.existsSync, onMissing: () => shell.beep() }); return; }
     const file = name.startsWith('file:') ? name.slice(5) : `/System/Library/Sounds/${name}.aiff`;
     if (!fs.existsSync(file)) { shell.beep(); return; }
     execFile('afplay', [file], () => {});
@@ -27,6 +30,7 @@ module.exports = ({ getWin }) => {
   // Returns the child so a new question can cut an answer short.
   function speak(text, done = () => {}) {
     if (IS_WIN) return PowerShell.run(PowerShell.SCRIPTS.speak, [String(text)], {}, () => done()); // privacy-flow: local-sound
+    if (IS_LINUX) return LinuxAudio.speak(text, done); // privacy-flow: local-sound
     // '--': a reply starting with '-' is words, never a `say` option.
     return execFile('say', ['--', String(text)], () => done());
   }
