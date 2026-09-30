@@ -82,7 +82,7 @@ function callbackHandler({ port, state, brand, finish }) {
     }
     if (!code || !CODE_RE.test(code)) { reply(res, 400, bad); return; }
     done = true;
-    reply(res, 200, `You’re signed in to ${brand}, you can close this tab.`);
+    reply(res, 200, `Finish signing in in ${brand}. You can close this tab.`);
     finish({ ok: true, code });
   };
 }
@@ -94,7 +94,7 @@ function callbackHandler({ port, state, brand, finish }) {
  */
 function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.createServer }) {
   return new Promise((resolve, reject) => {
-    let expectedState = typeof state === 'string' ? state : null;
+    let expectedState = typeof state === 'string' && state.length >= 16 ? state : null;
     let settle;
     const result = new Promise((r) => { settle = r; });
     let finished = false;
@@ -114,7 +114,8 @@ function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.c
       server.on('request', callbackHandler({ port, state: () => expectedState, brand, finish }));
       timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
       timer.unref?.();
-      resolve({ port, redirectUri: `http://127.0.0.1:${port}/callback`, address: server.address().address, result, expect: (s) => { expectedState = typeof s === 'string' ? s : null; }, close: () => finish({ ok: false, reason: 'cancelled' }) });
+      // An empty or short state would let a callback that carries none (or a guessable one) through.
+      resolve({ port, redirectUri: `http://127.0.0.1:${port}/callback`, address: server.address().address, result, expect: (s) => { expectedState = typeof s === 'string' && s.length >= 16 ? s : null; }, close: () => finish({ ok: false, reason: 'cancelled' }) });
     });
   });
 }

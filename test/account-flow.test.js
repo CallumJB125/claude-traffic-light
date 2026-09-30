@@ -682,7 +682,7 @@ test('oauth: a wrong state or a stray request never completes the flow nor echoe
   assert.equal((await fetch(callback, { method: 'POST' })).status, 405, 'GET only');
   assert.equal(h.flow.acct.screen, 'browser', 'still waiting');
   const ok = await fetch(callback);
-  assert.match(await ok.text(), /You’re signed in to Plexiform, you can close this tab/);
+  assert.equal(await ok.text(), 'Finish signing in in Plexiform. You can close this tab.', 'nothing claims a sign-in the exchange hasn’t made yet');
   await until(() => h.flow.acct.screen === 'create-team');
   assert.ok(h.vault(h.origin).load());
 }));
@@ -917,6 +917,11 @@ test('oauth: the listener refuses every callback until the hub’s state is know
   try {
     const hit = (qs) => fetch(`http://127.0.0.1:${l.port}/callback?${qs}`);
     assert.equal((await hit('code=abc&state=anything')).status, 400, 'no state known yet');
+    l.expect('');
+    assert.equal((await hit('code=abc')).status, 400, 'an empty state is no state');
+    assert.equal((await hit('code=abc&state=')).status, 400, 'an empty state is no state');
+    l.expect('short-state');
+    assert.equal((await hit('code=abc&state=short-state')).status, 400, 'under 16 characters is refused');
     l.expect('hub-minted-state-0123456789');
     assert.equal((await hit('code=abc&state=anything')).status, 400, 'wrong state');
     assert.equal((await hit('code=abc')).status, 400, 'no state');
