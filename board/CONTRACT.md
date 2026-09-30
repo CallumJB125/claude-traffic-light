@@ -240,7 +240,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 | `hb` | `{seq_hb, mono_ms, wall_ms, slept_ms, runs:[RunHb]}` | Every `HB_MS` = 15 s per device, even with no runs (presence). Not outboxed |
 | `host.suspending` | `{runs:[{run_id, card_id, fence}]}` | From Buddy's powerMonitor relay → event `host_suspending` per run. Sent immediately, not outboxed |
 | `out` | `{seq, delayed, msg:OutboxMsg}` | Durable outbox entry (§6.5) |
-| `rpc` | `{id, method, run_id, card_id, fence, repo_id, run_token, params}` | Needs the hub now; `method` ∈ `RPC_METHODS` (§6.6) |
+| `rpc` | `{id, method, run_id, card_id, fence, repo_id, run_token, params}` | Needs the hub now; `method` ∈ `RPC_METHODS` (§6.6). The hub handles a connection's frames in order, except that an `rpc` (which may wait on GitHub) starts after every earlier frame but never holds up the frames after it |
 | `salvage` | `{run_id, card_id, fence, repo_id, kind:'handover'\|'snapshot'\|'note', payload}` | Append-only, **accepts stale fences**, never changes state (§6.9). Built by `serializeOutbound` under the run scope; `repo_id` ≠ the run's → `FORBIDDEN` |
 
 `RunHb = {run_id, card_id, fence, child_alive, tool_in_flight:{name, summary, age_ms, bash_timeout_ms?}|null, last_activity_age_ms, cost_usd, post_wake_activity, wake_age_ms, gate:'open'|'closed', local_state}`. Ages are measured by the runner at send time; the hub converts each to its own monotonic clock as `rx_mono − age`.
@@ -303,7 +303,7 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 | `board_get_card` | `{key?}` | `{card, acceptance, handover_md, open_asks, comments}` | own card, parent or children only |
 | `board_list_cards` | `{column?, mine?}` | `{cards:[{key,title,column,run_state}]}` | same board **and** same repo only |
 | `board_ask_human` | `{kind:'question'\|'clarify'\|'decision', text, options?}` | `{ask_id}` | creates `asks` row + `step(block)`; `ONE_OPEN_ASK` if one is open |
-| `board_attach_evidence` | `{kind, ref, summary, result?}` | `{evidence_id, verification}` | PR/commit verified via GitHub API → `hub_verified`, else `self_reported` |
+| `board_attach_evidence` | `{kind, ref, summary, result?}` | `{evidence_id, verification}` | PR/commit verified via GitHub API → `hub_verified`, else `self_reported`. Every GitHub fetch (evidence and the merge poll) aborts after 10 s; merge polls never overlap |
 | `board_complete` | `{summary, evidence_ids}` | `{state:'in_review'}` | `EVIDENCE_MISSING` unless a `hub_verified` pr or pushed commit **and** a `test_run` or `no_tests_reason` |
 | `board_release` | `{reason, requeue}` | `{state}` | #`24` / #`25`; `POLICY_DENIED` when requeue isn't allowed |
 | `board_declare_plan` | `{summary, paths, areas?}` | `{overlaps:[…]}` | sets `runs.planned_paths` (repo-relative globs) |

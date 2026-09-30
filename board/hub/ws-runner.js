@@ -2,7 +2,8 @@
 // offers + CAS claims, heartbeats → hb.ack (current:true only for the card's
 // current fence), the durable outbox (per-device seq, dedupe, cumulative
 // acks, stale fence = ack + drop + salvage note), RPC, commands and the
-// salvage lane. Frames from one connection are handled strictly in order.
+// salvage lane. Frames from one connection are handled strictly in order,
+// except that an rpc never holds up the frames after it.
 
 import { randomUUID } from 'node:crypto';
 import { validate, compatible, PROTOCOL_VERSION, WS_CLOSE } from '../shared/protocol.js';
@@ -81,13 +82,21 @@ export class RunnerConn {
       this.error('VALIDATION', 'frame is not JSON');
       return;
     }
-    this.chain = this.chain.then(() => this.handle(msg)).catch((e) => {
+    const failed = (e) => {
       if (e instanceof HubError) this.error(e.code, e.message, msg?.id);
       else {
         this.hub.log.error('runner frame failed', { device_id: this.device_id, type: msg?.type, err: e });
         this.error('INTERNAL', 'internal error', msg?.id);
       }
-    });
+    };
+    // An rpc can wait on the network (GitHub evidence checks). It still starts
+    // after every earlier frame, but later frames (out, hb) never wait for it:
+    // a slow rpc must not stall the heartbeats that keep healthy cards green.
+    if (msg?.type === 'rpc') {
+      this.chain.then(() => this.handle(msg)).catch(failed);
+      return;
+    }
+    this.chain = this.chain.then(() => this.handle(msg)).catch(failed);
   }
 
   async handle(msg) {

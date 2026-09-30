@@ -915,6 +915,12 @@ export class Hub extends EventEmitter {
 
   // ── GitHub merge poll (Done on merge, #33/#34) ────────────────────────────
   async pollMerges() {
+    if (this.pollingMerges) return;   // a slow GitHub must not stack polls
+    this.pollingMerges = true;
+    try { await this.#pollMerges(); } finally { this.pollingMerges = false; }
+  }
+
+  async #pollMerges() {
     const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review'");
     for (const row of rows) {
       const ev = this.db.get("SELECT * FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", row.id);

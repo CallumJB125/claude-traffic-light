@@ -10,11 +10,13 @@ function ownerRepo(canonical) {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-export function createGitHub({ token = null, api = 'https://api.github.com', fetchImpl = globalThis.fetch } = {}) {
+export const GITHUB_TIMEOUT_MS = 10_000;
+
+export function createGitHub({ token = null, api = 'https://api.github.com', fetchImpl = globalThis.fetch, timeoutMs = GITHUB_TIMEOUT_MS } = {}) {
   async function get(path) {
     const headers = { accept: 'application/vnd.github+json', 'user-agent': 'board-hub', 'x-github-api-version': '2022-11-28' };
     if (token) headers.authorization = `Bearer ${token}`;
-    const res = await fetchImpl(`${api}${path}`, { headers });
+    const res = await fetchImpl(`${api}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`GitHub ${path} → ${res.status}`);
     return res.json();
