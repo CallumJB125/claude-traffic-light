@@ -35,7 +35,7 @@ module.exports = {
       { target: 'zip', arch: ['arm64', 'x64'] },
     ],
   },
-  dmg: { title: `${Brand.name} \${version}` },
+  dmg: { title: `${Brand.name} \${version}`, background: 'build/dmg-background.png' },
 
   win: {
     ...base.win,
@@ -49,6 +49,9 @@ module.exports = {
     perMachine: false,
     allowToChangeInstallationDirectory: true,
     shortcutName: Brand.name,
+    installerSidebar: 'build/installerSidebar.bmp',
+    uninstallerSidebar: 'build/installerSidebar.bmp',
+    installerHeader: 'build/installerHeader.bmp',
     uninstallDisplayName: Brand.name,
     artifactName: artifact('${ext}'),
     deleteAppDataOnUninstall: false,
