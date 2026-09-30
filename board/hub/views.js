@@ -112,6 +112,7 @@ export function cardView(hub, row, viewerId) {
   const stateAge = hub.ageOf(row.state_since);
   return {
     id: row.id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
+    agent_suggested: !!row.created_by_run_id, parent_card_id: row.parent_card_id ?? null,
     run_state: row.run_state ?? 'todo',
     blocked_kind: row.blocked_kind, fail_kind: row.fail_kind, fail_reason: row.fail_reason, resume_to: row.resume_to, fence: row.fence,
     repo: repo ? { id: repo.id, short_name: repo.short_name } : null, base_ref: row.base_ref, branch: runRow?.branch ?? null,

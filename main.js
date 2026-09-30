@@ -8,6 +8,7 @@ const Rules = require('./rules.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
+const UsageHistory = require('./usage-history.js');
 const Spend = require('./spend.js');
 const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
@@ -83,7 +84,7 @@ if (DEMO === 'knock') {
 const DIAG = process.argv.includes('--diag');
 // Dev runs (shots, playtests, demos) must never touch the real install: no
 // hook writes, no login item, no stale lock left behind.
-const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights');
+const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights') || process.argv.includes('--buddy');
 
 // Every interval/timeout the app owns goes through these so --diag can count
 // them and so nothing can leak a live timer on shutdown.
@@ -804,8 +805,26 @@ function createSettingsWindow() {
   if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
-    if (process.platform === 'darwin' && !lightsWin) app.dock.hide();
+    if (process.platform === 'darwin' && !lightsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
+}
+
+// The Buddy main window (board, views, integrations…): buddy-window/.
+const { createBuddyWindow } = require('./buddy-window');
+let buddyWin = null;
+function openBuddy(page = null) {
+  if (!buddyWin) {
+    buddyWin = createBuddyWindow({
+      openWindow: (which) => {
+        if (which === 'lights') createLightsWindow();
+        else if (which === 'settings') createSettingsWindow();
+        else if (which === 'mix') { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
+      },
+      onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin) app.dock.hide(); },
+    });
+  }
+  if (IS_MAC) app.dock.show();
+  buddyWin.open(page);
 }
 
 let lightsWin = null;
@@ -912,7 +931,7 @@ function createLightsWindow() {
   if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
-    if (process.platform === 'darwin' && !settingsWin) app.dock.hide();
+    if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
 
@@ -1812,6 +1831,7 @@ function createTray() {
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
   const menu = Menu.buildFromTemplate([
+    { label: 'Open Buddy…', accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
@@ -2146,8 +2166,7 @@ async function computeCosts() {
   if (turns.length) {
     noteCostSource('transcripts');
     const data = Usage.spend(turns);
-    for (const [key, cost] of Object.entries(data.history)) Stats.recordCost(stats, key, cost);
-    statsDirty = true;
+    // per-day cost comes from the permanent record (applyHistoryToStats), not from here
     costCache = { at: Date.now(), data };
     return data;
   }
@@ -2232,6 +2251,17 @@ function getUsageTurns() {
 // in a shell rc (never edited from here).
 ipcMain.handle('model-mix', async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
 
+// The Usage tab and buddy_usage_history read the permanent record from disk.
+// Asking also nudges a fresh fold in, so an open tab stays current.
+ipcMain.handle('usage-history', (_e, q = {}) => {
+  if (Date.now() - historyAt > HISTORY_LIVE_MS && spendTurns.turns) historyTick();
+  const store = UsageHistory.open({ root: ROOT_DIR });
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const now = Date.now();
+  const out = UsageHistory.query(store, { from: num(q.from, now - 30 * 86400000), to: num(q.to, now), groupBy: q.groupBy || 'day', project: q.project || null });
+  return { ...out, extent: UsageHistory.extent(store), progress: historyState.progress };
+});
+
 // Hook activity is what moves spend, so each burst of it gets a fresh read
 // once something has asked for usage. The reader is incremental — a warm
 // pass over ~500 transcripts measured 16 ms — so the floor between reads
@@ -2258,7 +2288,10 @@ function spendRead(since) {
     try {
       spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
       spendWorker.unref();
-      spendWorker.on('message', (m) => { const p = spendPending.get(m.id); spendPending.delete(m.id); if (p) (m.error ? p.reject(new Error(m.error)) : p.resolve(m)); });
+      spendWorker.on('message', (m) => {
+        if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
+        const p = spendPending.get(m.id); spendPending.delete(m.id); if (p) (m.error ? p.reject(new Error(m.error)) : p.resolve(m));
+      });
       spendWorker.on('error', (err) => {
         console.warn('[spend] worker failed, reading inline:', err.message);
         spendWorker = false;
@@ -2277,6 +2310,41 @@ function spendRead(since) {
     spendWorker.postMessage({ id, root: PROJECTS_DIR, since });
   });
 }
+// ── Usage history: the permanent daily record (usage-history.js) ──────────
+// Folded in by the spend worker on the same transcript pass (history.tick),
+// so there is one parse, not two. Everything reads it back from disk.
+const HISTORY_EVERY_MS = 60 * 60 * 1000;
+const HISTORY_LIVE_MS = 5000;
+let historyAt = 0;
+let historyState = { first: false, progress: null, lastDone: null };
+function historyTick() {
+  historyAt = Date.now();
+  if (spendWorker) { spendWorker.postMessage({ type: 'history.tick', root: PROJECTS_DIR, dataDir: ROOT_DIR, statsFile: STATS_FILE }); return; }
+  // no worker: fold what the main thread already read
+  if (!spendTurns.turns) return;
+  try {
+    const store = UsageHistory.open({ root: ROOT_DIR });
+    UsageHistory.record(store, spendTurns.turns);
+    UsageHistory.flush(store);
+    applyHistoryToStats();
+  } catch (err) { console.warn('[history] inline tick failed:', err.message); }
+}
+function onHistoryMessage(m) {
+  if (m.type === 'history.progress') { historyState.progress = { done: m.done, of: m.of }; return; }
+  if (m.type === 'history.error') { console.warn('[history] tick failed:', m.error); return; }
+  historyState = { ...historyState, progress: null, lastDone: Date.now() };
+  if (m.first || m.added) console.log(`[history] ${m.first ? 'backfill' : 'recorded'}: ${m.added} turns${m.imported ? `, ${m.imported} legacy days` : ''}`);
+  applyHistoryToStats();
+}
+// The Stats page's per-day cost is the record's, so the two can't disagree.
+function applyHistoryToStats() {
+  try {
+    const store = UsageHistory.open({ root: ROOT_DIR });
+    const q = UsageHistory.query(store, { from: Date.now() - 60 * 86400000, to: Date.now(), groupBy: 'day' });
+    for (const r of q.rows) if (r.turns || r.legacyCost) Stats.recordCost(stats, r.key, r.cost);
+    statsDirty = true;
+  } catch (err) { console.warn('[history] stats sync failed:', err.message); }
+}
 let spendInFlight = null;
 let spendReadAt = 0;
 const SPEND_POLL_MS = 15000;
@@ -2290,6 +2358,7 @@ function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
       if (!spendTurns.turns || Date.now() - t0 > 1000) console.log(`[spend] read ${r.parsed} files in ${Date.now() - t0} ms${spendWorker ? ' (worker)' : ''}`);
       if (r.unchanged && spendTurns.turns) return;
       spendTurns = { version: spendTurns.version + 1, turns: r.turns };
+      if (Date.now() - historyAt > HISTORY_EVERY_MS) historyTick();
       stateMemo = { at: 0, key: null, value: null };
       broadcastStatus();
     })
@@ -2789,6 +2858,7 @@ if (!gotLock) {
     // window throws — and an uncaught throw here took the whole app down.
     try {
       if (argv.includes('--lights')) createLightsWindow();
+      else if (argv.includes('--buddy')) openBuddy();
       else win?.show();
     } catch (err) {
       console.error('[second-instance] could not surface a window:', err.message);
@@ -2825,6 +2895,24 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
+  // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
+  // window (optionally on a page) and can capture both halves, then quit.
+  if (process.argv.includes('--buddy')) {
+    const at = process.argv.indexOf('--buddy');
+    const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
+    openBuddy(page);
+    const shotAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-shot');
+    if (shotAt > 0 && process.argv[shotAt + 1]) {
+      setTimeout(async () => {
+        const shots = await buddyWin.capture();
+        const prefix = process.argv[shotAt + 1];
+        fs.writeFileSync(`${prefix}-sidebar.png`, shots.sidebar.toPNG());
+        if (shots.content) fs.writeFileSync(`${prefix}-content.png`, shots.content.toPNG());
+        console.log('[buddy-shot]', JSON.stringify(buddyWin.status()));
+        app.quit();
+      }, Number(process.env.BUDDY_SHOT_DELAY_MS ?? 6000));
+    }
+  }
   // After the widget has had time to appear, so the panel can sit beside it.
   if (process.argv.includes('--help-window') || process.argv.includes('--shot-help')) setTimeout(createHelpWindow, 1200);
   else setTimeout(maybeAutoShowHelp, 2500);
@@ -2958,6 +3046,15 @@ function guardRenderer(w, name, recreate) {
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
 app.on('before-quit', () => { flushStats(); lightsWin?.destroy(); settingsWin?.destroy(); });
+// The embedded board hub gets SIGTERM and a grace period to close its DB
+// before we exit, once; a second quit goes straight through.
+let hubStopped = false;
+app.on('before-quit', (e) => {
+  if (hubStopped || !buddyWin) return;
+  e.preventDefault();
+  hubStopped = true;
+  buddyWin.stop().finally(() => app.quit());
+});
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
 

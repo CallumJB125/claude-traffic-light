@@ -83,3 +83,36 @@ test('a device of another org cannot see or claim cards; a tampered run token is
     await h.destroy();
   }
 });
+
+test('METHOD_SCOPES: every runner RPC (runner-only ones too) has a declared scope that matches its board-mcp tool', async () => {
+  const { METHOD_SCOPES } = await import('../rpc.js');
+  const { RPC_METHODS, RUNNER_ONLY_RPC, TOOL_SCOPES, MCP_TOOL_SCOPES } = await import('../../shared/protocol.js');
+  assert.deepEqual(Object.keys(METHOD_SCOPES).sort(), [...RPC_METHODS].sort());
+  for (const m of RUNNER_ONLY_RPC) assert.ok(METHOD_SCOPES[m], m);
+  for (const [m, s] of Object.entries(METHOD_SCOPES)) {
+    assert.ok(TOOL_SCOPES[s], `${m}: ${s} is a known scope`);
+    if (MCP_TOOL_SCOPES[m]) assert.equal(s, MCP_TOOL_SCOPES[m], m);
+  }
+  assert.ok(Object.isFrozen(METHOD_SCOPES));
+});
+
+test('board_recall (repo:read) returns only this board\'s notes, not another board\'s on the same repo', async () => {
+  const h = await startHub();
+  try {
+    const alice = await h.login('alice');
+    const r = await h.runner(await h.enroll(alice));
+    const run = await h.startRun(alice, r);
+    const now = new Date().toISOString();
+    const orgId = h.db.get('SELECT org_id FROM boards WHERE id = ?', h.ids.board).org_id;
+    h.db.insert('boards', { id: 'b-side', org_id: orgId, name: 'Side', key_prefix: 'SIDE', next_key: 2 });
+    h.db.insert('board_repos', { board_id: 'b-side', repo_id: run.repo_id });
+    h.db.insert('cards', { id: 'c-side', board_id: 'b-side', key: 'SIDE-1', title: 'side', body: '', repo_id: run.repo_id, created_by: h.ids.alice, created_at: now, updated_at: now });
+    const mem = (id, cardId, body) => h.db.insert('memories', { id, org_id: orgId, repo_id: run.repo_id, kind: 'handoff', body, card_id: cardId, author_run_id: run.run_id, created_at: now, updated_at: now });
+    mem('m-ours', run.card_id, 'our handoff');
+    mem('m-side', 'c-side', 'side board handoff');
+    const rec = await r.rpc(run, 'board_recall', {});
+    assert.deepEqual(rec.result.memories.map((m) => m.id), ['m-ours']);
+  } finally {
+    await h.destroy();
+  }
+});

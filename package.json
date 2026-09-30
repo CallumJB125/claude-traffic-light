@@ -38,6 +38,7 @@
       "lights-view.js",
       "lights-preload.js",
       "rig.js",
+      "characters/**/*",
       "rig.css",
       "tokens.css",
       "motion.js",
@@ -56,12 +57,23 @@
       "overlay-preload.js",
       "stats.js",
       "usage.js",
+      "usage-history.js",
       "spend.js",
       "mcp-server.js",
       "mcp-install.js",
       "agents.js",
       "tray.html",
-      "tray-preload.js"
+      "tray-preload.js",
+      "buddy-window/**/*",
+      "board/package.json",
+      "board/hub/**/*",
+      "board/shared/**/*",
+      "board/web/**/*",
+      "!board/**/test/**",
+      "!board/web/mock/**",
+      "!board/web/scripts/**",
+      "!board/hub/data/**",
+      "!board/**/*.db*"
     ],
     "extraResources": [
       {
@@ -123,6 +135,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.22.0",
     "zod": "^4.6.2"
   }
 }
