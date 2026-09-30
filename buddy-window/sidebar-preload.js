@@ -1,5 +1,5 @@
-// Sidebar bridge: pick a page or workspace, retry the board, sign out of a
-// team hub, read the page list, hear state.
+// Sidebar bridge: pick a page, a workspace or an account action, retry the
+// board, sign out of an Access-fallback hub, read the page list, hear state.
 // Nothing else crosses; main validates every id.
 const { contextBridge, ipcRenderer } = require('electron');
 
