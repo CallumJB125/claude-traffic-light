@@ -932,6 +932,9 @@ function createWindow() {
   win.on('restore', visibility(true));
   win.on('hide', visibility(false));
   win.on('minimize', visibility(false));
+  // Those only fire on a change; a widget that loads hidden (showWidget off)
+  // would otherwise run its clocks until its first hide.
+  win.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) visibility(win.isVisible() && !win.isMinimized())(); });
   win.on('closed', () => {
     win = null;
   });
