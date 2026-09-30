@@ -37,6 +37,21 @@ try {
   await fatal('startup failed', e, 1);
 }
 parent?.postMessage({ type: 'board.listening', port: addr.port, hub_epoch: app.hub.epoch, ...(app.hub.localSecret ? { local_secret: app.hub.localSecret } : {}) });
+// D36: the desktop app sends the integrations key (from macOS safeStorage)
+// this way, never through env. Local mode only, once; never logged.
+if (parent && config.auth === 'local') {
+  parent.on('message', (e) => {
+    const m = e?.data;
+    if (m?.type !== 'board.enc_key') return;
+    try {
+      app.hub.setVaultKey(Buffer.from(String(m.key ?? ''), 'base64'));
+      parent.postMessage({ type: 'board.enc_key', ok: true });
+    } catch (err) {
+      log.warn('board.enc_key ignored', { reason: err.message });
+      parent.postMessage({ type: 'board.enc_key', ok: false, reason: err.message });
+    }
+  });
+}
 if (app.devLoginSecret) {
   // Printed, not logged: the log may be shipped somewhere; this is for the person at the terminal.
   process.stderr.write(`\nDEV AUTH (loopback only; never behind any proxy or tunnel). Sign in at:\n  http://${config.bind}:${addr.port}/#dev_secret=${app.devLoginSecret}\n\n`);

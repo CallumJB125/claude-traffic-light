@@ -184,6 +184,31 @@ test('server.js under a parentPort: board.listening with the real port (BOARD_PO
   }
 });
 
+test('server.js under a parentPort: board.enc_key is accepted once, bad keys are refused, and the key never reaches the logs (D36)', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
+  const s = runServer({ BOARD_AUTH: 'local', BOARD_PORT: '0', BOARD_DATA_DIR: dataDir, BOARD_LOG_LEVEL: 'debug' });
+  const reply = () => new Promise((ok) => s.child.once('message', ok));
+  try {
+    assert.equal((await s.message()).type, 'board.listening');
+    let r = reply();
+    s.child.send({ type: 'board.enc_key', key: Buffer.alloc(16, 1).toString('base64') });
+    assert.deepEqual(await r, { type: 'board.enc_key', ok: false, reason: 'vault key must be 32 bytes' });
+    const key = Buffer.alloc(32, 7).toString('base64');
+    r = reply();
+    s.child.send({ type: 'board.enc_key', key });
+    assert.deepEqual(await r, { type: 'board.enc_key', ok: true });
+    r = reply();
+    s.child.send({ type: 'board.enc_key', key: Buffer.alloc(32, 9).toString('base64') });
+    assert.deepEqual(await r, { type: 'board.enc_key', ok: false, reason: 'vault key already set' });
+    s.child.kill('SIGTERM');
+    assert.equal(await s.exited, 0);
+    assert.ok(!s.out.stderr.includes(key) && !s.out.stdout.includes(key), 'the key is not in the log');
+  } finally {
+    s.child.kill('SIGKILL');
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('server.js under a parentPort: startup errors send board.fatal and exit non-zero; dev mode sends no local_secret', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'board-local-'));
   try {

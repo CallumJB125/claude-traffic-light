@@ -56,6 +56,7 @@ export class Hub extends EventEmitter {
     this.requestCache = new Map();  // `${member}|${request_id}` → {status, body, exp}
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
     this.secret = config.secret ?? this.loadSecret();
+    this.vaultKey = null;
     this.limiter = new RateLimiter({ now: () => this.mono(), limits: config.rateLimits });
   }
 
@@ -65,6 +66,15 @@ export class Hub extends EventEmitter {
   iso() { return new Date(this.clock.wall()).toISOString(); }
   uptime() { return this.mono() - this.bootMono; }
   ageOf(isoTime) { return isoTime == null ? null : Math.max(0, this.wallMs() - Date.parse(isoTime)); }
+
+  // Integrations encryption key handed in by the desktop app (local mode, over
+  // parentPort; D36). Held in memory only; set once.
+  setVaultKey(buf) {
+    if (this.vaultKey) throw new Error('vault key already set');
+    if (!Buffer.isBuffer(buf) || buf.length !== 32) throw new Error('vault key must be 32 bytes');
+    this.vaultKey = Buffer.from(buf);
+    this.emit('vault-key');
+  }
 
   loadSecret() {
     let s = this.db.meta('secret');
