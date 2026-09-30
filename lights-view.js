@@ -491,6 +491,7 @@
     sel.value = r.then.sound || '';
     $('sound-play').disabled = !r.then.sound;
     $('celebrate').checked = !!r.then.celebrate;
+    $('busy-ping').value = r.then.busyPing || '';
     $('text-row').hidden = !(r.then.pose === 'banner' || r.then.pose === 'bubble');
     $('text-row').querySelector('.lbl').textContent = r.then.pose === 'bubble' ? 'Bubble says' : 'Banner says';
     $('text').value = r.then.text || '';
@@ -517,6 +518,7 @@
   $('agents-color').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.then.agentsColor = e.target.value; touch(); });
   $('source').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.when.source = e.target.value || null; setDirty(true); });
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
+  $('busy-ping').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.busyPing = e.target.value; else delete r.then.busyPing; setDirty(true); });
   $('celebrate').addEventListener('change', (e) => { const r = selected(); if (!r) return; r.then.celebrate = e.target.checked; setDirty(true); stageCelebrate(e.target.checked); });
   $('delete-btn').addEventListener('click', () => selectedId && remove(selectedId));
 

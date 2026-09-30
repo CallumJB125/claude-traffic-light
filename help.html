@@ -53,6 +53,11 @@
     <ul id="why"></ul>
   </section>
 
+  <section id="busy-box" hidden>
+    <h2 id="busy-title">Busy</h2>
+    <p id="busy"></p>
+    <p id="away" class="rule" hidden></p>
+  </section>
   <section id="agents-box" hidden>
     <h2>The little chips</h2>
     <p id="agents"></p>
@@ -95,6 +100,11 @@
       why.replaceChildren(...h.why.map((w) => li(`<b>${esc(w.label)}:</b> ${esc(w.value)}${w.rule ? ` <span class="rule">— from “${esc(w.rule)}”</span>` : ''}`)));
       if (h.also.length) why.append(li(`<span class="rule">Also active: ${h.also.map(esc).join(', ')}</span>`));
       $('why-box').hidden = !why.children.length;
+      $('busy-box').hidden = !h.busy && !h.away;
+      $('busy-title').textContent = h.busy && h.busy.busy ? `Busy${h.busy.until ? ` until ${new Date(h.busy.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''} — pings held` : h.busy ? 'Busy & Focus' : 'While you were away';
+      $('busy').textContent = h.busy ? h.busy.text : '';
+      $('away').hidden = !h.away;
+      $('away').textContent = h.away ? `While you were away: ${h.away}` : '';
       $('agents-box').hidden = !h.agents;
       if (h.agents) {
         $('agents').textContent = h.agents.text;

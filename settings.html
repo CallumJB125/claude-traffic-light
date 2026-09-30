@@ -118,6 +118,10 @@
   }
   #status.err { color: var(--danger-text); }
   code { font-size: 0.92em; overflow-wrap: anywhere; }
+  input[type="url"], input[type="text"].wide { width: 100%; background: var(--panel-2); border: 1px solid var(--line-input); border-radius: var(--radius); color: inherit; padding: 5px var(--space-2); font: inherit; }
+  #busy-sources { display: flex; flex-direction: column; gap: 3px; padding-left: 23px; }
+  .busy-state { font-size: var(--text-xs); color: var(--muted); padding-left: 23px; margin-top: -3px; }
+  .busy-state.ok { color: var(--green); }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
     button:active { transform: none; }
@@ -249,6 +253,30 @@
     <div class="hint">Which signal lights which lamp, eye colours and poses now live in <b>Lights…</b> in the tray menu (or right-click the widget).</div>
   </div>
 
+  <h2>Busy &amp; Focus</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
+    <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
+    <div id="busy-sources" role="group" aria-label="Busy when">
+      <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar)</label>
+      <div class="busy-state" id="busy-calendar-state"></div>
+      <label class="row"><input type="checkbox" id="busyCalendarTitles" /> Show the meeting's name in the recap</label>
+      <label class="row"><input type="checkbox" id="busyFocus" /> A Focus or Do Not Disturb is on</label>
+      <div class="busy-state" id="busy-focus-state"></div>
+    </div>
+  </div>
+  <div class="field">
+    <label for="busyIcsUrl">Calendar feed (ICS), optional</label>
+    <input type="url" id="busyIcsUrl" placeholder="https://… or webcal://… .ics" spellcheck="false" aria-describedby="hint-ics" />
+    <div class="busy-state" id="busy-ics-state" style="padding-left:0"></div>
+    <div class="hint" id="hint-ics">For a calendar that isn't in macOS Calendar: paste its secret iCal address (Google: Settings › your calendar › “Secret address in iCal format”). Refreshed every 10 minutes; events marked Free are ignored.</div>
+  </div>
+  <div class="field">
+    <label for="busyFocusShortcut">Focus Shortcut, optional</label>
+    <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Buddy Focus" spellcheck="false" aria-describedby="hint-focus" />
+    <div class="hint" id="hint-focus">macOS only lets Buddy read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Buddy never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
+  </div>
+
   <div class="actions">
     <span id="status" role="status" aria-live="polite"></span>
     <button id="save">Save</button>
@@ -285,6 +313,49 @@
       document.getElementById('agentChipSize').value = ['small', 'normal', 'large'].includes(config.agentChipSize) ? config.agentChipSize : 'normal';
       document.getElementById('roam').checked = config.roam !== false;
       document.getElementById('randomEvents').checked = config.randomEvents !== false;
+      document.getElementById('busyHold').checked = config.busyHold !== false;
+      document.getElementById('busyCalendar').checked = config.busyCalendar !== false;
+      document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
+      document.getElementById('busyFocus').checked = config.busyFocus !== false;
+      document.getElementById('busyIcsUrl').value = config.busyIcsUrl || '';
+      document.getElementById('busyFocusShortcut').value = config.busyFocusShortcut || '';
+      showBusy();
+    }
+
+    // What each busy source can actually see right now.
+    const CAL_WORDS = {
+      fullAccess: ['Connected.', true],
+      notDetermined: ['Buddy asks for calendar access once, the first time it looks.', false],
+      denied: ['Calendar access is off. Turn on Claude Buddy in System Settings › Privacy & Security › Calendars.', false],
+      restricted: ['Calendar access is blocked on this Mac (a profile or Screen Time).', false],
+      writeOnly: ['Buddy has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
+      missing: ['Not available in this build (the calendar helper is missing). An ICS feed still works.', false],
+    };
+    const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    async function showBusy() {
+      let st;
+      try { st = await window.settingsApi.busyStatus(); } catch { return; }
+      const cal = document.getElementById('busy-calendar-state');
+      const words = st.calendar.on ? CAL_WORDS[st.calendar.status] || ['Checking…', false] : ['', false];
+      cal.textContent = words[0] + (words[1] && st.calendar.next ? ` Next busy: ${hhmm(st.calendar.next)}.` : '');
+      cal.className = `busy-state${words[1] ? ' ok' : ''}`;
+      if (st.calendar.on && ['denied', 'writeOnly'].includes(st.calendar.status)) {
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'secondary';
+        open.style.marginLeft = '6px';
+        open.style.padding = '1px 8px';
+        open.textContent = 'Open Privacy settings';
+        open.addEventListener('click', () => window.settingsApi.busyOpenPrivacy());
+        cal.append(open);
+      }
+      const focus = document.getElementById('busy-focus-state');
+      focus.textContent = !st.focus.on ? '' : st.focus.via ? `Reading Focus ${st.focus.via === 'shortcut' ? 'through your Shortcut' : 'directly'}${st.focus.focused ? ` — on now${st.focus.mode ? ` (${st.focus.mode})` : ''}` : ''}.`
+        : st.focus.error === 'no-access' ? 'Can’t read Focus here without Full Disk Access — use a Focus Shortcut below.' : st.focus.error ? `Focus unavailable: ${st.focus.error}` : 'Checking…';
+      focus.className = `busy-state${st.focus.via ? ' ok' : ''}`;
+      const ics = document.getElementById('busy-ics-state');
+      ics.textContent = !st.ics.on ? '' : st.ics.error ? `Couldn’t load it: ${st.ics.error}` : st.ics.fetchedAt ? `Loaded ${st.ics.events} event${st.ics.events === 1 ? '' : 's'}.` : 'Loading…';
+      ics.className = `busy-state${st.ics.on && !st.ics.error && st.ics.fetchedAt ? ' ok' : ''}`;
     }
 
     document.getElementById('save').addEventListener('click', async () => {
@@ -311,7 +382,14 @@
         agentChipSize: document.getElementById('agentChipSize').value,
         roam: document.getElementById('roam').checked,
         randomEvents: document.getElementById('randomEvents').checked,
+        busyHold: document.getElementById('busyHold').checked,
+        busyCalendar: document.getElementById('busyCalendar').checked,
+        busyCalendarTitles: document.getElementById('busyCalendarTitles').checked,
+        busyFocus: document.getElementById('busyFocus').checked,
+        busyIcsUrl: document.getElementById('busyIcsUrl').value.trim().slice(0, 2000),
+        busyFocusShortcut: document.getElementById('busyFocusShortcut').value.trim().slice(0, 100),
       });
+      setTimeout(showBusy, 1500);
       status.className = '';
       status.textContent = 'Saved';
       setTimeout(() => (status.textContent = ''), 2500);

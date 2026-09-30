@@ -489,7 +489,7 @@ test('minions: the app’s agentKinds filter decides which agents get chips', ()
 // ── Click-through: what index.html's hit test relies on ──────────────────
 test('hit test: the elements index.html probes for are there and clickable', () => {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  assert.match(html, /el\.closest\('#gear, #help, #ask, \.minion'\)/, 'index.html hit test changed — update this test');
+  assert.match(html, /el\.closest\('#gear, #help, #ask, #away, \.minion'\)/, 'index.html hit test changed — update this test');
   assert.match(html, /el\.closest\('svg\.rig'\)/);
   assert.match(html, /closest\('\.pet'\)/);
   const { svg, rig } = mount();

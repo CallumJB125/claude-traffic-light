@@ -26,7 +26,7 @@ function freePort() {
   });
 }
 
-async function launchApp({ extraArgs = [], config = {} } = {}) {
+async function launchApp({ extraArgs = [], config = {}, env = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
@@ -44,6 +44,7 @@ async function launchApp({ extraArgs = [], config = {} } = {}) {
       ...process.env,
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
+      ...env,
     },
   });
   const cleanup = async () => {

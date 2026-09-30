@@ -143,6 +143,13 @@ const DEFAULT_CONFIG = {
   agentChipSize: 'normal',
   roam: true,
   randomEvents: true,
+  // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
+  busyHold: true,
+  busyCalendar: true,
+  busyCalendarTitles: false,
+  busyIcsUrl: '',
+  busyFocus: true,
+  busyFocusShortcut: '',
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const STATS_FILE = path.join(ROOT_DIR, 'stats.json');
@@ -545,7 +552,7 @@ function computeState(opts = {}) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks, away: BusyWatch.recap() };
   }
   const override = readManualOverride();
   if (override) {
@@ -558,14 +565,14 @@ function computeState(opts = {}) {
   // replaces the look only; the chips, number and season still apply.
   const { look, fired, owned } = pending.length
     ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
-    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online });
+    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online, ...BusyWatch.env() });
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -593,6 +600,69 @@ function withNumber(look, sessions, tasks) {
 
 // ── Sounds ──────────────────────────────────────────────────────────────────
 const { playSound, speak } = require('./src/sound.js')({ getWin: () => win });
+
+// ── Busy / free (F5) ────────────────────────────────────────────────────────
+// Calendar, ICS and Focus decide whether you're busy; while you are, pings
+// (sounds, notifications, knocks) wait unless the rule behind them lets them
+// through, and the lamps carry on as normal. src/busy-watch.js has the rest.
+const BusyWatch = require('./src/busy-watch.js')({
+  rootDir: ROOT_DIR,
+  home: os.homedir(),
+  helperPath: app.isPackaged ? path.join(process.resourcesPath, 'calendar-helper', 'buddy-calendar') : path.join(__dirname, 'native', 'bin', 'buddy-calendar'),
+  loadConfig,
+  isDevRun: IS_DEV_RUN,
+  fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
+  tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  readFile: (f) => fs.readFileSync(f, 'utf8'),
+  writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
+  exists: (f) => fs.existsSync(f),
+  fetch: (url) => net.fetch(url),
+  log: (...a) => console.log(...a),
+  onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
+});
+
+// Whether a ping from this rule may sound now. Not busy: always.
+function pingAllowed(ruleId, opts = {}) {
+  if (!BusyWatch.holding()) return true;
+  const rule = loadConfig().rules.find((r) => r.id === ruleId);
+  if (Rules.pingsWhileBusy(rule, opts)) return true;
+  BusyWatch.noteHeld();
+  return false;
+}
+// A notification kind is a signal; the first enabled rule listening for it
+// decides, so "Needs your input" follows that rule's busy setting.
+function notificationAllowed(n) {
+  if (!BusyWatch.holding()) return true;
+  const rule = Rules.orderedRules(loadConfig().rules).find((r) => r.enabled && r.when.signal.includes(n.kind));
+  const ok = rule ? Rules.pingsWhileBusy(rule, { session: n.session }) : n.kind !== 'turn-failed';
+  if (!ok) BusyWatch.noteHeld();
+  return ok;
+}
+
+// The recap as the widget and the summary notification show it.
+function showAwayRecap(recap) {
+  console.log(`[busy] back — ${recap.headline}`);
+  const config = loadConfig();
+  if (IS_DEV_RUN || config.notifyOnStates === false || !Notification.isSupported()) return;
+  const note = new Notification({ title: 'While you were away', body: recap.headline, silent: true });
+  liveNotifications.add(note);
+  note.on('click', () => { liveNotifications.delete(note); openAwayItem(0); });
+  note.on('close', () => liveNotifications.delete(note));
+  note.show();
+}
+async function openAwayItem(i) {
+  const recap = BusyWatch.recap();
+  const item = recap && recap.items[Number(i) || 0];
+  if (!item) return { opened: 'none' };
+  if (item.cwd) clipboard.writeText(item.cwd);
+  const activated = await activateTerminalApp(item.folder, item.hostApp || undefined);
+  return { opened: activated?.app || 'none-found', folder: item.folder };
+}
+ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
+ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+ipcMain.handle('busy-status', () => BusyWatch.status());
+ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
 function createWindow() {
   const saved = readBounds();
@@ -844,7 +914,7 @@ function createHelpWindow() {
 
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
-  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null });
+  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status() });
 }
 
 ipcMain.handle('open-help', createHelpWindow);
@@ -870,6 +940,7 @@ function maybeNotify(st) {
   const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online }, loadConfig());
   notifyKeys = keys;
   for (const n of fire) {
+    if (!notificationAllowed({ ...n, session: st.sessions.find((s) => n.key.endsWith(`:${s.sessionId}`)) || null })) { console.log(`[notify] held while busy: ${n.key}`); continue; }
     console.log(`[notify] ${n.key} — ${n.title}`);
     if (IS_DEV_RUN || !Notification.isSupported()) continue;
     // Silent: the widget's own sound channel already speaks for these states.
@@ -1445,9 +1516,11 @@ function broadcastStatus() {
   helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    const recap = BusyWatch.observe(st.sessions);
+    if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
-    applyStrip(!!(st.pending && st.pending.length) && !travelLook);
+    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -1600,6 +1673,8 @@ function maybeRoam(st) {
   if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; return; }
+  // A knock is a ping: while you're busy only the lamp owner's rule can send one.
+  if (BusyWatch.holding() && !Rules.pingsWhileBusy(loadConfig().rules.find((r) => r.id === (st.owned && st.owned.lamp)), { lamp: st.look.lamp })) return;
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
@@ -2185,16 +2260,20 @@ ipcMain.handle('answer-request', (e, id, decision) => {
   return ok;
 });
 
-// The widget grows a strip of Allow / Deny buttons while a request waits.
+// The widget grows a strip of Allow / Deny buttons while a request waits,
+// or the "While you were away" recap once a busy spell ends. The ask wins:
+// it is the one that blocks a session.
 const STRIP_PX = 46;
-let stripShown = false;
-function applyStrip(show) {
-  if (!win || show === stripShown) return;
-  stripShown = show;
+const AWAY_PX = 64;
+let stripPx = 0;
+function applyStrip(asking, away = false) {
+  const px = asking ? STRIP_PX : away ? AWAY_PX : 0;
+  if (!win || px === stripPx) return;
   const b = win.getBounds();
   win.setAspectRatio(0);
-  win.setBounds({ ...b, height: b.height + (show ? STRIP_PX : -STRIP_PX) });
-  if (!show) win.setAspectRatio(WIDGET_ASPECT);
+  win.setBounds({ ...b, height: b.height + px - stripPx });
+  stripPx = px;
+  if (!px) win.setAspectRatio(WIDGET_ASPECT);
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));
@@ -2346,7 +2425,7 @@ function maybePlayAlertSound() {
   const { look, reason, owned } = aggregateState();
   if (reason === 'preview') return;
   const key = look.sound ? `${look.sound}:${owned.sound}` : null;
-  if (config.soundOnAmber && key && key !== lastSoundKey) playSound(look.sound);
+  if (config.soundOnAmber && key && key !== lastSoundKey && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
   lastSoundKey = key;
 }
 
@@ -2479,6 +2558,7 @@ app.whenReady().then(() => {
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
   every(5000, checkOnline, 'net');
+  BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }

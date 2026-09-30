@@ -78,6 +78,24 @@
   #ask .allow { background: var(--green); }
   #ask .deny { background: var(--danger); }
   #ask button:active { transform: scale(0.96); }
+
+  /* "While you were away": what happened during a meeting or Focus, shown
+     once it ends. Each row jumps to that session's terminal. */
+  #away { display: none; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 60px; box-sizing: border-box; padding: 3px 5px; border-radius: var(--radius); background: rgba(20, 20, 22, 0.92); color: rgba(255, 255, 255, 0.92); font: 500 9px/1.25 -apple-system, system-ui, sans-serif; flex-direction: column; gap: 1px; overflow: hidden; }
+  body.away:not(.asking) #away { display: flex; }
+  body.away:not(.asking) #app { height: calc(100% - 64px); }
+  #away .head { display: flex; align-items: center; gap: 4px; font-weight: 700; color: var(--accent); }
+  #away .head span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #away .x { border: none; background: none; color: inherit; font: 700 10px -apple-system, system-ui, sans-serif; padding: 0 2px; cursor: pointer; opacity: 0.7; }
+  #away .x:hover { opacity: 1; }
+  #away .row { display: flex; align-items: center; gap: 4px; border: none; background: none; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; min-width: 0; }
+  #away .row:hover { color: #fff; text-decoration: underline; }
+  #away .row .dot { flex: none; width: 6px; height: 6px; border-radius: 2px; background: var(--idle); }
+  #away .row.needs-you .dot { background: var(--red); }
+  #away .row.failed .dot { background: var(--amber); }
+  #away .row.done .dot { background: var(--green); }
+  #away .row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #away .more { opacity: 0.65; }
 </style>
 </head>
 <body>
@@ -91,6 +109,10 @@
     <div id="ask-what"></div>
     <button class="allow" id="allow" title="Allow this tool call">Allow</button>
     <button class="deny" id="deny" title="Deny this tool call">Deny</button>
+  </div>
+  <div id="away" role="status" aria-live="polite" aria-label="While you were away">
+    <div class="head"><span id="away-head">While you were away</span><button class="x" id="away-x" title="Dismiss" aria-label="Dismiss">×</button></div>
+    <div id="away-rows"></div>
   </div>
 
   <script src="motion.js"></script>
@@ -169,6 +191,7 @@
         document.getElementById('ask-what').textContent = `${req.tool}: ${req.summary || ''}`.slice(0, 80);
         document.getElementById('ask-what').title = `${req.tool} ${req.summary || ''}`;
       } else currentRequest = null;
+      renderAway(data.reason === 'travel' ? null : data.away);
       // Confetti fires on entering a celebrating state, then again every 10s
       // for as long as that state holds.
       if (look.celebrate && look.ruleId !== lastRuleId) {
@@ -200,6 +223,41 @@
       }
       tooltip.textContent = text + suffix;
     }
+
+    // The recap: needs-you first, then failures, then finished. Three lines
+    // fit under the heading; past three items the last becomes "+N more".
+    const AWAY_LINES = 3;
+    const AWAY_WORDS = { 'needs-you': (x) => x.detail || 'needs you', failed: (x) => `failed${x.detail && x.detail !== 'error' ? ` (${x.detail})` : ''}`, done: () => 'done' };
+    let awayKey = null;
+    function renderAway(recap) {
+      document.body.classList.toggle('away', !!recap);
+      const key = recap ? `${recap.to}` : null;
+      if (key === awayKey) return;
+      awayKey = key;
+      const rows = document.getElementById('away-rows');
+      if (!recap) { rows.replaceChildren(); return; }
+      document.getElementById('away-head').textContent = 'While you were away';
+      document.getElementById('away-head').title = `${recap.headline}${recap.reasons && recap.reasons.length ? ` — while busy (${recap.reasons.join(', ')})` : ''}`;
+      const shown = recap.items.length > AWAY_LINES ? AWAY_LINES - 1 : AWAY_LINES;
+      const els = recap.items.slice(0, shown).map((x, i) => {
+        const b = document.createElement('button');
+        b.className = `row ${x.kind}`;
+        b.title = `${x.folder || 'session'}: ${AWAY_WORDS[x.kind](x)} — click to go there`;
+        const dot = document.createElement('i');
+        dot.className = 'dot';
+        const text = document.createElement('span');
+        text.textContent = `${x.folder || 'session'} · ${AWAY_WORDS[x.kind](x)}`;
+        b.append(dot, text);
+        b.addEventListener('mousedown', (e) => e.stopPropagation());
+        b.addEventListener('click', async (e) => { e.stopPropagation(); const r = await window.trafficLight.awayOpen(i); if (r && r.folder) showFeedback(`→ ${r.folder} · path copied`); });
+        return b;
+      });
+      const extra = recap.items.length - shown;
+      if (extra > 0) { const m = document.createElement('div'); m.className = 'more'; m.textContent = `+${extra} more`; els.push(m); }
+      rows.replaceChildren(...els);
+    }
+    document.getElementById('away-x').addEventListener('mousedown', (e) => e.stopPropagation());
+    document.getElementById('away-x').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.awayDismiss(); });
 
     refresh();
     window.trafficLight.onStatusChanged(refresh);
@@ -245,7 +303,7 @@
     const solidAt = (x, y) => {
       const el = document.elementFromPoint(x, y);
       if (!el) return false;
-      if (el.closest('#gear, #help, #ask, .minion')) return true;
+      if (el.closest('#gear, #help, #ask, #away, .minion')) return true;
       return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
     };
     const hitTest = (x, y) => {

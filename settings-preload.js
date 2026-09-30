@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('settingsApi', {
   signalEndpoint: () => ipcRenderer.invoke('signal-endpoint'),
   mcpStatus: () => ipcRenderer.invoke('mcp-status'),
   mcpSetEnabled: (on) => ipcRenderer.invoke('mcp-set-enabled', on),
+  busyStatus: () => ipcRenderer.invoke('busy-status'),
+  busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
 });
