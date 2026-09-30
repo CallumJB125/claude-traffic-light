@@ -585,3 +585,32 @@ test('audit: every auth event is recorded, with no address, code or token in it'
     await h.close();
   }
 });
+
+test('M2: device name and platform in the mail are plain and link-free; a hub-wide daily cap bounds sign-in and invite mails', async () => {
+  const h = await startAccounts({ config: { mailDailyCap: 3 } });
+  try {
+    await h.start('jo@example.com', { device_name: 'evil.com/refund - call +1 555 0100 "now"\u202e', platform: 'https://evil.com/x <b>' });
+    const t = h.mailer.last('jo@example.com').text;
+    assert.ok(!/evil\.com|https?:|<b>|"now"|\u202e/.test(t), t);
+    assert.match(t, /on "evil\[\.\]com\/refund - call \+1 555 0100 now"/);
+    assert.match(t, /\(evil\[\.\]com\/x b\)/);
+
+    const alice = await h.signIn('alice@dev.local');   // mail 2 of 3
+    await h.start('p@example.com');                     // mail 3 of 3
+    const n = h.mailer.sent.length;
+    const quiet = await h.start('q@example.com');
+    assert.equal(quiet.status, 200, 'same answer');
+    assert.equal(h.mailer.sent.length, n, 'no mail over the cap');
+    assert.equal(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), null);
+    assert.ok(h.db.get("SELECT 1 AS x FROM audit WHERE action = 'auth.code.suppressed' AND detail LIKE '%mail_cap%'"));
+    const inv = await h.call('POST', `/api/teams/${h.ids.org}/invites`, { token: alice.body.device_token, headers: { origin: h.base }, body: { email: 'new@example.com', role: 'member' } });
+    assert.equal(inv.status, 200, inv.text);
+    assert.equal(inv.body.mailed, false, 'created, not mailed: the inviter shares the link');
+    assert.equal(h.mailer.sent.length, n);
+    h.clock.advance(DAY);
+    await h.start('q@example.com');
+    assert.equal(h.mailer.sent.length, n + 1, 'the cap refills');
+  } finally {
+    await h.close();
+  }
+});

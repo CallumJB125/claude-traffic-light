@@ -59,7 +59,10 @@ export class Hub extends EventEmitter {
     this.tunnel = { ok: true, okSinceMono: this.bootMono };
     this.secret = config.secret ?? this.loadSecret();
     this.vaultKey = null;
-    this.limiter = new RateLimiter({ now: () => this.mono(), limits: config.rateLimits });
+    this.limiter = new RateLimiter({
+      now: () => this.mono(),
+      limits: { ...(config.mailDailyCap ? { mail_global: { capacity: config.mailDailyCap, per_ms: 86_400_000 } } : {}), ...config.rateLimits },
+    });
     this.presence = new Presence(this);   // D37b, memory only
   }
 

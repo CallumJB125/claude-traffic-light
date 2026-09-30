@@ -62,6 +62,7 @@ There are two, and only two, credentials.
 | verify, per address and requesting network (every attempt) | 10 / 15 min | `429` for that network only |
 | **wrong codes per address** (the failure budget, every network together) | 20 in any 24 h (`BOARD_AUTH_FAIL_BUDGET`) | `429` on every verify for that address, **even with the right code** (it isn't checked), until the rolling day frees a slot; each exhaustion also locks for 1 h, doubling per exhaustion up to 24 h. A right code resets it. When it runs out for an address that has an account, that address gets one mail a day: "Someone is trying sign-in codes for your account" |
 | wrong codes per flow | 5 | the flow dies; `INVALID_TOKEN` from then on |
+| mails the hub sends (sign-in, invites, notices), whole hub | 2000 / day (`BOARD_MAIL_DAILY_CAP`) | sign-in: the silent answer; invites: created but not mailed (`mailed: false`) |
 | new users, per IP | 10 / day | `429` on the verify that would create the user |
 | any mutation, per IP | 300 / min | `429` |
 | any mutation, per signed-in user or member | 120 / min | `429` |
@@ -79,7 +80,7 @@ No auth for `purpose:'signin'`. `purpose:'delete'` needs the Bearer token (or th
 ```
 
 - `client`: `'buddy_desktop'` (default) or `'web'`.
-- `device_name` (≤ 100 chars) and `platform` (≤ 50) are optional. The mail names them ("This signs in Plexiform for desktop on "Jo's MacBook Pro" (darwin-arm64)") so a phished user can see what they would be approving.
+- `device_name` (≤ 100 chars) and `platform` (≤ 50) are optional. The mail names them ("This signs in Plexiform for desktop on "Jo's MacBook Pro" (darwin-arm64)") so a phished user can see what they would be approving. Whoever starts the flow chooses them, so they are cleaned like invite names: one line, ≤ 60 / 30 characters, no control characters, quotes or angle brackets, schemes stripped and domains defanged (`evil[.]com/refund`).
 - `purpose`: `'signin'` (default) or `'delete'` (step-up for account deletion). For `'delete'`, `email` and `client` are ignored: the code goes to the signed-in account's own address.
 
 → `200 {"flow_id": "<24 chars>", "expires_in": 600}`. The answer is the same whether or not an account exists, and whether or not the per-address limit silently dropped the mail.

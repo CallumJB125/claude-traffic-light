@@ -56,9 +56,19 @@ const optStr = (v, max, name) => {
   return v;
 };
 
-// Device names and platforms are chosen by whoever starts the flow: shown in
-// the mail as quoted plain text, one line, bounded.
-const mailSafe = (s, max = 60) => String(s ?? '').replace(/[\p{C}"]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+/**
+ * A name people chose (team, inviter, device, platform), made safe for a
+ * plain-text mail line: no control/format characters, quotes or angle
+ * brackets, one line, bounded, and nothing a mail client would turn into a
+ * link (schemes removed, domains defanged: evil[.]com).
+ */
+export function mailName(s, max = 60, fallback = 'Someone') {
+  return String(s ?? '')
+    .replace(/[\p{C}"<>`]/gu, ' ')
+    .replace(/[a-z][a-z0-9+.-]*:\/\//gi, '')
+    .replace(/\b([a-z0-9-]+)\.([a-z]{2,})\b/gi, '$1[.]$2')
+    .replace(/\s+/g, ' ').trim().slice(0, max) || fallback;
+}
 
 export class Accounts {
   constructor(hub, { mailer }) {
@@ -107,6 +117,14 @@ export class Accounts {
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
 
+  // The hub-wide daily cap on the mails anyone can make it send (sign-in
+  // codes, invites, lockout notices; M2). Takes one when there is one.
+  mailBudget() {
+    if (this.hub.limiter.take('mail_global', 'all').ok) return true;
+    this.hub.log.warn('daily mail cap reached: mail not sent (BOARD_MAIL_DAILY_CAP)');
+    return false;
+  }
+
   requireMailer() {
     if (!this.mailer) throw new HubError('METHOD_DISABLED', 'email sign-in is not enabled on this hub');
   }
@@ -141,6 +159,10 @@ export class Accounts {
     if (!lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', email).ok) {
       // Same answer, no mail, no row: a verify on this flow_id fails like a wrong code.
       this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'email_rate' }, ip });
+      return out;
+    }
+    if (!this.mailBudget()) {
+      this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'mail_cap' }, ip });
       return out;
     }
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -257,7 +279,7 @@ export class Accounts {
     if (!this.mailer) return;
     const has = this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
       ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
-    if (!has || !this.hub.limiter.take('auth_lock_notice', email).ok) return;
+    if (!has || !this.hub.limiter.take('auth_lock_notice', email).ok || !this.mailBudget()) return;
     this.mailer.send({
       to: email,
       subject: `Someone is trying sign-in codes for your ${BRAND.name} account`,
@@ -497,8 +519,11 @@ export function appendCookie(res, cookie) {
 }
 
 function codeMail({ purpose, client, code, deviceName, platform, link }) {
+  // Chosen by whoever starts the flow: plain, one line, link-free (M2).
+  const device = mailName(deviceName, 60, '');
+  const plat = mailName(platform, 30, '');
   const what = client === 'buddy_desktop'
-    ? `${BRAND.name} for desktop${deviceName ? ` on "${mailSafe(deviceName)}"` : ''}${platform ? ` (${mailSafe(platform, 30)})` : ''}`
+    ? `${BRAND.name} for desktop${device ? ` on "${device}"` : ''}${plat ? ` (${plat})` : ''}`
     : `${BRAND.name} in a web browser`;
   const warn = `Never share this code. Nobody from ${BRAND.name} will ever ask you for it: anyone who asks you to read it out, forward it or type it somewhere else is trying to get into your account.`;
   if (purpose === 'delete') {

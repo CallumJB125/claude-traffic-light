@@ -14,7 +14,9 @@ import { limitOrThrow } from '../ratelimit.js';
 import { emailOnlyIdentity } from '../views.js';
 import { can, canInviteAs, INVITABLE_ROLES } from '../permissions.js';
 import { BRAND } from '../../shared/brand.js';
-import { ipPrefix, maskEmail, normalizeEmail } from './accounts.js';
+import { ipPrefix, mailName, maskEmail, normalizeEmail } from './accounts.js';
+
+export { mailName };
 import { publicTeam, quotaFor } from './teams.js';
 
 export const INVITE_TTL_MS = 7 * 86_400_000;
@@ -23,19 +25,6 @@ const CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ';
 const CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
 
 const invalid = () => new HubError('INVALID_TOKEN', 'this invite is not valid: it may have expired, been used or been withdrawn. Ask for a new one.');
-
-/**
- * A name people chose (team, inviter), made safe for a plain-text mail line:
- * no control/format characters, quotes or angle brackets, one line, bounded,
- * and nothing a mail client would turn into a link.
- */
-export function mailName(s, max = 60) {
-  return String(s ?? '')
-    .replace(/[\p{C}"<>`]/gu, ' ')
-    .replace(/[a-z][a-z0-9+.-]*:\/\//gi, '')
-    .replace(/\b([a-z0-9-]+)\.([a-z]{2,})\b/gi, '$1[.]$2')
-    .replace(/\s+/g, ' ').trim().slice(0, max) || 'Someone';
-}
 
 export const firstName = (name) => mailName(String(name ?? '').trim().split(/\s+/)[0], 30);
 
@@ -142,12 +131,13 @@ export class Invites {
     const shown = `${code.slice(0, 4)}-${code.slice(4)}`;
     // No mailer (D66): nothing is sent; the inviter shares the link or code themselves.
     const mailer = this.accounts.mailer;
-    if (mailer) {
+    const mailed = !!mailer && this.accounts.mailBudget();
+    if (mailed) {
       const mail = inviteMail({ team: org.name, inviter: member.display_name, role, link, code: shown, email, expiresAt: inv.expires_at });
       mailer.send({ to: email, ...mail, idempotencyKey: inv.id })
         .catch((e) => this.hub.log.warn('invite mail failed', { mailer: mailer.kind, err: e.message }));
     }
-    return { invite: this.view(inv), link, code: shown, mailed: !!mailer };
+    return { invite: this.view(inv), link, code: shown, mailed };
   }
 
   /** GET /api/teams/:team_id/invites: pending ones only, never tokens. */
