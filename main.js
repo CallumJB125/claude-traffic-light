@@ -1546,7 +1546,8 @@ function updateTrayMode() {
 
 function applyWidgetVisibility() {
   if (!win) return;
-  if (loadConfig().showWidget) win.showInactive(); else win.hide();
+  // Linux with no tray: the widget is the only way back in, so it stays.
+  if (loadConfig().showWidget || (process.platform === 'linux' && !tray)) win.showInactive(); else win.hide();
 }
 
 // ── Garden on the real screen (Desktop-Goose style) ────────────────────────
@@ -2074,7 +2075,10 @@ function createTray() {
   try {
     tray = new Tray(trayIconPath);
   } catch {
-    return;
+    // Linux without a tray still needs a way to Quit: the same menu opens
+    // from a right-click on the widget (widget-menu below), which stays up.
+    if (process.platform !== 'linux') return;
+    tray = null;
   }
 
   function setManual(state) {
@@ -2141,10 +2145,20 @@ function createTray() {
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
+  trayMenu = menu;
+  if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
   tray.setToolTip('Claude Buddy');
   tray.setContextMenu(menu);
   updateTrayMode();
 }
+
+// Right-click on the widget: the Lights editor, or on Linux the tray's menu,
+// since GNOME shows no tray at all and that menu is the only way to Quit.
+let trayMenu = null;
+ipcMain.handle('widget-menu', () => {
+  if (process.platform === 'linux' && trayMenu && win && !win.isDestroyed()) { trayMenu.popup({ window: win }); return; }
+  createLightsWindow();
+});
 
 ipcMain.handle('open-claude', () => {
   shell.openExternal('https://claude.ai');
