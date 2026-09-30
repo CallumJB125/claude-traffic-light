@@ -5,6 +5,10 @@ import { h } from './h.js';
 import { icon, pixelClaude, PILL_ICON, ALERT_ICON } from './icons.js';
 import { inline } from './markdown.js';
 import { VIEWS } from './views.js';
+import { selectionBar } from './dnd.js';
+import { filterBar } from './render-filters.js';
+import { THEMES, BACKGROUNDS } from './themes.js';
+import { cardChips } from './chips.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -104,7 +108,23 @@ export function cardActions(face, view, busy) {
   return buttons.length ? h('div', { class: 'card-actions' }, buttons) : null;
 }
 
-export function card({ view, face }, model) {
+// Proof, handover age and cost as one row of small chips (chips.js decides which).
+function chipRow(chips) {
+  if (!chips.length) return null;
+  return h('div', { class: 'card-chips' }, chips.map((c) => {
+    const body = [
+      c.icon ? icon(c.icon, 'icon-xs') : null,
+      c.ratio != null ? h('span', { class: 'cchip-meter', 'aria-hidden': 'true' }, h('span', { class: 'cchip-fill', style: { '--ratio': String(c.ratio) } })) : null,
+      h('span', { class: 'cchip-text num' }, c.text),
+    ];
+    const props = { key: c.id, class: `cchip cchip-${c.id}`, 'data-tone': c.tone, title: c.title };
+    return c.href
+      ? h('a', { ...props, href: c.href, target: '_blank', rel: 'noopener noreferrer' }, body)
+      : h('span', props, body);
+  }));
+}
+
+export function card({ view, face, elapsed_ms = 0 }, model) {
   const members = model.members;
   const assignees = (view.assignee_ids ?? []).map((id) => members.get(id));
   const owner = view.run?.owner ? members.get(view.run.owner.member_id) ?? view.run.owner : null;
@@ -117,25 +137,33 @@ export function card({ view, face }, model) {
   // An integration's card (via:<provider>, D42) shows as a badge, like agent-suggested.
   const via = (view.labels ?? []).find((l) => /^via:[a-z0-9-]{2,32}$/.test(l))?.slice(4) ?? null;
   const labels = (view.labels ?? []).filter((l) => !/^via:[a-z0-9-]{2,32}$/.test(l));
+  const picked = model.selection?.has(view.id);
+  const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
+  const chips = cardChips(view, face, { elapsed_ms });
+  const pending = view.pending === true;
+  const draggable = human && !model.readOnly && !pending;
 
   return h('article', {
     key: view.id,
-    class: `card${selected ? ' is-open' : ''}${human ? ' is-human' : ''}`,
+    class: `card${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
     'data-tone': face.tone,
     'data-state': face.state,
     'data-card-id': view.id,
-    draggable: human && !model.readOnly ? 'true' : null,
+    'data-draggable': draggable ? 'true' : null,
     'aria-labelledby': `t-${view.id}`,
+    'aria-busy': pending ? 'true' : null,
   },
   h('div', { class: 'card-top' },
+    picked ? h('span', { class: 'sel-mark', 'aria-hidden': 'true' }, icon('check', 'icon-xs')) : null,
+    picked ? h('span', { class: 'sr-only' }, 'Selected') : null,
     h('span', { class: 'card-key num' }, view.key),
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
     via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must give it to Claude` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
-    h('button', { type: 'button', class: 'card-open', 'data-action': 'open', 'data-card': view.id }, view.title)),
-  pill(face),
+    h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
+  pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
@@ -143,10 +171,9 @@ export function card({ view, face }, model) {
   face.overlap_chip ? h('button', { type: 'button', class: 'chip chip-overlap', 'data-action': 'open', 'data-card': view.id, 'data-section': 'overlaps' },
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
   labels.length ? h('div', { class: 'card-labels' }, labels.map((l) => h('span', { class: 'label' }, l))) : null,
-  // An unspent budget on a card nobody is running is noise; the drawer and the Give dialog show it.
-  face.budget && (view.run || view.budget?.spent_usd > 0) ? budgetBar(face.budget) : null,
-  model.readOnly ? null : cardActions(face, view, model.busy),
-  human && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+  chipRow(chips),
+  model.readOnly || pending ? null : cardActions(face, view, model.busy),
+  human && !pending && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
 }
 
 export function column(id, entries, model) {
@@ -154,16 +181,54 @@ export function column(id, entries, model) {
   const needs = entries.filter((e) => e.face.tone === 'amber' || e.face.tone === 'red').length;
   const isDone = id === 'done';
   const shown = isDone && !model.showAllDone ? entries.slice(0, 6) : entries;
-  return h('section', { key: id, class: `column column-${id}`, 'data-column': id, 'aria-labelledby': `col-${id}` },
+  const over = model.drag?.over === id;
+  return h('section', { key: id, class: `column column-${id}${over && model.drag.ok ? ' is-drop' : ''}${over && !model.drag.ok && model.drag.plan.skipped.length ? ' is-drop-none' : ''}`, 'data-column': id, 'aria-labelledby': `col-${id}` },
     h('header', { class: 'column-head' },
       h('h2', { id: `col-${id}` }, COLUMN_LABEL[id]),
       h('span', { class: 'column-count num', 'aria-label': `${count} cards` }, String(count)),
       needs ? h('span', { class: 'column-needs', title: `${needs} need attention` }, icon('dot', 'icon-xs'), String(needs)) : null,
       id === 'todo' && !model.readOnly ? h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'new-card', 'aria-label': 'New card' }, icon('plus')) : null),
     h('div', { class: 'column-body', 'data-drop': id },
-      shown.length ? shown.map((e) => card(e, model)) : h('p', { class: 'column-empty' }, EMPTY[id]),
+      columnCards(id, shown, model),
+      id === 'todo' && !model.readOnly ? quickAddRow(model.quickAdd) : null,
       isDone && entries.length > 6 ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm column-more', 'data-action': 'toggle-done' },
         model.showAllDone ? 'Show fewer' : `Show ${entries.length - 6} more`) : null));
+}
+
+// The drop indicator is an empty keyed node between cards: its line is a
+// pseudo-element, so showing it never shifts the layout under the pointer.
+function columnCards(id, shown, model) {
+  const slot = model.drag?.ok && model.drag.over === id ? model.drag : null;
+  const line = h('div', { key: 'drop-line', class: 'drop-line', 'aria-hidden': 'true' });
+  if (!shown.length) return [h('p', { key: 'empty', class: 'column-empty' }, EMPTY[id]), slot ? line : null];
+  if (!slot) return shown.map((e) => card(e, model));
+  const at = shown.findIndex((e) => e.view.id === slot.before);
+  const cards = shown.map((e) => card(e, model));
+  cards.splice(at < 0 ? cards.length : at, 0, line);
+  return cards;
+}
+
+// "+ Add a card" at the foot of To do. Title only: the New card dialog stays
+// for everything else. Text lives in the textarea (not in state) so a render
+// never touches what is being typed; `seed` only refills it after a failure.
+function quickAddRow(qa) {
+  if (!qa?.open) {
+    return h('button', { key: 'quick-add', type: 'button', class: 'btn btn-ghost quickadd-open', 'data-action': 'quick-add', 'aria-keyshortcuts': 'n' },
+      icon('plus', 'icon-lead'), 'Add a card');
+  }
+  return h('div', { key: 'quick-add', class: 'quickadd' },
+    h('textarea', {
+      class: 'input quickadd-input', 'data-input': 'quickadd', rows: 1, maxlength: '4000', value: qa.seed ?? '',
+      placeholder: 'Card title…', 'aria-label': 'New card title', 'aria-describedby': 'quickadd-hint', autocomplete: 'off',
+    }),
+    qa.confirm ? h('div', { class: 'quickadd-confirm', role: 'alert' },
+      h('span', null, `Create ${qa.confirm.length} cards from those lines?`),
+      h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'quick-add-confirm' }, `Create ${qa.confirm.length}`),
+      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'quick-add-decline' }, 'Not yet')) : null,
+    h('div', { class: 'quickadd-foot' },
+      h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'quick-add-submit' }, 'Add card'),
+      h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-icon', 'data-action': 'quick-add-cancel', 'aria-label': 'Cancel' }, icon('close')),
+      h('span', { id: 'quickadd-hint', class: 'quickadd-hint' }, 'Enter adds · Shift+Enter keeps adding · Esc cancels')));
 }
 
 const EMPTY = {
@@ -195,9 +260,32 @@ export function connectionBanner(conn) {
     h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'reconnect' }, 'Retry now'));
 }
 
-const THEME_NEXT = { system: 'dark', dark: 'light', light: 'system' };
+export const THEME_NEXT = { system: 'dark', dark: 'light', light: 'system' };
 const THEME_ICON = { system: 'auto', dark: 'moon', light: 'sun' };
-const THEME_LABEL = { system: 'Theme: match system', dark: 'Theme: dark', light: 'Theme: light' };
+
+// One button opens a small menu: colour scheme, then the board background.
+// Roving focus (arrows), Esc and an outside click close it; see app.js.
+export function themeMenu(model) {
+  const open = !!model.themeMenu;
+  return h('div', { class: 'menu-wrap' },
+    h('button', {
+      type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'theme-menu', 'aria-haspopup': 'menu', 'aria-expanded': open ? 'true' : 'false',
+      'aria-controls': 'theme-menu', 'aria-label': 'Appearance', title: 'Appearance',
+    }, icon(THEME_ICON[model.theme] ?? 'auto')),
+    open ? h('div', { id: 'theme-menu', class: 'menu theme-menu', role: 'menu', 'aria-label': 'Appearance' },
+      h('p', { class: 'menu-title', id: 'menu-scheme' }, 'Theme'),
+      h('div', { role: 'group', 'aria-labelledby': 'menu-scheme' },
+        THEMES.map((t) => h('button', {
+          key: t.id, type: 'button', class: 'menu-item', role: 'menuitemradio', 'aria-checked': model.theme === t.id ? 'true' : 'false',
+          'data-action': 'theme', 'data-next': t.id,
+        }, icon(t.icon, 'icon-xs'), h('span', null, t.label), model.theme === t.id ? icon('check', 'icon-xs menu-check') : null))),
+      h('p', { class: 'menu-title', id: 'menu-bg' }, 'Board background'),
+      h('div', { role: 'group', 'aria-labelledby': 'menu-bg', class: 'bg-grid' },
+        BACKGROUNDS.map((b) => h('button', {
+          key: b.id, type: 'button', class: 'bg-opt', role: 'menuitemradio', 'aria-checked': (model.bg ?? 'none') === b.id ? 'true' : 'false',
+          'data-action': 'board-bg', 'data-bg': b.id, title: b.label,
+        }, h('span', { class: 'bg-swatch', 'data-bg': b.id, 'aria-hidden': 'true' }), h('span', { class: 'bg-name' }, b.label))))) : null);
+}
 
 export function topBar(model, lamps) {
   // /api/me is publicMember ({display_name, github_login}); snapshot members
@@ -216,7 +304,8 @@ export function topBar(model, lamps) {
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
-      h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'theme', 'data-next': THEME_NEXT[model.theme], 'aria-label': `${THEME_LABEL[model.theme]}. Switch to ${THEME_NEXT[model.theme]}.`, title: THEME_LABEL[model.theme] }, icon(THEME_ICON[model.theme])),
+      themeMenu(model),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),
       model.readOnly ? null : h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-action': 'new-card', 'aria-keyshortcuts': 'n' }, icon('plus', 'icon-lead'), 'New card'),
       me ? h('span', { class: 'me', title: `${me.name ?? me.login}${me.email ? ` · ${me.email}` : ''}` }, avatar({ ...me, member_id: me.id }), h('span', { class: 'me-name' }, me.name ?? me.login)) : null));
 }
@@ -233,14 +322,33 @@ function viewSwitch(model) {
 
 /** `body` replaces the columns for the other views (table, dashboard, …). */
 export function boardScreen(model, body = null) {
-  const cols = groupColumns(model.entries);
+  const cols = groupColumns(model.visible ?? model.entries);
   const lamps = boardLamps(model.me?.member?.id, model.entries, model.conn.status === 'lost');
   return h('div', { class: 'app', 'data-conn': model.conn.status },
     topBar(model, lamps),
     connectionBanner(model.conn),
     alertsStrip(model.alerts, model),
+    model.view === 'dashboard' ? null : filterBar(model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
-      COLUMNS.map((c) => column(c, cols[c], model))));
+      COLUMNS.map((c) => column(c, cols[c], model))),
+    selectionActions(model),
+    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards Claude is not running can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
+    h('div', { class: 'sr-only', role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' }, model.announce ?? ''));
+}
+
+export function selectionActions(model) {
+  const sel = model.selection;
+  if (!sel?.size) return null;
+  const bar = selectionBar(sel, (id) => model.entries.find((e) => e.view.id === id)?.view);
+  return h('div', { class: 'selbar', role: 'region', 'aria-label': 'Selected cards' },
+    h('span', { class: 'selbar-count num' }, bar.text),
+    bar.skipped ? h('span', { class: 'selbar-note' }, `${bar.skipped} run-driven won't move`) : null,
+    bar.movable ? h('label', { class: 'selbar-move' },
+      h('span', { class: 'sr-only' }, 'Move selected cards to'),
+      h('select', { class: 'input input-sm', 'data-change': 'bulk-move' },
+        h('option', { value: '' }, 'Move to…'),
+        COLUMNS.map((c) => h('option', { key: c, value: c }, COLUMN_LABEL[c])))) : null,
+    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'clear-selection' }, 'Clear'));
 }
 
 export function loadingScreen(text = 'Loading the board…') {

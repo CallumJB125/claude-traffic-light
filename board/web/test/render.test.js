@@ -57,7 +57,7 @@ test('card renders key, repo@branch, pill label + reason, sponsor, activity, bud
   assert.match(textOf(byClass(n, 'pill')[0]), /^Running.*Alice's Claude · editing deals\.ts$/);
   assert.match(t, /Runs on Alice's MacBook Pro · Alice's claude account/);
   assert.match(t, /Alice's Claude · 5s ago/);
-  assert.match(t, /\$1\.20 \/ \$5/);
+  assert.match(t, /\$1\.20\/\$5/);
   const chip = byClass(n, 'chip-overlap')[0];
   assert.equal(textOf(chip), 'overlaps BDL-2 · deals.ts', 'the ⚠ glyph is drawn as an icon, not text');
 });
@@ -78,8 +78,8 @@ test('pill keys by label so a state change re-creates it (the fade), a tick only
 test('agent-driven cards are never draggable; human-owned cards are', () => {
   const agent = card(entry(view()), model([]));
   const human = card(entry(view({ run_state: 'todo', run: null, live: null, column: 'in_progress' })), model([]));
-  assert.equal(agent.props.draggable, null);
-  assert.equal(human.props.draggable, 'true');
+  assert.equal(agent.props['data-draggable'], null);
+  assert.equal(human.props['data-draggable'], 'true');
 });
 
 test('column: human cards keep their column, run-state cards derive it', () => {

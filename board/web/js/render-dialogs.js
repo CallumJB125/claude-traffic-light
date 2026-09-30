@@ -4,6 +4,7 @@
 import { h } from './h.js';
 import { icon, pixelClaude } from './icons.js';
 import { formatAge } from './view.js';
+import { paletteDialog } from './render-palette.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -180,6 +181,7 @@ export function dialog(model) {
     case 'handover': return handOverDialog(d, model);
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);
+    case 'palette': return paletteDialog(d, model);
     default: return null;
   }
 }
