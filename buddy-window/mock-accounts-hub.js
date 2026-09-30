@@ -223,6 +223,12 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now() }
         enrolments.push(e);
         return ok({ enrollment_id: e.enrollment_id, device_token: `bdt_${crypto.randomBytes(24).toString('base64url')}` });
       }
+      if (what === 'enrol' && sub && method === 'DELETE') {
+        const e = enrolments.find((x) => x.enrollment_id === sub && x.team_id === teamId && x.user_id === me.user.id);
+        if (!e) return err(404, 'NOT_FOUND', 'no such enrolment');
+        e.revoked = true;
+        return ok({ ok: true });
+      }
       return err(404, 'NOT_FOUND', 'not found');
     }
 

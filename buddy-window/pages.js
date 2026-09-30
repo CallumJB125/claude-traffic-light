@@ -7,7 +7,8 @@
 //   window  — an existing app window (Lights, Preferences…) opened as is until
 //             its owner moves it into this window.
 //   local   — an app file rendered in its own view with its own preload
-//             (the plug-in point for Tasks and settings pages).
+//             (the plug-in point for Tasks and settings pages); `screen`
+//             picks the account page's screen (account.html).
 //   soon    — named in the plan but not built yet; says so honestly.
 'use strict';
 
@@ -22,10 +23,12 @@ const PAGES = [
   { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'soon', group: 'work', blurb: 'Standalone Claude tasks you started from Buddy, with their messages. Being built by buddy-builder-2.' },
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'soon', group: 'team', blurb: 'Connect Slack, GitHub, Sentry and more to the board.' },
-  { id: 'team', title: 'Team', icon: 'team', kind: 'soon', group: 'team', blurb: 'Members, who is online, and the agents working next to you.' },
+  { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
   { id: 'usage', title: 'Usage', icon: 'chart', kind: 'window', window: 'mix', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'soon', group: 'you', blurb: 'Borrow a teammate’s Claude setup. Being built by buddy-builder-4.' },
   { id: 'plugins', title: 'Plugins', icon: 'puzzle', kind: 'soon', group: 'you', blurb: 'Find and install Claude Code plugins.' },
+  { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
+  { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   { id: 'lights', title: 'Lights', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'settings', title: 'Settings', icon: 'gear', kind: 'window', window: 'settings', group: 'you' },
 ];
@@ -46,14 +49,18 @@ function pageById(id, pages = PAGES) {
   return flat(pages).find((p) => p.id === id) ?? null;
 }
 
-// The hub page URL for a board view. The web app reads ?view= on load.
-function hubPageUrl(base, page) {
+// The hub page URL for a board view. The web app reads ?view= on load, and
+// ?org= picks the team on a hub where the member is in several.
+function hubPageUrl(base, page, { org = null } = {}) {
   const u = new URL(base);
   u.pathname = '/';
+  u.search = '';
+  if (org) u.searchParams.set('org', org);
   if (page?.view && page.view !== 'board') u.searchParams.set('view', page.view);
-  else u.searchParams.delete('view');
   return u.toString();
 }
+
+const orgOfUrl = (url) => { try { return new URL(url).searchParams.get('org'); } catch { return null; } };
 
 /**
  * Where may the hub view navigate itself? Only its own origin, plus the
@@ -77,4 +84,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, pageForHubUrl };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, pageForHubUrl, orgOfUrl };

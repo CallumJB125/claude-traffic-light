@@ -26,6 +26,7 @@ const ROUTES = {
   previewInvite: ['POST', '/api/invites/preview'],
   acceptInvite: ['POST', '/api/invites/accept'],
   enrol: ['POST', '/api/teams/:team/enrol'],
+  unenrol: ['DELETE', '/api/teams/:team/enrol/:enrollment'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'guest'];
@@ -152,7 +153,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         return r;
       }
       if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
-      store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
+      try {
+        store.save({ hub: origin, token: r.device_token, device_id: r.device_id ?? null, user: r.user ?? null });
+      } catch {
+        return { ok: false, error: 'This Mac couldn’t store your sign-in securely. Try again.' };
+      }
       const email = flow.email;
       flow = null;
       return { ok: true, user: r.user ?? null, teams: Array.isArray(r.teams) ? r.teams : [], email };
@@ -191,6 +196,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call('acceptInvite', { body });
     },
     enrol: (team, name) => call('enrol', { params: { team }, body: { name: String(name ?? '').slice(0, 100), request_id: crypto.randomUUID() } }),
+    unenrol: (team, enrollment) => call('unenrol', { params: { team, enrollment } }),
 
     async signOut() {
       const r = saved() ? await call('signOut', { body: {} }) : { ok: true };

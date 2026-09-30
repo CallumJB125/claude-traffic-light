@@ -29,6 +29,10 @@ test('hub page URLs carry ?view= for every view but the board itself', () => {
   assert.equal(pageForHubUrl('http://127.0.0.1:5000/?view=table#card=x'), 'board:table');
   assert.equal(pageForHubUrl('http://127.0.0.1:5000/'), 'board');
   assert.equal(pageForHubUrl('http://127.0.0.1:5000/?view=nope'), 'board');
+  assert.equal(hubPageUrl('https://buddy.example.com', pageById('board:table'), { org: 'team_1' }), 'https://buddy.example.com/?org=team_1&view=table');
+  assert.equal(hubPageUrl('https://buddy.example.com/?org=old&view=x', pageById('board'), { org: 'team_2' }), 'https://buddy.example.com/?org=team_2');
+  assert.equal(pageForHubUrl('https://buddy.example.com/?org=t&view=table'), 'board:table');
+  for (const id of ['team', 'thismac', 'account']) assert.ok(pageById(id).screen, id);
 });
 
 test('the hub view only navigates within its origin (+ the team Access login)', () => {
@@ -249,7 +253,7 @@ test('dev mode never logs the dev login secret from the hub stderr', async () =>
 
 // ── workspaces ─────────────────────────────────────────────────────────────
 
-const { createWorkspaceStore, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition } = require('../buddy-window/workspaces');
+const { createWorkspaceStore, buildWorkspaceList, teamsFromAccount, normalizeHubUrl, accessTeamFromLocation, partitionFor: teamPartition } = require('../buddy-window/workspaces');
 
 test('team hub URLs: https origins only, bare hosts become https, junk refused', () => {
   assert.equal(normalizeHubUrl('buddy.bondly.co.za'), 'https://buddy.bondly.co.za');
@@ -270,43 +274,95 @@ test('the Access team comes only from a *.cloudflareaccess.com redirect', () => 
   assert.equal(accessTeamFromLocation('not a url'), null);
 });
 
-test('workspace store: local is always there; add makes a team active; persisted without secrets; remove falls back to local', () => {
+test('workspace list from /api/account: this Mac, then each signed-in hub’s teams, then Access-fallback hubs', () => {
+  const A = 'https://a.example.com';
+  const B = 'https://b.example.com';
+  const acct = { user: { id: 'u' }, teams: [{ id: 'team_2', name: 'Zeta', role: 'member', boards: [] }, { id: 'team_1', name: 'Alpha', role: 'owner', boards: [] }, { id: 'bad id/..', name: 'x' }, { id: 't3' }] };
+  const teams = { [A]: teamsFromAccount(acct), [B]: teamsFromAccount({ teams: [{ id: 'b1', name: 'Bee', role: 'weird' }] }) };
+  assert.deepEqual(teams[A].map((t) => t.id), ['team_2', 'team_1'], 'junk ids and nameless teams dropped');
+  assert.equal(teams[B][0].role, 'member', 'unknown role read as member');
+  const list = buildWorkspaceList({ hubs: [A, B], teams, access: [{ url: 'https://old.example.com', name: 'Old', accessTeam: 'x' }] });
+  assert.deepEqual(list.map((w) => w.id), ['local', 'team:a.example.com:team_1', 'team:a.example.com:team_2', 'team:b.example.com:b1', 'access:old.example.com']);
+  assert.deepEqual(list.map((w) => w.group ?? null), [null, 'a.example.com', 'a.example.com', 'b.example.com', null], 'hub names shown when there are several');
+  assert.deepEqual({ hub: list[1].hub, teamId: list[1].teamId, role: list[1].role }, { hub: A, teamId: 'team_1', role: 'owner' });
+  const one = buildWorkspaceList({ hubs: [A, B], teams, signedIn: (h) => h === A });
+  assert.deepEqual(one.map((w) => w.id), ['local', 'team:a.example.com:team_1', 'team:a.example.com:team_2'], 'a signed-out hub shows no teams');
+  assert.equal(one[1].group, null);
+  // Every team on one hub shares that hub's partition.
+  assert.equal(teamPartition(A), 'persist:board-a.example.com');
+  assert.equal(teamPartition('http://127.0.0.1:5123'), 'persist:board-127.0.0.1_5123');
+});
+
+test('workspace store: hubs, teams from the account, active team, persisted without secrets, 0600', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
   const file = path.join(dir, 'ws.json');
   const s1 = createWorkspaceStore(file);
   assert.equal(s1.active().id, 'local');
-  const t = s1.add({ url: 'buddy.bondly.co.za', name: 'Bondly team', accessTeam: 'restless-hall-ab0c' });
-  assert.equal(t.id, 'team:buddy.bondly.co.za');
-  assert.equal(s1.active().id, t.id);
+  const hub = s1.addHub('buddy.bondly.co.za');
+  assert.equal(hub, 'https://buddy.bondly.co.za');
+  assert.equal(s1.lastHub(), hub);
+  assert.equal(s1.setTeams(hub, { teams: [{ id: 't1', name: 'Bondly', role: 'owner' }, { id: 't2', name: 'Side', role: 'guest' }] }), true);
+  assert.equal(s1.activateTeam(hub, 't2'), true);
+  assert.equal(s1.active().name, 'Side');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(Object.keys(saved.teams[0]).sort(), ['accessTeam', 'name', 'url']);
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.ok(!/token|bdt_|secret/i.test(saved), saved);
   const s2 = createWorkspaceStore(file);
-  assert.deepEqual(s2.list().map((w) => w.id), ['local', 'team:buddy.bondly.co.za']);
-  assert.equal(s2.active().name, 'Bondly team');
-  assert.equal(s2.setActive('team:nope'), false);
-  assert.equal(s2.setActive('local'), true);
-  s2.setActive(t.id);
-  assert.equal(s2.remove(t.id), true);
+  assert.equal(s2.active().id, 'team:buddy.bondly.co.za:t2');
+  // Removed from a team (the next /api/account lacks it) → back to this Mac.
+  s2.setTeams(hub, { teams: [{ id: 't1', name: 'Bondly', role: 'owner' }] });
   assert.equal(s2.active().id, 'local');
+  s2.activateTeam(hub, 't1');
+  s2.forgetTeams(hub);
+  assert.equal(s2.active().id, 'local');
+  assert.deepEqual(s2.list().map((w) => w.id), ['local']);
+  assert.equal(s2.knows(hub), true, 'the hub is remembered for the next sign-in');
+  assert.equal(s2.setActive('team:nope'), false);
+  assert.equal(s2.sharesPresence(hub), false, 'presence is off by default');
+  s2.setSharesPresence(hub, true);
+  assert.equal(createWorkspaceStore(file).sharesPresence(hub), true);
 });
 
-test('workspace store: a tampered file cannot smuggle in a non-https hub or a bad Access team', () => {
+test('workspace store: v1 files migrate: Access hubs stay as the fallback, bare hubs become hubs to sign in to', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
   const file = path.join(dir, 'ws.json');
-  fs.writeFileSync(file, JSON.stringify({ active: 'team:evil', teams: [
-    { name: 'x', url: 'http://evil.example.com' },
-    { name: 'y', url: 'https://ok.example.com', accessTeam: 'evil.example.com/../' },
+  fs.writeFileSync(file, JSON.stringify({ active: 'team:old.example.com', teams: [
+    { name: 'Old', url: 'https://old.example.com', accessTeam: 'restless-hall' },
+    { name: 'New', url: 'https://new.example.com', accessTeam: null },
   ] }));
   const s = createWorkspaceStore(file);
-  assert.deepEqual(s.list().map((w) => w.id), ['local', 'team:ok.example.com']);
-  assert.equal(s.get('team:ok.example.com').accessTeam, null);
+  assert.deepEqual(s.list().map((w) => w.id), ['local', 'access:old.example.com']);
+  assert.equal(s.active().id, 'access:old.example.com');
+  assert.equal(s.active().accessTeam, 'restless-hall');
+  assert.deepEqual(s.hubs(), ['https://new.example.com']);
+  assert.equal(s.lastHub(), 'https://new.example.com');
+  s.setActive('local');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 2);
+  assert.equal(s.removeAccess('access:old.example.com'), true);
+});
+
+test('workspace store: a tampered file cannot smuggle in a non-https hub, a loopback hub or a bad Access team', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-ws-'));
+  const file = path.join(dir, 'ws.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 2, active: 'team:evil', hubs: ['http://evil.example.com', 'http://127.0.0.1:5000', 'https://ok.example.com', 'https://ok.example.com/path'],
+    teams: { 'https://ok.example.com': [{ id: '../x', name: 'bad' }, { id: 'good', name: 'Good' }] },
+    access: [{ name: 'y', url: 'https://acc.example.com', accessTeam: 'evil.example.com/../' }] }));
+  const s = createWorkspaceStore(file);
+  assert.deepEqual(s.hubs(), ['https://ok.example.com']);
+  assert.deepEqual(s.list().map((w) => w.id), ['local', 'team:ok.example.com:good', 'access:acc.example.com']);
+  assert.equal(s.get('access:acc.example.com').accessTeam, null);
   assert.equal(s.active().id, 'local');
+  // The dev mock's exact origin is let through only when named.
+  const d = createWorkspaceStore(file, { allowOrigins: ['http://127.0.0.1:5000'] });
+  assert.deepEqual(d.hubs(), ['http://127.0.0.1:5000', 'https://ok.example.com']);
+  assert.throws(() => normalizeHubUrl('http://127.0.0.1:5001', { allowOrigins: ['http://127.0.0.1:5000'] }));
 });
 
 // ── this Mac as a runner ──────────────────────────────────────────────────
 
-const { createDeviceController, defaultDeviceName } = require('../buddy-window/device');
+const { createDeviceController, defaultDeviceName, presenceSessions, NO_RUNNER } = require('../buddy-window/device');
+
+const HUB = 'https://buddy.bondly.co.za';
 
 function deviceHarness(over = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
@@ -314,73 +370,82 @@ function deviceHarness(over = {}) {
   const children = [];
   const statuses = [];
   const pending = [];
-  const hub = {
-    origin: 'https://buddy.bondly.co.za',
-    fetch: async (p, init) => {
-      calls.push({ p, init });
-      if (over.fetch) return over.fetch(p, init);
-      if (init.method === 'POST') return { status: 200, json: { device_id: 'dev-1', device_token: 'bdt_secret_token_value' } };
-      return { status: 200, json: { ok: true } };
-    },
+  let t = 0;
+  const account = over.account ?? {
+    origin: HUB,
+    enrol: async (team, name) => { calls.push({ op: 'enrol', team, name }); return over.enrol ? over.enrol() : { ok: true, enrollment_id: 'enr-1', device_token: 'bdt_secret_token_value' }; },
+    unenrol: async (team, id) => { calls.push({ op: 'unenrol', team, id }); return { ok: true }; },
   };
-  const make = () => createDeviceController({
-    hub, credsFile: path.join(dir, 'device.bin'),
+  const make = (teamId = 'team-1') => createDeviceController({
+    account, teamId, credsFile: path.join(dir, 'device.bin'),
     seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`),
     unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
     fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.args = args; c.opts = opts; c.sent = []; c.postMessage = (m) => c.sent.push(m); children.push(c); return c; },
-    runnerEntry: '/app/board/runner/cli.js', dataDir: path.join(dir, 'runner'),
-    onStatus: (s) => statuses.push(s), schedule: (fn) => pending.push(fn),
+    runnerEntry: '/app/board/runner/app-entry.js', entryExists: () => over.entryExists ?? true, dataDir: path.join(dir, 'runner'),
+    onStatus: (s) => statuses.push(s), schedule: (fn) => pending.push(fn), now: () => t, stopGraceMs: 1000,
   });
-  return { dir, calls, children, statuses, pending, make, credsFile: path.join(dir, 'device.bin') };
+  return { dir, calls, children, statuses, pending, make, credsFile: path.join(dir, 'device.bin'), tick: (ms) => { t += ms; } };
 }
-
-const CF_ID = `${'a1'.repeat(16)}.access`;
-const CF_SECRET = 'c'.repeat(64);
 
 test('device name reads like a person made it', () => {
   assert.equal(defaultDeviceName('Callum', 'Callums-MacBook-Air.local'), 'Callum’s Callums MacBook Air');
-  assert.equal(defaultDeviceName('', ''), 'My’s Mac'.replace('My’s', 'My’s'));
+  assert.equal(defaultDeviceName('', ''), 'My’s Mac');
 });
 
-test('enroll: validates the service token, enrols with cf_service_token_id = client id, seals secrets, starts the runner over parentPort', async () => {
+test('enroll: with the account (no service tokens), seals the device token 0600, starts the runner over parentPort', async () => {
   const h = deviceHarness();
   const d = h.make();
-  assert.match((await d.enroll({ name: 'Mac', cfClientId: 'nope', cfClientSecret: CF_SECRET })).error, /Client ID/);
-  assert.match((await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: 'short' })).error, /whole Client Secret/);
+  assert.match((await d.enroll({ name: '  ' })).error, /name/);
   assert.equal(h.calls.length, 0);
-  const r = await d.enroll({ name: 'Callum’s Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  const r = await d.enroll({ name: 'Callum’s Mac' });
   assert.equal(r.ok, true);
-  assert.equal(h.calls[0].p, '/api/devices');
-  assert.equal(h.calls[0].init.body.cf_service_token_id, CF_ID);
-  assert.equal(h.calls[0].init.body.cf_service_token_secret, undefined, 'the secret never goes to the hub');
-  // Sealed at rest, 0600, no plaintext secret in the file.
+  assert.deepEqual(h.calls[0], { op: 'enrol', team: 'team-1', name: 'Callum’s Mac' });
   const raw = fs.readFileSync(h.credsFile, 'utf8');
   assert.ok(raw.startsWith('SEALED:'));
-  assert.ok(!raw.includes(CF_SECRET) && !raw.includes('bdt_secret'));
+  assert.ok(!raw.includes('bdt_secret'));
   assert.equal(fs.statSync(h.credsFile).mode & 0o777, 0o600);
-  // Runner: no secret in argv/env; config over parentPort.
   const c = h.children[0];
-  assert.deepEqual(c.args, ['--parent-port']);
-  assert.ok(!JSON.stringify(c.opts.env).includes(CF_SECRET) && !JSON.stringify(c.opts.env).includes('bdt_'));
-  assert.equal(c.sent[0].type, 'runner.config');
-  assert.equal(c.sent[0].device_token, 'bdt_secret_token_value');
-  assert.equal(c.sent[0].cf_client_secret, CF_SECRET);
+  assert.deepEqual(c.args, [], 'app-entry takes no args');
+  assert.equal(c.opts.cwd, undefined);
+  assert.ok(!JSON.stringify(c.opts.env).includes('bdt_'));
+  assert.deepEqual(c.sent[0], { type: 'runner.config', hub_url: HUB, device_id: 'enr-1', device_token: 'bdt_secret_token_value', data_dir: path.join(h.dir, 'runner') });
+  c.emit('message', { type: 'runner.ready' });
   c.emit('message', { type: 'runner.status', state: 'connected' });
   assert.equal(d.status().runner.state, 'connected');
   assert.equal(d.status().enrolled, true);
+  assert.equal((await d.enroll({ name: 'again' })).ok, false);
 });
 
-test('enroll: a signed-out team session says so; the hub refusing is shown, nothing is stored', async () => {
-  const h = deviceHarness({ fetch: async () => ({ status: 401, json: {} }) });
-  const d = h.make();
-  assert.match((await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET })).error, /Sign in/);
-  assert.equal(fs.existsSync(h.credsFile), false);
+test('device enrol via the account against the mock hub', async () => withHub(async (hub, origin) => {
+  const { c } = await signIn(hub, origin, 'runner@example.com');
+  const team = (await c.createTeam('Runners')).team;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const sent = [];
+  const d = createDeviceController({
+    account: c, teamId: team.id, credsFile: path.join(dir, 'd.bin'), seal: (s) => Buffer.from(s), unseal: (b) => String(b),
+    fork: () => { const k = new FakeChild(); k.postMessage = (m) => sent.push(m); return k; }, runnerEntry: 'x', entryExists: () => true, dataDir: path.join(dir, 'r'), schedule: () => {}, stopGraceMs: 1000,
+  });
+  assert.equal((await d.enroll({ name: 'Mac' })).ok, true);
+  assert.equal(hub.enrolments().length, 1);
+  assert.equal(hub.enrolments()[0].team_id, team.id);
+  assert.match(sent[0].device_token, /^bdt_/);
+  assert.equal(sent[0].device_id, hub.enrolments()[0].enrollment_id);
+  await d.remove();
+  assert.equal(hub.enrolments()[0].revoked, true);
+}));
+
+test('enroll: signed out or refused says so in words; nothing is stored', async () => {
+  const h = deviceHarness({ enrol: () => ({ ok: false, signedOut: true, error: 'x' }) });
+  assert.match((await h.make().enroll({ name: 'Mac' })).error, /Sign in again/);
+  const g = deviceHarness({ enrol: () => ({ ok: false, error: 'You don’t have permission to do that in this team.' }) });
+  assert.match((await g.make().enroll({ name: 'Mac' })).error, /permission/);
+  assert.equal(fs.existsSync(h.credsFile) || fs.existsSync(g.credsFile), false);
 });
 
 test('off → SIGTERM, stays off across restarts; on again restarts; remove revokes and forgets every secret', async () => {
   const h = deviceHarness();
   const d = h.make();
-  await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  await d.enroll({ name: 'Mac' });
   await d.setEnabled(false);
   assert.equal(h.children[0].killed, 1);
   assert.equal(d.status().enabled, false);
@@ -392,29 +457,82 @@ test('off → SIGTERM, stays off across restarts; on again restarts; remove revo
   await d2.remove();
   assert.equal(h.children[1].killed, 1);
   assert.equal(fs.existsSync(h.credsFile), false);
-  assert.equal(h.calls.at(-1).init.method, 'DELETE');
-  assert.equal(h.calls.at(-1).p, '/api/devices/dev-1');
+  assert.deepEqual(h.calls.at(-1), { op: 'unenrol', team: 'team-1', id: 'enr-1' });
 });
 
 test('runner crash restarts with backoff; revoked/unauthenticated does not loop', async () => {
   const h = deviceHarness();
   const d = h.make();
-  await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  await d.enroll({ name: 'Mac' });
+  h.children[0].emit('message', { type: 'runner.ready' });
+  h.tick(60_000);
   h.children[0].emit('exit', 1);
   assert.equal(d.status().runner.state, 'restarting');
   h.pending.shift()();
   assert.equal(h.children.length, 2);
+  h.children[1].emit('message', { type: 'runner.ready' });
   h.children[1].emit('message', { type: 'runner.status', state: 'revoked', detail: 'device revoked' });
   h.children[1].emit('exit', 0);
   assert.equal(h.pending.length, 0);
   assert.equal(d.status().runner.state, 'revoked');
 });
 
-test('creds for another hub are ignored', async () => {
+test('no runner in this build (missing entry, or an exit before ready) is "not available", not a crash loop', async () => {
+  const gone = deviceHarness({ entryExists: false });
+  const g = gone.make();
+  assert.match((await g.enroll({ name: 'Mac' })).error, /not available/);
+  assert.equal(gone.calls.length, 0, 'nothing enrolled on the hub');
+  assert.equal(gone.children.length, 0);
+  assert.deepEqual(g.status().runner, { state: 'missing', detail: NO_RUNNER });
   const h = deviceHarness();
-  await h.make().enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  h.tick(300);
+  h.children[0].emit('exit', 2);
+  assert.deepEqual(d.status().runner, { state: 'missing', detail: NO_RUNNER });
+  assert.equal(h.pending.length, 0);
+});
+
+test('runner.fatal with exit 2 (bad config) is shown and not restarted; runner.stopped reports parked runs', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  const c = h.children[0];
+  c.emit('message', { type: 'runner.ready' });
+  c.emit('message', { type: 'runner.status', state: 'unavailable', detail: 'hub unreachable' });
+  assert.equal(d.status().runner.state, 'unavailable');
+  c.emit('message', { type: 'runner.stopped', parked: 2, orphaned: 0 });
+  assert.equal(d.status().parked, 2);
+  c.emit('message', { type: 'runner.fatal', message: 'device_token missing' });
+  h.tick(60_000);
+  c.emit('exit', 2);
+  assert.deepEqual(d.status().runner, { state: 'failed', detail: 'device_token missing' });
+  assert.equal(h.pending.length, 0);
+});
+
+test('presence: off by default; on sends the minimal session fields once ready; off clears at once', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  const c = h.children[0];
+  const sessions = [{ sessionId: 's1', via: 'claude', cwd: '/Users/c/proj', signal: 'tool-use', signalSince: '2026-09-30T10:00:00.000Z', model: 'secret-ish', tasks: [{ title: 'x' }] }];
+  d.setPresence(true, sessions);
+  assert.equal(c.sent.length, 1, 'nothing before ready');
+  c.emit('message', { type: 'runner.ready' });
+  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, sessions: [{ session_id: 's1', agent: 'claude', cwd: '/Users/c/proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
+  d.setPresence(true, sessions);
+  assert.equal(c.sent.length, 2, 'unchanged: not resent');
+  d.setPresence(false, sessions);
+  assert.deepEqual(c.sent[2], { type: 'runner.presence', enabled: false, sessions: [] });
+  assert.deepEqual(presenceSessions([{ nope: 1 }, null]), []);
+});
+
+test('creds for another hub or team are ignored', async () => {
+  const h = deviceHarness();
+  await h.make().enroll({ name: 'Mac' });
+  assert.equal(h.make('team-2').status().enrolled, false);
   const other = createDeviceController({
-    hub: { origin: 'https://other.example.com', fetch: async () => ({}) }, credsFile: h.credsFile,
+    account: { origin: 'https://other.example.com' }, teamId: 'team-1', credsFile: h.credsFile,
     seal: (s) => Buffer.from(s), unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
     fork: () => { throw new Error('must not start'); }, runnerEntry: 'x', dataDir: path.join(h.dir, 'r2'),
   });
