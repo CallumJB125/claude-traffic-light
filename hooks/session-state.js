@@ -4,6 +4,7 @@
 // beside them; main.js requires it from here too. The lifecycle itself (which
 // signal a write leaves, and the clocks that go with it) is session-machine.js.
 const fs = require('fs');
+const path = require('path');
 const Machine = require('./session-machine.js');
 
 const { TURN_END, TRANSIENT_ASK_MS, userTouched } = Machine;
@@ -143,6 +144,31 @@ function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = nu
   };
 }
 
+// Where one agent session's file lives. Claude Code's own hook names files
+// without a source, so an adapter event for 'claude' lands on the same file.
+const safeSessionId = (sessionId) => String(sessionId || 'default').replace(/[^\w.-]/g, '_').slice(0, 120) || 'default';
+
+function sessionFileFor(dir, host, source, sessionId) {
+  const id = safeSessionId(sessionId);
+  return path.join(dir, source === 'claude' ? `${host}-${id}.json` : `${host}-${source}-${id}.json`);
+}
+
+// One normalized adapter event ({ signal, sessionId, cwd, tool, pid } from an
+// adapter's normalize()) onto its session file: emit.js --adapter and the
+// app's /hook/:adapter route both land here.
+function applyAdapterEvent(dir, { host, source, event, fallbackSession, fallbackCwd, waitMs }) {
+  const sessionId = safeSessionId(event.sessionId || fallbackSession);
+  const file = sessionFileFor(dir, host, source, sessionId);
+  if (event.signal === 'session-end') { fs.rmSync(file, { force: true }); return file; }
+  withLock(file, () => {
+    const prev = readJson(file);
+    const next = applyBareSignal(prev, { sessionId, host, source, cwd: (typeof event.cwd === 'string' && event.cwd.slice(0, 500)) || prev?.cwd || fallbackCwd || '', signal: event.signal, tool: typeof event.tool === 'string' ? event.tool.slice(0, 80) : null });
+    if (Number.isInteger(event.pid) && event.pid > 1) next.claudePid = event.pid;
+    writeJsonAtomic(file, next);
+  }, waitMs);
+  return file;
+}
+
 // A session whose Claude process has exited without a SessionEnd (killed
 // terminal, crash) is over, whatever its file last said. Only a pid recorded
 // on this machine can be checked; EPERM means it exists under another user.
@@ -157,4 +183,4 @@ function processGone(session, host) {
   }
 }
 
-module.exports = { processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };
+module.exports = { sessionFileFor, applyAdapterEvent, processGone, TURN_END, STALE_LOCK_MS, LOCK_WAIT_MS, TRANSIENT_ASK_MS, withLock, withLockOrSkip, writeJsonAtomic, readJson, userTouched, applyBareSignal };

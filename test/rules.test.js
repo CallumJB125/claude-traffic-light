@@ -6,7 +6,11 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const R = require('../rules.js');
-const H = require('../hooks/install.js');
+const Claude = require('../adapters/claude-code.js');
+const Cursor = require('../adapters/cursor.js');
+const Codex = require('../adapters/codex.js');
+const Gemini = require('../adapters/gemini.js');
+const Runtime = require('../adapters/runtime.js');
 const SET_STATUS = path.join(__dirname, '..', 'hooks', 'set-status.js');
 
 const rules = () => R.defaultRules();
@@ -715,64 +719,120 @@ test('emit: Codex notify payload marks a finished turn', () => {
   assert.deepEqual([d.source, d.signal, d.sessionId], ['codex', 'stop', 't9']);
 });
 
+// The app's binary runs the hook scripts as Node; a dev checkout uses node.
+const APP = Runtime.make({ execPath: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', platform: 'darwin', hooksDir: '/App/Resources/hooks', dataDir: '/Users/me/.claude-traffic-light' });
+const DEV = Runtime.make({ execPath: null, platform: 'darwin', hooksDir: '/e', dataDir: '/Users/me/.claude-traffic-light' });
+const WIN = Runtime.make({ execPath: 'C:\\Program Files\\Claude Buddy\\Claude Buddy.exe', platform: 'win32', hooksDir: 'C:\\Program Files\\Claude Buddy\\resources\\hooks', dataDir: 'C:\\Users\\me\\.claude-traffic-light' });
+const RUN = 'ELECTRON_RUN_AS_NODE=1 "/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy"';
+
 test('adapters: cursor/codex/gemini config writers are idempotent and keep foreign entries', () => {
-  const cur = H.installCursor({ version: 1, hooks: { stop: [{ command: 'echo mine' }] } }, '/e/emit.js');
-  const twice = H.installCursor(cur, '/e/emit.js');
+  const cur = Cursor.apply({ version: 1, hooks: { stop: [{ command: 'echo mine' }] } }, APP);
+  const twice = Cursor.apply(cur, APP);
   assert.deepEqual(cur, twice);
-  assert.deepEqual(cur.hooks.stop.map((h) => h.command), ['echo mine', 'node "/e/emit.js" --cursor stop']);
+  assert.deepEqual(cur.hooks.stop.map((h) => h.command), ['echo mine', `${RUN} "/App/Resources/hooks/emit.js" --adapter cursor stop`]);
   assert.ok(cur.hooks.beforeShellExecution.length === 1);
-  const { text: toml } = H.installCodex('model = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', '/e/emit.js');
-  assert.equal(toml, 'notify = ["node", "/e/emit.js", "--codex"]\nmodel = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', 'a notify inside a table is another key');
-  assert.deepEqual(H.installCodex(toml, '/e/emit.js'), { text: toml });
-  assert.equal(H.installCodex(toml, '/new/emit.js').text, toml.replace('/e/emit.js', '/new/emit.js'), 'our own line moves with the app');
-  assert.equal(H.installCodex('', '/e/emit.js').text, 'notify = ["node", "/e/emit.js", "--codex"]\n');
-  const gem = H.installGemini({ theme: 'x', hooks: { BeforeTool: [{ matcher: '', hooks: [{ type: 'command', command: 'echo keep' }] }] } }, '/e/emit.js');
+  assert.equal(Cursor.check(cur, APP), true);
+  const { text: toml } = Codex.apply('model = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', APP);
+  assert.equal(toml, 'notify = ["/Users/me/.claude-traffic-light/bin/buddy-hook", "/App/Resources/hooks/emit.js", "--adapter", "codex"]\nmodel = "o3"\n[profiles.x]\nnotify = ["theirs"]\n', 'a notify inside a table is another key');
+  assert.deepEqual(Codex.apply(toml, APP), { text: toml });
+  const moved = Runtime.make({ ...APP, hooksDir: '/New/hooks' });
+  assert.equal(Codex.apply(toml, moved).text, toml.replace('/App/Resources/hooks/emit.js', '/New/hooks/emit.js'), 'our own line moves with the app');
+  assert.equal(Codex.apply('', DEV).text, 'notify = ["node", "/e/emit.js", "--adapter", "codex"]\n', 'dev runs fall back to node');
+  const gem = Gemini.apply({ theme: 'x', hooks: { BeforeTool: [{ matcher: '', hooks: [{ type: 'command', command: 'echo keep' }] }] } }, APP);
   assert.equal(gem.theme, 'x');
   assert.equal(gem.hooks.BeforeTool.length, 2);
-  assert.deepEqual(H.installGemini(gem, '/e/emit.js'), gem);
+  assert.equal(gem.hooks.BeforeTool[1].hooks[0].command, `${RUN} "/App/Resources/hooks/emit.js" --adapter gemini BeforeTool`);
+  assert.deepEqual(Gemini.apply(gem, APP), gem);
+});
+
+test('adapters: old node-style installs are recognised and replaced on reinstall', () => {
+  const oldCursor = { version: 1, hooks: { stop: [{ command: 'node "/old/emit.js" --cursor stop' }, { command: 'echo mine' }] } };
+  assert.deepEqual(Cursor.apply(oldCursor, APP).hooks.stop.map((h) => h.command), ['echo mine', `${RUN} "/App/Resources/hooks/emit.js" --adapter cursor stop`]);
+  const oldCodex = 'notify = ["node", "/old/emit.js", "--codex"]\nmodel = "o3"\n';
+  assert.equal(Codex.apply(oldCodex, APP).text.split('\n')[0], Codex.notifyLine(APP));
+  assert.equal(Codex.apply(oldCodex, APP).text.match(/notify/g).length, 1);
+  const oldGemini = { hooks: { BeforeTool: [{ matcher: '', hooks: [{ type: 'command', command: 'node "/old/emit.js" tool-use --source gemini' }] }] } };
+  assert.deepEqual(Gemini.apply(oldGemini, APP).hooks.BeforeTool.flatMap((g) => g.hooks.map((h) => h.command)), [`${RUN} "/App/Resources/hooks/emit.js" --adapter gemini BeforeTool`]);
+});
+
+test('adapters: Windows commands go through the .cmd shim; argv arrays through the wrapper everywhere', () => {
+  const shim = 'C:\\Users\\me\\.claude-traffic-light\\bin\\buddy-hook.cmd';
+  assert.equal(Claude.commandFor('Stop', WIN), `"${shim}" "C:\\Program Files\\Claude Buddy\\resources\\hooks\\set-status.js" stop`);
+  assert.equal(Cursor.commandFor('stop', WIN), `"${shim}" "C:\\Program Files\\Claude Buddy\\resources\\hooks\\emit.js" --adapter cursor stop`);
+  assert.deepEqual(Codex.commandFor('notify', WIN), [shim, 'C:\\Program Files\\Claude Buddy\\resources\\hooks\\emit.js', '--adapter', 'codex']);
+  assert.equal(Runtime.wrapperText(WIN), '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"C:\\Program Files\\Claude Buddy\\Claude Buddy.exe" %*\r\n');
+  assert.deepEqual(Codex.commandFor('notify', APP), ['/Users/me/.claude-traffic-light/bin/buddy-hook', '/App/Resources/hooks/emit.js', '--adapter', 'codex']);
+  assert.match(Runtime.wrapperText(APP), /^#!\/bin\/sh\n[\s\S]*ELECTRON_RUN_AS_NODE=1 exec '\/Applications\/Claude Buddy\.app\/Contents\/MacOS\/Claude Buddy' "\$@"\n$/);
+  assert.equal(Claude.commandFor('Stop', DEV), 'node "/e/set-status.js" stop');
 });
 
 test('adapters: Connect Codex never removes a notify another tool owns', () => {
   const theirs = 'model = "o3"\nnotify = ["/Applications/Codex Computer Use.app/Contents/MacOS/notify", "--turn"]\n[mcp_servers.x]\ncommand = "y"\n';
-  const r = H.installCodex(theirs, '/e/emit.js');
+  const r = Codex.apply(theirs, APP);
   assert.equal(r.text, undefined, 'nothing to write');
   assert.match(r.error, /Codex Computer Use.*already set.*only one notify/);
 });
 
-// ── hooks/install.js ────────────────────────────────────────────────────────
+// ── adapters/claude-code.js ─────────────────────────────────────────────────
 test('install is idempotent, strips old-style commands, keeps foreign hooks', () => {
   const foreign = { matcher: '', hooks: [{ type: 'command', command: 'echo hi' }] };
   const settings = {
     hooks: {
       PreToolUse: [foreign, { matcher: '', hooks: [{ type: 'command', command: 'node "/old/set-status.js" green tool-use' }] }],
       Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'node "/Applications/X.app/hooks/set-status.js" done stop' }] }],
+      PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'node "/Applications/X.app/hooks/set-status.js" tool-done' }] }],
     },
     permissions: { allow: ['Bash'] },
   };
-  const once = H.install(JSON.parse(JSON.stringify(settings)), '/new/set-status.js');
-  const twice = H.install(JSON.parse(JSON.stringify(once)), '/new/set-status.js');
+  const once = Claude.apply(JSON.parse(JSON.stringify(settings)), APP);
+  const twice = Claude.apply(JSON.parse(JSON.stringify(once)), APP);
   assert.deepEqual(once, twice);
   assert.deepEqual(once.permissions, settings.permissions);
   const cmds = (ev) => once.hooks[ev].flatMap((h) => h.hooks.map((x) => x.command));
-  assert.deepEqual(cmds('PreToolUse'), ['echo hi', 'node "/new/set-status.js" tool-use']);
-  assert.deepEqual(cmds('Stop'), ['node "/new/set-status.js" stop']);
+  assert.deepEqual(cmds('PreToolUse'), ['echo hi', `${RUN} "/App/Resources/hooks/set-status.js" tool-use`]);
+  assert.deepEqual(cmds('Stop'), [`${RUN} "/App/Resources/hooks/set-status.js" stop`]);
+  assert.deepEqual(cmds('PostToolUse'), [`${RUN} "/App/Resources/hooks/set-status.js" tool-done`], 'the old node command is replaced, not kept beside');
   assert.ok(cmds('PostToolUseFailure').length);
-  assert.equal(H.isInstalled(once, '/new/set-status.js'), true);
-  assert.equal(H.isInstalled(once, '/other/set-status.js'), false);
-  assert.equal(H.isInstalled(settings, '/old/set-status.js'), false, 'old-style commands do not count as installed');
+  assert.equal(Claude.check(once, APP), true);
+  assert.equal(Claude.check(once, DEV), false, 'a node-form install is not the current one');
+  assert.equal(Claude.check(settings, DEV), false, 'old-style commands do not count as installed');
+  const dev = Claude.apply(once, DEV);
+  assert.deepEqual(dev.hooks.Stop.flatMap((h) => h.hooks.map((x) => x.command)), ['node "/e/set-status.js" stop']);
+  assert.deepEqual(Claude.strip(once), { permissions: settings.permissions, hooks: { PreToolUse: [foreign] } });
 });
 
 test('install: PermissionRequest hook is opt-in and carries a timeout', () => {
-  const off = H.install({}, '/x/set-status.js');
+  const off = Claude.apply({}, APP);
   assert.equal(off.hooks.PermissionRequest, undefined);
-  assert.equal(H.isInstalled(off, '/x/set-status.js', { askFromWidget: true }), false, 'not installed for the opt-in when the hook is absent');
-  const on = H.install({}, '/x/set-status.js', { askFromWidget: true });
+  assert.equal(Claude.check(off, APP, { askFromWidget: true }), false, 'not installed for the opt-in when the hook is absent');
+  const on = Claude.apply({}, APP, { askFromWidget: true });
   assert.equal(on.hooks.PermissionRequest[0].hooks[0].timeout, 60);
-  assert.equal(H.isInstalled(on, '/x/set-status.js', { askFromWidget: true }), true);
-  assert.equal(H.isInstalled(on, '/x/set-status.js', { askFromWidget: false }), false, 'turning it off means the hook must go');
-  const backOff = H.install(on, '/x/set-status.js');
+  assert.equal(Claude.check(on, APP, { askFromWidget: true }), true);
+  assert.equal(Claude.check(on, APP, { askFromWidget: false }), false, 'turning it off means the hook must go');
+  const backOff = Claude.apply(on, APP);
   assert.equal(backOff.hooks.PermissionRequest, undefined);
   assert.ok(backOff.hooks.TaskCompleted, 'task hooks are always on');
+});
+
+test('install: file-level install into a temp home never clobbers an unparsable settings.json', () => {
+  const home = tmpHome();
+  const rt = Runtime.make({ ...APP, dataDir: path.join(home, '.ctl') });
+  Claude.install({ home, runtime: rt });
+  assert.equal(Claude.isInstalled({ home, runtime: rt }), true);
+  Claude.uninstall({ home });
+  assert.equal(Claude.isInstalled({ home, runtime: rt }), false);
+  assert.equal(fs.existsSync(path.join(home, '.ctl', 'bin')), false, 'macOS shell hooks need no wrapper file');
+  fs.writeFileSync(Claude.configPath(home), '{ broken');
+  assert.throws(() => Claude.install({ home, runtime: rt }));
+  assert.equal(fs.readFileSync(Claude.configPath(home), 'utf8'), '{ broken');
+  const codexHome = tmpHome();
+  assert.equal(Codex.install({ home: codexHome, runtime: rt }).ok, true);
+  const wrapper = Runtime.wrapperPath(rt);
+  assert.equal(fs.readFileSync(wrapper, 'utf8'), Runtime.wrapperText(rt));
+  assert.equal(fs.statSync(wrapper).mode & 0o111, 0o111, 'the wrapper is executable');
+  assert.equal(Codex.isInstalled({ home: codexHome, runtime: rt }), true);
+  assert.equal(Codex.uninstall({ home: codexHome }).changed, true);
+  assert.equal(Codex.isInstalled({ home: codexHome, runtime: rt }), false);
 });
 
 test('filterAgentKinds hides switched-off kinds and treats missing kinds as on', () => {

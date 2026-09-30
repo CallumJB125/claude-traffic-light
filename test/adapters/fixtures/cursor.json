@@ -1,0 +1,23 @@
+[
+  { "name": "beforeShellExecution", "event": "beforeShellExecution",
+    "payload": { "conversation_id": "c-19f2", "generation_id": "g-1", "hook_event_name": "beforeShellExecution", "workspace_roots": ["/w/proj"], "command": "ls -la", "cwd": "/w/proj" },
+    "reply": { "permission": "allow", "continue": true },
+    "expect": [{ "signal": "tool-use", "sessionId": "c-19f2", "cwd": "/w/proj", "tool": "Bash" }] },
+  { "name": "beforeMCPExecution", "event": "beforeMCPExecution",
+    "payload": { "conversation_id": "c-19f2", "hook_event_name": "beforeMCPExecution", "workspace_roots": ["/w/proj"], "tool_name": "github_search", "tool_input": "{}" },
+    "reply": { "permission": "allow", "continue": true },
+    "expect": [{ "signal": "tool-use", "sessionId": "c-19f2", "cwd": "/w/proj", "tool": "mcp__github_search" }] },
+  { "name": "afterFileEdit", "event": "afterFileEdit",
+    "payload": { "conversation_id": "c-19f2", "hook_event_name": "afterFileEdit", "workspace_roots": ["/w/proj"], "file_path": "/w/proj/a.ts", "edits": [{ "old_string": "a", "new_string": "b" }] },
+    "reply": null,
+    "expect": [{ "signal": "tool-done", "sessionId": "c-19f2", "cwd": "/w/proj", "tool": "Edit" }] },
+  { "name": "beforeSubmitPrompt", "event": "beforeSubmitPrompt",
+    "payload": { "conversation_id": "c-19f2", "hook_event_name": "beforeSubmitPrompt", "workspace_roots": ["/w/proj"], "prompt": "fix it", "attachments": [] },
+    "reply": { "permission": "allow", "continue": true },
+    "expect": [{ "signal": "prompt-submit", "sessionId": "c-19f2", "cwd": "/w/proj", "tool": null }] },
+  { "name": "stop", "event": "stop",
+    "payload": { "conversation_id": "c-19f2", "hook_event_name": "stop", "status": "completed", "workspace_roots": ["/w/proj"] },
+    "reply": null,
+    "expect": [{ "signal": "stop", "sessionId": "c-19f2", "cwd": "/w/proj", "tool": null }] },
+  { "name": "Unknown event", "event": "afterAgentThought", "payload": {}, "reply": null, "expect": [] }
+]

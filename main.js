@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 const Rules = require('./rules.js');
-const Hooks = require('./hooks/install.js');
+const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
 // electron-builder drops a file from the asar when it is also an extraResource,
@@ -241,8 +241,11 @@ function flushStats() {
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
 // the checked-out hooks/ dir next to main.js.
 const HOOKS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'hooks') : path.join(__dirname, 'hooks');
-const SET_STATUS_SCRIPT = path.join(HOOKS_DIR, 'set-status.js');
 const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
+// Hooks run the app's own binary as Node (ELECTRON_RUN_AS_NODE), so a machine
+// without node still lights up. An unpackaged dev run has no app binary worth
+// pinning into agent configs and falls back to plain `node`.
+const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: app.isPackaged ? process.execPath : null, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 // The shim runs router.js with plain node, which can't read inside app.asar,
 // so the packaged copy is an extraResource like hooks/.
 const ROUTER_SCRIPT = app.isPackaged ? path.join(process.resourcesPath, 'router.js') : path.join(__dirname, 'router.js');
@@ -266,26 +269,17 @@ function routerOpts() {
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
-function readClaudeSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function hookOptions() {
-  return { askFromWidget: !!loadConfig().askFromWidget };
+function claudeHookOpts() {
+  return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
 }
 
 function areHooksInstalled() {
-  return Hooks.isInstalled(readClaudeSettings(), SET_STATUS_SCRIPT, hookOptions());
+  return Adapters.get('claude').isInstalled(claudeHookOpts());
 }
 
+// An unparsable settings.json is left alone rather than written over.
 function installHooks() {
-  const settings = Hooks.install(readClaudeSettings(), SET_STATUS_SCRIPT, hookOptions());
-  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_PATH), { recursive: true });
-  fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
+  try { Adapters.get('claude').install(claudeHookOpts()); } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); }
 }
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -2575,32 +2569,16 @@ ipcMain.handle('mcp-set-enabled', (_e, on) => {
   }
 });
 
-// Connect other agents: writes their hook config files.
+// Connect other agents: each adapter writes its own hook config.
 ipcMain.handle('connect-agent', (e, which) => {
-  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return {}; } };
-  const home = os.homedir();
-  if (which === 'cursor') {
-    const f = path.join(home, '.cursor', 'hooks.json');
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify(Hooks.installCursor(readJson(f), EMIT_SCRIPT), null, 2));
-    return { ok: true, file: f };
+  const adapter = which === 'claude' ? null : Adapters.get(which);
+  if (!adapter) return { ok: false };
+  try {
+    const r = adapter.install({ home: os.homedir(), runtime: HOOK_RUNTIME });
+    return r.ok ? { ok: true, file: r.file } : { ok: false, file: r.file, error: r.error };
+  } catch (err) {
+    return { ok: false, file: adapter.configPath(os.homedir()), error: err.message };
   }
-  if (which === 'codex') {
-    const f = path.join(home, '.codex', 'config.toml');
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    let cur = ''; try { cur = fs.readFileSync(f, 'utf8'); } catch { /* none */ }
-    const r = Hooks.installCodex(cur, EMIT_SCRIPT);
-    if (r.error) return { ok: false, file: f, error: r.error };
-    fs.writeFileSync(f, r.text);
-    return { ok: true, file: f };
-  }
-  if (which === 'gemini') {
-    const f = path.join(home, '.gemini', 'settings.json');
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify(Hooks.installGemini(readJson(f), EMIT_SCRIPT), null, 2));
-    return { ok: true, file: f };
-  }
-  return { ok: false };
 });
 ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 

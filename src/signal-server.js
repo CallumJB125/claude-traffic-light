@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const Rules = require('../rules.js');
 const SessionState = require('../hooks/session-state.js');
+const Adapters = require('../adapters/index.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
 const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -25,6 +26,30 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks.
 module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus }) => {
+  function readBody(req, done, then) {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
+    req.on('end', () => {
+      let d; try { d = JSON.parse(body || '{}'); } catch { return done(400, { error: 'bad json' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return done(400, { error: 'bad json' });
+      then(d);
+    });
+  }
+
+  // POST /hook/:adapter[?event=<name>] with the agent's own hook payload:
+  // the adapter's normalize() turns it into signals, exactly as
+  // `emit.js --adapter <id>` does from a command hook.
+  function hookEvent(id, event, payload, done) {
+    const adapter = Adapters.get(id);
+    if (!adapter) return done(404, { error: 'unknown adapter', known: Adapters.list().map((a) => a.id) });
+    const events = adapter.normalize(event, payload).filter((e) => KNOWN_SIGNALS.has(e.signal));
+    const host = os.hostname().split('.')[0];
+    for (const e of events) SessionState.applyAdapterEvent(sessionsDir, { host, source: adapter.id, event: e, fallbackSession: 'default', waitMs: 250 });
+    if (events.length) broadcastStatus();
+    const reply = adapter.reply ? adapter.reply(event, payload) : null;
+    return done(200, { ok: true, signals: events.map((e) => e.signal), ...(reply ? { reply } : {}) });
+  }
+
   function startSignalServer() {
     const tokenFile = path.join(rootDir, 'token');
     const server = http.createServer((req, res) => {
@@ -32,12 +57,11 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       const host = String(req.headers.host || '').replace(/:\d+$/, '');
       if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
       if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })) }); }
-      if (req.method !== 'POST' || req.url !== '/signal') return done(404, { error: 'POST /signal or GET /status' });
+      const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w-]*))?$/.exec(req.url || '');
+      if (req.method !== 'POST' || (req.url !== '/signal' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
-      let body = '';
-      req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
-      req.on('end', () => {
-        let d; try { d = JSON.parse(body || '{}'); } catch { return done(400, { error: 'bad json' }); }
+      if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
+      readBody(req, done, (d) => {
         if (!KNOWN_SIGNALS.has(d.signal)) return done(400, { error: 'unknown signal', known: [...KNOWN_SIGNALS] });
         const source = String(d.source || 'custom').replace(/[^\w.-]/g, '').slice(0, 24) || 'custom';
         const session = String(d.session || 'default').replace(/[^\w.-]/g, '').slice(0, 80) || 'default';
@@ -71,6 +95,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
     server.listen(SIGNAL_PORT, '127.0.0.1');
+    return server;
   }
 
   // ── Pending permission requests (from the PermissionRequest hook) ──────────

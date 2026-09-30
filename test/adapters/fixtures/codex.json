@@ -1,0 +1,8 @@
+[
+  { "name": "agent-turn-complete", "event": "notify",
+    "payload": { "type": "agent-turn-complete", "thread-id": "0199a2b3-thread", "turn-id": "12", "cwd": "/w/codexy", "input-messages": ["rename the helper"], "last-assistant-message": "Done." },
+    "expect": [{ "signal": "stop", "sessionId": "0199a2b3-thread", "cwd": "/w/codexy", "tool": null }] },
+  { "name": "any other notification reads as work", "event": "notify",
+    "payload": { "type": "approval-requested", "thread_id": "t2", "cwd": "/w/x" },
+    "expect": [{ "signal": "tool-use", "sessionId": "t2", "cwd": "/w/x", "tool": null }] }
+]

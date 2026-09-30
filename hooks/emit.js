@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 // Generic emitter for any agent, not just Claude Code:
 //
-//   node emit.js <signal> [--source cursor] [--session id] [--cwd path] [--tool name]
+//   emit.js <signal> [--source name] [--session id] [--cwd path] [--tool name]
+//   emit.js --adapter <id> [event]      payload JSON on stdin, or (Codex) as the last arg
 //
 // signals: prompt-submit | tool-use | tool-done | tool-failed | stop |
 //          turn-failed | permission-ask | permission-denied | limit-hit |
 //          idle-nudge | session-start | session-end | subagent-start |
 //          subagent-done | compact
 //
-// Also understands Cursor and Codex payloads: pass --cursor <event> and the
-// hook JSON on stdin, or --codex with Codex's notify JSON as the last arg.
+// --adapter hands the event and payload to adapters/<id>.js normalize(), the
+// same step the app's POST /hook/:adapter route takes. Installs from before
+// the adapter layer still call `--cursor <event>` and `--codex`; both are
+// read as their adapter.
 // Never break the calling agent: any failure exits 0 quietly.
 process.on('uncaughtException', () => process.exit(0));
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const SessionState = require('./session-state.js');
+const Adapters = require('../adapters/index.js');
 
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
@@ -24,11 +28,6 @@ const KNOWN = ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'stop', 
 
 const argv = process.argv.slice(2);
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : null; };
-let signal = argv.find((a) => KNOWN.includes(a)) || null;
-let source = opt('source') || 'custom';
-let session = opt('session') || null;
-let cwd = opt('cwd') || null;
-let tool = opt('tool') || null;
 
 function readStdin() {
   if (process.stdin.isTTY) return '';
@@ -40,39 +39,40 @@ function readStdin() {
   }
   return out;
 }
+const parse = (text) => { try { return JSON.parse(text || '{}'); } catch { return {}; } };
 
-// Cursor hooks (~/.cursor/hooks.json): event name on the command line, JSON on stdin.
-const cursorEvent = opt('cursor');
-if (cursorEvent) {
-  source = 'cursor';
-  let d = {}; try { d = JSON.parse(readStdin() || '{}'); } catch { /* ignore */ }
-  session = d.conversation_id || d.conversationId || session;
-  cwd = d.workspace_roots?.[0] || d.cwd || cwd;
-  const map = { beforeSubmitPrompt: 'prompt-submit', beforeShellExecution: 'tool-use', beforeMCPExecution: 'tool-use', afterFileEdit: 'tool-done', beforeReadFile: 'tool-use', stop: 'stop' };
-  signal = map[cursorEvent] || null;
-  tool = cursorEvent === 'beforeShellExecution' ? 'Bash' : cursorEvent === 'afterFileEdit' ? 'Edit' : cursorEvent === 'beforeMCPExecution' ? (d.tool_name ? `mcp__${d.tool_name}` : 'mcp__tool') : cursorEvent === 'beforeReadFile' ? 'Read' : null;
-  // Cursor's permission hooks expect a JSON reply; "allow" keeps it unblocked.
-  if (['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile', 'beforeSubmitPrompt'].includes(cursorEvent)) process.stdout.write(JSON.stringify({ permission: 'allow', continue: true }));
+let adapterId = opt('adapter');
+let event = adapterId ? argv[argv.indexOf('--adapter') + 2] : null;
+if (!adapterId && opt('cursor')) { adapterId = 'cursor'; event = opt('cursor'); }
+if (!adapterId && argv.includes('--codex')) adapterId = 'codex';
+
+if (adapterId) {
+  const adapter = Adapters.get(adapterId);
+  if (!adapter) process.exit(0);
+  // Codex passes its JSON as the last argument; everyone else pipes it.
+  const payload = adapterId === 'codex' ? parse(argv[argv.length - 1]) : parse(readStdin());
+  const reply = adapter.reply ? adapter.reply(event, payload) : null;
+  if (reply) process.stdout.write(JSON.stringify(reply));
+  const events = adapter.normalize(event, payload).filter((e) => KNOWN.includes(e.signal));
+  if (!events.length) process.exit(0);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  for (const e of events) {
+    SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession: process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`, fallbackCwd: process.cwd() });
+  }
+  process.exit(0);
 }
 
-// Codex CLI notify (config.toml: notify = ["node", ".../emit.js", "--codex"]): JSON as the last argument.
-if (argv.includes('--codex')) {
-  source = 'codex';
-  let d = {}; try { d = JSON.parse(argv[argv.length - 1]); } catch { /* ignore */ }
-  session = d['thread-id'] || d.thread_id || d.session_id || session;
-  cwd = d.cwd || cwd;
-  signal = d.type === 'agent-turn-complete' ? 'stop' : 'tool-use';
-}
-
+const signal = argv.find((a) => KNOWN.includes(a)) || null;
 if (!signal) process.exit(0);
+const source = opt('source') || 'custom';
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-const sessionId = session || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
+const sessionId = opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
 const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
 if (signal === 'session-end') { fs.rmSync(file, { force: true }); process.exit(0); }
 // Same lock and state step as the Claude Code hook and the app's /signal
 // endpoint, so what the app and the pollers stored on the file survives.
 SessionState.withLock(file, () => {
   const prev = SessionState.readJson(file);
-  const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd: cwd || prev?.cwd || process.cwd(), signal, tool });
+  const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd: opt('cwd') || prev?.cwd || process.cwd(), signal, tool: opt('tool') || null });
   SessionState.writeJsonAtomic(file, next);
 });

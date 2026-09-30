@@ -278,45 +278,11 @@ function readDelegated(prevValue) {
   }
 }
 
-const tool = (data && (data.tool_name || data.toolName)) || null;
-
-// Claude Code tags each Notification with notification_type. Types not listed
-// here (auth_success, elicitation_complete, …) are bookkeeping and leave the
-// session's signal alone.
-const NOTIFICATION_TYPES = {
-  permission_prompt: 'permission-ask',
-  elicitation_dialog: 'permission-ask',
-  elicitation_url_dialog: 'permission-ask',
-  idle_prompt: 'idle-nudge',
-};
-let resolved = signal;
-// How this write came about — main.js quotes it in its transition log.
-let via = signal;
-// What kind of ask a permission-ask is: 'request' (the blocking
-// PermissionRequest hook), 'question' (AskUserQuestion) or 'notification'.
-// Only a notification ask can be a transient one the widget should sit out.
-let askKind = null;
-if (signal === 'notification') {
-  // A usage limit is spotted by its text whatever the type; older Claude Code
-  // sends no type at all, so the message text is the fallback there.
-  const text = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
-  const type = typeof data?.notification_type === 'string' ? data.notification_type : null;
-  via = `notification/${type || 'regex'}`;
-  if (/usage limit|rate limit|out of tokens|reached your (5-hour|weekly) limit|quota exceeded/.test(text)) resolved = 'limit-hit';
-  else if (type) resolved = NOTIFICATION_TYPES[type] || null;
-  else if (/permission|approve|allow|confirm/.test(text)) resolved = 'permission-ask';
-  else resolved = 'idle-nudge';
-  if (!resolved) process.exit(0);
-  if (resolved === 'permission-ask') askKind = 'notification';
-}
-// The widget shows a PermissionRequest the same way as a Notification ask.
-if (signal === 'permission-request') { resolved = 'permission-ask'; askKind = 'request'; }
-// AskUserQuestion blocks on the person until its PostToolUse, so it is an ask,
-// not work.
-if (signal === 'tool-use' && tool === 'AskUserQuestion') { resolved = 'permission-ask'; askKind = 'question'; via = 'tool-use/AskUserQuestion'; }
-// A session-start reads as open and idle; after an auto-compaction mid-turn
-// Claude carries straight on, so that one is the compaction, not a new start.
-if (signal === 'session-start' && data?.source === 'compact') { resolved = 'compact'; via = 'session-start/compact'; }
+// Which signal the session machine steps with, and how it came about, is the
+// Claude Code adapter's call — the same step /hook/claude takes.
+const Claude = require('../adapters/claude-code.js');
+const { resolved, askKind, via, tool } = Claude.resolveSignal(signal, data);
+if (!resolved) process.exit(0);
 
 // ── Other agents ────────────────────────────────────────────────────────────
 // SubagentStart/Stop carry the agent's id and type; every one Claude spawns
@@ -510,10 +476,7 @@ if (signal === 'permission-request') {
   }
   fs.rmSync(reqFile, { force: true });
   fs.rmSync(ansFile, { force: true });
-  if (decision === 'allow' || decision === 'deny') {
-    const out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: decision === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: 'Denied from the Claude Traffic Light widget' } } };
-    hookOutput = mergeOutput(hookOutput, out);
-  }
+  hookOutput = mergeOutput(hookOutput, Claude.answer(decision));
   finish();
 }
 

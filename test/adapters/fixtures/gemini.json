@@ -1,0 +1,17 @@
+[
+  { "name": "BeforeTool", "event": "BeforeTool",
+    "payload": { "session_id": "gem-5c1", "transcript_path": "/Users/me/.gemini/tmp/x/chats/session.json", "cwd": "/w/g", "hook_event_name": "BeforeTool", "timestamp": "2026-09-30T10:00:00Z", "tool_name": "run_shell_command", "tool_input": { "command": "ls" } },
+    "expect": [{ "signal": "tool-use", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": "run_shell_command" }] },
+  { "name": "AfterTool", "event": "AfterTool",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "AfterTool", "tool_name": "write_file", "tool_response": {} },
+    "expect": [{ "signal": "tool-done", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": "write_file" }] },
+  { "name": "AfterAgent", "event": "AfterAgent",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "AfterAgent", "prompt": "hi", "prompt_response": "hello" },
+    "expect": [{ "signal": "stop", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] },
+  { "name": "SessionStart", "event": "SessionStart",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "SessionStart", "source": "startup" },
+    "expect": [{ "signal": "session-start", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] },
+  { "name": "SessionEnd", "event": "SessionEnd",
+    "payload": { "session_id": "gem-5c1", "cwd": "/w/g", "hook_event_name": "SessionEnd", "reason": "exit" },
+    "expect": [{ "signal": "session-end", "sessionId": "gem-5c1", "cwd": "/w/g", "tool": null }] }
+]
