@@ -267,6 +267,7 @@ const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: HOOK_PATHS.execPath, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+require('./src/spellcheck.js').keepOffline({ app, getDefaultSession: () => require('electron').session.defaultSession });
 
 function claudeHookOpts() {
   return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
