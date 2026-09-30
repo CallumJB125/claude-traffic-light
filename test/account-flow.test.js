@@ -841,3 +841,19 @@ test('This Mac: “Include one-line summaries” is its own per-hub switch, off 
   assert.match(page, /disabled: !h\.share/);
   assert.match(page, /Applies to every team on/);
 }));
+
+test('the default team hub lives in brand.js only and prefills the hub field until another hub is used', async () => harness(async (h) => {
+  const BRAND = require('../buddy-window/brand');
+  assert.equal(BRAND.DEFAULT_HUB, 'https://app.plexiform.dev');
+  await h.A.go('hub');
+  let s = await h.A.state();
+  assert.equal(s.lastHub, new URL(BRAND.DEFAULT_HUB).host);
+  assert.equal(s.brand.defaultHost, new URL(BRAND.DEFAULT_HUB).host);
+  await h.signInAs('me@example.com');
+  await h.A.go('hub');
+  s = await h.A.state();
+  assert.equal(s.lastHub, h.origin, 'the hub last used wins');
+  const { execFileSync } = require('node:child_process');
+  const hits = execFileSync('git', ['grep', '-l', '-e', 'plexiform\\.dev', '-e', 'bondly\\.co\\.za', '--', 'buddy-window', 'main.js'], { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+  assert.deepEqual(hits, ['buddy-window/brand.js']);
+}));

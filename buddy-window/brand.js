@@ -15,6 +15,8 @@ module.exports = Object.freeze({
   SCHEME,
   LEGACY_SCHEMES,
   SCHEMES: Object.freeze([SCHEME, ...LEGACY_SCHEMES]),
+  // The hosted team hub: the sign-in screen's default until the member uses another.
+  DEFAULT_HUB: 'https://app.plexiform.dev',
   WINDOW_TITLE: 'Plexiform',
   CONNECT_TITLE: 'Connect',
   OPEN_MENU_LABEL: 'Open Plexiform…',

@@ -12,6 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const { DEFAULT_HUB } = require('./brand');
+
 const LOCAL = Object.freeze({ id: 'local', name: 'My board', kind: 'local' });
 const TEAM_ID_RE = /^[A-Za-z0-9_.-]{1,100}$/;
 
@@ -23,7 +25,7 @@ const TEAM_ID_RE = /^[A-Za-z0-9_.-]{1,100}$/;
  */
 function normalizeHubUrl(input, { allowOrigins = [] } = {}) {
   let s = String(input ?? '').trim();
-  if (!s) throw new Error('Enter the team hub address, like buddy.example.com');
+  if (!s) throw new Error(`Enter the team hub address, like ${new URL(DEFAULT_HUB).host}`);
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = `https://${s}`;
   let u;
   try { u = new URL(s); } catch { throw new Error('That is not a web address.'); }

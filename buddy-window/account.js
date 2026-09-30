@@ -134,7 +134,7 @@ const SCREENS = {
     return [
       heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),
       form({
-        fields: field('Team hub address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: 'buddy.example.com', value: s.lastHub ?? '', required: true, autofocus: true })),
+        fields: field('Team hub address', input({ name: 'url', type: 'text', inputmode: 'url', autocomplete: 'url', placeholder: s.brand.defaultHost, value: s.lastHub ?? '', required: true, autofocus: true })),
         submit: 'Continue', busy: 'Checking…',
         fn: (v) => api.hub(v.url),
       }),
