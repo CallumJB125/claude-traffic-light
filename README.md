@@ -343,7 +343,9 @@ in the app, so changing a rule never touches the hooks:
 - `Stop` → `stop`
 - `Notification` → `permission-ask`, `limit-hit` or `idle-nudge`, sniffed
   from the message text
-- `SessionStart` / `PreCompact` → `session-start` / `compact`
+- `SessionStart` / `PreCompact` → `session-start` / `compact` (a SessionStart
+  after a compaction is `compact`: the session carries on; a fresh one reads
+  idle until its first prompt)
 - `SessionEnd` → removes the file
 
 The app aggregates all non-stale sessions through your rules. A working

@@ -286,7 +286,7 @@
       },
       {
         id: 'working', name: 'Claude is working', enabled: true,
-        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'session-start', 'compact'] },
+        when: { signal: ['prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'subagent-start', 'subagent-done', 'permission-denied', 'compact'] },
         then: { lamp: 'green', pose: 'think' },
       },
       {
@@ -308,6 +308,11 @@
         id: 'nudge', name: 'Waiting for you', enabled: true,
         when: { signal: ['idle-nudge'] },
         then: { lamp: 'amber', pose: 'none' },
+      },
+      {
+        id: 'started', name: 'Session open, no prompt yet', enabled: true,
+        when: { signal: ['session-start'] },
+        then: { lamp: 'off', pose: 'none' },
       },
       {
         id: 'idle', name: 'Nothing running', enabled: true,
@@ -349,9 +354,16 @@
       }
     }
     // v5: a denied tool call is mid-turn (auto mode's classifier said no and
-    // Claude carries on), so it stays green instead of dropping the lamp.
-    if (version < 5 && w >= 0 && !out[w].when.signal.includes('permission-denied')) {
-      out[w] = { ...out[w], when: { ...out[w].when, signal: out[w].when.signal.concat('permission-denied') } };
+    // Claude carries on), so it stays green instead of dropping the lamp; a
+    // session that has only just opened is not working, so it leaves green
+    // for its own (idle-looking) rule.
+    if (version < 5) {
+      if (w >= 0) {
+        const signal = out[w].when.signal.filter((x) => x !== 'session-start');
+        if (!signal.includes('permission-denied')) signal.push('permission-denied');
+        out[w] = { ...out[w], when: { ...out[w].when, signal } };
+      }
+      add('started', out.findIndex((r) => r.id === 'idle'));
     }
     return out;
   }

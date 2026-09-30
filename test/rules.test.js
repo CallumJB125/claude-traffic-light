@@ -853,7 +853,7 @@ test('migrateRules: a saved config gains offline and failed-turn once, in their 
   assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
   assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
   const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
-  assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn']);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', 'mine', 'failed-turn', 'started']);
 });
 
 test('presentSignal: a young notification ask shows what came before it', () => {
@@ -955,6 +955,23 @@ test('lamps: green working, amber your turn, red blocked, off idle', () => {
   assert.equal(R.resolve(rules(), [{ signal: 'stop' }], Date.now(), { offline: true }).look.lamp, 'red', 'offline');
   assert.equal(lamp([]), 'off');
   assert.equal(lamp([{ signal: 'stop' }, { signal: 'tool-use' }]), 'green', 'one session working still owns the lamp');
+});
+
+test('lamps: a session opened with no prompt yet reads idle, not working', () => {
+  const opened = R.resolve(rules(), [{ signal: 'session-start', cwd: '/a' }]);
+  assert.deepEqual([opened.look.lamp, opened.look.pose, opened.owned.lamp], ['off', 'none', 'started']);
+  assert.equal(R.resolve(rules(), [{ signal: 'session-start', cwd: '/a' }, { signal: 'tool-use', cwd: '/b' }]).look.lamp, 'green', 'another session working still owns the lamp');
+  assert.equal(R.resolve(rules(), [{ signal: 'session-start', cwd: '/a' }, { signal: 'stop', cwd: '/b' }]).look.lamp, 'amber', 'and one waiting on you too');
+  assert.ok(!R.WAITING_ON_YOU.has('session-start'), 'an unused terminal never counts as ignored');
+});
+
+test('migrateRules v5: session-start leaves a saved working rule for its own idle rule; permission-denied joins it', () => {
+  const v4 = rules().filter((r) => r.id !== 'started')
+    .map((r) => (r.id === 'working' ? { ...r, when: { signal: r.when.signal.filter((x) => x !== 'permission-denied').concat('session-start') } } : r)).map(R.normalizeRule);
+  const m = R.migrateRules(v4, 4);
+  assert.deepEqual(m, rules().map(R.normalizeRule).map((r) => (r.id === 'working' ? { ...r, when: { ...r.when, signal: v4.find((x) => x.id === 'working').when.signal.filter((x) => x !== 'session-start').concat('permission-denied') } } : r)), 'a v4 default config becomes today\'s defaults (signal order aside)');
+  assert.deepEqual(m.map((r) => r.id).slice(-2), ['started', 'idle']);
+  assert.deepEqual(R.migrateRules(m.filter((r) => r.id !== 'started'), 5).map((r) => r.id), m.filter((r) => r.id !== 'started').map((r) => r.id), 'deleting it afterwards sticks');
 });
 
 test('migrateRules v4: old default lamp colours follow, customised ones stay', () => {

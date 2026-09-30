@@ -314,6 +314,9 @@ if (signal === 'permission-request') { resolved = 'permission-ask'; askKind = 'r
 // AskUserQuestion blocks on the person until its PostToolUse, so it is an ask,
 // not work.
 if (signal === 'tool-use' && tool === 'AskUserQuestion') { resolved = 'permission-ask'; askKind = 'question'; via = 'tool-use/AskUserQuestion'; }
+// A session-start reads as open and idle; after an auto-compaction mid-turn
+// Claude carries straight on, so that one is the compaction, not a new start.
+if (signal === 'session-start' && data?.source === 'compact') { resolved = 'compact'; via = 'session-start/compact'; }
 
 // ── Other agents ────────────────────────────────────────────────────────────
 // SubagentStart/Stop carry the agent's id and type; every one Claude spawns
@@ -418,7 +421,7 @@ function nextSession(prev, { hostApp, pid }) {
   // so the app's log shows it.
   const viaOut = t.held ? (prev?.via ?? null)
     : askKind === 'notification' && (prev?.signal === 'stop' || prev?.signal === 'idle-nudge') ? `${via} after-stop` : via;
-  const agents = updateAgents(prev?.agents, resolved, data, now);
+  const agents = updateAgents(prev?.agents, signal, data, now);
   return {
     sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),

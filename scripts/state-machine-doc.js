@@ -65,7 +65,8 @@ ${eventRows.join('\n')}
 A Notification is resolved first: \`permission_prompt\` / elicitation →
 \`permission-ask\`, \`idle_prompt\` → \`idle-nudge\`, usage-limit text →
 \`limit-hit\`; a PermissionRequest and an AskUserQuestion tool use are
-\`permission-ask\` too.
+\`permission-ask\` too. A SessionStart after a compaction (\`source: compact\`)
+is \`compact\`: the session is carrying on, not freshly opened.
 
 ## Transition rules
 
@@ -109,7 +110,7 @@ stateDiagram-v2
   [*] --> stored
   stored --> dropped: no-signal / gone
   stored --> held: young notification ask
-  stored --> promoted: stop / idle-nudge + working agent
+  stored --> promoted: ${[...M.PROMOTABLE_TURN_END].join(' / ')} + working agent
   stored --> shown: otherwise
   held --> shown: after ${M.TRANSIENT_ASK_MS} ms, or a pending request
   promoted --> dropped: stale-agents
@@ -118,7 +119,8 @@ stateDiagram-v2
 \`\`\`
 
 Stale windows: \`workingStaleMinutes\` for a working signal,
-\`waitingStaleHours\` for a waiting-on-you one (${[...M.WAITING_ON_YOU].map((s) => `\`${s}\``).join(', ')});
+\`waitingStaleHours\` for a waiting-on-you one (${[...M.WAITING_ON_YOU].map((s) => `\`${s}\``).join(', ')})
+or a quiet one (${[...M.QUIET].map((s) => `\`${s}\``).join(', ')}: open, no prompt yet);
 a promoted session lives while any working agent is younger than
 ${M.AGENT_KEEPALIVE_MS / 3600000} h or anything moved within the working window.
 `;

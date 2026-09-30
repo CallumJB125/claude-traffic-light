@@ -191,6 +191,22 @@ test('set-status: turn-failed ends the turn\'s working clock', () => {
   assert.equal(read(home, 'f').signal, 'turn-failed', 'a turn end for bookkeeping too');
 });
 
+test('set-status: a session-start is a fresh idle session, but a compaction mid-turn carries on working', () => {
+  const home = tmpHome();
+  run(home, 'session-start', { session_id: 'ss', source: 'startup' });
+  assert.deepEqual([read(home, 'ss').signal, read(home, 'ss').workingSince], ['session-start', null]);
+  run(home, 'prompt-submit', { session_id: 'ss' });
+  run(home, 'tool-use', { session_id: 'ss', tool_name: 'Bash' });
+  const before = read(home, 'ss');
+  run(home, 'compact', { session_id: 'ss' });
+  run(home, 'session-start', { session_id: 'ss', source: 'compact' });
+  const d = read(home, 'ss');
+  assert.deepEqual([d.signal, d.workingSince, d.touchedAt], ['compact', before.workingSince, before.touchedAt]);
+  run(home, 'tool-use', { session_id: 'ss', tool_name: 'Read' });
+  run(home, 'session-start', { session_id: 'ss', source: 'compact' });
+  assert.equal(read(home, 'ss').via, 'session-start/compact');
+});
+
 test('set-status: a permission denial mid-turn keeps the turn, its clock and the ignored timer', () => {
   const home = tmpHome();
   run(home, 'prompt-submit', { session_id: 'pd' });

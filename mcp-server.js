@@ -105,7 +105,7 @@ function classifySession(data, config, now, pendingIds = []) {
   if (c.dropped === 'no-signal') return { live: false, dropped: 'no signal', signal: null };
   if (c.dropped === 'gone') return { live: false, dropped: `process ${data.claudePid} exited without a SessionEnd`, signal: c.signal };
   const why = c.dropped === 'stale-agents' ? 'stale: finished turn whose working agents went quiet'
-    : c.dropped === 'stale' ? `stale: no update for over ${c.waiting ? `${config.waitingStaleHours} h (waiting signal)` : `${config.workingStaleMinutes} min (working signal)`}`
+    : c.dropped === 'stale' ? `stale: no update for over ${c.waiting || c.quiet ? `${config.waitingStaleHours} h (${c.waiting ? 'waiting' : 'quiet'} signal)` : `${config.workingStaleMinutes} min (working signal)`}`
     : null;
   const out = { live: c.live, signal: c.signal, presented: c.presented, held: c.held, source: c.source, staleInMs: c.staleInMs, session: c.session };
   return why ? { live: false, dropped: why, ...out } : out;

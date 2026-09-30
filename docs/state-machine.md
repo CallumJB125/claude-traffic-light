@@ -45,7 +45,8 @@ the working-since clock stops there.
 A Notification is resolved first: `permission_prompt` / elicitation →
 `permission-ask`, `idle_prompt` → `idle-nudge`, usage-limit text →
 `limit-hit`; a PermissionRequest and an AskUserQuestion tool use are
-`permission-ask` too.
+`permission-ask` too. A SessionStart after a compaction (`source: compact`)
+is `compact`: the session is carrying on, not freshly opened.
 
 ## Transition rules
 
@@ -162,9 +163,9 @@ front of the rules engine.
 | 1 | `no-signal` | nothing | no signal (and no legacy colour) in the file |
 | 2 | `gone` | nothing | its local Claude process exited without a SessionEnd |
 | 3 | `held` | prevSignal (or tool-use) | a notification ask younger than 1200 ms that no pending request or real ask backs |
-| 4 | `promoted` | tool-use / Agent | a finished or idle turn with a subagent still working |
+| 4 | `promoted` | tool-use / Agent | a finished, idle or just-opened session with a subagent still working |
 | 5 | `stale-agents` | nothing | promoted, but its working agents went quiet past the working window and keepalive |
-| 6 | `stale` | nothing | no update within the working window (or the waiting window for a waiting-on-you signal) |
+| 6 | `stale` | nothing | no update within the working window (or the waiting window for a waiting-on-you or quiet signal) |
 | 7 | `shown` | the stored signal | otherwise |
 
 ```mermaid
@@ -172,7 +173,7 @@ stateDiagram-v2
   [*] --> stored
   stored --> dropped: no-signal / gone
   stored --> held: young notification ask
-  stored --> promoted: stop / idle-nudge + working agent
+  stored --> promoted: stop / idle-nudge / session-start + working agent
   stored --> shown: otherwise
   held --> shown: after 1200 ms, or a pending request
   promoted --> dropped: stale-agents
@@ -181,6 +182,7 @@ stateDiagram-v2
 ```
 
 Stale windows: `workingStaleMinutes` for a working signal,
-`waitingStaleHours` for a waiting-on-you one (`permission-ask`, `limit-hit`, `idle-nudge`, `stop`, `turn-failed`);
+`waitingStaleHours` for a waiting-on-you one (`permission-ask`, `limit-hit`, `idle-nudge`, `stop`, `turn-failed`)
+or a quiet one (`session-start`: open, no prompt yet);
 a promoted session lives while any working agent is younger than
 6 h or anything moved within the working window.

@@ -87,6 +87,7 @@ test('machine: TURN_END is exactly the closed states, WAITING_ON_YOU and PROMOTA
   for (const s of M.WAITING_ON_YOU) assert.ok(M.TURN_END.has(s), s);
   for (const s of M.PROMOTABLE_TURN_END) assert.ok(M.TURN_END.has(s), s);
   for (const s of M.WAITING) assert.ok(M.WAITING_ON_YOU.has(s), s);
+  for (const s of M.QUIET) assert.ok(M.TURN_END.has(s) && !M.WAITING_ON_YOU.has(s), `${s}: closed, but not waiting on you`);
   assert.equal(M.stateOf({ state: 'green' }), 'working', 'a legacy file with no signal is mid-turn to the writer');
 });
 
@@ -179,12 +180,15 @@ const PRESENT_CASES = [
   ['held', { sessionId: 's', signal: 'permission-ask', askKind: 'notification', prevSignal: 'tool-done', signalSince: iso(-100), updatedAt: iso(-100) }, {}, 'tool-done', 'hysteresis-held'],
   ['promoted', { signal: 'stop', updatedAt: iso(-60000), agents: working(-60000) }, {}, 'tool-use', 'promoted-agents'],
   ['promoted', { signal: 'idle-nudge', updatedAt: iso(-60000), agents: working(-60000) }, {}, 'tool-use', 'promoted-agents'],
+  ['promoted', { signal: 'session-start', updatedAt: iso(-60000), agents: [{ id: 'm', kind: 'teammate', status: 'working', since: iso(-60000) }] }, {}, 'tool-use', 'promoted-agents'],
   ['shown', { signal: 'permission-denied', tool: 'Bash', updatedAt: iso(-60000), agents: [{ id: 'b' }] }, {}, 'permission-denied', 'hook signal'],
   ['stale-agents', { signal: 'stop', updatedAt: iso(-7 * 3600000), agents: working(-7 * 3600000) }, {}, 'tool-use', 'promoted-agents'],
   ['promoted', { signal: 'stop', updatedAt: iso(-7 * 3600000), agentsAt: iso(-60000), agents: working(-7 * 3600000) }, {}, 'tool-use', 'promoted-agents'],
   ['stale', { signal: 'tool-use', updatedAt: iso(-11 * 60000) }, {}, 'tool-use', 'hook signal'],
   ['shown', { signal: 'stop', via: 'stop', updatedAt: iso(-11 * 60000) }, {}, 'stop', 'stop'],
   ['stale', { signal: 'stop', updatedAt: iso(-13 * 3600000) }, {}, 'stop', 'hook signal'],
+  ['shown', { signal: 'session-start', updatedAt: iso(-11 * 60000) }, {}, 'session-start', 'hook signal'],
+  ['stale', { signal: 'session-start', updatedAt: iso(-13 * 3600000) }, {}, 'session-start', 'hook signal'],
   ['shown', { signal: 'permission-ask', askKind: 'request', updatedAt: iso(-100), agents: working(-100) }, {}, 'permission-ask', 'hook signal'],
   ['shown', { signal: 'limit-hit', updatedAt: iso(-100), agents: working(-100) }, {}, 'limit-hit', 'hook signal'],
   ['held', { state: 'amber', updatedAt: iso(-100) }, {}, 'tool-use', 'hysteresis-held'],

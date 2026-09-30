@@ -27,10 +27,15 @@
   // person retries). These keep their file for hours (no heartbeat while
   // they wait) and feed the ignored-for-N-minutes clock.
   const WAITING_ON_YOU = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 'turn-failed']);
+  // Open, but nothing asked of it yet: not working (no heartbeat is coming,
+  // so it keeps the waiting window) and not waiting on you either (a
+  // terminal you opened and left must not grow a beard).
+  const QUIET = new Set(['session-start']);
   // A turn that has ended while its subagents are still working hasn't
-  // really ended; only a finished/idle turn is promoted — a permission ask or
-  // a limit still needs the person whatever the agents are doing.
-  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge']);
+  // really ended; only a finished/idle turn (or a quiet session whose
+  // teammates are at work) is promoted — a permission ask or a limit still
+  // needs the person whatever the agents are doing.
+  const PROMOTABLE_TURN_END = new Set(['stop', 'idle-nudge', 'session-start']);
   // A permission ask that only came from a Notification can be resolved by
   // auto mode's classifier within a second, so the widget sits it out for
   // this long first. A blocking PermissionRequest (askKind 'request' or still
@@ -245,9 +250,9 @@
     { id: 'no-signal', shows: 'nothing', why: 'no signal (and no legacy colour) in the file' },
     { id: 'gone', shows: 'nothing', why: 'its local Claude process exited without a SessionEnd' },
     { id: 'held', shows: 'prevSignal (or tool-use)', why: `a notification ask younger than ${TRANSIENT_ASK_MS} ms that no pending request or real ask backs` },
-    { id: 'promoted', shows: 'tool-use / Agent', why: 'a finished or idle turn with a subagent still working' },
+    { id: 'promoted', shows: 'tool-use / Agent', why: 'a finished, idle or just-opened session with a subagent still working' },
     { id: 'stale-agents', shows: 'nothing', why: 'promoted, but its working agents went quiet past the working window and keepalive' },
-    { id: 'stale', shows: 'nothing', why: 'no update within the working window (or the waiting window for a waiting-on-you signal)' },
+    { id: 'stale', shows: 'nothing', why: 'no update within the working window (or the waiting window for a waiting-on-you or quiet signal)' },
     { id: 'shown', shows: 'the stored signal', why: 'otherwise' },
   ];
 
@@ -269,9 +274,10 @@
       return { live: !stale, dropped: stale ? 'stale-agents' : null, rule: stale ? 'stale-agents' : 'promoted', signal, presented: eff.signal, held, source, staleInMs, session: { ...data, ...eff } };
     }
     const waiting = WAITING_ON_YOU.has(signal);
-    const staleInMs = (waiting ? waitingStaleMs : workingStaleMs) - (now - new Date(data.updatedAt).getTime());
+    const quiet = QUIET.has(signal);
+    const staleInMs = (waiting || quiet ? waitingStaleMs : workingStaleMs) - (now - new Date(data.updatedAt).getTime());
     const stale = staleInMs < 0;
-    return { live: !stale, dropped: stale ? 'stale' : null, rule: stale ? 'stale' : held ? 'held' : 'shown', waiting, signal, presented, held, source, staleInMs: Number.isNaN(staleInMs) ? null : staleInMs, session: { ...data, signal: presented } };
+    return { live: !stale, dropped: stale ? 'stale' : null, rule: stale ? 'stale' : held ? 'held' : 'shown', waiting, quiet, signal, presented, held, source, staleInMs: Number.isNaN(staleInMs) ? null : staleInMs, session: { ...data, signal: presented } };
   }
 
   // ── Diagram ─────────────────────────────────────────────────────────────
@@ -308,7 +314,7 @@
   }
 
   return {
-    TURN_END, WAITING, WAITING_ON_YOU, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
+    TURN_END, WAITING, WAITING_ON_YOU, QUIET, PROMOTABLE_TURN_END, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS, AGENT_STATUSES, LEGACY_STATE_TO_SIGNAL,
     STATES, EVENTS, CLOSED, TRANSITIONS, PRESENTATION, EVENT_OF_SIGNAL, EVENT_SIGNAL,
     sessionSignal, stateOf, eventOf, transitionFor, step, userTouched,
     hasWorkingAgent, effectiveSignal, presentSignal, agentsStaleInMs, classify,
