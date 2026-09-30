@@ -885,6 +885,14 @@ export class Run {
         const r = await this.sup.rpc(this, 'board_recall', params);
         return { ...r, memories: (r.memories ?? []).map((m) => ({ ...m, body: this.#wrap(`memory:${m.card_key ?? 'repo'} ${m.kind}`, m.body) })) };
       }
+      case 'board_create_card':
+        return this.sup.rpc(this, 'board_create_card', {
+          title: this.#text(args.title, 200),
+          ...(args.body ? { body: this.#text(args.body, 20_000) } : {}),
+          ...(args.acceptance ? { acceptance: this.#text(args.acceptance, 10_000) } : {}),
+        });
+      case 'board_add_lesson':
+        return this.sup.rpc(this, 'board_add_lesson', { text: this.#text(args.text, 500), ...(args.evidence ? { evidence: this.#text(args.evidence, 1000) } : {}) });
       default:
         throw err('VALIDATION', `unknown tool ${name}`);
     }

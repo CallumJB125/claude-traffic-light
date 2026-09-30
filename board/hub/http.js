@@ -12,7 +12,7 @@ import { isLoopback } from './config.js';
 import { publicMember } from './api.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
-import { clientIp } from './ratelimit.js';
+import { clientIp, limitOrThrow } from './ratelimit.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
@@ -34,14 +34,6 @@ function sendJson(res, status, body, headers = {}) {
 
 // Dispatch-like actions start paid agent runs: a tighter per-member limit.
 const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
-
-export function limitOrThrow(hub, rule, key) {
-  const r = hub.limiter.take(rule, key);
-  if (!r.ok) {
-    const s = Math.max(1, Math.ceil(r.retry_after_ms / 1000));
-    throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
-  }
-}
 
 const retryHeader = (e) => (e.code === 'RATE_LIMITED' && e.extra?.retry_after_s ? { 'retry-after': String(e.extra.retry_after_s) } : {});
 

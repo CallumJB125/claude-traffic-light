@@ -82,3 +82,18 @@ test('each run gets its own nonce', async () => {
     rm(root);
   }
 });
+
+test('board_create_card / board_add_lesson: the runner redacts text and forwards only the scoped params', async () => {
+  await withRun('APP-94', async (run, hub) => {
+    hub.rpcReply = (f) => ({ ok: true, result: { method: f.method } });
+    await run.tool('board_create_card', { title: 'Rotate ghp_abcdefghijklmnopqrstuvwxyz0123456789', body: `see ${run.worktree}/src/a.js`, acceptance: 'green' });
+    await run.tool('board_add_lesson', { text: 'Tests need AWS_SECRET_ACCESS_KEY=abcd1234abcd1234abcd1234abcd1234abcd1234 unset', evidence: 'ci log' });
+    const [card, lesson] = ['board_create_card', 'board_add_lesson'].map((m) => hub.of('rpc').find((f) => f.method === m));
+    assert.deepEqual(Object.keys(card.params).sort(), ['acceptance', 'body', 'title']);
+    assert.doesNotMatch(card.params.title, /ghp_/);
+    assert.doesNotMatch(card.params.body, new RegExp(run.worktree.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.deepEqual(Object.keys(lesson.params).sort(), ['evidence', 'text']);
+    assert.doesNotMatch(lesson.params.text, /abcd1234abcd1234/);
+    assert.equal(card.repo_id, run.repo_id);
+  });
+});

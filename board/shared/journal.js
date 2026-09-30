@@ -2,7 +2,7 @@
 // that rebuilds every card's state from the rows alone. Browser-safe.
 
 export const JOURNAL_KINDS = Object.freeze([
-  'card.create',        // {key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name}
+  'card.create',        // {key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, parent_card_id?}
   'card.update',        // {fields: {name: [before, after]}}: human PATCH, dispatch budget
   'card.transition',    // {rule, event, from, to, state: CARD_STATE, effects: [type]} — every state.step() applied
   'run.create',         // {fence, device_id, branch, snapshot_ref, dispatch_request_id}
@@ -19,6 +19,7 @@ export const JOURNAL_KINDS = Object.freeze([
   'feed.relabel',       // {event_id, relabel}: replaces the old in-place events UPDATE
   'hub.restore_bump',   // {bump}: every card fence += bump (Litestream restore, D10)
   'card.notify',        // {rule, to}: the delayed orphan notification (the others ride card.transition effects)
+  'lesson.create',      // {lesson_id, repo_id}: board_add_lesson (no text, like comment.create)
   'device.outbox',      // {reason:'runner_acked'|'gap'|'reset', from, to, outbox_id?}: a device's last_seq_acked moved other than by an ack (board_id NULL)
 ]);
 

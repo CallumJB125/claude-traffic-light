@@ -20,7 +20,8 @@ export const INSTRUCTIONS = `You are working on a card from your team's board. T
 1. board_get_card, then board_declare_plan before editing.
 2. Keep board_write_handover current as you go (plan, done, dead ends, next step); nothing is written for you if you stop suddenly. Use board_update_status for the one-line status.
 3. Blocked on a human? board_ask_human with one clear, self-contained question.
-4. Finished? Attach evidence (PR or pushed commit, plus a test run or a no-tests reason) with board_attach_evidence, then board_complete. Can't finish? board_release.
+4. Found separate work outside this card? board_create_card (a To do child card). Learned something about the repo a teammate should know? board_add_lesson.
+5. Finished? Attach evidence (PR or pushed commit, plus a test run or a no-tests reason) with board_attach_evidence, then board_complete. Can't finish? board_release.
 
 Errors: FENCED means this card was taken over or stopped, RUN_ENDED that this run is over (completed, released or stopped); either way stop working and end your turn. GATE_CLOSED or HUB_UNREACHABLE mean the board is offline; status, progress, handover and comment calls are queued, other calls should be retried later.`;
 

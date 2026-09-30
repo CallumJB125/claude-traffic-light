@@ -3,7 +3,7 @@
 // tool, not just what it takes.
 
 import { z } from 'zod';
-import { MCP_TOOLS } from '../shared/protocol.js';
+import { MCP_TOOLS, MCP_TOOL_SCOPES } from '../shared/protocol.js';
 import { COLUMNS } from '../shared/states.js';
 import { AGENT_WRITABLE, LIMITS } from '../shared/handover.js';
 
@@ -175,6 +175,30 @@ Before calling: the acceptance criteria are met, your work is pushed, evidence i
     description: 'Recall notes left by earlier runs in this repository (handoff notes from taken-over or handed-over cards), relevant to paths or a query. Notes marked stale may no longer match the code; verify before relying on them.',
   },
 
+  board_create_card: {
+    title: 'Create follow-up card',
+    input: z.object({
+      title: text(200, 'title').describe('Short imperative title, e.g. "Handle cents vs rands in the bank API client".'),
+      body: z.string().trim().max(20_000).optional().describe('The goal: what is wrong or missing, where (file paths), and why it matters.'),
+      acceptance: z.string().trim().max(10_000).optional().describe('"Done means": how a reviewer can tell it is finished.'),
+    }).strict(),
+    description: `Create a follow-up card for work you found that is outside this card's scope (a separate bug, a refactor, missing tests). It becomes a child of your card, on the same board and repository, in To do. Returns {card_id, key}.
+
+It is never started, assigned or budgeted by you: a human decides whether and to whom to give it. Do not use it to split your own card's work; finish that here. Limited to a few per hour.`,
+  },
+
+  board_add_lesson: {
+    title: 'Suggest a team lesson',
+    input: z.object({
+      text: text(500, 'text').refine((t) => t.length >= 10, { message: 'text must be at least 10 characters' })
+        .describe('One reusable, repo-specific lesson in a sentence or two, e.g. "Run `npm run db:reset` before the API tests; they assume a clean schema."'),
+      evidence: z.string().trim().max(1000).optional().describe('Why you believe it: the error, file or command that showed it.'),
+    }).strict(),
+    description: `Suggest a lesson for teammates working in this repository: a convention, gotcha or command that cost you time and would save someone else time. Returns {lesson_id, status:"suggested"}.
+
+A human reviews suggestions before anyone relies on them; they are not shown back to agents. Write only durable facts about the repo, never secrets, personal data or card-specific status (use the handover for that). Repeating an existing lesson returns the first one.`,
+  },
+
   approval: {
     title: 'Permission prompt (internal)',
     input: z.object({
@@ -245,6 +269,6 @@ export function jsonSchemaOf(def) {
 
 // Every contract tool is defined here and nothing else is (checked by tests too).
 const defined = Object.keys(TOOLS);
-if (defined.length !== MCP_TOOLS.length || !MCP_TOOLS.every((t) => defined.includes(t))) {
-  throw new Error(`board-mcp tools drifted from protocol.MCP_TOOLS: ${defined.join(',')}`);
+if (defined.length !== MCP_TOOLS.length || !MCP_TOOLS.every((t) => defined.includes(t) && MCP_TOOL_SCOPES[t])) {
+  throw new Error(`board-mcp tools drifted from protocol.MCP_TOOLS / MCP_TOOL_SCOPES: ${defined.join(',')}`);
 }

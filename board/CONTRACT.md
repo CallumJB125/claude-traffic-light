@@ -33,7 +33,7 @@ board/
     migrate.js            migration runner + applyRestoreBump (Node only)
     journal.js            append-only journal row kinds + replay() (§15)
     untrusted.js          the untrusted-content envelope (§7.4, D30)
-    migrations/           002_device_form_factor.sql, 003_journal.sql, 004_outbox_identity.sql, 005_member_removal.sql
+    migrations/           002_device_form_factor.sql, 003_journal.sql, 004_outbox_identity.sql, 005_member_removal.sql, 006_lessons.sql
     test/                 node --test
   hub/                    board hub (Node ≥ 22.13, node:sqlite, ws). Serves web/ and shared/.
   runner/                 detached supervisor + hook shim + CLI (Node ≥ 22.13, ws)
@@ -129,7 +129,7 @@ All JSON. Every response carries header `Board-Protocol: 1`. Errors are `{"error
 | `POST /api/members` | admin | `{request_id, email, role, display_name?, github_login?, github_id?}` | `{member}` | `CONFLICT`, `VALIDATION` |
 | `DELETE /api/members/:id` | admin (an owner for an owner; never yourself) | `{request_id}` | `{ok}` | `NOT_FOUND`, `FORBIDDEN` |
 
-**Rate limits** (`hub/ratelimit.js`, token buckets on the hub monotonic clock, `config.rateLimits` overrides): every mutating request is limited per client IP (`mutate_ip` 300/min; `/api/dev/login` uses `login_ip` 10/min instead), and after auth per member (`mutate_member` 120/min), with a tighter per-member bucket for the actions that start paid runs (`dispatch`, `retry`, `take_over_with_claude`: `dispatch_member` 30/min). A replayed `request_id` served from the D8 cache costs nothing. Over the limit: `429 RATE_LIMITED`, header `Retry-After: <s>`, body `error.retry_after_s`. The client IP is the socket address, or `CF-Connecting-IP` under `BOARD_AUTH=access` (the hub sits on loopback behind the tunnel).
+**Rate limits** (`hub/ratelimit.js`, token buckets on the hub monotonic clock, `config.rateLimits` overrides): every mutating request is limited per client IP (`mutate_ip` 300/min; `/api/dev/login` uses `login_ip` 10/min instead), and after auth per member (`mutate_member` 120/min), with a tighter per-member bucket for the actions that start paid runs (`dispatch`, `retry`, `take_over_with_claude`: `dispatch_member` 30/min). Two runner RPCs have buckets keyed by the member the run works for (`runs.on_behalf_of`), taken after the run is verified: `board_create_card` (`agent_card_member` 20/h) and `board_add_lesson` (`agent_lesson_member` 30/h; an exact repeat is answered from the table and costs nothing). A replayed `request_id` served from the D8 cache costs nothing. Over the limit: `429 RATE_LIMITED`, header `Retry-After: <s>`, body `error.retry_after_s`. The client IP is the socket address, or `CF-Connecting-IP` under `BOARD_AUTH=access` (the hub sits on loopback behind the tunnel).
 
 **Actions** (`:action` → `states.js` event; the hub builds `ctx` per §10.2):
 
@@ -320,6 +320,8 @@ Every `rpc` is verified (run_token, fence current, run unended, `repo_id` matche
 | `approval` | `{tool_name, input_summary, tool_use_id?}` | `{permission_request_id}` | creates `permission_requests` (approvers = owner, dispatcher, assignees, owner's `approvals_from`) + `step(block{permission})`; the decision arrives later as `answer` |
 | `approval_cancel` | `{permission_request_id}` | `{state}` | The CLI cancelled the held prompt (board-mcp → IPC `cancel` → runner). An `open` request of this run becomes `cancelled` and the card gets `step(withdraw)` (rows `9w`/`9wb`/`9wd`: unblocks when nothing else is open); already answered → its state, unchanged. Idempotent. Runner-only (not an MCP tool, like `team_context`) |
 | `team_context` | `{}` | `{text, tokens}` | `overlap.teamContextBlock` within the board's `team_context_budget` (default 700) |
+| `board_create_card` | `{title, body?, acceptance?}` | `{card_id, key, column:'todo', parent_key}` | D31. Inserts a card on the run's board with `repo_id` = the run's repo, `parent_card_id` = the run's card, `created_by` = `runs.on_behalf_of`, `base_ref` = the parent's, column `todo`, no labels/assignees/budget/dispatch; any other param is ignored. `FORBIDDEN` when that member is a viewer or removed, or the repo left the board; `RATE_LIMITED` (`agent_card_member`). Journal `card.create` (actor = the device, `payload.parent_card_id`), feed `created`, `card.upsert` |
+| `board_add_lesson` | `{text (10–500 after whitespace collapse), evidence? (≤ 1000)}` | `{lesson_id, status:'suggested', duplicate?}` | D32. Appends a `lessons` row (migration 006) with `org_id` = the board's org, `repo_id` = the run's repo, the card, run and member. Same text for the same org + repo → the existing id, `duplicate:true`. `FORBIDDEN` for a viewer/removed member; `RATE_LIMITED` (`agent_lesson_member`). Journal `lesson.create` `{lesson_id, repo_id}` (no text) |
 
 ### 6.7 Commands and the stop recipe (spikes 1c, 5b–5e)
 
@@ -434,7 +436,18 @@ Widget session files: the runner writes one session file per run through the wid
 
 ### 7.3 board-mcp tool surface (Phase 1)
 
-Server name `board`, stdio, one per run. Each tool forwards `tool {name, args}` over IPC and returns `result` as a single JSON text content block; an IPC `error` becomes an MCP tool error (`isError:true`) whose text is `"<code>: <message>"`. Read-only tools carry `annotations.readOnlyHint: true`. No other tools exist: no heartbeat, move, assign, done, policy, budget, credentials or other repos' cards (§10).
+Server name `board`, stdio, one per run. Each tool forwards `tool {name, args}` over IPC and returns `result` as a single JSON text content block; an IPC `error` becomes an MCP tool error (`isError:true`) whose text is `"<code>: <message>"`. Read-only tools carry `annotations.readOnlyHint: true`. No other tools exist: no heartbeat, move, assign, claim, dispatch, done, policy, budget, credentials or other repos' cards (§10, D33). The only card an agent can create is a To do child of its own card (D31).
+
+**Scopes** (`protocol.TOOL_SCOPES` / `MCP_TOOL_SCOPES`; every tool has exactly one, `mcp/tools.js` refuses to load otherwise). All of them sit inside the run's repo scope: the runner exists only for an opted-in repo (`scope.scopeOf` default-denies everything else) and the hub verifies run token, fence, unended run and `repo_id` = the run's repo before any method runs (§6.6).
+
+| Scope | Allows | Tools |
+|---|---|---|
+| `card:read` | this run's card, its parent and its children | `board_get_card` |
+| `repo:read` | titles, overlaps and notes of this board's cards in this run's repo | `board_list_cards`, `board_check_overlap`, `board_recall` |
+| `card:write` | writes to this run's own card only | `board_update_status`, `board_append_progress`, `board_write_handover`, `board_ask_human`, `board_comment`, `board_attach_evidence`, `board_complete`, `board_release`, `board_declare_plan` |
+| `card:create_child` | a new To do child of this run's card, same board and repo | `board_create_card` |
+| `lesson:suggest` | append a lesson suggestion for this run's repo in the board's org; never read back to agents | `board_add_lesson` |
+| `permission:ask` | ask this card's approvers; cannot grant | `approval` |
 
 | Tool | Input (zod) | Output | Runner routing |
 |---|---|---|---|
@@ -451,6 +464,8 @@ Server name `board`, stdio, one per run. Each tool forwards `tool {name, args}` 
 | `board_declare_plan` | `{summary, paths: string[], areas?: string[]}` | `{overlaps}` | rpc |
 | `board_check_overlap` | `{}` | `{overlaps, locks}` | rpc |
 | `board_recall` | `{paths?, query?, kinds?}` | `{memories}`; bodies enveloped | rpc |
+| `board_create_card` | `{title ≤ 200, body? ≤ 20000, acceptance? ≤ 10000}` (strict: no repo, board, labels, assignees, budget, column) | `{card_id, key, column, parent_key}` | rpc (redacted) |
+| `board_add_lesson` | `{text: 10–500, evidence? ≤ 1000}` | `{lesson_id, status, duplicate?}` | rpc (redacted) |
 | `approval` | the CLI's permission-prompt payload `{tool_name, input, tool_use_id?}` | text `{"behavior":"allow","updatedInput":<input>}` or `{"behavior":"deny","message":"…"}` | runner: redact → rpc `approval` → hold the call open until `answer` (or park/stop/fence → deny). "Allow for this run" (`scope:'run'`) lets the runner auto-allow later requests with the same tool and, for Bash, the same first command word. Called by the model directly, it can only create an ask, never allow |
 
 The runner redacts every text argument (`redact`) and builds every hub-bound message through `serializeOutbound` before it leaves (§6.5).
@@ -682,6 +697,9 @@ The reaper calls `timerEvent(snapshot)` for each card every second and feeds a n
 - **D29 (P-1) One append-only journal, written in the same transaction as every mutation** (§15). Lean: no hash chain, no blob store, no bus cursors yet; comment bodies are not copied into it. Migration numbered 003 (002 was already taken by the device form factor).
 - **D28 Plan approval is the card label `plan-approval`** (`states.PLAN_APPROVAL_LABEL`); the hub derives `ctx.require_plan_approval` and `offer.require_plan_approval` from it.
 - **D30 Envelope hardening (security review L5).** The envelope moved to `shared/untrusted.js` so every package wraps the same way. Three changes: (a) a per-run random nonce in the tag name, so text on the board cannot guess the one closing tag that ends the data; (b) NFKC normalisation and removal of `\p{Cf}` / default-ignorable code points before closing tags are defused, so zero-width-split and fullwidth lookalike tags are caught; (c) board tool results are enveloped by the runner too (`board_get_card` was not: L5), with ids, enums and ages left bare. NFKC changes compatibility characters in the displayed data (e.g. fullwidth letters become ASCII); that is accepted, the text is data for the model and the board keeps the original.
+- **D31 `board_create_card` creates only a To do child of the run's card** (plan item 15 `create_card`). Least privilege: same board, the run's repo, `parent_card_id` = the run's card (so `card:read` reaches it), `created_by` = the member the run works for, who must be able to write. The agent cannot pick a repo, board, labels, assignees, budget or column, and cannot dispatch it: starting paid work stays a human action (row `1`). Per-member hourly cap (`agent_card_member`). No new HTTP route: it is a runner RPC like its neighbours, with the same verification and journal.
+- **D32 Lessons: a minimal append-only table** (plan item 15 `add_lesson`; migration `006_lessons.sql`). Rows are org- and repo-scoped (`org_id`, `repo_id`), carry the card, run and member, and can never be updated or deleted (triggers). Shape follows the local lessons prototype (`team-local/lib/lessons.js` on `feat/lessons-standup-local`: 10–500 chars, evidence ≤ 1000, starts as a suggestion). Deliberately missing for now: review/approval, votes, decay, and any read path. Nothing puts a lesson into an agent's context, so an unreviewed agent-written lesson cannot steer another run; review will be its own append-only rows. The journal row carries no text (like `comment.create`).
+- **D33 Not on the board MCP: `claim_card`, `buddy_usage_history`, `buddy_health`.** A claim is the runner's fence CAS under the member's local policy (§6.4, T1), done before the agent exists; an agent-callable claim would let a model start paid runs on cards no human gave it, which §7.3 and row `1` forbid. The run's own card is already claimed when the agent starts. The two `buddy_*` tools read widget-local data (the Electron app's usage and health on the member's machine); board-mcp is a per-run proxy to the runner with no access to that data, runs under `--strict-mcp-config` in an isolated profile, and bolting the widget onto the board would break the package rule in §1. They belong on the widget's own stdio server (`mcp-server.js` at the repo root, which already has `buddy_status`, `buddy_spend`, `buddy_model_mix`, …).
 
 ## 13. Phase 1 exit criteria → tests
 
@@ -720,7 +738,7 @@ Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas
 
 | `kind` | Written by | `payload` |
 |---|---|---|
-| `card.create` | `POST …/cards` | `{key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, assignees, request_id}` |
+| `card.create` | `POST …/cards`; rpc `board_create_card` (actor = the device, with `parent_card_id`) | `{key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, assignees, request_id, parent_card_id?}` |
 | `card.update` | `PATCH /api/cards/:id` (every changed field), dispatch `budget_usd` | `{fields:{name:[before, after]}, request_id}` |
 | `card.transition` | `hub.apply()` for every applied `step()` (not the pure no-ops, e.g. `n-hb`) | `{rule, event, from, to, state:{CARD_STATE after}, effects:[type]}`; `actor_kind` from `states.EVENTS` (human → member, runner → runner/device, timer/system → system) |
 | `run.create` | claim (`run_create` effect) | `{fence, device_id, branch, snapshot_ref, dispatch_request_id}` |
@@ -734,6 +752,7 @@ Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas
 | `feed.relabel` | `relabel_orphan` effect | `{event_id, relabel}` |
 | `hub.restore_bump` | boot with restore (`board_id` NULL) | `{bump}` |
 | `card.notify` | reaper, the delayed orphan notification (same transaction as `orphan_notified_at`) | `{rule:'orphaned', to:[member_id]}` |
+| `lesson.create` | rpc `board_add_lesson` | `{lesson_id, repo_id}` (no text) |
 | `device.outbox` | runner hello / first `out` of a connection (`board_id` NULL, actor = the device) | `{reason:'reset'\|'runner_acked'\|'gap', from, to, outbox_id?, outbox_id_before?}`: `last_seq_acked` moved other than by an ack (§6.1, §6.5) |
 
 `journal.replay(rows)` rebuilds every card's `CARD_STATE` + title/labels/budget/repo from `card.create`, `card.update`, `card.transition` and `hub.restore_bump` alone. Tests: `hub/test/journal.test.js` (triggers, coverage, API, restore) and the e2e chaos run (`test/e2e/`), which replays the journal and compares it with the live `cards` table.

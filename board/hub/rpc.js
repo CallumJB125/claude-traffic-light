@@ -8,6 +8,7 @@ import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
 import { prNumberOf } from './github.js';
+import { limitOrThrow } from './ratelimit.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
 const clip = (s, n) => {
@@ -31,6 +32,19 @@ export function verifyRun(hub, device, msg) {
   if (run.ended_at) throw new HubError('RUN_ENDED', 'run has ended');
   if (row.active_run_id !== run.id) throw new HubError('FENCED', 'run is no longer the active run');
   return { run, row };
+}
+
+const optText = (v, max, what) => {
+  if (v == null) return null;
+  if (typeof v !== 'string' || v.length > max) throw new HubError('VALIDATION', `${what} must be a string of at most ${max} characters`);
+  return v.trim() || null;
+};
+
+// The member a run works for must still be able to write (not a viewer).
+function runMember(hub, run) {
+  const m = hub.activeMember(run.on_behalf_of);
+  if (!hub.canWrite(m)) throw new HubError('FORBIDDEN', 'the member this run is for cannot write to this board');
+  return m;
 }
 
 function brief(hub, row) {
@@ -190,6 +204,56 @@ const METHODS = {
       hub.later(() => hub.broadcastCard(row.id));
     });
     return { state: 'cancelled' };
+  },
+
+  // D31: a follow-up card, as a child of this run's card, on the same board
+  // and repo, in todo. Never dispatched, assigned, labelled or budgeted here.
+  board_create_card(hub, { run, row }, params) {
+    const title = optText(params.title, 200, 'title');
+    if (!title) throw new HubError('VALIDATION', 'title required');
+    const body = optText(params.body, 20_000, 'body') ?? '';
+    const acceptance = optText(params.acceptance, 10_000, 'acceptance');
+    const member = runMember(hub, run);
+    if (!hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, run.repo_id)) throw new HubError('FORBIDDEN', 'this repo is no longer on the board');
+    limitOrThrow(hub, 'agent_card_member', member.id);
+    const id = randomUUID();
+    const now = hub.iso();
+    let key;
+    hub.txn(() => {
+      const b = hub.board(row.board_id);
+      key = `${b.key_prefix}-${b.next_key}`;
+      hub.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', row.board_id);
+      hub.db.insert('cards', {
+        id, board_id: row.board_id, key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels: '[]',
+        parent_card_id: row.id, created_by: member.id, created_at: now, updated_at: now, state_since: now,
+      });
+      hub.journal({ board_id: row.board_id, card_id: id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'card.create', payload: {
+        key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels: '[]', budget_cents: null, column_name: 'todo', assignees: [], parent_card_id: row.id, request_id: null,
+      } });
+      hub.feed(id, 'created', { parent_key: row.key }, { run });
+      hub.later(() => hub.broadcastCard(id));
+    });
+    return { card_id: id, key, column: 'todo', parent_key: row.key };
+  },
+
+  // D32: append-only, org- and repo-scoped; exact repeats return the first row.
+  board_add_lesson(hub, { run, row }, params) {
+    const text = optText(params.text, 2000, 'text')?.replace(/\s+/g, ' ');
+    if (!text || text.length < 10 || text.length > 500) throw new HubError('VALIDATION', 'text must be 10–500 characters');
+    const evidence = optText(params.evidence, 1000, 'evidence');
+    const member = runMember(hub, run);
+    const orgId = hub.board(row.board_id).org_id;
+    const dup = hub.db.get('SELECT id FROM lessons WHERE org_id = ? AND repo_id = ? AND text = ?', orgId, run.repo_id, text);
+    if (dup) return { lesson_id: dup.id, status: 'suggested', duplicate: true };
+    limitOrThrow(hub, 'agent_lesson_member', member.id);
+    const id = randomUUID();
+    hub.txn(() => {
+      hub.db.insert('lessons', {
+        id, org_id: orgId, repo_id: run.repo_id, card_id: row.id, author_run_id: run.id, author_member_id: member.id, text, evidence, created_at: hub.iso(),
+      });
+      hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'lesson.create', payload: { lesson_id: id, repo_id: run.repo_id } });
+    });
+    return { lesson_id: id, status: 'suggested' };
   },
 
   team_context(hub, { run }) {

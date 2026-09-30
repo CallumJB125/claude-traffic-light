@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { MCP_TOOLS, ERRORS } from '../../shared/protocol.js';
+import { MCP_TOOLS, MCP_TOOL_SCOPES, TOOL_SCOPES, ERRORS } from '../../shared/protocol.js';
 import { AGENT_WRITABLE } from '../../shared/handover.js';
 import { TOOLS, callTool, approvalReply, errorResult, okResult } from '../tools.js';
 import { IpcClient } from '../ipc.js';
@@ -44,6 +44,8 @@ describe('tool schemas', () => {
     board_declare_plan: [{ summary: 's', paths: ['src/**', 'a/b.js'], areas: ['auth'] }],
     board_check_overlap: [{}],
     board_recall: [{}, { paths: ['src/x.js'], query: 'q', kinds: ['handoff'] }],
+    board_create_card: [{ title: 'Handle cents in the bank client' }, { title: 't', body: 'why', acceptance: 'tests pass' }],
+    board_add_lesson: [{ text: 'Run db:reset before the API tests.' }, { text: 'Use tabs in this repo.', evidence: 'CLAUDE.md' }],
     approval: [{ tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' }, { tool_name: 'Bash', input: {} }],
   };
   const reject = {
@@ -60,6 +62,8 @@ describe('tool schemas', () => {
     board_declare_plan: [{ summary: 's', paths: [] }, { summary: 's', paths: ['/etc/passwd'] }, { summary: 's', paths: ['../other/x'] }, { summary: 's', paths: ['~/.ssh/id'] }],
     board_check_overlap: [{ x: 1 }],
     board_recall: [{ kinds: ['secret'] }, { paths: ['/abs'] }],
+    board_create_card: [{}, { title: '' }, { title: 'x'.repeat(201) }, { title: 't', repo_id: 'other' }, { title: 't', labels: ['x'] }, { title: 't', assignees: ['m'] }, { title: 't', budget_usd: 5 }, { title: 't', column: 'in_progress' }, { title: 't', board_id: 'b2' }],
+    board_add_lesson: [{}, { text: 'too short' }, { text: 'x'.repeat(501) }, { text: 'long enough lesson', repo_id: 'other' }, { text: 'long enough lesson', evidence: 'x'.repeat(1001) }],
     approval: [{ input: {} }, { tool_name: 'Bash', input: 'ls' }],
   };
 
@@ -71,6 +75,13 @@ describe('tool schemas', () => {
       for (const a of reject[name]) assert.equal(TOOLS[name].input.safeParse(a).success, false, JSON.stringify(a));
     });
   }
+
+  test('every tool has a declared least-privilege scope', () => {
+    assert.deepEqual(Object.keys(MCP_TOOL_SCOPES).sort(), [...MCP_TOOLS].sort());
+    for (const [name, scope] of Object.entries(MCP_TOOL_SCOPES)) assert.ok(TOOL_SCOPES[scope], `${name}: ${scope}`);
+    for (const name of Object.keys(TOOLS).filter((n) => TOOLS[n].annotations?.readOnlyHint)) assert.match(MCP_TOOL_SCOPES[name], /:read$/, name);
+    assert.equal(MCP_TOOL_SCOPES.board_create_card, 'card:create_child');
+  });
 
   test('handover patch keys are exactly AGENT_WRITABLE', () => {
     for (const k of AGENT_WRITABLE) assert.ok(TOOLS.board_write_handover.input.safeParse({ patch: { [k]: k === 'done' ? 'x' : 'x' } }).success, k);
