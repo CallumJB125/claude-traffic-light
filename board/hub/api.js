@@ -138,10 +138,18 @@ export class Api {
     const assignees = body.assignees ?? [];
     if (!Array.isArray(assignees)) throw new HubError('VALIDATION', 'assignees must be an array');
     for (const a of assignees) this.orgMember(member, a);
+    // An integration's request_id is durable (integration_requests, D42): a
+    // redelivery after a restart or a swept dedupe row returns the same card.
+    const via = this.hub.viaScope.getStore();
+    const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
+      ? { connection_id: via.connection_id, request_id: body.request_id.slice(0, 200) } : null;
     return this.hub.withBoard(boardId, () => {
       const id = randomUUID();
       const now = this.hub.iso();
+      let prior = null;
       this.hub.txn(() => {
+        prior = once && this.db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? AND request_id = ?', once.connection_id, once.request_id)?.card_id;
+        if (prior) return;
         const b = this.hub.board(boardId);
         this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
         this.db.insert('cards', {
@@ -150,11 +158,11 @@ export class Api {
           created_by: member.id, created_at: now, updated_at: now, state_since: now,
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
+        if (once) this.db.insert('integration_requests', { ...once, card_id: id, created_at: now });
         const c = this.hub.card(id);
         // An integration's card text is external text: the append-only
         // journal can never erase it, so it keeps only hashes (D41); the
         // text lives in `cards`, where replay and the Dashboard read it.
-        const via = this.hub.viaScope.getStore();
         const texts = via?.member_id === member.id
           ? { title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id, external_ref: via.external_ref ?? null }
           : { title, body: text, acceptance };
@@ -164,7 +172,7 @@ export class Api {
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
       });
-      return { card: cardView(this.hub, this.hub.card(id), member.id) };
+      return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
     });
   }
 

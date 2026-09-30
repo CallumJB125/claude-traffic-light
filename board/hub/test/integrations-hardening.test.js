@@ -191,3 +191,65 @@ test('M-2: ackEarly answers 200 before the handler runs, keeps the lease while i
     assert.throws(() => probe('m2d', { ackEarly: true, handleWebhook: undefined, verify: undefined }), /ackEarly/);
   } finally { await h.close(); }
 });
+
+// ── M-3 ───────────────────────────────────────────────────────────────────
+
+// A tracker whose handler creates a card per issue with a stable request_id
+// and (like a careless connector) no ctx.linked() check first.
+const tracker = (id, hooks = {}) => ({
+  handleWebhook: async ({ payload, ctx }) => {
+    await ctx.act('card.create', { external_ref: payload.issue }, async (s) => {
+      const { card } = await s.actAs(ctx.connection.created_by).createCard(ctx.boardIds()[0], { request_id: `issue-${payload.issue}`, title: `Issue ${payload.issue}` });
+      await hooks.afterCreate?.(card);
+      s.link(card.id, 'issue', payload.issue);
+    });
+  },
+});
+const hookIn = (h, conn, delivery, payload) => h.app.integrations.webhook(conn.id, { headers: { 'x-ok': '1', 'x-id': delivery }, rawBody: Buffer.from(JSON.stringify(payload)) });
+const cardsTitled = (h, title) => h.db.all('SELECT id FROM cards WHERE title = ?', title).map((r) => r.id);
+// What a hub restart forgets (D8) and what the 30-day sweep deletes.
+const forget = (h) => { h.hub.requestCache.clear(); h.db.run('DELETE FROM inbound_dedupe'); };
+
+test('M-3: a redelivery after the dedupe row is gone and the D8 cache forgotten returns the same card', async () => {
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'm3a', tracker('m3a'));
+    assert.equal((await hookIn(h, conn, 'd-1', { issue: 'ISS-1' })).status, 200);
+    forget(h);
+    assert.equal((await hookIn(h, conn, 'd-2', { issue: 'ISS-1' })).status, 200);
+    assert.equal(cardsTitled(h, 'Issue ISS-1').length, 1);
+    assert.deepEqual({ ...h.db.get('SELECT connection_id, request_id, card_id FROM integration_requests') }, { connection_id: conn.id, request_id: 'issue-ISS-1', card_id: cardsTitled(h, 'Issue ISS-1')[0] });
+    // Another connection's same request_id is its own card.
+    const other = connect(h, 'm3b', tracker('m3b'));
+    await hookIn(h, other, 'd-1', { issue: 'ISS-1' });
+    assert.equal(cardsTitled(h, 'Issue ISS-1').length, 2);
+  } finally { await h.close(); }
+});
+
+test('M-3: a crash between creating the card and linking it: the retry after a restart links the same card', async () => {
+  const h = await accessHub();
+  try {
+    let crash = true;
+    const conn = connect(h, 'm3c', tracker('m3c', { afterCreate: () => { if (crash) { crash = false; throw new Error('process died here'); } } }));
+    assert.equal((await hookIn(h, conn, 'd-1', { issue: 'ISS-2' })).status, 500);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM external_links').n, 0, 'nothing linked');
+    forget(h);
+    assert.equal((await hookIn(h, conn, 'd-1', { issue: 'ISS-2' })).status, 200);
+    const ids = cardsTitled(h, 'Issue ISS-2');
+    assert.equal(ids.length, 1);
+    assert.equal(h.db.get('SELECT card_id FROM external_links WHERE connection_id = ?', conn.id).card_id, ids[0]);
+  } finally { await h.close(); }
+});
+
+test('M-3: concurrent duplicates of one request create one card', async () => {
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'm3d');
+    const ctx = h.app.integrations.ctxFor(conn.id);
+    const create = () => ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, { request_id: 'same-request', title: 'Once' }));
+    const results = await Promise.all([create(), create(), create()]);
+    assert.equal(cardsTitled(h, 'Once').length, 1);
+    assert.equal(new Set(results.map((r) => r.result.card.id)).size, 1);
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM journal WHERE kind = 'card.create'").n, 1);
+  } finally { await h.close(); }
+});
