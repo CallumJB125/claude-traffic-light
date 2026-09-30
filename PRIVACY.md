@@ -8,7 +8,8 @@ Claude Buddy is a desktop app that watches your AI coding sessions and shows the
 
 - **On by default:** checking GitHub for pull requests and builds through your own GitHub login (only if you have the `gh` tool signed in), and reading your Focus / Do Not Disturb status on this computer.
 - **Off by default:** calendar, calendar subscription link, voice questions to Claude, answering permission prompts from Buddy, and remote devices.
-- **Never:** telemetry or analytics, crash reports (until you opt in, and that is not built yet), or update checks (not built yet). Nothing is sent to us.
+- **Never:** telemetry or analytics. Nothing is sent to us.
+- **Not built yet:** crash reports (they will be off until you opt in) and update checks.
 
 ## What stays on your machine
 
@@ -33,7 +34,7 @@ Everything below lives in `~/.claude-traffic-light` on your computer:
 - `cameos/`, including `cameos/index.json`: photos you add and their names.
 - `git-signals.json`: recent pull request and build events with their titles and links, the ids of events already shown, your GitHub login, branch names, local folder paths and the logins of reviewers. It holds no passwords or tokens.
 - `busy-ics-cache.json` (only with a calendar subscription link): event times and the repeat rules, status and free/busy flags of those events, plus a fingerprint (SHA-256) of the link, never the link itself. Meeting titles are kept only if you turned on "show meeting name".
-- `away.json`: a recap written after any busy spell, including a Focus one (Focus reading is on by default). It lists session ids, folder paths, tool names and the names of rules that held a notification. It is deleted when you dismiss it or it expires.
+- `away.json`: a recap written after any busy spell, including a Focus one (Focus reading is on by default). It lists session ids, folder paths, tool names, the names of rules that held a notification, and why you were busy: the Focus mode's name, or the meeting's title only if you turned on "show meeting name" (up to 60 characters). It is deleted when you dismiss it or it expires.
 - `app.log` and `app.log.old`: diagnostic log. It can contain project folder names, repo names and pull request numbers, file paths (which include your OS username) and notification titles. It never contains prompt text.
 - `token` and `port`: the details of the connection on this computer (see below).
 - `bin/buddy-hook` (`bin\buddy-hook.cmd` on Windows): a small launcher that Claude Code's hooks call.
