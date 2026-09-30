@@ -3,7 +3,7 @@
 // per-run `token`. board-mcp never talks to the hub: the runner owns scope,
 // fence, redaction and the hub connection.
 
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 
 export const MAX_LINE_BYTES = 1024 * 1024;
 
@@ -37,7 +37,7 @@ export class IpcClient {
     if (this.socket) return Promise.resolve();
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
-      const sock = net.createConnection(this.socketPath);
+      const sock = net.createConnection(this.socketPath); // privacy-flow: local-board-sockets
       const timer = setTimeout(() => {
         sock.destroy();
         reject(new IpcError('INTERNAL', `board runner did not accept the connection within ${this.connectTimeoutMs} ms`));

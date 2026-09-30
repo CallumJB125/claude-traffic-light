@@ -61,14 +61,30 @@ test('numbered lists render as <ol>, and HTML comments never show', () => {
 // no matching PRIVACY.md entry fails, and so does a PRIVACY.md entry no code
 // line uses.
 const HOW = 'To add a flow: tag the line with `// privacy-flow: <slug>` and add `<!-- flow:<slug> files=<path> -->` to the matching PRIVACY.md section.';
-// remote/ (phone relay) is not packaged or wired in; the packaging test below fails if that changes.
-const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git', 'remote']);
+// Directories whose files are scanned only if the app package actually includes them
+// (board/runner, board/mcp, board/web/mock and remote/ are dev or server-side tools).
+const BY_PACKAGING = new Set(['board', 'remote']);
+const SKIP_DIRS = new Set(['node_modules', 'test', 'test-visual', 'tools', 'docs', 'scripts', '.git']);
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 function shipped(dir = ROOT, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) shipped(p, out);
-    else if (/\.(js|mjs|cjs|html|css|swift)$/.test(e.name) && e.name !== 'playwright.config.js') out.push(p);
+    else if (/\.(js|mjs|cjs|html|css|swift)$/.test(e.name) && e.name !== 'playwright.config.js') {
+      const r = path.relative(ROOT, p);
+      if (!BY_PACKAGING.has(r.split(path.sep)[0]) || packaged(PKG, r.split(path.sep).join('/'))) out.push(p);
+    }
+  }
+  return out;
+}
+function unpackaged(dir = ROOT, out = []) {
+  const scanned = new Set(files.map((f) => f));
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(e.name)) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) unpackaged(p, out);
+    else if (/\.(js|mjs|cjs)$/.test(e.name) && BY_PACKAGING.has(path.relative(ROOT, p).split(path.sep)[0]) && !scanned.has(p)) out.push(p);
   }
   return out;
 }
@@ -87,7 +103,7 @@ const CHANNEL = new RegExp([
   'require\\(\\s*[\'"]electron[\'"]\\s*\\)\\s*\\.\\s*net\\b', '\\{[^}]*\\bnet\\b[^}]*\\}\\s*=\\s*require\\(\\s*[\'"]electron[\'"]',
   'new ClientRequest', '\\bfetch\\(', 'Reflect\\.apply\\(\\s*(?:globalThis\\.|window\\.)?fetch', 'new WebSocket', 'new EventSource', 'EventSource\\(',
   `new Worker\\(\\s*${NOT_LITERAL}`, 'XMLHttpRequest', 'sendBeacon',
-  'globalThis\\s*\\[', '\\bglobal\\s*\\[', 'window\\s*\\[',
+  '(?:globalThis|window|global)\\.fetch\\b', 'globalThis\\s*\\[', '\\bglobal\\s*\\[', 'window\\s*\\[',
   'autoUpdater', 'electron-updater', 'update-electron-app', 'crashReporter', 'Sentry\\.init', '@sentry/',
   `(?:loadURL|downloadURL)\\(\\s*${NOT_LITERAL}`, '(?:loadURL|downloadURL)\\(\\s*[\'"`]https?:', `openExternal\\(\\s*${NOT_LITERAL}`,
   '@import\\b', 'url\\(\\s*[\'"]?(?:https?:)?//',
@@ -129,7 +145,7 @@ function bindingsOf(text) {
   for (const m of text.matchAll(/\{([^}]*)\}\s*=\s*require\(\s*['"]electron['"]\s*\)/g)) {
     for (const part of m[1].split(',')) { const [orig, alias] = part.split(':').map((x) => x.trim()); if (orig === 'net') b.netNames.add(alias || 'net'); }
   }
-  for (const m of text.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:globalThis\.|window\.|global\.)?fetch\b(?!\s*\()/g)) b.fetchCalls.add(m[1]);
+  for (const m of text.matchAll(/(?:const|let|var|[{,(])\s*(\w+)\s*=\s*(?:globalThis\.|window\.|global\.)?fetch\b(?!\s*\()/g)) b.fetchCalls.add(m[1]);
   return b;
 }
 function opensChannel(code, b = bindingsOf('')) {
@@ -183,6 +199,17 @@ function audit(list) {
 
 test('every line that opens a network channel is tagged and documented in PRIVACY.md', () => {
   const { problems, used } = audit(files.map((f) => ({ file: rel(f), text: fs.readFileSync(f, 'utf8') })));
+  // Board tooling that is not packaged (runner, MCP) is not scanned, but its tags still count as documented uses.
+  for (const f of unpackaged()) {
+    linesOf(fs.readFileSync(f, 'utf8')).forEach(({ raw }, i) => {
+      const slug = (raw.match(/privacy-flow:\s*([\w-]+)/) || [])[1];
+      if (!slug) return;
+      const file = rel(f).split(path.sep).join('/');
+      if (!flows.has(slug)) problems.push(`${file}:${i + 1} is tagged "${slug}" but PRIVACY.md has no <!-- flow:${slug} files=… -->`);
+      else if (!flows.get(slug).has(file)) problems.push(`${file}:${i + 1} is tagged "${slug}" but PRIVACY.md documents that flow only for: ${[...flows.get(slug)].join(', ')}`);
+      else used.add(slug);
+    });
+  }
   for (const slug of flows.keys()) if (!used.has(slug)) problems.push(`PRIVACY.md lists flow:${slug} but no code line is tagged with it`);
   assert.deepEqual(problems, [], `\n${problems.join('\n')}\n${HOW}`);
 });
@@ -228,6 +255,8 @@ test('the guard catches what it should', () => {
   assert.ok(flagged('c.execFile(cmd)', "const c = require('child_process');"), 'member of a renamed child_process');
   assert.ok(flagged('n.request(o)', "const { net: n } = require('electron');"), 'renamed electron net');
   assert.ok(flagged('f(u)', 'const f = fetch;'), 'call of a fetch alias');
+  assert.ok(flagged('async function g({ fetchImpl = globalThis.fetch } = {}) {'), 'globalThis.fetch as a default');
+  assert.ok(flagged('await impl(u)', 'function h(impl = fetch) {'), 'a fetch default parameter is an alias');
   assert.ok(flagged('Reflect.apply(fetch, null, [u])'), 'Reflect.apply(fetch');
   const ok = ["execFile('git', ['status'])", "execFileSync('/bin/ps', [])", "spawn(process.execPath, ['x'])", "execFile('/usr/bin/osascript', [])", "shell.openExternal('https://claude.ai')", "win.loadFile('a.html')",
     "HOOK.exec(line)", "/a/g.exec(s)", "re.exec(line)", "match.exec(s)", "tokenRe.exec(s)", "line.exec(s)", "ctx.exec(file, args)", "net.isOnline()", "exec(file)",
@@ -268,7 +297,7 @@ test('every external hostname in shipped code is documented in PRIVACY.md', () =
 
 test('the shipped dependency list is an allow-list', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  const allowed = new Set(['@modelcontextprotocol/sdk', 'zod']);
+  const allowed = new Set(['@modelcontextprotocol/sdk', 'zod', 'ws']); // ws: the team hub websocket, documented under flow:team-hub
   for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
     for (const dep of Object.keys(pkg[k] || {})) assert.ok(allowed.has(dep), `new dependency ${dep}: check whether it reaches the network, document it in PRIVACY.md, then add it to this list`);
   }

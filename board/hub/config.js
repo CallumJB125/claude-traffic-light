@@ -1,7 +1,7 @@
 // Hub configuration from the environment. Every variable is documented in
 // hub/README.md; keep the two in sync.
 
-import { isIP } from 'node:net';
+import { isIP } from 'node:net'; // privacy-flow: local-board-sockets
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 

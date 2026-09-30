@@ -7,7 +7,7 @@
 'use strict';
 
 const path = require('node:path');
-const http = require('node:http');
+const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme } = require('electron');
@@ -25,7 +25,7 @@ function devLogin(url, secret, login = 'alice') {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ github_login: login, request_id: crypto.randomUUID() });
     const u = new URL('/api/dev/login', url);
-    const req = http.request(u, { method: 'POST', headers: { 'content-type': 'application/json', 'board-dev-secret': secret, 'content-length': Buffer.byteLength(body) } }, (res) => {
+    const req = http.request(u, { method: 'POST', headers: { 'content-type': 'application/json', 'board-dev-secret': secret, 'content-length': Buffer.byteLength(body) } }, (res) => { // privacy-flow: local-board-hub
       res.resume();
       if (res.statusCode !== 200) return reject(new Error(`dev login failed (${res.statusCode})`));
       const set = [].concat(res.headers['set-cookie'] ?? []).map((c) => String(c).split(';')[0]).find((c) => c.startsWith('board_dev='));
@@ -149,8 +149,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
   // Local pages load our two files only; nothing navigates them anywhere else.
   function lockLocal(view) {
     const wc = view.webContents;
-    wc.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-    const guard = (e, url) => { if (!isLocalPage(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } };
+    wc.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
+    const guard = (e, url) => { if (!isLocalPage(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } }; // privacy-flow: open-link-in-browser
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
   }
@@ -185,12 +185,12 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
-    wc.setWindowOpenHandler(({ url }) => { if (decide(url) === 'external') shell.openExternal(url); return { action: 'deny' }; });
+    wc.setWindowOpenHandler(({ url }) => { if (decide(url) === 'external') shell.openExternal(url); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
     const guard = (e, url) => {
       const d = decide(url);
       if (d === 'allow') return;
       e.preventDefault();
-      if (d === 'external') shell.openExternal(url);
+      if (d === 'external') shell.openExternal(url); // privacy-flow: open-link-in-browser
     };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
@@ -245,7 +245,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
     const cur = view.webContents.getURL();
     if (!cur || !cur.startsWith(hubInfo.origin) || pageForHubUrl(cur) !== page.id) {
       viewError = null;
-      await view.webContents.loadURL(url).catch(() => {});
+      await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: board-view
     }
     if (win && selected === page.id && view === hubView && !viewError) attach(view);
   }
