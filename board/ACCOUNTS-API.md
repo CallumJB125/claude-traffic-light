@@ -1,6 +1,6 @@
-# Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P2)
+# Plexiform accounts API (hub `BOARD_AUTH=accounts`, P1–P3)
 
-For the desktop app builder. What exists today (P1 sign-in, P2 teams and members), and the P3–P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D63; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
+For the desktop app builder. What exists today (P1 sign-in, P2 teams and members, P3 invites), and the P4 routes that are planned but **not built yet**. Decisions: CONTRACT.md D50–D65; background: ACCOUNTS-DESIGN.md (where the two differ, this file and the D-decisions win).
 
 The product name is **Plexiform** (`shared/brand.js`). Only user-facing text uses it; technical names keep `buddy` for now (the `__Host-buddy_*` cookies, the `bdt_` token prefix, `BOARD_*` env vars, route paths).
 
@@ -110,11 +110,11 @@ No auth for sign-in. A delete flow needs the same user's credential.
 
 Bearer or cookie.
 
-→ `{"user": {…}, "teams": [ {id, name, slug, role, member_id, boards:[{id, name, key_prefix}]} ], "pending_invites": []}`, plus `csrf_token` for cookie sessions.
+→ `{"user": {…}, "teams": [ {id, name, slug, plan, role, member_id, boards:[{id, name, key_prefix}]} ], "pending_invites": [ {id, team_name, inviter_first_name, role, expires_at} ]}`, plus `csrf_token` for cookie sessions.
 
 - `teams` has one entry per live membership in a team that isn't deleted, sorted by name: `{id, name, slug, plan, role, member_id, boards}`.
 - Every team has a `slug` (teams made by the legacy seed/bootstrap paths get one the first time they're listed).
-- `pending_invites` stays `[]` until P3; from then on it lists invites for the user's **verified** email.
+- `pending_invites` lists the open invites addressed to one of the user's **verified** addresses, in teams that exist and that the user isn't already in. Accept one with `POST /api/invites/accept {invite_id}` (no token needed).
 
 `401 UNAUTHENTICATED` without a valid credential.
 
@@ -197,7 +197,8 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 |---|---|
 | `GET /signin` | minimal email → code sign-in page (client `web`) |
 | `GET /auth/email` | the same page; handles `#f=<flow_id>&c=<code>` magic links |
-| `GET /invite` | static invite landing page (placeholder until P3, see below) |
+| `GET /invite` | the invite landing page (see Invites) |
+| `GET /download` | `302` to `BOARD_DOWNLOAD_URL` (the app download), or `404` when none is configured |
 
 All static pages send `Referrer-Policy: no-referrer`.
 
@@ -223,7 +224,7 @@ The `/ws/board` socket works the same way: each `subscribe {board_id}` picks the
 | read the team, its boards, cards, journal, member names | ✓ | ✓ | ✓ | ✓ |
 | member emails | ✓ | ✓ | | |
 | create / edit cards, comment, dispatch, answer | ✓ | ✓ | ✓ | |
-| rename the team, add boards, repos; change roles; remove members; invite (P3) | ✓ | ✓ | | |
+| rename the team, add boards, repos; change roles; remove members; invite | ✓ | ✓ | | |
 | make or unmake owners, remove an owner, delete the team | ✓ | | | |
 | leave (remove yourself) | ✓ | ✓ | ✓ | ✓ |
 
@@ -235,7 +236,7 @@ The **last owner** can't be demoted or removed, and can't leave (`409 CONFLICT {
 |---|---|---|
 | teams a user owns | 10 | `403 QUOTA_EXCEEDED {resource:'teams', limit:10}` |
 | boards per team | 10 | `403 QUOTA_EXCEEDED {resource:'boards', limit:10}` |
-| members per team (P3: counted with pending invites) | 25 | `403 QUOTA_EXCEEDED {resource:'members', limit:25}` |
+| members per team (pending invites count) | 25 | `403 QUOTA_EXCEEDED {resource:'members', limit:25}` |
 | team creations | 3 a day per user | `429 RATE_LIMITED` |
 
 `pro` teams get ×10; teams that existed before accounts are `self_hosted` (no limits).
@@ -285,49 +286,99 @@ Admin (an owner only by an owner), or the member themselves (leave). `{}` → `{
 
 Every team and member change writes an `audit` row (`team.create`, `team.update`, `team.delete`, `board.create`, `member.role`, `member.remove`, `member.leave`) with `org_id` and `actor_user_id`.
 
-## Planned, not built (P3–P4)
+## Routes built in P3: invites
 
-The shapes below are the plan agreed with 70. They may still change; nothing here exists on the hub yet.
+### The link, the page and the app
 
-### P3: invites
+One universal link per invite: **`https://<hub>/invite#<token>`**, with `token` = `inv_` + 43 base64url characters (32 random bytes). The token is in the URL **fragment**, so it never reaches the hub, its logs, Cloudflare's logs or a `Referer`; it is stored only as its sha256.
 
-One universal link: `https://<hub>/invite#<token>`. The token sits in the **fragment**, so it never reaches server logs or `Referer`.
+The hub serves `/invite` as a static page (`Referrer-Policy: no-referrer`). Its script reads the fragment, removes it from the address bar, POSTs `/api/invites/preview {t}`, and shows "*Jo* invited you to join *Acme* as a member". It then tries the desktop app:
 
-- The hub serves a public static landing page at `/invite` (already served, as a placeholder). Its JS reads the fragment, calls `POST /api/invites/preview {t}`, and then offers:
-  - **"Open in Buddy"** → `claudebuddy://invite/<token>`,
-  - **"Download Buddy for Mac"**.
-- The app handles `claudebuddy://invite/<token>` by calling preview and then accept with its Bearer token.
+1. **`plexiform://invite/<token>`** first,
+2. then the legacy alias **`claudebuddy://invite/<token>`** if the page is still in front 1.2 s later (older builds register only that scheme),
+
+and always shows **"Open in Plexiform"** (the `plexiform://` link) and **"Download Plexiform for Mac"** (`/download`, which redirects to `BOARD_DOWNLOAD_URL`), with the steps: install, open (the app isn't signed by Apple yet: right-click or Control-click it in Applications, choose Open, then Open again), sign in with the invited address, then click the invite link in the email again.
+
+**The app**: register `plexiform://` (and keep `claudebuddy://` as an alias). On `plexiform://invite/<token>`, call preview to show who invited whom, then `POST /api/invites/accept {t}` with the Bearer token. If the user isn't signed in yet, sign in first and keep the token in memory (not on disk) until then.
+
+The invite mail (plain text) carries the team and inviter names, the link, an 8-letter **code** (`XXXX-XXXX`, for typing into the app instead of clicking), the expiry, and "You got this because *name* invited *address*. Ignore it to decline." Names are made safe: no control characters, quotes or angle brackets, one line, ≤ 60 characters, schemes stripped and domains defanged (`evil[.]com`), so the only link in the mail is the hub's.
+
+### Rules
+
+- Only owners and admins invite, as `admin`, `member` or `viewer`, **never above their own role and never as `owner`** (`403 FORBIDDEN`; make someone owner after they join). The inviter's email must be verified (`403 EMAIL_UNVERIFIED`).
+- One invite per address per team at a time: a second → `409 CONFLICT {invite_id}` (resend the first instead). An address already in the team → `409 ALREADY_MEMBER {team:{id, name}}`.
+- 7 days, single use. Acceptance needs a signed-in user whose **verified** email is the invite's.
+- Removing the inviter, deleting the team, or deleting the inviter's account withdraws their unused invites.
+- Quotas: active members **plus pending invites** ≤ 25 per team (free), pending invites ≤ 100 (`403 QUOTA_EXCEEDED`). Rate limits: invites sent (create + resend) 20 a day per team, 50 a day per user, 50 an hour per IP; preview 30 per 10 min per IP; accept 30 per 10 min per IP and per user (`429`).
+- Every step is audited: `invite.create`, `invite.resend`, `invite.revoke`, `invite.accept`, `invite.accept.wrong_account`.
+
+### `POST /api/teams/:id/invites`
+
+Admin. `{email, role}` (`role` defaults to `member`) → `{"invite": {id, email, role, expires_at}, "link": "https://<hub>/invite#inv_…"}`. The link is shown **once** (the hub can't show it again); the mail goes out at the same time.
+
+### `GET /api/teams/:id/invites`
+
+Admin. → `{invites:[{id, email, role, expires_at, created_at, created_by_name}]}`: pending ones only, never tokens.
+
+### `DELETE /api/teams/:id/invites/:invite_id`
+
+Admin. `{}` → `{ok:true}`. The token dies at once. An unknown, used or already withdrawn invite → `404`.
+
+### `POST /api/teams/:id/invites/:invite_id/resend`
+
+Admin (the same role ceiling). `{}` → `{invite, link}`: a **new** invite id and token, a fresh 7 days and a new mail; the old token dies. Works for an expired invite too.
+
+### `POST /api/invites/preview`
+
+**No auth.** `{t}` → `{team_name, inviter_first_name, role}` and nothing else (never the invited address). Any token that is malformed, unknown, used, expired, withdrawn or for a deleted team gets the same `400 INVALID_TOKEN`. POST only: there is no GET form with the token in the URL.
+
+### `POST /api/invites/accept`
+
+Bearer or cookie + CSRF. One of:
+
+- `{t}`: the token from the link;
+- `{invite_id}`: an id from `GET /api/account` `pending_invites`;
+- `{code}`: the `XXXX-XXXX` code from the mail (case and the dash don't matter).
+
+→ `{"team": {id, name, slug, plan}, "member": {member_id, role}}`. The user joins with the invite's role; a user who was in the team before and was removed gets their old member row back (history stays attached).
+
+| Answer | When |
+|---|---|
+| `200` (same body again) | the same user accepts the same invite again (idempotent) |
+| `400 INVALID_TOKEN` | the token is malformed, unknown, used by someone else, expired, withdrawn, or its team was deleted; with `invite_id`/`code`, also any invite not addressed to one of **your** verified addresses (so ids and codes reveal nothing) |
+| `403 WRONG_ACCOUNT {email_masked}` | a valid token addressed to someone else, e.g. `c•••@example.com`: sign in with that address |
+| `409 ALREADY_MEMBER {team:{id, name}}` | you are already in that team |
+| `403 QUOTA_EXCEEDED` | the team is full |
+
+`POST /api/account/invites/:invite_id/accept` (body `{}`) is the same as `{invite_id}` in the body.
+
+## Planned, not built (P4): devices as runners
+
+Agreed with the app builder; nothing here exists on the hub yet.
 
 | Method + path | Who | Body | Response |
 |---|---|---|---|
-| `GET /api/teams/:id/invites` | admin | — | `{invites:[{id, email, role, expires_at, created_by_name}]}` (never tokens) |
-| `POST /api/teams/:id/invites` | admin | `{email, role}` | `{invite, link}`: `link` = `https://<hub>/invite#<token>`, shown once |
-| `DELETE /api/teams/:id/invites/:iid` | admin | `{}` | `{ok}` |
-| `POST /api/invites/preview` | **no auth**, rate limited per IP | `{t}` | `{team_name, inviter_first_name, role}` only, **never the invitee's email**. One generic `INVALID_TOKEN` for an invalid, expired or used token. POST, never GET with the token in the URL |
-| `POST /api/invites/accept` | Bearer or cookie; the invite's email must be one of the user's **verified** addresses | `{t}` | `{team, member}` |
+| `POST /api/teams/:id/enrol` | member+ (not viewer), Bearer | `{}` | `{enrollment_id, team_id, runner_token}`: enrols this install as a runner in that team |
+| `DELETE /api/teams/:id/enrol` | the same install, Bearer | `{}` | `{ok}`: revokes the enrolment and closes that runner socket (`4403`) |
 
-`GET /api/account.pending_invites` then lists invites addressed to the user's verified email.
-
-### P4: devices as runners
-
-| Method + path | Who | Body | Response |
-|---|---|---|---|
-| `POST /api/teams/:id/enrol` | member+, Bearer | `{}` | enrols this user_device as a runner in that team (design §6.4). Runners then open one `/ws/runner` per team with the same `bdt_` Bearer token and header `Board-Team: <team_id>` |
-
-Token rotation (`prev_token_hash`, old token valid 5 min) arrives with P4.
+- **Preferred design:** enrolling returns a separate **runner token** bound to one team and one device (stored as a hash, shown once). Revoking the runner never signs the app out, and signing out revokes its runner tokens. Runner sockets authenticate with `Authorization: Bearer <runner_token>` plus `Board-Team: <team_id>`, one socket per team.
+- The runner's config becomes `{hub_url, runner_token, team_id, data_dir}` (one per enrolled team), handed over on stdin, never argv or env.
+- Token rotation (`prev_token_hash`, the old token valid 5 min) arrives with P4.
 
 ## Error codes used here
 
 | Code | HTTP | When |
 |---|---|---|
 | `VALIDATION` | 400 | bad body |
-| `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code) |
+| `INVALID_TOKEN` | 400 | sign-in flow or code unknown, wrong, used, expired or dead (`attempts_left` after a wrong code); an invite token, id or code that is unknown, used, expired, withdrawn or not yours |
 | `UNAUTHENTICATED` | 401 | no, unknown or revoked credential |
 | `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` without a fresh verified delete flow (`max_age_s`) |
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
-| `EMAIL_UNVERIFIED` | 403 | creating a team without a verified email |
+| `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
+| `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |
 | `QUOTA_EXCEEDED` | 403 | a plan limit (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
-| `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug |
+| `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug; a second pending invite for one address (`invite_id`) |
+| `ALREADY_MEMBER` | 409 | inviting, or accepting an invite, for someone already in the team (`team`) |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |
 | `RATE_LIMITED` | 429 | see Rate limits (`retry_after_s`) |

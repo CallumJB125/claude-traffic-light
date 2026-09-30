@@ -17,6 +17,7 @@ import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, limitOrThrow } from './ratelimit.js';
 import { appendCookie } from './identity/accounts.js';
+import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
@@ -168,6 +169,16 @@ export function createHttpHandler({ hub, api, config }) {
     route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
     route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
     route('DELETE', '/api/teams/:team_id/members/:member_id', ({ member, params, ip }) => teams.removeMember(member, params.member_id, { ip }));
+    // Invites (P3, D64–D65). preview is public (rate limited); accept needs a
+    // signed-in user whose verified email is the invite's.
+    const inv = hub.invites;
+    route('GET', '/api/teams/:team_id/invites', ({ member }) => inv.list(member));
+    route('POST', '/api/teams/:team_id/invites', ({ member, body, ip, req }) => inv.create(member, body, { ip, req }));
+    route('DELETE', '/api/teams/:team_id/invites/:invite_id', ({ member, params, ip }) => inv.revoke(member, params.invite_id, { ip }));
+    route('POST', '/api/teams/:team_id/invites/:invite_id/resend', ({ member, params, ip, req }) => inv.resend(member, params.invite_id, { ip, req }));
+    route('POST', '/api/invites/preview', ({ body, ip }) => inv.preview(body, { ip }), { auth: 'none' });
+    route('POST', '/api/invites/accept', ({ ident, body, ip }) => inv.accept(ident, body, { ip }), { auth: 'user' });
+    route('POST', '/api/account/invites/:invite_id/accept', ({ ident, params, ip }) => inv.accept(ident, { invite_id: params.invite_id }, { ip }), { auth: 'user' });
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
@@ -247,6 +258,14 @@ export function createHttpHandler({ hub, api, config }) {
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
+        // The invite page's "Download" button (accounts): the configured app download.
+        if (config.auth === 'accounts' && url.pathname === '/download') {
+          const to = config.downloadUrl ?? BRAND.downloadUrlDefault;
+          if (!to) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'no download is configured (BOARD_DOWNLOAD_URL)' } });
+          res.writeHead(302, { location: to, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION) });
+          res.end();
+          return undefined;
+        }
         const p = staticPath(url.pathname);
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);

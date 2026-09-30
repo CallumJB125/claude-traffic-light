@@ -354,12 +354,12 @@ export class Accounts {
     return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
   }
 
-  /** GET /api/account → {user, teams, pending_invites}. pending_invites stays [] until invites land (P3). */
+  /** GET /api/account → {user, teams, pending_invites} (invites for the user's verified addresses, P3). */
   account(ident) {
     return {
       user: publicUser(ident.user),
       teams: this.teams(ident.user.id),
-      pending_invites: [],
+      pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
     };
   }
@@ -440,6 +440,7 @@ export class Accounts {
         this.db.run("UPDATE members SET removed_at = COALESCE(removed_at, ?), display_name = 'Deleted user', email = NULL, github_login = ?, github_id = ? WHERE id = ?",
           now, `${EMAIL_ONLY}deleted-${m.id}`, -Number.parseInt(createHash('sha256').update(`deleted:${m.id}`).digest('hex').slice(0, 12), 16), m.id);
         this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, m.id);
+        this.hub.invites?.revokeWhere('created_by', m.id, 'inviter_deleted');
       }
       this.audit('user.deleted', { user: user.id, detail: { memberships: members.length }, ip });
       this.hub.later(() => {

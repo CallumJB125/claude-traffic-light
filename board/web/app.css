@@ -783,6 +783,8 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .loading { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--muted); }
 .loading-mark { width: 44px; height: 48px; }
 .noscript { padding: 24px; }
+.invite-steps { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
+.invite-steps ol { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 
 /* ── toasts ───────────────────────────────────────────────────────────── */
 

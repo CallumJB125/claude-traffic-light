@@ -3,7 +3,7 @@
 // admin, a member and a viewer; B has an owner. User S is a member of both.
 // Both teams link the SAME canonical repo URL (separate repo rows), and B holds
 // content in every table a route can reach: a card with a comment, a run with
-// an open permission request, a runner device, an ask. N is signed in and in
+// an open permission request, a runner device, an ask, a pending invite. N is signed in and in
 // no team. Everything B holds carries the marker `B-SECRET`.
 
 import { randomUUID, createHash } from 'node:crypto';
@@ -82,6 +82,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   db.insert('runs', { id: B.run, card_id: B.card, fence: 1, device_id: B.device, on_behalf_of: B.owner, dispatched_by: B.owner, dispatch_request_id: dispatch, backend: 'claude_cli', repo_id: B.repo, base_ref: 'main', started_at: now });
   B.permission = randomUUID();
   db.insert('permission_requests', { id: B.permission, run_id: B.run, card_id: B.card, tool: 'Bash', input_summary: `${MARK} rm -rf`, state: 'open', approvers: JSON.stringify([B.owner, B.s]), created_at: now });
+  const ib = await as(users.ub, 'POST', `/api/teams/${B.team}/invites`, { email: 'invitee@beta.test', role: 'member' });
+  if (ib.status !== 200) throw new Error(`invite: ${ib.text}`);
+  B.invite = ib.body.invite.id;
+  B.inviteToken = ib.body.link.split('#')[1];
   B.ask = randomUUID();
   db.insert('asks', { id: B.ask, run_id: B.run, card_id: B.card, kind: 'question', text: `${MARK} ask`, state: 'open', created_at: now });
 
@@ -98,6 +102,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM asks WHERE card_id = ?', B.card),
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM repos WHERE org_id = ?', B.team),
+      q('SELECT * FROM invites WHERE org_id = ?', B.team),
     ].join('\n');
   }
 
@@ -127,4 +132,5 @@ export const INVARIANTS = {
   overlaps: `SELECT o.id FROM overlaps o JOIN runs ra ON ra.id = o.run_a JOIN runs rb ON rb.id = o.run_b JOIN repos a ON a.id = ra.repo_id JOIN repos b ON b.id = rb.repo_id WHERE a.org_id != b.org_id`,
   runner_repos: `SELECT rr.device_id FROM runner_repos rr JOIN devices d ON d.id = rr.device_id JOIN members m ON m.id = d.member_id JOIN repos r ON r.id = rr.repo_id WHERE r.org_id != m.org_id`,
   journal: `SELECT j.seq FROM journal j JOIN cards c ON c.id = j.card_id WHERE j.board_id IS NOT c.board_id`,
+  invites: `SELECT i.id FROM invites i JOIN members c ON c.id = i.created_by LEFT JOIN members m ON m.id = i.member_id WHERE c.org_id != i.org_id OR m.org_id != i.org_id`,
 };

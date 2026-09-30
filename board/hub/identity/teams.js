@@ -121,6 +121,7 @@ export class Teams {
     const counts = {
       members: this.activeMembers(o.id),
       boards: this.count('SELECT COUNT(*) AS n FROM boards WHERE org_id = ?', o.id),
+      ...(can(member, 'invite.list') ? { pending_invites: this.hub.invites.pendingCount(o.id) } : {}),
     };
     const quotas = Object.fromEntries(['members', 'boards'].map((r) => [r, Number.isFinite(quotaFor(o.plan, r)) ? quotaFor(o.plan, r) : null]));
     return { team: publicTeam(o), me: { member_id: member.id, role: member.role }, counts, quotas };
@@ -144,7 +145,7 @@ export class Teams {
   /**
    * DELETE /api/teams/:team_id {confirm_slug} (owner): soft delete. Every
    * route 404s at once, runner devices are revoked (their sockets close
-   * 4403) and browser sockets on the team close 4403.
+   * 4403), pending invites die and browser sockets on the team close 4403.
    * The hard purge after 7 days is P5.
    */
   remove(member, body, { ip }) {
@@ -158,6 +159,7 @@ export class Teams {
     this.hub.txn(() => {
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
+      this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.audit('team.delete', member, { ip, target: o.id, detail: { purge_after: purgeAfter } });
       this.hub.later(() => {
         for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'team deleted');
@@ -235,8 +237,8 @@ export class Teams {
   /**
    * DELETE /api/teams/:team_id/members/:member_id: an admin removes someone
    * (owners only by an owner), or anyone leaves. Soft: the row stays for
-   * history; runner devices are revoked and closed, and their browser
-   * sockets on this team close 4403.
+   * history; runner devices are revoked and closed, invites they sent that
+   * nobody used die, and their browser sockets on this team close 4403.
    */
   removeMember(member, id, { ip }) {
     const t = this.target(member, id);
@@ -248,6 +250,7 @@ export class Teams {
     this.hub.txn(() => {
       this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, t.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, t.id);
+      this.hub.invites.revokeWhere('created_by', t.id, 'inviter_removed');
       this.audit(self ? 'member.leave' : 'member.remove', member, { ip, target: t.id, detail: { role: t.role } });
       this.hub.later(() => {
         for (const d of devices) this.hub.runners.get(d.id)?.close(4403, 'member removed');

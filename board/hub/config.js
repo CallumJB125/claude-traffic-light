@@ -40,6 +40,7 @@ export function loadConfig(env = process.env) {
     trustCfIp: flag(env.BOARD_TRUST_CF_IP),
     resendApiKey: env.BOARD_RESEND_API_KEY || null,
     mailFrom: env.BOARD_MAIL_FROM || null,
+    downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     devSeed: flag(env.BOARD_DEV_SEED),
     devRepo: env.BOARD_DEV_REPO || null,
     devLoginSecret: env.BOARD_DEV_LOGIN_SECRET || null,
@@ -79,6 +80,11 @@ function validateAccounts(cfg) {
   if (cfg.resendApiKey && !cfg.mailFrom) throw new Error('BOARD_RESEND_API_KEY needs BOARD_MAIL_FROM');
   if (!cfg.resendApiKey && !loop) throw new Error('BOARD_AUTH=accounts off loopback needs BOARD_RESEND_API_KEY and BOARD_MAIL_FROM (the console mailer is for loopback only)');
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
+  if (cfg.downloadUrl) {
+    let d;
+    try { d = new URL(cfg.downloadUrl); } catch { throw new Error(`BOARD_DOWNLOAD_URL is not a URL: ${cfg.downloadUrl}`); }
+    if (d.protocol !== 'https:') throw new Error('BOARD_DOWNLOAD_URL must be https');
+  }
 }
 
 export function validateConfig(cfg) {

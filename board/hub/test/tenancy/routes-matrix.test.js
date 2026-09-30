@@ -14,6 +14,7 @@ import { tenancy, MARK } from './fixture.js';
 //   team     – no resource in the path; sent with X-Board-Team: <B>; expect 404
 //   self     – acts only on the caller's own account (no foreign id possible)
 //   public   – no auth (health, sign-in, invite preview): proven in their own tests
+//   (a cross entry may name another expected `status` when 404 isn't the generic answer)
 //   create   – makes a new team for the caller (teams.test.js)
 // For cross routes `path(fx)` fills B's ids; `alt` adds calls that mix A's
 // team with B's sub-resource ids (also 404).
@@ -41,6 +42,22 @@ const MATRIX = {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/members/${fx.B.s}`,
     alt: (fx) => [`/api/teams/${fx.A.team}/members/${fx.B.owner}`],
   },
+  'GET /api/teams/:team_id/invites': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/invites` },
+  'POST /api/teams/:team_id/invites': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/invites`, body: { email: 'x@pwned.test', role: 'member' } },
+  'DELETE /api/teams/:team_id/invites/:invite_id': {
+    kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/invites/${fx.B.invite}`,
+    alt: (fx) => [`/api/teams/${fx.A.team}/invites/${fx.B.invite}`],
+  },
+  'POST /api/teams/:team_id/invites/:invite_id/resend': {
+    kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/invites/${fx.B.invite}/resend`,
+    alt: (fx) => [`/api/teams/${fx.A.team}/invites/${fx.B.invite}/resend`],
+  },
+  'POST /api/invites/preview': { kind: 'public' },
+  // Token / own-address acceptance: invites.test.js proves the email binding.
+  'POST /api/invites/accept': { kind: 'self' },
+  // An invite addressed to someone else is as unknown as a made-up id: the one
+  // generic INVALID_TOKEN (not 404), and nothing about it in the answer.
+  'POST /api/account/invites/:invite_id/accept': { kind: 'cross', status: 400, path: (fx) => `/api/account/invites/${fx.B.invite}/accept` },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}` },
   'GET /api/boards/:board_id/alerts': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/alerts` },
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
@@ -83,17 +100,17 @@ async function sweep(fx, caller) {
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
-  const check = async (label, method, path, body, headers = {}) => {
+  const check = async (label, method, path, body, headers = {}, status = 404) => {
     calls++;
     const r = await fx.as(caller, method, path, method === 'GET' ? undefined : { request_id: randomUUID(), ...body }, headers);
-    if (r.status !== 404) leaks.push(`${label} ${path} → ${r.status} ${r.text.slice(0, 120)}`);
-    else if (r.text.includes(MARK) || r.text.includes(fx.B.team) || r.text.includes(fx.B.board)) leaks.push(`${label} ${path}: 404 body mentions B`);
+    if (r.status !== status) leaks.push(`${label} ${path} → ${r.status} ${r.text.slice(0, 120)}`);
+    else if (r.text.includes(MARK) || r.text.includes(fx.B.team) || r.text.includes(fx.B.board) || /beta\.test/.test(r.text)) leaks.push(`${label} ${path}: ${status} body mentions B`);
   };
   for (const r of fx.h.app.routes) {
     const e = MATRIX[key(r)];
     const body = typeof e.body === 'function' ? e.body(fx) : e.body ?? {};
     if (e.kind === 'cross') {
-      await check(key(r), r.method, e.path(fx), body);
+      await check(key(r), r.method, e.path(fx), body, {}, e.status);
       for (const p of e.alt?.(fx) ?? []) await check(`${key(r)} (alt)`, r.method, p, body);
     } else if (e.kind === 'team') {
       await check(key(r), r.method, r.pattern, body, { 'x-board-team': fx.B.team });

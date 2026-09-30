@@ -4,15 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>Invite · Claude Buddy</title>
+  <meta name="referrer" content="no-referrer">
+  <title>Invite · Plexiform</title>
   <link rel="icon" href="/web/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/web/app.css">
+  <script type="module" src="/web/js/invite.js"></script>
 </head>
 <body>
   <div class="app app-center">
     <main class="signin" aria-labelledby="invite-title">
-      <h1 id="invite-title">You're invited to a Buddy team</h1>
-      <p>Open this invite in Buddy for Mac to join. Team invites are coming soon.</p>
+      <h1 id="invite-title">You're invited to a Plexiform team</h1>
+      <p id="invite-lead" role="status">Checking your invite…</p>
+      <a id="open-app" class="btn btn-primary" href="#" hidden>Open in Plexiform</a>
+      <div id="no-app" class="invite-steps" hidden>
+        <p>Don't have Plexiform yet?</p>
+        <a id="download" class="btn" href="/download">Download Plexiform for Mac</a>
+        <ol>
+          <li>Install Plexiform: open the download and drag it to Applications.</li>
+          <li>Open it. Plexiform isn't signed by Apple yet, so the first time, right-click (or Control-click) the app in Applications, choose <strong>Open</strong>, then <strong>Open</strong> again.</li>
+          <li>Sign in with the email address this invite was sent to.</li>
+          <li>Then click your invite link in the email again.</li>
+        </ol>
+      </div>
+      <noscript><p class="noscript">This invite page needs JavaScript.</p></noscript>
     </main>
   </div>
 </body>

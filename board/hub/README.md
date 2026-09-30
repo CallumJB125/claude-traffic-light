@@ -71,7 +71,8 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_PUBLIC_URL` | — | Public origin, e.g. `https://board.example.com`. Accepted as a same-origin `Origin` for mutations and WS upgrades |
 | `BOARD_TRUST_CF_IP` | off | `accounts` only, loopback bind only: take the client IP for rate limits from `CF-Connecting-IP` (cloudflared on the same host) |
 | `BOARD_RESEND_API_KEY` | — | `accounts`: Resend API key (sending access) for sign-in codes; removed from the environment once read. Unset: codes are printed to stderr (loopback bind only) |
-| `BOARD_MAIL_FROM` | — | `accounts` with Resend: the From address, e.g. `Buddy <signin@mail.example.com>` |
+| `BOARD_MAIL_FROM` | — | `accounts` with Resend: the From address, e.g. `Plexiform <signin@mail.example.com>` |
+| `BOARD_DOWNLOAD_URL` | — | `accounts`: https URL of the desktop app download. `/download` (the invite page's "Download Plexiform for Mac" button) redirects there; unset → `404` |
 | `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
 | `BOARD_DEV_REPO` | — | With `BOARD_DEV_SEED`: a git remote to add as the DEV board's repo |

@@ -19,6 +19,7 @@ import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
 import { Teams } from './identity/teams.js';
+import { Invites } from './identity/invites.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer = null } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -42,6 +43,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // to whoever first proves that email address.
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer ?? createMailer(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
+  hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();
