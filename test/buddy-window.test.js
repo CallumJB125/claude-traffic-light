@@ -303,3 +303,120 @@ test('workspace store: a tampered file cannot smuggle in a non-https hub or a ba
   assert.equal(s.get('team:ok.example.com').accessTeam, null);
   assert.equal(s.active().id, 'local');
 });
+
+// ── this Mac as a runner ──────────────────────────────────────────────────
+
+const { createDeviceController, defaultDeviceName } = require('../buddy-window/device');
+
+function deviceHarness(over = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-dev-'));
+  const calls = [];
+  const children = [];
+  const statuses = [];
+  const pending = [];
+  const hub = {
+    origin: 'https://buddy.bondly.co.za',
+    fetch: async (p, init) => {
+      calls.push({ p, init });
+      if (over.fetch) return over.fetch(p, init);
+      if (init.method === 'POST') return { status: 200, json: { device_id: 'dev-1', device_token: 'bdt_secret_token_value' } };
+      return { status: 200, json: { ok: true } };
+    },
+  };
+  const make = () => createDeviceController({
+    hub, credsFile: path.join(dir, 'device.bin'),
+    seal: (s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`),
+    unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
+    fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.args = args; c.opts = opts; c.sent = []; c.postMessage = (m) => c.sent.push(m); children.push(c); return c; },
+    runnerEntry: '/app/board/runner/cli.js', dataDir: path.join(dir, 'runner'),
+    onStatus: (s) => statuses.push(s), schedule: (fn) => pending.push(fn),
+  });
+  return { dir, calls, children, statuses, pending, make, credsFile: path.join(dir, 'device.bin') };
+}
+
+const CF_ID = `${'a1'.repeat(16)}.access`;
+const CF_SECRET = 'c'.repeat(64);
+
+test('device name reads like a person made it', () => {
+  assert.equal(defaultDeviceName('Callum', 'Callums-MacBook-Air.local'), 'Callum’s Callums MacBook Air');
+  assert.equal(defaultDeviceName('', ''), 'My’s Mac'.replace('My’s', 'My’s'));
+});
+
+test('enroll: validates the service token, enrols with cf_service_token_id = client id, seals secrets, starts the runner over parentPort', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  assert.match((await d.enroll({ name: 'Mac', cfClientId: 'nope', cfClientSecret: CF_SECRET })).error, /Client ID/);
+  assert.match((await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: 'short' })).error, /whole Client Secret/);
+  assert.equal(h.calls.length, 0);
+  const r = await d.enroll({ name: 'Callum’s Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  assert.equal(r.ok, true);
+  assert.equal(h.calls[0].p, '/api/devices');
+  assert.equal(h.calls[0].init.body.cf_service_token_id, CF_ID);
+  assert.equal(h.calls[0].init.body.cf_service_token_secret, undefined, 'the secret never goes to the hub');
+  // Sealed at rest, 0600, no plaintext secret in the file.
+  const raw = fs.readFileSync(h.credsFile, 'utf8');
+  assert.ok(raw.startsWith('SEALED:'));
+  assert.ok(!raw.includes(CF_SECRET) && !raw.includes('bdt_secret'));
+  assert.equal(fs.statSync(h.credsFile).mode & 0o777, 0o600);
+  // Runner: no secret in argv/env; config over parentPort.
+  const c = h.children[0];
+  assert.deepEqual(c.args, ['--parent-port']);
+  assert.ok(!JSON.stringify(c.opts.env).includes(CF_SECRET) && !JSON.stringify(c.opts.env).includes('bdt_'));
+  assert.equal(c.sent[0].type, 'runner.config');
+  assert.equal(c.sent[0].device_token, 'bdt_secret_token_value');
+  assert.equal(c.sent[0].cf_client_secret, CF_SECRET);
+  c.emit('message', { type: 'runner.status', state: 'connected' });
+  assert.equal(d.status().runner.state, 'connected');
+  assert.equal(d.status().enrolled, true);
+});
+
+test('enroll: a signed-out team session says so; the hub refusing is shown, nothing is stored', async () => {
+  const h = deviceHarness({ fetch: async () => ({ status: 401, json: {} }) });
+  const d = h.make();
+  assert.match((await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET })).error, /Sign in/);
+  assert.equal(fs.existsSync(h.credsFile), false);
+});
+
+test('off → SIGTERM, stays off across restarts; on again restarts; remove revokes and forgets every secret', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  await d.setEnabled(false);
+  assert.equal(h.children[0].killed, 1);
+  assert.equal(d.status().enabled, false);
+  const d2 = h.make();
+  d2.resume();
+  assert.equal(h.children.length, 1, 'left off: not started at launch');
+  await d2.setEnabled(true);
+  assert.equal(h.children.length, 2);
+  await d2.remove();
+  assert.equal(h.children[1].killed, 1);
+  assert.equal(fs.existsSync(h.credsFile), false);
+  assert.equal(h.calls.at(-1).init.method, 'DELETE');
+  assert.equal(h.calls.at(-1).p, '/api/devices/dev-1');
+});
+
+test('runner crash restarts with backoff; revoked/unauthenticated does not loop', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  h.children[0].emit('exit', 1);
+  assert.equal(d.status().runner.state, 'restarting');
+  h.pending.shift()();
+  assert.equal(h.children.length, 2);
+  h.children[1].emit('message', { type: 'runner.status', state: 'revoked', detail: 'device revoked' });
+  h.children[1].emit('exit', 0);
+  assert.equal(h.pending.length, 0);
+  assert.equal(d.status().runner.state, 'revoked');
+});
+
+test('creds for another hub are ignored', async () => {
+  const h = deviceHarness();
+  await h.make().enroll({ name: 'Mac', cfClientId: CF_ID, cfClientSecret: CF_SECRET });
+  const other = createDeviceController({
+    hub: { origin: 'https://other.example.com', fetch: async () => ({}) }, credsFile: h.credsFile,
+    seal: (s) => Buffer.from(s), unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
+    fork: () => { throw new Error('must not start'); }, runnerEntry: 'x', dataDir: path.join(h.dir, 'r2'),
+  });
+  assert.equal(other.status().enrolled, false);
+});
