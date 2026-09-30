@@ -338,4 +338,4 @@ function modelMix(turns, { now = Date.now() } = {}) {
   return { today, week, opus: { turns: opus, routine, share, saving: { low: r2(low), high: r2(high) } }, recommendation };
 }
 
-module.exports = { PRICES, SLACK, ROUTINE_OUTPUT, ROUTINE_NEW_INPUT, modelKey, costOf, readTurns, summarise, spend, modelMix };
+module.exports = { PRICES, SLACK, ROUTINE_OUTPUT, ROUTINE_NEW_INPUT, modelKey, costOf, listJsonl, parseFile, readTurns, summarise, spend, modelMix };
