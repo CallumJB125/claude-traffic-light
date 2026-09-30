@@ -50,6 +50,7 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await fill('input[name=email]', 'sam@example.com');
   await submit();
   await until('invite listed', () => page("document.body.textContent.includes('sam@example.com') && document.querySelectorAll('.acct-list').length === 2"));
+  await until('link shown once', () => page("!!document.querySelector('.acct-link-box')?.value.includes('/invite#')"));
   await shot('05-team', { sidebar: true });
 
   // Someone else invites us to their team; the deep link opens the preview.
@@ -59,7 +60,7 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await lukeClient.verifyCode(mock.lastCode('luke@example.com'), { deviceName: 'Luke’s Mac' });
   const pistor = await lukeClient.createTeam('Pistor');
   const inv = await lukeClient.invite(pistor.team.id, 'callum@example.com', 'member');
-  buddy.openInvite(`claudebuddy://invite/${inv.code}`);
+  buddy.openInvite(inv.link);
   await onScreen('join');
   await until('preview', () => page("document.body.textContent.includes('Join Pistor?')"));
   await shot('06-join-preview');
@@ -90,12 +91,24 @@ async function walkAccounts({ buddy, mock, hub, prefix, fs }) {
   await fill('input[name=email]', 'sam@example.com');
   await submit();
   await onScreen('code');
-  await fill('input[name=code]', '000000'.replace(/0/g, () => '9'));
-  await until('wrong code shown', () => page("!!document.querySelector('.acct-error')?.textContent"));
+  const good = mock.lastCode('sam@example.com');
+  await fill('input[name=code]', good === '999999' ? '111111' : '999999');
+  await until('wrong code shown', () => page("document.querySelector('.acct-error')?.textContent.includes('tries left')"));
   await shot('11-wrong-code');
-  await fill('input[name=code]', mock.lastCode('sam@example.com'));
+  await fill('input[name=code]', good);
   await onScreen('invites');
   await shot('12-pending-invites', { sidebar: true });
+
+  // Deleting the account: a code, then the delete; the sole-owner rule doesn't apply to Sam.
+  buddy.select('account');
+  await onScreen('account');
+  await click('Delete account…');
+  await until('delete code form', () => page("!!document.querySelector('.btn-danger')"));
+  await shot('13-delete-code');
+  await fill('input[name=code]', mock.lastCode('sam@example.com'));
+  await submit();
+  await until('deleted', () => page("document.body.textContent.includes('Your account was deleted.')"));
+  await shot('14-deleted', { sidebar: true });
 }
 
 module.exports = { walkAccounts };

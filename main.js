@@ -964,9 +964,14 @@ function createSettingsWindow() {
 // The Buddy main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
 let buddyWin = null;
-// Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub's origin.
+// Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
+// Buddy window reads its origin once, when created, so nothing may create the
+// window (a deep link, the tray, a second instance) until it is listening.
+const devMock = !app.isPackaged && process.argv.includes('--buddy-mock-accounts') ? require('./buddy-window/mock-accounts-hub').createMockAccountsHub({ log: (m) => console.log(m) }) : null;
 let devAccountsHub = null;
+let devMockReady = !devMock;
 function getBuddy() {
+  if (!devMockReady) throw new Error('the dev mock accounts hub is still starting');
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       openWindow: (which) => {
@@ -981,6 +986,7 @@ function getBuddy() {
   return buddyWin;
 }
 function openBuddy(page = null) {
+  if (!devMockReady) return;
   getBuddy();
   if (IS_MAC) app.dock.show();
   buddyWin.open(page);
@@ -3271,27 +3277,30 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
-  // Links that arrived before ready (cold start), then any in our own argv
-  // (Windows/Linux pass the link as an argument).
-  linksReady = true;
-  for (const link of [...pendingLinks.splice(0), ...process.argv.filter((a) => /^claudebuddy:/i.test(a))]) handleDeepLink(link);
-  // Runners the member left on come back at launch, window or not.
-  if (!IS_DEV_RUN) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
-  // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
-  // window (optionally on a page) and can capture both halves, then quit.
-  // `--buddy-mock-accounts` starts the in-process mock accounts hub on
-  // loopback first; `--buddy-accounts-walk prefix` then walks the account
-  // flow against it, capturing each step.
-  if (process.argv.includes('--buddy')) (async () => {
+  (async () => {
+    // `--buddy-mock-accounts` (dev): the mock accounts hub on loopback, listening before anything below can create the window.
+    if (devMock) {
+      devAccountsHub = await devMock.listen(); // privacy-flow: local-board-hub
+      devMockReady = true;
+      console.log('[buddy] mock accounts hub at', devAccountsHub);
+      app.on('will-quit', () => { devMock.close(); });
+    }
+    // Links that arrived before ready (cold start), then any in our own argv
+    // (Windows/Linux pass the link as an argument).
+    linksReady = true;
+    for (const link of [...pendingLinks.splice(0), ...process.argv.filter((a) => /^claudebuddy:/i.test(a))]) handleDeepLink(link);
+    // Runners the member left on come back at launch, window or not; a dev
+    // run shares the Mac with an installed app, so only when asked to.
+    const resumeRunners = app.isPackaged ? !IS_DEV_RUN : process.env.BUDDY_RESUME_RUNNERS === '1';
+    if (resumeRunners) { try { getBuddy().resumeDevices(); } catch (err) { console.error('[buddy] could not resume runners:', err.message); } }
+    // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
+    // window (optionally on a page) and can capture both halves, then quit.
+    // `--buddy-accounts-walk prefix` (with --buddy-mock-accounts) walks the
+    // account flow against the mock hub, capturing each step.
+    if (!process.argv.includes('--buddy')) return;
     const at = process.argv.indexOf('--buddy');
     const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
-    let mock = null;
-    if (!app.isPackaged && process.argv.includes('--buddy-mock-accounts')) {
-      mock = require('./buddy-window/mock-accounts-hub').createMockAccountsHub({ log: (m) => console.log(m) });
-      devAccountsHub = await mock.listen();
-      console.log('[buddy] mock accounts hub at', devAccountsHub);
-      app.on('will-quit', () => { mock.close(); });
-    }
+    const mock = devMock;
     openBuddy(page);
     const connectAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-connect');
     if (connectAt > 0 && process.argv[connectAt + 1]) buddyWin.devConnect(process.argv[connectAt + 1]).then((r) => console.log('[buddy-connect]', JSON.stringify(r)));
