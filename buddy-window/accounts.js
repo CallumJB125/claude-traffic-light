@@ -134,11 +134,13 @@ function oauthOutcome(r, provider, host) {
   if (r.code === 'EMAIL_UNVERIFIED') return { ...r, error: `${who} hasn’t verified that email address. Verify it with ${who}, or use an email code instead.` };
   if (r.code === 'PROVIDER_ERROR' || r.code === 'PROVIDER_UNAVAILABLE') return { ...r, error: `${who} didn’t answer. Try again in a minute.` };
   if (r.code === 'METHOD_DISABLED') return { ...r, error: `${who} sign-in is turned off on ${host}.` };
+  if (r.code === 'WRONG_ACCOUNT') return { ...r, error: `That isn’t the ${who} account you sign in with. Use that one.` };
+  if (r.code === 'STEP_UP_REQUIRED') return { ...r, stepUp: true, error: 'That check timed out. Confirm it’s you again.' };
   return r;
 }
 
-function deleteOutcome(r) {
-  if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: 'That check timed out. Send a new code and do the check again.' };
+function deleteOutcome(r, { again = 'Send a new code and do the check again.' } = {}) {
+  if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: `That check timed out. ${again}` };
   const owned = Array.isArray(r.detail?.sole_owner_of) ? r.detail.sole_owner_of.map((t) => String(t?.name ?? '').slice(0, 60)).filter(Boolean) : [];
   if (r.status === 409 && owned.length) {
     const names = owned.length === 1 ? owned[0] : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)}`;
@@ -199,6 +201,12 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
   }
 
   const need = (cond, error) => (cond ? null : { ok: false, error });
+  // The hub's expiry, but never past our own 5 minutes: a skewed hub clock can't stretch the window.
+  function stepUpUntil(v) {
+    const t = now();
+    const at = typeof v === 'string' ? Date.parse(v) : typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : NaN;
+    return Number.isFinite(at) && at > t ? Math.min(at, t + STEP_UP_MS) : t + STEP_UP_MS;
+  }
   function signedInWith(r) {
     if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
     try {
@@ -253,10 +261,18 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return r.ok ? { ok: true, google: r.google === true, github: r.github === true, email: r.email === true } : r;
     },
 
-    /** Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller. */
-    async startOAuth(provider, { challenge, redirectUri }, dev = {}) {
+    /**
+     * Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller.
+     * `purpose:'delete'` is the account-deletion check instead: it goes with the Bearer, and names no
+     * device because no token comes of it.
+     */
+    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin' } = {}) {
       if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
-      const r = await call('oauthStart', { body: { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) }, auth: false });
+      const stepUp = purpose === 'delete';
+      const body = stepUp
+        ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' }
+        : { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) };
+      const r = await call('oauthStart', { body, auth: stepUp });
       if (!r.ok) return oauthOutcome(r, provider, host);
       // The hub mints the state: without one the loopback callback couldn't be checked.
       if (typeof r.flow_id !== 'string' || typeof r.url !== 'string' || typeof r.state !== 'string' || r.state.length < 16) return { ok: false, error: `${host} didn’t start a sign-in.` };
@@ -268,7 +284,16 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
      * `keep()` is asked once the hub has answered: false (the member cancelled, or another sign-in
      * replaced this one) and the new token is revoked on the hub without ever being stored.
      */
-    async exchangeOAuth({ flowId, code, state, verifier, provider }, dev = {}, { keep = () => true } = {}) {
+    async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true } = {}) {
+      if (purpose === 'delete') {
+        // A deletion check proves who you are to the hub and nothing more: whatever else the answer
+        // holds, only its expiry is read, and the vault is never touched.
+        const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier } });
+        if (!keep()) return { ok: false, cancelled: true };
+        if (!r.ok) return oauthOutcome(r, provider, host);
+        if (r.stepup_until == null) return { ok: false, error: `${host} didn’t confirm it’s you. Try again.` };
+        return { ok: true, flowId, stepupUntil: stepUpUntil(r.stepup_until) };
+      }
       const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false });
       if (!keep()) {
         if (r.ok && typeof r.device_token === 'string' && r.device_token) await call('signOut', { body: {}, token: r.device_token });
@@ -378,6 +403,16 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         if (r.code === 'STEP_UP_REQUIRED') flow = null;
         return deleteOutcome(r);
       }
+      try { store.clear(); } catch { /* already gone */ }
+      flow = null;
+      return { ok: true };
+    },
+
+    /** Account deletion after a Google/GitHub check: the check's flow_id, which the hub spends once. */
+    async deleteAccountWith(flowId) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+      const r = await call('deleteAccount', { body: { flow_id: flowId } });
+      if (!r.ok) return deleteOutcome(r, { again: 'Confirm it’s you again.' });
       try { store.clear(); } catch { /* already gone */ }
       flow = null;
       return { ok: true };

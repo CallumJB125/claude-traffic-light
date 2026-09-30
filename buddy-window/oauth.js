@@ -124,9 +124,11 @@ function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.c
  * The whole provider sign-in against one hub's account client:
  *   listener up → POST oauth/start → system browser → callback → POST oauth/exchange.
  * → {done: Promise<{ok, user?} | {ok:false, error, cancelled?}>, cancel()}.
+ * `purpose:'delete'` runs the same path as the account-deletion check: done is
+ * then {ok, flowId, stepupUntil} and no token is involved.
  * The verifier and the code live only in this closure; nothing here logs them.
  */
-function startProviderSignIn({ client, provider, device = {}, openExternal, brand, allowOrigins = [], timeoutMs = LISTEN_MS, log = () => {} }) {
+function startProviderSignIn({ client, provider, purpose = 'signin', device = {}, openExternal, brand, allowOrigins = [], timeoutMs = LISTEN_MS, log = () => {} }) {
   let cancelled = false;
   let listener = null;
   const host = new URL(client.origin).host;
@@ -135,7 +137,7 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
     const { verifier, challenge } = pkcePair();
     try { listener = await listenOnce({ brand, timeoutMs }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
-    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device);
+    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose });
     if (cancelled || !start.ok) { listener.close(); return cancelled ? { ok: false, cancelled: true } : start; }
     // The hub's state: the loopback callback must carry exactly this, and the exchange sends it back.
     listener.expect(start.state);
@@ -153,7 +155,7 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
     }
     if (cancelled) return { ok: false, cancelled: true };
     // Cancel can land while the exchange is in flight: the hub may still mint a token, which must not outlive this run.
-    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider }, device, { keep: () => !cancelled });
+    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider, purpose }, device, { keep: () => !cancelled });
   })();
   return {
     done,
