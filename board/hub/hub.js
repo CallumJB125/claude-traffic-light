@@ -53,9 +53,6 @@ export class Hub extends EventEmitter {
     this.offered = new Map();       // card_id → Set(device_id)
     this.pendingCmds = new Map();   // device_id → cmd frames for an offline device
     this.notifications = [];
-    // Sealed connector secrets (D41). No key until one is given: the desktop
-    // app sends it over parentPort, the Pi hub loads it from its env/keyfile.
-    this.vault = createVault(null);
     this.overlapDue = new Map();    // repo_id → due (mono)
     this.prStatus = new Map();      // card_id → PR status from the merge poll
     this.requestCache = new Map();  // `${member}|${request_id}` → {status, body, exp}
@@ -80,6 +77,13 @@ export class Hub extends EventEmitter {
     if (!Buffer.isBuffer(buf) || buf.length !== 32) throw new Error('vault key must be 32 bytes');
     this.vaultKey = Buffer.from(buf);
     this.emit('vault-key');
+  }
+
+  // Sealed connector secrets (D41), built from the key D36 hands in; keyless
+  // (every seal refused) until then.
+  get vault() {
+    if (this._vaultFor !== this.vaultKey) { this._vault = createVault(this.vaultKey); this._vaultFor = this.vaultKey; }
+    return this._vault;
   }
 
   loadSecret() {
@@ -149,13 +153,6 @@ export class Hub extends EventEmitter {
       this.post.length = mark;
       throw e;
     }
-  }
-
-  /** One-shot: the first key wins; a second call is refused (never logged). */
-  setVaultKey(key) {
-    if (this.vault.available) return false;
-    this.vault = createVault(key);
-    return true;
   }
 
   later(fn) {

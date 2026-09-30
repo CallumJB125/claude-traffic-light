@@ -214,7 +214,7 @@ test('loadKey: env hex/base64, keyfile outside the data dir only, 0600 only, 32 
   assert.equal(loadKey({ env: { BOARD_ENC_KEY_FILE: f }, dataDir: data, hasParentPort: false }).toString('hex'), hex);
 });
 
-test('migration 007: tables exist; identities are unique per workspace subject and per member', () => {
+test('migration 008: tables exist; identities are unique per workspace subject and per member', () => {
   const db = openDb(':memory:');
   const now = new Date().toISOString();
   db.run("INSERT INTO orgs (id, name, created_at) VALUES ('o', 'O', ?)", now);
@@ -244,4 +244,17 @@ test('bus: a poison row is dead-lettered after DEAD_AFTER tries on the same seq,
   const dl = db.get('SELECT * FROM bus_dead_letters');
   assert.equal(dl.consumer, 'c');
   assert.match(dl.error, /always broken/);
+});
+
+test('hub.vault follows the D36 key: keyless until setVaultKey, then seals', async () => {
+  const h = await startHub();
+  try {
+    assert.equal(h.hub.vault.available, false);
+    h.hub.setVaultKey(randomBytes(32));
+    assert.equal(h.hub.vault.available, true);
+    const sealed = h.hub.vault.seal('c', 'bot_token', 'x');
+    assert.equal(h.hub.vault.open('c', 'bot_token', sealed), 'x');
+  } finally {
+    await h.close();
+  }
 });
