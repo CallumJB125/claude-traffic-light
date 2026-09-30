@@ -11,7 +11,8 @@ import { confine, globBase, realish } from './paths.js';
 import { answererAllowed, runAllowKey } from './policy.js';
 import { snapshot as gitSnapshot, pushRef, gitFacts } from './git.js';
 import { clip } from './util.js';
-import { untrusted } from './launch.js';
+import { randomBytes } from 'node:crypto';
+import { untrusted } from '../shared/untrusted.js';
 
 export const ACTIVITY_THROTTLE_MS = 5000;
 export const FACT_FLUSH_MS = 2000;
@@ -77,6 +78,8 @@ export class Run {
     this.log = sup.log;
     this.clock = sup.clock;
     Object.assign(this, info);   // run_id, card_id, key, fence, repo_id, run_token, branch, worktree, runDir, socketPath, sessionId, offer, scope
+    // Envelope nonce (D30): content authors never see it, so they cannot forge our closing tag.
+    this.nonce = randomBytes(8).toString('hex');
     this.backend = null;
     this.localState = 'running';
     this.fenced = false;
@@ -527,7 +530,7 @@ export class Run {
 
   onComments(comments) {
     for (const c of comments ?? []) {
-      this.#deliver(`New comment on card ${this.key}:\n${untrusted(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`, 'comment', [c.comment_id]);
+      this.#deliver(`New comment on card ${this.key}:\n${this.#wrap(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`, 'comment', [c.comment_id]);
     }
   }
 
@@ -545,7 +548,7 @@ export class Run {
     if (key) this.answered.add(key);
     const text = a.answer != null ? String(a.answer) : a.decision ?? '';
     const by = a.answered_by?.name ?? 'a teammate';
-    this.#deliver(`Your question${a.ask_id ? ` (${a.ask_id})` : ''} was answered:\n${untrusted(`card:${this.key} answer by ${by}`, text)}`, 'answer');
+    this.#deliver(`Your question${a.ask_id ? ` (${a.ask_id})` : ''} was answered:\n${this.#wrap(`card:${this.key} answer by ${by}`, text)}`, 'answer');
   }
 
   onContextUpdate(u) {
@@ -647,11 +650,11 @@ export class Run {
     if (source === 'startup') {
       if (seed.handover_md) {
         parts.push(`You are run r${this.fence} of card ${this.key}.${seed.prev_run_n != null ? ` Run r${seed.prev_run_n} ended; its handover follows.` : ''}`);
-        parts.push(untrusted(`card:${this.key} handover from ${prev}`, seed.handover_md));
+        parts.push(this.#wrap(`card:${this.key} handover from ${prev}`, seed.handover_md));
       }
-      if (seed.answer) parts.push(`Answer to ${prev}'s question:\n${untrusted(`card:${this.key} answer`, str(seed.answer))}`);
-      if (seed.review) parts.push(`Review requested changes:\n${untrusted(`card:${this.key} review`, str(seed.review))}`);
-      for (const c of seed.comments ?? []) parts.push(`Comment on card ${this.key}:\n${untrusted(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`);
+      if (seed.answer) parts.push(`Answer to ${prev}'s question:\n${this.#wrap(`card:${this.key} answer`, str(seed.answer))}`);
+      if (seed.review) parts.push(`Review requested changes:\n${this.#wrap(`card:${this.key} review`, str(seed.review))}`);
+      for (const c of seed.comments ?? []) parts.push(`Comment on card ${this.key}:\n${this.#wrap(`card:${this.key} comment by ${c.author_name ?? 'a teammate'}`, c.body)}`);
     } else if (source === 'compact') {
       parts.push(this.#handoverText());
     }
@@ -662,11 +665,11 @@ export class Run {
 
   #handoverText() {
     const doc = mergeHandover({ card: { key: this.key, title: this.offer?.title ?? '', repo_id: this.repo_id }, narrative: this.narrative });
-    return `Your current handover (re-injected after compaction):\n${untrusted(`card:${this.key} handover (this run)`, renderMarkdown(doc, { now_ms: this.clock.wall() }))}`;
+    return `Your current handover (re-injected after compaction):\n${this.#wrap(`card:${this.key} handover (this run)`, renderMarkdown(doc, { now_ms: this.clock.wall() }))}`;
   }
 
   #teamContextText() {
-    return untrusted('board:team context (other runs in this repo)', this.teamContext.text);
+    return this.#wrap('board:team context (other runs in this repo)', this.teamContext.text);
   }
 
   #hookPrompt() {
@@ -746,7 +749,7 @@ export class Run {
     for (const p of this.pending) { ctx.push(p.text); if (p.comment_ids) delivered.push(...p.comment_ids); }
     this.pending = [];
     if (delivered.length) this.emit({ kind: 'comment.delivered', comment_ids: delivered, via: 'post_tool_use' });
-    if (this.overlapDelta) { ctx.push(untrusted('board:overlap update', typeof this.overlapDelta === 'string' ? this.overlapDelta : JSON.stringify(this.overlapDelta))); this.overlapDelta = null; }
+    if (this.overlapDelta) { ctx.push(this.#wrap('board:overlap update', typeof this.overlapDelta === 'string' ? this.overlapDelta : JSON.stringify(this.overlapDelta))); this.overlapDelta = null; }
     const now = this.clock.mono();
     const stale = now - this.lastHandoverMono > NARRATIVE_NUDGE_MS || this.callsSinceHandover > NARRATIVE_NUDGE_CALLS;
     if (stale && now - this.nudgedAt > NARRATIVE_NUDGE_MS) {
@@ -798,7 +801,7 @@ export class Run {
   }
 
   #hookStop(payload) {
-    if (payload.last_assistant_message) this.fact('message', { text: clip(redact(String(payload.last_assistant_message), this.worktree), 500) });
+    if (payload.last_assistant_message) this.fact('message', { text: this.#text(payload.last_assistant_message, 500) });
     this.snapshotNow({ why: 'stop' });
     const s = this.turnSignals;
     if (this.ending || this.completed || this.released || s.complete || s.ask || s.release) return PROCEED;
@@ -813,8 +816,46 @@ export class Run {
     return { run_id: this.run_id, card_id: this.card_id, key: this.key, fence: this.fence, repo_id: this.repo_id, tools: this.sup.mcpTools };
   }
 
+  // Agent text bound for the board. The nonce never leaves: echoed back in a
+  // read-tool result it would let this run's own text forge a closing tag.
   #text(s, n) {
-    return clip(redact(String(s ?? ''), this.worktree), n);
+    return clip(redact(String(s ?? ''), this.worktree).replaceAll(this.nonce, '[nonce]'), n);
+  }
+
+  #wrap(source, text) {
+    return untrusted(source, text, this.nonce);
+  }
+
+  // Board text in read-tool results is data, like the seed (L5): every
+  // human- or run-written string is enveloped; ids, enums and ages are not.
+  #wrapCard(r) {
+    const key = r?.card?.key ?? this.key;
+    const w = (what, s) => (typeof s === 'string' ? this.#wrap(`card:${key} ${what}`, s) : s);
+    return {
+      ...r,
+      card: r.card && { ...r.card, title: w('title', r.card.title), body: w('body', r.card.body) },
+      acceptance: w('acceptance', r.acceptance),
+      handover_md: w('handover', r.handover_md),
+      open_asks: (r.open_asks ?? []).map((a) => ({ ...a, text: w('open ask', a.text) })),
+      comments: (r.comments ?? []).map((c) => ({ ...c, body: w(`comment by ${c.author_name ?? 'a teammate'}`, c.body) })),
+    };
+  }
+
+  // Paths, reasons and owner names in overlap results come from other runs
+  // and members: data, enveloped like card text.
+  #wrapOverlaps(r) {
+    return {
+      ...r,
+      overlaps: (r?.overlaps ?? []).map((o) => {
+        const w = (what, s) => (typeof s === 'string' ? this.#wrap(`overlap:${o.other_key ?? 'card'} ${what}`, s) : s);
+        return {
+          ...o,
+          other_owner: w('owner', o.other_owner),
+          reasons: Array.isArray(o.reasons) ? o.reasons.map((x) => w('reason', x)) : o.reasons,
+          paths: Array.isArray(o.paths) ? o.paths.map((x) => w('path', x)) : o.paths,
+        };
+      }),
+    };
   }
 
   async tool(name, args = {}, ctx = {}) {
@@ -823,8 +864,11 @@ export class Run {
     if (name === 'approval') return this.#approval(args, ctx);
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
     switch (name) {
-      case 'board_get_card': return this.sup.rpc(this, 'board_get_card', args.key ? { key: String(args.key) } : {});
-      case 'board_list_cards': return this.sup.rpc(this, 'board_list_cards', { ...(args.column ? { column: String(args.column) } : {}), ...(args.mine != null ? { mine: !!args.mine } : {}) });
+      case 'board_get_card': return this.#wrapCard(await this.sup.rpc(this, 'board_get_card', args.key ? { key: String(args.key) } : {}));
+      case 'board_list_cards': {
+        const r = await this.sup.rpc(this, 'board_list_cards', { ...(args.column ? { column: String(args.column) } : {}), ...(args.mine != null ? { mine: !!args.mine } : {}) });
+        return { ...r, cards: (r.cards ?? []).map((c) => ({ ...c, title: this.#wrap(`card:${c.key} title`, c.title) })) };
+      }
       case 'board_ask_human': {
         const r = await this.sup.rpc(this, 'board_ask_human', { kind: args.kind, text: this.#text(args.text, 2000), ...(Array.isArray(args.options) ? { options: args.options.map((o) => this.#text(o, 200)) } : {}) });
         this.turnSignals.ask = true;
@@ -849,16 +893,25 @@ export class Run {
       }
       case 'board_declare_plan': {
         const paths = (args.paths ?? []).map((p) => filterPath(String(p), this.worktree)).filter((p) => p && p !== '.');
-        return this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) });
+        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
       }
-      case 'board_check_overlap': return this.sup.rpc(this, 'board_check_overlap', {});
+      case 'board_check_overlap': return this.#wrapOverlaps(await this.sup.rpc(this, 'board_check_overlap', {}));
       case 'board_recall': {
         const params = {};
         if (args.paths) params.paths = args.paths.map((p) => filterPath(String(p), this.worktree)).filter(Boolean);
         if (args.query) params.query = this.#text(args.query, 500);
         if (args.kinds) params.kinds = args.kinds.map(String);
-        return this.sup.rpc(this, 'board_recall', params);
+        const r = await this.sup.rpc(this, 'board_recall', params);
+        return { ...r, memories: (r.memories ?? []).map((m) => ({ ...m, body: this.#wrap(`memory:${m.card_key ?? 'repo'} ${m.kind}`, m.body) })) };
       }
+      case 'board_create_card':
+        return this.sup.rpc(this, 'board_create_card', {
+          title: this.#text(args.title, 200),
+          ...(args.body ? { body: this.#text(args.body, 20_000) } : {}),
+          ...(args.acceptance ? { acceptance: this.#text(args.acceptance, 10_000) } : {}),
+        });
+      case 'board_add_lesson':
+        return this.sup.rpc(this, 'board_add_lesson', { text: this.#text(args.text, 500), ...(args.evidence ? { evidence: this.#text(args.evidence, 1000) } : {}) });
       default:
         throw err('VALIDATION', `unknown tool ${name}`);
     }
