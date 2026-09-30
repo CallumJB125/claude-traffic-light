@@ -2,7 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, findAll, byAttr } from '../js/h.js';
-import { integrationsScreen, actionLabel, connectWindowName } from '../js/render-integrations.js';
+import * as integ from '../js/render-integrations.js';
+
+const { integrationsScreen, actionLabel, connectWindowName } = integ;
 import { boardScreen } from '../js/render-board.js';
 import { model } from './fixtures.js';
 
@@ -81,6 +83,19 @@ test('the connect window is named plexiform-connect|<provider>|<bind> for the de
   const v = integrationsScreen(m({ data: { available, connections: [], vault: true } }));
   assert.equal(byAttr(v, 'data-action', 'integ-complete').length, 0);
   assert.ok(!textOf(v).includes('Finish connecting'));
+});
+
+test('the bind goes into the window name only inside the desktop shell; a plain browser tab gets _blank (the cookie suffices)', () => {
+  const bind = 'AbCd_-0123456789abcdefghijklmnopqrstuv';
+  const target = integ.connectWindowTarget;
+  assert.equal(typeof target, 'function');
+  const desktop = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140.0 Electron/38.0 Plexiform/1.4.0';
+  assert.equal(target('github', bind, desktop), `plexiform-connect|github|${bind}`);
+  for (const ua of ['Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140.0 Safari/537.36', '', undefined, 'Plexiform 1.0']) {
+    const t = target('github', bind, ua);
+    assert.equal(t, '_blank', String(ua));
+    assert.ok(!t.includes(bind));
+  }
 });
 
 test('Integrations is not in the board view switcher', () => {

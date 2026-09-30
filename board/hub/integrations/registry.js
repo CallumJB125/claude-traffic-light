@@ -511,15 +511,19 @@ export function createIntegrations({
   // ── OAuth / app-install connect ─────────────────────────────────────────
   // `state` = payload.HMAC(hub secret): the admin, their team, the provider,
   // 10 minutes, single use, and the hash of a bind nonce that must come back
-  // as the HttpOnly cookie board_int_<provider>. The binding is to the
-  // browser that consents: a victim who consents in a browser without that
-  // cookie connects nothing (so nobody can send the link to someone else and
-  // collect their workspace). The desktop app sets the cookie in its connect
-  // window from the window name the web page gives it (D42).
+  // as the HttpOnly bind cookie (bindCookie). The binding is to the browser
+  // that consents: a victim who consents in a browser without that cookie
+  // connects nothing (so nobody can send the link to someone else and collect
+  // their workspace). The desktop app sets the cookie in its connect window
+  // from the window name the web page gives it (D42).
 
   const mac = (payload) => createHmac('sha256', hub.secret).update(`integration-state|${payload}`).digest();
   const redirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/callback`;
-  const bindCookieName = (provider) => `board_int_${provider}`;
+  // https: a __Host- cookie (Secure, Path=/, no Domain), which neither plain
+  // http nor a sibling host can set, so nobody can plant their own bind.
+  const bindCookie = (provider, publicUrl) => (String(publicUrl).startsWith('https:')
+    ? { name: `__Host-board_int_${provider}`, path: '/', secure: true }
+    : { name: `board_int_${provider}`, path: '/integrations/', secure: false });
 
   function oauthStart({ member, provider, publicUrl }) {
     const conn = connectors.get(provider);
@@ -533,7 +537,7 @@ export function createIntegrations({
     return {
       url: conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, provider), config: {} }),
       bind,
-      cookie: { name: bindCookieName(provider), value: bind, max_age_s: STATE_TTL_MS / 1000 },
+      cookie: { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 },
     };
   }
 
@@ -660,7 +664,7 @@ export function createIntegrations({
     sweepDedupe,
     oauthStart,
     oauthCallback,
-    bindCookieName,
+    bindCookie,
     ctxFor: (id) => { const c = row(id); return c ? ctxFor(c) : null; },
   };
 }

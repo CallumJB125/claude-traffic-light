@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, sign as rsaSign, randomBytes, randomUUID } from 'node:crypto';
 import { Api } from '../api.js';
 import * as busModule from '../bus.js';
 import { createIntegrations } from '../integrations/registry.js';
@@ -281,4 +281,65 @@ test('L-6: the webhook failure bucket keys an IPv6 client on its /64', () => {
   assert.notEqual(key('203.0.113.7'), key('203.0.113.8'));
   assert.equal(key('::ffff:203.0.113.7'), '203.0.113.7');
   assert.equal(key('not-an-ip'), 'not-an-ip');
+});
+
+// ── M-D / L-3 ─────────────────────────────────────────────────────────────
+
+const oauthProbe = defineConnector({
+  id: 'oprobe', name: 'OAuth probe', scopes: ['read'], secrets: ['access_token'], hosts: ['oprobe.example'],
+  connect: {
+    kind: 'oauth',
+    authorizeUrl: ({ state }) => `https://oprobe.example/authorize?state=${encodeURIComponent(state)}`,
+    exchange: async () => ({ external_id: 'ws-1', display_name: 'Probe workspace', scopes: ['read'], secrets: { access_token: 't' } }),
+  },
+});
+
+async function httpsHub() {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' };
+  const b = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (email) => {
+    const head = b({ alg: 'RS256', kid: 'k1', typ: 'JWT' });
+    const body = b({ iss: 'https://acme.cloudflareaccess.com', aud: ['aud-1'], exp: Math.floor(Date.now() / 1000) + 600, email });
+    return `${head}.${body}.${rsaSign('RSA-SHA256', Buffer.from(`${head}.${body}`), privateKey).toString('base64url')}`;
+  };
+  const h = await hubWith({ config: { auth: 'access', accessTeam: 'acme', accessAud: 'aud-1', publicUrl: 'https://hub.example' }, fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ keys: [jwk] }) }) });
+  return { h, as: (email) => ({ 'cf-access-jwt-assertion': jwt(email) }) };
+}
+
+test('L-3: on an https hub the bind cookie is __Host-board_int_<provider>, Path=/, Secure; the callback reads only that name', async () => {
+  const { h, as } = await httpsHub();
+  try {
+    const reg = h.app.integrations;
+    reg.register(oauthProbe);
+    const start = await h.api(null, 'POST', '/api/integrations/oprobe/start', { request_id: randomUUID() }, as('alice@dev.local'));
+    assert.equal(start.status, 200, start.text);
+    const cookie = start.headers.get('set-cookie');
+    assert.match(cookie, /^__Host-board_int_oprobe=[A-Za-z0-9_-]+; HttpOnly; SameSite=Lax; Path=\/; Max-Age=600; Secure$/);
+    assert.equal(cookie.split(';')[0].split('=')[1], start.body.bind);
+    const state = new URL(start.body.url).searchParams.get('state');
+    const cb = (c) => fetch(`${h.base}/integrations/oprobe/callback?${new URLSearchParams({ state, code: 'x' })}`, { headers: { cookie: c } });
+    const plain = await cb(`board_int_oprobe=${start.body.bind}`);
+    assert.equal(plain.status, 400, 'the plain name (settable from http or a sibling host) is not honoured on https');
+    const ok = await cb(`__Host-board_int_oprobe=${start.body.bind}`);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get('set-cookie'), '__Host-board_int_oprobe=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure');
+    assert.equal(reg.list(h.ids.org).length, 1);
+  } finally { await h.close(); }
+});
+
+test('L-3: an http (dev) hub keeps board_int_<provider> on Path=/integrations/ without Secure', async () => {
+  const h = await hubWith();
+  try {
+    h.app.integrations.register(oauthProbe);
+    const alice = await h.login('alice');
+    const start = await h.api(alice, 'POST', '/api/integrations/oprobe/start', { request_id: randomUUID() });
+    assert.match(start.headers.get('set-cookie'), /^board_int_oprobe=[A-Za-z0-9_-]+; HttpOnly; SameSite=Lax; Path=\/integrations\/; Max-Age=600$/);
+    const state = new URL(start.body.url).searchParams.get('state');
+    const cb = (c) => fetch(`${h.base}/integrations/oprobe/callback?${new URLSearchParams({ state, code: 'x' })}`, { headers: { cookie: c } });
+    assert.equal((await cb(`__Host-board_int_oprobe=${start.body.bind}`)).status, 400);
+    const ok = await cb(`board_int_oprobe=${start.body.bind}`);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get('set-cookie'), 'board_int_oprobe=; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=0');
+  } finally { await h.close(); }
 });

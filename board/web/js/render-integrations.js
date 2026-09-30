@@ -112,13 +112,23 @@ function availableCard(c, m) {
 }
 
 /**
- * The name the OAuth window is opened with (D42). The desktop app's connect
- * window is its own session and never saw the hub's bind cookie: the app
- * parses this name and sets board_int_<provider>=<bind> there before loading.
+ * The name the OAuth window is opened with in the desktop shell (D42). The
+ * app's connect window is its own session and never saw the hub's bind
+ * cookie: the app reads this name at window.open, renames the window at once
+ * (so the provider's page never sees it) and sets the bind cookie there.
  */
 export function connectWindowName(provider, bind) {
   if (!/^[a-z0-9-]{2,32}$/.test(provider) || !/^[A-Za-z0-9_-]{1,64}$/.test(bind)) throw new Error('bad connect window name');
   return `plexiform-connect|${provider}|${bind}`;
+}
+
+/**
+ * window.open target: the bind travels in the name only inside the desktop
+ * shell (its user agent carries `Plexiform/`). A plain browser tab already has
+ * the cookie from /start, and a name there would be readable by the provider's page.
+ */
+export function connectWindowTarget(provider, bind, userAgent) {
+  return String(userAgent ?? '').includes('Plexiform/') ? connectWindowName(provider, bind) : '_blank';
 }
 
 export function integrationsScreen(model) {

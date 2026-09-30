@@ -9,7 +9,7 @@ import { boardScreen, loadingScreen } from './render-board.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
-import { integrationsScreen, connectWindowName } from './render-integrations.js';
+import { integrationsScreen, connectWindowTarget } from './render-integrations.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
@@ -107,9 +107,7 @@ async function connectIntegration(provider, kind) {
   if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
   const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
   if (!res?.url || !res.bind) return;
-  // A browser tab already has the bind cookie; the desktop app reads the
-  // bind from this name and sets the cookie in its own connect window.
-  window.open(res.url, connectWindowName(provider, res.bind), 'noopener');
+  window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
   update();
 }
 

@@ -32,8 +32,10 @@ members only through a verified link (`external_identities`) or a rule approved 
 **Connections** are per team: two teams may connect the same external workspace, each with
 its own secrets and webhook URL (whether the provider allows a second install is up to
 the provider). OAuth `state` is bound to the browser that consents: the callback refuses
-unless the `board_int_<provider>` cookie set by `POST …/start` comes back (the desktop app
-sets it in its connect window from the window name, D42).
+unless the bind cookie set by `POST …/start` comes back: `__Host-board_int_<provider>` (`Path=/`,
+`Secure`) on an https hub, `board_int_<provider>` (`Path=/integrations/`) on an http dev/local hub.
+Inside the desktop shell only, the web passes the bind in the connect window's name and the app
+sets the cookie in its connect window; a browser tab gets `_blank` and uses the cookie it has (D42).
 
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,

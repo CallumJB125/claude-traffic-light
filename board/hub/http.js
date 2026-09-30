@@ -195,10 +195,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // session) gets `bind` through the window name and sets it itself.
     route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
       api.requireAdmin(member);
-      const base = publicBase(req);
-      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: base });
-      const secure = base.startsWith('https:') ? '; Secure' : '';
-      res.setHeader('set-cookie', `${out.cookie.name}=${out.cookie.value}; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=${out.cookie.max_age_s}${secure}`);
+      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+      const { name, value, path, secure, max_age_s } = out.cookie;
+      res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
       return { url: out.url, bind: out.bind };
     });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
@@ -264,10 +263,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
     if (cb) {
       try {
+        const base = publicBase(req);
+        // Only the variant this hub sets: on https the plain name is ignored.
+        const ck = integrations.bindCookie(cb[1], base);
         let bind = null;
-        try { bind = parseCookies(req.headers.cookie)[integrations.bindCookieName(cb[1])] ?? null; } catch { bind = null; }
-        const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: publicBase(req), bindCookie: bind });
-        const clear = bind != null ? { 'set-cookie': `${integrations.bindCookieName(cb[1])}=; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=0` } : {};
+        try { bind = parseCookies(req.headers.cookie)[ck.name] ?? null; } catch { bind = null; }
+        const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: base, bindCookie: bind });
+        const clear = bind != null ? { 'set-cookie': `${ck.name}=; HttpOnly; SameSite=Lax; Path=${ck.path}; Max-Age=0${ck.secure ? '; Secure' : ''}` } : {};
         if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
         return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear);
       } catch (e) {
