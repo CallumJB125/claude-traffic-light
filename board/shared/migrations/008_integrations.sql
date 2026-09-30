@@ -37,7 +37,9 @@ CREATE TRIGGER journal_no_delete BEFORE DELETE ON journal BEGIN SELECT RAISE(ABO
 -- delivered to an agent). Same rebuild for the widened CHECK; rowids are kept
 -- (delivery orders by created_at, rowid). reply_to names comments_new so the
 -- DROP below never sees a child row pointing at the old table; RENAME
--- rewrites it to comments.
+-- rewrites it to comments. A reply_to naming no comment (possible in a DB
+-- written with foreign keys off) becomes NULL: it would abort the copy, and
+-- with it the boot.
 CREATE TABLE comments_new (
   id TEXT PRIMARY KEY,
   card_id TEXT NOT NULL REFERENCES cards,
@@ -57,7 +59,9 @@ CREATE TABLE comments_new (
   CHECK (author_member_id IS NOT NULL OR author_run_id IS NOT NULL)
 );
 INSERT INTO comments_new (rowid, id, card_id, author_member_id, author_run_id, source, trusted, body, for_agent, reply_to, delivered_at, delivered_run_id, created_at, anchor_kind, anchor, plan_step_id)
-  SELECT rowid, id, card_id, author_member_id, author_run_id, source, trusted, body, for_agent, reply_to, delivered_at, delivered_run_id, created_at, anchor_kind, anchor, plan_step_id FROM comments;
+  SELECT rowid, id, card_id, author_member_id, author_run_id, source, trusted, body, for_agent,
+    CASE WHEN reply_to IN (SELECT id FROM comments) THEN reply_to END,
+    delivered_at, delivered_run_id, created_at, anchor_kind, anchor, plan_step_id FROM comments;
 DROP TABLE comments;
 ALTER TABLE comments_new RENAME TO comments;
 

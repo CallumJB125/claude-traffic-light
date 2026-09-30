@@ -8,12 +8,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { generateKeyPairSync, sign as rsaSign, randomBytes, randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { Api } from '../api.js';
 import * as busModule from '../bus.js';
 import { createIntegrations } from '../integrations/registry.js';
 import { defineConnector } from '../integrations/connector.js';
 import fake, { sign } from '../integrations/fake/index.js';
 import * as ratelimit from '../ratelimit.js';
+import { migrate, loadMigrations } from '../../shared/migrate.js';
 import { startHub } from './helpers.js';
 
 const { createBus } = busModule;
@@ -368,4 +370,29 @@ test('L-1/L-2: a card an integration creates has no budget and carries via:<prov
     assert.deepEqual(mine.body.card.labels, []);
     assert.equal(h.db.get('SELECT budget_cents FROM cards WHERE id = ?', mine.body.card.id).budget_cents, 500);
   } finally { await h.close(); }
+});
+
+// ── L-4 ───────────────────────────────────────────────────────────────────
+
+test('L-4: migration 008 nulls a reply_to that names no comment instead of aborting the boot', () => {
+  const all = loadMigrations();
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: all.filter((m) => m.version <= 7) });
+  const t = new Date().toISOString();
+  db.exec(`INSERT INTO orgs VALUES ('o', 'O', '${t}');
+    INSERT INTO members (id, org_id, github_id, github_login, display_name, role, created_at) VALUES ('m', 'o', -1, 'a', 'A', 'owner', '${t}');
+    INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('b', 'o', 'B', 'B');
+    INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at, state_since) VALUES ('c', 'b', 'B-1', 'T', 'm', '${t}', '${t}', '${t}');
+    INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1', 'c', 'm', 'web', 1, 'first', '${t}');
+    INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, reply_to, created_at) VALUES ('k2', 'c', 'm', 'web', 1, 'reply', 'k1', '${t}');`);
+  // A dangling reference, as a DB written with foreign keys off could hold.
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec(`INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, reply_to, created_at) VALUES ('k3', 'c', 'm', 'web', 1, 'orphan', 'gone', '${t}')`);
+  db.exec('PRAGMA foreign_keys = ON');
+  migrate(db, { migrations: all });
+  assert.deepEqual(db.prepare('SELECT id, reply_to FROM comments ORDER BY rowid').all().map((x) => ({ ...x })), [
+    { id: 'k1', reply_to: null }, { id: 'k2', reply_to: 'k1' }, { id: 'k3', reply_to: null },
+  ]);
+  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+  db.close();
 });
