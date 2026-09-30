@@ -10,6 +10,7 @@
   // instead of easing on a fixed curve, and a new target mid-flight bends the
   // path rather than restarting it. One rAF loop runs only while something is
   // still moving. With reduced motion a spring jumps straight to its target.
+  document.documentElement.classList.add('js');
   const active = new Set();
   let raf = 0;
   let last = 0;
@@ -17,7 +18,7 @@
   function tick(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    for (const s of [...active]) s.step(dt);
+    for (const s of [...active]) { try { s.step(dt); } catch (e) { active.delete(s); console.error(e); } }
     raf = active.size ? requestAnimationFrame(tick) : 0;
   }
   function spring(initial, { response = 0.5, damping = 0.8, precision = 0.0005, onUpdate = () => {} } = {}) {

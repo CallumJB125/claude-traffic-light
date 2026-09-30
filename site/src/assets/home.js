@@ -17,7 +17,9 @@
   document.addEventListener('visibilitychange', () => document.documentElement.classList.toggle('tab-hidden', document.hidden));
 
   const setSprite = (stack, state) => { for (const s of stack.querySelectorAll('.sprite[data-state]')) s.classList.toggle('is-on', s.dataset.state === state); };
-  const burst = (el) => { if (!el || reduce) return; el.classList.remove('play'); void el.offsetWidth; el.classList.add('play'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('play'), 1450); };
+  // a finished one-shot animation is no longer listed by getAnimations(), so restart by name
+  const restart = (el) => { const imgs = el.querySelectorAll('.burst img, .hit img'); imgs.forEach((i) => { i.style.animation = 'none'; }); void el.offsetWidth; imgs.forEach((i) => { i.style.animation = ''; }); };
+  const burst = (el) => { if (!el || reduce) return; el.classList.add('play'); restart(el); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('play'), 1450); };
   const setFrame = (root, name) => { for (const l of root.querySelectorAll('.shot-layer')) l.classList.toggle('is-on', (l.dataset.frame || 'board') === name); };
 
   // where the card and its button sit in each captured frame (measured when captured)
@@ -125,7 +127,9 @@
   hero$.look('off');
   // tilt + parallax: the window leans toward the cursor and drifts with scroll; the widget floats the other way (depth)
   const t = { ry: 0, rx: 0, wx: 0, wy: 0, sy: 0 };
-  const paint = () => {
+  let painting = false;
+  const paint = () => { if (painting) return; painting = true; requestAnimationFrame(() => { painting = false; paintNow(); }); };
+  const paintNow = () => {
     heroFrame.style.transform = `translate3d(0, ${t.sy}px, 0) rotateY(${t.ry}deg) rotateX(${t.rx}deg)`;
     widget.style.transform = `translate3d(${t.wx}px, ${t.wy + t.sy * 1.7}px, 0)`;
   };
@@ -137,8 +141,10 @@
     const sy = sp(0, { response: 0.5, damping: 1 }, (v) => { t.sy = v; paint(); });
     ry.jump(-5); rx.jump(2);
     const stage = $('hero-stage');
+    let sr = stage.getBoundingClientRect(); let sTop = scrollY;
+    new ResizeObserver(() => { sr = stage.getBoundingClientRect(); sTop = scrollY; }).observe(stage);
     if (fine) {
-      hero.addEventListener('pointermove', (e) => { const r = stage.getBoundingClientRect(); const u = clamp((e.clientX - r.left) / r.width, -0.2, 1.2) - 0.5; const v = clamp((e.clientY - r.top) / r.height, -0.2, 1.2) - 0.5; ry.to(-5 + u * 7); rx.to(2 - v * 5); wx.to(-u * 22); wy.to(-v * 16); });
+      hero.addEventListener('pointermove', (e) => { const r = { left: sr.left, top: sr.top + sTop - scrollY, width: sr.width, height: sr.height }; const u = clamp((e.clientX - r.left) / r.width, -0.2, 1.2) - 0.5; const v = clamp((e.clientY - r.top) / r.height, -0.2, 1.2) - 0.5; ry.to(-5 + u * 7); rx.to(2 - v * 5); wx.to(-u * 22); wy.to(-v * 16); });
       hero.addEventListener('pointerleave', () => { ry.to(-5); rx.to(2); wx.to(0); wy.to(0); });
     }
     let q = false;
@@ -173,7 +179,7 @@
     [5400, () => { setFrame(heroShots, 'blocked'); hero$.look('approve'); ringAt('story-03-blocked', 'action', true); aimAt('story-03-blocked', 'action'); }],
     [7300, () => tap()],
     [7500, () => { ringAt('', '', false); setFrame(heroShots, 'queued'); hero$.look('working'); aimAt('story-01-queued', 'card', 60, 40); }],
-    [9800, () => { setFrame(heroShots, 'review'); hero$.look('ready'); burst($('hero-burst')); aimAt('story-06-in_review', 'card', 40, 30); }],
+    [9800, () => { setFrame(heroShots, 'review'); hero$.look('ready'); burst(sprStack.querySelector('.burst')); aimAt('story-06-in_review', 'card', 40, 30); }],
     [12400, () => { setFrame(heroShots, 'done'); hero$.look('ready'); aimAt('story-07-done', 'card', 40, 30); }],
     [14400, () => { cur.o = 0; putPtr(); }],
   ];
@@ -193,7 +199,8 @@
   // isn't room to pin, so it becomes the same story as plain content with the last frame showing.
   const story = $('story');
   if (story) {
-    const STATIC = reduce || matchMedia('(max-width: 860px), (max-height: 720px)').matches;
+    const mq = matchMedia('(max-width: 860px), (max-height: 720px)');
+    let STATIC = reduce || mq.matches;
     const steps = [...$('story-steps').children];
     const pin = story.querySelector('.story-pin');
     const shots = $('story-shots');
@@ -206,6 +213,8 @@
     const FRAME_KEY = ['board-dark', 'story-01-queued', 'story-03-blocked', 'story-06-in_review'];
     const SPR = ['off', 'working', 'approve', 'ready'];
     let last = -1;
+    let K = 1;
+    const measureK = () => { K = shots.clientWidth / 1440; };
     const render = (p) => {
       const step = STATIC ? 3 : p < 0.2 ? 0 : p < 0.47 ? 1 : p < 0.74 ? 2 : 3;
       if (step !== last) {
@@ -220,7 +229,7 @@
       // the pointer walks to the button through step 0, the ring pulses, then both let go
       const r = where(FRAME_KEY[step], step === 0 ? 'give' : 'action') || where(FRAME_KEY[step], 'card');
       if (r && RECTS) {
-        const k = shots.clientWidth / 1440;
+        const k = K;
         const walk = step === 0 ? clamp(p / 0.18) : 1;
         const from = { x: (r.x + r.w / 2) * k + 160 * (1 - walk), y: (r.y + r.h / 2) * k + 110 * (1 - walk) };
         ptrEl.style.transform = `translate(${from.x + 10}px, ${from.y + 8}px) scale(${step === 0 && walk >= 1 ? 0.84 : 1})`;
@@ -237,11 +246,19 @@
     const rawP = () => { const r = story.getBoundingClientRect(); return clamp(-r.top / Math.max(1, story.offsetHeight - pin.offsetHeight)); };
     const spr = PX.spring(0, { response: 0.32, damping: 0.92, precision: 0.0002, onUpdate: render });
     rects.then(() => {
-      if (STATIC) { spr.jump(1); return; }
-      spr.jump(rawP());
-      addEventListener('scroll', () => spr.to(rawP()), { passive: true });
+      measureK();
+      new ResizeObserver(measureK).observe(shots);
+      if (STATIC) { spr.jump(1); }
+      else spr.jump(rawP());
+      // only while the story is near, and at most once a frame
+      let near = false; let queued = false;
+      new IntersectionObserver((es) => { near = es[es.length - 1].isIntersecting; if (near && !STATIC) spr.to(rawP()); }, { rootMargin: '100% 0px' }).observe(story);
+      addEventListener('scroll', () => { if (!near || STATIC || queued) return; queued = true; requestAnimationFrame(() => { queued = false; spr.to(rawP()); }); }, { passive: true });
       let width = innerWidth;
-      addEventListener('resize', () => { if (innerWidth === width) return; width = innerWidth; spr.jump(rawP()); });
+      addEventListener('resize', () => { if (innerWidth === width) return; width = innerWidth; if (!STATIC) spr.jump(rawP()); });
+      // crossing the breakpoint (rotating a tablet, resizing a window) swaps the layout: follow it
+      const follow = () => { STATIC = reduce || mq.matches; last = -1; frame.style.transform = ''; widget2.style.transform = ''; ptrEl.style.opacity = '0'; ring.style.opacity = '0'; spr.jump(STATIC ? 1 : rawP()); };
+      mq.addEventListener('change', follow);
     });
   }
 
@@ -256,7 +273,8 @@
       for (const x of lampList.querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
       stage.dataset.lamp = b.dataset.look;
       setSprite(stack, b.dataset.look);
-      if (b.dataset.look === 'ready') burst($('lamp-burst'));
+      stack.setAttribute('aria-label', `The character with the ${b.dataset.look === 'approve' ? 'red' : b.dataset.look === 'ready' ? 'amber' : 'green'} lamp on.`);
+      if (b.dataset.look === 'ready') burst(stack.querySelector('.burst'));
     });
   }
 
@@ -264,9 +282,11 @@
   const tabs = $('board-tabs');
   if (tabs) {
     const shots = $('tabs-shots');
+    shots.tabIndex = 0;
+    shots.querySelectorAll('.shot-layer').forEach((l) => l.setAttribute('aria-hidden', String(!l.classList.contains('is-on'))));
     const pick = (b) => {
       for (const x of tabs.querySelectorAll('.tab')) { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', String(x === b)); x.tabIndex = x === b ? 0 : -1; }
-      for (const l of shots.querySelectorAll('.shot-layer')) l.classList.toggle('is-on', l.dataset.view === b.dataset.view);
+      for (const l of shots.querySelectorAll('.shot-layer')) { const on = l.dataset.view === b.dataset.view; l.classList.toggle('is-on', on); l.setAttribute('aria-hidden', String(!on)); }
       shots.setAttribute('aria-labelledby', b.id);
     };
     tabs.querySelectorAll('.tab').forEach((x, i) => { x.tabIndex = i === 0 ? 0 : -1; });
@@ -312,8 +332,8 @@
   if (gallery) {
     gallery.addEventListener('click', (e) => {
       const b = e.target.closest('.pet');
-      if (!b || reduce) return;
-      b.classList.remove('cheer'); void b.offsetWidth; b.classList.add('cheer');
+      if (!b) return;
+      b.classList.add('cheer'); restart(b);
       clearTimeout(b._t); b._t = setTimeout(() => b.classList.remove('cheer'), 1650);
     });
   }
