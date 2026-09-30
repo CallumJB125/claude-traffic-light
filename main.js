@@ -2088,6 +2088,8 @@ function commitConfig(partial) {
   return next;
 }
 
+ipcMain.handle('get-privacy', () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
