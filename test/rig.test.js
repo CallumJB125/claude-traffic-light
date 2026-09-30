@@ -107,11 +107,21 @@ test('rig: lamp rhythm — green breathes, amber holds, red blinks; a rule colou
 });
 
 test('rig: the blink stays under three flashes a second and gives way to a ring under reduced motion', () => {
-  const blink = /\.rig \.lamp\.on\.blink \{ animation: rig-blink ([\d.]+)s steps\(1\) infinite; \}/.exec(RIG_CSS);
+  const blink = /\.rig \.lamp\.on\.blink \{ animation: rig-lamp-blink ([\d.]+)s steps\(1\) infinite; \}/.exec(RIG_CSS);
   assert.ok(blink, 'blink rule');
   assert.ok(Number(blink[1]) >= 1 / 3, 'WCAG 2.3.1: no more than three flashes per second');
   assert.match(RIG_CSS, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rig \.lamp\.on\.blink \{ stroke: var\(--lamp-ring\)/);
   assert.match(RIG_CSS, /prefers-reduced-motion: reduce\) \{[^}]*\.rig \.lamp,/, 'reduced motion stops lamp animations');
+});
+
+// A later @keyframes of the same name silently replaces the earlier one for
+// every rule that uses it (the red lamp once blinked fully dark on the eyes'
+// blink frames).
+test('rig.css: no @keyframes name is defined twice', () => {
+  const names = [...RIG_CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]);
+  assert.ok(names.length > 50, 'keyframes found');
+  const dupes = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+  assert.deepEqual(dupes, []);
 });
 
 test('rig: group lamp effects light every lamp even with no lamp state, and swap cleanly', () => {
