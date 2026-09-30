@@ -431,9 +431,17 @@
 
   // Every shell command and Shortcut a set of rules' clicks would run: what
   // anything imported from someone else must show before it loads.
+  // What clicks in someone else's rules would do outside Buddy: shell
+  // commands and Shortcuts as written, plus the external URLs they open and
+  // the apps they launch on the session's folder.
   function clickCommands(rules) {
-    return [...new Set(rules.flatMap((r) => Object.values(normalizeRule(r).then.clicks))
-      .filter((a) => (a.type === 'shell' || a.type === 'shortcut') && a.arg).map((a) => a.arg))];
+    const shown = (a) => {
+      if (!a.arg) return null;
+      if (a.type === 'shell' || a.type === 'shortcut' || a.type === 'url') return a.arg;
+      if (a.type === 'editor') return `open -a ${a.arg} <session folder>`;
+      return null;
+    };
+    return [...new Set(rules.flatMap((r) => Object.values(normalizeRule(r).then.clicks)).map(shown).filter(Boolean))];
   }
 
   function toolMatches(pattern, tool) {

@@ -2505,7 +2505,7 @@
   $('share-copy').addEventListener('click', async (e) => { e.stopPropagation(); const code = await encodeShare(rules); await navigator.clipboard.writeText(code); $('presets').hidden = true; flash(`Share code copied (${code.length} chars)`); });
   $('share-paste').addEventListener('click', async (e) => { e.stopPropagation(); $('share-form').hidden = false; $('share-code').value = ''; try { const t = await navigator.clipboard.readText(); if (/^ctl1:/.test(t.trim())) $('share-code').value = t.trim(); } catch { /* clipboard not readable */ } $('share-code').focus(); });
   // Rules from someone else (a share code or a file) can bind clicks to shell
-  // commands and Shortcuts, so, like a whole-setup import, they are shown —
+  // commands, Shortcuts, URLs and apps, so, like a whole-setup import, they are shown —
   // every command included — and only load on an explicit confirm.
   let offered = null;
   function offerRules(incoming, done) {
