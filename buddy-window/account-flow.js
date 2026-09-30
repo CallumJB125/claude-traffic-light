@@ -6,7 +6,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE } = require('./accounts');
+const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE, SLUG_MISMATCH } = require('./accounts');
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
 const { startProviderSignIn, PROVIDERS, PROVIDER_NAME } = require('./oauth');
 const BRAND = require('./brand');
@@ -20,7 +20,8 @@ const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
   oauth: ['string'], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
-  renameTeam: ['string', 'string'], deleteTeam: ['string', 'string'], addBoard: ['string', 'string'],
+  renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
+  teamDeleteStart: ['string', 'string'], teamDeleteCode: ['string', 'string'], teamDeleteResend: ['string'], teamDeleteOAuth: ['string', 'string'], deleteTeam: ['string'],
   joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
   deleteConfirm: ['string'], cancelDelete: [], deleteOAuth: ['string'], cancelDeleteOAuth: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
 };
@@ -28,7 +29,6 @@ const ACCT_ARGS = {
 const TEAM_CHANGED = { ok: false, error: 'The team changed while this page was open. Look again, then try once more.' };
 // Runner states that mean the hub stopped accepting this Mac's token.
 const TOKEN_TROUBLE = new Set(['unauthenticated', 'revoked']);
-const noTeamDelete = (host) => `Deleting a team needs a code sent by email, and ${host} can’t send email. Ask whoever runs ${host} to delete it.`;
 
 /** Providers that can confirm a deletion: those the hub offers, cut to the ones the account says it signs in with. */
 function deleteProviders(methods, account) {
@@ -59,10 +59,12 @@ async function clearHubSessions(origin, fromPartition) {
 function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
   const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
   let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
-  // Deleting an account on a hub with no mailer: the Google/GitHub check. `confirmed` is held only
-  // here, in memory, and only the run that is still current may set it.
-  let delStep = null; // {hub, providers, confirmed: {provider, flowId, until} | null}
-  let delRun = null; // {hub, provider, run, done}: the check waiting on the browser
+  // The check before a deletion: for the account on a hub with no mailer (Google/GitHub), or for one
+  // team (its emailed `delete_team` code, or Google/GitHub without a mailer). `confirmed` is held only
+  // here, in memory, and only the run that is still current may set it. A step made for one team (or
+  // for the account) is never spent on anything else.
+  let delStep = null; // {hub, team: {wsId, teamId, slug, user} | null, via: 'provider'|'email', providers, flowId?, email?, confirmed: {provider?, flowId, until} | null}
+  let delRun = null; // {hub, step, provider, run, done}: the check waiting on the browser
   let pendingInvite = null; // {hub|null, token, previewId?}
   // A hub named by an invite link must be confirmed by the member before any
   // request goes to it; a hub they typed themselves counts as confirmed.
@@ -85,6 +87,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   const prefill = (origin) => (!origin ? '' : origin.startsWith('https://') ? hostOf(origin) : origin);
 
   function show(screen, { notice = null, alert = null } = {}) {
+    if (delStep?.team && screen !== 'team') dropDeleteStep();
     acct.screen = screen;
     acct.notice = notice;
     acct.alert = alert;
@@ -109,31 +112,56 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   }
 
   /** "Confirm it's you with Google/GitHub" before deleting: one at a time; a new one replaces the old. */
-  function beginDeleteCheck(origin, provider) {
+  function beginDeleteCheck(step, provider) {
     cancelDeleteRun();
-    delStep.confirmed = null;
-    const run = startProviderSignIn({ client: clientFor(origin), provider, purpose: 'delete', openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
-    const me = { hub: origin, provider, run };
+    step.confirmed = null;
+    const run = startProviderSignIn({ client: clientFor(step.hub), provider, purpose: 'delete', openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
+    const me = { hub: step.hub, step, provider, run };
+    const screen = step.team ? 'team' : 'account';
     me.done = run.done.then((r) => {
       if (delRun !== me) return r;
       delRun = null;
-      if (r.ok && delStep?.hub === origin) delStep.confirmed = { provider, flowId: r.flowId, until: r.stepupUntil };
-      if (acct.screen === 'account' && !r.cancelled) show('account', r.ok ? { notice: `Confirmed with ${PROVIDER_NAME[provider]}.` } : { alert: r.error });
+      if (r.ok && delStep === step) step.confirmed = { provider, flowId: r.flowId, until: r.stepupUntil };
+      if (acct.screen === screen && !r.cancelled) show(screen, r.ok ? { notice: `Confirmed with ${PROVIDER_NAME[provider]}.` } : { alert: r.error });
       return r;
     });
     delRun = me;
     return me.done;
   }
 
-  /** Where the provider check stands, for the account page; an expired confirmation is dropped here. */
-  function deleteCheckState() {
-    if (!delStep || delStep.hub !== acct.hub) return null;
-    const base = { providers: delStep.providers.map((p) => ({ id: p, name: PROVIDER_NAME[p] })) };
-    if (delRun?.hub === delStep.hub) return { ...base, phase: 'browser', provider: PROVIDER_NAME[delRun.provider] };
-    const c = delStep.confirmed;
-    if (c && now() < c.until) return { ...base, phase: 'confirmed', provider: PROVIDER_NAME[c.provider], secondsLeft: Math.ceil((c.until - now()) / 1000) };
-    if (c) { delStep.confirmed = null; return { ...base, phase: 'choose', expired: true }; }
+  /** Where a check stands; an expired confirmation is dropped here. */
+  function checkState(step) {
+    const base = { providers: step.providers.map((p) => ({ id: p, name: PROVIDER_NAME[p] })) };
+    if (delRun?.step === step) return { ...base, phase: 'browser', provider: PROVIDER_NAME[delRun.provider] };
+    const c = step.confirmed;
+    if (c && now() < c.until) return { ...base, phase: 'confirmed', provider: c.provider ? PROVIDER_NAME[c.provider] : 'the emailed code', secondsLeft: Math.ceil((c.until - now()) / 1000) };
+    if (c) { step.confirmed = null; return { ...base, phase: 'choose', expired: true }; }
     return { ...base, phase: 'choose' };
+  }
+
+  /** The account page's check. */
+  function deleteCheckState() {
+    if (!delStep || delStep.team || delStep.hub !== acct.hub) return null;
+    return checkState(delStep);
+  }
+
+  /** The step for this team as the page should draw it; one for another team, hub or person is dropped. Expiry starts over. */
+  function teamDeleteState(ws) {
+    const st = delStep;
+    if (!st?.team) return null;
+    if (st.hub !== ws.hub || st.team.wsId !== ws.id || st.team.user !== (userOf(ws.hub)?.id ?? null)) { dropDeleteStep(); return null; }
+    const c = checkState(st);
+    if (c.expired) { dropDeleteStep(); return { expired: true }; }
+    if (st.via === 'email') return { via: 'email', email: st.email, phase: c.phase === 'confirmed' ? 'confirmed' : 'code', ...(c.phase === 'confirmed' ? { provider: c.provider, secondsLeft: c.secondsLeft } : {}) };
+    return { via: 'provider', ...c };
+  }
+
+  /** The step an action on the team screen may use: only one made for the team the page rendered. */
+  function teamStepFor(wsId) {
+    const ws = renderedTeam(wsId);
+    if (!ws) return { ws: null, st: null };
+    const d = teamDeleteState(ws);
+    return { ws, st: d && !d.expired ? delStep : null, expired: !!d?.expired };
   }
 
   /** "Continue with Google/GitHub": one at a time; a new one (or leaving the screen) cancels the old. */
@@ -349,11 +377,13 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const [m, t] = await Promise.all([c.listMembers(ws.teamId), c.getTeam(ws.teamId)]);
       const canManage = ['owner', 'admin'].includes(ws.role);
       const inv = canManage ? await c.listInvites(ws.teamId) : { ok: true, invites: [] };
-      // A team's delete check is an emailed code only: without a mailer the page offers no button.
+      // Without a mailer the owner confirms it's them with Google/GitHub instead of an emailed code.
       const noMail = ws.role === 'owner' ? await c.methods().then((mm) => mm.ok && !mm.email) : false;
+      const del = ws.role === 'owner' ? teamDeleteState(ws) : null;
+      if (del?.expired) base.notice = 'That check ran out. Type the name and confirm it’s you again.';
       const meId = userOf(ws.hub)?.id ?? null;
       const members = (m.members ?? []).map((x) => ({ id: String(x.member_id ?? x.id), name: String(x.display_name ?? ''), email: String(x.email ?? ''), role: String(x.role), you: meId != null && String(x.user_id) === String(meId) }));
-      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null, deleteNeedsEmail: noMail ? noTeamDelete(hostOf(ws.hub)) : null }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
+      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null, deleteVia: noMail ? 'provider' : 'email', deleteStep: del?.expired ? null : del }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
     }
     if (screen === 'account') {
       const check = acct.deleting ? deleteCheckState() : null;
@@ -390,7 +420,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       if (!PAGE_SCREENS.has(screen)) return { ok: false };
       cancelOAuth();
       cancelDeleteRun();
-      if (screen === 'hub' || screen === 'email') { acct.deleting = false; delStep = null; }
+      if (screen === 'hub' || screen === 'email') { acct.deleting = false; dropDeleteStep(); }
       if (screen === 'join') {
         if (pendingInvite && !hubTrusted(pendingInvite.hub)) pendingInvite = null;
         if (!pendingInvite) acct.hub = null;
@@ -495,15 +525,85 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       await refreshAccount(ws.hub);
       return { ok: true, notice: 'Team renamed.' };
     },
-    async deleteTeam(wsId, typed) {
+    /** Delete team, step 1: the owner types the slug, then an emailed code (or Google/GitHub without a mailer). */
+    async teamDeleteStart(wsId, typed) {
       const ws = renderedTeam(wsId);
       if (!ws) return TEAM_CHANGED;
-      const m = await clientFor(ws.hub).methods();
-      if (m.ok && !m.email) return { ok: false, error: noTeamDelete(hostOf(ws.hub)) };
-      const r = await clientFor(ws.hub).deleteTeam(ws.teamId, typed);
+      if (ws.role !== 'owner') return { ok: false, error: 'Only an owner can delete the team.' };
+      const c = clientFor(ws.hub);
+      // Checked against the hub's slug, not the page's, before anything is asked of the hub.
+      const t = await c.getTeam(ws.teamId);
+      if (!t.ok) return t;
+      const slug = String(t.team?.slug ?? '');
+      if (!slug || String(typed).trim() !== slug) return { ok: false, error: SLUG_MISMATCH };
+      const m = await c.methods();
+      if (!m.ok) return m;
+      const step = { hub: ws.hub, team: { wsId: ws.id, teamId: ws.teamId, slug, user: userOf(ws.hub)?.id ?? null }, via: m.email ? 'email' : 'provider', providers: [], confirmed: null };
+      if (step.via === 'provider') {
+        const a = await c.me();
+        if (!a.ok) return a;
+        step.providers = deleteProviders(m, a);
+        if (!step.providers.length) return { ok: false, error: `${hostOf(ws.hub)} can’t check it’s you: it has no email, Google or GitHub sign-in. Ask whoever runs it to delete the team.` };
+      } else {
+        const r = await c.startTeamDelete();
+        if (!r.ok) return r;
+        step.flowId = r.flowId;
+        step.email = r.email;
+      }
+      if (!renderedTeam(wsId) || (userOf(ws.hub)?.id ?? null) !== step.team.user) return TEAM_CHANGED;
+      dropDeleteStep();
+      acct.deleting = false;
+      delStep = step;
+      return step.via === 'email' ? { ok: true, email: step.email } : { ok: true, via: 'provider' };
+    },
+    async teamDeleteResend(wsId) {
+      const { ws, st } = teamStepFor(wsId);
+      if (!ws) return TEAM_CHANGED;
+      if (!st || st.via !== 'email') return { ok: false, error: 'Start again: type the team’s name.' };
+      const r = await clientFor(ws.hub).startTeamDelete();
       if (!r.ok) return r;
+      if (delStep !== st) return { ok: false, error: 'Start again: type the team’s name.' };
+      st.flowId = r.flowId;
+      st.email = r.email;
+      st.confirmed = null;
+      return { ok: true, notice: `We sent a new code to ${r.email ?? 'your email'}.` };
+    },
+    async teamDeleteCode(wsId, code) {
+      const { ws, st } = teamStepFor(wsId);
+      if (!ws) return TEAM_CHANGED;
+      if (!st || st.via !== 'email') return { ok: false, error: 'Start again: type the team’s name.' };
+      const flowId = st.flowId;
+      const r = await clientFor(ws.hub).verifyTeamDelete(flowId, code);
+      if (!r.ok) return r;
+      // A code verified for a step that has since been replaced or dropped confirms nothing.
+      if (delStep !== st || st.flowId !== flowId) return { ok: false, error: 'Start again: type the team’s name.' };
+      st.confirmed = { flowId, until: r.stepupUntil };
+      return { ok: true };
+    },
+    async teamDeleteOAuth(wsId, provider) {
+      const { ws, st } = teamStepFor(wsId);
+      if (!ws) return TEAM_CHANGED;
+      if (!st || st.via !== 'provider' || !signedIn(ws.hub)) return { ok: false, error: 'Start again: type the team’s name.' };
+      if (!st.providers.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
+      beginDeleteCheck(st, provider);
+      return { ok: true };
+    },
+    /** Spends the confirmed step on this team only; a failed delete keeps it for another try. */
+    async deleteTeam(wsId) {
+      const { ws, st, expired } = teamStepFor(wsId);
+      if (!ws) return TEAM_CHANGED;
+      if (expired) return { ok: false, stepUp: true, error: 'That check ran out. Type the name and confirm it’s you again.' };
+      const c = st?.confirmed;
+      if (!c || delRun?.step === st) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+      const r = await clientFor(ws.hub).deleteTeam(ws.teamId, { confirmSlug: st.team.slug, flowId: c.flowId });
+      if (!r.ok) {
+        if (r.stepUp && delStep === st) dropDeleteStep();
+        return r;
+      }
+      if (delStep === st) dropDeleteStep();
+      minted.delete(ws.id);
       await refreshAccount(ws.hub);
-      show('team', { notice: `${ws.name} was deleted.` });
+      show('account', { notice: `${ws.name} was deleted.` });
       return { ok: true };
     },
     async addBoard(wsId, name) {
@@ -625,9 +725,9 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     },
     async deleteOAuth(provider) {
       const st = delStep;
-      if (!acct.deleting || !st || st.hub !== acct.hub || !signedIn(st.hub)) return { ok: false, error: 'Start again: choose Delete account.' };
+      if (!acct.deleting || !st || st.team || st.hub !== acct.hub || !signedIn(st.hub)) return { ok: false, error: 'Start again: choose Delete account.' };
       if (!st.providers.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
-      beginDeleteCheck(st.hub, provider);
+      beginDeleteCheck(st, provider);
       return { ok: true };
     },
     async cancelDeleteOAuth() { cancelDeleteRun(); return { ok: true }; },
@@ -635,7 +735,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const origin = acct.hub;
       if (!origin || !acct.deleting) return { ok: false, error: 'Ask for a new code first.' };
       let r;
-      if (delStep?.hub === origin) {
+      if (delStep && !delStep.team && delStep.hub === origin) {
         const c = delStep.confirmed;
         if (!c || delRun) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
         if (now() >= c.until) { delStep.confirmed = null; return { ok: false, stepUp: true, error: 'That check ran out. Confirm it’s you again.' }; }
@@ -685,8 +785,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     refreshAccount,
     /** Tests and the dev walk: the provider sign-in in progress (its result), or null. */
     pendingOAuth: () => oauthRun?.done ?? null,
-    /** Tests: the account-deletion check in progress (its result), or null. */
+    /** Tests: the account- or team-deletion check in progress (its result), or null. */
     pendingDeleteCheck: () => delRun?.done ?? null,
+    /** The window left the account pages (a board or another page): a team's delete check goes. */
+    leftAccountPages() { if (delStep?.team) dropDeleteStep(); },
     /** The sidebar's workspace-menu actions. */
     startFlow(which) {
       cancelOAuth();

@@ -566,9 +566,11 @@ test('P2: team settings: rename, add a board, resend with the resend route, dele
   const re = await h.A.resendInvite(ws.id, s.invites[0].id);
   assert.equal(re.ok, true);
   assert.ok(h.requests.some((u) => u.pathname === `/api/teams/${ws.teamId}/invites/${s.invites[0].id}/resend`));
-  assert.equal((await h.A.deleteTeam(ws.id, 'Bondly')).error, 'That doesn’t match the team’s name. Type it exactly as shown.');
-  assert.equal((await h.A.deleteTeam(ws.id, 'bondly-team')).ok, true);
-  assert.equal(h.flow.acct.screen, 'team');
+  assert.equal((await h.A.teamDeleteStart(ws.id, 'Bondly')).error, 'That doesn’t match the team’s name. Type it exactly as shown.');
+  assert.equal((await h.A.teamDeleteStart(ws.id, 'bondly-team')).ok, true);
+  assert.equal((await h.A.teamDeleteCode(ws.id, h.hub.lastCode('me@example.com'))).ok, true);
+  assert.equal((await h.A.deleteTeam(ws.id)).ok, true);
+  assert.equal(h.flow.acct.screen, 'account');
   assert.match((await h.A.state()).notice ?? '', /was deleted/);
   assert.equal(h.store.list().some((w) => w.id === ws.id), false, 'gone from the switcher');
 }));
@@ -1125,7 +1127,7 @@ test('delete via provider: a check replaced by a newer one while its exchange is
   assert.equal((await second).cancelled, true);
 }));
 
-test('delete via provider: another account at the provider is refused (WRONG_ACCOUNT) in plain words; unlisted providers aren’t offered', async () => harness(async (h) => {
+test('delete via provider: another account at the provider is refused (a generic INVALID_TOKEN) in plain words; unlisted providers aren’t offered', async () => harness(async (h) => {
   await providerAccount(h);
   await h.A.go('account');
   await h.A.deleteStart(h.host);
@@ -1134,8 +1136,8 @@ test('delete via provider: another account at the provider is refused (WRONG_ACC
   h.hub.setOAuthIdentity('google', { email: 'someone-else@example.com' });
   await h.A.deleteOAuth('google');
   const r = await h.flow.pendingDeleteCheck();
-  assert.equal(r.code, 'WRONG_ACCOUNT');
-  assert.equal(r.error, 'That isn’t the Google account you sign in with. Use that one.');
+  assert.equal(r.code, 'INVALID_TOKEN');
+  assert.equal(r.error, 'That didn’t confirm it’s you. Use the Google account you sign in with, and try again.');
   const s = await h.A.state();
   assert.equal(s.alert, r.error);
   assert.equal(s.deleteCheck.phase, 'choose');
@@ -1149,7 +1151,7 @@ test('delete via provider: another account at the provider is refused (WRONG_ACC
   const st = await c.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' }, {}, { purpose: 'delete' });
   const code = new URL((await fetch(st.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
   const x = await c.exchangeOAuth({ flowId: st.flow_id, code, state: st.state, verifier: p.verifier, provider: 'github', purpose: 'delete' });
-  assert.deepEqual([x.code, x.error], ['WRONG_ACCOUNT', 'That isn’t the GitHub account you sign in with. Use that one.']);
+  assert.deepEqual([x.status, x.code, x.error], [400, 'INVALID_TOKEN', 'That didn’t confirm it’s you. Use the GitHub account you sign in with, and try again.']);
   // An account the hub lists no identities for is offered every provider the hub has.
   const { oauthOutcome } = require('../buddy-window/accounts');
   assert.equal(oauthOutcome({ ok: false, code: 'STEP_UP_REQUIRED' }, 'google', 'h').error, 'That check timed out. Confirm it’s you again.');
@@ -1177,7 +1179,7 @@ test('delete via provider: single use: the exchange can’t be replayed and a sp
   const code = new URL((await fetch(st.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
   const args = { flowId: st.flow_id, code, state: st.state, verifier: p.verifier, provider: 'google', purpose: 'delete' };
   assert.equal((await c.exchangeOAuth(args)).ok, true);
-  assert.equal((await c.exchangeOAuth(args)).error, 'That sign-in didn’t work. Try again.', 'replay');
+  assert.equal((await c.exchangeOAuth(args)).code, 'INVALID_TOKEN', 'replay');
   // A sign-in flow is not a delete check.
   const q = pkcePair();
   const si = await c.startOAuth('google', { challenge: q.challenge, redirectUri: 'http://127.0.0.1:9/callback' });
@@ -1206,24 +1208,6 @@ test('delete with email:true is the emailed code as before: no provider check, n
   assert.deepEqual(h.hub.oauthStarts(), []);
   assert.equal((await h.A.deleteConfirm(h.hub.lastCode('me@example.com'))).ok, true);
   assert.equal(h.vault(h.origin).load(), null);
-}));
-
-test('team deletion with email:false: a plain sentence, no button, no request; with email:true the slug form as before', async () => harness(async (h) => {
-  await providerAccount(h);
-  await h.A.createTeam('Bondly');
-  const ws = h.store.active();
-  let s = await h.A.state();
-  const msg = `Deleting a team needs a code sent by email, and ${h.host} can’t send email. Ask whoever runs ${h.host} to delete it.`;
-  assert.equal(s.team.deleteNeedsEmail, msg);
-  assert.equal((await h.A.deleteTeam(ws.id, s.team.slug)).error, msg);
-  assert.ok(!h.requests.some((u) => u.pathname === `/api/teams/${ws.teamId}` && h.bodies.some((b) => b.includes('confirm_slug'))), 'no delete sent');
-  assert.ok(!h.hub.oauthStarts().some((b) => b.purpose === 'delete'), 'no provider path for teams');
-  assert.ok(h.store.list().some((w) => w.id === ws.id));
-  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
-  assert.match(page, /s\.isOwner && s\.team\.deleteNeedsEmail\) \{\n\s+out\.push\(el\('section', \{ class: 'acct-section' \}, el\('h2', \{\}, 'Delete team'\), el\('p', \{ class: 'acct-hint' \}, s\.team\.deleteNeedsEmail\)\)\);\n\s+\} else if/, 'text only, and no delete form in that branch');
-  h.hub.setMethods({ google: true, github: true, email: true });
-  s = await h.A.state();
-  assert.equal(s.team.deleteNeedsEmail, null);
 }));
 
 test('a step-up exchange never stores a token, even when a hub sends one; its expiry is capped at 5 minutes', async () => {
@@ -1263,3 +1247,299 @@ test('the delete check’s page: plain text, keyboard buttons, status announced,
   assert.match(preload, /cancelDeleteOAuth: \(\) => call\('cancelDeleteOAuth'\)/);
   assert.deepEqual([ACCT_ARGS.deleteOAuth, ACCT_ARGS.cancelDeleteOAuth], [['string'], []]);
 });
+
+// ── deleting a team: typed slug, then a step-up bound to that team ─────────
+
+const teamDeletes = (h) => h.bodies.map((b) => { try { return JSON.parse(b); } catch { return null; } }).filter((j) => j && 'confirm_slug' in j);
+const hubCall = async (h, method, p, body, token = h.vault(h.origin).load().token) => {
+  const res = await fetch(`${h.origin}${p}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+  return { status: res.status, body: await res.json() };
+};
+// A verified emailed step-up of either purpose, straight against the hub.
+const stepUp = async (h, purpose, email = 'me@example.com') => {
+  const flowId = (await hubCall(h, 'POST', '/api/auth/email/start', { purpose })).body.flow_id;
+  assert.equal((await hubCall(h, 'POST', '/api/auth/email/verify', { flow_id: flowId, code: h.hub.lastCode(email) })).status, 200);
+  return flowId;
+};
+const confirmTeamByEmail = async (h, ws, slug) => {
+  assert.equal((await h.A.teamDeleteStart(ws.id, slug)).ok, true);
+  assert.equal((await h.A.teamDeleteCode(ws.id, h.hub.lastCode('me@example.com'))).ok, true);
+  return JSON.parse(h.bodies.at(-1)).flow_id;
+};
+
+test('delete team (email): slug, code, a countdown, delete with that flow; only that team goes, the session and vault untouched', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Other');
+  const other = h.store.active();
+  await h.A.createTeam('Bondly Team');
+  const ws = h.store.active();
+  const before = JSON.stringify(h.vault(h.origin).load());
+  const live = h.hub.liveTokens();
+  let s = await h.A.state();
+  assert.deepEqual([s.team.deleteVia, s.team.deleteStep], ['email', null]);
+  assert.deepEqual(await h.A.teamDeleteStart(ws.id, 'bondly-team'), { ok: true, email: 'me@example.com' });
+  assert.deepEqual(h.hub.starts().at(-1), { purpose: 'delete_team', client: 'buddy_desktop' }, 'no device named: no token comes of it');
+  s = await h.A.state();
+  assert.deepEqual(s.team.deleteStep, { via: 'email', email: 'me@example.com', phase: 'code' });
+  assert.equal((await h.A.teamDeleteCode(ws.id, h.hub.lastCode('me@example.com'))).ok, true);
+  const verify = JSON.parse(h.bodies.at(-1));
+  assert.deepEqual(Object.keys(verify).sort(), ['code', 'flow_id']);
+  s = await h.A.state();
+  assert.equal(s.team.deleteStep.phase, 'confirmed');
+  assert.ok(s.team.deleteStep.secondsLeft > 290 && s.team.deleteStep.secondsLeft <= 300, String(s.team.deleteStep.secondsLeft));
+  assert.equal(teamDeletes(h).length, 0, 'nothing deleted before the button');
+  assert.equal((await h.A.deleteTeam(ws.id)).ok, true);
+  assert.deepEqual(teamDeletes(h), [{ confirm_slug: 'bondly-team', flow_id: verify.flow_id }]);
+  assert.equal(h.flow.acct.screen, 'account');
+  s = await h.A.state();
+  assert.equal(s.notice, 'Bondly Team was deleted.');
+  assert.equal(s.accounts.length, 1, 'still signed in');
+  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team').map((w) => w.id), [other.id]);
+  assert.equal(JSON.stringify(h.vault(h.origin).load()), before, 'the vault is exactly as it was');
+  assert.equal(h.hub.liveTokens(), live);
+}));
+
+test('delete team: a wrong slug is refused before any code is sent or DELETE made; no check, no delete', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly Team');
+  const ws = h.store.active();
+  for (const typed of ['Bondly Team', 'bondly', 'BONDLY-TEAM', '']) assert.equal((await h.A.teamDeleteStart(ws.id, typed)).error, 'That doesn’t match the team’s name. Type it exactly as shown.', typed);
+  assert.ok(!h.hub.starts().some((b) => b.purpose === 'delete_team'), 'no code sent');
+  assert.equal((await h.A.state()).team.deleteStep, null);
+  const r = await h.A.deleteTeam(ws.id);
+  assert.deepEqual([r.ok, r.stepUp], [false, true]);
+  assert.equal(teamDeletes(h).length, 0, 'the hub never saw a delete');
+  assert.ok(h.store.list().some((w) => w.id === ws.id));
+}));
+
+test('delete team: a wrong code says so; a lapsed check (injected clock) starts over; the hub’s own lapse too', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  await h.A.teamDeleteStart(ws.id, 'bondly');
+  const good = h.hub.lastCode('me@example.com');
+  assert.equal((await h.A.teamDeleteCode(ws.id, good === '000000' ? '111111' : '000000')).error, 'That code didn’t work. 4 tries left.');
+  assert.equal((await h.A.teamDeleteCode(ws.id, '12')).error, 'The code is 6 digits.');
+  assert.equal((await h.A.state()).team.deleteStep.phase, 'code');
+  assert.equal((await h.A.teamDeleteCode(ws.id, good)).ok, true);
+  h.setNow(Date.now() + 5 * 60_000 + 1000);
+  const r = await h.A.deleteTeam(ws.id);
+  assert.deepEqual([r.ok, r.stepUp, r.error], [false, true, 'That check ran out. Type the name and confirm it’s you again.']);
+  assert.equal((await h.A.state()).team.deleteStep, null, 'back to the start');
+  assert.equal(teamDeletes(h).length, 0, 'nothing sent with a lapsed check');
+  h.setNow(Date.now() + 5 * 60_000 + 1000);
+  await confirmTeamByEmail(h, ws, 'bondly');
+  h.setNow(Date.now() + 10 * 60_000 + 2000);
+  const s = await h.A.state();
+  assert.equal(s.team.deleteStep, null);
+  assert.equal(s.notice, 'That check ran out. Type the name and confirm it’s you again.');
+  h.setNow(null);
+  // Fresh here, but the hub's 5 minutes have gone: its STEP_UP_REQUIRED starts over too.
+  await confirmTeamByEmail(h, ws, 'bondly');
+  h.hub.setNow(Date.now() + 6 * 60_000);
+  const late = await h.A.deleteTeam(ws.id);
+  assert.deepEqual([late.ok, late.stepUp, late.error], [false, true, 'That check timed out or was already used. Confirm it’s you again to delete the team.']);
+  assert.equal((await h.A.state()).team.deleteStep, null);
+  assert.ok(h.store.list().some((w) => w.id === ws.id), 'the team is still there');
+}));
+
+test('delete team: the account’s `delete` step-up can’t delete a team, a team’s can’t delete the account; each is single use', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Alpha');
+  const a = h.store.active();
+  await h.A.createTeam('Beta');
+  const b = h.store.active();
+  const acctFlow = await stepUp(h, 'delete');
+  const refused = await hubCall(h, 'DELETE', `/api/teams/${b.teamId}`, { confirm_slug: 'beta', flow_id: acctFlow });
+  assert.deepEqual([refused.status, refused.body.error.code, refused.body.error.max_age_s, refused.body.error.purpose], [401, 'STEP_UP_REQUIRED', 300, 'delete_team']);
+  const teamFlow = await stepUp(h, 'delete_team');
+  const noAcct = await hubCall(h, 'DELETE', '/api/account', { flow_id: teamFlow });
+  assert.deepEqual([noAcct.status, noAcct.body.error.code, noAcct.body.error.purpose], [401, 'STEP_UP_REQUIRED', 'delete']);
+  assert.equal((await hubCall(h, 'DELETE', `/api/teams/${b.teamId}`, { confirm_slug: 'wrong', flow_id: teamFlow })).status, 400, 'a wrong slug spends nothing');
+  assert.equal((await hubCall(h, 'DELETE', `/api/teams/${b.teamId}`, { confirm_slug: 'beta', flow_id: teamFlow })).status, 200);
+  const again = await hubCall(h, 'DELETE', `/api/teams/${a.teamId}`, { confirm_slug: 'alpha', flow_id: teamFlow });
+  assert.deepEqual([again.status, again.body.error.code], [401, 'STEP_UP_REQUIRED'], 'spent');
+  assert.ok(h.vault(h.origin).load(), 'still signed in');
+  // Through the app: a spent flow can't be sent twice, and the account path never sees a team's code.
+  h.store.setActive(a.id);
+  await h.A.go('team');
+  const f = await confirmTeamByEmail(h, a, 'alpha');
+  await h.A.go('account');
+  assert.equal((await h.A.deleteConfirm(h.hub.lastCode('me@example.com'))).error, 'Ask for a new code first.');
+  assert.equal((await hubCall(h, 'DELETE', `/api/teams/${a.teamId}`, { confirm_slug: 'alpha', flow_id: f })).status, 200, 'the hub still holds it: leaving the screen only dropped it here');
+  assert.ok(h.vault(h.origin).load());
+}));
+
+test('delete team: switching team, leaving the screen or the account pages, and signing out each drop the check', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Alpha');
+  const a = h.store.active();
+  await h.A.createTeam('Beta');
+  const b = h.store.active();
+  const refusedNow = async () => { const r = await h.A.deleteTeam(b.id); assert.deepEqual([r.ok, r.stepUp], [false, true], JSON.stringify(r)); };
+  await confirmTeamByEmail(h, b, 'beta');
+  h.store.setActive(a.id);
+  assert.equal((await h.A.deleteTeam(b.id)).error, 'The team changed while this page was open. Look again, then try once more.');
+  assert.equal((await h.A.state()).team.deleteStep, null, 'Alpha never shows Beta’s check');
+  h.store.setActive(b.id);
+  assert.equal((await h.A.state()).team.deleteStep, null, 'and it is gone for Beta too');
+  await refusedNow();
+  await confirmTeamByEmail(h, b, 'beta');
+  h.flow.leftAccountPages();
+  await refusedNow();
+  await confirmTeamByEmail(h, b, 'beta');
+  await h.A.go('thismac');
+  await h.A.go('team');
+  await refusedNow();
+  await confirmTeamByEmail(h, b, 'beta');
+  h.flow.startFlow('join');
+  h.flow.show('team');
+  await refusedNow();
+  await confirmTeamByEmail(h, b, 'beta');
+  await h.A.signOut(h.host);
+  await h.signInAs('me@example.com');
+  h.store.setActive(b.id);
+  h.flow.show('team');
+  assert.equal((await h.A.state()).team.deleteStep, null);
+  await refusedNow();
+  assert.equal(teamDeletes(h).length, 0);
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 2);
+}));
+
+test('delete team: a failed DELETE (no longer an owner) keeps the check; once owner again the same check deletes it', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  const luke = await h.other('luke@example.com');
+  const inv = await h.A.invite(ws.id, 'luke@example.com', 'admin');
+  assert.equal((await luke.acceptInvite({ code: inv.invite.code })).ok, true);
+  let s = await h.A.state();
+  const lukeId = s.members.find((m) => m.email === 'luke@example.com').id;
+  const meId = s.members.find((m) => m.you).id;
+  assert.equal((await h.A.setRole(ws.id, lukeId, 'owner')).ok, true);
+  const flowId = await confirmTeamByEmail(h, ws, 'bondly');
+  const before = JSON.stringify(h.vault(h.origin).load());
+  assert.equal((await luke.setRole(ws.teamId, meId, 'admin')).ok, true);
+  const r = await h.A.deleteTeam(ws.id);
+  assert.deepEqual([r.ok, r.error], [false, 'You don’t have permission to do that in this team.']);
+  assert.equal(h.flow.acct.screen, 'team', 'kept on the screen');
+  s = await h.A.state();
+  assert.equal(s.team.deleteStep.phase, 'confirmed', 'not spent');
+  assert.equal((await luke.setRole(ws.teamId, meId, 'owner')).ok, true);
+  assert.equal((await h.A.deleteTeam(ws.id)).ok, true);
+  assert.deepEqual(teamDeletes(h).map((b) => b.flow_id), [flowId, flowId]);
+  assert.equal(JSON.stringify(h.vault(h.origin).load()), before);
+}));
+
+test('delete team (email:false): slug, a Google check for that team, DELETE with its flow_id; account and team checks aren’t interchangeable', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  const before = JSON.stringify(h.vault(h.origin).load());
+  const live = h.hub.liveTokens();
+  let s = await h.A.state();
+  assert.deepEqual([s.team.deleteVia, s.team.deleteStep], ['provider', null]);
+  assert.equal((await h.A.teamDeleteStart(ws.id, 'Bondly')).error, 'That doesn’t match the team’s name. Type it exactly as shown.');
+  assert.deepEqual(await h.A.teamDeleteStart(ws.id, 'bondly'), { ok: true, via: 'provider' });
+  assert.ok(!h.requests.some((u) => u.pathname === '/api/auth/email/start'), 'no emailed code on a hub without a mailer');
+  assert.deepEqual((await h.A.state()).team.deleteStep, { via: 'provider', providers: [{ id: 'google', name: 'Google' }], phase: 'choose' });
+  assert.equal((await h.A.teamDeleteOAuth(ws.id, 'github')).error, 'Pick Google or GitHub.');
+  assert.equal((await h.A.teamDeleteOAuth(ws.id, 'google')).ok, true);
+  let r = await h.flow.pendingDeleteCheck();
+  assert.equal(r.ok, true, r.error);
+  assert.equal(h.hub.oauthStarts().at(-1).purpose, 'delete');
+  s = await h.A.state();
+  assert.equal(s.notice, 'Confirmed with Google.');
+  assert.deepEqual([s.team.deleteStep.phase, s.team.deleteStep.provider], ['confirmed', 'Google']);
+  // The team's check is not the account's: the account page neither shows nor spends it, and leaving drops it.
+  await h.A.go('account');
+  assert.equal((await h.A.state()).deleteCheck, null);
+  assert.equal((await h.A.deleteConfirm('')).ok, false);
+  await h.A.go('team');
+  assert.equal((await h.A.deleteTeam(ws.id)).stepUp, true);
+  // Nor is the account's check the team's.
+  await h.A.go('account');
+  assert.equal((await h.A.deleteStart(h.host)).via, 'provider');
+  await h.A.deleteOAuth('google');
+  assert.equal((await h.flow.pendingDeleteCheck()).ok, true);
+  assert.equal((await h.A.state()).deleteCheck.phase, 'confirmed');
+  await h.A.go('team');
+  assert.equal((await h.A.state()).team.deleteStep, null);
+  assert.equal((await h.A.deleteTeam(ws.id)).stepUp, true);
+  assert.equal(teamDeletes(h).length, 0);
+  assert.equal(deleteCalls(h).length, 0);
+  // The real thing.
+  await h.A.teamDeleteStart(ws.id, 'bondly');
+  await h.A.teamDeleteOAuth(ws.id, 'google');
+  r = await h.flow.pendingDeleteCheck();
+  assert.equal((await h.A.deleteTeam(ws.id)).ok, true);
+  assert.deepEqual(teamDeletes(h), [{ confirm_slug: 'bondly', flow_id: r.flowId }]);
+  assert.equal(h.flow.acct.screen, 'account');
+  assert.equal((await h.A.state()).notice, 'Bondly was deleted.');
+  assert.equal(h.store.list().some((w) => w.id === ws.id), false);
+  assert.equal(JSON.stringify(h.vault(h.origin).load()), before);
+  assert.equal(h.hub.liveTokens(), live);
+  const spent = await hubCall(h, 'DELETE', '/api/account', { flow_id: r.flowId });
+  assert.deepEqual([spent.status, spent.body.error.code], [401, 'STEP_UP_REQUIRED'], 'single use across both routes');
+}));
+
+test('step-up codes count against the user, never lock the address out of sign-in; someone else’s flow is a plain INVALID_TOKEN', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  const luke = await h.other('luke@example.com');
+  const mine = (await hubCall(h, 'POST', '/api/auth/email/start', { purpose: 'delete_team' })).body.flow_id;
+  const lukeToken = await luke.accessToken();
+  const theirs = await hubCall(h, 'POST', '/api/auth/email/verify', { flow_id: mine, code: h.hub.lastCode('me@example.com') }, lukeToken);
+  assert.deepEqual([theirs.status, theirs.body.error.code], [400, 'INVALID_TOKEN']);
+  let limited = null;
+  for (let i = 0; i < 3 && !limited; i += 1) {
+    const f = (await hubCall(h, 'POST', '/api/auth/email/start', { purpose: 'delete_team' })).body.flow_id;
+    const good = h.hub.lastCode('me@example.com');
+    for (let j = 0; j < 4; j += 1) {
+      const r = await hubCall(h, 'POST', '/api/auth/email/verify', { flow_id: f, code: good === '000000' ? '111111' : '000000' });
+      if (r.status === 429) { limited = r; break; }
+    }
+  }
+  assert.equal(limited?.body.error.code, 'RATE_LIMITED', 'the user’s step-up tries ran out');
+  let v = null;
+  const c = createAccountClient({ origin: h.origin, store: { load: () => v, save: (x) => { v = x; }, clear: () => { v = null; } } });
+  assert.equal((await c.startEmail('me@example.com')).ok, true);
+  const signIn = await c.verifyCode(h.hub.lastCode('me@example.com'));
+  assert.equal(signIn.ok, true, 'email sign-in for the same address still works');
+}));
+
+test('the team delete page: text only, the slug typed before any code, the same code input as the account’s, status announced, a quiet countdown', () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.ok(!/\.innerHTML|insertAdjacentHTML|outerHTML/.test(page));
+  const team = page.slice(page.indexOf('function teamDelete('), page.indexOf('function deleteCheck('));
+  assert.ok(team.length > 0);
+  assert.match(team, /if \(!d\) \{[\s\S]*Type \$\{s\.team\.slug\} to confirm[\s\S]*api\.teamDeleteStart\(team, v\.slug\)/, 'the slug first');
+  assert.match(team, /'Send me a code'/);
+  assert.match(team, /inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '12', placeholder: '123456', class: 'input input-code', 'aria-label': '6-digit code'/);
+  assert.match(team, /return deleteCheck\(d, \{[\s\S]*submit: 'Delete team'[\s\S]*api\.deleteTeam\(team\)[\s\S]*api\.teamDeleteOAuth\(team, id\)/, 'the confirmed step and the provider check are the account’s, with the team’s actions');
+  assert.match(page, /'aria-live': 'off' \}, 'Delete within '/);
+  assert.match(page, /role: 'status' \}, `Confirmed with \$\{c\.provider\}/);
+  assert.ok(!/deleteNeedsEmail/.test(page), 'no dead end without a mailer');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account-preload.js'), 'utf8');
+  assert.match(preload, /teamDeleteStart: \(team, slug\) => call\('teamDeleteStart', str\(team\), str\(slug\)\)/);
+  assert.match(preload, /teamDeleteCode: \(team, code\) => call\('teamDeleteCode', str\(team\), str\(code\)\)/);
+  assert.match(preload, /teamDeleteResend: \(team\) => call\('teamDeleteResend', str\(team\)\)/);
+  assert.match(preload, /teamDeleteOAuth: \(team, provider\) => call\('teamDeleteOAuth', str\(team\), str\(provider\)\)/);
+  assert.match(preload, /deleteTeam: \(team\) => call\('deleteTeam', str\(team\)\)/);
+  assert.deepEqual([ACCT_ARGS.teamDeleteStart, ACCT_ARGS.teamDeleteCode, ACCT_ARGS.teamDeleteResend, ACCT_ARGS.teamDeleteOAuth, ACCT_ARGS.deleteTeam], [['string', 'string'], ['string', 'string'], ['string'], ['string', 'string'], ['string']]);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  assert.match(main, /if \(page\.kind === 'local'\) \{ flow\.show\(page\.screen\); return; \}\n\s+flow\.leftAccountPages\(\);/, 'a board or another page drops a team’s check');
+});
+
+test('delete team: Send a new code replaces the flow; the old code no longer confirms', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  await h.A.teamDeleteStart(ws.id, 'bondly');
+  const old = h.hub.lastCode('me@example.com');
+  const re = await h.A.teamDeleteResend(ws.id);
+  assert.deepEqual(re, { ok: true, notice: 'We sent a new code to me@example.com.' });
+  const fresh = h.hub.lastCode('me@example.com');
+  if (old !== fresh) assert.equal((await h.A.teamDeleteCode(ws.id, old)).ok, false, 'the old flow isn’t the one verified');
+  assert.equal((await h.A.teamDeleteCode(ws.id, fresh)).ok, true);
+  assert.equal((await h.A.deleteTeam(ws.id)).ok, true);
+}));

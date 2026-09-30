@@ -559,6 +559,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
     if (page.kind === 'local') { flow.show(page.screen); return; }
+    flow.leftAccountPages();
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);
