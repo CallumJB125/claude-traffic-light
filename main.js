@@ -174,7 +174,8 @@ const DEFAULT_CONFIG = {
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
   busyCalendarTitles: false,
   busyIcsUrl: '',
-  busyFocus: true,
+  // Focus and the Calendar helper are macOS-only readers.
+  busyFocus: process.platform === 'darwin',
   busyFocusShortcut: '',
   voice: { ...Voice.DEFAULTS },
 };
@@ -913,6 +914,8 @@ function createSettingsWindow() {
   });
   settingsWin.setMenuBarVisibility(false);
   settingsWin.loadFile('settings.html');
+  // The macOS Calendar and Focus readers don't exist elsewhere; the ICS feed stays.
+  if (!IS_MAC) settingsWin.webContents.on('dom-ready', () => settingsWin?.webContents.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {}));
   if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
