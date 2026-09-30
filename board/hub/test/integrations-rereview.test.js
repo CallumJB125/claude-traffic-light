@@ -361,8 +361,8 @@ test('L-a: the bus never re-runs a row while its timed-out handler is still runn
     await new Promise((r) => setImmediate(r));
     timers.q.shift().fn();
     await bus.settle();
-    assert.equal(calls, 2);
-    assert.deepEqual(seen, [1, 1]);
+    assert.equal(calls, 1, 'it ended well: the row is not run again (round 3, M-B)');
+    assert.deepEqual(seen, [1]);
   } finally { await h.close(); }
 });
 

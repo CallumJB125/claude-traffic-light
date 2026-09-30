@@ -95,7 +95,10 @@ export function createIntegrations({
   const connectors = new Map();
   const db = hub.db;
   const now = () => hub.iso();
-  const inflight = new Map(); // consumer name → the onEvent call still running after its timeout
+  const inflight = new Map(); // consumer name → {seq, running}: the onEvent call still running after its timeout
+  // consumer name → the seq whose timed-out call later succeeded: its retry
+  // must not repeat the side effects.
+  const lateOk = new Map();
 
   const warn = (msg, c, e) => log?.warn?.(msg, { integration: c?.provider ?? c?.id, connection_id: c?.id, err: redact(e?.message ?? e) });
 
@@ -571,17 +574,28 @@ export function createIntegrations({
       const cur = row(c.id);
       if (!cur || cur.status !== 'active') return;
       const name = consumerName(c);
+      if (lateOk.has(name)) {
+        const seq = lateOk.get(name);
+        lateOk.delete(name);
+        if (seq === r.seq) return;
+      }
+      const prev = inflight.get(name);
       // A timed-out call may still be acting: never run the row again beside it.
-      if (inflight.has(name)) throw Object.assign(new Error('handler_busy: the previous call has not ended'), { busy: true });
+      // The bus moved past its row only by dead-lettering it (handler_stuck):
+      // that call's signal aborted long ago, so it can no longer act; forget it.
+      if (prev?.seq === r.seq) throw Object.assign(new Error('handler_busy: the previous call has not ended'), { busy: true });
+      if (prev) inflight.delete(name);
       const controller = new AbortController();
       const running = Promise.resolve().then(() => conn.onEvent(r, ctxFor(cur, controller.signal)))
         .finally(() => controller.abort(handlerEnded()));
-      inflight.set(name, running);
-      const settled = () => { if (inflight.get(name) === running) inflight.delete(name); };
-      running.then(settled, settled);
+      const entry = { seq: r.seq, running, timedOut: false };
+      inflight.set(name, entry);
+      const settled = () => { if (inflight.get(name) === entry) inflight.delete(name); };
+      running.then(() => { if (entry.timedOut && inflight.get(name) === entry) lateOk.set(name, r.seq); settled(); }, settled);
       try {
         await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
+        if (e?.code === 'TIMEOUT') entry.timedOut = true;
         const code = errCode(e);
         setHealth(c.id, false, code);
         if (e instanceof ActorUnavailable) { warn('integration acts as a removed member', c, e); return; }

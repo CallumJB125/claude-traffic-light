@@ -5,7 +5,8 @@
 // A consumer's rows are handled strictly in order; a failing row is retried
 // with backoff and blocks that consumer only (never the hub, never others).
 // A handler that throws an error with `busy: true` is retried the same way
-// but never dead-lettered for it.
+// but does not count toward DEAD_AFTER; after BUSY_DEAD_AFTER busy tries on
+// the same row it is dead-lettered as handler_stuck.
 // Consumers run in the context the bus was created in, never in the async
 // context of whatever committed the row (a board queue, an integration's actor).
 
@@ -17,6 +18,9 @@ const TICK_MS = 5_000;
 // 8 tries on the same row (≈ 173 s of backoff: 1+2+5+15+30+60+60), then it
 // is dead-lettered and skipped.
 export const DEAD_AFTER = 8;
+// A call that never ends must not hold its consumer forever: ≈ 25 min of
+// busy retries (backoff grows to 60 s), then the row is dead-lettered.
+export const BUSY_DEAD_AFTER = 30;
 
 export function createBus({ db, log, now = () => new Date().toISOString(), timers = { setTimeout, clearTimeout } }) {
   const consumers = new Map(); // name → {handler, kinds, running, again, failures, retryAt, timer, lastError}
@@ -61,6 +65,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
           }
           advance(name, row.seq);
           c.failures = 0;
+          c.busy = 0;
           c.lastError = null;
           if (stopped) return;
         }
@@ -70,22 +75,30 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
       if (consumers.get(name) !== c) return;
       // A handler still busy with this row (a timed-out call that hasn't ended)
       // waits without moving the row toward the dead-letter queue.
-      if (!e?.busy) {
+      if (e?.busy) {
+        c.busy = c.busySeq === current ? c.busy + 1 : 1;
+        c.busySeq = current;
+      } else {
         c.failures = c.failSeq === current ? c.failures + 1 : 1;
         c.failSeq = current;
       }
       c.lastError = { message: e?.message ?? String(e), at: now() };
-      if (current != null && c.failures >= DEAD_AFTER) {
-        db.run('INSERT OR IGNORE INTO bus_dead_letters (consumer, seq, error, at) VALUES (?, ?, ?, ?)', name, current, String(c.lastError.message).slice(0, 500), now());
+      const stuck = e?.busy && c.busy >= BUSY_DEAD_AFTER;
+      if (current != null && (c.failures >= DEAD_AFTER || stuck)) {
+        const reason = stuck ? `handler_stuck: still running after ${c.busy} retries: ${c.lastError.message}` : c.lastError.message;
+        db.run('INSERT OR IGNORE INTO bus_dead_letters (consumer, seq, error, at) VALUES (?, ?, ?, ?)', name, current, String(reason).slice(0, 500), now());
         advance(name, current);
-        log?.warn?.('bus row dead-lettered', { consumer: name, seq: current, err: c.lastError.message });
+        log?.warn?.('bus row dead-lettered', { consumer: name, seq: current, err: reason });
         c.failures = 0;
         c.failSeq = null;
+        c.busy = 0;
+        c.busySeq = null;
         c.running = false;
         queueMicrotask(() => root(drain, name));
         return;
       }
-      const delay = BACKOFF_MS[Math.max(0, Math.min(c.failures - 1, BACKOFF_MS.length - 1))];
+      const n = e?.busy ? c.busy : c.failures;
+      const delay = BACKOFF_MS[Math.max(0, Math.min(n - 1, BACKOFF_MS.length - 1))];
       log?.warn?.('bus consumer failed; retrying', { consumer: name, failures: c.failures, delay, err: c.lastError.message });
       c.timer = timers.setTimeout(() => { c.timer = null; root(drain, name); }, delay);
       c.timer?.unref?.();
@@ -102,7 +115,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
     /** subscribe(name, handler(row), {kinds?: string[]}) */
     subscribe(name, handler, { kinds = null } = {}) {
       if (consumers.has(name)) throw new Error(`bus consumer ${name} already subscribed`);
-      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, failSeq: null, timer: null, lastError: null });
+      consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, failSeq: null, busy: 0, busySeq: null, timer: null, lastError: null });
       cursor(name);
       queueMicrotask(() => root(drain, name));
     },
