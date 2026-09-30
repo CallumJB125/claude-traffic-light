@@ -122,9 +122,15 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
     return out.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   }
 
-  // First answer wins (desk, MCP or phone); see hooks/answer-file.js.
+  // First answer wins (desk or phone); see hooks/answer-file.js. The bare
+  // allow/deny path (gestures, the old answerRequest IPC) answers tool
+  // permissions only: a plan, question or elicitation needs its own option
+  // (answerInput), never a blind "allow".
   function answerRequest(id, decision) {
-    return Answer.writeAnswer(requestsDir, id, decision, { by: 'desk', key: requestKeys.get(id) }).ok;
+    if (decision !== 'allow' && decision !== 'deny') return false;
+    const req = readRequests().find((r) => r.id === String(id));
+    if (!req || (req.kind !== undefined && req.kind !== 'permission')) return false;
+    return Answer.writeAnswer(requestsDir, req.id, decision, { by: 'desk', key: requestKeys.get(req.id), decisionHash: req.decisionHash }).ok;
   }
 
   return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor: (id) => requestKeys.get(id) };

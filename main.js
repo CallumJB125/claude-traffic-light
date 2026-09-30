@@ -2351,10 +2351,14 @@ async function runAction(action, st) {
       return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
+      // Tool permissions only: a plan, question or elicitation is answered
+      // from its own options, never by a gesture.
       const req = st.pending && st.pending[0];
       if (!req) return { feedback: 'nothing to answer' };
-      answerRequest(req.id, action.type);
+      if (req.kind && req.kind !== 'permission') return { feedback: 'open it to answer' };
+      const ok = answerRequest(req.id, action.type);
       setTimeout(broadcastStatus, 250);
+      if (!ok) return { feedback: 'answer it in the terminal' };
       return { feedback: action.type === 'allow' ? 'allowed' : 'denied' };
     }
     case 'poke': return { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
@@ -2512,6 +2516,7 @@ ipcMain.handle('voice-status', () => ({
   hotkeyTaken: voiceHotkeyTaken,
 }));
 
+// allow | deny for a tool permission only (answerRequest checks both).
 ipcMain.handle('answer-request', (e, id, decision) => {
   const ok = answerRequest(String(id), String(decision));
   setTimeout(broadcastStatus, 250);

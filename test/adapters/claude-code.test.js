@@ -19,8 +19,8 @@ function post(home, urlPath, body, token) {
 }
 const A = require('../../hooks/answer-file.js');
 
-test('signal server: POST /request-key takes a key once, token-protected; the desk answers with it', async () => {
-  // Its own server: the suite's one is closed when its test ends.
+// Its own server per test: the suite's one is closed when its test ends.
+async function realServer() {
   const home = tmp();
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '0';
   require.cache[require.resolve('electron')] = { id: 'electron', filename: 'electron', loaded: true, exports: { app: { on() {} } } };
@@ -29,6 +29,50 @@ test('signal server: POST /request-key takes a key once, token-protected; the de
   const http = api.startSignalServer();
   test.after(() => { http.closeAllConnections(); http.close(); });
   while (!fs.existsSync(path.join(home, 'port'))) await new Promise((r) => setTimeout(r, 10));
+  return { home, api };
+}
+
+function hookFor(home, signal, payload) {
+  const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'hooks', 'set-status.js'), signal], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '3000' } });
+  child.stdin.end(JSON.stringify(payload));
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  return new Promise((res) => child.on('exit', () => res(out)));
+}
+
+async function oneRequest(home) {
+  const dir = path.join(home, 'requests');
+  for (let i = 0; i < 200; i += 1) {
+    const f = fs.existsSync(dir) && fs.readdirSync(dir).find((x) => x.endsWith('.json'));
+    if (f) return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return null;
+}
+
+test('L1: answerRequest answers allow/deny for a tool permission only, never a plan, question or elicitation', async () => {
+  const { home, api } = await realServer();
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ askFromWidget: true }));
+  for (const [signal, payload] of [
+    ['permission-request', { session_id: 'pl', cwd: '/x', tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } }],
+    ['tool-use', { session_id: 'qu', cwd: '/x', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'A' }] }] } }],
+    ['elicitation', { session_id: 'el', cwd: '/x', mcp_server_name: 'srv', message: 'm' }],
+  ]) {
+    const done = hookFor(home, signal, payload);
+    const req = await oneRequest(home);
+    assert.ok(req && api.keyFor(req.id), signal);
+    for (const d of ['allow', 'deny', 'accept']) assert.equal(api.answerRequest(req.id, d), false, `${req.kind} ${d}`);
+    assert.equal(await done, '', `${req.kind}: nothing answered it`);
+  }
+  const done = hookFor(home, 'permission-request', { session_id: 'pe', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
+  const req = await oneRequest(home);
+  assert.equal(api.answerRequest(req.id, 'accept'), false);
+  assert.equal(api.answerRequest(req.id, 'deny'), true);
+  assert.equal(JSON.parse(await done).hookSpecificOutput.decision.behavior, 'deny');
+});
+
+test('signal server: POST /request-key takes a key once, token-protected; the desk answers with it', async () => {
+  const { home, api } = await realServer();
   assert.equal((await post(home, '/request-key', { id: 'mac-x', key: 'ab'.repeat(32) })).status, 200);
   assert.equal((await post(home, '/request-key', { id: 'mac-x', key: 'cd'.repeat(32) })).status, 409, 'first key wins');
   assert.equal((await post(home, '/request-key', { id: '../x', key: 'ab'.repeat(32) })).status, 409);
@@ -36,18 +80,9 @@ test('signal server: POST /request-key takes a key once, token-protected; the de
   assert.equal((await post(home, '/request-key', { id: 'mac-y', key: 'ab'.repeat(32) }, 'wrong')).status, 401);
   assert.equal(api.keyFor('mac-y'), null);
 
-  const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'hooks', 'set-status.js'), 'permission-request'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_ASK_MS: '5000' } });
-  child.stdin.end(JSON.stringify({ session_id: 'srv', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }));
-  let out = '';
-  child.stdout.on('data', (d) => { out += d; });
-  const done = new Promise((res) => child.on('exit', () => res(out)));
+  const done = hookFor(home, 'permission-request', { session_id: 'srv', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
   const dir = path.join(home, 'requests');
-  let req = null;
-  for (let i = 0; i < 200 && !req; i += 1) {
-    const f = fs.existsSync(dir) && fs.readdirSync(dir).find((x) => x.endsWith('.json'));
-    if (f) req = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-    else await new Promise((r) => setTimeout(r, 20));
-  }
+  const req = await oneRequest(home);
   assert.ok(req && api.keyFor(req.id), 'the hook registered its key before the request appeared');
   assert.equal(A.writeAnswer(dir, req.id, 'allow').ok, false, 'no key: an outside writer cannot answer');
   assert.ok(api.readRequests().some((r) => r.id === req.id));
