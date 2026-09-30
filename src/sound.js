@@ -22,9 +22,11 @@ module.exports = ({ getWin }) => {
     execFile('afplay', [file], () => {});
   }
 
-  function speak(text) {
-    if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => {});
-    else execFile('say', [text], () => {});
+  // done: called when the speech ends (the voice answers lip-sync to it).
+  // Returns the child so a new question can cut an answer short.
+  function speak(text, done = () => {}) {
+    if (IS_WIN) return execFile('powershell', ['-NoProfile', '-c', `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${String(text).replace(/'/g, "''")}')`], () => done());
+    return execFile('say', [text], () => done());
   }
 
   return { playSound, speak };

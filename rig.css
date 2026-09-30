@@ -573,6 +573,13 @@
 .rig.grumpy .grumpy-mouth { opacity: 1; }
 .rig.grumpy .eye-closed { transform: rotate(-8deg); transform-origin: center; }
 
+/* Talking (push-to-talk answers, rig.talking): the jaw opens and closes in
+   sprite steps while he speaks; the other mouths step aside. Under reduced
+   motion the mouth just stays open until he's done. */
+.rig .talk-mouth { opacity: 0; transform-box: fill-box; transform-origin: 50% 0%; }
+.rig.talking .talk-mouth { opacity: 1; animation: rig-talk-jaw 0.42s steps(1, end) infinite; }
+@keyframes rig-talk-jaw { 0% { transform: scaleY(1); } 33% { transform: scaleY(0.4); } 66% { transform: scaleY(0.75); } 100% { transform: scaleY(1); } }
+
 /* One-shot confetti, fired by rig.celebrate(). */
 .rig .confetti { opacity: 0; }
 .rig .confetti.burst { animation: rig-confetti 700ms ease-out forwards; }
@@ -956,10 +963,13 @@
   }
   /* walking/running/tapping legs, the munching mouth, agent chips, the selfie
      screen flash and the garden's pots, crops and tools */
-  .rig .body rect, .rig .grumpy-mouth, .rig .minion-in, .rig.pose-selfie, .rig .pot, .rig .crop, .rig .bag, .rig .dirtbit, .rig .waterdrop, .rig .cig-smoke { animation: none !important; }
+  .rig .body rect, .rig .grumpy-mouth, .rig .talk-mouth, .rig .minion-in, .rig.pose-selfie, .rig .pot, .rig .crop, .rig .bag, .rig .dirtbit, .rig .waterdrop, .rig .cig-smoke { animation: none !important; }
   .rig.pose-ak47.firing .muzzle { opacity: 1; }
   .rig.pose-sleep .sign-assembly { transition: none; }
   /* The idle bob dies with .claude-body above; the walk spring, pose settle
      and squash check this same query in rig.js, and the widget tells main to
      stop roaming, hopping and gliding. */
 }
+
+/* Last in the file so it beats the grin, grumpy and munch mouths it replaces. */
+.rig.talking :is(.grin, .grumpy-mouth, .cameo-lips) { opacity: 0; }
