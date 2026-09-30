@@ -9,6 +9,13 @@
 // always goes out).
 
 import { PRESENCE_TTL_MS, PRESENCE_MIN_MS, PRESENCE_PUSH_MS } from '../shared/liveness.js';
+import { assertNoForeignBytes } from '../shared/scope.js';
+
+// name, repo_short, branch and summary are untrusted text (CONTRACT §5.3):
+// no C0/C1 control or bidi override/isolate is stored or pushed.
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+const plain = (v) => (typeof v === 'string' ? v.replace(CONTROLS, '') || null : null);
 
 export class Presence {
   constructor(hub) {
@@ -26,9 +33,12 @@ export class Presence {
     conn.presenceAt = now;
     // Default deny on the hub too: only repos on a board of the device member's org.
     const allowed = new Set(conn.allowlist().map((r) => r.repo_id));
+    // The runner's path/credential guard again: a session that trips it is dropped.
     const sessions = msg.sessions.filter((s) => allowed.has(s.repo_id)).map((s) => ({
-      session_id: s.session_id, agent: s.agent, repo_id: s.repo_id, branch: s.branch ?? null, state: s.state, since: s.since, summary: s.summary ?? null,
-    }));
+      session_id: s.session_id, agent: s.agent, repo_id: s.repo_id, branch: plain(s.branch), state: s.state, since: s.since, summary: plain(s.summary),
+    })).filter((s) => {
+      try { assertNoForeignBytes(s, { repo_id: s.repo_id }); return true; } catch { return false; }
+    });
     if (sessions.length) this.byDevice.set(conn.device_id, { member_id: conn.member_id, org_id: conn.member.org_id, sessions, at: now });
     else this.byDevice.delete(conn.device_id);
     this.changed(conn.member.org_id);
@@ -56,7 +66,7 @@ export class Presence {
     const board = this.hub.board(boardId);
     if (!board) return { members: [] };
     const repos = new Map(this.hub.db.all('SELECT r.id, r.short_name FROM board_repos br JOIN repos r ON r.id = br.repo_id WHERE br.board_id = ? AND r.org_id = ?', boardId, board.org_id)
-      .map((r) => [r.id, r.short_name]));
+      .map((r) => [r.id, plain(r.short_name) ?? '']));
     const members = new Map();
     for (const e of this.byDevice.values()) {
       if (e.org_id !== board.org_id) continue;
@@ -64,7 +74,7 @@ export class Presence {
       if (!m) continue;
       for (const s of e.sessions) {
         if (!repos.has(s.repo_id)) continue;
-        if (!members.has(m.id)) members.set(m.id, { member_id: m.id, name: m.display_name, sessions: [] });
+        if (!members.has(m.id)) members.set(m.id, { member_id: m.id, name: plain(m.display_name) ?? '', sessions: [] });
         members.get(m.id).sessions.push({
           agent: s.agent, repo_short: repos.get(s.repo_id), ...(s.branch ? { branch: s.branch } : {}), state: s.state, since: s.since, ...(s.summary ? { summary: s.summary } : {}),
         });

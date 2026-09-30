@@ -254,3 +254,22 @@ test('presence: DELETE /api/devices/:id and removing the member drop the device\
     await h.destroy();
   }
 });
+
+test('presence: markup stays text, control and bidi characters are stripped, a session carrying a local path is dropped', async () => {
+  const { h, r, b } = await setup();
+  try {
+    h.db.run('UPDATE members SET display_name = ? WHERE id = ?', 'Ali\u202Ece\u0007', h.ids.alice);
+    h.db.run('UPDATE repos SET short_name = ? WHERE id = ?', 'ap\u2066p\u009b', h.ids.repo);
+    r.send({ type: 'presence', sessions: [
+      sess({ repo_id: h.ids.repo, branch: '<img src=x onerror=alert(1)>\u202E', summary: '\u202Egnp.exe\u0000 <b>done</b>\u2069' }),
+      sess({ session_id: 'h-2', repo_id: h.ids.repo, summary: 'see file:///Users/callum/.ssh/id_rsa' }),
+    ] });
+    const f = await b.next('team.presence', (m) => m.members.length === 1, { fresh: true });
+    assert.equal(f.members[0].name, 'Alice');
+    assert.deepEqual(f.members[0].sessions, [{ agent: 'claude', repo_short: 'app', branch: '<img src=x onerror=alert(1)>', state: 'working', since: '2026-09-30T10:00:00Z', summary: 'gnp.exe <b>done</b>' }],
+      'markup is passed through as text for textContent rendering; controls and bidi are gone; the path-carrying session is dropped');
+    assert.doesNotMatch(JSON.stringify(b.all('team.presence')), /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]|\/Users\//);
+  } finally {
+    await h.destroy();
+  }
+});
