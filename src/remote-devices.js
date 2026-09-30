@@ -97,18 +97,13 @@ function chooseTailnet({ ifaces = os.networkInterfaces(), cliIp = null, platform
   return { error: stray.length ? `${stray.join(', ')} is not a Tailscale interface; not listening.` : 'No Tailscale address on this machine (is Tailscale running?)' };
 }
 
-const TAILSCALE_BINS = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'];
-function tailscaleIp(bins = TAILSCALE_BINS) {
-  return new Promise((resolve) => {
-    const next = (i) => {
-      if (i >= bins.length) return resolve(null);
-      execFile(bins[i], ['ip', '-4'], { timeout: 3000 }, (err, out) => {
-        const ip = !err && String(out || '').split('\n').map((l) => l.trim()).find(Protocol.isTailnetIPv4);
-        return ip ? resolve(ip) : next(i + 1);
-      });
-    };
-    next(0);
-  });
+// The CLI on PATH first, then the one inside the Mac app. Each binary is
+// named where it runs, so the privacy guard can see both are local.
+const firstTailnetIp = (out) => String(out || '').split('\n').map((l) => l.trim()).find(Protocol.isTailnetIPv4) || null;
+const askTailscale = (run) => new Promise((resolve) => run((err, out) => resolve(err ? null : firstTailnetIp(out))));
+async function tailscaleIp() {
+  return (await askTailscale((cb) => execFile('tailscale', ['ip', '-4'], { timeout: 3000 }, cb)))
+    || askTailscale((cb) => execFile('/Applications/Tailscale.app/Contents/MacOS/Tailscale', ['ip', '-4'], { timeout: 3000 }, cb));
 }
 
 module.exports = function createRemoteDevices({ rootDir, onChange = () => {}, log = () => {}, now = () => Date.now(), mono = Protocol.monoMs }) {
