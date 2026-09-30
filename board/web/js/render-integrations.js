@@ -94,16 +94,6 @@ function connectedCard(conn, m) {
 function availableCard(c, m) {
   const tokenOpen = m.tokenFor === c.id;
   const busy = m.busy.has(`integ-connect:${c.id}`);
-  // The desktop app's connect window has its own cookies: the hub then waits
-  // for this admin to finish here (D42).
-  if (m.canEdit && m.completeFor === c.id) {
-    return h('article', { key: c.id, class: 'integ-card integ-available' },
-      h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
-      h('p', { class: 'muted small' }, `Approve ${c.name} in the window that opened, then finish here.`),
-      h('div', { class: 'integ-card-actions' },
-        h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-complete', 'data-provider': c.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Finish connecting'),
-        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-complete-cancel' }, 'Cancel')));
-  }
   return h('article', { key: c.id, class: 'integ-card integ-available' },
     h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
     c.scopes?.length ? h('p', { class: 'muted small' }, `Asks for: ${c.scopes.join(', ')}`) : null,
@@ -121,6 +111,16 @@ function availableCard(c, m) {
         : h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-connect', 'data-provider': c.id, 'data-kind': c.connect, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Connect ${c.name}`));
 }
 
+/**
+ * The name the OAuth window is opened with (D42). The desktop app's connect
+ * window is its own session and never saw the hub's bind cookie: the app
+ * parses this name and sets board_int_<provider>=<bind> there before loading.
+ */
+export function connectWindowName(provider, bind) {
+  if (!/^[a-z0-9-]{2,32}$/.test(provider) || !/^[A-Za-z0-9_-]{1,64}$/.test(bind)) throw new Error('bad connect window name');
+  return `plexiform-connect|${provider}|${bind}`;
+}
+
 export function integrationsScreen(model) {
   const m = model.integrations;
   const main = (...kids) => h('main', { class: 'integview', id: 'board', 'aria-label': 'Integrations' }, ...kids);
@@ -132,7 +132,7 @@ export function integrationsScreen(model) {
   const data = m.data;
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
-    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, completeFor: m.complete?.provider ?? null, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
   };
   const connected = data.connections ?? [];
   const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id));

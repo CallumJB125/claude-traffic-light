@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, findAll, byAttr } from '../js/h.js';
-import { integrationsScreen, actionLabel } from '../js/render-integrations.js';
+import { integrationsScreen, actionLabel, connectWindowName } from '../js/render-integrations.js';
 import { boardScreen } from '../js/render-board.js';
 import { model } from './fixtures.js';
 
@@ -68,10 +68,19 @@ test('health codes and failed actions read as fixed text; an unknown code never 
   assert.match(t, /Failed: an update from the tool took too long/);
 });
 
-test('after starting an OAuth connect the admin can finish it here (desktop connect window)', () => {
-  const v = integrationsScreen(m({ data: { available, connections: [], vault: true }, complete: { provider: 'github', token: 't' } }));
-  assert.equal(byAttr(v, 'data-action', 'integ-complete')[0].props['data-provider'], 'github');
-  assert.equal(byAttr(integrationsScreen(m({ data: { available, connections: [], vault: true }, complete: { provider: 'github', token: 't' } }, 'member')), 'data-action', 'integ-complete').length, 0);
+test('the connect window is named plexiform-connect|<provider>|<bind> for the desktop app; no finish-here step', () => {
+  const bind = 'AbCd_-0123456789abcdefghijklmnopqrstuv';
+  assert.equal(connectWindowName('github', bind), `plexiform-connect|github|${bind}`);
+  const [tag, provider, b] = connectWindowName('fake-oauth', bind).split('|');
+  assert.deepEqual([tag, provider, b], ['plexiform-connect', 'fake-oauth', bind]);
+  assert.match(provider, /^[a-z0-9-]{2,32}$/);
+  assert.match(b, /^[A-Za-z0-9_-]{1,64}$/);
+  assert.throws(() => connectWindowName('Git|Hub', bind));
+  assert.throws(() => connectWindowName('github', 'x|y'));
+  assert.throws(() => connectWindowName('github', 'x'.repeat(65)));
+  const v = integrationsScreen(m({ data: { available, connections: [], vault: true } }));
+  assert.equal(byAttr(v, 'data-action', 'integ-complete').length, 0);
+  assert.ok(!textOf(v).includes('Finish connecting'));
 });
 
 test('Integrations is not in the board view switcher', () => {
