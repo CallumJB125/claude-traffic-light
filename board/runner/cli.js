@@ -6,7 +6,7 @@
 // BOARD_HOME overrides ~/.board.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: local-board-sockets
 import { fileURLToPath } from 'node:url';
 import { boardHome, initHome, writeDevice, readPolicy, writePolicy } from './config.js';
 import { Supervisor } from './supervisor.js';
@@ -26,7 +26,7 @@ function flags(argv) {
 
 function control(l, msg) {
   return new Promise((resolve, reject) => {
-    const c = net.createConnection(l.controlSock);
+    const c = net.createConnection(l.controlSock); // privacy-flow: local-board-sockets
     let buf = '';
     c.setEncoding('utf8');
     c.on('connect', () => c.write(`${JSON.stringify({ id: '1', ...msg })}\n`));

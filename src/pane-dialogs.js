@@ -104,7 +104,7 @@ function createDetector({ exec, serverOk, tmuxBin, minIntervalMs = 15000, maxPer
   const cache = new Map(); // key → {at, found}
   async function capture(t) {
     if (!tmuxBin || !serverOk(t.socket, t.serverPid)) return null;
-    const r = await exec(tmuxBin, ['-S', t.socket, 'capture-pane', '-p', '-J', '-t', t.pane]);
+    const r = await exec(tmuxBin, ['-S', t.socket, 'capture-pane', '-p', '-J', '-t', t.pane]); // privacy-flow: tmux-capture
     return r && r.ok ? classify(r.stdout) : null;
   }
   // → PendingDialog[] {key, dialog, title, text, options, pane, sessionId|null, launchId|null, cwd, seenAt}

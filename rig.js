@@ -832,11 +832,24 @@
     return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
   }
 
+  // A rig scrolled out of view holds still. The Lights editor mounts ~165 (each
+  // picker option is a live preview) with only a handful ever in view, and
+  // animating the rest cost more than a whole core in paint and layerize.
+  const offscreen = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      // remounted or removed: let go, or the observer keeps it alive
+      if (!e.target.isConnected) { offscreen.unobserve(e.target); continue; }
+      e.target.classList.toggle('offscreen', !e.isIntersecting);
+    }
+  }) : null;
+
   // opts.ambient: sample the rig's idle loops on a slow clock instead of every
-  // display frame (the desk widget, which is on screen all day).
+  // display frame (the desk widget, which is on screen all day; the editor's
+  // stage while the editor isn't focused — see setAmbient).
   function mountRig(container, opts = {}) {
     container.innerHTML = SVG;
     const svg = container.querySelector('.rig');
+    if (offscreen) offscreen.observe(svg);
     const lamps = Array.from(svg.querySelectorAll('.lamp'));
     let current = null;
     const reduceMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1271,19 +1284,22 @@
       const frozen = new Set(); // paused while not rendered
       let timer = null;
       let paused = false;
+      let enabled = true;
       let scanQueued = false;
       const now = () => performance.now();
       function planFor(a) {
         const t = a.effect && typeof a.effect.getTiming === 'function' ? a.effect.getTiming() : null;
         if (!t || t.iterations !== Infinity || !(t.duration > 0)) return null;
         const kfs = a.effect.getKeyframes().map((k) => ({ offset: k.computedOffset ?? k.offset, easing: k.easing && k.easing !== 'linear' ? k.easing : t.easing }));
-        return Mo().ambientPlan(kfs, t.duration, t.direction, cfg('ambient').minMs || 1000);
+        const A = cfg('ambient');
+        return Mo().ambientPlan(kfs, t.duration, t.direction, A.minMs || 1000, (Mo().AMBIENT_FAST || []).includes(a.animationName));
       }
       // Smooth loops share one frame grid, so however many there are, they
       // cost one wake-up (and one style/paint pass) per ambient frame.
       function dueAt(rec, t) {
         if (!rec.plan.stepped) {
-          const frame = 1000 / Math.max(1, cfg('ambient').fps || 12);
+          const A = cfg('ambient');
+          const frame = 1000 / Math.max(1, (rec.plan.fast ? A.fastFps : A.fps) || 12);
           return (Math.floor(t / frame) + 1) * frame;
         }
         return rec.base + Mo().nextStepTime(rec.plan.points, rec.dur, rec.delay, t - rec.base);
@@ -1314,7 +1330,7 @@
       }
       function scan() {
         scanQueued = false;
-        if (!Mo()) return;
+        if (!enabled || !Mo()) return;
         const t = now();
         for (const a of frozen) {
           const el = a.effect && a.effect.target;
@@ -1353,9 +1369,21 @@
           for (const rec of tracked.values()) rec.due = Math.min(rec.due, t);
           schedule();
         },
+        // Off: every loop goes back to the display clock from where it
+        // stands (the editor's stage while you're working in it); on: the
+        // next scan takes them over again.
+        setEnabled(on) {
+          enabled = !!on;
+          if (enabled) { queueScan(); return; }
+          clearTimeout(timer); timer = null;
+          for (const a of [...tracked.keys(), ...frozen]) if (a.playState === 'paused') a.play();
+          tracked.clear();
+          frozen.clear();
+        },
         get size() { return tracked.size; },
       };
     }
+    function setAmbient(on) { if (ambient) ambient.setEnabled(on); }
     // The widget went off screen (hidden, minimised): stop every clock the rig
     // owns until it's back.
     let blinksWanted = false;
@@ -1621,7 +1649,12 @@
     }
     function gardenTick() {
       if (!garden) return;
-      const el = (performance.now() - garden.t0) * garden.speed;
+      // Out of view (an editor tile scrolled away, a hidden window): hold the
+      // garden's clock so it carries on from the same step, not skips ahead.
+      const now = performance.now();
+      if (svg.matches('.offscreen, .motion-paused *')) { if (garden.heldAt == null) garden.heldAt = now; return; }
+      if (garden.heldAt != null) { garden.t0 += now - garden.heldAt; garden.heldAt = null; }
+      const el = (now - garden.t0) * garden.speed;
       const g = gardenEl();
       const potSlot = (i) => POT_X[i];
       // ── fetch: 5 pots, each = walk out (edge), walk back, place
@@ -1831,7 +1864,7 @@
       return false;
     }
 
-    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, talking, get look() { return current; } };
+    return { svg, solidAt, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, setAmbient, talking, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

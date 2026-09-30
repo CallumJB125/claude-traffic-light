@@ -18,7 +18,7 @@ export function connectBoard({ boardId, org = null, onMessage, onStatus, url, We
     timer = null;
     retryAt = null;
     onStatus({ status: wasOpen ? 'lost' : 'connecting', attempt, retryAt: null });
-    try { ws = new WebSocketImpl(wsUrl); } catch { return retry(); }
+    try { ws = new WebSocketImpl(wsUrl); } catch { return retry(); } // privacy-flow: board-view
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'hello', protocol: PROTOCOL_VERSION }));
       ws.send(JSON.stringify({ type: 'subscribe', board_id: boardId }));

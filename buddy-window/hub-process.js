@@ -13,7 +13,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const net = require('node:net');
+const net = require('node:net'); // privacy-flow: local-board-hub
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -33,7 +33,7 @@ async function waitForHealth(port, { fetchImpl = fetch, timeoutMs = READY_TIMEOU
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     try {
-      const res = await fetchImpl(`http://127.0.0.1:${port}/api/health`);
+      const res = await fetchImpl(`http://127.0.0.1:${port}/api/health`); // privacy-flow: local-board-hub
       if (res.ok) return await res.json();
     } catch { /* not listening yet */ }
     await sleep(150);

@@ -116,6 +116,14 @@
     cursor: pointer;
     transition: filter var(--t);
   }
+  .pv { font-size: var(--text-sm, 12px); line-height: 1.45; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .pv p, .pv ul, .pv ol, .pv blockquote { margin: 0; }
+  .pv ul, .pv ol { padding-left: 18px; }
+  .pv li { margin: 3px 0; }
+  .pv .pv-h { font-size: var(--text-base); margin: 10px 0 0; }
+  .pv blockquote { border-left: 3px solid var(--line-input); padding-left: 8px; color: var(--text); }
+  .pv code { font-size: 11px; word-break: break-all; }
+  #privacy summary { cursor: pointer; font-weight: 500; }
   button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); font-weight: 500; padding: 5px 12px; }
   button.secondary:hover { filter: none; background: #322e3a; }
   button:hover { filter: brightness(1.08); }
@@ -360,11 +368,27 @@
     <div class="hint" id="hint-focus">macOS only lets Buddy read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Buddy never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
   </div>
 
+  <h2>Privacy</h2>
+  <div class="field" id="privacy">
+    <div class="hint">Buddy reads your sessions on this machine and sends nothing to us. The full notice is below, and it is a draft pending legal review.</div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="privacy-export-stats">Export stats</button>
+      <button type="button" class="secondary" id="privacy-export-setup">Export setup</button>
+      <button type="button" class="secondary" id="privacy-folder">Show data folder</button>
+    </div>
+    <div class="hint" id="privacy-status" role="status" aria-live="polite"></div>
+    <details id="privacy-notice">
+      <summary>Read the privacy notice</summary>
+      <div id="privacy-body" class="pv"></div>
+    </details>
+  </div>
+
   <div class="actions">
     <span id="status" role="status" aria-live="polite"></span>
     <button id="save">Save</button>
   </div>
 
+  <script src="privacy-render.js"></script>
   <script>
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
@@ -576,6 +600,14 @@
         : '';
     };
     window.settingsApi.gitStatus().then(showGit);
+    const pvStatus = document.getElementById('privacy-status');
+    const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
+    document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));
+    document.getElementById('privacy-export-setup').addEventListener('click', async () => pvDone(await window.settingsApi.exportSetup()));
+    document.getElementById('privacy-folder').addEventListener('click', async () => pvDone(await window.settingsApi.showDataFolder()));
+    window.settingsApi.privacyText().then((t) => {
+      document.getElementById('privacy-body').innerHTML = t ? window.renderPrivacy(t) : '<p>The privacy notice could not be loaded.</p>';
+    });
     load();
 
     // ── Voice (F7) ── its own saves, so the Save button's list stays untouched.

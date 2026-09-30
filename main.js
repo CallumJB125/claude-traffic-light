@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -21,7 +21,10 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
-const http = require('http');
+const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
+const { createAwayFeeds } = require('./src/away-feeds.js');
+const { createProbeBackoff } = require('./src/probe-backoff.js');
+const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions, getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
 const {
@@ -659,12 +662,12 @@ const BusyWatch = require('./src/busy-watch.js')({
   isDevRun: IS_DEV_RUN,
   fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
   tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
-  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))), // privacy-flow: calendar-helper
   readFile: (f) => fs.readFileSync(f, 'utf8'),
   writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
   removeFile: (f) => fs.rmSync(f, { force: true }),
   exists: (f) => fs.existsSync(f),
-  fetch: (url) => net.fetch(url),
+  fetch: (url) => net.fetch(url), // privacy-flow: ics-feed
   log: (...a) => console.log(...a),
   onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
 });
@@ -722,6 +725,82 @@ ipcMain.handle('busy-status', () => BusyWatch.status());
 ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
 ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
+// ── Motion gate ────────────────────────────────────────────────────────────
+// backgroundThrottling is off, so Chromium never tells a page nobody can see
+// it. Every reason the widget can't be seen (hidden, minimised, screen locked,
+// asleep, displays off) feeds one gate — menu-bar-only mode (item 10) will
+// call setMotionPaused('menu-bar', …); while it holds, the renderer stops its
+// clocks and main stops the cursor poll, the overlay, the garden, roaming and
+// status pushes.
+const widgetMotion = createMotionGate((paused) => {
+  if (win && !win.isDestroyed()) win.webContents.send('motion-paused', paused);
+  syncEyePoll();
+  // Whatever changed while paused lands the moment it's back.
+  if (!paused) broadcastStatus();
+});
+function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
+
+// The editor's previews run every animation the rules can pick, at full
+// rate; hidden, minimised or behind a locked screen that is pure waste.
+const lightsMotion = createMotionGate((paused) => {
+  if (lightsWin && !lightsWin.isDestroyed()) lightsWin.webContents.send('motion-paused', paused);
+});
+
+// Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
+// only while the machine sleeps.
+let gitTick = null;
+const awayFeeds = createAwayFeeds({
+  busyWatch: BusyWatch,
+  feeds: () => [refreshSpend, ...(gitTick ? [gitTick] : [])],
+});
+
+// Machine-wide reasons (locked, asleep, displays off) apply to every gate.
+const machineReasons = new Set();
+function pauseEverywhere(reason, on) {
+  if (on) machineReasons.add(reason); else machineReasons.delete(reason);
+  setMotionPaused(reason, on);
+  lightsMotion.set(reason, on);
+  awayFeeds.power(reason, on);
+  syncMachineReconcile();
+}
+
+// A missed unlock or wake notification would leave the widget frozen for
+// good. While a lock or displays-off reason stands, check once a minute
+// whether someone is plainly back.
+let machineReconcileTimer = null;
+function syncMachineReconcile() {
+  const want = machineReasons.has('locked') || machineReasons.has('screens-asleep');
+  if (want && !machineReconcileTimer) {
+    machineReconcileTimer = every(60 * 1000, () => {
+      const stale = staleMachineReasons([...machineReasons], powerMonitor.getSystemIdleState(60), powerMonitor.getSystemIdleTime());
+      for (const r of stale) { console.log(`[motion] clearing a stale '${r}'`); pauseEverywhere(r, false); }
+    }, 'motion-reconcile');
+  } else if (!want) machineReconcileTimer = stopTimer(machineReconcileTimer);
+}
+
+function watchPowerForMotion() {
+  powerMonitor.on('lock-screen', () => pauseEverywhere('locked', true));
+  powerMonitor.on('unlock-screen', () => pauseEverywhere('locked', false));
+  powerMonitor.on('suspend', () => pauseEverywhere('suspended', true));
+  powerMonitor.on('resume', () => pauseEverywhere('suspended', false));
+  if (IS_MAC) {
+    // Displays asleep without a lock (energy saver, a closed lid on a dock).
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidSleepNotification', () => pauseEverywhere('screens-asleep', true));
+    systemPreferences.subscribeWorkspaceNotification('NSWorkspaceScreensDidWakeNotification', () => pauseEverywhere('screens-asleep', false));
+    // An app launching or coming to the front may be the terminal gaining its
+    // Dock icon (or leaving the front): the roam probe looks again soon.
+    for (const n of ['NSWorkspaceDidLaunchApplicationNotification', 'NSWorkspaceDidActivateApplicationNotification']) systemPreferences.subscribeWorkspaceNotification(n, () => roamProbe.wake());
+  }
+}
+
+let eyeTimer = null;
+function syncEyePoll() {
+  // The visual tests screenshot a still face; a live cursor would shift it.
+  const want = DEMO !== 'visual' && app.isReady() && !widgetMotion.paused;
+  if (want && !eyeTimer) eyeTimer = every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  else if (!want) eyeTimer = stopTimer(eyeTimer);
+}
+
 function createWindow() {
   const saved = readBounds();
   const primary = screen.getPrimaryDisplay().workAreaSize;
@@ -747,6 +826,7 @@ function createWindow() {
     fullscreenable: false,
     show: false,
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       backgroundThrottling: false,
@@ -769,16 +849,24 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', () => { if (!glideTimer) saveBounds(); });
-  // backgroundThrottling is off, so the page never learns it's hidden: tell
-  // it, so the rig's clocks (idle loops, blinks) stop while nobody can see.
-  const visibility = (on) => () => { if (win && !win.isDestroyed()) win.webContents.send('visibility', on); };
-  win.on('show', visibility(true));
-  win.on('restore', visibility(true));
-  win.on('hide', visibility(false));
-  win.on('minimize', visibility(false));
-  // Those only fire on a change; a widget that loads hidden (showWidget off)
-  // would otherwise run its clocks until its first hide.
-  win.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) visibility(win.isVisible() && !win.isMinimized())(); });
+  // Each event re-reads both from the window: a restore can bring back a
+  // window that was hidden before it was minimised, with no 'show' at all.
+  const syncVisibility = (visible = win.isVisible()) => {
+    if (!win || win.isDestroyed()) return;
+    setMotionPaused('minimized', win.isMinimized());
+    setMotionPaused('hidden', !visible && !win.isMinimized());
+  };
+  win.on('show', () => syncVisibility(true));
+  win.on('hide', () => syncVisibility(false));
+  win.on('restore', () => syncVisibility());
+  win.on('minimize', () => syncVisibility());
+  // Those only fire on a change; a widget that loads hidden (showWidget off),
+  // or reloads while paused, must still start in the right state.
+  win.webContents.on('did-finish-load', () => {
+    if (!win || win.isDestroyed()) return;
+    syncVisibility();
+    win.webContents.send('motion-paused', widgetMotion.paused);
+  });
   win.on('closed', () => {
     win = null;
   });
@@ -801,6 +889,7 @@ function createSettingsWindow() {
     maximizable: false,
     title: 'Claude Buddy Preferences',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
       contextIsolation: true,
     },
@@ -850,6 +939,7 @@ function createLightsWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'lights-preload.js'),
       contextIsolation: true,
       // The live preview must keep animating when this window sits behind
@@ -858,6 +948,24 @@ function createLightsWindow() {
     },
   });
   lightsWin.setMenuBarVisibility(false);
+  const syncLightsVisibility = (visible = lightsWin?.isVisible()) => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsMotion.set('minimized', lightsWin.isMinimized());
+    lightsMotion.set('hidden', !visible && !lightsWin.isMinimized());
+  };
+  lightsWin.on('show', () => syncLightsVisibility(true));
+  lightsWin.on('hide', () => syncLightsVisibility(false));
+  lightsWin.on('restore', () => syncLightsVisibility());
+  lightsWin.on('minimize', () => syncLightsVisibility());
+  lightsWin.webContents.on('did-finish-load', () => {
+    if (!lightsWin || lightsWin.isDestroyed()) return;
+    lightsWin.webContents.send('motion-paused', lightsMotion.paused);
+    lightsWin.webContents.send('window-focus', lightsWin.isFocused());
+  });
+  // The page's own focus state can't be trusted in every host (automation
+  // pins document.hasFocus()), so the window's is sent in.
+  lightsWin.on('focus', () => lightsWin?.webContents.send('window-focus', true));
+  lightsWin.on('blur', () => lightsWin?.webContents.send('window-focus', false));
   // Dev: `electron . --lights --shot out.png [--select <ruleId>] [--mode live]`
   // captures the editor and quits.
   const shotAt = process.argv.indexOf('--shot');
@@ -936,6 +1044,9 @@ function createLightsWindow() {
   if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
+    // The next editor opens shown; only the machine-wide reasons carry over.
+    lightsMotion.set('hidden', false);
+    lightsMotion.set('minimized', false);
     if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
@@ -970,6 +1081,7 @@ function createHelpWindow() {
     title: 'What is Claude doing?',
     backgroundColor: '#1c1a1f',
     webPreferences: {
+      spellcheck: false,
       preload: path.join(__dirname, 'help-preload.js'),
       contextIsolation: true,
     },
@@ -1174,7 +1286,7 @@ async function pushScreenFx(fx) {
 function updateOverlay(look) {
   const gun = look.pose === 'ak47' || look.pose === 'sniper' ? look.pose : null;
   const fx = look.screenFx && look.screenFx !== 'none' ? look.screenFx : (look.effect === 'garden' || gardenRun ? 'garden' : null);
-  const wants = (gun || fx) && win && win.isVisible() && !prefersReducedMotion();
+  const wants = (gun || fx) && win && win.isVisible() && !widgetMotion.paused && !prefersReducedMotion();
   if (!wants) { stopOverlay(); overlayFx = 'none'; return; }
   const m = widgetMuzzle();
   if (!m) return;
@@ -1198,7 +1310,7 @@ function updateOverlay(look) {
     skipTaskbar: true,
     fullscreenable: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setIgnoreMouseEvents(true);
   overlayWin.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1260,7 +1372,7 @@ function ensureTrayRenderer() {
     show: false,
     transparent: true,
     frame: false,
-    webPreferences: { preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'tray-preload.js'), contextIsolation: true, offscreen: true, backgroundThrottling: false },
   });
   trayRenderWin.webContents.setFrameRate(4);
   trayRenderWin.loadFile('tray.html');
@@ -1567,7 +1679,7 @@ function updateGarden(st) {
   // Judge by the state underneath any travel override, or a state change
   // during gardening would never be seen.
   const real = gardenRun ? aggregateState({ ignoreTravel: true }) : st;
-  const wants = real.look.effect === 'garden' && win && win.isVisible() && real.reason !== 'preview';
+  const wants = real.look.effect === 'garden' && win && win.isVisible() && !widgetMotion.paused && real.reason !== 'preview';
   if (wants && !gardenRun && !roamState.busy) {
     runGarden(real.look).catch((e) => console.log('[garden]', e.message));
   } else if (!wants && gardenRun && !gardenRun.stop) {
@@ -1576,6 +1688,7 @@ function updateGarden(st) {
   }
 }
 
+let widgetAsksSent = null;
 function broadcastStatus() {
   // travelLook is only ever legitimate while the garden or a roam is running.
   // If one of those died (a throw, a crashed renderer, a closed window) the
@@ -1595,11 +1708,14 @@ function broadcastStatus() {
     win = null;
     createWindow();
   }
-  win?.webContents.send('status-changed');
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    // A paused widget catches up when the gate lifts (it broadcasts then),
+    // except for its waiting inputs, which it always hears about.
+    const asks = askKey(st);
+    if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
@@ -1615,7 +1731,16 @@ function broadcastStatus() {
 // When something needs you and the terminal isn't the front app, Claude runs
 // along the screen to that app's Dock icon, knocks, and runs home. Once per
 // waiting episode, then every 10 minutes while still ignored.
-let roamState = { lastKnock: 0, lastProbe: 0, probing: false, waitingSince: null, busy: false, home: null };
+let roamState = { lastKnock: 0, probing: false, waitingSince: null, busy: false, home: null };
+// A probe that keeps failing the same way (no Dock icon for the terminal)
+// backs off to 10 min; the terminal being in front must still be seen at once.
+const roamProbe = createProbeBackoff({
+  base: 20000,
+  max: 10 * 60 * 1000,
+  // A terminal that isn't running yet is worth checking for again soon.
+  caps: { 'no terminal app running': 60 * 1000 },
+  steady: (why) => why === 'already the front app',
+});
 
 // The renderer reports prefers-reduced-motion; while it holds, travel snaps
 // to its destination (keeping the pacing) and nothing roams, hops or glides.
@@ -1691,17 +1816,17 @@ async function roamAndKnock(st, { force = false } = {}) {
   // status tick start another round while the previous one was still waiting —
   // thousands of hung osascript processes, and an exhausted process table.
   roamState.busy = true;
-  const giveUp = (why) => { roamState.busy = false; return { ok: false, why }; };
+  const giveUp = (why, situation) => { roamState.busy = false; return { ok: false, why, situation }; };
   let appName = null;
   let icon = null;
   try {
     appName = await terminalForSessions(st.sessions);
-    if (!appName) return giveUp('no terminal app running');
-    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app');
+    if (!appName) return giveUp('no terminal app running', { app: null, running: false });
+    if (!force && (await frontmostApp()) === appName) return giveUp('already the front app', { app: appName, running: true, frontmost: true });
     icon = await dockIconRect(appName);
-    if (!icon) return giveUp(`no Dock icon for ${appName}`);
+    if (!icon) return giveUp(`no Dock icon for ${appName}`, { app: appName, running: true, frontmost: false, dockIcon: false });
   } catch (e) {
-    return giveUp(`could not locate the Dock icon: ${e.message}`);
+    return giveUp(`could not locate the Dock icon: ${e.message}`, { app: appName, running: !!appName });
   }
   roamState.lastKnock = Date.now();
   const wasVisible = win.isVisible();
@@ -1754,9 +1879,9 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || roamState.busy || previewLook || gardenRun) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
   const waiting = st.pending?.length || st.sessions.some((s) => WAITING_SIGNALS.has(s.signal));
-  if (!waiting) { roamState.waitingSince = null; return; }
+  if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
@@ -1775,13 +1900,19 @@ function maybeRoam(st) {
   // processes every 4 seconds (and on every session-file write), which is what
   // made the machine crawl while a permission prompt sat unanswered.
   if (roamState.probing) return;
-  if (Date.now() - roamState.lastProbe < 20000) return;
+  // Who is waiting, and in which terminal: a change there is a new situation.
+  roamProbe.setKey([...(st.pending || []).map((p) => p.id), ...st.sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).map((s) => `${s.sessionId}:${s.signal}:${s.hostApp || ''}`)].sort().join('|'));
+  if (!roamProbe.due(Date.now())) return;
   roamState.probing = true;
-  roamState.lastProbe = Date.now();
+  let result = null;
   roamAndKnock(st)
-    .then((r) => { if (!r.ok) console.log('[roam] skipped:', r.why); })
-    .catch((e) => console.log('[roam]', e.message))
-    .finally(() => { roamState.probing = false; });
+    .then((r) => { result = r; })
+    .catch((e) => { result = { ok: false, why: e.message }; console.log('[roam]', e.message); })
+    .finally(() => {
+      roamState.probing = false;
+      roamProbe.probed(result, Date.now());
+      if (result && !result.ok) console.log(`[roam] skipped: ${result.why}${roamProbe.gap > 20000 ? ` (next look in ${Math.round(roamProbe.gap / 1000)} s)` : ''}`);
+    });
 }
 
 // ── Rare events ────────────────────────────────────────────────────────────
@@ -1791,7 +1922,7 @@ const seenSessions = new Set();
 let lastEventAt = 0;
 function maybeRandomEvent(st) {
   const config = loadConfig();
-  if (!config.randomEvents || !win || !win.isVisible() || previewLook || travelLook) return;
+  if (!config.randomEvents || !win || !win.isVisible() || widgetMotion.paused || previewLook || travelLook) return;
   let milestone = false;
   for (const s of st.sessions) {
     if (!seenSessions.has(s.sessionId)) {
@@ -2088,15 +2219,17 @@ function commitConfig(partial) {
   return next;
 }
 
+ipcMain.handle('get-privacy', () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+ipcMain.handle('show-data-folder', () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
 ipcMain.handle('get-stats', (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-ipcMain.handle('export-stats', async (_e, format, days) => {
+ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
   const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
-  const r = await dialog.showSaveDialog(lightsWin || undefined, {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
     filters: [csv ? { name: 'CSV', extensions: ['csv'] } : { name: 'JSON', extensions: ['json'] }],
@@ -2293,7 +2426,7 @@ let spendReqId = 0;
 function spendRead(since) {
   if (spendWorker === null) {
     try {
-      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
+      spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js')); // privacy-flow: local-worker
       spendWorker.unref();
       spendWorker.on('message', (m) => {
         if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
@@ -2483,12 +2616,12 @@ async function runAction(action, st) {
       return { feedback: `${action.arg || 'Visual Studio Code'} → ${folderHint}` };
     }
     case 'copy-path': if (!cwd) return { feedback: 'no session folder' }; clipboard.writeText(cwd); return { feedback: 'path copied' };
-    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' };
+    case 'url': if (!/^https?:\/\//i.test(action.arg || '')) return { feedback: 'no URL set' }; shell.openExternal(action.arg); return { feedback: 'opened' }; // privacy-flow: rule-url
     case 'shell': {
       if (!action.arg) return { feedback: 'no command set' };
       // The user's own command, run in their shell; the session folder is CLAUDE_CWD.
-      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
-      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {});
+      if (IS_WIN) execFile('powershell', ['-NoProfile', '-c', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
+      else execFile('/bin/zsh', ['-lc', action.arg], { env: { ...process.env, CLAUDE_CWD: cwd || '' } }, () => {}); // privacy-flow: rule-command
       return { feedback: 'ran' };
     }
     case 'shortcut': if (IS_WIN) return { feedback: 'Shortcuts are macOS only' }; if (!action.arg) return { feedback: 'no shortcut set' }; execFile('shortcuts', ['run', action.arg], () => {}); return { feedback: `Shortcut: ${action.arg}` };
@@ -2767,8 +2900,8 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-ipcMain.handle('setup-export', async () => {
-  const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+ipcMain.handle('setup-export', async (e) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
@@ -2981,7 +3114,7 @@ app.whenReady().then(() => {
   // dev runs never call gh, but still show saved events.
   if (IS_DEV_RUN) git.pause('dev-run');
   else {
-    const gitTick = () => {
+    gitTick = () => {
       const config = loadConfig();
       if (!git.due(config)) return;
       git.tick({ sessions: readSessions(config), config }).then((fired) => {
@@ -2992,12 +3125,11 @@ app.whenReady().then(() => {
       }).catch((e) => console.log('[git]', e.message));
     };
     setTimeout(gitTick, 5000);
-    every(15000, gitTick, 'git');
   }
   refreshSpend();
-  every(SPEND_POLL_MS, refreshSpend, 'spend');
-  // The visual tests screenshot a still face; a live cursor would shift it.
-  if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  every(SPEND_POLL_MS, awayFeeds.tick, 'feeds');
+  syncEyePoll();
+  watchPowerForMotion();
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();

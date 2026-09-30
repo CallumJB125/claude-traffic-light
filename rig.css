@@ -4,6 +4,9 @@
    pose-* classes, so a rule can light any lamp in any colour, recolour the
    eyes, and pick a pose independently. */
 
+/* Out of view (rig.js observes every rig): nothing to draw, so nothing ticks. */
+.rig.offscreen, .rig.offscreen * { animation-play-state: paused !important; }
+
 .rig {
   width: 100%;
   height: 100%;
