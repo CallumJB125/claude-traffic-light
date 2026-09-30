@@ -224,9 +224,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, getTeam
       if (!hubLoading) hubLoading = resolveHub().finally(() => { hubLoading = null; });
       try {
         const h = await hubLoading;
-        // A hub that restarted while we set its cookie has a new URL: let the
-        // next 'ready' drive the load instead of adopting a dead one.
-        if (!h.team && supervisor.status().url !== h.url) return;
+        // A hub that restarted while we set its cookie has a new URL: start
+        // over against the new one rather than adopt a dead one. (hubLoading
+        // is already cleared here; the crash budget bounds the loop.)
+        if (!h.team && supervisor.status().url !== h.url) return showHubPage(page);
         if (!hubInfo) hubInfo = h;
       } catch (e) {
         log('board unavailable', e.message);
