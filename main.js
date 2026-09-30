@@ -269,6 +269,8 @@ const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: app.isPackaged ? process.execPath : null, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+// Linux panels are often dark and don't recolour template images, so it gets its own colour icon.
+const TRAY_ICON = IS_WIN ? 'tray-win.png' : process.platform === 'linux' ? 'tray-linux.png' : 'trayTemplate.png';
 
 function claudeHookOpts() {
   return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
@@ -1517,7 +1519,7 @@ function updateTrayMode() {
     trayTimer = stopTimer(trayTimer);
     trayLookKey = null;
     if (trayRenderWin) { trayRenderWin.close(); trayRenderWin = null; }
-    tray?.setImage(path.join(__dirname, 'assets', IS_WIN ? 'tray-win.png' : 'trayTemplate.png'));
+    tray?.setImage(path.join(__dirname, 'assets', TRAY_ICON));
   }
 }
 
@@ -2047,7 +2049,7 @@ function createTray() {
     tray.destroy();
     tray = null;
   }
-  const trayIconPath = path.join(__dirname, 'assets', IS_WIN ? 'tray-win.png' : 'trayTemplate.png');
+  const trayIconPath = path.join(__dirname, 'assets', TRAY_ICON);
   try {
     tray = new Tray(trayIconPath);
   } catch {
