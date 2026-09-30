@@ -29,10 +29,24 @@ test('a template loads unsaved and Revert undoes it', async () => {
   const before = await names();
   await lights.click('#presets-btn');
   await lights.click('#templates [data-template=minimal]');
-  await expect(lights.locator('#save-state')).toContainText('Revert to undo');
+  await expect(lights.locator('#save-state')).toContainText('Revert returns to your saved rules');
   expect(await names()).not.toEqual(before);
   await lights.waitForTimeout(2500);
   await expect(lights).toHaveScreenshot('lights-template-minimal.png');
   await lights.click('#revert-btn');
   expect(await names()).toEqual(before);
+});
+
+test('with unsaved edits a template asks before replacing them', async () => {
+  await lights.click('#presets-btn');
+  await lights.click('#templates [data-template=pair]');
+  await lights.click('#presets-btn');
+  await lights.click('#templates [data-template=show-off]');
+  await expect(lights.locator('#rules-choice')).toBeVisible();
+  await lights.click('#rules-choice [data-rules=cancel]');
+  await lights.click('#presets-btn');
+  await lights.click('#templates [data-template=show-off]');
+  await lights.click('#rules-choice [data-rules=load]');
+  await expect(lights.locator('#save-btn')).toBeEnabled();
+  await lights.click('#revert-btn');
 });

@@ -1136,10 +1136,22 @@ test('templates: authored values survive normalization (no typo silently dropped
 
 test('templates: export then import round-trips through the share format', () => {
   for (const id of TEMPLATE_IDS) {
-    const file = JSON.parse(JSON.stringify(R.templateShare(id)));
+    const file = JSON.parse(JSON.stringify(R.shareFile(R.applyTemplate(id))));
     assert.equal(file.app, 'claude-traffic-light');
-    const imported = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file));
+    const imported = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file), id);
     assert.deepEqual(imported, R.applyTemplate(id), id);
+  }
+});
+
+test('templates: a file from an older rulesVersion migrates through the real path and stays in shape', () => {
+  for (const id of ['minimal', 'pair']) {
+    const file = JSON.parse(JSON.stringify(R.shareFile(R.applyTemplate(id))));
+    // As if exported at v4, before the git, spend and "session open" rules.
+    file.rulesVersion = 4;
+    file.rules = file.rules.filter((r) => !/^git-|^runaway$|^budget-|^started$/.test(r.id));
+    const back = R.migrateRules(file.rules.map(R.normalizeRule), R.rulesVersionOf(file), id);
+    assert.deepEqual(back.map((r) => r.id).sort(), R.applyTemplate(id).map((r) => r.id).sort(), id);
+    for (const r of back) if (id === 'minimal') assert.deepEqual(nonLamp(r), [], r.id);
   }
 });
 
@@ -1169,4 +1181,61 @@ test('templates: applying hands back fresh rules and never touches the current s
   a[0].name = 'mutated';
   assert.notEqual(R.applyTemplate('show-off')[0].name, 'mutated');
   assert.equal(JSON.stringify(current), snapshot);
+});
+
+const lampIds = () => R.defaultRules().filter((r) => r.then.lamp).map((r) => r.id).sort();
+
+test('templates: Minimal and Pair keep exactly the rules that light the lamp', () => {
+  for (const id of ['minimal', 'pair']) assert.deepEqual(R.applyTemplate(id).map((r) => r.id).sort(), lampIds(), id);
+});
+
+test('templates: Solo dev is the defaults', () => {
+  assert.deepEqual(R.applyTemplate('solo-dev'), R.defaultRules().map(R.normalizeRule));
+});
+
+test('templates: Pair keeps Offline quiet but red rules that block you loud', () => {
+  const rs = R.applyTemplate('pair');
+  assert.deepEqual(nonLamp(rs.find((r) => r.id === 'offline')), []);
+  for (const id of ['limit', 'permission', 'runaway', 'budget-exceeded']) assert.ok(nonLamp(rs.find((r) => r.id === id)).length || id === 'budget-exceeded', id);
+});
+
+test('templates: Minimal is silent even on the locked rules', () => {
+  const rs = R.applyTemplate('minimal');
+  for (const id of ['limit', 'permission']) assert.equal(rs.find((r) => r.id === id).then.sound, null);
+});
+
+test('templates: Team lead shows the TEAM banner and crown with a subagent present', () => {
+  const l = look([
+    { signal: 'tool-use', tool: 'Bash', cwd: '/p', agents: [{ id: 'a', kind: 'teammate', status: 'running' }], mode: 'team' },
+  ], R.applyTemplate('team-lead'));
+  assert.equal(l.costume, 'crown');
+  assert.match(String(l.text), /TEAM/);
+  const rs = R.applyTemplate('team-lead').map((r) => r.id);
+  assert.ok(rs.indexOf('team') < rs.indexOf('subagents'));
+});
+
+test('templates: prefs overlays silence what rules cannot', () => {
+  const min = R.templatePrefs('minimal');
+  assert.equal(min.notifyOnStates, false);
+  assert.equal(min.seasonal, false);
+  const pair = R.templatePrefs('pair');
+  assert.equal(pair.seasonal, false);
+  assert.equal(pair.notifyStates['turn-failed'], false);
+  assert.equal(pair.notifyStates.offline, false);
+  assert.equal(pair.notifyStates['permission-ask'], undefined);
+  assert.deepEqual(R.templatePrefs('solo-dev'), {});
+  assert.deepEqual(R.templatePrefs('nope'), {});
+  R.templatePrefs('pair').notifyStates.offline = true;
+  assert.equal(R.templatePrefs('pair').notifyStates.offline, false);
+});
+
+test('templates: a rule added by a later migration follows the template it was saved with', () => {
+  const base = R.applyTemplate('minimal').filter((r) => !['offline', 'failed-turn', 'started'].includes(r.id));
+  const min = R.migrateRules(base, 1, 'minimal');
+  assert.ok(min.some((r) => r.id === 'offline'));
+  for (const r of min) assert.deepEqual(nonLamp(r), [], r.id);
+  const plain = R.migrateRules(base, 1);
+  assert.ok(nonLamp(plain.find((r) => r.id === 'offline')).length > 0);
+  // git rules have no lamp, so a lamp-only set never gets them
+  assert.ok(!R.migrateRules(base, 6, 'minimal').some((r) => r.id.startsWith('git-')));
 });

@@ -129,8 +129,14 @@
   }
 
   function selected() { return rules.find((r) => r.id === selectedId) || null; }
+  // The template the rules came from (saved with them, so later migrations keep
+  // them in its shape), and the settings it implies, staged until Save.
+  let templateId = null;
+  let stagedPrefs = null;
+  let applying = false;
   function setDirty(v) {
     dirty = v;
+    if (v && !applying) templateId = null;
     $('save-state').innerHTML = v ? '<span class="unsaved">Unsaved changes</span>' : '';
     $('save-btn').disabled = !v;
     $('revert-btn').disabled = !v;
@@ -867,13 +873,14 @@
   // ── Save / revert / presets ────────────────────────────────────────────
   async function save() {
     if (!dirty) return;
-    try { config = await window.lightsApi.saveConfig({ rules }); } catch (err) {
+    try { config = await window.lightsApi.saveConfig({ rules, template: templateId, ...prefsToSave() }); stagedPrefs = null; } catch (err) {
       // stay dirty: nothing was stored, and the edits are still only here
       flash(`Save failed — ${err.message}`);
       return;
     }
     rules = config.rules.map(R.normalizeRule);
     setDirty(false);
+    templateId = config.template || null;
     $('save-state').textContent = 'Saved';
     setTimeout(() => { if (!dirty) $('save-state').textContent = ''; }, 1500);
     renderList(); renderEditor(); renderStage();
@@ -881,7 +888,7 @@
   // Any other saveConfig rejection (toggles) still gets a visible message.
   window.addEventListener('unhandledrejection', (e) => { flash(e.reason?.message || 'Something went wrong'); });
   $('save-btn').addEventListener('click', save);
-  $('revert-btn').addEventListener('click', () => { rules = config.rules.map(R.normalizeRule); setDirty(false); if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
+  $('revert-btn').addEventListener('click', () => { rules = config.rules.map(R.normalizeRule); setDirty(false); templateId = config.template || null; stagedPrefs = null; if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
   window.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
   window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
@@ -896,10 +903,6 @@
   });
 
   const PRESETS = {
-    classic: () => R.defaultRules(),
-    minimal: () => R.defaultRules()
-      .filter((r) => !['subagent', 'ralph', 'swarm', 'team', 'shell', 'failed', 'ignored'].includes(r.id))
-      .map((r) => ({ ...r, then: { lamp: r.then.lamp, pose: 'none', sound: r.locked ? 'beep' : null, celebrate: false } })),
     tools: () => {
       const d = R.defaultRules().map((r) => (r.id === 'shell' || r.id === 'failed' ? { ...r, enabled: true } : r));
       const at = d.findIndex((r) => r.id === 'working');
@@ -932,10 +935,22 @@
   }
   renderTemplates();
 
-  function applyRules(next) {
+  // A template's settings merged over the saved ones: config keys are replaced
+  // whole, so notifyStates starts from what is saved.
+  function prefsToSave() {
+    if (!stagedPrefs) return {};
+    const { notifyStates, ...rest } = stagedPrefs;
+    return notifyStates ? { ...rest, notifyStates: { ...config.notifyStates, ...notifyStates } } : rest;
+  }
+
+  function applyRules(next, tpl) {
     rules = next.map(R.normalizeRule);
     selectedId = rules[0]?.id || null;
+    applying = true;
     setDirty(true);
+    applying = false;
+    templateId = tpl ? tpl.id : null;
+    stagedPrefs = tpl && Object.keys(tpl.prefs).length ? tpl.prefs : null;
     $('presets').hidden = true;
     renderList(); renderEditor(); renderStage();
   }
@@ -1080,9 +1095,12 @@
     if (!b) return;
     if (b.dataset.preset) return applyRules(PRESETS[b.dataset.preset]());
     if (b.dataset.template) {
-      // Staged, not saved: Revert brings back the rules it replaced.
-      applyRules(R.applyTemplate(b.dataset.template));
-      return flash('Template loaded — Save to keep it, Revert to undo');
+      // Staged, not saved: Revert returns to the saved rules and settings.
+      const t = R.templates().find((x) => x.id === b.dataset.template);
+      const done = `Template loaded${t.prefsNote ? ` (${t.prefsNote})` : ''} — Save to keep it; Revert returns to your saved rules`;
+      if (dirty) return offerRules(t.rules, done, t);
+      applyRules(t.rules, t);
+      return flash(done);
     }
     if (b.dataset.user) {
       const p = userPresets().find((x) => x.id === b.dataset.user);
@@ -1097,7 +1115,7 @@
   // ── Sharing: a compact code (deflate + base64url) or a JSON file. Codes
   // are versioned ("ctl1:") so a future format can still read old ones.
   async function encodeShare(rulesToShare) {
-    const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: R.RULES_VERSION, rules: rulesToShare.map(R.normalizeRule) });
+    const json = JSON.stringify(R.shareFile(rulesToShare));
     const bytes = new TextEncoder().encode(json);
     const cs = new CompressionStream('deflate-raw');
     const w = cs.writable.getWriter(); w.write(bytes); w.close();
@@ -1126,11 +1144,11 @@
   // commands, Shortcuts, URLs and apps, so, like a whole-setup import, they are shown —
   // every command included — and only load on an explicit confirm.
   let offered = null;
-  function offerRules(incoming, done) {
-    offered = { rules: incoming.map(R.normalizeRule), done };
+  function offerRules(incoming, done, tpl) {
+    offered = { rules: incoming.map(R.normalizeRule), done, tpl };
     const cmds = R.clickCommands(offered.rules);
     const k = offered.rules.length;
-    $('rules-summary').innerHTML = `<b>${k} rule${k === 1 ? '' : 's'} — they replace your current rules until you Save or Revert</b>`
+    $('rules-summary').innerHTML = `<b>${k} rule${k === 1 ? '' : 's'} — they replace your current rules, unsaved edits included. Revert returns to your saved rules</b>`
       + (cmds.length ? `<br>Clicks in these rules run:${cmds.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');
     $('share-form').hidden = true;
     $('setup-choice').hidden = true;
@@ -1142,11 +1160,11 @@
     e.stopPropagation();
     const b = e.target.closest('button[data-rules]');
     if (!b || !offered) return;
-    const { rules: incoming, done } = offered;
+    const { rules: incoming, done, tpl } = offered;
     offered = null;
     $('rules-choice').hidden = true;
     if (b.dataset.rules === 'cancel') { $('presets').hidden = true; return; }
-    applyRules(incoming);
+    applyRules(incoming, tpl);
     flash(done);
   });
   $('share-form').addEventListener('submit', async (e) => {
@@ -1577,6 +1595,7 @@
     $('tool-list').innerHTML = R.TOOL_SUGGESTIONS.map((t) => `<option value="${t}">`).join('');
     config = await window.lightsApi.getConfig();
     rules = config.rules.map(R.normalizeRule);
+    templateId = config.template || null;
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
