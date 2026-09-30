@@ -38,6 +38,37 @@ test('deep links: main registers plexiform:// and claudebuddy:// and routes both
   assert.deepEqual(pkg.build.mac.protocols, [{ name: 'Plexiform', schemes: ['plexiform', 'claudebuddy'] }]);
 });
 
+test('the dev-only mock accounts hub and walk are left out of the package, and nothing a packaged build loads needs them', () => {
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const files = pkg.build.files;
+  for (const f of ['!buddy-window/mock-accounts-hub.js', '!buddy-window/dev-walk.js']) {
+    assert.ok(files.indexOf(f) > files.indexOf('buddy-window/**/*'), `${f} after the glob it narrows`);
+  }
+  const DEV = new Set(['mock-accounts-hub.js', 'dev-walk.js']);
+  // Every relative require the window's modules make, followed from index.js.
+  const seen = new Set();
+  const walk = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/require\('(\.{1,2}\/[^']+)'\)/g)) {
+      let dep = path.resolve(path.dirname(file), m[1]);
+      if (!dep.endsWith('.js')) dep += '.js';
+      if (dep.startsWith(path.join(root, 'buddy-window') + path.sep)) walk(dep);
+    }
+  };
+  walk(path.join(root, 'buddy-window', 'index.js'));
+  assert.ok(seen.size > 3, 'the graph was walked');
+  for (const f of seen) assert.ok(!DEV.has(path.basename(f)), `${path.basename(f)} is reachable from index.js`);
+  // main.js loads each only lazily, behind !app.isPackaged.
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.equal(main.match(/require\('\.\/buddy-window\/mock-accounts-hub'\)/g).length, 1);
+  assert.match(main, /const devMock = !app\.isPackaged && [^\n]*\? require\('\.\/buddy-window\/mock-accounts-hub'\)/);
+  assert.equal(main.match(/require\('\.\/buddy-window\/dev-walk'\)/g).length, 1);
+  assert.match(main, /const walkAt = app\.isPackaged \|\| !mock \? -1 : [^\n]*\n\s+if \(walkAt > 0 [^\n]*\{\n\s+require\('\.\/buddy-window\/dev-walk'\)/);
+});
+
 test('the runner and the board MCP ship in the app; what runs as its own process is unpacked from app.asar', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   for (const f of ['board/package.json', 'board/shared/**/*', 'board/runner/**/*', 'board/mcp/**/*', '!board/**/test/**', '!board/runner/scripts/**']) assert.ok(pkg.build.files.includes(f), f);

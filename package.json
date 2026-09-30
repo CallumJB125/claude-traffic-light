@@ -71,6 +71,8 @@
       "tray.html",
       "tray-preload.js",
       "buddy-window/**/*",
+      "!buddy-window/mock-accounts-hub.js",
+      "!buddy-window/dev-walk.js",
       "board/package.json",
       "board/hub/**/*",
       "board/shared/**/*",
