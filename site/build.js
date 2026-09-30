@@ -8,6 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Brand = require('../brand.js');
+const QR = require('./src/assets/qr.js');
+// what is live; flip a flag when the thing ships and rebuild
+const LIVE_FILE = JSON.parse(fs.readFileSync(path.join(__dirname, 'site.config.json'), 'utf8'));
 
 const SRC = path.join(__dirname, 'src');
 const DIST = path.join(__dirname, 'dist');
@@ -28,7 +31,8 @@ const hashOf = (file) => crypto.createHash('sha1').update(fs.readFileSync(file))
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const lookup = (obj, dotted) => dotted.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
 
-function build() {
+function build({ live } = {}) {
+  const LIVE = { ...LIVE_FILE, ...live };
   rmrf(DIST);
   fs.mkdirSync(DIST, { recursive: true });
   copyDir(path.join(SRC, 'assets'), path.join(DIST, 'assets'));
@@ -49,7 +53,7 @@ function build() {
     const slug = f === 'index.html' ? '' : f.replace(/\.html$/, '');
     meta.path = slug ? `/${slug}` : '/';
     meta.canonical = `${Brand.urls.site}${slug ? `/${slug}` : '/'}`;
-    meta.contact = Brand.email('hello');
+    meta.contact = Brand.email('support');
     const ctx = { brand: Brand, page: meta };
     // partials first (they carry placeholders too), then placeholders
     html = html.replace(/\{\{include:([a-z-]+)\}\}/g, (_, n) => { if (!partials[n]) throw new Error(`${f}: no partial ${n}`); return partials[n]; });
@@ -58,6 +62,11 @@ function build() {
       if (!fs.existsSync(file)) throw new Error(`${f}: no asset ${p}`);
       return `/${p}?v=${hashOf(file)}`;
     });
+    // {{qr:phone}} becomes an inline QR code for that brand URL; {{live:phone}}...{{/live}} keeps
+    // its content only when site.config.json says the thing is live
+    html = html.replace(/\{\{qr:([a-z]+)\}\}/g, (_, k) => { if (!Brand.urls[k]) throw new Error(`${f}: no url ${k}`); return QR.toSvg(Brand.urls[k], { label: `QR code for ${Brand.urls[k]}`, dark: '#15171c', light: '#ffffff' }); });
+    html = html.replace(/\{\{live:([a-zA-Z]+)\}\}([\s\S]*?)\{\{\/live\}\}/g, (_, k, inner) => (LIVE[k] ? inner : ''));
+    html = html.replace(/\{\{notlive:([a-zA-Z]+)\}\}([\s\S]*?)\{\{\/notlive\}\}/g, (_, k, inner) => (LIVE[k] ? '' : inner));
     html = html.replace(/\{\{(raw:)?([a-zA-Z.]+)\}\}/g, (_, raw, key) => {
       const v = lookup(ctx, key);
       if (v == null || typeof v === 'object') throw new Error(`${f}: no value for {{${key}}}`);

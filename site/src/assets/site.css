@@ -81,8 +81,8 @@ p { margin: 0; text-wrap: pretty; }
 .hero-note { margin-top: 16px; font-size: 0.92rem; color: var(--ink-3); }
 .desk { position: relative; aspect-ratio: 1 / 1.08; background: var(--desk); border-radius: 22px; overflow: hidden; box-shadow: 0 2px 0 var(--ink), 0 26px 50px -24px rgba(21,23,28,0.45); isolation: isolate; }
 .desk::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 18%; background: linear-gradient(to top, #2a2730, transparent); z-index: -1; }
-.desk .stage { position: absolute; inset: 6% 8% 17%; display: grid; place-items: end center; }
-.desk .stage svg.rig { width: 100%; height: 100%; }
+.desk .stage { position: absolute; inset: 6% 8% 17%; display: flex; align-items: flex-end; justify-content: center; }
+.desk .stage svg.rig { height: 100%; width: auto; max-width: 100%; }
 .desk-caption { position: absolute; left: 18px; right: 18px; bottom: 14px; display: flex; justify-content: space-between; gap: 12px; font: 600 0.95rem/1.2 var(--pixel); color: var(--desk-ink); letter-spacing: 0.01em; }
 .desk-caption span:last-child { color: var(--desk-mute); }
 .desk-lamp { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; background: var(--desk-line); transition: background-color 200ms var(--ease); }
@@ -90,6 +90,40 @@ p { margin: 0; text-wrap: pretty; }
 .desk[data-lamp="amber"] .desk-lamp { background: var(--amber); }
 .desk[data-lamp="red"] .desk-lamp { background: var(--red); }
 @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } .desk { max-width: 420px; } }
+
+/* hero scene: the product, running. A fixed 560x470 design scaled to fit, so
+   every position below is in design pixels and the scale is one variable. */
+.scene { --k: 1; position: relative; width: 100%; aspect-ratio: 560 / 470; perspective: 1400px; }
+.scene-glow { position: absolute; inset: -12% -8% -6%; border-radius: 50%; background: radial-gradient(closest-side, var(--glow, transparent), transparent 72%); opacity: var(--glow-o, 0); filter: blur(10px); transition: opacity 600ms var(--ease); pointer-events: none; }
+.scene-inner { position: absolute; left: 0; top: 0; width: 560px; height: 470px; transform: scale(var(--k)); transform-origin: 0 0; }
+.win { position: absolute; left: 0; top: 0; width: 520px; height: 352px; background: var(--desk); border-radius: 16px; overflow: hidden; box-shadow: 0 2px 0 var(--ink), 0 32px 60px -28px rgba(21,23,28,0.55); transform-style: preserve-3d; transform: rotateY(var(--ry, 0deg)) rotateX(var(--rx, 0deg)); will-change: transform; }
+.win-bar { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 14px; background: #121015; color: var(--desk-mute); font: 600 13px var(--sans); }
+.win-bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a3641; } .win-bar span { margin-left: 10px; }
+.win-body { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px; color: var(--desk-ink); }
+.wcol { background: var(--desk-2); border-radius: 10px; padding: 8px; min-height: 252px; }
+.wcol h4 { margin: 2px 2px 8px; font-size: 12px; color: var(--desk-mute); font-weight: 700; }
+.slot { height: 62px; margin-bottom: 8px; }
+.wc { height: 62px; position: relative; background: #302c38; border: 1px solid var(--desk-line); border-radius: 9px; padding: 8px 9px; font-size: 12px; line-height: 1.25; overflow: hidden; }
+.wc b { display: block; font-weight: 700; } .wc small { color: var(--desk-mute); font-size: 11.5px; }
+.mcard { position: absolute; left: 0; top: 0; width: calc((100% - 24px - 30px) / 4 - 16px); will-change: transform; border-color: var(--nerve-2); background: #383348; box-shadow: 0 10px 22px -10px rgba(0,0,0,0.6); }
+.mcard .bar { position: absolute; left: 9px; right: 9px; bottom: 7px; height: 3px; border-radius: 2px; background: #4a4556; overflow: hidden; opacity: 0; } .mcard .bar i { display: block; height: 100%; width: 100%; background: var(--green); transform-origin: left; transform: scaleX(0); }
+.mcard .give { position: absolute; right: 7px; bottom: 6px; background: var(--green); color: #07200b; font: 700 11.5px var(--sans); padding: 3px 9px; border-radius: 7px; transform-origin: center; }
+.ask { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #2b1d1f; border: 1px solid #7a2a26; color: var(--desk-ink); border-radius: 10px; padding: 9px 12px; font-size: 12.5px; opacity: 0; transform: translateY(12px); pointer-events: none; }
+.ask code { font: 600 12px ui-monospace, Menlo, monospace; background: #3c2a2c; padding: 1px 6px; border-radius: 5px; }
+.ask-btn { background: var(--paper); color: #15171c; font: 700 12px var(--sans); padding: 4px 11px; border-radius: 7px; transform-origin: center; }
+.widget { position: absolute; right: 0; bottom: 0; width: 196px; background: var(--desk); border-radius: 16px; padding: 10px 10px 10px; box-shadow: 0 2px 0 var(--ink), 0 28px 50px -20px rgba(21,23,28,0.6); will-change: transform; transform: translate3d(var(--wx, 0px), var(--wy, 0px), 60px); }
+.widget-rig { width: 100%; aspect-ratio: 64 / 82; } .widget-rig svg.rig { width: 100%; height: 100%; }
+.widget-cap { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; align-items: center; padding: 6px 4px 2px; font: 600 13px var(--pixel); color: var(--desk-ink); }
+.widget-cap span { grid-column: 1 / -1; color: var(--desk-mute); font-size: 12px; }
+.widget-cap .desk-lamp { margin: 0; width: 10px; height: 10px; border-radius: 3px; background: var(--desk-line); }
+.widget[data-lamp="green"] .desk-lamp { background: var(--green); } .widget[data-lamp="amber"] .desk-lamp { background: var(--amber); } .widget[data-lamp="red"] .desk-lamp { background: var(--red); }
+.pointer { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; filter: drop-shadow(0 3px 4px rgba(0,0,0,0.4)); opacity: 0; }
+.plexus-alt { display: none; list-style: none; margin: 0; padding: 0; gap: 10px; }
+.plexus-alt li { padding: 14px 16px; border: 2px solid var(--ink); border-radius: 14px; } .plexus-alt strong { display: block; font-size: 1.05rem; }
+.phone-grid { display: grid; grid-template-columns: auto 1fr; gap: 28px 40px; align-items: center; }
+.qr { width: 168px; background: #fff; padding: 10px; border-radius: 14px; } .qr svg { display: block; width: 100%; height: auto; }
+@media (max-width: 860px) { .hero-grid .scene { max-width: 560px; } }
+@media (max-width: 640px) { .plexus { display: none; } .plexus-alt { display: grid; } .phone-grid { grid-template-columns: 1fr; } }
 
 /* sections */
 .section { padding: clamp(56px, 9vw, 120px) 0; position: relative; z-index: 2; }
@@ -153,9 +187,8 @@ p { margin: 0; text-wrap: pretty; }
 
 /* mesh + plexus */
 .plexus { width: 100%; height: auto; display: block; }
-.plexus .edge { fill: none; stroke: var(--nerve); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
-.plexus[data-live] .edge { animation: draw 1100ms var(--ease) forwards; animation-delay: var(--d, 0ms); }
-@keyframes draw { to { stroke-dashoffset: 0; } }
+.plexus .edge { fill: none; stroke: var(--nerve); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: var(--off, 1); }
+.plexus .node { transform-box: fill-box; transform-origin: center; }
 .plexus .node rect { fill: var(--paper); stroke: var(--ink); stroke-width: 2; }
 .plexus .node text { font: 700 15px var(--sans); fill: var(--ink); }
 .plexus .node.hub rect { fill: var(--ink); } .plexus .node.hub text { fill: var(--paper); font-size: 18px; }
@@ -251,7 +284,7 @@ p { margin: 0; text-wrap: pretty; }
   html { scroll-behavior: auto; }
   .story { height: auto; } .story-pin { position: static; height: auto; padding: 40px 0; }
   .btn, .lamp-btn, .pet, .board .card, .chart .bar, .nav { transition: none !important; }
-  .plexus .edge { stroke-dashoffset: 0; animation: none !important; } .plexus .pulse { display: none; }
+  .plexus .edge { --off: 0; } .plexus .pulse { display: none; } .plexus .node { transform: none !important; opacity: 1 !important; }
   .board[data-pre] .card { --y: 0; --o: 1; } .chart[data-pre] .bar { --s: 1; }
   .spine i { transform: scaleY(1); }
 }

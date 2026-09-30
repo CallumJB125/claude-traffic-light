@@ -21,9 +21,26 @@
       </div>
       <p class="hero-note">Private beta for small teams. Unsigned for now, so the first open takes one extra click: <a href="/download#first-open">here's how</a>.</p>
     </div>
-    <div class="desk" id="desk" data-lamp="off">
-      <div class="stage" id="hero-rig" role="img" aria-label="The pixel character holding up a traffic-light sign. The lamps cycle from green while agents work, to amber when it's your turn, to red when something needs approval."></div>
-      <div class="desk-caption" aria-hidden="true"><span><i class="desk-lamp"></i><b id="desk-state">Idle</b></span><span id="desk-detail">No agents running</span></div>
+    <div class="scene" id="scene" role="img" aria-label="An illustration of the Plexiform window and its widget. A card is given to Claude and moves across the board while the widget's lamp goes green, red for an approval, then amber when the work is ready.">
+      <div class="scene-glow" id="scene-glow"></div>
+      <div class="scene-inner" id="scene-inner" aria-hidden="true">
+        <div class="win" id="win">
+          <div class="win-bar"><i></i><i></i><i></i><span>{{brand.name}} · checkout service</span></div>
+          <div class="win-body" id="win-body">
+            <div class="wcol" data-col="todo"><h4>To do</h4><div class="slot"><div class="wc"><b>Rate-limit the export API</b><small>Mei</small></div></div><div class="slot"></div></div>
+            <div class="wcol" data-col="doing"><h4>Doing</h4><div class="slot"><div class="wc"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div><div class="slot"></div></div>
+            <div class="wcol" data-col="review"><h4>Needs you</h4><div class="slot"></div><div class="slot"></div></div>
+            <div class="wcol" data-col="done"><h4>Done</h4><div class="slot"><div class="wc"><b>Dark mode for settings</b><small>Merged</small></div></div><div class="slot"></div></div>
+            <div class="wc mcard" id="mcard"><b>Fix flaky test</b><small id="mcard-note">Unassigned</small><span class="bar"><i id="mcard-bar"></i></span><span class="give" id="give">Give to Claude</span></div>
+          </div>
+          <div class="ask" id="ask"><span>Claude wants to run <code>npm test</code></span><span class="ask-btn" id="ask-btn">Approve</span></div>
+        </div>
+        <div class="widget" id="widget">
+          <div class="widget-rig" id="hero-rig"></div>
+          <div class="widget-cap"><i class="desk-lamp" id="desk-lamp"></i><b id="desk-state">Idle</b><span id="desk-detail">No agents running</span></div>
+        </div>
+        <svg class="pointer" id="pointer" viewBox="0 0 16 22" width="22" height="30"><path d="M1 1 L1 17 L5.2 13.2 L8 20 L10.6 18.9 L7.9 12.3 L13.5 12.3 Z" fill="#f2efe8" stroke="#15171c" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      </div>
     </div>
   </div>
 </section>
@@ -43,7 +60,7 @@
       <div class="stage-card" id="stage-card" aria-hidden="true">
         <div class="stage-top"><span>Board: checkout service</span><span id="stage-lamp">idle</span></div>
         <div class="cols" id="cols">
-          <div class="col"><h4>To do</h4><div class="card" data-card="a"><b>Fix flaky checkout test</b><small>Unassigned</small><div class="give" id="give">Give to Claude</div></div><div class="card"><b>Rate-limit the export API</b><small>Mei</small></div></div>
+          <div class="col"><h4>To do</h4><div class="card" data-card="a"><b>Fix flaky checkout test</b><small>Unassigned</small><div class="give" id="give2">Give to Claude</div></div><div class="card"><b>Rate-limit the export API</b><small>Mei</small></div></div>
           <div class="col"><h4>Doing</h4><div class="card"><b>Migrate invoices to v2</b><small>Kofi · Codex</small></div></div>
           <div class="col"><h4>Done</h4><div class="card"><b>Dark mode for settings</b><small>Shipped</small></div></div>
         </div>
@@ -113,6 +130,9 @@
       <g class="node"><rect x="395" y="120" width="170" height="72" rx="14"/><text x="480" y="152" text-anchor="middle">Mei</text><text x="480" y="174" text-anchor="middle" style="font-weight:500;font-size:13px">Claude · testing</text></g>
       <g class="node"><rect x="700" y="130" width="170" height="72" rx="14"/><text x="785" y="162" text-anchor="middle">Kofi</text><text x="785" y="184" text-anchor="middle" style="font-weight:500;font-size:13px">Codex · migrating</text></g>
     </svg>
+    <ul class="plexus-alt" aria-label="Teammates">
+      <li><strong>Ana</strong> Claude · reviewing</li><li><strong>Mei</strong> Claude · testing</li><li><strong>Kofi</strong> Codex · migrating</li>
+    </ul>
     <p class="caption">An illustration of how it is planned to work. Not shipped yet.</p>
   </div>
 </section>
@@ -135,6 +155,9 @@
       <g class="node soon"><rect x="710" y="46" width="160" height="48" rx="12"/><text x="790" y="77" text-anchor="middle">Linear</text></g>
       <g class="node soon"><rect x="710" y="306" width="160" height="48" rx="12"/><text x="790" y="337" text-anchor="middle">Jira</text></g>
     </svg>
+    <ul class="plexus-alt" aria-label="Integrations">
+      <li><strong>GitHub</strong> In the beta</li><li><strong>Slack</strong> Coming</li><li><strong>Sentry</strong> Coming</li><li><strong>Linear</strong> Coming</li><li><strong>Jira</strong> Coming</li>
+    </ul>
     <p class="legend"><span>Solid outline: in the beta</span><span>Dashed outline: coming</span></p>
   </div>
 </section>
@@ -193,6 +216,21 @@
       <li>Calendar access is off by default, and event titles aren't read unless you turn that on.</li>
       <li>Crash reports, when they arrive, will be opt-in.</li>
       <li>Your rules, settings and cameo photos stay in a folder on your Mac.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section" id="beta" aria-labelledby="beta-h">
+  <div class="wrap grid-2">
+    <div>
+      <h2 id="beta-h">Private beta, for small teams.</h2>
+      <div class="prose" style="margin-top:22px"><p>The desktop app works on its own. The team board is where the beta needs you: a few small teams, each with an invite, using it for real work for a few weeks.</p><p>Pricing isn't announced yet. The waitlist hears first, before anything is charged.</p></div>
+      <div class="hero-cta" style="margin-top:28px"><a class="btn" href="#waitlist">Join the waitlist</a><a class="btn btn-ghost" href="/download">See the downloads</a></div>
+    </div>
+    <ul class="facts">
+      <li>Install it today on a Mac. Windows and Linux builds appear on the download page as they're published.</li>
+      <li>A phone companion, to approve a permission prompt when you're away from your desk, is coming.</li>
+      <li>Every change is written up in the <a href="/changelog">changelog</a>, and the <a href="/docs">docs</a> say exactly what it adds to your machine.</li>
     </ul>
   </div>
 </section>

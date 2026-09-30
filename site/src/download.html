@@ -25,6 +25,23 @@
       <li data-os="linux"><span><strong>Linux</strong> · AppImage and .deb</span><span class="muted">Checking…</span></li>
     </ul>
 
+    <h2 id="phone" style="margin-top:64px;font-size:1.7rem">Phone companion<span class="tag tag-soon">{{notlive:phone}}Coming{{/notlive}}{{live:phone}}Web app{{/live}}</span></h2>
+    <p class="prose" style="margin-top:12px">This is a web app for your phone, not the desktop app. It lets you answer a permission prompt when you're away from your desk. There's no native iPhone or iPad app yet, so it installs from your browser, with no app store.</p>
+    {{live:phone}}
+    <div class="phone-grid" style="margin-top:26px">
+      <div class="qr">{{qr:phone}}</div>
+      <ol class="steps" style="margin:0">
+        <li><strong>Point your phone's camera at the code</strong> to open the page.</li>
+        <li><strong>On iPhone or iPad,</strong> open it in Safari, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</li>
+        <li><strong>On Android,</strong> open it in Chrome, tap the menu, then <strong>Install app</strong>.</li>
+        <li><strong>On your Mac,</strong> open {{brand.name}}, then Phone, then <strong>Pair this phone</strong>, and scan the code it shows.</li>
+      </ol>
+    </div>
+    {{/live}}
+    {{notlive:phone}}
+    <p class="prose" style="margin-top:14px">It isn't live yet. When it is, this page will show a code to scan, and the steps will be: open it in Safari, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong> (on Android, <strong>Install app</strong> from Chrome's menu), then pair it from the desktop app. It needs a {{brand.name}} account and your team's hub, because phones don't talk to your Mac directly.</p>
+    {{/notlive}}
+
     <h2 id="first-open" style="margin-top:64px;font-size:1.7rem">Opening it the first time</h2>
     <p class="prose" style="margin-top:12px">The beta isn't signed with a developer certificate yet, so your system asks you to confirm once. It's a normal step for software that isn't from an app store, and it only happens the first time.</p>
     <div class="grid-2" style="margin-top:28px">
