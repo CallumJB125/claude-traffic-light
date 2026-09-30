@@ -131,7 +131,9 @@ function oauthOutcome(r, provider, host) {
   if (r.ok) return r;
   const who = PROVIDER_LABEL[provider] ?? 'That';
   if (r.code === 'INVALID_TOKEN') return { ...r, error: 'That sign-in didn’t work. Try again.' };
-  if (r.code === 'ACCOUNT_CONFLICT') return { ...r, error: `That ${who} account’s email already signs in to a different account on ${host}. Use an email code instead.` };
+  if (r.code === 'EMAIL_UNVERIFIED') return { ...r, error: `${who} hasn’t verified that email address. Verify it with ${who}, or use an email code instead.` };
+  if (r.code === 'PROVIDER_ERROR' || r.code === 'PROVIDER_UNAVAILABLE') return { ...r, error: `${who} didn’t answer. Try again in a minute.` };
+  if (r.code === 'METHOD_DISABLED') return { ...r, error: `${who} sign-in is turned off on ${host}.` };
   return r;
 }
 
@@ -251,12 +253,13 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     },
 
     /** Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller. */
-    async startOAuth(provider, { challenge, redirectUri, state }, dev = {}) {
+    async startOAuth(provider, { challenge, redirectUri }, dev = {}) {
       if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
-      const r = await call('oauthStart', { body: { provider, code_challenge: challenge, redirect_uri: redirectUri, state, ...device(dev) }, auth: false });
+      const r = await call('oauthStart', { body: { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) }, auth: false });
       if (!r.ok) return oauthOutcome(r, provider, host);
-      if (typeof r.flow_id !== 'string' || typeof r.url !== 'string') return { ok: false, error: `${host} didn’t start a sign-in.` };
-      return { ok: true, flow_id: r.flow_id, url: r.url };
+      // The hub mints the state: without one the loopback callback couldn't be checked.
+      if (typeof r.flow_id !== 'string' || typeof r.url !== 'string' || typeof r.state !== 'string' || r.state.length < 16) return { ok: false, error: `${host} didn’t start a sign-in.` };
+      return { ok: true, flow_id: r.flow_id, url: r.url, state: r.state };
     },
 
     /** Step 2: the loopback's code plus the verifier; the answer is the same as a verified email code. */
@@ -520,4 +523,4 @@ function bearerHeaders(requestHeaders, url, { scope, token }) {
   return headers;
 }
 
-module.exports = { createAccountClient, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
+module.exports = { createAccountClient, oauthOutcome, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };

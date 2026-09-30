@@ -682,8 +682,10 @@ test('presence: off by default; on sends the minimal session fields once ready; 
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 1, 'nothing before ready');
   c.emit('message', { type: 'runner.ready' });
-  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, share_summaries: false, sessions: [{ session_id: 's1', agent: 'claude', project: 'proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
-  assert.ok(!JSON.stringify(c.sent).includes('/Users/'), 'never an absolute path');
+  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, share_summaries: false, sessions: [{ session_id: 's1', agent: 'claude', cwd: '/Users/callum/Development/secret-client/proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
+  // The runner needs `cwd` to find the repo (D37b) and never forwards it; only the runner's own channel carries it.
+  assert.equal(c.sent[1].sessions[0].cwd, sessions[0].cwd);
+  assert.ok(!('model' in c.sent[1].sessions[0]) && !('tasks' in c.sent[1].sessions[0]), 'nothing else from the widget rides along');
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 2, 'unchanged: not resent');
   d.setPresence(false, sessions);

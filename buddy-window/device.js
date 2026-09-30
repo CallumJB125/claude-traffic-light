@@ -56,8 +56,10 @@ function presenceSessions(sessions = [], { summaries = false } = {}) {
     const out = {
       session_id: s.sessionId.slice(0, 100),
       agent: typeof s.via === 'string' && s.via ? s.via.slice(0, 40) : 'claude',
-      // The folder name only: a full path says who you are and how your disk is laid out.
-      project: typeof s.cwd === 'string' ? path.basename(s.cwd).slice(0, 100) : '',
+      // The runner needs the folder to find which repo this is (it reads the folder's git origin). It
+      // crosses only the private channel to the runner on this Mac; the runner sends the hub the repo,
+      // branch and state, never a path (D37b).
+      cwd: typeof s.cwd === 'string' ? s.cwd.slice(0, 1000) : '',
       state: typeof s.signal === 'string' ? s.signal.slice(0, 40) : 'unknown',
       since: new Date(Number.isFinite(t) ? t : Date.now()).toISOString(),
     };

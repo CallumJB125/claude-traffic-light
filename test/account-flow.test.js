@@ -646,9 +646,11 @@ test('oauth: Continue with Google, full path against the mock: loopback, exchang
   assert.match(start.code_challenge, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(start.device_name, 'Test Mac');
   assert.equal(start.code_verifier, undefined, 'the verifier goes only to the exchange');
+  assert.equal(start.state, undefined, 'the hub mints the state; the app never sends one');
+  assert.equal(start.client, 'buddy_desktop');
   const ex = JSON.parse(h.bodies.find((b) => b.includes('code_verifier')));
   assert.equal(crypto.createHash('sha256').update(ex.code_verifier).digest('base64url'), start.code_challenge);
-  assert.equal(ex.state, start.state);
+  assert.equal(ex.state, new URL(h.hub.oauthCallback()).searchParams.get('state'), 'the exchange returns the hub’s own state');
   const logged = h.logs.join('\n');
   for (const secret of [ex.code, ex.code_verifier, h.vault(h.origin).load().token, ex.state]) assert.ok(!logged.includes(secret), 'never logged');
   assert.ok(h.opened[0].startsWith(`${h.origin}/dev/oauth/authorize`));
@@ -684,8 +686,9 @@ test('oauth: a wrong state or a stray request never completes the flow nor echoe
 test('oauth: the hub refuses a replayed code and a verifier that doesn’t match the challenge', async () => harness(async (h) => {
   const c = createAccountClient({ origin: h.origin, store: { load: () => null, save() {}, clear() {} } });
   const { verifier, challenge } = pkcePair();
-  const state = 's'.repeat(43);
-  const start = await c.startOAuth('google', { challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const start = await c.startOAuth('google', { challenge, redirectUri: 'http://127.0.0.1:9/callback' });
+  const state = start.state;
+  assert.ok(state.length >= 16, 'the hub minted a state');
   const loc = new URL((await fetch(start.url, { redirect: 'manual' })).headers.get('location'));
   const code = loc.searchParams.get('code');
   assert.equal(loc.searchParams.get('state'), state);
@@ -697,13 +700,13 @@ test('oauth: the hub refuses a replayed code and a verifier that doesn’t match
   let saved = null;
   const c2 = createAccountClient({ origin: h.origin, store: { load: () => saved, save: (x) => { saved = x; }, clear: () => { saved = null; } } });
   const p = pkcePair();
-  const s2 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const s2 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' });
   const code2 = new URL((await fetch(s2.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
   assert.equal((await c2.exchangeOAuth({ flowId: s2.flow_id, code: code2, state: 'z'.repeat(43), verifier: p.verifier, provider: 'github' })).ok, false, 'wrong state at the hub');
-  const s3 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback', state });
+  const s3 = await c2.startOAuth('github', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' });
   const code3 = new URL((await fetch(s3.url, { redirect: 'manual' })).headers.get('location')).searchParams.get('code');
-  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state, verifier: p.verifier, provider: 'github' })).ok, true);
-  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state, verifier: p.verifier, provider: 'github' })).ok, false, 'replay');
+  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state: s3.state, verifier: p.verifier, provider: 'github' })).ok, true);
+  assert.equal((await c2.exchangeOAuth({ flowId: s3.flow_id, code: code3, state: s3.state, verifier: p.verifier, provider: 'github' })).ok, false, 'replay');
   assert.equal(saved.user.email, 'github-user@example.com');
   h.hub.setNow(Date.now() + 11 * 60_000);
   assert.equal((await fetch(s3.url, { redirect: 'manual' })).status, 400, 'expired');
@@ -733,7 +736,8 @@ test('oauth: the listener times out; Cancel closes it; a second sign-in replaces
 }, { oauthTimeoutMs: 300 }));
 
 test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and non-GET are refused', async () => {
-  const l = await listenOnce({ state: 's', brand: 'Plexiform', timeoutMs: 5000 });
+  const l = await listenOnce({ brand: 'Plexiform', timeoutMs: 5000 });
+  assert.equal(typeof l.expect, 'function');
   try {
     assert.equal(l.address, '127.0.0.1');
     const finished = [];
@@ -785,13 +789,16 @@ test('oauth: nothing starts for an unconfirmed hub; hub errors are plain sentenc
   await h.A.notNow();
   await h.A.hub(h.origin);
   assert.equal((await h.A.oauth('facebook')).error, 'Pick Google or GitHub.');
-  h.hub.setOAuthIdentity('github', { email: 'x@example.com', conflict: true });
-  await h.A.oauth('github');
-  assert.match((await h.flow.pendingOAuth()).error, /That GitHub account’s email already signs in to a different account/);
-  assert.equal(h.flow.acct.screen, 'email');
+  // The hub's own error codes (accounts link by verified email, so there is no account-conflict code).
+  const { oauthOutcome } = require('../buddy-window/accounts');
+  assert.match(oauthOutcome({ ok: false, code: 'PROVIDER_UNAVAILABLE' }, 'github', 'h').error, /GitHub didn’t answer/);
+  assert.match(oauthOutcome({ ok: false, code: 'PROVIDER_ERROR' }, 'google', 'h').error, /Google didn’t answer/);
+  assert.match(oauthOutcome({ ok: false, code: 'METHOD_DISABLED' }, 'google', 'h').error, /turned off on h/);
+  assert.match(oauthOutcome({ ok: false, code: 'INVALID_TOKEN' }, 'google', 'h').error, /didn’t work/);
+  assert.equal(oauthOutcome({ ok: false, code: 'ACCOUNT_CONFLICT', error: 'x' }, 'google', 'h').error, 'x', 'that code no longer exists');
   h.hub.setOAuthIdentity('google', { email: 'y@example.com', verified: false });
   await h.A.oauth('google');
-  assert.equal((await h.flow.pendingOAuth()).error, 'Verify your email first.');
+  assert.match((await h.flow.pendingOAuth()).error, /Google hasn’t verified that email address/);
   const { humanError } = require('../buddy-window/accounts');
   assert.match(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 120 } }, 'h'), /Wait 2 minutes/);
 }));
@@ -829,7 +836,7 @@ test('This Mac: “Include one-line summaries” is its own per-hub switch, off 
   assert.equal(child.sent.filter((m) => m.type === 'runner.presence').length, 0, 'summaries alone share nothing');
   await h.A.presence(h.host, true);
   const p = child.sent.filter((m) => m.type === 'runner.presence').at(-1);
-  assert.deepEqual([p.enabled, p.share_summaries, p.sessions[0].summary, p.sessions[0].project], [true, true, 'Using Edit', 'proj']);
+  assert.deepEqual([p.enabled, p.share_summaries, p.sessions[0].summary, p.sessions[0].cwd, p.sessions[0].project], [true, true, 'Using Edit', '/Users/me/p/proj', undefined]);
   await h.A.summaries(h.host, false);
   const q = child.sent.filter((m) => m.type === 'runner.presence').at(-1);
   assert.deepEqual([q.enabled, q.share_summaries, q.sessions[0].summary], [true, false, undefined]);
@@ -862,3 +869,16 @@ test('the default team hub comes from the app’s brand module and prefills the 
   assert.equal(BRAND.DEFAULT_HUB, Root.urls.hub);
   assert.deepEqual([BRAND.NAME, BRAND.SCHEME, [...BRAND.LEGACY_SCHEMES]], [Root.name, Root.scheme, [...Root.legacySchemes]]);
 }));
+
+test('oauth: the listener refuses every callback until the hub’s state is known, then only that state', async () => {
+  const l = await listenOnce({ brand: 'Plexiform', timeoutMs: 5000 });
+  try {
+    const hit = (qs) => fetch(`http://127.0.0.1:${l.port}/callback?${qs}`);
+    assert.equal((await hit('code=abc&state=anything')).status, 400, 'no state known yet');
+    l.expect('hub-minted-state-0123456789');
+    assert.equal((await hit('code=abc&state=anything')).status, 400, 'wrong state');
+    assert.equal((await hit('code=abc')).status, 400, 'no state');
+    assert.equal((await hit('code=abcDEF123&state=hub-minted-state-0123456789')).status, 200);
+    assert.deepEqual(await l.result, { ok: true, code: 'abcDEF123' });
+  } finally { l.close(); }
+});

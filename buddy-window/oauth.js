@@ -53,6 +53,9 @@ const same = (a, b) => {
  * once, for the one request that ends the flow.
  */
 function callbackHandler({ port, state, brand, finish }) {
+  // `state` is a string or a function: the hub mints it in oauth/start, after this listener (whose port
+  // goes into redirect_uri) is already up. Until it is known every request is refused.
+  const expected = typeof state === 'function' ? state : () => state;
   let done = false;
   const reply = (res, status, text, extra = {}) => {
     res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', connection: 'close', ...extra });
@@ -67,7 +70,8 @@ function callbackHandler({ port, state, brand, finish }) {
     let u;
     try { u = new URL(req.url, `http://127.0.0.1:${port}`); } catch { reply(res, 400, bad); return; }
     if (u.pathname !== '/callback') { reply(res, 404, bad); return; }
-    if (done || !same(u.searchParams.get('state'), state)) { reply(res, 400, bad); return; }
+    const want = expected();
+    if (done || typeof want !== 'string' || !same(u.searchParams.get('state'), want)) { reply(res, 400, bad); return; }
     const code = u.searchParams.get('code');
     // The provider said no (or the member closed it): that ends the flow too.
     if (!code && u.searchParams.get('error')) {
@@ -90,6 +94,7 @@ function callbackHandler({ port, state, brand, finish }) {
  */
 function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.createServer }) {
   return new Promise((resolve, reject) => {
+    let expectedState = typeof state === 'string' ? state : null;
     let settle;
     const result = new Promise((r) => { settle = r; });
     let finished = false;
@@ -106,10 +111,10 @@ function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.c
     server.on('error', (e) => { if (!server.listening) reject(e); });
     server.listen(0, '127.0.0.1', () => { // privacy-flow: team-hub-account
       const { port } = server.address();
-      server.on('request', callbackHandler({ port, state, brand, finish }));
+      server.on('request', callbackHandler({ port, state: () => expectedState, brand, finish }));
       timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
       timer.unref?.();
-      resolve({ port, redirectUri: `http://127.0.0.1:${port}/callback`, address: server.address().address, result, close: () => finish({ ok: false, reason: 'cancelled' }) });
+      resolve({ port, redirectUri: `http://127.0.0.1:${port}/callback`, address: server.address().address, result, expect: (s) => { expectedState = typeof s === 'string' ? s : null; }, close: () => finish({ ok: false, reason: 'cancelled' }) });
     });
   });
 }
@@ -127,11 +132,12 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
   const done = (async () => {
     if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
     const { verifier, challenge } = pkcePair();
-    const state = b64url(crypto.randomBytes(32));
-    try { listener = await listenOnce({ state, brand, timeoutMs }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
+    try { listener = await listenOnce({ brand, timeoutMs }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
-    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri, state }, device);
+    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device);
     if (cancelled || !start.ok) { listener.close(); return cancelled ? { ok: false, cancelled: true } : start; }
+    // The hub's state: the loopback callback must carry exactly this, and the exchange sends it back.
+    listener.expect(start.state);
     if (!providerUrlOk(start.url, { allowOrigins })) {
       listener.close();
       log('provider sign-in refused: the hub gave a page this app will not open');
@@ -145,7 +151,7 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
       return { ok: false, error: `Sign-in with ${PROVIDER_NAME[provider]} was cancelled.` };
     }
     if (cancelled) return { ok: false, cancelled: true };
-    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state, verifier, provider }, device);
+    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider }, device);
   })();
   return {
     done,

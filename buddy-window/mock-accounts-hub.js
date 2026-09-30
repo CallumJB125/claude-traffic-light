@@ -11,7 +11,7 @@
 // (the last invite's XXXX-XXXX code), `setNow(ms)` (clock), `starts()` (email/start
 // bodies), `revokeAll(email)`, `enrolments()`, `setVerified(email, bool)`,
 // `teamHeaders()` (X-Board-Team values seen), `setMethods({google, github,
-// email})`, `setOAuthIdentity(provider, {email, verified, conflict})`,
+// email})`, `setOAuthIdentity(provider, {email, verified})`,
 // `oauthStarts()` (oauth/start bodies), `oauthCallback(url)` (the loopback
 // URL the fake provider page last redirected to).
 //
@@ -217,10 +217,11 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (!['google', 'github'].includes(provider) || !signInMethods[provider]) return err(400, 'VALIDATION', 'provider not enabled');
       if (!/^[A-Za-z0-9_-]{43}$/.test(String(body.code_challenge ?? ''))) return err(400, 'VALIDATION', 'bad code_challenge');
       if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/callback$/.test(String(body.redirect_uri ?? ''))) return err(400, 'VALIDATION', 'redirect_uri must be the loopback callback');
-      if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(body.state ?? ''))) return err(400, 'VALIDATION', 'bad state');
+      // The hub mints the state (the app never sends one) and answers it with the flow.
       const id = crypto.randomBytes(18).toString('base64url');
-      oauthFlows.set(id, { provider, challenge: body.code_challenge, redirect: body.redirect_uri, state: body.state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name });
-      return ok({ flow_id: id, url: `${base}/dev/oauth/authorize?flow=${id}` });
+      const state = crypto.randomBytes(32).toString('base64url');
+      oauthFlows.set(id, { provider, challenge: body.code_challenge, redirect: body.redirect_uri, state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name });
+      return ok({ flow_id: id, url: `${base}/dev/oauth/authorize?flow=${id}`, state, expires_in: Math.round(CODE_TTL_MS / 1000) });
     }
 
     // The fake provider page: "approved", straight back to the app's loopback.
@@ -248,7 +249,6 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (got !== f.challenge) return invalid();
       const who = identities[f.provider];
       if (!who.verified) return err(403, 'EMAIL_UNVERIFIED', 'the provider has not verified this email');
-      if (who.conflict) return err(409, 'ACCOUNT_CONFLICT', 'this identity belongs to another user');
       return signInUser(who.email, body.device_name ?? f.device_name);
     }
 
