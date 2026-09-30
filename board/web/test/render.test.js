@@ -78,8 +78,8 @@ test('pill keys by label so a state change re-creates it (the fade), a tick only
 test('agent-driven cards are never draggable; human-owned cards are', () => {
   const agent = card(entry(view()), model([]));
   const human = card(entry(view({ run_state: 'todo', run: null, live: null, column: 'in_progress' })), model([]));
-  assert.equal(agent.props.draggable, null);
-  assert.equal(human.props.draggable, 'true');
+  assert.equal(agent.props['data-draggable'], null);
+  assert.equal(human.props['data-draggable'], 'true');
 });
 
 test('column: human cards keep their column, run-state cards derive it', () => {

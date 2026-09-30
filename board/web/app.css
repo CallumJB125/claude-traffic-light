@@ -64,6 +64,9 @@
   --text-lg: 16px;
   --text-xl: 20px;
 
+  --shadow-lift-color: light-dark(rgba(40, 30, 60, 0.32), rgba(0, 0, 0, 0.66));
+  --shadow-lift: 0 18px 34px -12px var(--shadow-lift-color), 0 3px 8px -2px var(--shadow-lift-color);
+
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --t: 160ms ease;
@@ -291,13 +294,14 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
   padding: 14px 20px 20px; overflow-x: auto;
 }
 .column { display: flex; flex-direction: column; min-height: 0; border-radius: var(--radius-lg); transition: background-color var(--t); }
-.column.is-drop { background: var(--accent-soft); }
+.column.is-drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--accent) 50%, transparent); }
+.column.is-drop-none { background: color-mix(in oklab, var(--tone-red) 7%, transparent); cursor: not-allowed; }
 .column-head { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 4px 6px; }
 .column-head h2 { font-size: var(--text-base); font-weight: 650; }
 .column-count { color: var(--faint); font-size: var(--text-sm); }
 .column-needs { display: inline-flex; align-items: center; gap: 2px; color: var(--tone-amber); font-size: var(--text-sm); font-family: var(--mono); }
 .column-head .btn-icon { margin-left: auto; width: 28px; min-height: 28px; }
-.column-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 12px; }
+.column-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 12px; }
 .column-empty { color: var(--faint); font-size: var(--text-sm); padding: 14px 12px; border: 1px dashed var(--line); border-radius: var(--radius-lg); }
 .column-more { align-self: flex-start; }
 .column-done .card:not(:focus-within) { opacity: 0.82; }
@@ -313,13 +317,45 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
-  transition: border-color var(--t-fast), background-color var(--t);
+  transition: border-color var(--t-fast), background-color var(--t), transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .card[data-tone="amber"] { --tone: var(--tone-amber); background: color-mix(in oklab, var(--tone-amber) 5%, var(--panel)); border-color: color-mix(in oklab, var(--tone-amber) 30%, var(--line)); }
 .card[data-tone="red"] { --tone: var(--tone-red); background: color-mix(in oklab, var(--tone-red) 5%, var(--panel)); border-color: color-mix(in oklab, var(--tone-red) 30%, var(--line)); }
 .card.is-open { border-color: var(--accent); }
-.card.is-dragging { opacity: 0.5; }
-.card.is-human[draggable="true"] { cursor: grab; }
+/* The lifted card is a clone (.card-ghost); the real one stays as the dashed slot. */
+.card.is-dragging { border-style: dashed; border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); background: var(--accent-soft); box-shadow: none; }
+.card.is-dragging > * { visibility: hidden; }
+.card[data-draggable="true"] { cursor: grab; }
+.card.is-lifted { transform: rotate(2deg) scale(1.03); box-shadow: var(--shadow-lift); border-color: var(--accent); cursor: grabbing; }
+.card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow); }
+.sel-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); }
+.sel-mark .icon { width: 11px; height: 11px; stroke-width: 2.2; }
+.card-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; will-change: transform; }
+.card-ghost .card { width: 100%; height: 100%; cursor: grabbing; }
+.card-ghost[data-count]::before {
+  content: attr(data-count); position: absolute; top: -8px; right: -8px; z-index: 1;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; text-align: center;
+  background: var(--accent); color: var(--accent-ink); font: 650 11px/20px var(--mono);
+}
+@starting-style { .card-ghost .card.is-lifted { transform: none; box-shadow: var(--shadow); } }
+body.is-card-dragging, body.is-card-dragging * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+body.is-card-dragging .board { scroll-snap-type: none; }
+.drop-line { position: relative; flex: none; height: 0; margin-top: -8px; pointer-events: none; }
+.drop-line::before { content: ""; position: absolute; left: 0; right: 0; top: 2.5px; height: 3px; border-radius: 2px; background: var(--accent); }
+.drop-line:first-child::before { top: 5px; }
+.selbar {
+  position: fixed; left: 50%; bottom: 16px; translate: -50% 0; z-index: 9;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 24px);
+  padding: 6px 8px 6px 14px; border-radius: var(--radius-lg);
+  background: var(--panel-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop);
+  transition: opacity 180ms var(--ease-out), translate 220ms var(--ease-out);
+}
+@starting-style { .selbar { opacity: 0; translate: -50% 10px; } }
+.selbar-count { font-weight: 650; font-size: var(--text-sm); white-space: nowrap; }
+.selbar-note { color: var(--muted); font-size: var(--text-xs); }
+.app-shell:has(.selbar) .toasts { bottom: 72px; }
+
 @media (hover: hover) and (pointer: fine) { .card:hover { border-color: var(--line-strong); } .card.is-open:hover { border-color: var(--accent); } }
 
 .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 20px; }
@@ -870,6 +906,9 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
   .toast { transition: opacity 150ms ease; }
   @starting-style { .toast { translate: 0 0; } }
   .btn:active:not(:disabled), .alert:active { transform: none; }
+  .card.is-lifted { transform: none; }
+  .selbar { transition: opacity 150ms ease; }
+  @starting-style { .selbar { translate: -50% 0; } }
   .budget-fill { transition: none; }
   .dash-spin { animation: none; }
 }

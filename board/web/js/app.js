@@ -4,7 +4,9 @@
 import { h, render } from './h.js';
 import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, isHumanOwned, agedView } from './view.js';
+import { displayFace, alertsForViewer, agedView } from './view.js';
+import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen } from './render-board.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
@@ -44,6 +46,10 @@ const state = {
   dash: null, // set below: freshDash(), status idle | loading | ok | error
   integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, confirmDisconnect: null },
   cardsRev: 0,
+  selection: new Set(), // card ids picked with Shift/⌘-click
+  drag: null, // pointer drag in flight: {ids, over, mode}
+  kbd: null, // keyboard pick-up: {ids, from, over}
+  announce: '',
 };
 
 let socket = null;
@@ -190,6 +196,10 @@ function buildModel() {
     busy: state.busy,
     theme: state.theme,
     showAllDone: state.showAllDone,
+    selection: state.selection,
+    kbd: state.kbd,
+    announce: state.announce,
+    drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
     readOnly: state.me?.member?.role === 'viewer',
     view: state.view,
@@ -298,11 +308,13 @@ let queued = false;
 function update() {
   if (queued) return;
   queued = true;
-  queueMicrotask(() => {
-    queued = false;
-    render(root, screen());
-    syncDialogs();
-  });
+  queueMicrotask(() => { if (queued) renderNow(); });
+}
+// Synchronous render, for callers that measure the DOM right after (FLIP).
+function renderNow() {
+  queued = false;
+  render(root, screen());
+  syncDialogs();
 }
 
 function syncDialogs() {
@@ -381,6 +393,7 @@ function onMessage(msg) {
       state.members = new Map(msg.members.map((m) => [m.member_id, m]));
       state.cards = new Map(msg.cards.map((c) => [c.id, { view: c, rx: now }]));
       state.cardsRev += 1;
+      state.selection = pruneSelection(state.selection, state.cards.keys());
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
@@ -397,6 +410,7 @@ function onMessage(msg) {
     case 'card.remove': {
       state.cards.delete(msg.card_id);
       state.cardsRev += 1;
+      state.selection = pruneSelection(state.selection, state.cards.keys());
       if (state.detail?.cardId === msg.card_id) closeDrawer();
       break;
     }
@@ -714,15 +728,66 @@ async function openNewCard() {
   if (state.dialog?.kind === 'new') { state.dialog = { ...state.dialog, repos }; update(); }
 }
 
-async function moveCard(cardId, column) {
-  const v = viewOf(cardId);
-  if (!v || !isHumanOwned(v) || v.column === column) return;
-  // Optimistic: human-owned cards move immediately, the hub confirms.
-  state.cards.set(cardId, { view: { ...v, column }, rx: state.cards.get(cardId).rx });
-  update();
-  const res = await withBusy(`${cardId}:move`, () => api.patchCard(cardId, { version: v.version, column }));
-  if (res) applyCard(res);
-  else state.cards.set(cardId, { view: v, rx: state.cards.get(cardId)?.rx ?? perf() });
+// Optimistic: the column changes now (and the cards settle into place), the hub
+// confirms per card. Each card's PATCHes run one after another so a second
+// quick move sends the version the first one returned; a failure rolls that
+// card back and says why.
+const moveChains = new Map();
+
+function say(text) {
+  state.announce = state.announce === text ? `${text}\u200b` : text;
+}
+
+function moveCards(ids, column, { flipFrom = null } = {}) {
+  const plan = planMoves(ids, viewOf, column);
+  const summary = moveSummary(plan, column);
+  say(summary);
+  if (!plan.moves.length) {
+    if (plan.skipped.length) toast(summary);
+    update();
+    return plan;
+  }
+  const before = snapshotRects(root);
+  for (const m of plan.moves) {
+    const c = state.cards.get(m.id);
+    state.cards.set(m.id, { view: { ...c.view, column }, rx: c.rx });
+  }
+  state.cardsRev += 1;
+  state.drag = null;
+  renderNow();
+  playFlip(root, before, flipFrom && new Map(plan.moves.map((m) => [m.id, flipFrom])));
+  if (plan.skipped.length) toast(summary);
+  for (const m of plan.moves) queueMove(m, column);
+  return plan;
+}
+
+function queueMove(m, column) {
+  const next = (moveChains.get(m.id) ?? Promise.resolve()).then(async () => {
+    const v = viewOf(m.id);
+    if (!v) return;
+    try {
+      applyCard(await api.patchCard(m.id, { version: v.version, column }));
+    } catch (err) {
+      toast(`Couldn't move ${m.key}: ${errorText(err)}`, 'error');
+      if (err.code === 'VERSION_CONFLICT' || err.code === 'ILLEGAL_TRANSITION') refreshBoardCard();
+      if (err.code === 'UNAUTHENTICATED') boot();
+      const cur = state.cards.get(m.id);
+      if (cur && cur.view.column === column) {
+        const before = snapshotRects(root);
+        state.cards.set(m.id, { view: { ...cur.view, column: m.from }, rx: cur.rx });
+        state.cardsRev += 1;
+        renderNow();
+        playFlip(root, before);
+      }
+    }
+    update();
+  });
+  moveChains.set(m.id, next);
+  next.finally(() => { if (moveChains.get(m.id) === next) moveChains.delete(m.id); });
+}
+
+function setSelection(next) {
+  state.selection = next;
   update();
 }
 
@@ -734,6 +799,12 @@ function onClick(e) {
     // Backdrop click closes (the dialog element itself only receives clicks outside its content box).
     const r = dlg.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dlg.close();
+    return;
+  }
+  const picked = (e.shiftKey || e.metaKey || e.ctrlKey) && !e.target.closest?.('a, .card-actions') ? e.target.closest?.('.card[data-card-id]') : null;
+  if (picked) {
+    e.preventDefault();
+    setSelection(toggleSelection(state.selection, picked.dataset.cardId));
     return;
   }
   const el = e.target.closest?.('[data-action]');
@@ -769,6 +840,7 @@ function onClick(e) {
     case 'new-card': openNewCard(); return;
     case 'theme': setTheme(el.dataset.next); return;
     case 'reconnect': socket?.reconnectNow(); return;
+    case 'clear-selection': setSelection(new Set()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'view': setView(el.dataset.view); return;
     case 'integ-reload': loadIntegrations(); return;
@@ -809,7 +881,8 @@ function onChange(e) {
     update();
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
-  if (what === 'move') moveCard(el.dataset.card, el.value);
+  if (what === 'move') moveCards([el.dataset.card], el.value);
+  if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
   if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
 }
 
@@ -820,7 +893,58 @@ function onDialogClose(e) {
   if (el.dataset.dialog === 'drawer') { if (state.detail) closeDrawer(); } else if (state.dialog) { state.dialog = null; update(); }
 }
 
+// Keyboard drag: Space lifts the focused card, ←/→ pick a column, Space/Enter
+// drops, Esc cancels. Space would also "click" the card open, so its keyup is
+// swallowed whenever a keydown was ours.
+let swallowSpaceUp = false;
+
+function kbdKeydown(e) {
+  if (state.kbd) {
+    if (!['ArrowLeft', 'ArrowRight', ' ', 'Enter', 'Escape'].includes(e.key) || e.metaKey || e.ctrlKey || e.altKey) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.key === ' ') swallowSpaceUp = true;
+    const held = state.kbd;
+    const { state: next, effect } = kbdKey(held, e.key);
+    state.kbd = next;
+    const count = held.ids.length;
+    const key = viewOf(held.ids[0])?.key ?? 'Card';
+    if (effect.type === 'drop') {
+      moveCards(held.ids, effect.column);
+      root.querySelector(`[data-card-id="${CSS.escape(held.ids[0])}"] .card-open`)?.focus();
+    } else {
+      say(announcement(effect, { key, count, from: held.from, over: (next ?? held).over }));
+      update();
+    }
+    return true;
+  }
+  const open = e.key === ' ' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey ? e.target.closest?.('.card-open') : null;
+  const cardEl = open?.closest('.card[data-draggable="true"]');
+  if (!cardEl) return false;
+  e.preventDefault();
+  swallowSpaceUp = true;
+  const id = cardEl.dataset.cardId;
+  const ids = idsToDrag(state.selection, id);
+  state.kbd = kbdStart(ids, viewOf(id).column);
+  say(announcement({ type: 'pickup' }, { key: viewOf(id).key, count: ids.length }));
+  update();
+  return true;
+}
+
+function onKeyup(e) {
+  if (e.key === ' ' && swallowSpaceUp) { swallowSpaceUp = false; e.preventDefault(); }
+}
+
+function onFocusout(e) {
+  if (!state.kbd || !e.target.closest?.('.card-open') || e.relatedTarget === e.target) return;
+  const held = state.kbd;
+  state.kbd = null;
+  say(announcement({ type: 'cancel' }, { key: viewOf(held.ids[0])?.key, count: held.ids.length, from: held.from }));
+  update();
+}
+
 function onKeydown(e) {
+  if (kbdKeydown(e)) return;
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
@@ -838,6 +962,11 @@ function onKeydown(e) {
     update();
     return;
   }
+  if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !root.querySelector('dialog[open]')) {
+    const cardEl = e.key === 'x' ? e.target.closest?.('.card-open')?.closest('.card[data-card-id]') : null;
+    if (cardEl) { e.preventDefault(); setSelection(toggleSelection(state.selection, cardEl.dataset.cardId)); return; }
+    if (e.key === 'Escape' && state.selection.size) { setSelection(new Set()); return; }
+  }
   const tab = e.target.closest?.('[role="tab"]');
   if (tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
     const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')];
@@ -850,34 +979,15 @@ function onKeydown(e) {
   }
 }
 
-// Drag and drop: human-owned cards only. Agent-driven cards move by run state.
-let dragId = null;
-function onDragStart(e) {
-  const cardEl = e.target.closest?.('[data-card-id][draggable="true"]');
-  if (!cardEl) return;
-  dragId = cardEl.dataset.cardId;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', dragId);
-  cardEl.classList.add('is-dragging');
-}
-function onDragOver(e) {
-  if (!dragId) return;
-  const zone = e.target.closest?.('[data-drop]');
-  if (!zone) return;
-  e.preventDefault();
-  for (const z of root.querySelectorAll('.column.is-drop')) if (z !== zone.parentElement) z.classList.remove('is-drop');
-  zone.parentElement.classList.add('is-drop');
-}
-function onDrop(e) {
-  const zone = e.target.closest?.('[data-drop]');
-  if (!zone || !dragId) return;
-  e.preventDefault();
-  moveCard(dragId, zone.dataset.drop);
-}
-function onDragEnd() {
-  dragId = null;
-  for (const z of root.querySelectorAll('.is-drop, .is-dragging')) z.classList.remove('is-drop', 'is-dragging');
-}
+// Pointer drag: human-owned cards only. Agent-driven cards move by run state.
+installDnd({
+  root,
+  dragIds: (el) => idsToDrag(state.selection, el.dataset.cardId),
+  start: (ids) => { state.drag = { ids, over: null, mode: 'pointer' }; update(); },
+  hover: (over) => { if (state.drag) { state.drag = { ...state.drag, over }; update(); } },
+  drop: (ids, column, rect) => moveCards(ids, column, { flipFrom: rect }).moves.length > 0,
+  end: () => { state.drag = null; update(); },
+});
 
 function onImgError(e) {
   if (e.target instanceof HTMLImageElement && e.target.hasAttribute('data-avatar')) e.target.remove();
@@ -889,10 +999,8 @@ document.addEventListener('change', onChange);
 document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
 document.addEventListener('close', onDialogClose, true);
-document.addEventListener('dragstart', onDragStart);
-document.addEventListener('dragover', onDragOver);
-document.addEventListener('drop', onDrop);
-document.addEventListener('dragend', onDragEnd);
+document.addEventListener('keyup', onKeyup);
+document.addEventListener('focusout', onFocusout);
 document.addEventListener('error', onImgError, true);
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => update());
 
