@@ -843,8 +843,9 @@
 /* Lamp bloom: the glow is whatever colour the lamp was lit with; rig.js
    animates only its scale and opacity. */
 .rig .lamp-bloom { fill: var(--lamp-on, transparent); opacity: 0; transform-box: fill-box; transform-origin: center; pointer-events: none; }
-/* Eyes follow the cursor on .eye-track; a pose that darts the eyes itself wins. */
-.rig.pose-look .eye-track { transform: none !important; }
+/* Eyes follow the cursor on .eye-track; a pose that darts the eyes itself wins,
+   and shut eyes can't be watching anything. */
+.rig:is(.pose-look, .pose-sleep, .pose-dead, .eyes-closed, .eyes-sleepy) .eye-track { transform: none !important; }
 /* A natural blink (rig.blinks) — only ever set while the plain eyes show. */
 .rig.blinking .eye-track .eye-open { opacity: 0 !important; }
 .rig.blinking .eye-track .eye-closed { opacity: 1 !important; }

@@ -3095,7 +3095,8 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
-  every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
+  // The visual tests screenshot a still face; a live cursor would shift it.
+  if (DEMO !== 'visual') every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
