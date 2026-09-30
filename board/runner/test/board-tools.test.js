@@ -97,3 +97,21 @@ test('board_create_card / board_add_lesson: the runner redacts text and forwards
     assert.equal(card.repo_id, run.repo_id);
   });
 });
+
+test('board_declare_plan / board_check_overlap: paths, reasons and other_owner come back enveloped', async () => {
+  await withRun('APP-95', async (run, hub) => {
+    const overlap = { other_card_id: 'c2', other_key: 'APP-7', other_owner: EVIL[0], level: 'warn', kind: 'adjacent', reasons: [EVIL[1]], paths: [EVIL[2], 'src/api.ts'], age_ms: 3 };
+    hub.rpcReply = (f) => (['board_declare_plan', 'board_check_overlap'].includes(f.method)
+      ? { ok: true, result: { overlaps: [overlap], ...(f.method === 'board_check_overlap' ? { locks: [] } : {}) } }
+      : { ok: true, result: {} });
+    const tag = `untrusted_board_content_${run.nonce}`;
+    for (const r of [await run.tool('board_declare_plan', { paths: ['src/api.ts'] }), await run.tool('board_check_overlap', {})]) {
+      const o = r.overlaps[0];
+      for (const s of [o.other_owner, ...o.reasons, ...o.paths]) {
+        assert.ok(s.startsWith(`<${tag} source="overlap:APP-7 `), s);
+        assert.equal(closes(s), 1, s);
+      }
+      assert.deepEqual([o.other_key, o.level, o.kind, o.age_ms], ['APP-7', 'warn', 'adjacent', 3], 'ids and enums untouched');
+    }
+  });
+});

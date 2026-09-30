@@ -18,6 +18,10 @@ const clip = (s, n) => {
 export const relPath = (p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.startsWith('/') && !p.startsWith('~')
   && !/^[a-z]:/i.test(p) && !p.includes('\0') && !p.split('/').includes('..');
 
+// Plan paths are shown to other runs' agents: no whitespace or '<' that could
+// carry prose or a tag inside a "path".
+const planPath = (p) => relPath(p) && !/[\s<]/u.test(p);
+
 export function verifyRun(hub, device, msg) {
   const tok = parseRunToken(hub.secret, msg.run_token);
   if (!tok || tok.run_id !== msg.run_id || tok.card_id !== msg.card_id) throw new HubError('UNAUTHENTICATED', 'bad run token');
@@ -133,7 +137,7 @@ const METHODS = {
 
   board_declare_plan(hub, { run, row }, params) {
     if (!Array.isArray(params.paths)) throw new HubError('VALIDATION', 'paths must be an array');
-    const paths = [...new Set(params.paths.filter(relPath))].slice(0, 200);
+    const paths = [...new Set(params.paths.filter(planPath))].slice(0, 200);
     hub.txn(() => {
       hub.db.run('UPDATE runs SET planned_paths = ? WHERE id = ?', JSON.stringify(paths), run.id);
       hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'plan.declare', payload: { paths } });

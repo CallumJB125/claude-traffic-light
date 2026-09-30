@@ -839,6 +839,23 @@ export class Run {
     };
   }
 
+  // Paths, reasons and owner names in overlap results come from other runs
+  // and members: data, enveloped like card text.
+  #wrapOverlaps(r) {
+    return {
+      ...r,
+      overlaps: (r?.overlaps ?? []).map((o) => {
+        const w = (what, s) => (typeof s === 'string' ? this.#wrap(`overlap:${o.other_key ?? 'card'} ${what}`, s) : s);
+        return {
+          ...o,
+          other_owner: w('owner', o.other_owner),
+          reasons: Array.isArray(o.reasons) ? o.reasons.map((x) => w('reason', x)) : o.reasons,
+          paths: Array.isArray(o.paths) ? o.paths.map((x) => w('path', x)) : o.paths,
+        };
+      }),
+    };
+  }
+
   async tool(name, args = {}, ctx = {}) {
     if (this.endedNormally) throw err('RUN_ENDED', 'this run has ended normally');
     if (this.fenced) throw err('FENCED', 'this card was taken over');
@@ -874,9 +891,9 @@ export class Run {
       }
       case 'board_declare_plan': {
         const paths = (args.paths ?? []).map((p) => filterPath(String(p), this.worktree)).filter((p) => p && p !== '.');
-        return this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) });
+        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
       }
-      case 'board_check_overlap': return this.sup.rpc(this, 'board_check_overlap', {});
+      case 'board_check_overlap': return this.#wrapOverlaps(await this.sup.rpc(this, 'board_check_overlap', {}));
       case 'board_recall': {
         const params = {};
         if (args.paths) params.paths = args.paths.map((p) => filterPath(String(p), this.worktree)).filter(Boolean);
