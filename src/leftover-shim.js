@@ -2,7 +2,8 @@
 // your shell rc and a `claude` shim under ~/.claude-traffic-light/bin. The
 // shim starts claude unrouted once the router script is missing, so nothing
 // breaks; this only notices the leftovers and hands you the exact command to
-// remove them. It reads, it never edits an rc file.
+// remove them (including the buddy-reader / buddy-worker agents under
+// ~/.claude/agents). It reads, it never edits an rc file.
 const fs = require('fs');
 const path = require('path');
 
@@ -27,16 +28,19 @@ function detect({ home, env = {}, root = path.join(home, '.claude-traffic-light'
   });
   const shim = path.join(root, 'bin', 'claude');
   const shimThere = exists(shim);
-  if (!files.length && !shimThere) return null;
+  const agentFiles = ['buddy-reader.md', 'buddy-worker.md'].map((n) => path.join(home, '.claude', 'agents', n)).filter((f) => exists(f));
+  if (!files.length && !shimThere && !agentFiles.length) return null;
   const sedInPlace = platform === 'darwin' ? "sed -i ''" : 'sed -i';
   const parts = files.map((f) => `${sedInPlace} ${shQuote(sedRange)} ${shQuote(f)}`);
   if (shimThere) parts.push(`rm -f ${shQuote(shim)}`);
+  parts.push(...agentFiles.map((f) => `rm -f ${shQuote(f)}`));
   const where = files.map((f) => f.replace(home, '~')).join(', ');
   return {
     files,
     shim: shimThere ? shim : null,
+    agentFiles,
     command: parts.join(' && '),
-    note: files.length ? `An old router block is still in ${where} — Buddy won't edit it. To remove it, run:` : 'An old router shim is still on disk — Buddy won\'t delete it. To remove it, run:',
+    note: files.length ? `An old router block is still in ${where} — Buddy won't edit it. To remove it, run:` : 'Old router leftovers are still on disk — Buddy won\'t delete them. To remove them, run:',
   };
 }
 

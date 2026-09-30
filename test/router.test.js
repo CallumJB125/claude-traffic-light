@@ -84,6 +84,23 @@ test('leftover shim: bash, fish (XDG) and a clean home', () => {
   assert.equal(r.command.split(' && ').length, 2);
 });
 
+test('leftover shim: old buddy-reader / buddy-worker agent files are found and listed for removal', () => {
+  const home = tmp();
+  const agents = path.join(home, '.claude', 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'buddy-reader.md'), 'x');
+  fs.writeFileSync(path.join(agents, 'buddy-worker.md'), 'x');
+  fs.writeFileSync(path.join(agents, 'mine.md'), 'x');
+  const r = LeftoverShim.detect({ home, env: {}, platform: 'linux' });
+  assert.deepEqual(r.agentFiles, [path.join(agents, 'buddy-reader.md'), path.join(agents, 'buddy-worker.md')]);
+  assert.equal(r.command, `rm -f '${agents}/buddy-reader.md' && rm -f '${agents}/buddy-worker.md'`);
+  assert.equal(fs.existsSync(path.join(agents, 'buddy-reader.md')), true, 'detect never deletes');
+  assert.equal(LeftoverShim.detect({ home, env: {}, platform: 'linux' }).files.length, 0);
+  assert.equal(spawnSync('/bin/sh', ['-c', r.command]).status, 0);
+  assert.equal(LeftoverShim.detect({ home, env: {} }), null);
+  assert.equal(fs.existsSync(path.join(agents, 'mine.md')), true);
+});
+
 // ── Model mix ───────────────────────────────────────────────────────────────
 const turn = (over) => ({ ts: NOW - 3600000, sessionId: 's', project: 'p', model: 'claude-opus-4-1', modelKey: 'opus', subagent: false, input: 100, output: 200, cacheRead: 20000, cacheWrite: 500, cacheWrite1h: 0, ...over });
 
