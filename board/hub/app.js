@@ -46,8 +46,10 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     if (config.tunnelProbeUrl) {
       const probe = async () => {
         try {
-          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000) });
-          hub.noteTunnel(res.ok);
+          // Healthy only when the answer came from this hub through the edge
+          // (an Access login page or a 530 from Cloudflare is not the origin).
+          const res = await fetchImpl(config.tunnelProbeUrl, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
+          hub.noteTunnel(res.ok && res.headers.get('board-protocol') != null);
         } catch {
           hub.noteTunnel(false);
         }
@@ -76,12 +78,14 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
       closed = true;
       for (const i of intervals) clearInterval(i);
       const done = new Promise((resolve) => server.close(() => resolve()));
-      for (const c of [...hub.runners.values(), ...hub.browsers]) c.close(WS_CLOSE.HUB_SHUTDOWN, 'hub shutting down');
+      const grace = () => new Promise((r) => setTimeout(r, graceMs).unref());
+      const handshakes = [...wss.clients].map((ws) => new Promise((r) => { if (ws.readyState === 3) r(); else ws.once('close', r); }));
+      for (const ws of wss.clients) ws.close(WS_CLOSE.HUB_SHUTDOWN, 'hub shutting down');
       server.closeIdleConnections?.();
-      await Promise.race([hub.idle(), new Promise((r) => setTimeout(r, graceMs).unref())]);
+      await Promise.race([Promise.all([hub.idle(), ...handshakes]), grace()]);
       server.closeAllConnections?.();
       for (const ws of wss.clients) ws.terminate();
-      await Promise.race([done, new Promise((r) => setTimeout(r, graceMs).unref())]);
+      await Promise.race([done, grace()]);
       db.close();
       log.info('hub stopped');
     },

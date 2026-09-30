@@ -23,7 +23,7 @@ export function isLoopback(host) {
 }
 
 export function loadConfig(env = process.env) {
-  const dataDir = env.BOARD_DATA_DIR ? resolve(env.BOARD_DATA_DIR) : resolve(HERE, '..', 'data');
+  const dataDir = env.BOARD_DATA_DIR ? resolve(env.BOARD_DATA_DIR) : resolve(HERE, 'data');
   const cfg = {
     bind: env.BOARD_BIND || '127.0.0.1',
     port: int(env.BOARD_PORT, 8787),
@@ -55,6 +55,7 @@ export function loadConfig(env = process.env) {
 
 export function validateConfig(cfg) {
   if (!['access', 'dev'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access or dev, got ${cfg.auth}`);
+  if (cfg.devSeed && cfg.auth !== 'dev') throw new Error('BOARD_DEV_SEED needs BOARD_AUTH=dev');
   if (cfg.auth === 'dev' && !isLoopback(cfg.bind)) throw new Error(`BOARD_AUTH=dev is allowed only on a loopback bind (BOARD_BIND=${cfg.bind})`);
   if (cfg.auth === 'access' && (!cfg.accessTeam || !cfg.accessAud)) throw new Error('BOARD_AUTH=access needs BOARD_ACCESS_TEAM and BOARD_ACCESS_AUD');
   if (cfg.secret != null && Buffer.byteLength(cfg.secret) < 32) throw new Error('BOARD_SECRET must be at least 32 bytes');

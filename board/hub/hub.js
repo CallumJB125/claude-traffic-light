@@ -7,9 +7,9 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
-import { step, fromDb, toDb, ACTIVE, DARK } from '../shared/states.js';
+import { step, fromDb, toDb, ACTIVE } from '../shared/states.js';
 import {
-  timerEvent, isGreen, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
+  timerEvent, ORPHAN_NOTIFY_MS, OVERLAP_DEBOUNCE_MS, TICK_MAX_RATE_MS,
 } from '../shared/liveness.js';
 import { branchName, snapshotRef } from '../shared/fence.js';
 import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText } from '../shared/handover.js';
@@ -43,7 +43,6 @@ export class Hub extends EventEmitter {
     this.browsers = new Set();      // browser connections (ws-board.js)
     this.offered = new Map();       // card_id → Set(device_id)
     this.pendingCmds = new Map();   // device_id → cmd frames for an offline device
-    this.pendingAnswers = new Map(); // run_id → answer frames not yet delivered
     this.notifications = [];
     this.overlapDue = new Map();    // repo_id → due (mono)
     this.prStatus = new Map();      // card_id → PR status from the merge poll
@@ -271,7 +270,6 @@ export class Hub extends EventEmitter {
         this.db.run("UPDATE asks SET state = 'cancelled' WHERE run_id = ? AND state = 'open' AND ? != 'parked'", runId, e.reason);
         this.db.run("UPDATE permission_requests SET state = ? WHERE run_id = ? AND state = 'open'", e.reason === 'parked' ? 'parked' : 'cancelled', runId);
         this.live.delete(runId);
-        this.pendingAnswers.delete(runId);
         this.scheduleOverlap(row.repo_id, 0);
         break;
       }
@@ -419,14 +417,21 @@ export class Hub extends EventEmitter {
       answered_by: a.answered_by,
     };
     this.later(() => {
-      if (this.sendToDevice(run.device_id, frame)) {
-        if (a.ask_id) this.db.run('UPDATE asks SET delivered_at = ? WHERE id = ?', this.iso(), a.ask_id);
-      } else {
-        const list = this.pendingAnswers.get(run.id) ?? [];
-        list.push(frame);
-        this.pendingAnswers.set(run.id, list);
-      }
+      if (this.sendToDevice(run.device_id, frame) && a.ask_id) this.db.run('UPDATE asks SET delivered_at = ? WHERE id = ?', this.iso(), a.ask_id);
     });
+  }
+
+  // Every answer of an unended run, re-sent on each runner hello: an answer
+  // given while the runner was dark (or sent into a dying socket) is never
+  // lost. The runner dedupes by ask_id / permission_request_id.
+  answerFrames(run) {
+    const row = this.card(run.card_id);
+    const by = (id) => ({ member_id: id, name: this.memberName(id) });
+    const asks = this.db.all("SELECT * FROM asks WHERE run_id = ? AND state = 'answered' ORDER BY answered_at", run.id)
+      .map((a) => ({ type: 'answer', run_id: run.id, card_id: row.id, fence: row.fence, ask_id: a.id, answer: a.answer, answered_by: by(a.answered_by) }));
+    const perms = this.db.all("SELECT * FROM permission_requests WHERE run_id = ? AND state IN ('allowed','denied') ORDER BY answered_at", run.id)
+      .map((p) => ({ type: 'answer', run_id: run.id, card_id: row.id, fence: row.fence, permission_request_id: p.id, decision: p.state === 'allowed' ? 'allow' : 'deny', scope: p.scope ?? 'once', answered_by: by(p.answered_by) }));
+    return [...asks, ...perms];
   }
 
   // Trusted @claude comments to the live run (the runner acks with outbox

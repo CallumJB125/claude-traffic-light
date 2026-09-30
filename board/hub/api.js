@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
-import { sponsorLine } from '../shared/cardface.js';
+import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
 import { cardView, cardDetail, boardSnapshot } from './views.js';
@@ -82,7 +82,10 @@ export class Api {
 
   alerts(member, boardId) {
     const snap = this.snapshot(member, boardId);
-    return { cards: snap.cards.map((c) => c.id), notifications: this.hub.notifications.filter((n) => n.board_id === boardId && n.to.includes(member.id)).slice(-50) };
+    return {
+      alerts: alertsFor(member.id, snap.cards),
+      notifications: this.hub.notifications.filter((n) => n.board_id === boardId && n.to.includes(member.id)).slice(-50),
+    };
   }
 
   overlapPreview(member, cardId, targetMemberId) {

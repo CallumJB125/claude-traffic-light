@@ -159,20 +159,11 @@ export class RunnerConn {
       }
     }
     for (const run of hub.db.all('SELECT * FROM runs WHERE device_id = ? AND ended_at IS NULL', this.device_id)) {
-      this.flushAnswers(run.id);
+      for (const f of hub.answerFrames(run)) this.send(f);
+      hub.db.run("UPDATE asks SET delivered_at = COALESCE(delivered_at, ?) WHERE run_id = ? AND state = 'answered'", hub.iso(), run.id);
       hub.deliverComments(run.card_id);
     }
     hub.sendOffersForDevice(this.device_id);
-  }
-
-  flushAnswers(runId) {
-    const list = this.hub.pendingAnswers.get(runId);
-    if (!list?.length) return;
-    this.hub.pendingAnswers.delete(runId);
-    for (const f of list) {
-      this.send(f);
-      if (f.ask_id) this.hub.db.run('UPDATE asks SET delivered_at = ? WHERE id = ?', this.hub.iso(), f.ask_id);
-    }
   }
 
   onAdvertise(msg) {
@@ -294,7 +285,6 @@ export class RunnerConn {
     }
     const res = hub.apply(row.id, { type: 'hb', fence: r.fence }, { device: hub.device(this.device_id) });
     if (!res.ok && res.error.code === 'FENCED') return no('FENCED');
-    this.flushAnswers(run.id);
     const after = hub.card(row.id);
     return { run_id: run.id, fence: after.fence, current: true, state: after.run_state };
   }
@@ -357,7 +347,13 @@ export class RunnerConn {
           this.consumeSeq(seq);
           return;
         }
-        this.applyKind(cur, run, m, seq, delayed);
+        try {
+          hub.txn(() => this.applyKind(cur, run, m, seq, delayed));
+        } catch (e) {
+          // A poison entry must never block the outbox: record it, ack it.
+          hub.log.warn('outbox entry rejected', { device_id: this.device_id, seq, kind: m.kind, err: e });
+          hub.feed(row.id, 'error', { first_line: `runner ${m.kind} rejected: ${clip(e.message, 200)}` }, { run, device: this.device_id, seq, delayed });
+        }
         this.consumeSeq(seq);
       });
     });
@@ -402,12 +398,7 @@ export class RunnerConn {
         break;
       case 'handover.write': {
         rec('handover.write');
-        try {
-          hub.writeNarrative(row.id, m.patch, { written_by: 'claude', run });
-        } catch (e) {
-          if (e.code !== 'VALIDATION') throw e;
-          hub.feed(row.id, 'error', { first_line: `handover write rejected: ${e.message}` }, { run });
-        }
+        hub.writeNarrative(row.id, m.patch, { written_by: 'claude', run });
         break;
       }
       case 'progress.append':

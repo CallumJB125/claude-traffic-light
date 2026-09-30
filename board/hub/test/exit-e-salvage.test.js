@@ -105,6 +105,12 @@ test('exit (e): outbox dedupes by (device, seq), applies in order, acks cumulati
     const texts = h.db.all("SELECT payload FROM events WHERE card_id = ? AND kind = 'progress' ORDER BY id", run.card_id).map((e) => JSON.parse(e.payload).text);
     assert.deepEqual(texts, ['one', 'two', 'three']);
     assert.equal(h.db.get('SELECT last_seq_acked FROM devices WHERE id = ?', r.dev.device_id).last_seq_acked, base + 3);
+
+    // A poison entry (not agent-writable) is recorded and acked, never retried forever.
+    const poison = await r.out({ kind: 'handover.write', ...runMsg(run), patch: { goal: 'rewrite the goal' } }, { seq: base + 4 });
+    assert.equal(poison.seq, base + 4);
+    assert.ok(h.db.get("SELECT 1 AS x FROM events WHERE card_id = ? AND kind = 'error' AND seq = ?", run.card_id, base + 4));
+    assert.equal(h.db.get('SELECT count(*) AS n FROM handovers WHERE card_id = ?', run.card_id).n, 0);
   } finally {
     await h.destroy();
   }

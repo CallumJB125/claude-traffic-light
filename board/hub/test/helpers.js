@@ -12,6 +12,7 @@ import WebSocket from 'ws';
 import { createApp } from '../app.js';
 import { silentLogger } from '../log.js';
 import { validateConfig } from '../config.js';
+import { seedDev } from '../seed.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -47,12 +48,14 @@ export function testConfig(over = {}) {
     restore: false, tunnelProbeUrl: null, githubToken: null, githubApi: 'https://api.github.com', githubPollMs: 60_000,
     webDir: resolve(HERE, 'fixtures', 'web'), sharedDir: resolve(HERE, '..', '..', 'shared'), logLevel: 'silent', shutdownGraceMs: 200,
     ...over,
+    devSeed: (over.auth ?? 'dev') === 'dev',
   });
 }
 
-export async function startHub({ clock = fakeClock(), github = fakeGitHub(), config = {}, dataDir } = {}) {
+export async function startHub({ clock = fakeClock(), github = fakeGitHub(), config = {}, dataDir, fetchImpl } = {}) {
   const cfg = testConfig({ ...config, ...(dataDir ? { dataDir, dbPath: join(dataDir, 'board.db') } : {}) });
-  const app = createApp(cfg, { clock, log: silentLogger, github, timers: false });
+  const app = createApp(cfg, { clock, log: silentLogger, github, timers: false, ...(fetchImpl ? { fetchImpl } : {}) });
+  if (!cfg.devSeed) seedDev(app.hub, { repoUrl: cfg.devRepo });   // same fixture data under Access auth
   const addr = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${addr.port}`;
   const db = app.db;
@@ -133,9 +136,9 @@ export async function startHub({ clock = fakeClock(), github = fakeGitHub(), con
       return run;
     },
     async close() {
+      await app.close({ graceMs: 200 });
       for (const r of runners) r.terminate();
       for (const b of browsers) b.terminate();
-      await app.close({ graceMs: 200 });
     },
     async destroy() {
       await h.close();
