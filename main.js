@@ -83,7 +83,7 @@ if (DEMO === 'knock') {
 const DIAG = process.argv.includes('--diag');
 // Dev runs (shots, playtests, demos) must never touch the real install: no
 // hook writes, no login item, no stale lock left behind.
-const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights');
+const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.includes('--shot-help') || process.argv.includes('--help-window') || process.argv.includes('--playtest') || process.argv.includes('--lights') || process.argv.includes('--buddy');
 
 // Every interval/timeout the app owns goes through these so --diag can count
 // them and so nothing can leak a live timer on shutdown.
@@ -779,8 +779,26 @@ function createSettingsWindow() {
   if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
-    if (process.platform === 'darwin' && !lightsWin) app.dock.hide();
+    if (process.platform === 'darwin' && !lightsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
+}
+
+// The Buddy main window (board, views, integrations…): buddy-window/.
+const { createBuddyWindow } = require('./buddy-window');
+let buddyWin = null;
+function openBuddy(page = null) {
+  if (!buddyWin) {
+    buddyWin = createBuddyWindow({
+      openWindow: (which) => {
+        if (which === 'lights') createLightsWindow();
+        else if (which === 'settings') createSettingsWindow();
+        else if (which === 'mix') { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
+      },
+      onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin) app.dock.hide(); },
+    });
+  }
+  if (IS_MAC) app.dock.show();
+  buddyWin.open(page);
 }
 
 let lightsWin = null;
@@ -887,7 +905,7 @@ function createLightsWindow() {
   if (IS_MAC) app.dock.show();
   lightsWin.on('closed', () => {
     lightsWin = null;
-    if (process.platform === 'darwin' && !settingsWin) app.dock.hide();
+    if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
 
@@ -1787,6 +1805,7 @@ function createTray() {
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
   const menu = Menu.buildFromTemplate([
+    { label: 'Open Buddy…', accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
@@ -2730,6 +2749,7 @@ if (!gotLock) {
     // window throws — and an uncaught throw here took the whole app down.
     try {
       if (argv.includes('--lights')) createLightsWindow();
+      else if (argv.includes('--buddy')) openBuddy();
       else win?.show();
     } catch (err) {
       console.error('[second-instance] could not surface a window:', err.message);
@@ -2764,6 +2784,24 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), 9 * 60 * 1000);
   }
   if (process.argv.includes('--lights')) createLightsWindow();
+  // Dev: `electron . --buddy [page] [--buddy-shot out-prefix]` opens the Buddy
+  // window (optionally on a page) and can capture both halves, then quit.
+  if (process.argv.includes('--buddy')) {
+    const at = process.argv.indexOf('--buddy');
+    const page = process.argv[at + 1]?.startsWith('--') ? null : process.argv[at + 1] ?? null;
+    openBuddy(page);
+    const shotAt = app.isPackaged ? -1 : process.argv.indexOf('--buddy-shot');
+    if (shotAt > 0 && process.argv[shotAt + 1]) {
+      setTimeout(async () => {
+        const shots = await buddyWin.capture();
+        const prefix = process.argv[shotAt + 1];
+        fs.writeFileSync(`${prefix}-sidebar.png`, shots.sidebar.toPNG());
+        if (shots.content) fs.writeFileSync(`${prefix}-content.png`, shots.content.toPNG());
+        console.log('[buddy-shot]', JSON.stringify(buddyWin.status()));
+        app.quit();
+      }, Number(process.env.BUDDY_SHOT_DELAY_MS ?? 6000));
+    }
+  }
   // After the widget has had time to appear, so the panel can sit beside it.
   if (process.argv.includes('--help-window') || process.argv.includes('--shot-help')) setTimeout(createHelpWindow, 1200);
   else setTimeout(maybeAutoShowHelp, 2500);
@@ -2897,6 +2935,15 @@ function guardRenderer(w, name, recreate) {
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
 app.on('before-quit', () => { flushStats(); lightsWin?.destroy(); settingsWin?.destroy(); });
+// The embedded board hub gets SIGTERM and a grace period to close its DB
+// before we exit, once; a second quit goes straight through.
+let hubStopped = false;
+app.on('before-quit', (e) => {
+  if (hubStopped || !buddyWin) return;
+  e.preventDefault();
+  hubStopped = true;
+  buddyWin.stop().finally(() => app.quit());
+});
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });
 
