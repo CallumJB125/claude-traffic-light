@@ -6,6 +6,7 @@ import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
 import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
+import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen } from './render-board.js';
 import { tableScreen } from './render-table.js';
@@ -50,6 +51,7 @@ const state = {
   drag: null, // pointer drag in flight: {ids, over, mode}
   kbd: null, // keyboard pick-up: {ids, from, over}
   announce: '',
+  quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
 };
 
 let socket = null;
@@ -199,6 +201,7 @@ function buildModel() {
     selection: state.selection,
     kbd: state.kbd,
     announce: state.announce,
+    quickAdd: state.quickAdd,
     drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
     readOnly: state.me?.member?.role === 'viewer',
@@ -721,6 +724,78 @@ async function submitDialogForm(form, submitter) {
   return undefined;
 }
 
+// ── quick add ────────────────────────────────────────────────────────────────
+
+let pendingSeq = 0;
+
+function openQuickAdd() {
+  if (state.me?.member?.role === 'viewer' || state.view !== 'board') return false;
+  state.quickAdd = { open: true, seed: '', confirm: null, keep: false };
+  renderNow();
+  const ta = root.querySelector('.quickadd-input');
+  ta?.focus();
+  ta?.scrollIntoView({ block: 'nearest' });
+  return true;
+}
+
+function closeQuickAdd() {
+  state.quickAdd = null;
+  update();
+}
+
+// Optimistic: the cards are on the board before the request leaves; the hub's
+// card then replaces each placeholder. A failure removes it and hands the text
+// back in the field.
+async function createQuick(titles, keep) {
+  const prefix = state.board?.key_prefix ?? null;
+  const memberId = state.me?.member?.id ?? null;
+  const temps = titles.map((t) => pendingCard(t, ++pendingSeq, { prefix, memberId }));
+  for (const v of temps) state.cards.set(v.id, { view: v, rx: perf() });
+  state.cardsRev += 1;
+  state.quickAdd = keep ? { open: true, seed: '', confirm: null, keep } : null;
+  update();
+  const failed = [];
+  for (const v of temps) {
+    try {
+      const res = await api.createCard(state.boardId, { title: v.title });
+      state.cards.delete(v.id);
+      applyCard(res);
+    } catch (err) {
+      state.cards.delete(v.id);
+      failed.push(v.title);
+      toast(`Couldn't add “${v.title}”: ${errorText(err)}`, 'error');
+      if (err.code === 'UNAUTHENTICATED') boot();
+    }
+    state.cardsRev += 1;
+    update();
+  }
+  if (failed.length) {
+    state.quickAdd = { open: true, seed: failed.join('\n'), confirm: null, keep };
+    renderNow();
+    root.querySelector('.quickadd-input')?.focus();
+  }
+}
+
+function commitTitles(titles, keep) {
+  if (!titles.length) { if (!keep) closeQuickAdd(); return; }
+  const ta = root.querySelector('.quickadd-input');
+  if (needsConfirm(titles)) {
+    state.quickAdd = { ...state.quickAdd, confirm: titles, keep };
+    update();
+    return;
+  }
+  if (ta) ta.value = '';
+  createQuick(titles, keep);
+}
+
+function onPaste(e) {
+  const ta = e.target.closest?.('[data-input="quickadd"]');
+  const text = e.clipboardData?.getData('text') ?? '';
+  if (!ta || !/\r?\n/.test(text.trim())) return;
+  e.preventDefault();
+  commitTitles(parseTitles(ta.value.slice(0, ta.selectionStart) + text + ta.value.slice(ta.selectionEnd)), true);
+}
+
 async function openNewCard() {
   state.dialog = { kind: 'new', repos: state.repos };
   update();
@@ -838,6 +913,17 @@ function onClick(e) {
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
+    case 'quick-add': openQuickAdd(); return;
+    case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
+    case 'quick-add-cancel': closeQuickAdd(); return;
+    case 'quick-add-confirm': {
+      const { confirm, keep } = state.quickAdd;
+      const ta = root.querySelector('.quickadd-input');
+      if (ta) { ta.value = ''; ta.focus(); }
+      createQuick(confirm, keep);
+      return;
+    }
+    case 'quick-add-decline': state.quickAdd = { ...state.quickAdd, confirm: null }; update(); root.querySelector('.quickadd-input')?.focus(); return;
     case 'theme': setTheme(el.dataset.next); return;
     case 'reconnect': socket?.reconnectNow(); return;
     case 'clear-selection': setSelection(new Set()); return;
@@ -945,10 +1031,15 @@ function onFocusout(e) {
 
 function onKeydown(e) {
   if (kbdKeydown(e)) return;
+  if (e.target.dataset?.input === 'quickadd') {
+    if (e.key === 'Escape') { e.preventDefault(); closeQuickAdd(); }
+    else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); commitTitles(parseTitles(e.target.value), e.shiftKey); }
+    return;
+  }
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    openNewCard();
+    if (state.me?.member?.role !== 'viewer' && !openQuickAdd()) openNewCard();
     return;
   }
   if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !state.detail && state.view === 'table' && !root.querySelector('dialog[open]')) {
@@ -1000,6 +1091,7 @@ document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
 document.addEventListener('close', onDialogClose, true);
 document.addEventListener('keyup', onKeyup);
+document.addEventListener('paste', onPaste);
 document.addEventListener('focusout', onFocusout);
 document.addEventListener('error', onImgError, true);
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => update());

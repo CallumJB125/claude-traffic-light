@@ -344,6 +344,15 @@ body.is-card-dragging .board { scroll-snap-type: none; }
 .drop-line { position: relative; flex: none; height: 0; margin-top: -8px; pointer-events: none; }
 .drop-line::before { content: ""; position: absolute; left: 0; right: 0; top: 2.5px; height: 3px; border-radius: 2px; background: var(--accent); }
 .drop-line:first-child::before { top: 5px; }
+.card.is-pending { opacity: 0.65; }
+.quickadd-open { align-self: stretch; justify-content: flex-start; gap: 6px; color: var(--muted); min-height: 34px; }
+.quickadd { display: flex; flex-direction: column; gap: 8px; }
+.quickadd-input { field-sizing: content; min-height: 62px; resize: none; line-height: 1.4; background: var(--panel); }
+.quickadd-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quickadd-foot .btn-icon { width: 28px; min-height: 28px; }
+.quickadd-hint { flex-basis: 100%; color: var(--faint); font-size: var(--text-xs); }
+.quickadd-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 10px; border-radius: var(--radius); font-size: var(--text-sm); background: color-mix(in oklab, var(--tone-amber) 12%, var(--panel)); border: 1px solid color-mix(in oklab, var(--tone-amber) 32%, var(--line)); }
+.quickadd-confirm span { flex-basis: 100%; }
 .selbar {
   position: fixed; left: 50%; bottom: 16px; translate: -50% 0; z-index: 9;
   display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 24px);

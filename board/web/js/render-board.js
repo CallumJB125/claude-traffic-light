@@ -120,16 +120,18 @@ export function card({ view, face }, model) {
   const labels = (view.labels ?? []).filter((l) => !/^via:[a-z0-9-]{2,32}$/.test(l));
   const picked = model.selection?.has(view.id);
   const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
-  const draggable = human && !model.readOnly;
+  const pending = view.pending === true;
+  const draggable = human && !model.readOnly && !pending;
 
   return h('article', {
     key: view.id,
-    class: `card${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
+    class: `card${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
     'data-tone': face.tone,
     'data-state': face.state,
     'data-card-id': view.id,
     'data-draggable': draggable ? 'true' : null,
     'aria-labelledby': `t-${view.id}`,
+    'aria-busy': pending ? 'true' : null,
   },
   h('div', { class: 'card-top' },
     picked ? h('span', { class: 'sel-mark', 'aria-hidden': 'true' }, icon('check', 'icon-xs')) : null,
@@ -140,7 +142,7 @@ export function card({ view, face }, model) {
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
-    h('button', { type: 'button', class: 'card-open', 'data-action': 'open', 'data-card': view.id, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
+    h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
   pill(face),
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
@@ -151,8 +153,8 @@ export function card({ view, face }, model) {
   labels.length ? h('div', { class: 'card-labels' }, labels.map((l) => h('span', { class: 'label' }, l))) : null,
   // An unspent budget on a card nobody is running is noise; the drawer and the Give dialog show it.
   face.budget && (view.run || view.budget?.spent_usd > 0) ? budgetBar(face.budget) : null,
-  model.readOnly ? null : cardActions(face, view, model.busy),
-  human && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+  model.readOnly || pending ? null : cardActions(face, view, model.busy),
+  human && !pending && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
 }
 
 export function column(id, entries, model) {
@@ -169,6 +171,7 @@ export function column(id, entries, model) {
       id === 'todo' && !model.readOnly ? h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'new-card', 'aria-label': 'New card' }, icon('plus')) : null),
     h('div', { class: 'column-body', 'data-drop': id },
       columnCards(id, shown, model),
+      id === 'todo' && !model.readOnly ? quickAddRow(model.quickAdd) : null,
       isDone && entries.length > 6 ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm column-more', 'data-action': 'toggle-done' },
         model.showAllDone ? 'Show fewer' : `Show ${entries.length - 6} more`) : null));
 }
@@ -184,6 +187,29 @@ function columnCards(id, shown, model) {
   const cards = shown.map((e) => card(e, model));
   cards.splice(at < 0 ? cards.length : at, 0, line);
   return cards;
+}
+
+// "+ Add a card" at the foot of To do. Title only: the New card dialog stays
+// for everything else. Text lives in the textarea (not in state) so a render
+// never touches what is being typed; `seed` only refills it after a failure.
+function quickAddRow(qa) {
+  if (!qa?.open) {
+    return h('button', { key: 'quick-add', type: 'button', class: 'btn btn-ghost quickadd-open', 'data-action': 'quick-add', 'aria-keyshortcuts': 'n' },
+      icon('plus', 'icon-lead'), 'Add a card');
+  }
+  return h('div', { key: 'quick-add', class: 'quickadd' },
+    h('textarea', {
+      class: 'input quickadd-input', 'data-input': 'quickadd', rows: 1, maxlength: '4000', value: qa.seed ?? '',
+      placeholder: 'Card title…', 'aria-label': 'New card title', 'aria-describedby': 'quickadd-hint', autocomplete: 'off',
+    }),
+    qa.confirm ? h('div', { class: 'quickadd-confirm', role: 'alert' },
+      h('span', null, `Create ${qa.confirm.length} cards from those lines?`),
+      h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'quick-add-confirm' }, `Create ${qa.confirm.length}`),
+      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'quick-add-decline' }, 'Not yet')) : null,
+    h('div', { class: 'quickadd-foot' },
+      h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'quick-add-submit' }, 'Add card'),
+      h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-icon', 'data-action': 'quick-add-cancel', 'aria-label': 'Cancel' }, icon('close')),
+      h('span', { id: 'quickadd-hint', class: 'quickadd-hint' }, 'Enter adds · Shift+Enter keeps adding · Esc cancels')));
 }
 
 const EMPTY = {
