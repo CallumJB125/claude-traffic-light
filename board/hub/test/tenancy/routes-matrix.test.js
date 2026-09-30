@@ -26,6 +26,8 @@ const MATRIX = {
   'GET /api/auth/methods': { kind: 'public', reason: 'the sign-in page asks before anyone is signed in' },
   'POST /api/auth/email/start': { kind: 'public', reason: 'starts a sign-in' },
   'POST /api/auth/email/verify': { kind: 'public', reason: 'finishes a sign-in' },
+  'POST /api/auth/oauth/start': { kind: 'public', reason: 'starts a Google/GitHub sign-in (a step-up needs the caller\'s own Bearer; oauth.test.js)' },
+  'POST /api/auth/oauth/exchange': { kind: 'public', reason: 'finishes a Google/GitHub sign-in; the flow, state and PKCE verifier are the credential (oauth.test.js)' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },

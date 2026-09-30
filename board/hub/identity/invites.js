@@ -78,7 +78,8 @@ export class Invites {
   verifiedEmails(user) {
     const set = new Set();
     if (user.primary_email && user.primary_email_verified_at) set.add(canonEmail(user.primary_email));
-    for (const r of this.db.all("SELECT email FROM identities WHERE user_id = ? AND provider = 'email' AND email_verified = 1 AND email IS NOT NULL", user.id)) set.add(canonEmail(r.email));
+    // Email identities, and addresses Google / GitHub verified at a sign-in (never migration 009's admin-typed GitHub ids).
+    for (const r of this.db.all("SELECT email FROM identities WHERE user_id = ? AND provider IN ('email','google','github') AND email_verified = 1 AND verified_at IS NOT NULL AND email IS NOT NULL", user.id)) set.add(canonEmail(r.email));
     return [...set];
   }
 

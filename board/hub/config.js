@@ -43,6 +43,10 @@ export function loadConfig(env = process.env) {
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    googleClientId: env.BOARD_GOOGLE_CLIENT_ID || null,
+    googleClientSecret: env.BOARD_GOOGLE_CLIENT_SECRET || null,
+    githubClientId: env.BOARD_GITHUB_CLIENT_ID || null,
+    githubClientSecret: env.BOARD_GITHUB_CLIENT_SECRET || null,
     accountsDev: flag(env.BOARD_ACCOUNTS_DEV),
     authFailBudget: int(env.BOARD_AUTH_FAIL_BUDGET, 20),
     mailDailyCap: int(env.BOARD_MAIL_DAILY_CAP, 2000),
@@ -65,6 +69,8 @@ export function loadConfig(env = process.env) {
   };
   delete env.BOARD_LOCAL_SECRET;
   delete env.BOARD_RESEND_API_KEY;
+  delete env.BOARD_GOOGLE_CLIENT_SECRET;
+  delete env.BOARD_GITHUB_CLIENT_SECRET;
   validateConfig(cfg);
   return cfg;
 }
@@ -77,6 +83,11 @@ export function isExposed(cfg) {
 }
 
 export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
+
+/** The OAuth providers this hub can sign in with: both the client id and its secret are set (D76). */
+export function oauthProviders(cfg) {
+  return SIGNIN_METHODS.filter((p) => cfg[`${p}ClientId`] && cfg[`${p}ClientSecret`]);
+}
 
 // BOARD_AUTH=accounts (D51, D66): the hub runs its own sign-in. Exposed, it
 // must be https behind cloudflared (per-IP limits key on CF-Connecting-IP,
@@ -104,7 +115,7 @@ function validateAccounts(cfg) {
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
     if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
-    if (!cfg.resendApiKey && !methods.length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM)');
+    if (!cfg.resendApiKey && !methods.length && !oauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
   if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');

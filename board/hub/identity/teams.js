@@ -144,17 +144,18 @@ export class Teams {
 
   /**
    * DELETE /api/teams/:team_id {confirm_slug, flow_id} (owner, with a fresh
-   * purpose:'delete' step-up that this spends): soft delete. Every
+   * step-up that this spends: an email 'delete_team' code, or an OAuth
+   * re-authentication from this device, D78): soft delete. Every
    * route 404s at once, runner devices are revoked (their sockets close
    * 4403), pending invites die and browser sockets on the team close 4403.
    * The hard purge after 7 days is P5.
    */
-  remove(member, body, { ip }) {
+  remove(member, body, { ip, cred = null }) {
     if (!can(member, 'team.delete')) throw new HubError('FORBIDDEN', 'only an owner can delete the team');
     const o = this.org(member.org_id);
     if (body.confirm_slug !== o.slug) throw new HubError('VALIDATION', 'confirm_slug must be the team slug');
     // Like deleting the account: a fresh email code first (M4), of its own purpose (L-H).
-    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team');
+    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team', cred);
     return this.deleteTeam(o, { member, ip, step });
   }
 
