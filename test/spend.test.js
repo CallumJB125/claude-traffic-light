@@ -155,14 +155,26 @@ test('rules: no env.spend (usage not read yet) changes nothing', () => {
   assert.deepEqual(R.spendSessions([live('a')], undefined), []);
 });
 
-test('rules v7: spend rules are slotted in once; deleting them sticks', () => {
+test('rules v8: spend rules are slotted in once; deleting them sticks', () => {
   const ids = R.SPEND_RULES.map((r) => r.id);
   const v6 = R.defaultRules().filter((r) => !ids.includes(r.id)).map(R.normalizeRule);
-  const m = R.migrateRules(v6, 6);
-  assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id));
-  assert.deepEqual(R.migrateRules(m, 6), m, 'never duplicated');
-  assert.equal(R.migrateRules(v6, R.RULES_VERSION), v6);
-  assert.equal(R.RULES_VERSION, 7);
+  for (const from of [6, 7]) {
+    const m = R.migrateRules(v6, from);
+    assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id), `from v${from}`);
+    assert.deepEqual(R.migrateRules(m, from), m, 'never duplicated');
+  }
+  assert.equal(R.RULES_VERSION, 8);
+});
+
+test('rules v8: spend rules deleted on v8 stay deleted, one or all', () => {
+  const ids = R.SPEND_RULES.map((r) => r.id);
+  const none = R.defaultRules().filter((r) => !ids.includes(r.id)).map(R.normalizeRule);
+  assert.equal(R.migrateRules(none, 8), none);
+  const noRunaway = R.defaultRules().filter((r) => r.id !== 'runaway').map(R.normalizeRule);
+  assert.equal(R.migrateRules(noRunaway, 8), noRunaway);
+  assert.ok(!R.migrateRules(noRunaway, 8).some((r) => r.id === 'runaway'));
+  // Carried forward through a later version too.
+  assert.equal(R.migrateRules(none, 9), none);
 });
 
 test('rules: editing a default spend rule does not leak into the next defaults', () => {

@@ -47,7 +47,7 @@
   // Budgets and runaway sessions. The app works them out from the transcripts
   // (spend.js) and passes them in as env.spend = { budget: { level },
   // budgetText, runaway: [{ sessionId, cwd, burn }] }; here they become
-  // virtual signals, get default rules, and v7 slots those rules into saved
+  // virtual signals, get default rules, and v8 slots those rules into saved
   // configs. Everything else in this file only calls into this block.
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'runaway', label: 'A session is burning money fast', hook: null, kind: 'virtual' },
@@ -368,7 +368,7 @@
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 7;
+  const RULES_VERSION = 8;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -425,8 +425,9 @@
       }
       out.splice(0, out.length, ...kept);
     }
-    // v7 (F1 spend): runaway and budget rules.
-    if (version < 7) return placeSpendRules(out, SPEND_RULES.map(normalizeRule));
+    // v7: reserved for F2 (git and CI signals), which merges first.
+    // v8 (F1 spend): runaway and budget rules.
+    if (version < 8) return placeSpendRules(out, SPEND_RULES.map(normalizeRule));
     return out;
   }
 
