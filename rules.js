@@ -559,7 +559,7 @@
       },
     },
     {
-      id: 'pair', name: 'Pair with Claude all day', description: 'Quiet: lamp colours only. Sounds and effects are kept for red, when you are blocked.',
+      id: 'pair', name: 'Pair with Claude all day', description: 'Quiet: lamp colours only. Sounds, effects and notifications only for red, when you are blocked.',
       fit: quietFit(true),
       prefs: { seasonal: false, notifyStates: { 'turn-failed': false, offline: false }, spend: { notifyBudgetWarning: false } },
       prefsNote: 'amber and offline notifications off, seasonal looks off',
