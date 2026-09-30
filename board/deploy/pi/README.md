@@ -31,4 +31,14 @@ Rollback: `deploy.sh` keeps the previous tree at `/opt/buddy-hub/board.prev`; mo
 restart. Restore a snapshot by stopping the hub, copying it over `board.db` and starting with
 `BOARD_RESTORE=1` once.
 
-Off-site backups: add Litestream to an R2 bucket once one exists.
+Off-site backups: Litestream streams `/var/lib/buddy-hub/board.db` to the R2 bucket `plexiform-hub-backups`
+(1 s sync; root-only config at `/etc/litestream.yml`, set up by the operator). The nightly snapshot stays as a second copy.
+
+Restore from Litestream (hub host lost or DB damaged):
+1. `systemctl stop buddy-hub`; move the damaged `board.db*` aside (never delete it).
+2. `litestream restore -config /etc/litestream.yml -o /var/lib/buddy-hub/board.db /var/lib/buddy-hub/board.db`
+   (add `-timestamp <RFC3339>` for point-in-time); `chown buddyhub:buddyhub`, `chmod 600`.
+3. Start the hub ONCE with `BOARD_RESTORE=1` in `hub.env`. It bumps every card's fence by 1000 and starts a new
+   epoch, so any runner or card that was live before the restore cannot write over the restored state. Remove
+   the line after the first start.
+4. Check `/api/health` and the journal tail. Runners reconnect on their own.

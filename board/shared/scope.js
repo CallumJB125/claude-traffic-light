@@ -150,7 +150,10 @@ export const CREDENTIAL_PATTERNS = Object.freeze([
 
 // Local absolute paths that must never leave the machine (the worktree path
 // included: it is local-only, §9.4 #6). Facts carry repo-relative paths.
-const LOCAL_PATH = /(?:^|[\s"'`(=:,[])(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/])/;
+// Any preceding character counts as a boundary (file:///Users/…, cat</Users/…,
+// x|/home/…, {/Users/…}) except one that continues a path segment, so a
+// repo-relative lib/tmp/x.js is not mistaken for /tmp/.
+const LOCAL_PATH = /(?<![\w.-])(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/])/;
 
 /**
  * Redact free text (command tails, agent-written text) before it enters the
@@ -164,7 +167,7 @@ export function redact(text, toplevel) {
     const top = normPath(toplevel);
     out = out.split(`${top}/`).join('').split(top).join('.');
   }
-  out = out.replace(/(^|[\s"'`(=:,[])((?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/)[^\s"'`),\]]*|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/][^\s"'`),\]]*)/g, '$1<path>');
+  out = out.replace(/(?<![\w.-])(?:(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/)[^\s"'`)},\]<>|]*|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/][^\s"'`)},\]<>|]*)/g, '<path>');
   for (const [kind, re] of CREDENTIAL_PATTERNS) out = out.replace(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`), `<redacted:${kind}>`);
   return out;
 }

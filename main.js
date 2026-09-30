@@ -8,6 +8,7 @@ const Rules = require('./rules.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
+const UsageHistory = require('./usage-history.js');
 const Spend = require('./spend.js');
 const SessionState = require('./hooks/session-state.js');
 const Agents = require('./agents.js');
@@ -152,6 +153,8 @@ const DEFAULT_CONFIG = {
   gitRepos: [],
   gitDeployWorkflows: [],
   spend: { ...Spend.DEFAULTS },
+  // the widget tooltip's "Today $X · Y% above your usual" line
+  paceTooltip: true,
   // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
   busyHold: true,
   busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
@@ -587,7 +590,8 @@ function computeState(opts = {}) {
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend), away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  const sNote = spendNote(config.rules, fired, sessions, spend);
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -2140,8 +2144,7 @@ async function computeCosts() {
   if (turns.length) {
     noteCostSource('transcripts');
     const data = Usage.spend(turns);
-    for (const [key, cost] of Object.entries(data.history)) Stats.recordCost(stats, key, cost);
-    statsDirty = true;
+    // per-day cost comes from the permanent record (applyHistoryToStats), not from here
     costCache = { at: Date.now(), data };
     return data;
   }
@@ -2226,6 +2229,19 @@ function getUsageTurns() {
 // in a shell rc (never edited from here).
 ipcMain.handle('model-mix', async () => ({ ...Usage.modelMix(await getUsageTurns()), leftoverShim: LeftoverShim.detect({ home: os.homedir(), env: process.env, root: ROOT_DIR }) }));
 
+// The Usage tab and buddy_usage_history read the permanent record from disk.
+// Asking also nudges a fresh fold in, so an open tab stays current.
+// One call gives the tab everything it draws (usage-history.js bundle), read
+// from the cached store; `now` is only honoured in the visual tests.
+ipcMain.handle('usage-bundle', (_e, q = {}) => {
+  if (Date.now() - historyAt > HISTORY_LIVE_MS && spendTurns.turns) historyTick();
+  const range = ['7d', '30d', '90d', '1y', 'all'].includes(q.range) ? q.range : '30d';
+  const now = DEMO === 'visual' && Number.isFinite(Number(q.now)) ? Number(q.now) : Date.now();
+  const project = typeof q.project === 'string' && q.project.length < 1024 ? q.project : null;
+  const out = UsageHistory.bundle(openHistory(), { range, now, project, compare: q.compare !== false });
+  return { ...out, progress: historyState.progress, mode: Spend.normalize(loadConfig().spend).mode };
+});
+
 // Hook activity is what moves spend, so each burst of it gets a fresh read
 // once something has asked for usage. The reader is incremental — a warm
 // pass over ~500 transcripts measured 16 ms — so the floor between reads
@@ -2252,7 +2268,10 @@ function spendRead(since) {
     try {
       spendWorker = new Worker(path.join(__dirname, 'src', 'usage-worker.js'));
       spendWorker.unref();
-      spendWorker.on('message', (m) => { const p = spendPending.get(m.id); spendPending.delete(m.id); if (p) (m.error ? p.reject(new Error(m.error)) : p.resolve(m)); });
+      spendWorker.on('message', (m) => {
+        if (m && typeof m.type === 'string' && m.type.startsWith('history.')) { onHistoryMessage(m); return; }
+        const p = spendPending.get(m.id); spendPending.delete(m.id); if (p) (m.error ? p.reject(new Error(m.error)) : p.resolve(m));
+      });
       spendWorker.on('error', (err) => {
         console.warn('[spend] worker failed, reading inline:', err.message);
         spendWorker = false;
@@ -2271,6 +2290,47 @@ function spendRead(since) {
     spendWorker.postMessage({ id, root: PROJECTS_DIR, since });
   });
 }
+// ── Usage history: the permanent daily record (usage-history.js) ──────────
+// Folded in by the spend worker on the same transcript pass (history.tick),
+// so there is one parse, not two. Everything reads it back from disk.
+const HISTORY_EVERY_MS = 60 * 60 * 1000;
+const HISTORY_LIVE_MS = 5000;
+let historyAt = 0;
+let historyState = { first: false, progress: null, lastDone: null };
+// One store, opened once: the month files are parsed the first time they are
+// asked for and kept until the worker records something new.
+let historyStore = null;
+const openHistory = () => historyStore || (historyStore = UsageHistory.open({ root: ROOT_DIR }));
+function historyTick() {
+  historyAt = Date.now();
+  if (spendWorker) { spendWorker.postMessage({ type: 'history.tick', root: PROJECTS_DIR, dataDir: ROOT_DIR, statsFile: STATS_FILE }); return; }
+  // no worker: fold what the main thread already read
+  if (!spendTurns.turns) return;
+  try {
+    const store = UsageHistory.open({ root: ROOT_DIR });
+    UsageHistory.record(store, spendTurns.turns);
+    UsageHistory.flush(store);
+    historyStore = null;
+    applyHistoryToStats();
+  } catch (err) { console.warn('[history] inline tick failed:', err.message); }
+}
+function onHistoryMessage(m) {
+  if (m.type === 'history.progress') { historyState.progress = { done: m.done, of: m.of }; return; }
+  if (m.type === 'history.error') { console.warn('[history] tick failed:', m.error); return; }
+  historyState = { ...historyState, progress: null, lastDone: Date.now() };
+  historyStore = null;
+  paceBase = { key: null, value: null };
+  if (m.first || m.added) console.log(`[history] ${m.first ? 'backfill' : 'recorded'}: ${m.added} turns${m.imported ? `, ${m.imported} legacy days` : ''}`);
+  applyHistoryToStats();
+}
+// The Stats page's per-day cost is the record's, so the two can't disagree.
+function applyHistoryToStats() {
+  try {
+    const q = UsageHistory.query(openHistory(), { from: Date.now() - 60 * 86400000, to: Date.now(), groupBy: 'day' });
+    for (const r of q.rows) if (r.turns || r.legacyCost) Stats.recordCost(stats, r.key, r.cost);
+    statsDirty = true;
+  } catch (err) { console.warn('[history] stats sync failed:', err.message); }
+}
 let spendInFlight = null;
 let spendReadAt = 0;
 const SPEND_POLL_MS = 15000;
@@ -2284,6 +2344,7 @@ function refreshSpend(minGap = SPEND_POLL_MS - 1000) {
       if (!spendTurns.turns || Date.now() - t0 > 1000) console.log(`[spend] read ${r.parsed} files in ${Date.now() - t0} ms${spendWorker ? ' (worker)' : ''}`);
       if (r.unchanged && spendTurns.turns) return;
       spendTurns = { version: spendTurns.version + 1, turns: r.turns };
+      if (Date.now() - historyAt > HISTORY_EVERY_MS) historyTick();
       stateMemo = { at: 0, key: null, value: null };
       broadcastStatus();
     })
@@ -2298,7 +2359,33 @@ const spendTracker = Spend.tracker();
 const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 function spendSnapshot(config) {
   if (SPEND_FIXTURE && fs.existsSync(SPEND_FIXTURE)) return JSON.parse(fs.readFileSync(SPEND_FIXTURE, 'utf8'));
-  return spendTurns.turns ? spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend) : null;
+  if (!spendTurns.turns) return null;
+  const snap = spendTracker.snapshot(spendTurns.turns, spendTurns.version, config.spend);
+  return { ...snap, pace: paceFor(spendTurns.turns, spendTurns.version) };
+}
+// Today against your own usual (usage-history.js pace): recomputed per turns
+// version and minute. Needs a week of recorded history before it says anything.
+let paceMemo = { key: null, value: null };
+// The baseline is what you had spent by this time on earlier days: it only
+// changes when the hour turns or the record does, not with every turn.
+let paceBase = { key: null, value: null };
+function paceFor(turns, version) {
+  const now = Date.now();
+  const key = `${version}|${Math.floor(now / 60000)}|${historyState.lastDone || 0}`;
+  if (paceMemo.key === key) return paceMemo.value;
+  let value = null;
+  try {
+    const from = new Date(now); from.setHours(0, 0, 0, 0);
+    let today = 0;
+    for (const t of turns) if (t.ts >= from.getTime() && t.ts <= now) today += Usage.costOf(t) || 0;
+    const bkey = `${from.getTime()}|${new Date(now).getHours()}|${Math.floor(new Date(now).getMinutes() / 10)}|${historyState.lastDone || 0}`;
+    if (paceBase.key !== bkey) paceBase = { key: bkey, value: UsageHistory.paceBaseline(openHistory(), { now }) };
+    const p = UsageHistory.paceOf(paceBase.value, today);
+    const money = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
+    value = { ...p, firing: UsageHistory.paceFiring(p), noteworthy: UsageHistory.paceNoteworthy(p), text: p.ready ? `Today ${money(p.today)} · ${p.aboveBy >= 0 ? `${p.aboveBy}% above` : `${-p.aboveBy}% below`} your usual for now (${money(p.avg)})` : '' };
+  } catch (err) { console.warn('[history] pace failed:', err.message); }
+  paceMemo = { key, value };
+  return value;
 }
 // What the tooltip adds after the spend rule that fired: the burn rate or
 // how far over budget.
@@ -2312,6 +2399,7 @@ function spendNote(rules, fired, sessions, spend) {
       if (v) return { rule: rule.name, text: `${v.burn}${v.cwd ? ` in ${v.cwd.split('/').filter(Boolean).pop()}` : ''}` };
     }
     if ((sig.includes('budget-exceeded') || sig.includes('budget-warning')) && spend.budgetText) return { rule: rule.name, text: spend.budgetText };
+    if (sig.includes('above-usual-pace') && spend.pace && spend.pace.text) return { rule: rule.name, text: spend.pace.text };
   }
   return null;
 }

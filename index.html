@@ -134,6 +134,8 @@
   </div>
 
   <script src="motion.js"></script>
+  <script src="characters/contract.js"></script>
+  <script src="characters/builtin/core.js"></script>
   <script src="rig.js"></script>
   <script>
     // ambient: the idle loops tick on a slow clock, not every display frame
@@ -257,7 +259,8 @@
         if (`${text} · ${n} · …`.length + suffix.length > TOOLTIP_MAX) { text += ' · …'; break; }
         text += ` · ${n}`;
       }
-      tooltip.textContent = text + suffix;
+      // Usage history: today against your own usual, when it is clearly above.
+      tooltip.textContent = text + suffix + (data.paceLine ? ` — ${data.paceLine}` : '');
     }
 
     // The recap: needs-you first, then failures, then finished. Three lines
@@ -380,7 +383,7 @@
       const el = document.elementFromPoint(x, y);
       if (!el) return false;
       if (el.closest('#gear, #help, #ask, #ask-full, #away, .minion')) return true;
-      return !!el.closest('svg.rig') && el.tagName.toLowerCase() !== 'svg';
+      return rig.solidAt(x, y);
     };
     const hitTest = (x, y) => {
       const ignore = !solidAt(x, y);

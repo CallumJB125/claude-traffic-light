@@ -597,6 +597,85 @@
   .mix-leftover[hidden] { display: none; }
   .mix-leftover code { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: 11px ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
+
+  /* ── Usage history charts (usage-view.js) ─────────────────────────────
+     Series colours are the validated categorical slots 1–4 (blue, orange,
+     aqua, yellow), stepped per mode; heat steps are the blue ramp, with the
+     lightest step receding toward the surface in each. Contrast on the chart
+     surface is below 3:1 for aqua and yellow in light mode, so every chart
+     has a legend, hover values and a table view. */
+  .uv { --uv-s1: #3987e5; --uv-s2: #d95926; --uv-s3: #199e70; --uv-s4: #c98500; --uv-none: #6f6b76;
+        --uv-step0: var(--panel-2); --uv-step1: #184f95; --uv-step2: #256abf; --uv-step3: #3987e5; --uv-step4: #86b6ef;
+        --uv-gap: var(--panel); position: relative; }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) .uv { --uv-s1: #2a78d6; --uv-s2: #eb6834; --uv-s3: #1baf7a; --uv-s4: #eda100; --uv-none: #9a968f;
+      --uv-step1: #cde2fb; --uv-step2: #86b6ef; --uv-step3: #3987e5; --uv-step4: #184f95; }
+  }
+  :root[data-theme="light"] .uv { --uv-s1: #2a78d6; --uv-s2: #eb6834; --uv-s3: #1baf7a; --uv-s4: #eda100; --uv-none: #9a968f;
+    --uv-step1: #cde2fb; --uv-step2: #86b6ef; --uv-step3: #3987e5; --uv-step4: #184f95; }
+  .uv-body { display: flex; flex-direction: column; gap: 12px; }
+  .uv-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .uv-spacer { flex: 1; }
+  .uv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .uv-chip { font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .uv-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; max-width: 72ch; }
+  .uv-empty { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 6px 0; max-width: 60ch; }
+  .uv-callouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .uv-callouts li { font-size: 13px; color: var(--text); padding: 7px 10px; border-left: 3px solid var(--uv-s1); background: var(--panel); border-radius: 0 6px 6px 0; }
+  .uv-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .uv-tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .uv-k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .uv-v { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .uv-d { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 14px; }
+  .uv-d.up::before, .uv-d.down::before { content: ''; }
+  .uv-spark { width: 100%; height: 24px; margin-top: 4px; }
+  .uv-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .uv-card h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .uv-sub { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; max-width: 72ch; }
+  .uv-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+  .uv-legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .uv-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .uv-legendrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .uv-svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .uv-heat { max-width: 100%; }
+  .uv-grid { stroke: var(--line); stroke-width: 1; }
+  .uv-tick { fill: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .uv-fill { stroke: var(--uv-gap); stroke-width: 2; paint-order: stroke; }
+  .uv-s1 { fill: var(--uv-s1); background: var(--uv-s1); } .uv-s2 { fill: var(--uv-s2); background: var(--uv-s2); }
+  .uv-s3 { fill: var(--uv-s3); background: var(--uv-s3); } .uv-s4 { fill: var(--uv-s4); background: var(--uv-s4); }
+  .uv-none { fill: var(--uv-none); background: var(--uv-none); }
+  .uv-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  polyline.uv-s1, .uv-line.uv-s1 { stroke: var(--uv-s1); } .uv-line.uv-s2 { stroke: var(--uv-s2); }
+  .uv-dot { stroke: var(--uv-gap); stroke-width: 2; }
+  .uv-hit { fill: transparent; }
+  .uv-hit:hover { fill: color-mix(in srgb, var(--text) 6%, transparent); }
+  .uv-hit:focus-visible { outline: 2px solid var(--uv-s1); outline-offset: -2px; fill: color-mix(in srgb, var(--text) 8%, transparent); }
+  .uv-marker line { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 2 3; }
+  .uv-marker polygon { fill: var(--text); stroke: var(--uv-gap); stroke-width: 1; cursor: default; }
+  .uv-cell { fill: var(--uv-step0); background: var(--uv-step0); display: inline-block; width: 11px; height: 11px; border-radius: 2px; }
+  .uv-step1 { fill: var(--uv-step1); background: var(--uv-step1); } .uv-step2 { fill: var(--uv-step2); background: var(--uv-step2); }
+  .uv-step3 { fill: var(--uv-step3); background: var(--uv-step3); } .uv-step4 { fill: var(--uv-step4); background: var(--uv-step4); }
+  .uv-scale { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--faint); }
+  .uv-scale .uv-cell { display: block; }
+  .uv-projects { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .uv-projects button { display: grid; grid-template-columns: minmax(80px, 160px) 64px 1fr 90px; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; font-size: 12px; color: var(--text); background: none; border: 0; border-radius: 6px; padding: 5px 6px; cursor: pointer; }
+  .uv-projects button:hover, .uv-projects button.on { background: var(--panel-2); }
+  .uv-pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .uv-pval { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+  .uv-pbar { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+  .uv-pbar i { display: block; height: 100%; background: var(--uv-s1); border-radius: 3px; }
+  .uv-table summary { font-size: 11px; color: var(--muted); cursor: pointer; }
+  .uv-scroll { max-height: 220px; overflow: auto; margin-top: 6px; }
+  .uv-table table { border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; width: 100%; }
+  .uv-table th, .uv-table td { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .uv-table th[scope="row"], .uv-table thead th:first-child { text-align: left; }
+  .uv-tip { position: absolute; z-index: 5; pointer-events: none; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 9px; font-size: 11px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  .uv-tip[hidden] { display: none; }
+  .uv-tip-head { font-weight: 600; margin-bottom: 2px; }
+  .uv-tip-row { color: var(--muted); font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) { .uv-tiles { grid-template-columns: repeat(2, 1fr); } .uv-projects button { grid-template-columns: minmax(60px, 1fr) 56px 70px; } .uv-pbar { display: none; } }
+  @media (prefers-reduced-motion: reduce) { .uv * { transition: none !important; animation: none !important; } }
+
   /* Presets popover */
   #presets {
     position: fixed;
@@ -770,7 +849,7 @@
     <div class="seg view-seg" role="tablist" aria-label="View">
       <button id="view-rules" class="on" role="tab" aria-controls="rules right">Rules</button>
       <button id="view-stats" role="tab" aria-controls="stats">Stats</button>
-      <button id="view-mix" role="tab" aria-controls="mix">Model mix</button>
+      <button id="view-mix" role="tab" aria-controls="mix">Usage</button>
     </div>
     <span class="spacer"></span>
     <div class="tools">
@@ -1115,8 +1194,8 @@
 
     <section id="mix" role="tabpanel" aria-labelledby="view-mix">
       <div>
-        <div class="stats-title">Model mix</div>
-        <div class="stats-sub">Which models your Claude Code turns ran on and what they cost, read from your transcripts at API prices. Read-only — Buddy never changes your model.</div>
+        <div class="stats-title">Usage</div>
+        <div class="stats-sub">Overview: which models your Claude Code turns ran on and what they cost, at API prices. Read-only — Buddy never changes your model. The history below is kept by Buddy, so it reaches back past the transcripts Claude Code deletes.</div>
       </div>
       <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
       <div class="stats-sub" id="mix-empty" hidden>No Claude Code turns in the last 7 days yet.</div>
@@ -1139,6 +1218,7 @@
         <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
       <div class="mix-leftover" id="mix-leftover" hidden><span id="mix-leftover-note"></span><code id="mix-leftover-cmd"></code></div>
+      <div id="usage-history" aria-label="Usage history"></div>
     </section>
   </div>
 
@@ -1208,6 +1288,8 @@
 
 <script>window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno));</script>
 <script src="motion.js"></script>
+<script src="characters/contract.js"></script>
+<script src="characters/builtin/core.js"></script>
 <script src="rig.js"></script>
 <div id="face-modal" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="face-title">
@@ -1255,6 +1337,8 @@
 <script src="hooks/session-machine.js"></script>
 <script src="rules.js"></script>
 <script src="stats.js"></script>
+<script src="usage-insights.js"></script>
+<script src="usage-view.js"></script>
 <script src="lights-view.js"></script>
 </body>
 </html>

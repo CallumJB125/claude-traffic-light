@@ -27,6 +27,23 @@ export function ensureDir(dir) {
   return dir;
 }
 
+/**
+ * App mode (D37a): data_dir holds the ledger, outbox, worktrees and the
+ * control socket. Refuse a symlink, a directory another uid owns, or one
+ * still open to group/other after the chmod (whose failure is fatal here).
+ */
+export function ensurePrivateDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const before = fs.lstatSync(dir);
+  if (before.isSymbolicLink()) throw new Error('data_dir must not be a symlink');
+  if (!before.isDirectory()) throw new Error('data_dir is not a directory');
+  if (before.uid !== process.getuid()) throw new Error('data_dir is not owned by this user');
+  fs.chmodSync(dir, 0o700);
+  const after = fs.lstatSync(dir);
+  if (after.isSymbolicLink() || after.uid !== process.getuid() || (after.mode & 0o077) !== 0) throw new Error('data_dir is not private (0700)');
+  return dir;
+}
+
 export function writeFileAtomic(file, data, mode = 0o600) {
   ensureDir(path.dirname(file));
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;

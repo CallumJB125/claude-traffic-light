@@ -23,6 +23,7 @@ import { noGitHub, prNumberOf } from './github.js';
 import { cardView, leaseView } from './views.js';
 import { RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
+import { Presence } from './presence.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -59,6 +60,7 @@ export class Hub extends EventEmitter {
     this.secret = config.secret ?? this.loadSecret();
     this.vaultKey = null;
     this.limiter = new RateLimiter({ now: () => this.mono(), limits: config.rateLimits });
+    this.presence = new Presence(this);   // D37b, memory only
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -771,6 +773,7 @@ export class Hub extends EventEmitter {
     this.sweepPendingCmds();
     this.limiter.sweep();
     this.recheckBrowsers();
+    this.presence.sweep();
     await this.idle();
   }
 
@@ -806,6 +809,7 @@ export class Hub extends EventEmitter {
 
   memberChanged(memberId) {
     this.recheckBrowsers(memberId);
+    this.presence.changed();
   }
 
   // Accounts: a device token or cookie session was revoked (sign-out, device

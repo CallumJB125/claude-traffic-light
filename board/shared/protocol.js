@@ -146,6 +146,32 @@ export const HOOK_EVENTS = Object.freeze(['start', 'prompt', 'pre', 'post', 'pos
 
 export const RUNNER_COMMANDS = Object.freeze(['stop', 'park', 'handover_begin', 'interrupt']);
 
+// Team presence (D37b): the desktop app's local agent sessions, reduced by the
+// runner to board-linked repos. Never a path: repo_id + branch only.
+export const PRESENCE_AGENTS = Object.freeze(['claude', 'codex', 'cursor', 'gemini', 'hermes']);
+export const PRESENCE_STATES = Object.freeze(['working', 'waiting', 'idle']);
+export const PRESENCE_MAX_SESSIONS = 50;
+export const PRESENCE_SUMMARY_MAX = 120;
+export const PRESENCE_SINCE_MAX = 40;
+export const PRESENCE_SESSION = Object.freeze({ session_id: 'string', agent: 'string', repo_id: 'string', branch: 'string?', state: 'string', since: 'string', summary: 'string?' });
+
+// `since`: an ISO-8601 date-time with a zone (Z or ±hh:mm), ≤ 40 chars.
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/;
+export function isPresenceSince(v) {
+  return typeof v === 'string' && v.length <= PRESENCE_SINCE_MAX && ISO_DATE_TIME.test(v) && Number.isFinite(Date.parse(v));
+}
+
+function presenceItemError(s) {
+  const e = checkShape(PRESENCE_SESSION, s);
+  if (e) return e.message;
+  if (!PRESENCE_AGENTS.includes(s.agent)) return `agent ${s.agent} unknown`;
+  if (!PRESENCE_STATES.includes(s.state)) return `state ${s.state} unknown`;
+  if (!isPresenceSince(s.since)) return `since must be an ISO-8601 date-time ≤ ${PRESENCE_SINCE_MAX} chars`;
+  if (s.session_id.length > 64 || (s.branch != null && s.branch.length > 200)) return 'session_id or branch too long';
+  if (s.summary != null && s.summary.length > PRESENCE_SUMMARY_MAX) return `summary over ${PRESENCE_SUMMARY_MAX}`;
+  return null;
+}
+
 // ── shapes ─────────────────────────────────────────────────────────────────
 // 'T' required, 'T?' optional (may be null). T ∈ string|int|number|bool|object|array|any.
 const run3 = { run_id: 'string', card_id: 'string', fence: 'int' };
@@ -167,6 +193,7 @@ export const SHAPES = Object.freeze({
     'card.remove': { board_id: 'string', card_id: 'string' },
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
     'event.append': { card_id: 'string', event: 'object' },
+    'team.presence': { members: 'array' },
     pong: {},
     error: { code: 'string', message: 'string' },
   },
@@ -181,6 +208,7 @@ export const SHAPES = Object.freeze({
     out: { seq: 'int', delayed: 'bool', msg: 'object' },
     rpc: { id: 'string', method: 'string', ...run3, repo_id: 'string', run_token: 'string', params: 'object' },
     salvage: { ...run3, repo_id: 'string', kind: 'string', payload: 'object' },
+    presence: { sessions: 'array' },
   },
   // hub → runner
   'hub→runner': {
@@ -274,6 +302,13 @@ export function validate(channel, msg) {
   if (!msg || typeof msg.type !== 'string' || !(msg.type in table)) return { code: 'VALIDATION', message: `unknown type ${msg?.type}` };
   const e = checkShape(table[msg.type], msg);
   if (e) return e;
+  if (channel === 'runner→hub' && msg.type === 'presence') {
+    if (msg.sessions.length > PRESENCE_MAX_SESSIONS) return { code: 'VALIDATION', message: `presence: over ${PRESENCE_MAX_SESSIONS} sessions` };
+    for (const s of msg.sessions) {
+      const pe = presenceItemError(s);
+      if (pe) return { code: 'VALIDATION', message: `presence: ${pe}` };
+    }
+  }
   if (channel === 'runner→hub' && msg.type === 'out') {
     const body = msg.msg;
     if (!(body.kind in OUTBOX_SHAPES)) return { code: 'VALIDATION', message: `unknown outbox kind ${body.kind}` };

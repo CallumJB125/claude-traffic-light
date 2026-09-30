@@ -12,9 +12,9 @@
 // machine in hooks/session-machine.js; this file builds looks on top of it.
 // The Lights editor loads that file with a <script> tag before this one.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./hooks/session-machine.js'));
-  else root.TrafficLightRules = factory(root.SessionMachine);
-})(typeof self !== 'undefined' ? self : this, function (Machine) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./hooks/session-machine.js'), require('./characters/index.js'));
+  else root.TrafficLightRules = factory(root.SessionMachine, root.BuddyCharacters);
+})(typeof self !== 'undefined' ? self : this, function (Machine, Characters) {
   const SIGNALS = [
     { id: 'prompt-submit', label: 'You send a prompt', hook: 'UserPromptSubmit', kind: 'working' },
     { id: 'tool-use', label: 'Claude uses a tool', hook: 'PreToolUse', kind: 'working', tool: true },
@@ -92,7 +92,11 @@
   SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
     { id: 'runaway', label: 'A session is burning money fast', hook: null, kind: 'virtual' },
     { id: 'budget-warning', label: 'Spend is nearing your budget', hook: null, kind: 'virtual' },
-    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' });
+    { id: 'budget-exceeded', label: 'Spend is over your budget', hook: null, kind: 'virtual' },
+    // Today's spend so far is far above your own usual for this hour (needs a
+    // week of history). Optional: no default rule, so it never lights a lamp
+    // unless you add one.
+    { id: 'above-usual-pace', label: 'Today is well above your usual spend', hook: null, kind: 'virtual' });
   const SPEND_RULES = [
     { id: 'runaway', name: 'Runaway session', enabled: true, when: { signal: ['runaway'] }, then: { lamp: 'red', lampFx: 'pulse', eyes: 'wide' } },
     { id: 'budget-exceeded', name: 'Over budget', enabled: true, when: { signal: ['budget-exceeded'] }, then: { lamp: 'red', eyes: 'money' } },
@@ -131,6 +135,7 @@
       if (!s || TURN_END.has(sessionSignal(s))) continue;
       out.push({ signal: 'runaway', sessionId: r.sessionId, cwd: s.cwd || r.cwd || null, source: s.source, hostApp: s.hostApp, virtual: true, burn: r.burn });
     }
+    if (sp.pace && sp.pace.firing) for (const s of sessions) out.push({ signal: 'above-usual-pace', cwd: s.cwd, virtual: true, pace: sp.pace.text || '' });
     const level = sp.budget && sp.budget.level;
     if (level === 'warning' || level === 'exceeded') for (const s of sessions) out.push({ signal: `budget-${level}`, cwd: s.cwd, virtual: true, budget: sp.budgetText || '' });
     return out;
@@ -265,7 +270,10 @@
   // Famous faces drawn over Claude's head; independent of costume, so a cameo can wear a hat.
   const CAMEOS = ['none', 'neo', 'alfred', 'mcafee', 'spagni', 'powell', 'baker', 'ellison', 'saylor', 'wizard', 'scientist', 'pirate', 'punk'];
   const CAMEO_ID = /^[a-z0-9-]{1,32}$/;
-  const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
+  // The built-in characters; a rule may also name an installed one (u-…),
+  // which the widget shows once it's installed and as Claude until then.
+  const BODIES = Characters.ids().filter(Characters.isBuiltin);
+  const isBody = (id) => BODIES.includes(id) || (typeof id === 'string' && /^u-[a-z][a-z0-9-]{1,31}$/.test(id));
   const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
   const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
@@ -543,7 +551,7 @@
         // Built-ins, or a photo cameo the user added (cameos.js ids); a photo
         // that has since been removed just renders as no cameo.
         cameo: typeof r.then?.cameo === 'string' && (CAMEOS.includes(r.then.cameo) || CAMEO_ID.test(r.then.cameo)) ? r.then.cameo : null,
-        body: BODIES.includes(r.then?.body) ? r.then.body : null,
+        body: isBody(r.then?.body) ? r.then.body : null,
         bodyColor: /^#[0-9a-f]{6}$/i.test(r.then?.bodyColor || '') ? r.then.bodyColor : null,
         effect: EFFECTS.includes(r.then?.effect) ? r.then.effect : null,
         pet: PETS.includes(r.then?.pet) ? r.then.pet : null,
