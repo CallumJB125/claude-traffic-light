@@ -17,6 +17,10 @@ version tag. A release goes out in two deliberate steps: **stage**, then
    - smoke-tests each packaged app (`scripts/smoke-installed.js`): launch
      against a throwaway HOME → install the Claude Code hooks → run one →
      window loads → quit
+   - writes `release.json` (every installer's name, size, sha512, platform,
+     arch) and signs it into `release.json.sig` with
+     `PLEXIFORM_UPDATE_SIGNING_KEY` (`scripts/release-sign.js`). **A tag
+     release fails here if the secret is missing**: apps would refuse it.
    - creates a **draft** GitHub Release with every file and `SHA256SUMS.txt`
    - uploads the same files to R2 under `1.2.0/`, leaving the live feed alone
 
@@ -27,31 +31,82 @@ To try the build without staging anything: Actions → Release → Run workflow
 
 Actions → **Promote release** → version `1.2.0`. This:
 - publishes the draft GitHub Release and marks it latest
-- copies `1.2.0/*` to the root of the R2 bucket, installers first and the
-  `latest*.yml` feed files last
+- copies `1.2.0/*` to the root of the R2 bucket: installers first, then the
+  `latest*.yml` feed files, then `release.json` and `release.json.sig` last.
+  A version with no signed `release.json` staged is refused.
 
-Installed apps pick it up within a day (on launch, then daily):
+Installed apps check on launch, every 4 hours, and on "Check now". Each
+update is verified against the signed release before anything is installed,
+and none restarts on its own: "Restart to update" installs now, unless a
+session is working or waiting on the person (then the UI asks: restart
+anyway, or when idle = after 30 s with nothing busy).
 
 | platform | what happens |
 |---|---|
-| Windows (NSIS) | downloads in the background; tray: "Restart to update to 1.2.0"; installs on the next quit if not restarted |
+| Windows (NSIS) | electron-updater downloads (only after its feed matches the signed release); restart installs; also installs on the next quit |
 | Linux AppImage | same as Windows |
-| macOS | tray and Settings: "Plexiform 1.2.0 is available — Download" (unsigned apps cannot replace themselves) |
-| Linux .deb | notify + download link |
+| macOS | the app downloads the zip, verifies it, unpacks it (`ditto`), checks bundle id and version, and on restart a helper swaps the bundle and relaunches; if the new app hasn't reported in within 90 s the helper puts the old one back. The old bundle is kept for Revert |
+| Linux .deb | the verified .deb goes to ~/Downloads and opens in the software installer (xdg-open) |
+
+Beta builds (`workflow_dispatch` with beta, or a push to the installers
+branch) are signed when the secret is set and stage under `beta/<version>/`.
+Promote with **beta** ticked makes one the beta feed (`beta/`). Apps on the
+beta channel (Preferences, or any `-beta` build) read `beta/release.json`.
+
+## Signing
+
+- **Key:** Ed25519. The private key is only the GitHub Actions secret
+  `PLEXIFORM_UPDATE_SIGNING_KEY` (base64 of a PKCS8 PEM); the tag stage and
+  a rollback promote need it. The public key ships in the app as
+  `build/update-key.pub.pem`.
+- **Rotating:** add the new public key as `build/update-key-2.pub.pem` (the
+  app accepts any `build/update-key*.pub.pem`), release that, and only then
+  switch the secret to the new private key. Drop the old public key a few
+  releases later.
+- **Format:** `release.json` = `{ product: 'plexiform', channel, version,
+  issuedAt, rollback, notes, files: [{ name, sha512, size, platform, arch,
+  kind }] }`; `release.json.sig` = base64 Ed25519 signature over its exact
+  bytes. `src/updater/verify.js` is the checker.
+
+## What the app refuses
+
+An update is refused, and the UI shows why, when:
+- `release.json.sig` does not verify with a shipped key (`signature`)
+- the product isn't `plexiform`, or the channel isn't the one the app is on (`verify`)
+- the version is older than the running one and the manifest isn't a
+  signed rollback, and the person didn't ask to revert to it (`downgrade`)
+- its `issuedAt` is older than the last manifest that channel accepted: an
+  old signed release replayed (`verify`)
+- a downloaded file's size or sha512 differs from the signed entry, or (on
+  Windows/AppImage) electron-updater's `update-available` files differ from
+  it; the latter is checked before anything is downloaded (`verify`)
+- macOS: the unpacked app has another bundle id or version (`verify`), the
+  app runs translocated (`translocated`), or its folder isn't writable
+  (`not-writable`); both of those point the person at the .dmg
 
 ## Rolling back
 
-Run **Promote release** with the previous version. The feed files point back
-at it, and apps accept the downgrade (`allowDowngrade`). Installer file names
-carry their version, so nothing is overwritten.
+Run **Promote release** with the previous version and tick **rollback**.
+The workflow fetches that version's staged `release.json`, re-signs it with
+`rollback: true` and a fresh `issuedAt`, and promotes it with that manifest.
+Apps on the newer version then accept the downgrade (they refuse an unsigned
+one, and the fresh `issuedAt` gets past their replay check). Installer file
+names carry their version, so nothing is overwritten.
+
+After a rollback, a later promote must also carry a fresh signature: stage a
+new version (the normal case), or promote with rollback ticked.
+
+People can also revert one install themselves (Revert, in the app's update settings):
+macOS puts back the bundle it kept; Windows and AppImage fetch
+`<version>/release.json(.sig)` for the previous version and install it
+through the same verified path. That explicit revert is the only unsigned
+downgrade the app allows.
 
 ## Where the apps look
 
-`Brand.urls.updates` in brand.js, baked into each build's `app-update.yml`
-by electron-builder.config.js:
-- now: `https://github.com/CallumJB125/claude-traffic-light/releases/latest/download`
-- once download.plexiform.dev serves the R2 bucket: change that one line.
-  The next release, and every one after it, reads from R2.
+`Brand.urls.updates` in brand.js: `https://download.plexiform.dev` (stable)
+and `/beta` under it (beta). The updater reads `release.json` there and, on
+Windows and AppImage, points electron-updater at the same folder.
 
 ## R2 (Cloudflare)
 
@@ -112,8 +167,9 @@ Then:
 - add `notarize: true` under `mac` in electron-builder.config.js
 - give `build/sign.js` the identity; it already keeps the calendar helper's
   narrow entitlements
-- turn on macOS auto-update in src/auto-update.js `supported()`, since signed
-  apps can replace themselves
+- switch macOS from the self-swap (src/updater/mac-swap.js) to
+  electron-updater's MacUpdater (Squirrel), keeping the manifest check in
+  front of it as on Windows
 - if the terminal-jump feature must keep working under the hardened runtime,
   check that `com.apple.security.automation.apple-events` and
   `NSAppleEventsUsageDescription` are present
