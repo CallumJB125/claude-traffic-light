@@ -9,7 +9,8 @@ import { FEED_KINDS } from '../shared/protocol.js';
 import { json } from './db.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
-export const publicLogin = (m) => (m.github_login?.startsWith(EMAIL_ONLY) ? null : m.github_login);
+export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
+export const publicLogin = (m) => (m.github_login?.startsWith(EMAIL_ONLY) || m.github_login?.startsWith(LOCAL_ONLY) ? null : m.github_login);
 // The NOT NULL github columns of a member added by email only: a private
 // placeholder login and a stable negative id (never an avatar).
 export const emailOnlyIdentity = (email) => ({

@@ -1,9 +1,11 @@
-// First-run data: the BOARD_DEV_SEED fixture (CONTRACT §4.1) and the
-// production BOARD_BOOTSTRAP admin (org + board + owner) when no member exists.
+// First-run data: the BOARD_DEV_SEED fixture (CONTRACT §4.1), the
+// production BOARD_BOOTSTRAP admin (org + board + owner) when no member exists
+// and the BOARD_AUTH=local owner (D35).
 
 import { randomUUID } from 'node:crypto';
+import { userInfo } from 'node:os';
 import { normalizeRemoteUrl } from '../shared/scope.js';
-import { emailOnlyIdentity, EMAIL_ONLY } from './views.js';
+import { emailOnlyIdentity, EMAIL_ONLY, LOCAL_ONLY } from './views.js';
 
 export function seedDev(hub, { repoUrl = null } = {}) {
   const db = hub.db;
@@ -62,4 +64,30 @@ export function bootstrapAdmin(hub, spec, boardSpec = 'Team:BRD') {
   });
   hub.log.info('bootstrap admin created', { email_only: login.startsWith(EMAIL_ONLY) });
   return true;
+}
+
+// BOARD_AUTH=local: on a DB with no members, one org, board "My board" and an
+// email-less owner every local request maps to. → that owner's member id.
+export function seedLocal(hub, boardSpec = 'Me:ME') {
+  const db = hub.db;
+  const existing = db.meta('local_member');
+  if (existing) {
+    if (!hub.activeMember(existing)) throw new Error('local owner missing or removed');
+    return existing;
+  }
+  if (db.get('SELECT 1 AS x FROM members LIMIT 1')) throw new Error('BOARD_AUTH=local needs a database it created (this one already has members)');
+  let user;
+  try { user = userInfo().username; } catch { user = process.env.USER || process.env.USERNAME || 'me'; }
+  const [name, prefix] = String(boardSpec).split(':');
+  const now = hub.iso();
+  const id = randomUUID();
+  hub.txn(() => {
+    const org = { id: randomUUID(), name: name || 'Me', created_at: now };
+    db.insert('orgs', org);
+    db.insert('boards', { id: randomUUID(), org_id: org.id, name: 'My board', key_prefix: (prefix || 'ME').toUpperCase() });
+    db.insert('members', { id, org_id: org.id, github_id: -1, github_login: `${LOCAL_ONLY}${user}`, email: null, display_name: user, role: 'owner', created_at: now });
+    db.setMeta('local_member', id);
+  });
+  hub.log.info('local owner created');
+  return id;
 }

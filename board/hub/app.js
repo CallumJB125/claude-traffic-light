@@ -15,11 +15,15 @@ import { createAccessVerifier } from './auth.js';
 import { createGitHub, noGitHub } from './github.js';
 import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './http.js';
 import { createLogger } from './log.js';
-import { seedDev, bootstrapAdmin } from './seed.js';
+import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true } = {}) {
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
   const gh = github ?? (config.githubToken ? createGitHub({ token: config.githubToken, api: config.githubApi, fetchImpl }) : noGitHub);
+  if (config.auth !== 'local' && db.meta('local_member')) {
+    db.close();
+    throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
+  }
   const hub = new Hub({ db, config, clock, log, github: gh });
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
@@ -27,6 +31,10 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.access = config.auth === 'access'
     ? createAccessVerifier({ team: config.accessTeam, aud: config.accessAud, fetchImpl, now: clock.wall })
     : null;
+  // Local mode (D35): a fresh per-launch secret the embedding app sets as the
+  // board_local cookie; never logged or printed.
+  hub.localSecret = config.auth === 'local' ? (config.localSecret ?? randomBytes(32).toString('hex')) : null;
+  hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();

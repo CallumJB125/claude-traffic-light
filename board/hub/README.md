@@ -12,6 +12,8 @@ curl -s localhost:8787/api/health
 
 **Dev auth must never sit behind any proxy or tunnel** (Cloudflare Tunnel, nginx, ssh -R, anything). Through a proxy every request arrives from loopback, so the loopback check proves nothing; the hub refuses `BOARD_AUTH=dev` when `BOARD_PUBLIC_URL` or `BOARD_TUNNEL_PROBE_URL` is set, and dev login additionally needs the secret printed at startup. Anything reachable by anyone else uses `BOARD_AUTH=access`.
 
+**Local auth (`BOARD_AUTH=local`, D35)** is for the hub embedded in the desktop app, run via Electron's `utilityProcess`. Every request (API, static, browser WS) must carry cookie `board_local=<secret>`, a per-launch secret the hub hands its parent over `process.parentPort` as `{type:'board.listening', port, hub_epoch, local_secret}` (a startup error sends `{type:'board.fatal', message}` and exits non-zero). The first start creates org, board "My board" and one email-less owner (`local:<os user>`) that every request maps to. Runners still use device tokens.
+
 Node ≥ 22.13 (unflagged `node:sqlite`). No native dependencies, so it runs as-is on a
 Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that's expected.
 
@@ -58,10 +60,11 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | Variable | Default | Meaning |
 |---|---|---|
 | `BOARD_BIND` | `127.0.0.1` | Listen address. Keep it on loopback behind Cloudflare Tunnel |
-| `BOARD_PORT` | `8787` | Listen port |
+| `BOARD_PORT` | `8787` | Listen port. `0` picks a free port; the log (and `board.listening`, below) reports the real one |
 | `BOARD_DATA_DIR` | `board/hub/data` (gitignored) | Directory for the DB (created if missing) |
 | `BOARD_DB` | `$BOARD_DATA_DIR/board.db` | SQLite file (WAL: `board.db-wal`, `board.db-shm` next to it) |
-| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT) or `dev` (cookie stub, loopback bind only; startup fails otherwise) |
+| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT), `dev` (cookie stub, loopback bind only; startup fails otherwise) or `local` (the hub embedded in the desktop app, D35: `BOARD_BIND` must be `127.0.0.1`, `::1` or `localhost`, and `BOARD_PUBLIC_URL`, `BOARD_TUNNEL_PROBE_URL` and `BOARD_DEV_SEED` must be unset) |
+| `BOARD_LOCAL_SECRET` | random per start | With `BOARD_AUTH=local`, **tests only**: the `board_local` cookie value (≥ 32 bytes). Unset: 32 random bytes (hex) per launch, sent only in the parentPort `board.listening` message, never logged or printed |
 | `BOARD_ACCESS_TEAM` | — | Access team name: certs at `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Required for `access` |
 | `BOARD_ACCESS_AUD` | — | The Access application AUD tag. Required for `access` |
 | `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta` |
@@ -70,7 +73,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
 | `BOARD_DEV_REPO` | — | With `BOARD_DEV_SEED`: a git remote to add as the DEV board's repo |
 | `BOARD_BOOTSTRAP` | — | `email` (Access one-time PIN, no GitHub identity) or `github_login,github_id,email`: on a DB with no members, create the org, a board and this owner |
-| `BOARD_BOOTSTRAP_BOARD` | `Team:BRD` | `Name:KEYPREFIX` for the bootstrap board |
+| `BOARD_BOOTSTRAP_BOARD` | `Team:BRD` (`Me:ME` with `BOARD_AUTH=local`) | `Name:KEYPREFIX` for the bootstrap board. Under `local` the org takes the name, the board is always "My board" and takes the prefix |
 | `BOARD_RESTORE` | off | `1`: apply the restore fence bump (+1000, new epoch) at boot. A `<BOARD_DB>.restored` marker does the same |
 | `BOARD_TUNNEL_PROBE_URL` | — | Public URL of `/api/health`, probed every `BOARD_TUNNEL_PROBE_MS`. It counts as healthy only when the answer has the `Board-Protocol` header, so give `/api/health` an Access **Bypass** policy. While the probe fails, orphaning is suspended. Unset: the tunnel is assumed healthy |
 | `BOARD_TUNNEL_PROBE_MS` | `15000` | Probe interval |

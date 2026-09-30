@@ -1,5 +1,5 @@
 // HTTP: static web/shared (CONTRACT §5.1), the JSON API (§5.2), member auth
-// (Access JWT or the loopback dev cookie), CSRF guards (JSON content type,
+// (Access JWT, the loopback dev cookie or the local-mode cookie), CSRF guards (JSON content type,
 // same-origin), the (member, request_id) replay cache (D8) and WS upgrades.
 
 import { createHash } from 'node:crypto';
@@ -10,6 +10,7 @@ import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
 import { isLoopback } from './config.js';
 import { publicMember } from './api.js';
+import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, limitOrThrow } from './ratelimit.js';
@@ -25,6 +26,12 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const PROXY_HEADERS = ['cf-connecting-ip', 'cf-ray', 'cf-access-jwt-assertion', 'x-forwarded-for', 'forwarded'];
 const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
+const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local';
+// Local auth (D35): every browser request carries the per-launch secret cookie.
+// (parseCookies throws on a malformed %-escape: that is just "no".)
+const localCookieOk = (hub, req) => {
+  try { return safeEqual(parseCookies(req.headers.cookie).board_local ?? '', hub.localSecret); } catch { return false; }
+};
 
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
@@ -102,6 +109,7 @@ export function createHttpHandler({ hub, api, config }) {
   route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (config.auth !== 'dev' || !isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
     if (!hub.devLoginSecret || !safeEqual(req.headers['board-dev-secret'] ?? '', hub.devLoginSecret)) throw new HubError('FORBIDDEN', 'dev login needs the Board-Dev-Secret printed when the hub started');
+    if (String(body.github_login ?? '').startsWith(LOCAL_ONLY)) throw new HubError('NOT_FOUND', 'no such member');
     const m = hub.db.get('SELECT * FROM members WHERE github_login = ? ORDER BY created_at LIMIT 1', String(body.github_login ?? ''));
     if (!m) throw new HubError('NOT_FOUND', 'no such member');
     res.setHeader('set-cookie', `board_dev=${encodeURIComponent(devCookieValue(hub.secret, m.id))}; HttpOnly; SameSite=Strict; Path=/`);
@@ -172,7 +180,8 @@ export function createHttpHandler({ hub, api, config }) {
 
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://hub');
-    if (config.auth === 'dev' && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: 'dev auth serves direct loopback requests only' } });
+    if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
+    if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         const p = staticPath(url.pathname);
@@ -238,7 +247,9 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
   return async function onUpgrade(req, socket, head) {
     const { pathname, searchParams } = new URL(req.url, 'http://hub');
     socket.on('error', () => {});
-    if (config.auth === 'dev' && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
+    if (loopbackOnly(config) && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
+    // Runners keep device-token auth; every other upgrade needs the local cookie.
+    if (config.auth === 'local' && pathname !== WS_PATHS.runner && !localCookieOk(hub, req)) return refuse(socket, 401, 'Unauthorized');
     if (pathname === WS_PATHS.browser) {
       if (!sameOrigin(req, config.publicUrl)) return refuse(socket, 403, 'Forbidden');
       let auth = null;
@@ -273,6 +284,11 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
  */
 export function makeAuthenticate({ hub, config }) {
   return async (req) => {
+    if (config.auth === 'local') {
+      const m = localCookieOk(hub, req) && hub.activeMember(hub.localMemberId);
+      if (!m) throw new HubError('UNAUTHENTICATED', 'not signed in');
+      return { candidates: [m], exp_ms: null };
+    }
     if (config.auth === 'dev') {
       const id = parseDevCookie(hub.secret, parseCookies(req.headers.cookie).board_dev);
       const m = id && hub.activeMember(id);
