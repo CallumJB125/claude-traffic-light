@@ -12,7 +12,7 @@ import { replay, CARD_STATE } from '../../shared/journal.js';
 import { TTL_MS } from '../../shared/liveness.js';
 import { startHub, runMsg, runHb } from './helpers.js';
 
-const TRACKED = [...CARD_STATE, 'title', 'labels', 'budget_cents', 'repo_id', 'base_ref', 'key'];
+const TRACKED = [...CARD_STATE, 'title', 'labels', 'budget_cents', 'repo_id', 'base_ref', 'key', 'parent_card_id'];
 
 export function assertReplayMatches(db, boardId = null) {
   const rows = db.all(`SELECT * FROM journal ${boardId ? 'WHERE board_id = ? OR board_id IS NULL' : ''} ORDER BY seq`, ...(boardId ? [boardId] : []));
@@ -59,6 +59,8 @@ test('every change journals: create, PATCH before/after, dispatch→claim→run,
     await h.action(alice, run.card_id, 'answer', { ask_id: ask.result.ask_id, answer: 'that one' });
     await r.out({ kind: 'handover.write', ...runMsg(run), patch: { next: 'n' } });
     await r.rpc(run, 'board_attach_evidence', { kind: 'test_run', ref: 'npm test', summary: 'ok', result: 'pass' });
+    const child = await r.rpc(run, 'board_create_card', { title: 'follow-up' });
+    assert.equal(replay(h.db.all('SELECT * FROM journal ORDER BY seq')).get(child.result.card_id).parent_card_id, run.card_id, 'replay keeps the parent link');
     // Dark and back: hb silence → unresponsive → hb → recover.
     await h.run(TTL_MS + 1000);
     assert.equal(h.card(run.card_id).run_state, 'unresponsive');

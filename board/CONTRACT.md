@@ -769,6 +769,6 @@ Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas
 | `lesson.create` | rpc `board_add_lesson` | `{lesson_id, repo_id}` (no text) |
 | `device.outbox` | runner hello / first `out` of a connection (`board_id` NULL, actor = the device) | `{reason:'reset'\|'runner_acked'\|'gap', from, to, outbox_id?, outbox_id_before?}`: `last_seq_acked` moved other than by an ack (§6.1, §6.5) |
 
-`journal.replay(rows)` rebuilds every card's `CARD_STATE` + title/labels/budget/repo from `card.create`, `card.update`, `card.transition` and `hub.restore_bump` alone. Tests: `hub/test/journal.test.js` (triggers, coverage, API, restore) and the e2e chaos run (`test/e2e/`), which replays the journal and compares it with the live `cards` table.
+`journal.replay(rows)` rebuilds every card's `CARD_STATE` + title/labels/budget/repo/`parent_card_id` from `card.create`, `card.update`, `card.transition` and `hub.restore_bump` alone. Tests: `hub/test/journal.test.js` (triggers, coverage, API, restore) and the e2e chaos run (`test/e2e/`), which replays the journal and compares it with the live `cards` table.
 
 The orphan relabel no longer rewrites an `events` row: `relabel_orphan` appends an internal `orphan_relabel` event `{event_id, relabel}` that `feedEvent` joins onto the orphaned line.

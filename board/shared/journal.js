@@ -25,7 +25,7 @@ export const JOURNAL_KINDS = Object.freeze([
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).
 export const CARD_STATE = Object.freeze(['run_state', 'column_name', 'blocked_kind', 'fail_kind', 'resume_to', 'pre_reconnect_state', 'fence', 'handover_target', 'handover_provenance']);
-const CREATE_FIELDS = ['key', 'title', 'body', 'acceptance', 'repo_id', 'base_ref', 'labels', 'budget_cents', 'column_name'];
+const CREATE_FIELDS = ['key', 'title', 'body', 'acceptance', 'repo_id', 'base_ref', 'labels', 'budget_cents', 'column_name', 'parent_card_id'];
 
 /**
  * rows: journal rows in seq order ({seq, card_id, kind, payload} with payload
