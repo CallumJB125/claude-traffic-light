@@ -11,6 +11,7 @@
 //
 // Signing is off until Callum has a Developer ID. build/sign.js falls back to
 // ad-hoc signing, which Apple Silicon needs to run the app at all.
+const path = require('path');
 const Brand = require('./brand.js');
 const base = require('./package.json').build;
 
@@ -51,6 +52,8 @@ module.exports = {
     uninstallDisplayName: Brand.name,
     artifactName: artifact('${ext}'),
     deleteAppDataOnUninstall: false,
+    // Takes Plexiform's hooks out of the agents' configs before the exe goes.
+    include: 'build/installer.nsh',
   },
 
   linux: {
@@ -66,6 +69,11 @@ module.exports = {
     maintainer: `${Brand.name} <${Brand.email('support')}>`,
     desktop: { entry: { Name: Brand.name, Comment: Brand.tagline } },
   },
-  deb: { artifactName: artifact('${ext}') },
+  deb: {
+    artifactName: artifact('${ext}'),
+    // prerm: takes Plexiform's hooks out of each user's agent configs on
+    // remove. electron-builder has no option for it; fpm does.
+    fpm: ['--before-remove', path.join(__dirname, 'build', 'linux', 'prerm.sh')],
+  },
   appImage: { artifactName: artifact('${ext}') },
 };

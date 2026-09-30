@@ -101,3 +101,20 @@ test('the smoke test refuses a real home or data folder', () => {
   assert.equal(Smoke.reportPathFrom(['x']), null);
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test('uninstall: NSIS and the .deb take the hooks out before the binary goes, and not on an update', () => {
+  assert.equal(config.nsis.include, 'build/installer.nsh');
+  const nsh = fs.readFileSync(path.join(__dirname, '..', config.nsis.include), 'utf8');
+  // customUnInstall runs after $INSTDIR is deleted; customRemoveFiles runs before.
+  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR\s*!macroend/);
+  assert.ok(!/!macro customUnInstall\b/.test(nsh));
+  const at = config.deb.fpm.indexOf('--before-remove');
+  assert.ok(at >= 0);
+  const prerm = fs.readFileSync(config.deb.fpm[at + 1], 'utf8');
+  assert.match(prerm, /^#!\/bin\/sh\n/);
+  assert.match(prerm, /remove\|purge\) ;;\n\s*\*\) exit 0 ;;/, 'an upgrade leaves the hooks alone');
+  assert.match(prerm, /runuser -u "\$user" -- env HOME="\$home" ELECTRON_RUN_AS_NODE=1 "\$APP" "\$SCRIPT"/);
+  assert.match(prerm, new RegExp(`/usr/bin/${config.linux.executableName}\\b`));
+  assert.ok(fs.statSync(config.deb.fpm[at + 1]).mode & 0o111, 'prerm is executable');
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')), 'shipped in extraResources hooks/');
+});
