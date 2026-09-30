@@ -6,18 +6,37 @@ import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { createLogger } from './log.js';
 
+// Under Electron's utilityProcess the embedding app hears about startup over
+// process.parentPort (D35); plain `node` runs get nothing new.
+const parent = process.parentPort ?? null;
+
 const boot = createLogger();
+// → never settles under parentPort, so the caller stops here until the exit.
+function fatal(msg, e, code) {
+  boot.error(msg, { err: e });
+  if (!parent) process.exit(code);
+  parent.postMessage({ type: 'board.fatal', message: `${msg}: ${e.message}` });
+  setTimeout(() => process.exit(code), 100);   // let the message leave first
+  return new Promise(() => {});
+}
+
 let config;
 try {
   config = loadConfig();
 } catch (e) {
-  boot.error('invalid configuration', { err: e });
-  process.exit(2);
+  await fatal('invalid configuration', e, 2);
 }
 
 const log = createLogger({ level: config.logLevel });
-const app = createApp(config, { log });
-const addr = await app.listen();
+let app;
+let addr;
+try {
+  app = createApp(config, { log });
+  addr = await app.listen();
+} catch (e) {
+  await fatal('startup failed', e, 1);
+}
+parent?.postMessage({ type: 'board.listening', port: addr.port, hub_epoch: app.hub.epoch, ...(app.hub.localSecret ? { local_secret: app.hub.localSecret } : {}) });
 if (app.devLoginSecret) {
   // Printed, not logged: the log may be shipped somewhere; this is for the person at the terminal.
   process.stderr.write(`\nDEV AUTH (loopback only; never behind any proxy or tunnel). Sign in at:\n  http://${config.bind}:${addr.port}/#dev_secret=${app.devLoginSecret}\n\n`);

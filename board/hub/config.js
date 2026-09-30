@@ -15,6 +15,8 @@ const int = (v, d) => {
 };
 const flag = (v) => v === '1' || v === 'true' || v === 'yes';
 
+const LOCAL_BINDS = new Set(['127.0.0.1', '::1', 'localhost']);
+
 export function isLoopback(host) {
   if (host === 'localhost') return true;
   if (isIP(host) === 4) return host.startsWith('127.');
@@ -23,13 +25,14 @@ export function isLoopback(host) {
 }
 
 export function loadConfig(env = process.env) {
+  const auth = env.BOARD_AUTH || 'access';
   const dataDir = env.BOARD_DATA_DIR ? resolve(env.BOARD_DATA_DIR) : resolve(HERE, 'data');
   const cfg = {
     bind: env.BOARD_BIND || '127.0.0.1',
     port: int(env.BOARD_PORT, 8787),
     dataDir,
     dbPath: env.BOARD_DB ? resolve(env.BOARD_DB) : join(dataDir, 'board.db'),
-    auth: env.BOARD_AUTH || 'access',
+    auth,
     accessTeam: env.BOARD_ACCESS_TEAM || null,
     accessAud: env.BOARD_ACCESS_AUD || null,
     secret: env.BOARD_SECRET || null,
@@ -37,8 +40,9 @@ export function loadConfig(env = process.env) {
     devSeed: flag(env.BOARD_DEV_SEED),
     devRepo: env.BOARD_DEV_REPO || null,
     devLoginSecret: env.BOARD_DEV_LOGIN_SECRET || null,
+    localSecret: env.BOARD_LOCAL_SECRET || null,
     bootstrap: env.BOARD_BOOTSTRAP || null,
-    bootstrapBoard: env.BOARD_BOOTSTRAP_BOARD || 'Team:BRD',
+    bootstrapBoard: env.BOARD_BOOTSTRAP_BOARD || (auth === 'local' ? 'Me:ME' : 'Team:BRD'),
     restore: flag(env.BOARD_RESTORE),
     tunnelProbeUrl: env.BOARD_TUNNEL_PROBE_URL || null,
     tunnelProbeMs: int(env.BOARD_TUNNEL_PROBE_MS, 15_000),
@@ -55,7 +59,15 @@ export function loadConfig(env = process.env) {
 }
 
 export function validateConfig(cfg) {
-  if (!['access', 'dev'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access or dev, got ${cfg.auth}`);
+  if (!['access', 'dev', 'local'].includes(cfg.auth)) throw new Error(`BOARD_AUTH must be access, dev or local, got ${cfg.auth}`);
+  // Local = the hub embedded in the desktop app: only its own window may reach it.
+  if (cfg.auth === 'local') {
+    if (!LOCAL_BINDS.has(cfg.bind)) throw new Error(`BOARD_AUTH=local needs BOARD_BIND=127.0.0.1, ::1 or localhost (got ${cfg.bind})`);
+    if (cfg.publicUrl || cfg.tunnelProbeUrl) throw new Error('BOARD_AUTH=local must never sit behind a proxy or tunnel: unset BOARD_PUBLIC_URL and BOARD_TUNNEL_PROBE_URL');
+    if (cfg.devSeed) throw new Error('BOARD_AUTH=local does not take BOARD_DEV_SEED');
+  }
+  if (cfg.localSecret != null && cfg.auth !== 'local') throw new Error('BOARD_LOCAL_SECRET needs BOARD_AUTH=local');
+  if (cfg.localSecret != null && Buffer.byteLength(cfg.localSecret) < 32) throw new Error('BOARD_LOCAL_SECRET must be at least 32 bytes');
   if (cfg.devSeed && cfg.auth !== 'dev') throw new Error('BOARD_DEV_SEED needs BOARD_AUTH=dev');
   if (cfg.auth === 'dev' && !isLoopback(cfg.bind)) throw new Error(`BOARD_AUTH=dev is allowed only on a loopback bind (BOARD_BIND=${cfg.bind})`);
   // Behind a proxy or tunnel every request arrives from loopback, so the
