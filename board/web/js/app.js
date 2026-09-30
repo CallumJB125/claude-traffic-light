@@ -9,7 +9,7 @@ import { boardScreen, loadingScreen } from './render-board.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
-import { dashboardMetrics } from './metrics.js';
+import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
@@ -40,7 +40,7 @@ const state = {
   repos: null,
   view: 'board',
   table: { sort: DEFAULT_SORT, filter: '' },
-  dash: { status: 'idle', rows: [], afterSeq: 0, error: null, updatedAt: null }, // idle | loading | ok | error
+  dash: null, // set below: freshDash(), status idle | loading | ok | error
   cardsRev: 0,
 };
 
@@ -135,34 +135,31 @@ function buildModel() {
 }
 
 // ── dashboard ────────────────────────────────────────────────────────────────
-// The journal is append-only, so after the first full read each refresh only
-// asks for rows past the last seq. Refreshes: on opening the view, every 60 s
-// while it is open and visible, and 10 s after card changes settle.
+// Journal pages are folded into per-card histories as they arrive (metrics.js)
+// and dropped, and the journal is append-only, so after the first full read a
+// refresh only asks for rows past the last seq. Refreshes: on opening the
+// view, every 60 s while it is open and visible, and after card changes at
+// most once per 10 s (the first change after a refresh schedules it, later
+// ones ride along: a throttle, not a debounce).
 
 const JOURNAL_PAGE = 1000;
 const DASH_REFRESH_MS = 60_000;
-const DASH_UPSERT_DEBOUNCE_MS = 10_000;
+const DASH_UPSERT_THROTTLE_MS = 10_000;
 let dashToken = 0;
 
+const freshDash = () => ({ status: 'idle', fold: emptyFold(), offset: 0, error: null, updatedAt: null, epoch: null });
+state.dash = freshDash();
+
 async function loadJournal() {
-  const d = state.dash;
-  if (!state.boardId || d.status === 'loading') return;
+  if (!state.boardId || state.dash.status === 'loading') return;
   const token = ++dashToken;
   const boardId = state.boardId;
-  state.dash = { ...d, status: 'loading' };
+  state.dash = { ...state.dash, status: 'loading' };
   update();
   try {
-    let after = d.afterSeq;
-    const rows = [];
-    for (;;) {
-      const page = await api.journal(boardId, after, JOURNAL_PAGE);
-      if (token !== dashToken) return;
-      rows.push(...(page.rows ?? []));
-      const next = page.next_after_seq ?? after;
-      if ((page.rows ?? []).length < JOURNAL_PAGE || next === after) { after = next; break; }
-      after = next;
-    }
-    state.dash = { status: 'ok', rows: rows.length ? [...state.dash.rows, ...rows] : state.dash.rows, afterSeq: after, error: null, updatedAt: Date.now() };
+    const res = await pullJournal(state.dash.fold, (after, limit) => api.journal(boardId, after, limit), { pageSize: JOURNAL_PAGE });
+    if (token !== dashToken) return;
+    state.dash = { ...state.dash, status: 'ok', fold: res.fold, offset: res.offset ?? state.dash.offset, error: null, updatedAt: Date.now() };
   } catch (err) {
     if (token !== dashToken) return;
     state.dash = { ...state.dash, status: 'error', error: errorText(err) };
@@ -172,27 +169,48 @@ async function loadJournal() {
 
 function resetDashboard() {
   dashToken++;
-  state.dash = { status: 'idle', rows: [], afterSeq: 0, error: null, updatedAt: null };
-  dashMemo = null;
+  state.dash = freshDash();
+  winMemo = null;
+  cardMemo = null;
+}
+
+// A new hub epoch (restart or restore) may have rewritten history the fold
+// already holds; the page check in pullJournal can't see a restore whose new
+// rows sit below our last seq, so the welcome frame's epoch drops it too.
+function onHubEpoch(epoch) {
+  const prev = state.dash.epoch;
+  if (prev && epoch && prev !== epoch) {
+    resetDashboard();
+    if (state.view === 'dashboard') loadJournal();
+  }
+  state.dash.epoch = epoch ?? null;
 }
 
 let dashUpsertTimer = null;
 function dashboardSoon() {
   if (state.view !== 'dashboard' || dashUpsertTimer) return;
-  dashUpsertTimer = setTimeout(() => { dashUpsertTimer = null; if (state.view === 'dashboard') loadJournal(); }, DASH_UPSERT_DEBOUNCE_MS);
+  dashUpsertTimer = setTimeout(() => { dashUpsertTimer = null; if (state.view === 'dashboard') loadJournal(); }, DASH_UPSERT_THROTTLE_MS);
 }
 
-// Metrics walk the whole journal; recompute only when rows, cards or the minute change.
-let dashMemo = null;
+// The window sums walk every card's history: only when rows arrive or the
+// minute turns. The join with live cards is cheap and runs on card changes.
+let winMemo = null;
+let cardMemo = null;
 function dashboardModel(entries) {
   const d = state.dash;
-  const now = Date.now();
-  const key = `${d.rows.length}|${d.afterSeq}|${state.cardsRev}|${Math.floor(now / 60_000)}`;
-  const ready = d.updatedAt != null;
-  if (ready && dashMemo?.key !== key) {
-    dashMemo = { key, metrics: dashboardMetrics({ rows: d.rows, cards: entries.map((e) => agedView(e.view, e.elapsed_ms)), now }) };
+  const base = { status: d.status, error: d.error, updated_at: d.updatedAt, metrics: null };
+  if (d.updatedAt == null) return base;
+  // Journal times are the hub's; so is "now".
+  const now = Date.now() + d.offset;
+  const minute = Math.floor(now / 60_000);
+  if (winMemo?.fold !== d.fold || winMemo.version !== d.fold.version || winMemo.minute !== minute) {
+    winMemo = { fold: d.fold, version: d.fold.version, minute, win: windowMetrics(d.fold, now) };
+    cardMemo = null;
   }
-  return { status: d.status, error: d.error, updated_at: d.updatedAt, metrics: ready ? dashMemo.metrics : null };
+  if (cardMemo?.rev !== state.cardsRev) {
+    cardMemo = { rev: state.cardsRev, metrics: cardMetrics(winMemo.win, d.fold, entries.map((e) => agedView(e.view, e.elapsed_ms))) };
+  }
+  return { ...base, metrics: cardMemo.metrics };
 }
 
 function toasts() {
@@ -292,7 +310,7 @@ function onStatus({ status, retryAt }) {
 function onMessage(msg) {
   const now = perf();
   switch (msg.type) {
-    case 'welcome': break;
+    case 'welcome': onHubEpoch(msg.hub_epoch); break;
     case 'snapshot': {
       if (msg.board_id !== state.boardId) return;
       state.board = msg.board;
@@ -371,7 +389,8 @@ function closeDrawer() {
   state.detail = null;
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* sandboxed */ }
   update();
-  if (id) queueMicrotask(() => root.querySelector(`[data-card-id="${CSS.escape(id)}"] .card-open`)?.focus());
+  // Back to what opened it: the card or row, else a dashboard list entry.
+  if (id) queueMicrotask(() => (root.querySelector(`[data-card-id="${CSS.escape(id)}"] .card-open`) ?? root.querySelector(`[data-action="open"][data-card="${CSS.escape(id)}"]`))?.focus());
 }
 
 // The hub prints http://…/#dev_secret=<secret> at startup: keep it for this tab
@@ -686,7 +705,7 @@ function onClick(e) {
     case 'reconnect': socket?.reconnectNow(); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'view': setView(el.dataset.view); return;
-    case 'dashboard-refresh': loadJournal(); return;
+    case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
     default:
@@ -734,7 +753,7 @@ function onKeydown(e) {
     openNewCard();
     return;
   }
-  if (!typing && e.key === '/' && state.view === 'table' && !root.querySelector('dialog[open]')) {
+  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !state.detail && state.view === 'table' && !root.querySelector('dialog[open]')) {
     e.preventDefault();
     root.querySelector('[data-input="table-filter"]')?.focus();
     return;

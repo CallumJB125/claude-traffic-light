@@ -53,7 +53,8 @@ export function toRow(entry, members) {
 }
 
 const keyNum = (k) => String(k ?? '');
-const cmpText = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), undefined, { numeric: true, sensitivity: 'base' });
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const cmpText = (a, b) => collator.compare(String(a ?? ''), String(b ?? ''));
 
 // Empty values sort last in both directions: a blank cost is "unknown", not zero.
 function cmpNullable(a, b, dir, cmp) {

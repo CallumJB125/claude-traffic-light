@@ -696,6 +696,8 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .dashview-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 28px; }
 .dashview-sum { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: var(--text-sm); }
 .dashview-stale { display: inline-flex; align-items: center; gap: 5px; color: var(--tone-amber); }
+.dashview-live:empty { display: none; }
+.btn[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
 
 .dash-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
 .dash-tile { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px 14px 13px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); }

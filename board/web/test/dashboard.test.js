@@ -2,7 +2,7 @@
 // and card rows that open the drawer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { textOf, byClass, byAttr, findAll } from '../js/h.js';
+import { textOf, byClass, byAttr, findAll, walk } from '../js/h.js';
 import { dashboardScreen } from '../js/render-dashboard.js';
 import { dashboardMetrics, DAY, HOUR } from '../js/metrics.js';
 import { VIEWS } from '../js/views.js';
@@ -58,7 +58,7 @@ test('KPI tiles read the metrics', () => {
   assert.match(t, /Median cycle time/);
   assert.match(t, /Finished by Claude50%1 of 2 cards/);
   assert.match(t, /Time blocked1d 1h/);
-  assert.match(t, /Spent\$2\.5/);
+  assert.match(t, /Spent on budgeted cards\$2\.5/);
 });
 
 test('every chart is a named figure with a hidden data table or visible text', () => {
@@ -94,4 +94,42 @@ test('empty panels say why instead of drawing an empty chart', () => {
   assert.equal(findAll(v, (n) => n.tag === 'figure').length, 0);
   assert.match(textOf(byClass(v, 'dash-throughput')[0]), /no cards finished in the last 8 weeks/);
   assert.match(textOf(byClass(v, 'dash-blocked')[0]), /Nothing was blocked/);
+});
+
+test('card titles and keys from the journal or the board are only ever text (D25)', () => {
+  const evil = '<img src=x onerror=alert(1)><script>alert(1)</script>';
+  const evilRows = [
+    row('c-x', 'card.create', 3 * DAY, { key: evil, title: evil }),
+    tr('c-x', 2 * DAY, 'todo', 'queued'), tr('c-x', 2 * DAY - HOUR, 'queued', 'claimed'), tr('c-x', 2 * DAY - 2 * HOUR, 'claimed', 'running'),
+    tr('c-x', DAY, 'running', 'blocked', evil),
+  ];
+  const evilCards = [view({ id: 'c-y', key: evil, title: evil, labels: [evil], budget: { spent_usd: 1, cap_usd: 2 } })];
+  const v = dashboardScreen(model([], { dashboard: { status: 'ok', updated_at: NOW, metrics: dashboardMetrics({ rows: evilRows, cards: evilCards, now: NOW }) } }));
+  assert.ok(textOf(v).includes(evil));
+  walk(v, (x) => {
+    assert.ok(!('innerHTML' in x.props) && !('outerHTML' in x.props), 'no html props');
+    assert.notEqual(x.tag, 'script');
+    assert.notEqual(x.tag, 'img');
+  });
+});
+
+test('cards with no budget are left out of the spend and the panel says how many', () => {
+  const withUncapped = [...cards, view({ id: 'c-u', key: 'BDL-5', budget: null })];
+  const m = dashboardMetrics({ rows, cards: withUncapped, now: NOW });
+  const v = dashboardScreen(model([], { dashboard: { status: 'ok', updated_at: NOW, metrics: m } }));
+  assert.match(textOf(byClass(v, 'dash-tiles')[0]), /Spent on budgeted cards\$2\.5/);
+  assert.match(textOf(byClass(v, 'dash-cost')[0]), /2 cards have no budget, so their spend isn’t shown\./);
+});
+
+test('only the stale warning is live; Refresh stays focusable while busy', () => {
+  const ok = dashboardScreen(dash());
+  const live = byAttr(ok, 'aria-live');
+  assert.equal(live.length, 1);
+  assert.equal(textOf(live[0]), '', 'the minutely "updated" time is not announced');
+  const stale = dashboardScreen(dash({ status: 'error', error: 'x' }));
+  assert.match(textOf(byAttr(stale, 'aria-live')[0]), /Refresh failed/);
+  const busy = dashboardScreen(dash({ status: 'loading' }));
+  const btn = byAttr(busy, 'data-action', 'dashboard-refresh')[0];
+  assert.equal(btn.props['aria-disabled'], 'true');
+  assert.equal(btn.props.disabled, undefined);
 });

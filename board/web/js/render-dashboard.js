@@ -104,7 +104,7 @@ function tiles(m) {
     tile('done', 'Done in the last 7 days', String(tp.this_week), diff == null ? 'No earlier week' : diff === 0 ? 'Same as the week before' : `${diff > 0 ? '+' : '−'}${Math.abs(diff)} on the week before`),
     tile('share', 'Finished by Claude', m.share.claude_pct == null ? '—' : pct(m.share.claude_pct), m.share.total ? `${m.share.claude} of ${plural(m.share.total, 'card')}` : 'No finished cards yet'),
     tile('blocked', 'Time blocked', dur(m.blocked.total_ms || null), m.blocked.cards ? `across ${plural(m.blocked.cards, 'card')}` : 'Nothing blocked'),
-    tile('cost', 'Spent', fmtUsd(Number(m.cost.total_usd.toFixed(2))), m.cost.cards ? `median ${fmtUsd(Number(m.cost.median_usd.toFixed(2)))} per card` : 'No spend yet'));
+    tile('cost', 'Spent on budgeted cards', fmtUsd(Number(m.cost.total_usd.toFixed(2))), m.cost.cards ? `median ${fmtUsd(Number(m.cost.median_usd.toFixed(2)))} per card` : 'No spend yet'));
 }
 
 function throughputPanel(m) {
@@ -146,7 +146,7 @@ function sharePanel(m) {
         s.claude && s.human ? h('rect', { class: 'viz-gap', x: `${p * 100}%`, y: 0, width: 2, height: 14, transform: 'translate(-1 0)' }) : null),
       h('ul', { class: 'dash-legend' },
         item('viz-claude', 'Claude', s.claude, 'a run went through review to done'),
-        item('viz-mark', 'People', s.human, 'moved to Done by hand, no run'))));
+        item('viz-mark', 'People', s.human, 'moved to Done by hand'))));
 }
 
 function waitPanel(m, model) {
@@ -183,7 +183,9 @@ function blockedPanel(m) {
 
 function costPanel(m) {
   const c = m.cost;
-  return panel('cost', 'Cost per card', c.cards ? `Claude spend so far · ${fmtUsd(Number(c.total_usd.toFixed(2)))} across ${plural(c.cards, 'card')}` : 'Claude spend so far',
+  const sub = c.cards ? `Claude spend so far · ${fmtUsd(Number(c.total_usd.toFixed(2)))} across ${plural(c.cards, 'budgeted card')}` : 'Claude spend so far, budgeted cards';
+  return panel('cost', 'Cost per card', sub,
+    c.unbudgeted ? h('p', { class: 'dash-note' }, `${plural(c.unbudgeted, 'card')} ${c.unbudgeted === 1 ? 'has' : 'have'} no budget, so ${c.unbudgeted === 1 ? 'its' : 'their'} spend isn’t shown.`) : null,
     barList(c.top, { fmt: (v) => fmtUsd(Number(v.toFixed(2))), empty: 'No spend recorded on any card yet.' }));
 }
 
@@ -195,7 +197,8 @@ function statusBlock(kind, text, extra = null) {
     h('p', null, text), extra);
 }
 
-const refreshBtn = (busy, label = 'Refresh') => h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'dashboard-refresh', disabled: busy, 'aria-busy': busy ? 'true' : null }, label);
+// aria-disabled, not disabled: the button keeps focus while a refresh runs.
+const refreshBtn = (busy, label = 'Refresh') => h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'dashboard-refresh', 'aria-disabled': busy ? 'true' : null, 'aria-busy': busy ? 'true' : null }, label);
 
 export function dashboardScreen(model) {
   const d = model.dashboard ?? { status: 'loading' };
@@ -214,9 +217,11 @@ export function dashboardScreen(model) {
   }
   return h('main', { class: 'dashview', id: 'board', 'aria-label': 'Board dashboard' },
     h('div', { class: 'dashview-bar' },
-      h('p', { class: 'dashview-sum', role: 'status', 'aria-live': 'polite' },
+      h('p', { class: 'dashview-sum' },
         d.updated_at ? `From the board’s journal · updated ${clock(d.updated_at).slice(0, 5)}` : 'From the board’s journal',
-        m && d.status === 'error' ? h('span', { class: 'dashview-stale' }, icon('warn', 'icon-xs'), 'Refresh failed; showing the last good numbers') : null),
+        // Only the stale warning is announced, not the minutely "updated" time.
+        h('span', { class: 'dashview-live', role: 'status', 'aria-live': 'polite' },
+          m && d.status === 'error' ? h('span', { class: 'dashview-stale' }, icon('warn', 'icon-xs'), 'Refresh failed; showing the last good numbers') : null)),
       m ? refreshBtn(busy) : null),
     body);
 }
