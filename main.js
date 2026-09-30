@@ -2867,7 +2867,7 @@ ipcMain.handle('connect-agent', (e, which) => {
   }
   return { ok: false };
 });
-ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT }));
+ipcMain.handle('signal-endpoint', () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 
 ipcMain.handle('choose-sound-file', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {

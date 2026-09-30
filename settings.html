@@ -235,7 +235,7 @@
       <button type="button" class="secondary" data-agent="codex">Codex CLI</button>
       <button type="button" class="secondary" data-agent="gemini">Gemini CLI</button>
     </div>
-    <div class="hint" id="connect-hint" role="status" aria-live="polite">Writes each tool's hook config so its sessions light the widget too. Anything else can POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> or run <code id="emit-path">emit.js</code>.</div>
+    <div class="hint" id="connect-hint" role="status" aria-live="polite">Writes each tool's hook config so its sessions light the widget too. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
   </div>
 
   <h2>Claude integration</h2>
@@ -337,7 +337,7 @@
     };
     mcpToggle.addEventListener('click', async () => showMcp(await window.settingsApi.mcpSetEnabled(!mcpToggle.dataset.on)));
     window.settingsApi.mcpStatus().then(showMcp);
-    window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; });
+    window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     load();
   </script>
 </body>
