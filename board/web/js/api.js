@@ -57,6 +57,7 @@ export const api = {
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
   devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
   board: (id) => call('GET', `/api/boards/${enc(id)}`),
+  presence: (boardId) => call('GET', `/api/boards/${enc(boardId)}/presence`),
   card: (id) => call('GET', `/api/cards/${enc(id)}`),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
   patchCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}`, body),

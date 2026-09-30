@@ -16,6 +16,7 @@ import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget } from './render-integrations.js';
+import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
@@ -59,6 +60,8 @@ const state = {
   kbd: null, // keyboard pick-up: {ids, from, over}
   announce: '',
   quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
+  // team.presence (D37b). `stale` from a socket drop until the next frame.
+  presence: { members: [], loaded: false, stale: false },
 };
 
 let socket = null;
@@ -109,6 +112,7 @@ function setView(v) {
   state.view = v;
   if (v === 'dashboard') loadJournal();
   if (v === 'integrations') loadIntegrations();
+  if (v === 'team' && state.board) presenceFallbackSoon();
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -255,6 +259,9 @@ function buildModel() {
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now() } : null,
+    presence: { ...state.presence, stale: state.presence.stale || lost },
+    // Presence ages freeze at the drop, like card ages.
+    nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
   };
 }
 
@@ -349,7 +356,7 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : null;
+  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -414,6 +421,7 @@ async function boot() {
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
   resetDashboard();
+  state.presence = { members: [], loaded: false, stale: false };
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
   update();
@@ -427,6 +435,7 @@ function onStatus({ status, retryAt }) {
     state.conn.lostAt = new Date();
     state.conn.lostPerf = perf();
   }
+  if (status === 'lost') state.presence.stale = true;
   if (status === 'open') { state.conn.lostAt = null; state.conn.lostPerf = null; }
   state.conn.status = status;
   state.conn.retryAt = retryAt ?? null;
@@ -447,8 +456,12 @@ function onMessage(msg) {
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
+      presenceFallbackSoon();
       break;
     }
+    case 'team.presence':
+      state.presence = { members: msg.members, loaded: true, stale: false };
+      break;
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
       state.cards.set(msg.card.id, { view: msg.card, rx: now });
@@ -482,6 +495,23 @@ function onMessage(msg) {
     default: break;
   }
   update();
+}
+
+// The socket sends presence right after every snapshot; this is only the
+// fallback for a frame that never comes (the endpoint is rate limited), tried
+// once per board, never on a timer.
+let presenceFallbackFor = null;
+function presenceFallbackSoon() {
+  if (state.view !== 'team' || presenceFallbackFor === state.boardId) return;
+  const boardId = state.boardId;
+  presenceFallbackFor = boardId;
+  setTimeout(async () => {
+    if (state.presence.loaded || state.boardId !== boardId) return;
+    try {
+      const res = await api.presence(boardId);
+      if (!state.presence.loaded && state.boardId === boardId) { state.presence = { members: res.members ?? [], loaded: true, stale: false }; update(); }
+    } catch { /* the socket frame or the next snapshot will fill it */ }
+  }, 2000);
 }
 
 // ── detail drawer ────────────────────────────────────────────────────────────
