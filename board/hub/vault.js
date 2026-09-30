@@ -68,10 +68,26 @@ export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!p
   return null;
 }
 
-export function createVault(key) {
+/**
+ * BOARD_ENC_KEY_PREVIOUS: the key being rotated away from. It only opens rows
+ * sealed with it (their key_id), which are then sealed again with the current
+ * key; nothing is ever sealed with it. Same rules as BOARD_ENC_KEY.
+ */
+export function loadPreviousKey({ env = process.env, hasParentPort = !!process.parentPort } = {}) {
+  if (!env.BOARD_ENC_KEY_PREVIOUS) return null;
+  if (hasParentPort) throw new Error('BOARD_ENC_KEY_PREVIOUS is refused under the desktop app: the key comes over parentPort');
+  const key = decodeKey(env.BOARD_ENC_KEY_PREVIOUS);
+  delete env.BOARD_ENC_KEY_PREVIOUS;
+  return key;
+}
+
+export function createVault(key, previous = null) {
   const keyBuf = key ? Buffer.from(key) : null;
   if (keyBuf && keyBuf.length !== KEY_BYTES) throw new Error(`encryption key must be ${KEY_BYTES} bytes`);
   const keyId = keyBuf ? keyIdOf(keyBuf) : null;
+  const prevBuf = keyBuf && previous ? Buffer.from(previous) : null;
+  if (prevBuf && prevBuf.length !== KEY_BYTES) throw new Error(`previous encryption key must be ${KEY_BYTES} bytes`);
+  const prevId = prevBuf ? keyIdOf(prevBuf) : null;
   const aad = (connectionId, kind, kid) => Buffer.from(`${connectionId}|${kind}|${kid}`, 'utf8');
   const need = () => {
     if (!keyBuf) throw new HubError('POLICY_DENIED', 'integrations need an encryption key (BOARD_ENC_KEY) on this hub');
@@ -80,6 +96,8 @@ export function createVault(key) {
   return {
     available: !!keyBuf,
     keyId,
+    /** Sealed with the previous key: seal it again with the current one. */
+    stale: (row) => row.key_id !== keyId,
     seal(connectionId, kind, plaintext) {
       need();
       const nonce = randomBytes(12);
@@ -91,12 +109,11 @@ export function createVault(key) {
     open(connectionId, kind, row) {
       need();
       if (!row) return null;
-      if (row.key_id !== keyId) {
-        throw new HubError('INTERNAL', 'secret was sealed with a different key (rotate/re-seal needed)');
-      }
+      const k = row.key_id === keyId ? keyBuf : (prevBuf && row.key_id === prevId ? prevBuf : null);
+      if (!k) throw new HubError('INTERNAL', 'secret was sealed with a different key (set BOARD_ENC_KEY_PREVIOUS to it to re-seal)');
       const ct = Buffer.from(row.ciphertext);
       if (ct.length < TAG_BYTES) throw new HubError('INTERNAL', 'sealed secret is truncated');
-      const d = createDecipheriv('aes-256-gcm', keyBuf, Buffer.from(row.nonce), { authTagLength: TAG_BYTES });
+      const d = createDecipheriv('aes-256-gcm', k, Buffer.from(row.nonce), { authTagLength: TAG_BYTES });
       d.setAAD(aad(connectionId, kind, row.key_id));
       d.setAuthTag(ct.subarray(ct.length - TAG_BYTES));
       return Buffer.concat([d.update(ct.subarray(0, ct.length - TAG_BYTES)), d.final()]).toString('utf8');

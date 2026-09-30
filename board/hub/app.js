@@ -3,7 +3,7 @@
 // self-probe) → graceful shutdown. Tests build this with a fake clock and
 // drive hub.tick() themselves (timers: false).
 
-import { loadKey } from './vault.js';
+import { loadKey, loadPreviousKey } from './vault.js';
 import { createBus } from './bus.js';
 import { createIntegrations } from './integrations/registry.js';
 import { connectorsFor } from './integrations/index.js';
@@ -46,7 +46,8 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
   if (config.auth !== 'local') {
     const key = loadKey({ dataDir: config.dataDir, hasParentPort: !!process.parentPort });
-    if (key) hub.setVaultKey(key);
+    const previous = loadPreviousKey({ hasParentPort: !!process.parentPort });
+    if (key) hub.setVaultKey(key, previous);
   }
 
   const api = new Api(hub);

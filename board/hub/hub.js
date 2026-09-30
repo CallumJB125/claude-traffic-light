@@ -75,9 +75,11 @@ export class Hub extends EventEmitter {
 
   // Integrations encryption key handed in by the desktop app (local mode, over
   // parentPort; D36). Held in memory only; set once.
-  setVaultKey(buf) {
+  setVaultKey(buf, previous = null) {
     if (this.vaultKey) throw new Error('vault key already set');
     if (!Buffer.isBuffer(buf) || buf.length !== 32) throw new Error('vault key must be 32 bytes');
+    if (previous != null && (!Buffer.isBuffer(previous) || previous.length !== 32)) throw new Error('previous vault key must be 32 bytes');
+    this.vaultPrevKey = previous ? Buffer.from(previous) : null;
     this.vaultKey = Buffer.from(buf);
     this.emit('vault-key');
   }
@@ -85,7 +87,7 @@ export class Hub extends EventEmitter {
   // Sealed connector secrets (D41), built from the key D36 hands in; keyless
   // (every seal refused) until then.
   get vault() {
-    if (this._vaultFor !== this.vaultKey) { this._vault = createVault(this.vaultKey); this._vaultFor = this.vaultKey; }
+    if (this._vaultFor !== this.vaultKey) { this._vault = createVault(this.vaultKey, this.vaultPrevKey); this._vaultFor = this.vaultKey; }
     return this._vault;
   }
 

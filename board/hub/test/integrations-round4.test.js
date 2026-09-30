@@ -9,6 +9,8 @@ import { request } from 'node:http';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { defineConnector } from '../integrations/connector.js';
+import fake, { sign } from '../integrations/fake/index.js';
+import { keyIdOf, loadPreviousKey } from '../vault.js';
 import { migrate, loadMigrations, currentVersion } from '../../shared/migrate.js';
 import { replay } from '../../shared/journal.js';
 import { dashboardMetrics } from '../../web/js/metrics.js';
@@ -228,4 +230,61 @@ test('L-1: a hub under a parentPort refuses BOARD_ENC_KEY from env in every auth
     delete process.env.BOARD_ENC_KEY;
     if (had) Object.defineProperty(process, 'parentPort', had); else delete process.parentPort;
   }
+});
+
+// ── L-2 ───────────────────────────────────────────────────────────────────
+
+async function fakeHookHub() {
+  const h = await startHub();
+  const oldKey = randomBytes(32);
+  h.hub.setVaultKey(oldKey);
+  const reg = h.app.integrations;
+  const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
+  const conn = reg.createConnection({ ...v, orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake' });
+  const post = (n) => {
+    const raw = JSON.stringify({ event: 'noop', n });
+    return fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-fake-signature': sign('whsec_abcdef123456', Buffer.from(raw)), 'x-fake-delivery': randomUUID() }, body: raw });
+  };
+  // Rotation: a restarted hub with a new key (the vault is rebuilt from it).
+  const rotate = (previous) => { h.hub.vaultKey = null; h.hub.setVaultKey(randomBytes(32), previous); };
+  return { h, conn, post, oldKey, rotate };
+}
+
+test('L-2: a vault key mismatch answers 500 and never spends the caller’s failure bucket', async () => {
+  const { h, conn, post, rotate } = await fakeHookHub();
+  try {
+    h.hub.limiter.limits.webhook_fail_ip = { capacity: 1, per_ms: 60_000 };
+    rotate(null);
+    assert.equal((await post(1)).status, 500);
+    assert.equal((await post(2)).status, 500);
+    assert.equal(h.hub.limiter.peek('webhook_fail_ip', `${conn.id}|127.0.0.1`).ok, true, 'not spent');
+    assert.equal(h.app.integrations.get(conn.id).health.last_error, 'vault_error');
+  } finally { await h.close(); }
+});
+
+test('L-2: with BOARD_ENC_KEY_PREVIOUS a row sealed with the old key opens and is sealed again with the current one', async () => {
+  const { h, conn, post, oldKey, rotate } = await fakeHookHub();
+  try {
+    const before = h.db.all('SELECT key_id FROM connection_secrets WHERE connection_id = ?', conn.id).map((r) => r.key_id);
+    assert.deepEqual([...new Set(before)], [keyIdOf(oldKey)]);
+    rotate(oldKey);
+    assert.equal((await post(1)).status, 200);
+    const after = h.db.all('SELECT key_id FROM connection_secrets WHERE connection_id = ?', conn.id).map((r) => r.key_id);
+    assert.deepEqual([...new Set(after)], [h.hub.vault.keyId], 're-sealed with the current key');
+    // Once re-sealed, the previous key is no longer needed.
+    const current = h.hub.vaultKey;
+    h.hub.vaultKey = null;
+    h.hub.setVaultKey(current);
+    assert.equal((await post(2)).status, 200);
+  } finally { await h.close(); }
+});
+
+test('L-2: loadPreviousKey reads BOARD_ENC_KEY_PREVIOUS once, and never under a parentPort', () => {
+  const k = randomBytes(32).toString('hex');
+  const env = { BOARD_ENC_KEY_PREVIOUS: k };
+  assert.deepEqual(loadPreviousKey({ env, hasParentPort: false }), Buffer.from(k, 'hex'));
+  assert.equal(env.BOARD_ENC_KEY_PREVIOUS, undefined);
+  assert.equal(loadPreviousKey({ env: {}, hasParentPort: false }), null);
+  assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: k }, hasParentPort: true }), /refused under the desktop app/);
+  assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: 'short' }, hasParentPort: false }), /32 bytes/);
 });

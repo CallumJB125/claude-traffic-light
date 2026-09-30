@@ -154,7 +154,13 @@ export function createIntegrations({
 
   function secretsOf(c) {
     const out = {};
-    for (const r of db.all('SELECT * FROM connection_secrets WHERE connection_id = ?', c.id)) out[r.kind] = hub.vault.open(c.id, r.kind, r);
+    for (const r of db.all('SELECT * FROM connection_secrets WHERE connection_id = ?', c.id)) {
+      out[r.kind] = hub.vault.open(c.id, r.kind, r);
+      if (hub.vault.stale(r)) {
+        const s = hub.vault.seal(c.id, r.kind, out[r.kind]);
+        db.run('UPDATE connection_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE connection_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, c.id, r.kind, r.key_id);
+      }
+    }
     return out;
   }
 
@@ -467,8 +473,15 @@ export function createIntegrations({
     const conn = c && connectors.get(c.provider);
     if (!c || c.status !== 'active' || !conn?.handleWebhook) return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'not found' } } };
     if (rawBody.length > MAX_BODY) return { status: 413, body: { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too large' } } };
+    // A key problem is the hub's, not the caller's: 500, and no failure spent.
+    let secrets;
+    try { secrets = secretsOf(c); } catch (e) {
+      setHealth(c.id, false, 'vault_error');
+      warn('integration secrets could not be opened', c, e);
+      return { status: 500, body: { error: { code: 'INTERNAL', message: 'internal error' } } };
+    }
     let v;
-    try { v = conn.verify({ headers, rawBody, secrets: secretsOf(c), now: Date.now() }); } catch (e) { v = { ok: false, reason: e.message }; }
+    try { v = conn.verify({ headers, rawBody, secrets, now: Date.now() }); } catch (e) { v = { ok: false, reason: e.message }; }
     if (!v?.ok || !v.dedupe_key) {
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
