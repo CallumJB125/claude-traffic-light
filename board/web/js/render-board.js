@@ -219,7 +219,7 @@ export function topBar(model, lamps) {
 
 function viewSwitch(model) {
   return h('nav', { class: 'viewswitch', 'aria-label': 'Board views' },
-    VIEWS.map((v) => h('button', {
+    VIEWS.filter((v) => v.switcher !== false).map((v) => h('button', {
       key: v.id, type: 'button', class: 'viewswitch-btn', 'data-action': 'view', 'data-view': v.id,
       'aria-pressed': model.view === v.id ? 'true' : 'false',
       // The text label is hidden on phones; the name must survive it.

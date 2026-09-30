@@ -3,6 +3,7 @@
 // self-probe) → graceful shutdown. Tests build this with a fake clock and
 // drive hub.tick() themselves (timers: false).
 
+import { loadKey } from './vault.js';
 import { createBus } from './bus.js';
 import { createIntegrations } from './integrations/registry.js';
 import { connectorsFor } from './integrations/index.js';
@@ -41,6 +42,12 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });
   if (config.bootstrap) bootstrapAdmin(hub, config.bootstrap, config.bootstrapBoard);
   hub.boot();
+  // D41: a hub outside the desktop app loads its integrations key from
+  // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
+  if (config.auth !== 'local') {
+    const key = loadKey({ dataDir: config.dataDir, hasParentPort: false });
+    if (key) hub.setVaultKey(key);
+  }
 
   const api = new Api(hub);
   // Integrations (D40/D41): consumers read the journal through the bus.

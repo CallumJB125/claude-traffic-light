@@ -1,0 +1,67 @@
+// Integrations page: pure render over GET /api/integrations.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { textOf, findAll, byAttr } from '../js/h.js';
+import { integrationsScreen, actionLabel } from '../js/render-integrations.js';
+import { boardScreen } from '../js/render-board.js';
+import { model } from './fixtures.js';
+
+const available = [
+  { id: 'github', name: 'GitHub', scopes: ['pull_requests:read'], connect: 'app_install', actions: { 'system.pr_merged': { default: 'auto' }, 'github.comment': { default: 'ask' } } },
+  { id: 'fake', name: 'Fake tracker', scopes: ['issues:read'], connect: 'token', actions: { 'card.create': { default: 'auto' } } },
+];
+const conn = { id: 'c1', provider: 'github', display_name: 'acme', status: 'active', health: { ok: false, last_error: 'answered 502' }, settings: { autonomy: { 'github.comment': 'off' } } };
+
+const m = (over = {}, role = 'owner') => {
+  const base = model([], { view: 'integrations' });
+  return { ...base, me: { member: { ...base.me.member, role } }, integrations: { status: 'ok', data: { available, connections: [conn], vault: true }, open: null, audit: {}, tokenFor: null, confirmDisconnect: null, nowMs: Date.parse('2026-09-30T20:00:00Z'), ...over } };
+};
+
+test('connected tools show health and per-action autonomy; available ones offer the right connect', () => {
+  const v = integrationsScreen(m());
+  const t = textOf(v);
+  assert.match(t, /Problem: answered 502/);
+  assert.match(t, /Mark a card Done when its PR merges/);
+  const selects = findAll(v, (n) => n.tag === 'select' && n.props['data-change'] === 'integ-autonomy');
+  assert.equal(selects.length, 2);
+  const comment = selects.find((s) => s.props['data-action-id'] === 'github.comment');
+  assert.equal(comment.children.find((o) => o.props.selected).props.value, 'off');
+  assert.match(t, /default: Ask first/);
+  const connect = byAttr(v, 'data-action', 'integ-connect');
+  assert.deepEqual(connect.map((b) => b.props['data-provider']), ['fake']);
+  assert.equal(connect[0].props['data-kind'], 'token');
+});
+
+test('members see autonomy read-only and cannot connect or disconnect', () => {
+  const v = integrationsScreen(m({}, 'member'));
+  assert.equal(findAll(v, (n) => n.tag === 'select').length, 0);
+  assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
+  assert.equal(byAttr(v, 'data-action', 'integ-disconnect-ask').length, 0);
+  assert.match(textOf(v), /A team admin can connect this/);
+});
+
+test('no vault key: says so and offers no connect', () => {
+  const v = integrationsScreen(m({ data: { available, connections: [], vault: false } }));
+  assert.match(textOf(v), /needs its encryption key/);
+  assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
+});
+
+test('disconnect asks inline first; activity lists audit entries as text', () => {
+  const v = integrationsScreen(m({ confirmDisconnect: 'c1', open: 'c1', audit: { c1: [{ id: 'a', action: 'system.pr_merged', decision: 'auto', external_ref: '<b>PR 7</b>', card_id: 'k1', at: '2026-09-30T19:00:00Z' }] } }));
+  assert.equal(byAttr(v, 'data-action', 'integ-disconnect').length, 1);
+  assert.match(textOf(v), /Done automatically/);
+  assert.equal(findAll(v, (n) => n.tag === 'b').length, 0, 'provider refs stay text (D25)');
+  assert.equal(byAttr(v, 'data-action', 'open')[0].props['data-card'], 'k1');
+});
+
+test('token form, loading and error states', () => {
+  assert.equal(byAttr(integrationsScreen(m({ tokenFor: 'fake' })), 'data-form', 'integ-token').length, 1);
+  assert.match(textOf(integrationsScreen(m({ status: 'loading', data: null }))), /Loading integrations/);
+  assert.equal(byAttr(integrationsScreen(m({ status: 'error', data: null, error: 'nope' })), 'data-action', 'integ-reload').length, 1);
+});
+
+test('Integrations is not in the board view switcher', () => {
+  const v = boardScreen(model([], { view: 'integrations' }), integrationsScreen(m()));
+  assert.equal(findAll(v, (n) => n.props['data-view'] === 'integrations').length, 0);
+  assert.equal(actionLabel('unknown.x'), 'unknown.x');
+});

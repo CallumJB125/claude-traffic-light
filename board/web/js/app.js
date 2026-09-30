@@ -9,6 +9,7 @@ import { boardScreen, loadingScreen } from './render-board.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
+import { integrationsScreen } from './render-integrations.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
@@ -41,6 +42,7 @@ const state = {
   view: 'board',
   table: { sort: DEFAULT_SORT, filter: '' },
   dash: null, // set below: freshDash(), status idle | loading | ok | error
+  integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, confirmDisconnect: null },
   cardsRev: 0,
 };
 
@@ -77,13 +79,76 @@ function setView(v) {
   if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
   state.view = v;
   if (v === 'dashboard') loadJournal();
-  try { localStorage.setItem('board-view', v); } catch { /* private mode */ }
+  if (v === 'integrations') loadIntegrations();
+  // Team pages are opened from the app sidebar; only board views are remembered.
+  if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
     const q = new URLSearchParams(location.search);
     q.set('view', v);
     history.replaceState(null, '', `${location.pathname}?${q}${location.hash}`);
   } catch { /* sandboxed */ }
   update();
+}
+
+// ── integrations ─────────────────────────────────────────────────────────────
+
+async function loadIntegrations() {
+  state.integ = { ...state.integ, status: 'loading' };
+  update();
+  try {
+    state.integ = { ...state.integ, status: 'ok', data: await api.integrations(), error: null };
+  } catch (err) {
+    state.integ = { ...state.integ, status: 'error', error: errorText(err) };
+  }
+  update();
+}
+
+async function connectIntegration(provider, kind) {
+  if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
+  const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
+  if (!res?.url) return;
+  // The desktop app opens this name in its own sign-in window; a browser opens a tab.
+  window.open(res.url, 'buddy-connect', 'noopener');
+  toast('Finish connecting in the window that opened, then come back here.');
+}
+
+async function submitIntegrationToken(form) {
+  const provider = form.dataset.provider;
+  const token = String(new FormData(form).get('token') ?? '').trim();
+  if (!token) return;
+  const res = await withBusy(`integ-connect:${provider}`, () => api.connectToken(provider, token));
+  if (res) { state.integ = { ...state.integ, tokenFor: null }; toast('Connected.'); loadIntegrations(); }
+}
+
+async function toggleActivity(id) {
+  const open = state.integ.open === id ? null : id;
+  state.integ = { ...state.integ, open };
+  update();
+  if (!open) return;
+  try {
+    const res = await api.integrationAudit(id);
+    state.integ = { ...state.integ, audit: { ...state.integ.audit, [id]: res.entries ?? [] } };
+  } catch (err) {
+    state.integ = { ...state.integ, audit: { ...state.integ.audit, [id]: [] }, error: errorText(err) };
+  }
+  update();
+}
+
+async function setAutonomy(id, action, mode) {
+  const conn = state.integ.data?.connections?.find((c) => c.id === id);
+  if (!conn) return;
+  const autonomy = { ...(conn.settings?.autonomy ?? {}), [action]: mode };
+  const res = await withBusy(`integ:${id}`, () => api.patchIntegration(id, { autonomy }));
+  if (res?.connection) {
+    state.integ = { ...state.integ, data: { ...state.integ.data, connections: state.integ.data.connections.map((c) => (c.id === id ? res.connection : c)) } };
+    update();
+  }
+}
+
+async function disconnectIntegration(id) {
+  const res = await withBusy(`integ:${id}`, () => api.disconnectIntegration(id));
+  state.integ = { ...state.integ, confirmDisconnect: null };
+  if (res) { toast('Disconnected.'); loadIntegrations(); } else update();
 }
 
 // ── toasts ───────────────────────────────────────────────────────────────────
@@ -131,6 +196,7 @@ function buildModel() {
     view: state.view,
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
+    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now() } : null,
   };
 }
 
@@ -225,7 +291,7 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : null;
+  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -318,6 +384,7 @@ function onMessage(msg) {
       state.cardsRev += 1;
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
+      if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       break;
     }
     case 'card.upsert': {
@@ -563,6 +630,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if (kind === 'integ-token') return submitIntegrationToken(form);
   const d = state.dialog;
   const cardId = form.dataset.card;
   const fd = new FormData(form);
@@ -704,6 +772,13 @@ function onClick(e) {
     case 'reconnect': socket?.reconnectNow(); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
     case 'view': setView(el.dataset.view); return;
+    case 'integ-reload': loadIntegrations(); return;
+    case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
+    case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
+    case 'integ-activity': toggleActivity(el.dataset.conn); return;
+    case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
+    case 'integ-disconnect-cancel': state.integ = { ...state.integ, confirmDisconnect: null }; update(); return;
+    case 'integ-disconnect': disconnectIntegration(el.dataset.conn); return;
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
@@ -736,6 +811,7 @@ function onChange(e) {
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
   if (what === 'move') moveCard(el.dataset.card, el.value);
+  if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
 }
 
 // Dialog close (Escape, backdrop, close buttons) is the one path back to state.
