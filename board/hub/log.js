@@ -15,3 +15,10 @@ export function createLogger({ level = 'info', sink = (line) => process.stderr.w
 }
 
 export const silentLogger = createLogger({ level: 'silent' });
+
+// Logs get the message with URLs cut to origin + path and token-like runs removed.
+export function redact(msg) {
+  return String(msg ?? '').slice(0, 300)
+    .replace(/https?:\/\/[^\s"'<>]+/g, (u) => { try { const x = new URL(u); return `${x.origin}${x.pathname}`; } catch { return '[url]'; } })
+    .replace(/[A-Za-z0-9_\-.+/=]{24,}/g, '[redacted]');
+}

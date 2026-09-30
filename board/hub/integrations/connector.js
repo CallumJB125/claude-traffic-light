@@ -8,6 +8,7 @@
 //   name: 'GitHub',
 //   scopes: ['pull_requests:read', …],  // what the consent screen lists; the minimum
 //   secrets: ['app_private_key', 'webhook_secret'],   // kinds this connector seals
+//   hosts: ['api.github.com'],          // exact hostnames ctx.fetch / exchange / verifyToken may reach (https only)
 //
 //   // Connect (in an in-app auth window). Either an OAuth-style redirect
 //   // flow or a manual token. The registry makes and checks `state`.
@@ -17,6 +18,7 @@
 //     async exchange({ query, redirectUri, config, fetch }) →          // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value}, settings? },
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
+//     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
 //
 //   // Inbound webhooks at POST /integrations/<connection id>/webhook.
@@ -34,7 +36,9 @@
 //   async sync(ctx) → void,
 //
 //   // Actions and their default autonomy (Callum's policy: facts are automatic,
-//   // anything that speaks for a person or touches production asks).
+//   // anything that speaks for a person or touches production asks). Every
+//   // side effect runs inside ctx.act(action, meta, (s) => s.actAs(member)…);
+//   // an integration can never dispatch/retry/take over or answer a permission.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
 //
 //   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
@@ -46,6 +50,7 @@
 // })
 
 const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
+const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // The only state-machine events an integration may raise as the system (D42):
@@ -58,6 +63,7 @@ export function defineConnector(spec) {
   if (!spec?.name) errs.push('name is required');
   if (!Array.isArray(spec?.scopes)) errs.push('scopes must be an array (the minimum the connector needs)');
   if (!Array.isArray(spec?.secrets)) errs.push('secrets must list the secret kinds it seals');
+  if (!Array.isArray(spec?.hosts) || spec.hosts.some((x) => typeof x !== 'string' || !HOST_RE.test(x))) errs.push('hosts must list the exact lowercase hostnames it calls (https only; no wildcards, ports or schemes)');
   if (!spec?.connect || !CONNECT_KINDS.has(spec.connect.kind)) errs.push(`connect.kind must be one of ${[...CONNECT_KINDS].join(', ')}`);
   if (spec?.connect?.kind === 'token' && typeof spec.connect.verifyToken !== 'function') errs.push('connect.verifyToken is required for token connectors');
   if (spec?.connect && spec.connect.kind !== 'token' && (typeof spec.connect.authorizeUrl !== 'function' || typeof spec.connect.exchange !== 'function')) errs.push('connect.authorizeUrl and connect.exchange are required for oauth/app_install');
@@ -71,5 +77,5 @@ export function defineConnector(spec) {
     else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
   }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec });
+  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, hosts: Object.freeze([...spec.hosts]) });
 }

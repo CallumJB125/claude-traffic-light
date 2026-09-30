@@ -4,17 +4,23 @@
 //
 // A consumer's rows are handled strictly in order; a failing row is retried
 // with backoff and blocks that consumer only (never the hub, never others).
+// Consumers run in the context the bus was created in, never in the async
+// context of whatever committed the row (a board queue, an integration's actor).
+
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const BATCH = 200;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
 const TICK_MS = 5_000;
-// ~10 min of retries on the same row, then it is dead-lettered and skipped.
+// 8 tries on the same row (≈ 173 s of backoff: 1+2+5+15+30+60+60), then it
+// is dead-lettered and skipped.
 export const DEAD_AFTER = 8;
 
 export function createBus({ db, log, now = () => new Date().toISOString(), timers = { setTimeout, clearTimeout } }) {
   const consumers = new Map(); // name → {handler, kinds, running, again, failures, retryAt, timer, lastError}
   let tick = null;
   let stopped = false;
+  const root = AsyncLocalStorage.snapshot();
 
   function cursor(name) {
     const row = db.get('SELECT seq FROM bus_cursors WHERE consumer = ?', name);
@@ -39,11 +45,13 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
     let current = null;
     try {
       for (;;) {
+        if (consumers.get(name) !== c) return;
         c.again = false;
         const from = cursor(name);
         const rows = db.all('SELECT * FROM journal WHERE seq > ? ORDER BY seq LIMIT ?', from, BATCH);
         if (!rows.length) break;
         for (const row of rows) {
+          if (consumers.get(name) !== c) return; // unsubscribed meanwhile
           current = row.seq;
           if (!c.kinds || c.kinds.has(row.kind)) {
             const r = { ...row, payload: safeJson(row.payload) };
@@ -57,6 +65,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         if (rows.length < BATCH && !c.again) break;
       }
     } catch (e) {
+      if (consumers.get(name) !== c) return;
       c.failures = c.failSeq === current ? c.failures + 1 : 1;
       c.failSeq = current;
       c.lastError = { message: e?.message ?? String(e), at: now() };
@@ -67,12 +76,12 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
         c.failures = 0;
         c.failSeq = null;
         c.running = false;
-        queueMicrotask(() => drain(name));
+        queueMicrotask(() => root(drain, name));
         return;
       }
       const delay = BACKOFF_MS[Math.min(c.failures - 1, BACKOFF_MS.length - 1)];
       log?.warn?.('bus consumer failed; retrying', { consumer: name, failures: c.failures, delay, err: c.lastError.message });
-      c.timer = timers.setTimeout(() => { c.timer = null; drain(name); }, delay);
+      c.timer = timers.setTimeout(() => { c.timer = null; root(drain, name); }, delay);
       c.timer?.unref?.();
     } finally {
       c.running = false;
@@ -81,6 +90,7 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
   }
 
   const drainAll = () => { for (const name of consumers.keys()) drain(name); };
+  let poked = false;
 
   return {
     /** subscribe(name, handler(row), {kinds?: string[]}) */
@@ -88,13 +98,26 @@ export function createBus({ db, log, now = () => new Date().toISOString(), timer
       if (consumers.has(name)) throw new Error(`bus consumer ${name} already subscribed`);
       consumers.set(name, { handler, kinds: kinds ? new Set(kinds) : null, running: false, again: false, failures: 0, failSeq: null, timer: null, lastError: null });
       cursor(name);
-      queueMicrotask(() => drain(name));
+      queueMicrotask(() => root(drain, name));
     },
-    /** Called after every commit that wrote journal rows. */
-    poke: drainAll,
+    /** Stop delivering to `name` and forget its cursor (a revoked connection). */
+    unsubscribe(name) {
+      const c = consumers.get(name);
+      if (!c) return;
+      if (c.timer) timers.clearTimeout(c.timer);
+      consumers.delete(name);
+      db.run('DELETE FROM bus_cursors WHERE consumer = ?', name);
+    },
+    has: (name) => consumers.has(name),
+    /** Called after every commit that wrote journal rows; drains on a later turn, never inside the committer. */
+    poke() {
+      if (poked) return;
+      poked = true;
+      root(setImmediate, () => { poked = false; drainAll(); });
+    },
     start() {
       stopped = false;
-      const loop = () => { drainAll(); tick = timers.setTimeout(loop, TICK_MS); tick?.unref?.(); };
+      const loop = () => { root(drainAll); tick = timers.setTimeout(loop, TICK_MS); tick?.unref?.(); };
       tick = timers.setTimeout(loop, TICK_MS);
       tick?.unref?.();
     },

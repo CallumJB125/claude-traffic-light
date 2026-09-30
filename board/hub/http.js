@@ -14,6 +14,7 @@ import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, limitOrThrow } from './ratelimit.js';
+import { redact } from './log.js';
 
 const MAX_BODY = 1024 * 1024;
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol']);
@@ -39,8 +40,9 @@ function sendJson(res, status, body, headers = {}) {
   res.end(data);
 }
 
-// Dispatch-like actions start paid agent runs: a tighter per-member limit.
-const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
+// Dispatch-like actions start paid agent runs: a tighter per-member limit, and
+// integrations may never take them (integrations/registry.js).
+export const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
 
 const retryHeader = (e) => (e.code === 'RATE_LIMITED' && e.extra?.retry_after_s ? { 'retry-after': String(e.extra.retry_after_s) } : {});
 
@@ -79,11 +81,13 @@ async function readBody(req) {
 }
 
 // The provider's redirect lands here in the connect window: text only, no
-// script, nothing from the query echoed back.
-function sendConnectPage(res, status, text, ok) {
+// script, nothing from the query echoed back. kind: ok | pending | error.
+const CONNECT_TITLE = { ok: 'Connected', pending: 'Finish connecting in Buddy', error: 'Not connected' };
+function sendConnectPage(res, status, text, kind, headers = {}) {
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${ok ? 'Connected' : 'Not connected'} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${ok ? 'ok' : 'error'}"><h1>${ok ? 'Connected' : 'Not connected'}</h1><p>${esc(text)}</p><p>You can close this window and go back to Buddy.</p></body></html>`;
-  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION) });
+  const tail = kind === 'pending' ? 'Close this window and press Finish connecting in Buddy.' : 'You can close this window and go back to Buddy.';
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p><p>${tail}</p></body></html>`;
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
   res.end(body);
 }
 
@@ -168,7 +172,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   if (integrations) {
     const own = (member, id) => {
       const c = integrations.get(id);
-      if (!c || hub.db.get('SELECT org_id FROM connections WHERE id = ?', id)?.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
+      if (!c || c.status === 'revoked' || integrations.orgOf(id) !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
       return c;
     };
     route('GET', '/api/integrations', ({ member }) => ({
@@ -181,12 +185,29 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       const token = String(body.token ?? '').trim();
       if (!token || token.length > 4096) throw new HubError('VALIDATION', 'paste the token');
       let v;
-      try { v = await integrations.verifyToken(params.provider, token); } catch (e) { throw new HubError('VALIDATION', e.message); }
-      return { connection: integrations.createConnection({ orgId: member.org_id, memberId: member.id, provider: params.provider, ...v }) };
+      try { v = await integrations.verifyToken(params.provider, token); } catch (e) {
+        // Provider/connector text never reaches the user (it can carry request details).
+        hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
+        throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
+      }
+      return { connection: integrations.createConnection({ ...v, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
     });
-    route('POST', '/api/integrations/:provider/start', ({ member, params, req }) => {
+    // OAuth / app install. Two bindings to whoever started it (D42): an
+    // HttpOnly cookie for the same browser, and complete_token for the
+    // desktop's connect window (its own cookie jar) → POST …/complete.
+    route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
       api.requireAdmin(member);
-      return integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+      const base = publicBase(req);
+      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: base });
+      const secure = base.startsWith('https:') ? '; Secure' : '';
+      res.setHeader('set-cookie', `${out.cookie.name}=${out.cookie.value}; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=${out.cookie.max_age_s}${secure}`);
+      return { url: out.url, complete_token: out.complete_token };
+    });
+    route('POST', '/api/integrations/:provider/complete', ({ member, params, body }) => {
+      api.requireAdmin(member);
+      const token = typeof body.complete_token === 'string' ? body.complete_token : '';
+      if (!token || token.length > 100) throw new HubError('VALIDATION', 'complete_token is required');
+      return { connection: integrations.oauthComplete({ member, provider: params.provider, completeToken: token }) };
     });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
@@ -246,23 +267,40 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const url = new URL(req.url, 'http://hub');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    // These two paths bypass Cloudflare Access (providers can't sign in):
+    // the signed state and the webhook signature are their only auth.
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
     if (cb) {
-      const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: publicBase(req) });
-      return sendConnectPage(res, out.ok ? 200 : 400, out.ok ? `${out.connection.display_name ?? 'The integration'} is connected.` : out.error, out.ok);
+      try {
+        let bind = null;
+        try { bind = parseCookies(req.headers.cookie)[integrations.bindCookieName(cb[1])] ?? null; } catch { bind = null; }
+        const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: publicBase(req), bindCookie: bind });
+        const clear = bind != null ? { 'set-cookie': `${integrations.bindCookieName(cb[1])}=; HttpOnly; SameSite=Lax; Path=/integrations/; Max-Age=0` } : {};
+        if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
+        if (out.pending) return sendConnectPage(res, 200, 'Almost done: Buddy has to confirm this connection.', 'pending', clear);
+        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear);
+      } catch (e) {
+        hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
+        return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
+      }
     }
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
     if (hook) {
       try {
-        limitOrThrow(hub, 'mutate_ip', clientIp(req, config));
+        // Unknown or inactive → 404 before a byte of the body is read.
+        if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
+        limitOrThrow(hub, 'webhook_conn', hook[1]);
         const chunks = [];
         let n = 0;
         for await (const c of req) { n += c.length; if (n > MAX_BODY) return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } }); chunks.push(c); }
         const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
+        // Only failed signature checks spend the per-IP budget.
+        if (out.status === 401) limitOrThrow(hub, 'webhook_fail_ip', clientIp(req, config));
         return sendJson(res, out.status, out.body);
       } catch (e) {
-        if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e));
-        throw e;
+        if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
+        hub.log.error('integration webhook failed', { connection_id: hook[1], err: redact(e?.message ?? e) });
+        return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
       }
     }
     try {

@@ -1,6 +1,31 @@
 -- Integrations framework (D41): connections per org, sealed secrets, identity
 -- links for acting from another tool, card links, routing, inbound replay
--- protection.
+-- protection, and the journal actor kind 'integration' (§15).
+
+-- An integration's own actions are journaled as actor_kind 'integration',
+-- actor_id = the connection id. SQLite can't widen a CHECK in place, so the
+-- journal is rebuilt (same columns, seqs, indexes and append-only triggers;
+-- DROP TABLE fires no triggers).
+CREATE TABLE journal_new (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id TEXT,
+  card_id TEXT,
+  run_id TEXT,
+  at_hub TEXT NOT NULL,
+  hub_epoch TEXT,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('member','runner','system','integration')),
+  actor_id TEXT,                                   -- member id | device id | connection id | NULL
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}'
+);
+INSERT INTO journal_new (seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload)
+  SELECT seq, board_id, card_id, run_id, at_hub, hub_epoch, actor_kind, actor_id, kind, payload FROM journal ORDER BY seq;
+DROP TABLE journal;
+ALTER TABLE journal_new RENAME TO journal;
+CREATE INDEX journal_board_seq ON journal (board_id, seq);
+CREATE INDEX journal_card_seq ON journal (card_id, seq);
+CREATE TRIGGER journal_no_update BEFORE UPDATE ON journal BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
+CREATE TRIGGER journal_no_delete BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
 
 CREATE TABLE connections (
   id TEXT PRIMARY KEY,
@@ -14,9 +39,12 @@ CREATE TABLE connections (
   settings TEXT NOT NULL DEFAULT '{}', -- JSON {autonomy:{<action>:'auto'|'ask'|'off'}, …connector config}
   created_by TEXT REFERENCES members(id),
   created_at TEXT NOT NULL,
-  revoked_at TEXT,
-  UNIQUE (provider, external_id)
+  revoked_at TEXT
 );
+-- Revoked rows stay (their audit, links and routes point at them); only a live
+-- connection is unique, and only within its org: two teams may each connect
+-- the same external workspace, each with its own secrets and webhook URL.
+CREATE UNIQUE INDEX connections_live ON connections (org_id, provider, external_id) WHERE status != 'revoked';
 
 -- Never selected by any route. AES-256-GCM under a key that is NOT in this DB
 -- (BOARD_ENC_KEY / keyfile / the desktop app's safeStorage); key_id allows rotation.
@@ -64,12 +92,18 @@ CREATE TABLE routes (
   created_at TEXT NOT NULL
 );
 
+-- A delivery is leased while its handler runs ('processing' until
+-- lease_until), then 'done'; a failed handler deletes its row so the
+-- provider's retry runs. Rows older than 30 days are swept.
 CREATE TABLE inbound_dedupe (
   provider TEXT NOT NULL,
   dedupe_key TEXT NOT NULL,
   received_at TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'done' CHECK (state IN ('processing', 'done')),
+  lease_until TEXT,
   PRIMARY KEY (provider, dedupe_key)
 );
+CREATE INDEX inbound_dedupe_age ON inbound_dedupe (received_at);
 
 -- Every automatic action an integration takes (Callum: automate the obvious,
 -- audit all of it, reversible from the card).
@@ -77,11 +111,14 @@ CREATE TABLE integration_audit (
   id TEXT PRIMARY KEY,
   connection_id TEXT NOT NULL REFERENCES connections(id),
   action TEXT NOT NULL,               -- e.g. card.move, card.link, card.create, notify.post
-  decision TEXT NOT NULL CHECK (decision IN ('auto', 'asked', 'approved', 'denied', 'skipped')),
+  -- 'attempted' is written before an automatic action runs, then becomes
+  -- 'auto' or 'failed' (with a short error code).
+  decision TEXT NOT NULL CHECK (decision IN ('attempted', 'auto', 'failed', 'asked', 'approved', 'denied', 'skipped')),
   card_id TEXT REFERENCES cards(id),
   external_ref TEXT,                  -- provider id (PR number, Sentry issue id) — never message text
-  detail TEXT NOT NULL DEFAULT '{}',  -- JSON, no secrets, no external message bodies
+  detail TEXT NOT NULL DEFAULT '{}',  -- JSON ≤ 2 KB, scalars and ids only: no secrets, no external message bodies
   undo TEXT,                          -- JSON describing how to reverse it, when reversible
+  error TEXT,                         -- short code when decision = 'failed'
   at TEXT NOT NULL
 );
 CREATE INDEX integration_audit_by_conn ON integration_audit (connection_id, at);

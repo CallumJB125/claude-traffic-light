@@ -13,11 +13,16 @@ import { dirname, basename, join, sep } from 'node:path';
 import { HubError } from './db.js';
 
 const KEY_BYTES = 32;
+const TAG_BYTES = 16;
 
+// Hex (64 chars) or canonical base64 (43 chars + '='): Buffer.from(…, 'base64')
+// silently skips junk, so anything else is refused rather than half-decoded.
 function decodeKey(text) {
   const t = String(text ?? '').trim();
-  const buf = /^[0-9a-f]{64}$/i.test(t) ? Buffer.from(t, 'hex') : Buffer.from(t, 'base64');
-  if (buf.length !== KEY_BYTES) throw new Error(`encryption key must be ${KEY_BYTES} bytes (hex or base64)`);
+  let buf = null;
+  if (/^[0-9a-f]{64}$/i.test(t)) buf = Buffer.from(t, 'hex');
+  else if (/^[A-Za-z0-9+/]{43}=$/.test(t)) buf = Buffer.from(t, 'base64');
+  if (!buf || buf.length !== KEY_BYTES) throw new Error(`encryption key must be ${KEY_BYTES} bytes (hex or base64)`);
   return buf;
 }
 
@@ -90,10 +95,11 @@ export function createVault(key) {
         throw new HubError('INTERNAL', 'secret was sealed with a different key (rotate/re-seal needed)');
       }
       const ct = Buffer.from(row.ciphertext);
-      const d = createDecipheriv('aes-256-gcm', keyBuf, Buffer.from(row.nonce));
+      if (ct.length < TAG_BYTES) throw new HubError('INTERNAL', 'sealed secret is truncated');
+      const d = createDecipheriv('aes-256-gcm', keyBuf, Buffer.from(row.nonce), { authTagLength: TAG_BYTES });
       d.setAAD(aad(connectionId, kind, row.key_id));
-      d.setAuthTag(ct.subarray(ct.length - 16));
-      return Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString('utf8');
+      d.setAuthTag(ct.subarray(ct.length - TAG_BYTES));
+      return Buffer.concat([d.update(ct.subarray(0, ct.length - TAG_BYTES)), d.final()]).toString('utf8');
     },
   };
 }

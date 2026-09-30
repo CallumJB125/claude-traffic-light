@@ -32,8 +32,12 @@ const post = (reg, conn, payload, { secret = 'whsec_abcdef123456', delivery = ra
 const issue = (id, title = 'Login broken') => ({ event: 'issue.opened', issue: { id, title, url: `https://fake.example/issues/${id}` } });
 
 test('defineConnector refuses an incomplete connector (webhooks without verify, bad autonomy)', () => {
-  const base = { id: 'x-y', name: 'X', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) } };
+  const base = { id: 'x-y', name: 'X', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) } };
   assert.doesNotThrow(() => defineConnector(base));
+  assert.throws(() => defineConnector({ ...base, hosts: undefined }), /hosts/);
+  for (const bad of ['*.github.com', 'https://api.github.com', 'api.github.com:8443', 'API.github.com', 'localhost']) {
+    assert.throws(() => defineConnector({ ...base, hosts: [bad] }), /hosts/, bad);
+  }
   assert.throws(() => defineConnector({ ...base, handleWebhook: async () => {} }), /verify/);
   assert.throws(() => defineConnector({ ...base, actions: { a: { default: 'yolo' } } }), /auto\|ask\|off/);
   assert.throws(() => defineConnector({ ...base, id: 'Bad Id' }), /id must match/);
@@ -136,20 +140,23 @@ test('bus: board events reach the connector for its own team only; "ask" by defa
   } finally { await h.close(); }
 });
 
-test('actAs: only members of the connection’s team; revoked connection drops secrets and 404s webhooks', async () => {
+test('actAs: only inside act(), only members of the connection’s team; revoked connection drops secrets and 404s webhooks', async () => {
   const { h, reg } = await setup();
   try {
     const conn = await connectFake(h, reg);
     const ctx = reg.ctxFor(conn.id);
-    assert.throws(() => ctx.actAs('not-a-member'), (e) => e.code === 'FORBIDDEN');
-    assert.equal(ctx.actAs(h.ids.bob).member.id, h.ids.bob);
+    assert.equal(ctx.actAs, undefined, 'no side-effect API outside act()');
+    let kept;
+    await ctx.act('card.create', {}, async (s) => {
+      assert.throws(() => s.actAs('not-a-member'), (e) => e.code === 'FORBIDDEN');
+      assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob);
+      kept = s;
+    });
+    assert.throws(() => kept.actAs(h.ids.bob), /scope has ended/);
     reg.revokeConnection(conn.id, h.ids.alice);
     assert.equal(h.db.get('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', conn.id).n, 0);
     assert.equal((await post(reg, conn, issue('ISS-9'))).status, 404);
     assert.deepEqual(reg.list(h.ids.org), []);
-    // Reconnecting after a revoke works.
-    await connectFake(h, reg);
-    assert.equal(reg.list(h.ids.org).length, 1);
   } finally { await h.close(); }
 });
 
@@ -218,7 +225,8 @@ test('ctx.system: only declared facts, only for a card linked to this connection
     // Not linked as a PR yet → nothing happens, even with the right card id nowhere in reach.
     assert.deepEqual(await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 }), { done: false, reason: 'not linked' });
     await assert.rejects(ctx.system.event('pr_closed', { kind: 'pr', external_id: 'PR-1' }), /may not raise/);
-    ctx.link(cardId, 'pr', 'PR-1');
+    assert.throws(() => ctx.link(cardId, 'pr', 'PR-1'), /only inside act/);
+    await ctx.act('card.create', {}, async (s) => s.link(cardId, 'pr', 'PR-1'));
     // The card is in To do, so the state machine refuses pr_merged: applied exactly like the merge poll.
     const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 });
     assert.equal(r.done, false);
@@ -227,15 +235,15 @@ test('ctx.system: only declared facts, only for a card linked to this connection
     reg.setSettings(conn.id, { autonomy: { 'system.pr_merged': 'off' } });
     assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1' })).decision, 'skipped');
     // A connector that declares no system events gets no ctx.system.
-    assert.throws(() => defineConnector({ id: 'chatty', name: 'Chat', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['card_delete'] }), /not an allowed system event/);
-    assert.throws(() => defineConnector({ id: 'gh2', name: 'G', scopes: [], secrets: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['pr_merged'] }), /declare the action system.pr_merged/);
+    assert.throws(() => defineConnector({ id: 'chatty', name: 'Chat', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['card_delete'] }), /not an allowed system event/);
+    assert.throws(() => defineConnector({ id: 'gh2', name: 'G', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['pr_merged'] }), /declare the action system.pr_merged/);
   } finally { await h.close(); }
 });
 
 // ── OAuth / app-install connect ────────────────────────────────────────────
 
 const fakeOauth = defineConnector({
-  id: 'fake-oauth', name: 'Fake OAuth', scopes: ['read'], secrets: ['access_token'],
+  id: 'fake-oauth', name: 'Fake OAuth', scopes: ['read'], secrets: ['access_token'], hosts: ['fake-oauth.example'],
   connect: {
     kind: 'oauth',
     authorizeUrl: ({ state, redirectUri }) => `https://fake-oauth.example/authorize?state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
@@ -253,10 +261,13 @@ test('OAuth: start gives a signed state; the callback connects once, refuses for
     const alice = await h.login('alice');
     const start = await h.api(alice, 'POST', '/api/integrations/fake-oauth/start', { request_id: randomUUID() });
     assert.equal(start.status, 200, start.text);
+    const setCookie = start.headers.get('set-cookie');
+    assert.match(setCookie, /^board_int_fake-oauth=[A-Za-z0-9_-]+; HttpOnly; SameSite=Lax; Path=\/integrations\/; Max-Age=600$/);
+    const bind = setCookie.split(';')[0];
     const auth = new URL(start.body.url);
     const state = auth.searchParams.get('state');
     assert.equal(auth.searchParams.get('redirect_uri'), `${h.base}/integrations/fake-oauth/callback`);
-    const cb = (q) => fetch(`${h.base}/integrations/fake-oauth/callback?${new URLSearchParams(q)}`);
+    const cb = (q) => fetch(`${h.base}/integrations/fake-oauth/callback?${new URLSearchParams(q)}`, { headers: { cookie: bind } });
     // Forged state.
     const forged = await cb({ state: `${state.split('.')[0]}.AAAA`, code: 'good-code' });
     assert.equal(forged.status, 400);

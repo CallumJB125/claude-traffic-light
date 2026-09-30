@@ -14,6 +14,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
+  webhook_conn: { capacity: 600, per_ms: 60_000 },          // inbound webhooks, per connection
+  webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook signature checks, per client IP
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
 });

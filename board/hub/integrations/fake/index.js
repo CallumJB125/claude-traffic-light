@@ -15,6 +15,7 @@ export default defineConnector({
   name: 'Fake tracker',
   scopes: ['issues:read'],
   secrets: ['api_token', 'webhook_secret'],
+  hosts: ['api.fake.example'],
 
   connect: {
     kind: 'token',
@@ -39,7 +40,7 @@ export default defineConnector({
   async handleWebhook({ payload, ctx }) {
     // A linked PR merged → the card's own pr_merged fact (never a card id from the payload).
     if (payload.event === 'pr.merged') {
-      await ctx.system.event('pr_merged', { kind: 'pr', external_id: String(payload.pr?.id ?? ''), pr: Number(payload.pr?.number) || null });
+      await ctx.system.event('pr_merged', { kind: 'pr', external_id: String(payload.pr?.id ?? ''), pr: payload.pr?.number, by: payload.pr?.merged_by });
       return;
     }
     if (payload.event !== 'issue.opened') return;
@@ -47,11 +48,11 @@ export default defineConnector({
     if (!issueId || ctx.linked('issue', issueId)) return;
     const boardId = ctx.boardIds()[0];
     if (!boardId) return;
-    await ctx.act('card.create', { external_ref: issueId, detail: { source: 'fake' } }, async () => {
-      const res = await ctx.actAs(ctx.connection.created_by).createCard(boardId, {
-        request_id: `fake-issue-${issueId}`, title: String(payload.issue?.title ?? 'Untitled issue').slice(0, 200), labels: ['auto'],
+    await ctx.act('card.create', { external_ref: issueId, detail: { source: 'fake' } }, async (s) => {
+      const res = await s.actAs(ctx.connection.created_by).createCard(boardId, {
+        request_id: `issue-${issueId}`, title: String(payload.issue?.title ?? 'Untitled issue').slice(0, 200), labels: ['auto'],
       });
-      ctx.link(res.card.id, 'issue', issueId, payload.issue?.url ?? null);
+      s.link(res.card.id, 'issue', issueId, payload.issue?.url ?? null);
       return res.card.id;
     });
   },
