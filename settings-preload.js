@@ -26,4 +26,8 @@ contextBridge.exposeInMainWorld('settingsApi', {
   remotePair: (name) => ipcRenderer.invoke('remote-pair', name),
   remoteRevoke: (id) => ipcRenderer.invoke('remote-revoke', id),
   remoteCopyCode: (code) => ipcRenderer.invoke('remote-copy-code', code),
+  health: () => ipcRenderer.invoke('health-report'),
+  healthFix: (id) => ipcRenderer.invoke('health-fix', id),
+  copyDiagnostics: () => ipcRenderer.invoke('health-copy-diagnostics'),
+  onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
 });

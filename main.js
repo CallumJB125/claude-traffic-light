@@ -21,6 +21,7 @@ const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
+const Health = require('./src/health.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
@@ -278,9 +279,14 @@ function areHooksInstalled() {
 }
 
 // An unparsable settings.json is left alone rather than written over.
+// Returns the error message, or null.
 function installHooks() {
-  try { Adapters.get('claude').install(claudeHookOpts()); } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); }
+  try { Adapters.get('claude').install(claudeHookOpts()); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
 }
+// Opened straight from Downloads, macOS runs a random read-only copy; hooks
+// pinned to it break at the next launch, so none are written (Health says why).
+const TRANSLOCATED = /\/AppTranslocation\//.test(process.execPath);
+const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !TRANSLOCATED;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
@@ -341,6 +347,8 @@ async function scanPaneDialogs() {
 
 let win;
 let tray;
+let signalServer = null;
+let signalServerError = null;
 
 function readBounds() {
   let saved;
@@ -440,6 +448,19 @@ function sweepSessionFiles() {
   const removed = Agents.sweepStaleFiles(SESSIONS_DIR, maxAge);
   for (const dir of RemoteDevices.deviceDirs()) removed.push(...Agents.sweepStaleFiles(dir, maxAge));
   if (removed.length) console.log(`[sweep] removed ${removed.length} stale session file(s)`);
+}
+
+// Hooks write session files themselves and SessionEnd deletes them, so the
+// newest hook stamp is saved (at most every 30 s) for Health's "last hook
+// event" to outlive the session.
+const LAST_HOOK_FILE = path.join(ROOT_DIR, Health.LAST_HOOK_FILE);
+let lastHookSaved = 0;
+try { lastHookSaved = Date.parse(JSON.parse(fs.readFileSync(LAST_HOOK_FILE, 'utf8')).at) || 0; } catch { /* none yet */ }
+function saveLastHook() {
+  const ev = Health.newestHookAt([...sessionFileCache.values()].map((e) => e.data));
+  if (!ev || ev.at - lastHookSaved < 30000) return;
+  lastHookSaved = ev.at;
+  try { SessionState.writeJsonAtomic(LAST_HOOK_FILE, { at: new Date(ev.at).toISOString(), source: ev.source }); } catch { /* the next event retries */ }
 }
 
 // Every change in what a session presents is logged, so a flicker report can
@@ -956,6 +977,14 @@ function openBuddy(page = null) {
   }
   if (IS_MAC) app.dock.show();
   buddyWin.open(page);
+}
+
+// Preferences scrolled to its Health section, rechecked.
+function showHealth() {
+  const fresh = !settingsWin;
+  createSettingsWindow();
+  if (fresh) settingsWin.webContents.once('did-finish-load', () => settingsWin?.webContents.send('show-section', 'health'));
+  else settingsWin.webContents.send('show-section', 'health');
 }
 
 let lightsWin = null;
@@ -2026,6 +2055,7 @@ function createTray() {
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
+    { label: 'Health…', click: showHealth },
     { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
     { type: 'separator' },
     { label: 'Bigger', click: () => resizeBy(1.25) },
@@ -2945,6 +2975,62 @@ ipcMain.handle('remote-revoke', (_e, id) => {
   return { ...remoteDevicesView(), revoked };
 });
 
+// ── Health (Preferences → Health, tray Health…) ────────────────────────────
+// Item 1's updater replaces this; until then the check says "not set up yet".
+let updateStatus = Health.notConfigured;
+function healthReport() {
+  const report = Health.runChecks({
+    home: os.homedir(),
+    root: ROOT_DIR,
+    projectsDir: PROJECTS_DIR || undefined,
+    runtime: HOOK_RUNTIME,
+    askFromWidget: !!loadConfig().askFromWidget,
+    version: app.getVersion(),
+    updateStatus,
+    mcp: McpInstall.status(mcpOpts()),
+    signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
+  });
+  // Dev runs share the machine with a real install and never rewrite its hooks.
+  if (IS_DEV_RUN) report.checks = report.checks.map(({ fix, fixLabel, ...c }) => (fix === 'reinstall-hooks' ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) }));
+  return report;
+}
+ipcMain.handle('health-report', () => healthReport());
+ipcMain.handle('health-fix', (_e, id) => {
+  let error = null;
+  try {
+    if (id === 'reinstall-hooks') {
+      if (!AUTO_INSTALL_HOOKS) error = TRANSLOCATED ? 'Buddy is running from a temporary copy; move it to Applications first' : 'dev runs never install hooks';
+      else { error = installHooks(); createTray(); }
+    } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
+    else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
+    else error = 'unknown fix';
+  } catch (err) { error = err.message; }
+  console.log(`[health] fix ${JSON.stringify(id)}${error ? ` failed: ${error}` : ''}`);
+  return { error, report: healthReport() };
+});
+ipcMain.handle('health-copy-diagnostics', () => {
+  let logText = '';
+  for (const f of ['app.log.old', 'app.log']) { try { logText += fs.readFileSync(path.join(ROOT_DIR, f), 'utf8'); } catch { /* rotated away or never written */ } }
+  const text = Health.diagnostics({
+    report: healthReport(),
+    versions: process.versions,
+    platform: { os: process.platform, release: IS_MAC ? `macOS ${process.getSystemVersion()}` : os.release(), arch: process.arch, packaged: app.isPackaged },
+    logText,
+    // Watched repos and open sessions' folders (the names notifications
+    // show) name projects too.
+    scrubWith: {
+      home: os.homedir(), user: os.userInfo().username, hostname: os.hostname(),
+      names: [
+        ...(git.status().repos || []).map((r) => r.repo),
+        ...(loadConfig().gitRepos || []),
+        ...aggregateState().sessions.map((x) => String(x.cwd || '').split('/').filter(Boolean).pop() || ''),
+      ],
+    },
+  });
+  clipboard.writeText(text);
+  return { lines: text.split('\n').length - 1 };
+});
+
 ipcMain.handle('choose-sound-file', async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
     title: 'Choose a sound',
@@ -3125,7 +3211,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
-  if (!IS_DEV_RUN && !areHooksInstalled()) installHooks();
+  if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();
 
   const autoLaunchMarker = path.join(ROOT_DIR, '.auto-launch-configured');
   if (!IS_DEV_RUN && !fs.existsSync(autoLaunchMarker)) {
@@ -3136,7 +3222,9 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
-  startSignalServer();
+  signalServer = startSignalServer();
+  signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
+  signalServer.on('listening', () => { signalServerError = null; });
   // Rate limits live in the detector (one capture per pane per 15 s, four per scan).
   every(5000, () => { scanPaneDialogs().catch((err) => console.warn('[pane-dialogs]', err.message)); }, 'pane-dialogs');
   // Dev and demo runs share this machine with a real install; they only
@@ -3185,6 +3273,7 @@ app.whenReady().then(() => {
     watchTimer = setTimeout(() => {
       watchTimer = null;
       broadcastStatus();
+      saveLastHook();
       maybePlayAlertSound();
       refreshUsageLive();
       refreshSpend(SPEND_LIVE_MS);
@@ -3195,6 +3284,7 @@ app.whenReady().then(() => {
     broadcastStatus();
     maybePlayAlertSound();
     tickStats(readSessions(loadConfig()));
+    saveLastHook();
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
   // GitHub is asked at most once a poll interval (github-signals decides);
@@ -3227,7 +3317,7 @@ app.whenReady().then(() => {
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }
 
-  if (!IS_DEV_RUN) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
+  if (AUTO_INSTALL_HOOKS) every(10 * 60 * 1000, () => { if (!areHooksInstalled()) installHooks(); }, 'hooks');
   if (DIAG) startDiag();
   if (DEMO === 'knock') {
     // A session that is waiting on you, running in whatever terminal launched
