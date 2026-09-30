@@ -63,9 +63,15 @@ export class RunnerConn {
     if (this.ws.readyState === 1) this.ws.send(JSON.stringify(frame));
   }
 
+  // Closed means closed now: frames the peer sends during the close handshake
+  // (a hello, an out) are never handled, and a peer that never answers the
+  // close frame is cut off.
   close(code, reason) {
+    this.closed = true;
     this.ready = false;
+    if (this.hub.runners.get(this.device_id) === this) this.hub.runners.delete(this.device_id);
     try { this.ws.close(code, reason); } catch { /* already closed */ }
+    setTimeout(() => { try { this.ws.terminate(); } catch { /* gone */ } }, 1000).unref();
   }
 
   error(code, message, re) {
@@ -85,7 +91,6 @@ export class RunnerConn {
     // it reconnects with backoff and replays its outbox, so nothing is lost.
     if (!this.hub.limiter.take('ws_runner', this.device_id).ok) {
       this.hub.log.warn('runner over its frame rate: disconnecting', { device_id: this.device_id });
-      this.closed = true;
       this.close(WS_CLOSE.RATE_LIMITED, 'rate limited');
       return;
     }
@@ -112,6 +117,7 @@ export class RunnerConn {
   }
 
   async handle(msg) {
+    if (this.closed) return;
     const bad = validate('runner→hub', msg);
     if (bad) {
       this.error(bad.code, bad.message, msg?.id);
@@ -144,6 +150,13 @@ export class RunnerConn {
 
   onHello(msg) {
     const hub = this.hub;
+    // Revoked or removed after the upgrade (maybe before this socket was
+    // registered, so nobody closed it): never (re)register.
+    const dev = hub.device(this.device_id);
+    if (!dev || dev.revoked_at || !hub.activeMember(dev.member_id)) {
+      this.close(WS_CLOSE.REVOKED, dev?.revoked_at ? 'device revoked' : 'member removed');
+      return;
+    }
     if (!compatible(msg.protocol)) {
       this.error('PROTOCOL_UNSUPPORTED', `hub speaks protocol ${PROTOCOL_VERSION}`);
       this.close(WS_CLOSE.PROTOCOL_UNSUPPORTED, 'protocol unsupported');

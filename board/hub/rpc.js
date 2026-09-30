@@ -24,6 +24,8 @@ export function verifyRun(hub, device, msg) {
   const row = hub.card(msg.card_id);
   if (!run || !row || run.card_id !== row.id) throw new HubError('NOT_FOUND', 'run not found');
   if (run.device_id !== device.id) throw new HubError('FORBIDDEN', 'run belongs to another device');
+  const dev = hub.device(device.id);
+  if (!dev || dev.revoked_at || !hub.activeMember(dev.member_id)) throw new HubError('FORBIDDEN', 'device revoked or member removed');
   if (msg.repo_id !== run.repo_id) throw new HubError('FORBIDDEN', 'repo_id does not match the run (out of scope)');
   if (tok.fence !== row.fence || msg.fence !== row.fence) throw new HubError('FENCED', `fence ${msg.fence} is not current (${row.fence})`);
   if (run.ended_at) throw new HubError('RUN_ENDED', 'run has ended');
