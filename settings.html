@@ -258,7 +258,7 @@
     <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
     <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
     <div id="busy-sources" role="group" aria-label="Busy when">
-      <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar)</label>
+      <label class="row"><input type="checkbox" id="busyCalendar" /> A calendar event marked busy (macOS Calendar — ticking this asks macOS for access)</label>
       <div class="busy-state" id="busy-calendar-state"></div>
       <label class="row"><input type="checkbox" id="busyCalendarTitles" /> Show the meeting's name in the recap</label>
       <label class="row"><input type="checkbox" id="busyFocus" /> A Focus or Do Not Disturb is on</label>
@@ -314,7 +314,7 @@
       document.getElementById('roam').checked = config.roam !== false;
       document.getElementById('randomEvents').checked = config.randomEvents !== false;
       document.getElementById('busyHold').checked = config.busyHold !== false;
-      document.getElementById('busyCalendar').checked = config.busyCalendar !== false;
+      document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
       document.getElementById('busyFocus').checked = config.busyFocus !== false;
       document.getElementById('busyIcsUrl').value = config.busyIcsUrl || '';
@@ -322,10 +322,17 @@
       showBusy();
     }
 
+    // One click: ticking the calendar saves it at once, and that save is what
+    // shows macOS's one-time access prompt. It is off until then.
+    document.getElementById('busyCalendar').addEventListener('change', async (e) => {
+      try { await window.settingsApi.saveConfig({ busyCalendar: e.target.checked }); } catch { /* Save reports errors */ }
+      setTimeout(showBusy, 1500);
+    });
+
     // What each busy source can actually see right now.
     const CAL_WORDS = {
       fullAccess: ['Connected.', true],
-      notDetermined: ['Buddy asks for calendar access once, the first time it looks.', false],
+      notDetermined: ['Waiting for macOS calendar access. If no prompt appeared, untick and tick this again.', false],
       denied: ['Calendar access is off. Turn on Claude Buddy in System Settings › Privacy & Security › Calendars.', false],
       restricted: ['Calendar access is blocked on this Mac (a profile or Screen Time).', false],
       writeOnly: ['Buddy has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],

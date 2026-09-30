@@ -239,27 +239,45 @@ function rig(over = {}) {
 }
 const meeting = { start: at('2026-09-30T10:00:00Z'), end: at('2026-09-30T11:00:00Z'), allDay: false, availability: 'busy', cancelled: false, declined: false };
 
-test('watch: asks for calendar access once, then reads busy from events', async () => {
+test('watch: calendar is off by default and a tick never prompts, even when switched on', async () => {
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /busyCalendar: false/, 'DEFAULT_CONFIG keeps macOS Calendar off until ticked');
   const r = rig({ helper: { events: [meeting] } });
   await r.w.tick();
-  assert.deepEqual(r.calls.map((c) => c[1]), ['status', 'request', 'events']);
-  assert.ok(r.files.has('/buddy/.calendar-asked'), 'the one-time marker');
+  r.advance(2 * 60000);
+  await r.w.tick();
+  assert.equal(r.calls.filter((c) => c[1] === 'request').length, 0, 'no system prompt from the timer');
+  assert.equal(r.w.env().busy, null, 'notDetermined counts as no source');
+  assert.equal(r.w.status().calendar.status, 'notDetermined');
+});
+
+test('watch: ticking the calendar in Settings asks once, then reads busy from events', async () => {
+  const r = rig({ helper: { events: [meeting] } });
+  await r.w.enableCalendar();
+  assert.deepEqual(r.calls.map((c) => c[1]), ['status', 'request', 'status', 'events']);
   assert.equal(r.w.env().busy, true);
   assert.equal(r.w.holding(), true);
   assert.equal(r.w.status().calendar.status, 'fullAccess');
   assert.deepEqual(r.calls.find((c) => c[1] === 'events').includes('--titles'), false, 'titles only when opted in');
+  await r.w.enableCalendar();
+  assert.equal(r.calls.filter((c) => c[1] === 'request').length, 1, 'already decided: no second ask');
 });
 
-test('watch: a turned-down or write-only calendar is never asked again, and counts as no source', async () => {
+test('watch: a turned-down or write-only calendar counts as no source and is not re-asked by the timer', async () => {
   for (const grant of ['denied', 'writeOnly']) {
     const r = rig({ helper: { grant } });
-    await r.w.tick();
+    await r.w.enableCalendar();
     r.advance(2 * 60000);
-    r.helperState.status = 'notDetermined'; // even if macOS forgets, the marker holds
     await r.w.tick();
     assert.equal(r.calls.filter((c) => c[1] === 'request').length, 1, grant);
     assert.equal(r.w.env().busy, null, `${grant}: busy stays unknown`);
   }
+});
+
+test('watch: dev runs never prompt, even from the Settings tick-box', async () => {
+  const r = rig({ isDevRun: true });
+  await r.w.enableCalendar();
+  assert.deepEqual(r.calls, []);
 });
 
 test('watch: no helper in the build means no calendar, not a crash', async () => {
@@ -327,7 +345,7 @@ test('watch: Focus from Assertions.json when readable, else the Shortcut', async
 });
 
 test('watch: the recap arrives once when a busy spell ends, then back-from-busy holds briefly', async () => {
-  const r = rig({ helper: { events: [meeting] } });
+  const r = rig({ helper: { status: 'fullAccess', events: [meeting] } });
   await r.w.tick();
   const s = (signal) => [{ sessionId: 'a', cwd: '/w/api', signal, tool: 'Bash' }];
   assert.equal(r.w.observe(s('tool-use')), null);
@@ -351,7 +369,7 @@ test('watch: the recap arrives once when a busy spell ends, then back-from-busy 
 });
 
 test('watch: with holding off, busy is still a rule condition but nothing is logged or held', async () => {
-  const r = rig({ helper: { events: [meeting] }, config: { busyHold: false } });
+  const r = rig({ helper: { status: 'fullAccess', events: [meeting] }, config: { busyHold: false } });
   await r.w.tick();
   assert.deepEqual([r.w.env().busy, r.w.holding()], [true, false]);
   r.w.observe([{ sessionId: 'a', signal: 'stop' }]);

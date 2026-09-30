@@ -145,7 +145,7 @@ const DEFAULT_CONFIG = {
   randomEvents: true,
   // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
   busyHold: true,
-  busyCalendar: true,
+  busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
   busyCalendarTitles: false,
   busyIcsUrl: '',
   busyFocus: true,
@@ -1984,9 +1984,11 @@ ipcMain.handle('save-config', (e, partial) => {
 });
 // saveConfig plus everything a changed setting has to reach outside config.json.
 function commitConfig(partial) {
-  const before = loadConfig().askFromWidget;
+  const prev = loadConfig();
+  const before = prev.askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
+  if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();

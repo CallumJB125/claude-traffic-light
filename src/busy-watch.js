@@ -22,7 +22,6 @@ module.exports = function busyWatch(deps) {
     exec, readFile, writeFile, exists, fetch, home,
     now = () => Date.now(), fakeFile = null, tickMs = TICK_MS,
   } = deps;
-  const ASKED_MARKER = path.join(rootDir, '.calendar-asked');
   const ICS_CACHE = path.join(rootDir, 'busy-ics-cache.json');
   const AWAY_FILE = path.join(rootDir, 'away.json');
   const DND_DIR = path.join(home, 'Library', 'DoNotDisturb', 'DB');
@@ -35,6 +34,7 @@ module.exports = function busyWatch(deps) {
   let recap = null;
   let backUntil = 0;
   let timer = null;
+  let asking = null;
 
   // ── Calendar (EventKit helper) ────────────────────────────────────────────
   async function helper(args, timeout = 10000) {
@@ -48,13 +48,8 @@ module.exports = function busyWatch(deps) {
     if (cal.fetchedAt && t - cal.fetchedAt < CALENDAR_EVERY_MS) return;
     cal.fetchedAt = t;
     try {
-      let st = (await helper(['status'])).status;
-      // The one-time ask: only ever once per install, so turning it down sticks.
-      if (st === 'notDetermined' && !exists(ASKED_MARKER)) {
-        writeFile(ASKED_MARKER, new Date(t).toISOString());
-        log('[busy] asking for calendar access');
-        st = (await helper(['request'], 130000)).status;
-      }
+      // Never prompts: only enableCalendar (the Settings tick-box) asks.
+      const st = asking ? 'notDetermined' : (await helper(['status'])).status;
       cal.status = st;
       if (st !== 'fullAccess') { cal.occurrences = []; return; }
       const args = ['events', String(t - 6 * 3600000), String(t + 24 * 3600000)];
@@ -66,6 +61,31 @@ module.exports = function busyWatch(deps) {
       cal.error = e.message;
       log('[busy] calendar helper failed:', e.message);
     }
+  }
+
+  // The EventKit prompt, only ever from a click on Settings' calendar
+  // tick-box: turning the source on is the consent, so first launch after an
+  // update never shows a system dialog. macOS itself shows it at most once.
+  async function enableCalendar() {
+    if (isDevRun || !exists(helperPath)) return;
+    if (!asking) {
+      asking = (async () => {
+        try {
+          if ((await helper(['status'])).status === 'notDetermined') {
+            log('[busy] asking for calendar access');
+            await helper(['request'], 130000);
+          }
+        } catch (e) {
+          cal.error = e.message;
+          log('[busy] calendar request failed:', e.message);
+        } finally {
+          asking = null;
+        }
+      })();
+    }
+    await asking;
+    cal.fetchedAt = 0;
+    await tick();
   }
 
   // ── ICS feed ──────────────────────────────────────────────────────────────
@@ -201,6 +221,7 @@ module.exports = function busyWatch(deps) {
     },
     stop() { clearInterval(timer); timer = null; },
     tick,
+    enableCalendar,
     observe,
     // Only while pings are actually being held does the rest of the app act busy.
     holding: () => combined.busy === true && loadConfig().busyHold !== false,
