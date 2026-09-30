@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron');
-const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, bearerScope, bearerHeaders } = require('./accounts');
@@ -394,18 +394,31 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     return { url: info.url, origin: new URL(info.url).origin, accessTeam: null, partition, team: false };
   }
 
+  // Key presses and clicks on the hub page: a connect window opens only right after one.
+  const GESTURES = new Set(['mouseDown', 'mouseUp', 'keyDown', 'rawKeyDown', 'gestureTap', 'touchStart']);
+
   function makeHubView(h) {
-    hardenSession(session.fromPartition(h.partition));
+    const hubSes = session.fromPartition(h.partition);
+    hardenSession(hubSes);
+    // The board web names a connect window with the bind only when it sees this token.
+    hubSes.setUserAgent(appUserAgent(hubSes.getUserAgent(), app.getVersion()));
     const view = new WebContentsView({
       webPreferences: { partition: h.partition, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
-    wc.setWindowOpenHandler(({ url, frameName }) => {
+    let gestureAt = 0;
+    wc.on('input-event', (_e, ev) => { if (GESTURES.has(ev.type)) gestureAt = Date.now(); });
+    wc.setWindowOpenHandler(({ url, frameName, referrer }) => {
       const d = openDecision({ url, frameName }, { hubOrigin: h.origin, accessTeam: h.accessTeam });
-      if (d === 'connect') openConnect(url, h);
-      else if (d === 'external') shell.openExternal(url); // privacy-flow: open-link-in-browser
+      if (d === 'connect') {
+        const c = connectDecision({ url, frameName, referrer: referrer?.url ?? '', pageUrl: wc.getURL(), hubOrigin: h.origin, signedIn: !!h.bearer && signedIn(h.origin) && hubInfo?.origin === h.origin, gestureAt });
+        // One click, one window: a second open needs a second gesture.
+        gestureAt = 0;
+        if (c.ok) openConnect(url, h, c).catch((e) => log('connect window failed', e.message));
+        else log('connect window refused', c.reason);
+      } else if (d === 'external') shell.openExternal(url); // privacy-flow: open-link-in-browser
       return { action: 'deny' };
     });
     const guard = (e, url) => {
@@ -443,18 +456,17 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // window on its own per-hub partition: never the hub's, so the bearer
   // header can't reach a provider, and the provider's cookies stay out of the
   // board and go when that hub signs out.
+  // A fresh BrowserWindow, never the page's own window.open: it has no opener
+  // and an empty window.name, so the bind in the name never reaches the provider.
   let connectWin = null;
-  function openConnect(url, h) {
-    // Only a signed-in account hub's page may open it, and only on https.
-    if (!h.bearer || !signedIn(h.origin) || hubInfo?.origin !== h.origin) { log('connect window refused: not a signed-in team hub'); return; }
-    try { if (new URL(url).protocol !== 'https:') return; } catch { return; }
-    if (connectWin && !connectWin.isDestroyed()) {
-      if (connectWin.hubOrigin === h.origin) { connectWin.loadURL(url).catch(() => {}); connectWin.focus(); return; } // privacy-flow: integration-connect
-      // Another hub's window: its guards and partition belong to that hub.
-      connectWin.close();
-    }
+  async function openConnect(url, h, { provider, bind }) {
+    // A new connect replaces any open one: each carries its own bind.
+    if (connectWin && !connectWin.isDestroyed()) connectWin.close();
     const ses = session.fromPartition(integrationPartitionFor(h.origin));
     hardenSession(ses);
+    const cookie = bindCookie(h.origin, provider, bind);
+    await ses.cookies.set(cookie); // privacy-flow: integration-connect
+    const authorizeHost = new URL(url).host;
     const w = new BrowserWindow({
       width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
       webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
@@ -462,6 +474,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     w.hubOrigin = h.origin;
     connectWin = w;
     const wc = w.webContents;
+    // The first page must be the authorize host the hub named; later hops are the provider's own.
+    let first = true;
+    wc.on('did-start-navigation', (d) => {
+      if (!d.isMainFrame || !first) return;
+      first = false;
+      let host = null;
+      try { host = new URL(d.url).host; } catch { /* refused below */ }
+      if (host !== authorizeHost) { log('connect window closed: first page not the authorize host'); wc.stop(); w.close(); }
+    });
     wc.setWindowOpenHandler(({ url: u }) => { if (/^https:/.test(u)) shell.openExternal(u); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
     // Provider logins hop between https hosts freely; the callback is on the hub.
     const ok = (u) => /^https:/.test(u) || isConnectCallback(u, w.hubOrigin);
@@ -484,7 +505,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
         }
       }, 1500);
     });
-    w.on('closed', () => { if (connectWin === w) connectWin = null; });
+    w.on('closed', () => {
+      if (connectWin === w) connectWin = null;
+      // The hub's callback clears it too; a window closed early must not leave it behind.
+      ses.cookies.remove(cookie.url, cookie.name).catch(() => {}); // privacy-flow: integration-connect
+    });
     w.loadURL(url).catch(() => {}); // privacy-flow: integration-connect
   }
 

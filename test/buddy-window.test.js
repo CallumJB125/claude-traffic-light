@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -49,12 +49,14 @@ test('the hub view only navigates within its origin (+ the team Access login)', 
   assert.equal(navDecision('https://pistor.cloudflareaccess.com/', { hubOrigin: o.hubOrigin }), 'external');
 });
 
-test('window.open from the hub view: buddy-connect (https) gets the in-app connect window; nothing else does', () => {
+test('window.open from the hub view: plexiform-connect|<provider>|<bind> (https) may get the connect window; the old buddy-connect opens nothing', () => {
   const o = { hubOrigin: 'https://buddy.example.com' };
-  assert.equal(openDecision({ url: 'https://github.com/login/oauth/authorize?x=1', frameName: 'buddy-connect' }, o), 'connect');
-  assert.equal(openDecision({ url: 'https://slack.com/oauth/v2/authorize', frameName: 'buddy-connect' }, o), 'connect');
-  assert.equal(openDecision({ url: 'http://github.com/login', frameName: 'buddy-connect' }, o), 'deny');
-  assert.equal(openDecision({ url: 'javascript:alert(1)', frameName: 'buddy-connect' }, o), 'deny');
+  assert.equal(openDecision({ url: 'https://github.com/login/oauth/authorize?x=1', frameName: 'plexiform-connect|github|b1nd_X-9' }, o), 'connect');
+  assert.equal(openDecision({ url: 'https://slack.com/oauth/v2/authorize', frameName: 'plexiform-connect|slack|b' }, o), 'connect');
+  assert.equal(openDecision({ url: 'http://github.com/login', frameName: 'plexiform-connect|github|b' }, o), 'deny');
+  assert.equal(openDecision({ url: 'javascript:alert(1)', frameName: 'plexiform-connect|github|b' }, o), 'deny');
+  for (const url of ['https://github.com/login/oauth/authorize', 'http://github.com/login']) assert.equal(openDecision({ url, frameName: 'buddy-connect' }, o), 'deny', 'buddy-connect no longer opens anything');
+  assert.equal(openDecision({ url: 'https://github.com/', frameName: 'plexiform-connect|github' }, o), 'deny', 'a malformed connect name opens nothing, not even the browser');
   assert.equal(openDecision({ url: 'https://github.com/o/r', frameName: '' }, o), 'external');
   assert.equal(openDecision({ url: 'https://github.com/o/r', frameName: 'other' }, o), 'external');
   assert.equal(openDecision({ url: 'https://buddy.example.com/x', frameName: '' }, o), 'deny', 'no second hub window');
@@ -65,6 +67,63 @@ test('window.open from the hub view: buddy-connect (https) gets the in-app conne
   assert.equal(isConnectCallback('https://buddy.example.com/integrations/github', o.hubOrigin), false);
   assert.equal(isConnectCallback('https://buddy.example.com/integrations/../callback', o.hubOrigin), false);
   assert.equal(hubPageUrl(o.hubOrigin, pageById('integrations'), { org: 't1' }), 'https://buddy.example.com/?org=t1&view=integrations');
+});
+
+test('connect names: exactly three |-parts, plexiform-connect, a provider and a bind of the allowed alphabets', () => {
+  assert.deepEqual(parseConnectName('plexiform-connect|github|abc_DEF-123'), { provider: 'github', bind: 'abc_DEF-123' });
+  assert.deepEqual(parseConnectName(`plexiform-connect|google-drive|${'b'.repeat(64)}`), { provider: 'google-drive', bind: 'b'.repeat(64) });
+  for (const n of ['', 'buddy-connect', 'plexiform-connect', 'plexiform-connect|github', 'plexiform-connect|github|b|x', 'plexiform-connect||b', 'plexiform-connect|g|b', `plexiform-connect|${'a'.repeat(33)}|b`, 'plexiform-connect|GitHub|b', 'plexiform-connect|git_hub|b', 'plexiform-connect|github|', `plexiform-connect|github|${'b'.repeat(65)}`, 'plexiform-connect|github|b=1', 'plexiform-connect|github|b c', 'Plexiform-connect|github|b', 'x|github|b', null, undefined]) {
+    assert.equal(parseConnectName(n), null, String(n));
+  }
+});
+
+test('connect guard: only the signed-in hub’s own Integrations page, right after a gesture, to a public https URL', () => {
+  const hub = 'https://app.plexiform.dev';
+  const base = { url: 'https://github.com/login/oauth/authorize?client_id=x', frameName: 'plexiform-connect|github|bnd1', referrer: `${hub}/?org=t1&view=integrations`, pageUrl: `${hub}/?org=t1&view=integrations`, hubOrigin: hub, signedIn: true, gestureAt: 1000, now: 2000 };
+  assert.deepEqual(connectDecision(base), { ok: true, provider: 'github', bind: 'bnd1' });
+  assert.equal(connectDecision({ ...base, referrer: '' }).ok, true, 'a no-referrer page still counts by its own URL');
+  const no = (over, reason) => assert.deepEqual(connectDecision({ ...base, ...over }), { ok: false, reason }, JSON.stringify(over));
+  no({ gestureAt: 0 }, 'gesture');
+  no({ now: 1000 + 5001 }, 'gesture');
+  no({ gestureAt: 3000 }, 'gesture');
+  no({ pageUrl: 'https://evil.example.com/?view=integrations' }, 'opener');
+  no({ pageUrl: `${hub}/?org=t1` }, 'opener');
+  no({ pageUrl: `${hub}/?view=table` }, 'opener');
+  no({ referrer: 'https://evil.example.com/x' }, 'opener');
+  no({ referrer: 'http://app.plexiform.dev/' }, 'opener');
+  no({ signedIn: false }, 'signed-out');
+  no({ frameName: 'buddy-connect' }, 'name');
+  for (const url of ['http://github.com/login', 'https://127.0.0.1/x', 'https://10.1.2.3/', 'https://192.168.0.5/', 'https://169.254.169.254/latest', 'https://[::1]/', 'https://localhost/', 'https://intranet/']) no({ url }, 'url');
+  assert.equal(connectUrlOk('https://slack.com/oauth/v2/authorize'), true);
+});
+
+test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
+  const now = 1_700_000_000_000;
+  const https = bindCookie('https://app.plexiform.dev', 'github', 'bnd', now);
+  assert.deepEqual(https, { url: 'https://app.plexiform.dev/', name: '__Host-board_int_github', value: 'bnd', path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: now / 1000 + 600 });
+  assert.equal('domain' in https, false);
+  const dev = bindCookie('http://127.0.0.1:4100', 'slack', 'b2', now);
+  assert.deepEqual(dev, { url: 'http://127.0.0.1:4100/integrations/', name: 'board_int_slack', value: 'b2', path: '/integrations/', secure: false, httpOnly: true, sameSite: 'lax', expirationDate: now / 1000 + 600 });
+});
+
+test('user agent: the hub view appends Plexiform/<version> once, never replacing the browser’s', () => {
+  const ua = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140 Electron/44 Safari/537.36';
+  assert.equal(appUserAgent(ua, '2.4.0'), `${ua} Plexiform/2.4.0`);
+  assert.equal(appUserAgent(appUserAgent(ua, '2.4.0'), '2.4.0'), `${ua} Plexiform/2.4.0`);
+});
+
+test('connect window wiring: gesture-tracked, guarded, cookie set before the load and removed on close, no bearer, no preload', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  assert.match(src, /hubSes\.setUserAgent\(appUserAgent\(hubSes\.getUserAgent\(\), app\.getVersion\(\)\)\)/);
+  assert.match(src, /wc\.on\('input-event'/);
+  assert.match(src, /connectDecision\(\{ url, frameName, referrer: referrer\?\.url/);
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.ok(fn.indexOf('await ses.cookies.set(cookie)') < fn.indexOf('w.loadURL(url)'), 'the bind cookie is set before the provider page loads');
+  assert.match(fn, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
+  assert.match(fn, /integrationPartitionFor\(h\.origin\)/);
+  assert.ok(!/preload|installBearer|bearerHeaders/.test(fn), 'no preload, no bearer on the connect partition');
+  assert.match(fn, /first page must be the authorize host/);
+  assert.match(fn, /sandbox: true/);
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────
