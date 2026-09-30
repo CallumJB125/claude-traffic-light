@@ -8,8 +8,11 @@ import { untrusted, envelopeTag } from '../shared/untrusted.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BOARD_DIR = path.resolve(HERE, '..');
-export const HOOK_SHIM = path.join(HERE, 'hook-shim.js');
-export const MCP_SERVER = path.join(BOARD_DIR, 'mcp', 'server.js');
+// The shim and the MCP server run as their own processes, which can't read
+// inside a packaged app's app.asar: point them at the unpacked copies.
+export const onDisk = (p) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+export const HOOK_SHIM = onDisk(path.join(HERE, 'hook-shim.js'));
+export const MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'server.js'));
 
 // CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
 // task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.
@@ -162,7 +165,7 @@ export function recordBuddyLaunch(buddyHome, { cwd, now = Date.now(), claimWindo
     const record = { v: 1, launchId, launcher: 'board', cwd, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + claimWindowMs).toISOString() };
     const file = path.join(dir, `${launchId}.json`);
     const tmp = `${file}.tmp.${crypto.randomBytes(8).toString('hex')}`;
-    fs.writeFileSync(tmp, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify(record), { flag: 'wx', mode: 0o600 }); // privacy-flow: launch-record
     try { fs.linkSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
     return launchId;
   } catch {

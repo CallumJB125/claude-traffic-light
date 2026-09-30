@@ -37,3 +37,20 @@ test('deep links: main registers plexiform:// and claudebuddy:// and routes both
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.deepEqual(pkg.build.mac.protocols, [{ name: 'Plexiform', schemes: ['plexiform', 'claudebuddy'] }]);
 });
+
+test('the runner and the board MCP ship in the app; what runs as its own process is unpacked from app.asar', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  for (const f of ['board/package.json', 'board/shared/**/*', 'board/runner/**/*', 'board/mcp/**/*', '!board/**/test/**', '!board/runner/scripts/**']) assert.ok(pkg.build.files.includes(f), f);
+  for (const f of ['board/package.json', 'board/mcp/**', 'board/shared/**', 'board/runner/hook-shim.js', 'board/runner/procs.js', 'board/runner/ipc.js', 'board/runner/launch.js', 'node_modules/@modelcontextprotocol/sdk/**', 'node_modules/zod/**']) assert.ok(pkg.build.asarUnpack.includes(f), f);
+  // What the runner and the MCP server import from npm is a root dependency (the package has no board/node_modules).
+  for (const d of ['@modelcontextprotocol/sdk', 'ws', 'zod']) assert.ok(pkg.dependencies[d], d);
+});
+
+test('the runner points the hook shim and the MCP server at app.asar.unpacked in a packaged app', async () => {
+  const { onDisk, HOOK_SHIM, MCP_SERVER } = await import('../board/runner/launch.js');
+  assert.equal(onDisk('/A/Plexiform.app/Contents/Resources/app.asar/board/mcp/server.js'), '/A/Plexiform.app/Contents/Resources/app.asar.unpacked/board/mcp/server.js');
+  assert.equal(onDisk('/repo/board/mcp/server.js'), '/repo/board/mcp/server.js', 'unchanged outside a package');
+  assert.equal(onDisk('/x/app.asar.unpacked/board/y.js'), '/x/app.asar.unpacked/board/y.js', 'never doubled');
+  assert.ok(HOOK_SHIM.endsWith(path.join('board', 'runner', 'hook-shim.js')) && fs.existsSync(HOOK_SHIM));
+  assert.ok(MCP_SERVER.endsWith(path.join('board', 'mcp', 'server.js')) && fs.existsSync(MCP_SERVER));
+});

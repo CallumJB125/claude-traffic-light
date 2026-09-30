@@ -75,9 +75,12 @@
       "board/hub/**/*",
       "board/shared/**/*",
       "board/web/**/*",
+      "board/runner/**/*",
+      "board/mcp/**/*",
       "!board/**/test/**",
       "!board/web/mock/**",
       "!board/web/scripts/**",
+      "!board/runner/scripts/**",
       "!board/hub/data/**",
       "!board/**/*.db*"
     ],
@@ -132,7 +135,18 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "asarUnpack": [
+      "board/package.json",
+      "board/mcp/**",
+      "board/shared/**",
+      "board/runner/hook-shim.js",
+      "board/runner/procs.js",
+      "board/runner/ipc.js",
+      "board/runner/launch.js",
+      "node_modules/@modelcontextprotocol/sdk/**",
+      "node_modules/zod/**"
+    ]
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
