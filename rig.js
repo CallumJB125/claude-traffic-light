@@ -21,7 +21,12 @@
   </defs>
   <g class="scene">
   <g class="mover">
+  <!-- sign-swing: the pendulum (rig.swing/lean) rotates the whole sign about
+       its grip, on top of whatever the pose does to the sign itself -->
+  <g class="sign-swing">
   <g class="sign-assembly">
+    <!-- lamp-bloom: a glow that blooms off a newly lit lamp (behind the sign) -->
+    <circle class="lamp-bloom" cx="0" cy="0" r="0" />
     <!-- horizontal, three lamps (default) -->
     <g class="sign sign-h3">
       <rect x="4" y="24" width="56" height="5" fill="#726c62" />
@@ -60,6 +65,7 @@
     <rect fill="#da7756" x="0" y="29" width="9" height="10" />
     <text class="tasks-label" x="32" y="28.1" text-anchor="middle"></text>
   </g>
+  </g><!-- /sign-swing -->
   </g><!-- /mover -->
   </g><!-- /scene -->
   <!-- staged garden: pots, bed, plants and tools; driven by the garden machine below -->
@@ -267,10 +273,13 @@
     </g>
     <!-- everything at the eyes: moves onto a photo cameo's own eyes -->
     <g class="eye-anchor">
+    <!-- eye-track: the plain eyes follow the cursor by whole units (rig.lookAt) -->
+    <g class="eye-track">
     <rect class="eye-open" x="22" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-open" x="37.5" y="43.5" width="4.5" height="4.5" />
     <rect class="eye-closed" x="21" y="45.25" width="6.5" height="1.6" rx="0.8" />
     <rect class="eye-closed" x="36.5" y="45.25" width="6.5" height="1.6" rx="0.8" />
+    </g>
     <!-- zyn: catchlights on the dilated pupils -->
     <g class="zyn-glints" fill="#f2efe8"><rect x="21.3" y="42.7" width="1.6" height="1.6" /><rect x="36.8" y="42.7" width="1.6" height="1.6" /></g>
     <g class="eyefx eyefx-heart" fill="#f472b6">
@@ -623,13 +632,33 @@
     return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
   }
 
-  function mountRig(container) {
+  // opts.ambient: sample the rig's idle loops on a slow clock instead of every
+  // display frame (the desk widget, which is on screen all day).
+  function mountRig(container, opts = {}) {
     container.innerHTML = SVG;
     const svg = container.querySelector('.rig');
     const lamps = Array.from(svg.querySelectorAll('.lamp'));
     let current = null;
     const reduceMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const canAnimate = (el) => typeof el.animate === 'function' && typeof el.getAnimations === 'function' && !reduceMotion();
+    // Motion constants live in motion.js (MOTION) and are read when used, so
+    // the tuning playground can change them live. Where motion.js isn't
+    // loaded, the old fixed curves stand in.
+    const Mo = () => window.BuddyMotion || null;
+    const cfg = (k) => (Mo() && Mo().MOTION && Mo().MOTION[k]) || {};
+    const supportsLinear = typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('animation-timing-function', 'linear(0, 1)');
+    const curves = new Map();
+    function springCurve(response, damping) {
+      const M = Mo();
+      if (!M || !supportsLinear) return null;
+      const key = `${response}|${damping}`;
+      if (!curves.has(key)) curves.set(key, M.springEasing(response, damping));
+      return curves.get(key);
+    }
+    // One-shot pop-ins in rig.css (banner, bubble, pots, plants) ease on a
+    // real spring; without linear() they keep their cubic-bezier fallback.
+    const pop = springCurve(cfg('pop').response, cfg('pop').damping);
+    if (pop) svg.style.setProperty('--ease-pop', pop.easing);
 
     // Pose changes: dropping a pose-* class ends its keyframes wherever they
     // were, which snapped the sign/body home mid-swing. Capture the on-screen
@@ -650,7 +679,10 @@
       for (const { el, from } of captured) {
         const cs = getComputedStyle(el);
         if (el.getAnimations().length || cs.transform === from.transform) continue;
-        const anim = el.animate([from, { transform: cs.transform, transformOrigin: cs.transformOrigin }], { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1.2)' });
+        const S = cfg('settle');
+        const curve = springCurve(S.response, S.damping);
+        const timing = curve ? { duration: curve.ms, easing: curve.easing } : { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1.2)' };
+        const anim = el.animate([from, { transform: cs.transform, transformOrigin: cs.transformOrigin }], timing);
         settles.set(el, anim);
         anim.onfinish = () => { if (settles.get(el) === anim) settles.delete(el); };
       }
@@ -769,7 +801,13 @@
       const bt = svg.querySelector('.bubble-text');
       const btext = (look.text || 'BRB').toUpperCase().slice(0, 12);
       if (bt.textContent !== btext) bt.textContent = btext;
+      // A newly lit lamp (a different slot or colour) blooms; group effects
+      // and number mode light no single lamp, so nothing blooms for them.
+      const nextBloom = lit && !groupFx && numText === '' ? `${lit}|${color}|${sign}` : '';
+      if (current && nextBloom && nextBloom !== bloomKey) bloom(svg.querySelector(`.sign-${sign} .lamp.on`));
+      bloomKey = nextBloom;
       current = { ...look, pose, costume, cameo, photoKey, lampFx: fx, signFx, smokeKey };
+      if (ambient) ambient.scan();
     }
 
     function wearPhoto(photo) {
@@ -790,25 +828,275 @@
       clearTimeout(eventTimer);
       eventTimer = setTimeout(() => svg.classList.remove(`event-${name}`), ms);
     }
-    // Squash-and-stretch from the feet: a press, or landing after a hop or a
-    // throw (strength 0..1). A new one starts from wherever the last one is,
-    // so rapid clicks re-squash instead of restarting from rest.
+    // Squash-and-stretch against a surface: the floor (a press, or landing
+    // after a hop or a throw) or a wall a glide bounced off. Strength 0..1.
+    // It squashes fast, then a real spring carries it back through a stretch.
+    // A new one starts from wherever the last one is, so rapid clicks
+    // re-squash instead of restarting from rest.
+    const SQUASH_ORIGIN = { bottom: '50% 83%', top: '50% 0%', left: '0% 50%', right: '100% 50%' }; // bottom: the feet (y 68 of 82)
     let squashAnim = null;
-    function squash(strength = 1) {
+    function squash(strength = 1, side = 'bottom') {
       if (!canAnimate(svg)) return;
       const k = Math.max(0, Math.min(1, Number(strength) || 0));
       const from = squashAnim ? getComputedStyle(svg).transform : 'none';
       if (squashAnim) squashAnim.cancel();
-      svg.style.transformOrigin = '50% 83%'; // the feet (y 68 of 82)
-      const sc = (x, y) => `scale(${(1 + x * k).toFixed(3)}, ${(1 + y * k).toFixed(3)})`;
-      squashAnim = svg.animate([
-        { transform: from === 'none' ? 'scale(1, 1)' : from, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
-        { transform: sc(0.08, -0.1), offset: 0.28, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' },
-        { transform: sc(-0.03, 0.04), offset: 0.64, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' },
+      const Q = cfg('squash');
+      const amount = Number.isFinite(Q.amount) ? Q.amount : 0.1;
+      const wall = side === 'left' || side === 'right';
+      svg.style.transformOrigin = SQUASH_ORIGIN[side] || SQUASH_ORIGIN.bottom;
+      const along = 1 - amount * k;
+      const across = 1 + amount * 0.8 * k;
+      const squashed = wall ? `scale(${along.toFixed(3)}, ${across.toFixed(3)})` : `scale(${across.toFixed(3)}, ${along.toFixed(3)})`;
+      const curve = springCurve(Q.response, Q.damping);
+      const pressMs = Number.isFinite(Q.pressMs) ? Q.pressMs : 60;
+      const frames = curve ? [
+        { transform: from === 'none' ? 'scale(1, 1)' : from, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+        { transform: squashed, offset: pressMs / (pressMs + curve.ms), easing: curve.easing },
         { transform: 'scale(1, 1)' },
-      ], { duration: 350 });
+      ] : [
+        { transform: from === 'none' ? 'scale(1, 1)' : from, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+        { transform: squashed, offset: 0.28, easing: 'cubic-bezier(0.3, 0, 0.2, 1)' },
+        { transform: 'scale(1, 1)' },
+      ];
+      squashAnim = svg.animate(frames, { duration: curve ? pressMs + curve.ms : 350 });
       const anim = squashAnim;
       anim.onfinish = () => { if (squashAnim === anim) squashAnim = null; };
+    }
+
+    // ── Sign pendulum ─────────────────────────────────────────────────────
+    // The sign hangs on its grip: it trails the body's motion (lean, from the
+    // drag velocity), swings when the body is kicked (swing, deg/s — a hop,
+    // a landing, a wall), and settles on a damped spring. The rAF loop only
+    // runs while it is moving.
+    const swingEl = svg.querySelector('.sign-swing');
+    const sway = { x: 0, v: 0, target: 0, raf: 0, last: 0 };
+    const placeSwing = (deg) => {
+      const P = cfg('pendulum');
+      const M = Mo();
+      const shown = M ? M.softLimit(deg, P.maxDeg || 6) : deg;
+      const q = Math.round(shown * 4) / 4;
+      swingEl.style.transform = q ? `rotate(${q}deg)` : '';
+    };
+    function swayFrame(now) {
+      const M = Mo();
+      const P = cfg('pendulum');
+      const s = M.springStep(sway, sway.target, (now - sway.last) / 1000, M.springParams(P.response, P.damping));
+      sway.last = now;
+      sway.x = s.x; sway.v = s.v;
+      if (M.springSettled(sway, sway.target, 0.05, 0.5)) {
+        sway.x = sway.target; sway.v = 0; sway.raf = 0;
+        placeSwing(sway.x);
+        return;
+      }
+      placeSwing(sway.x);
+      sway.raf = requestAnimationFrame(swayFrame);
+    }
+    function runSway() {
+      if (!Mo() || typeof requestAnimationFrame !== 'function' || reduceMotion()) {
+        if (sway.raf) cancelAnimationFrame(sway.raf);
+        Object.assign(sway, { x: 0, v: 0, target: 0, raf: 0 });
+        placeSwing(0);
+        return;
+      }
+      if (!sway.raf) { sway.last = performance.now(); sway.raf = requestAnimationFrame(swayFrame); }
+    }
+    // The body is moving at vx px/s (0 = stopped): lean the sign against it.
+    function lean(vx) {
+      const M = Mo();
+      if (!M) return;
+      const P = cfg('pendulum');
+      const target = M.swayTarget(vx, P.dragGain, P.maxDeg);
+      if (Math.abs(target - sway.target) < 0.05 && !sway.raf && Math.abs(sway.x - target) < 0.05) return;
+      sway.target = target;
+      runSway();
+    }
+    // A knock to the body: angular velocity in deg/s (+ = clockwise). Called
+    // with no argument it uses the configured kick.
+    function swing(degPerSec) {
+      const P = cfg('pendulum');
+      const v = Number.isFinite(degPerSec) ? degPerSec : (P.kick || 70);
+      sway.v += v;
+      runSway();
+    }
+
+    // ── Eyes: follow the cursor, blink now and then ───────────────────────
+    // Offsets are whole rig units, set only when they change, and the eyes
+    // snap like a sprite frame. A pose that works the eyes itself (look)
+    // overrides the tracking in rig.css.
+    const eyeTrack = svg.querySelector('.eye-track');
+    let lookAtKey = '0,0';
+    function lookAt(x, y) {
+      const dx = reduceMotion() ? 0 : Math.round(Number(x) || 0);
+      const dy = reduceMotion() ? 0 : Math.round(Number(y) || 0);
+      const key = `${dx},${dy}`;
+      if (key === lookAtKey) return;
+      lookAtKey = key;
+      eyeTrack.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : '';
+    }
+    // Blink only while the plain eyes are what shows: not closed, not a mood,
+    // not under shades or a photo, not a pose already animating them.
+    const plainEye = svg.querySelector('.eye-track .eye-open');
+    const plainLid = svg.querySelector('.eye-track .eye-closed');
+    function canBlink() {
+      if (reduceMotion() || typeof getComputedStyle !== 'function') return false;
+      if (typeof plainEye.getAnimations === 'function' && plainEye.getAnimations().length) return false;
+      return getComputedStyle(plainEye).opacity === '1' && getComputedStyle(plainLid).opacity === '0';
+    }
+    let blinkTimer = null;
+    let blinking = false;
+    function blinkOnce(then) {
+      const B = cfg('blink');
+      svg.classList.add('blinking');
+      blinkTimer = setTimeout(() => { svg.classList.remove('blinking'); then(); }, B.closedMs || 110);
+    }
+    function scheduleBlink() {
+      const M = Mo();
+      const B = cfg('blink');
+      if (!M || !blinking) return;
+      blinkTimer = setTimeout(() => {
+        if (!blinking) return;
+        if (!canBlink()) { scheduleBlink(); return; }
+        const twice = Math.random() < (B.doubleChance || 0);
+        blinkOnce(() => {
+          if (twice && blinking) blinkTimer = setTimeout(() => blinkOnce(scheduleBlink), (B.closedMs || 110) * 1.4);
+          else scheduleBlink();
+        });
+      }, M.nextBlinkDelay(Math.random(), B.minMs, B.maxMs));
+    }
+    function blinks(on) {
+      clearTimeout(blinkTimer);
+      blinkTimer = null;
+      svg.classList.remove('blinking');
+      blinking = !!on && !reduceMotion();
+      if (blinking) scheduleBlink();
+    }
+
+    // ── Lamp change: a glow blooms off the newly lit lamp ─────────────────
+    // Colour comes from --lamp-on (whatever the look lit it with); only
+    // transform and opacity animate.
+    const bloomEl = svg.querySelector('.lamp-bloom');
+    let bloomKey = null;
+    let bloomAnim = null;
+    function bloom(lamp) {
+      if (!lamp || !canAnimate(bloomEl)) return;
+      const B = cfg('bloom');
+      const x = Number(lamp.getAttribute('x')) || 0;
+      const y = Number(lamp.getAttribute('y')) || 0;
+      const w = Number(lamp.getAttribute('width')) || 0;
+      const h = Number(lamp.getAttribute('height')) || 0;
+      bloomEl.setAttribute('cx', String(x + w / 2));
+      bloomEl.setAttribute('cy', String(y + h / 2));
+      bloomEl.setAttribute('r', String(Math.max(w, h) / 2));
+      if (bloomAnim) bloomAnim.cancel();
+      bloomAnim = bloomEl.animate([
+        { opacity: B.opacity ?? 0.55, transform: 'scale(1)' },
+        { opacity: 0, transform: `scale(${B.scale || 1.9})` },
+      ], { duration: B.ms || 420, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+    }
+
+    // ── Ambient clock ─────────────────────────────────────────────────────
+    // Infinite CSS loops (the idle bob, lamp pulse, thinking dots, Zs…) would
+    // otherwise run the renderer, and in SVG a full style/layout/paint, every
+    // display frame, all day. Each one is paused and moved by hand instead:
+    // stepped loops exactly when their frame changes, smooth ones at
+    // MOTION.ambient.fps. One timeout covers them all; nothing runs between.
+    const ambient = opts.ambient && typeof svg.getAnimations === 'function' && typeof CSSAnimation === 'function' ? makeAmbient() : null;
+    function makeAmbient() {
+      const tracked = new Map(); // anim -> { base, plan, dur, delay, due }
+      const frozen = new Set(); // paused while not rendered
+      let timer = null;
+      let paused = false;
+      let scanQueued = false;
+      const now = () => performance.now();
+      function planFor(a) {
+        const t = a.effect && typeof a.effect.getTiming === 'function' ? a.effect.getTiming() : null;
+        if (!t || t.iterations !== Infinity || !(t.duration > 0)) return null;
+        const kfs = a.effect.getKeyframes().map((k) => ({ offset: k.computedOffset ?? k.offset, easing: k.easing && k.easing !== 'linear' ? k.easing : t.easing }));
+        return Mo().ambientPlan(kfs, t.duration, t.direction, cfg('ambient').minMs || 1000);
+      }
+      // Smooth loops share one frame grid, so however many there are, they
+      // cost one wake-up (and one style/paint pass) per ambient frame.
+      function dueAt(rec, t) {
+        if (!rec.plan.stepped) {
+          const frame = 1000 / Math.max(1, cfg('ambient').fps || 12);
+          return (Math.floor(t / frame) + 1) * frame;
+        }
+        return rec.base + Mo().nextStepTime(rec.plan.points, rec.dur, rec.delay, t - rec.base);
+      }
+      function tick() {
+        timer = null;
+        if (paused) return;
+        const t = now();
+        // Read every state first, then write every time: reading playState
+        // after a write would force a style pass per animation.
+        const due = [];
+        for (const [a, rec] of tracked) {
+          // cancelled (class removed, or a screenshot tool froze it): let go
+          if (a.playState === 'idle' || a.playState === 'finished' || !svg.isConnected) { tracked.delete(a); continue; }
+          if (rec.due <= t + 2) due.push([a, rec]);
+        }
+        for (const [a, rec] of due) {
+          a.currentTime = t - rec.base;
+          rec.due = dueAt(rec, t);
+        }
+        schedule();
+      }
+      function schedule() {
+        if (timer || paused || !tracked.size) return;
+        let next = Infinity;
+        for (const rec of tracked.values()) next = Math.min(next, rec.due);
+        timer = setTimeout(tick, Math.max(8, next - now()));
+      }
+      function scan() {
+        scanQueued = false;
+        if (!Mo()) return;
+        const t = now();
+        for (const a of frozen) {
+          const el = a.effect && a.effect.target;
+          if (a.playState === 'idle' || !el || !el.isConnected) frozen.delete(a);
+          else if (el.getClientRects().length) { frozen.delete(a); a.play(); }
+        }
+        for (const a of svg.getAnimations({ subtree: true })) {
+          if (tracked.has(a) || frozen.has(a) || !(a instanceof CSSAnimation) || a.playState !== 'running') continue;
+          // not rendered (a sign layout not in use): nothing to draw, so hold
+          // it still; a later scan picks it up if it comes into view
+          const el = a.effect && a.effect.target;
+          if (el && typeof el.getClientRects === 'function' && !el.getClientRects().length) { a.pause(); frozen.add(a); continue; }
+          const plan = planFor(a);
+          if (!plan) continue;
+          const timing = a.effect.getTiming();
+          const rec = { base: t - (a.currentTime || 0), plan, dur: timing.duration, delay: timing.delay || 0, due: 0 };
+          a.pause();
+          rec.due = dueAt(rec, t);
+          tracked.set(a, rec);
+        }
+        if (timer) { clearTimeout(timer); timer = null; }
+        schedule();
+      }
+      function queueScan() {
+        if (scanQueued) return;
+        scanQueued = true;
+        Promise.resolve().then(scan);
+      }
+      svg.addEventListener('animationstart', queueScan);
+      return {
+        scan: queueScan,
+        setPaused(p) {
+          paused = !!p;
+          if (paused) { clearTimeout(timer); timer = null; return; }
+          const t = now();
+          for (const rec of tracked.values()) rec.due = Math.min(rec.due, t);
+          schedule();
+        },
+        get size() { return tracked.size; },
+      };
+    }
+    // The widget went off screen (hidden, minimised): stop every clock the rig
+    // owns until it's back.
+    let blinksWanted = false;
+    function setHidden(hidden) {
+      if (ambient) ambient.setPaused(!!hidden);
+      if (hidden) { blinksWanted = blinksWanted || blinking; blinks(false); } else if (blinksWanted) { blinksWanted = false; blinks(true); }
     }
     let reactTimer = null;
     // Short reaction that temporarily overrides the look (poke, pet, feed).
@@ -1029,7 +1317,8 @@
     const placeMover = (x) => { mover.style.transform = x ? `translateX(${x}px)` : ''; };
     function walkFrame(now) {
       const M = window.BuddyMotion;
-      const s = M.springStep(walk, walk.target, (now - walk.last) / 1000, M.springParams(2.2 / walk.speed, 1));
+      const W = cfg('walk');
+      const s = M.springStep(walk, walk.target, (now - walk.last) / 1000, M.springParams((W.response || 2.2) / walk.speed, W.damping ?? 1));
       walk.last = now;
       walk.x = s.x; walk.v = s.v;
       if (M.springSettled(walk, walk.target, 0.3, 1)) {
@@ -1244,7 +1533,7 @@
       });
     }
 
-    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, get look() { return current; } };
+    return { svg, setLook, celebrate, burst, playEvent, react, flash, pokePet, squash, lean, swing, lookAt, blinks, setHidden, get look() { return current; } };
   }
 
   window.mountRig = mountRig;

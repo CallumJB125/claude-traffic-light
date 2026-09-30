@@ -927,6 +927,13 @@ function createWindow() {
 
   win.on('resize', saveBounds);
   win.on('move', () => { if (!glideTimer) saveBounds(); });
+  // backgroundThrottling is off, so the page never learns it's hidden: tell
+  // it, so the rig's clocks (idle loops, blinks) stop while nobody can see.
+  const visibility = (on) => () => { if (win && !win.isDestroyed()) win.webContents.send('visibility', on); };
+  win.on('show', visibility(true));
+  win.on('restore', visibility(true));
+  win.on('hide', visibility(false));
+  win.on('minimize', visibility(false));
   win.on('closed', () => {
     win = null;
   });
@@ -1869,13 +1876,16 @@ async function performKnock(appName, target, base) {
     broadcastStatus();
     if (knockSound) playSound(knockSound);
     bounceOwnDock();
-    // hop up off the icon and land back on it: one gravity arc, then a squash
-    if (reducedMotion) await wait(280);
+    // hop up off the icon and land back on it: one gravity arc, then a squash;
+    // the sign lags the take-off and swings on the landing
+    const hop = Motion.MOTION.hop;
+    if (reducedMotion) await wait(hop.ms);
     else {
-      await tween(target, target, 280, (pt) => win?.setPosition(pt.x, pt.y), (p) => ({ x: target.x, y: target.y - Motion.hopHeight(p, 16) }));
+      if (win && !win.isDestroyed()) win.webContents.send('sway', -0.6 * Motion.MOTION.pendulum.kick);
+      await tween(target, target, hop.ms, (pt) => win?.setPosition(pt.x, pt.y), (p) => ({ x: target.x, y: target.y - Motion.hopHeight(p, hop.height) }));
       if (win && !win.isDestroyed()) win.webContents.send('land', 0.6);
     }
-    await wait(220);
+    await wait(hop.gapMs);
   }
   travelLook = { ...base, pose: 'bubble', facing: 'right', aimAngle: 0, text: `HEY! ${appName}`, name: `${appName} needs you` };
   broadcastStatus();
@@ -1922,11 +1932,17 @@ async function roamAndKnock(st, { force = false } = {}) {
   try {
     travelLook = { ...base, pose: 'run', facing, aimAngle: 0, name: `Running to ${appName}` };
     broadcastStatus();
+    // The sign trails the run at its average speed, and swings when it stops.
+    const runSpeed = (target.x - home.x) / 1.4;
+    sendLean(runSpeed);
     await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+    sendLean(0);
     await performKnock(appName, target, base);
     travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
     broadcastStatus();
+    sendLean(-runSpeed);
     await tween(target, { x: home.x, y: home.y }, 1400, (pt) => win?.setPosition(pt.x, pt.y));
+    sendLean(0);
     return { ok: true, app: appName, icon: { x: icon.x, y: icon.y, w: icon.w, h: icon.h, hidden: !!icon.hidden } };
   } catch (e) {
     // Whatever went wrong, the widget must not be left mid-walk.
@@ -2097,40 +2113,56 @@ ipcMain.on('set-window-position', (e, x, y) => {
 
 // ── Drag release: coast on the flick's momentum, then land ─────────────────
 // A spring per axis from the release point, seeded with the pointer's
-// velocity, toward where that flick would coast — kept on the display.
+// velocity, toward where that flick would coast. The work-area edges are
+// walls: a glide that reaches one squashes against it and bounces back a
+// little (MOTION.edge.restitution) instead of stopping dead, and the walls,
+// not the target, are what keep it on screen.
 let glideTimer = null;
 function stopGlide() { glideTimer = stopTimer(glideTimer); }
-const GLIDE_MIN_SPEED = 150; // px/s; slower than this is a placement, not a throw
-const GLIDE_MAX_SPEED = 4000;
-const GLIDE_SPRING = Motion.springParams(0.45, 0.85);
 
 function glideFrom(vx, vy) {
   stopGlide();
   if (!win || win.isDestroyed() || gardenRun || roamState.busy) return false;
+  const G = Motion.MOTION.glide;
+  const E = Motion.MOTION.edge;
   const speed = Math.hypot(vx, vy);
-  if (reducedMotion || !Number.isFinite(speed) || speed < GLIDE_MIN_SPEED) return false;
-  const k = Math.min(1, GLIDE_MAX_SPEED / speed);
+  // slower than minSpeed is a placement, not a throw
+  if (reducedMotion || !Number.isFinite(speed) || speed < G.minSpeed) return false;
+  const k = Math.min(1, G.maxSpeed / speed);
   const v = { x: vx * k, y: vy * k };
   const b = win.getBounds();
-  const proj = { x: b.x + Motion.project(v.x), y: b.y + Motion.project(v.y) };
-  const fit = HostApp.clampRectToDisplays({ x: proj.x, y: proj.y, w: b.width, h: b.height }, screen.getAllDisplays());
+  const target = { x: b.x + Motion.project(v.x, G.decel), y: b.y + Motion.project(v.y, G.decel) };
+  const fit = HostApp.clampRectToDisplays({ x: target.x, y: target.y, w: b.width, h: b.height }, screen.getAllDisplays());
   const wa = fit.display ? fit.display.workArea : null;
-  const target = wa ? {
-    x: Math.round(Motion.glideTarget(b.x, proj.x, wa.x, wa.x + wa.width - b.width)),
-    y: Math.round(Motion.glideTarget(b.y, proj.y, wa.y, wa.y + wa.height - b.height)),
-  } : { x: Math.round(proj.x), y: Math.round(proj.y) };
-  let sx = { x: b.x, v: v.x };
-  let sy = { x: b.y, v: v.y };
+  // Widened to wherever the widget already is, so one parked half off an
+  // edge is neither pushed further out nor yanked back in.
+  const walls = wa ? {
+    x: [Math.min(wa.x, b.x), Math.max(wa.x + wa.width - b.width, b.x)],
+    y: [Math.min(wa.y, b.y), Math.max(wa.y + wa.height - b.height, b.y)],
+  } : null;
+  const spring = Motion.springParams(G.response, G.damping);
+  const axes = [{ s: { x: b.x, v: v.x }, key: 'x', sides: ['left', 'right'] }, { s: { x: b.y, v: v.y }, key: 'y', sides: ['top', 'bottom'] }];
   let last = Date.now();
   glideTimer = every(16, () => {
     if (!win || win.isDestroyed()) { stopGlide(); return; }
     const now = Date.now();
     const dt = (now - last) / 1000;
     last = now;
-    sx = Motion.springStep(sx, target.x, dt, GLIDE_SPRING);
-    sy = Motion.springStep(sy, target.y, dt, GLIDE_SPRING);
-    const done = Motion.springSettled(sx, target.x) && Motion.springSettled(sy, target.y);
-    try { win.setPosition(done ? target.x : Math.round(sx.x), done ? target.y : Math.round(sy.x)); } catch { stopGlide(); return; }
+    for (const a of axes) {
+      a.s = Motion.springStep(a.s, target[a.key], dt, spring);
+      if (!walls) continue;
+      const [lo, hi] = walls[a.key];
+      const impactSpeed = Math.abs(a.s.v);
+      const hit = Motion.bounceAxis(a.s, lo, hi, E.restitution);
+      if (!hit.hit) continue;
+      a.s = { x: hit.x, v: hit.v };
+      target[a.key] = Math.min(hi, Math.max(lo, Motion.reboundTarget(hit.x, hit.v, G.decel, E.maxRebound)));
+      const strength = Math.min(1, impactSpeed / 2000);
+      if (strength > 0.05 && !win.isDestroyed()) win.webContents.send('impact', a.sides[hit.hit > 0 ? 1 : 0], strength);
+    }
+    const [ax, ay] = axes;
+    const done = Motion.springSettled(ax.s, target.x) && Motion.springSettled(ay.s, target.y);
+    try { win.setPosition(Math.round(done ? target.x : ax.s.x), Math.round(done ? target.y : ay.s.x)); } catch { stopGlide(); return; }
     if (done) {
       stopGlide();
       saveBounds();
@@ -2138,6 +2170,40 @@ function glideFrom(vx, vy) {
     }
   }, 'glide');
   return true;
+}
+
+// The sign on the widget trails body motion the renderer can't see (the run
+// to the Dock): vx px/s, 0 when it stops.
+function sendLean(vx) {
+  if (!reducedMotion && win && !win.isDestroyed()) win.webContents.send('lean', vx);
+}
+
+// ── Eyes: follow the cursor ────────────────────────────────────────────────
+// Sampled here (the renderer only sees the cursor over its own window) and
+// sent only when the whole-unit offset changes. A cursor at rest for
+// MOTION.eyes.holdMs gets the eyes back to straight ahead, so a still desk
+// (or a test run) always shows the same face.
+let eyeLast = null;
+let eyeMovedAt = 0;
+let eyeSent = '0,0';
+function eyeTick() {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  const E = Motion.MOTION.eyes;
+  const p = screen.getCursorScreenPoint();
+  const now = Date.now();
+  const moved = eyeLast && Math.abs(p.x - eyeLast.x) + Math.abs(p.y - eyeLast.y) > 2;
+  eyeLast = p;
+  if (moved) eyeMovedAt = now;
+  let off = { x: 0, y: 0 };
+  if (!reducedMotion && eyeMovedAt && now - eyeMovedAt < E.holdMs) {
+    // the eyes sit at (32, 45.75) of the 64×82 rig, inside the 12px padding
+    const b = win.getBounds();
+    off = Motion.eyeOffset(p.x - (b.x + b.width / 2), p.y - (b.y + 12 + ((b.height - 24) * 45.75) / 82), E.range, E.deadzone);
+  }
+  const key = `${off.x},${off.y}`;
+  if (key === eyeSent) return;
+  eyeSent = key;
+  win.webContents.send('eyes', off.x, off.y);
 }
 
 ipcMain.on('drag-start', () => stopGlide());
@@ -3030,6 +3096,7 @@ app.whenReady().then(() => {
     tickStats(readSessions(loadConfig()));
   }, 'poll');
   every(30000, flushStats, 'stats-flush');
+  every(Motion.MOTION.eyes.pollMs, eyeTick, 'eyes');
   sweepSessionFiles();
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
