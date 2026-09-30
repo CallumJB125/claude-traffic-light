@@ -227,6 +227,14 @@ deny-list → first-wins settle.
 - **R8 — SAS is 6 digits** (~20 bits). With commit/reveal the attacker gets
   one online guess per pairing (≈ 1e-6), and only if it already has the QR
   secret.
+- **R10 — Hook-timeout race (file adapter).** The hook gives up after 55 s
+  and deletes its files; an answer landing in that instant would be reported
+  "applied" although Claude Code already showed its own dialog. The adapter
+  only answers requests younger than 45 s; the real fix is a hook-side ack
+  (the hook renames `<id>.answer` → `<id>.taken` and the desktop checks it)
+  before reporting success.
+- **R11 — Deny-list cost.** Inputs over 64 KB canonical are desk-only rather
+  than scanned; the rules are linear-ish but not formally ReDoS-audited.
 - **R9 — Audit trail is local** until the hub's card activity feed exists;
   events are designed to be forwarded as-is (they contain no tool input).
 

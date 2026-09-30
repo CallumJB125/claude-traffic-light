@@ -125,3 +125,8 @@ test('git push parser edge cases', () => {
   assert.match(gitForcePushViolation('echo hi; git push --force'), /without an explicit branch/);
   assert.equal(gitForcePushViolation('git commit -m "push -f later"'), null);
 });
+
+test('inputs too large to review remotely are desk-only', () => {
+  const r = evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: 'a.txt', content: 'x'.repeat(70000) } });
+  assert.deepEqual([r.blocked, r.ruleId], [true, 'input-too-large']);
+});

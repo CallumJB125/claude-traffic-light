@@ -137,10 +137,16 @@ export function compileRules(rules = DEFAULT_RULES) {
 }
 
 // → { blocked: true, ruleId, reason, message } or { blocked: false }
+// Larger inputs aren't scanned (regex cost, and nobody reviews 64 KB on a
+// phone): they are desk-only.
+export const MAX_REMOTE_INPUT_CHARS = 65536;
+
 export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [] }) {
   const labels = new Set((repoLabels || []).map((l) => String(l).toLowerCase()));
+  const canonical = canonicalize(toolInput ?? {});
+  if (canonical.length > MAX_REMOTE_INPUT_CHARS) return { blocked: true, ruleId: 'input-too-large', reason: 'input too large to review remotely', message: DESK_MESSAGE };
   const texts = stringsIn(toolInput ?? {});
-  texts.push(canonicalize(toolInput ?? {}));
+  texts.push(canonical);
   for (const r of compiled) {
     if (r.tool && !test(r.tool, String(toolName ?? ''))) continue;
     if (r.labels && !r.labels.some((l) => labels.has(l))) continue;

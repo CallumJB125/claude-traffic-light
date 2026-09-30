@@ -67,7 +67,7 @@ test('widget request store: requests without the full tool input are never remot
 
 test('widget request store: stale requests and path tricks are refused', async () => {
   const dir = tmp();
-  writeReq(dir, 'old', { createdAt: new Date(Date.now() - 120000).toISOString() });
+  writeReq(dir, 'old', { createdAt: new Date(Date.now() - 50000).toISOString() });
   const store = new WidgetRequestStore({ requestsDir: dir, ownerId: 'alice' });
   assert.equal(await store.get('old'), null);
   for (const id of ['../x', '..', 'a/b', '', '.hidden']) {

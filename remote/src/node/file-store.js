@@ -56,7 +56,10 @@ export function jsonlAudit(file) {
 // answers exactly one wins. The desk path must use 'wx' as well for the
 // desk-vs-phone race to be first-wins too (see THREAT_MODEL.md).
 export class WidgetRequestStore {
-  constructor({ requestsDir, ownerId, describe = () => ({}), maxAgeMs = 90000, clock = () => Date.now() }) {
+  // maxAgeMs stays under the hook's own wait (CLAUDE_TRAFFIC_LIGHT_ASK_MS,
+  // default 55 s): an answer written as the hook gives up would be reported
+  // "applied" though nothing read it.
+  constructor({ requestsDir, ownerId, describe = () => ({}), maxAgeMs = 45000, clock = () => Date.now() }) {
     Object.assign(this, { requestsDir, ownerId, describe, maxAgeMs, clock });
   }
 
