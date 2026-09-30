@@ -8,7 +8,8 @@ import { spawn } from 'node:child_process';
 import { Outbox } from '../outbox.js';
 import { lstartOf } from '../procs.js';
 import { serializeOutbound } from '../../shared/scope.js';
-import { startFakeHub, startRunner, makeRepo, tmpDir, rm, waitFor, alive, REPO_ID } from './helpers.js';
+import { startFakeHub, startRunner, makeRepo, tmpDir, rm, waitFor, alive, fakeClock, REPO_ID } from './helpers.js';
+import { HB_MS } from '../../shared/liveness.js';
 
 const scope = { repo_id: REPO_ID, toplevel: '/x' };
 const msg = (i) => serializeOutbound({ kind: 'progress.append', run_id: 'r', card_id: 'c', fence: 1, repo_id: REPO_ID, text: `p${i}` }, scope, { requireRepoId: true });
@@ -99,4 +100,29 @@ test('restart: an orphaned CLI (pid + lstart match) and its tool group are kille
     await hub.close();
     rm(root);
   }
+});
+
+test('replay: only entries written offline or older than a heartbeat go as delayed; seen cmd ids are bounded', async () => {
+  const root = tmpDir();
+  const clock = fakeClock();
+  const hub = await startFakeHub();
+  const sup = await startRunner({ hub, home: path.join(root, 'home'), repo: makeRepo(root), clock });
+  try {
+    hub.autoAck = false;
+    const fake = { scope: { repo_id: REPO_ID, toplevel: '/x' } };
+    const body = (t) => ({ kind: 'progress.append', run_id: 'r', card_id: 'c', fence: 1, repo_id: REPO_ID, text: t });
+    const replay1 = () => hub.frames.filter((f) => f.type === 'out' && f.msg.text === 'fresh');
+    sup.emitOut(fake, body('fresh'));
+    await waitFor(() => replay1().length === 1, { what: 'sent live' });
+    hub.dropAll();
+    await waitFor(() => replay1().length === 2, { what: 'replayed' });
+    assert.equal(replay1()[1].delayed, false, 'a few ms old: not delayed');
+    clock.advance(HB_MS + 1);
+    hub.dropAll();
+    await waitFor(() => replay1().length === 3, { what: 'replayed again' });
+    assert.equal(replay1()[2].delayed, true, 'older than a heartbeat: delayed');
+    for (let i = 0; i < 1100; i++) hub.send({ type: 'cmd', cmd_id: `k${i}`, run_id: 'none', card_id: 'c', fence: 1, cmd: 'interrupt' });
+    await waitFor(() => sup.seenCmds.has('k1099'), { what: 'cmds seen' });
+    assert.ok(sup.seenCmds.size <= 1000);
+  } finally { await sup.shutdown(); await hub.close(); rm(root); }
 });

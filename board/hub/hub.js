@@ -25,6 +25,10 @@ import { cardView, leaseView } from './views.js';
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
 const NOTIFY_KEEP = 500;
+// Commands for an offline device: bounded. Anything older is re-derived from
+// card state on its hello (stop for stale runs, handover_begin for handing_over).
+const PENDING_CMD_TTL_MS = 30 * 60_000;
+const PENDING_CMDS_MAX = 50;
 
 export const defaultClock = { mono: () => performance.now(), wall: () => Date.now() };
 
@@ -538,11 +542,27 @@ export class Hub extends EventEmitter {
     const conn = this.runners.get(deviceId);
     if (conn?.ready) { conn.send(frame); return true; }
     if (queue) {
-      const list = this.pendingCmds.get(deviceId) ?? [];
-      list.push(frame);
-      this.pendingCmds.set(deviceId, list);
+      const now = this.mono();
+      const list = (this.pendingCmds.get(deviceId) ?? []).filter((p) => now - p.at < PENDING_CMD_TTL_MS);
+      list.push({ frame, at: now });
+      this.pendingCmds.set(deviceId, list.slice(-PENDING_CMDS_MAX));
     }
     return false;
+  }
+
+  takePendingCmds(deviceId) {
+    const now = this.mono();
+    const list = this.pendingCmds.get(deviceId) ?? [];
+    this.pendingCmds.delete(deviceId);
+    return list.filter((p) => now - p.at < PENDING_CMD_TTL_MS).map((p) => p.frame);
+  }
+
+  sweepPendingCmds() {
+    const now = this.mono();
+    for (const [dev, list] of this.pendingCmds) {
+      const keep = list.filter((p) => now - p.at < PENDING_CMD_TTL_MS);
+      if (keep.length) this.pendingCmds.set(dev, keep); else this.pendingCmds.delete(dev);
+    }
   }
 
   eligibleDevices(cardId) {
@@ -703,8 +723,12 @@ export class Hub extends EventEmitter {
     }
     const after = this.card(cardId);
     if (after.run_state === 'orphaned' && after.orphan_notified_at == null && this.ageOf(after.state_since) >= ORPHAN_NOTIFY_MS) {
-      this.db.run('UPDATE cards SET orphan_notified_at = ? WHERE id = ?', this.iso(), cardId);
-      this.notify('orphaned', cardId, ['dispatcher', 'assignees']);
+      const roles = ['dispatcher', 'assignees'];
+      this.txn(() => {
+        this.db.run('UPDATE cards SET orphan_notified_at = ? WHERE id = ?', this.iso(), cardId);
+        this.journal({ board_id: after.board_id, card_id: cardId, run_id: after.active_run_id ?? null, kind: 'card.notify', payload: { rule: 'orphaned', to: this.recipients(cardId, roles) } });
+        this.later(() => this.notify('orphaned', cardId, roles));
+      });
     }
   }
 
@@ -728,6 +752,7 @@ export class Hub extends EventEmitter {
     }
     this.pushLeaseTicks();
     this.sweepRequestCache();
+    this.sweepPendingCmds();
     await this.idle();
   }
 

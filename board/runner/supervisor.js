@@ -25,6 +25,7 @@ import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUN
 // Device-level frames carry no repo_id; they still pass the serializer guard
 // (no local paths, no credential shapes).
 const DEVICE_SCOPE = Object.freeze({ repo_id: '__device__', toplevel: null });
+const SEEN_CMDS_MAX = 1000;   // cmd_id dedupe window (the hub re-sends a cmd at most on reconnect)
 
 function err(code, message) {
   return Object.assign(new Error(message), { code });
@@ -210,6 +211,7 @@ export class Supervisor extends EventEmitter {
       case 'cmd': {
         if (this.seenCmds.has(m.cmd_id)) return;
         this.seenCmds.add(m.cmd_id);
+        if (this.seenCmds.size > SEEN_CMDS_MAX) this.seenCmds.delete(this.seenCmds.values().next().value);
         const r = this.runs.get(m.run_id);
         if (r && r.fence === m.fence) r.command(m).catch((e) => this.log.error('cmd failed', { err: e.message }));
         return;
@@ -236,7 +238,10 @@ export class Supervisor extends EventEmitter {
     this.attempt = 0;
     this.originDown = false;
     this.outbox.ack(m.last_seq_acked);
-    for (const e of this.outbox.pendingAfter(m.last_seq_acked)) this.sendRaw(Outbox.frame(e, true));
+    // Delayed = written while offline, by an earlier supervisor, or older than
+    // one heartbeat: only those never move a card (D3).
+    const now = this.clock.mono();
+    for (const e of this.outbox.pendingAfter(m.last_seq_acked)) this.sendRaw(Outbox.frame(e, e.offline || e.at == null || now - e.at > HB_MS));
     this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist) });
     this.connected = true;
     this.sendHbNow();
@@ -292,6 +297,7 @@ export class Supervisor extends EventEmitter {
     const shapeErr = validate('runner→hub', { type: 'out', seq: 1, delayed: false, msg });
     if (shapeErr) { this.log.error('dropped malformed outbox message', { kind: msg.kind, err: shapeErr.message }); return null; }
     const e = this.outbox.append(bytes, { offline: !this.connected });
+    e.at = this.clock.mono();
     if (this.connected) this.sendRaw(Outbox.frame(e, e.offline));
     return e;
   }

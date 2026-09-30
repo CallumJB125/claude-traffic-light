@@ -10,6 +10,7 @@ import { validate, compatible, PROTOCOL_VERSION, WS_CLOSE } from '../shared/prot
 import { HubError, json } from './db.js';
 import { bearer, sha256hex } from './auth.js';
 import { handleRpc, relPath } from './rpc.js';
+import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
 
 const clip = (s, n) => {
   const t = String(s ?? '');
@@ -154,8 +155,7 @@ export class RunnerConn {
     this.ready = true;
     hub.log.info('runner connected', { device_id: this.device_id, runs: msg.runs.length });
 
-    const pending = hub.pendingCmds.get(this.device_id) ?? [];
-    hub.pendingCmds.delete(this.device_id);
+    const pending = hub.takePendingCmds(this.device_id);
     for (const f of pending) this.send(f);
     // Commands still implied by card state (§6.1 step 4).
     for (const r of msg.runs) {
@@ -164,7 +164,14 @@ export class RunnerConn {
       const row = run ? hub.card(run.card_id) : null;
       if (!run || run.device_id !== this.device_id || !row) continue;
       const stale = run.ended_at || row.fence !== r.fence || row.active_run_id !== run.id;
-      if (!stale) continue;
+      if (!stale) {
+        // A handover asked for while the hub restarted or the runner was away
+        // is asked again (the runner ignores a second one for the same run).
+        if (row.run_state === 'handing_over' && !pending.some((f) => f.type === 'cmd' && f.run_id === run.id && f.cmd === 'handover_begin')) {
+          this.send({ type: 'cmd', cmd_id: randomUUID(), run_id: run.id, card_id: row.id, fence: row.fence, cmd: 'handover_begin', wait_ms: HANDOVER_WAIT_MS, reason: 'hand_over' });
+        }
+        continue;
+      }
       this.send({ type: 'fenced', run_id: run.id, card_id: row.id, held_fence: r.fence, current_fence: row.fence });
       if (!pending.some((f) => f.type === 'cmd' && f.run_id === run.id && f.cmd === 'stop')) {
         this.send({ type: 'cmd', cmd_id: randomUUID(), run_id: run.id, card_id: row.id, fence: r.fence, cmd: 'stop', reason: run.ended_at ? 'RUN_ENDED' : 'FENCED' });
@@ -406,7 +413,9 @@ export class RunnerConn {
       hub.txn(() => {
         const cur = hub.card(row.id);
         if (cur.fence !== m.fence) {
-          hub.feed(row.id, 'salvage', { note: 'stale outbox entry dropped', kind: m.kind, reason: 'FENCED', held_fence: m.fence }, { run, device: this.device_id, seq: this.seqBase + seq, delayed });
+          // One visible salvage line per run; later drops are internal rows (they still hold the seq).
+          const shown = hub.db.get("SELECT 1 AS x FROM events WHERE run_id = ? AND kind = 'salvage' AND json_extract(payload, '$.reason') = 'FENCED'", run.id);
+          hub.feed(row.id, shown ? 'outbox_dropped' : 'salvage', { note: 'stale outbox entries dropped', kind: m.kind, reason: 'FENCED', held_fence: m.fence }, { run, device: this.device_id, seq: this.seqBase + seq, delayed });
           this.consumeSeq(seq);
           return;
         }

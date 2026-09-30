@@ -228,7 +228,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
    `outbox_id` (a UUID the runner creates together with its outbox, stored in `head.json`) and `outbox_acked_seq` (the runner's persisted acked seq) settle the outbox before `welcome` (migration 004): a changed `outbox_id` means the outbox was wiped and restarted at seq 1, so the hub resets `devices.last_seq_acked` to 0 (and moves `devices.seq_base` past every stored `events.seq` of the device, keeping `UNIQUE(device_id, seq)`); then `last_seq_acked = max(hub, outbox_acked_seq)`, so a hub restored from an older backup never waits for entries the runner already dropped. Each move is a `device.outbox` journal row (§15).
 2. Hub → `welcome {protocol, hub_epoch, device_id, member_id, last_seq_acked, allowlist:[{repo_id, canonical_url, aliases}]}`. `allowlist` = every repo on any board the device's member belongs to (the input to `scope.matchRepo`, D14).
 3. Runner replays every outbox entry with `seq > last_seq_acked`, in order, as `out` frames (with `delayed:true`), then sends `advertise`, then its first `hb` immediately (not waiting for the 15 s tick).
-4. Hub re-sends pending `offer`s for this device and any `cmd` still implied by card state (e.g. `stop` for a run whose card is failed/handed_over).
+4. Hub re-sends pending `offer`s for this device and any `cmd` still implied by card state (e.g. `stop` for a run whose card is failed/handed_over, `handover_begin` for a current run whose card is `handing_over`, so a hub restart never loses it). Commands queued for an offline device are bounded (30 min, 50 per device); older ones are re-derived this way. The runner dedupes `cmd_id` over its last 1000.
 
 ### 6.2 Runner → hub frames (`runner→hub`)
 
@@ -274,8 +274,8 @@ The web renders handover markdown as **text** (escape everything; only headings,
 
 - Append-only NDJSON log at `~/.board/outbox/<device_id>.ndjson` plus `acked.json` (`{seq}`), written with `writeJsonAtomic`-style rename. `seq` is per device, starts at 1, strictly increasing, never reused (persist the head before sending).
 - Every hub-bound message about a run is **constructed from scoped data and serialized only by `scope.serializeOutbound(msg, scope, {requireRepoId:true})`**. The outbox never holds bytes that did not pass it (exit f).
-- `delayed:true` when the entry is a replay or was created while disconnected. Delayed `activity` never moves a card (rows `n-activity-delayed`, D3).
-- The hub dedupes by `UNIQUE(device_id, seq)` in `events` (stored as `devices.seq_base + seq`), applies in seq order, and acks cumulatively. A gap before the **first** `out` frame of a connection can never fill (the runner replays contiguously from its oldest unacked entry): the hub skips it (fast-forwards `last_seq_acked`, journal `device.outbox {reason:'gap'}`) instead of buffering forever. A stale-fence outbox entry is **acked and dropped** (recorded as a `salvage` note event), never retried forever.
+- `delayed:true` when the entry was created while disconnected, by an earlier supervisor process, or is replayed more than `HB_MS` after it was written. A replay of an entry a few seconds old (a dropped socket) is not delayed. Delayed `activity` never moves a card (rows `n-activity-delayed`, D3).
+- The hub dedupes by `UNIQUE(device_id, seq)` in `events` (stored as `devices.seq_base + seq`), applies in seq order, and acks cumulatively. A gap before the **first** `out` frame of a connection can never fill (the runner replays contiguously from its oldest unacked entry): the hub skips it (fast-forwards `last_seq_acked`, journal `device.outbox {reason:'gap'}`) instead of buffering forever. A stale-fence outbox entry is **acked and dropped** (the first per run is recorded as a `salvage` note event, later ones as internal `outbox_dropped` rows), never retried forever.
 
 `OutboxMsg` kinds (`protocol.OUTBOX_SHAPES`; every one carries `kind, run_id, card_id, fence, repo_id`):
 
@@ -722,6 +722,7 @@ Also required: `mcp/test/tools.test.js` (every `MCP_TOOLS` entry listed, schemas
 | `comment.create` | web and agent comments | `{comment_id, source, for_agent}` (no body) |
 | `feed.relabel` | `relabel_orphan` effect | `{event_id, relabel}` |
 | `hub.restore_bump` | boot with restore (`board_id` NULL) | `{bump}` |
+| `card.notify` | reaper, the delayed orphan notification (same transaction as `orphan_notified_at`) | `{rule:'orphaned', to:[member_id]}` |
 | `device.outbox` | runner hello / first `out` of a connection (`board_id` NULL, actor = the device) | `{reason:'reset'\|'runner_acked'\|'gap', from, to, outbox_id?, outbox_id_before?}`: `last_seq_acked` moved other than by an ack (§6.1, §6.5) |
 
 `journal.replay(rows)` rebuilds every card's `CARD_STATE` + title/labels/budget/repo from `card.create`, `card.update`, `card.transition` and `hub.restore_bump` alone. Tests: `hub/test/journal.test.js` (triggers, coverage, API, restore) and the e2e chaos run (`test/e2e/`), which replays the journal and compares it with the live `cards` table.

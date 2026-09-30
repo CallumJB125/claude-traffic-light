@@ -37,6 +37,8 @@ test('killed runner: never green after TTL; unresponsive at TTL, orphaned at T_o
     const notes = h.hub.notifications.filter((n) => n.rule === 'orphaned' && n.card_id === run.card_id);
     assert.equal(notes.length, 1, 'orphan notification once, after ≥ 10 min orphaned');
     assert.deepEqual(notes[0].to, [h.ids.alice]);
+    const j = h.db.all("SELECT payload FROM journal WHERE card_id = ? AND kind = 'card.notify'", run.card_id).map((x) => JSON.parse(x.payload));
+    assert.deepEqual(j, [{ rule: 'orphaned', to: [h.ids.alice] }], 'journaled in the same transaction');
     await h.run(5000);
     assert.equal(h.hub.notifications.filter((n) => n.rule === 'orphaned').length, 1, 'only once');
     const detail = (await h.api(alice, 'GET', `/api/cards/${run.card_id}`)).body;
