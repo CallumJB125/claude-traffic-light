@@ -312,6 +312,14 @@ otherwise `unknown` ("not applied — check at your desk").
   `decisionHash` and registers no key; the new app refuses to answer such
   requests from the widget or phone (the terminal dialog still works). The
   hook scripts are run from the app, so an app update updates them too.
+- **R12 — Junk key registration only costs the widget.** Anything that holds
+  the token can `POST /request-key` for ids of its choosing: fill the store
+  (1024 keys, each kept ≤ 75 s), or guess an id first. Ids are random UUIDs
+  the hook registers before the request file exists, so a guess never
+  matches, and a full store or a taken id makes the hook's registration fail.
+  Either way the hook writes no request and doesn't wait: the terminal prompt
+  shows, as when the app is down. Never an allow; at worst the widget and
+  phone can't answer until the junk expires.
 
 ## 9. Integration notes (for whoever wires this into the widget/hub)
 
