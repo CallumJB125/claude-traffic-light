@@ -288,3 +288,23 @@ test('L-2: loadPreviousKey reads BOARD_ENC_KEY_PREVIOUS once, and never under a 
   assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: k }, hasParentPort: true }), /refused under the desktop app/);
   assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: 'short' }, hasParentPort: false }), /32 bytes/);
 });
+
+// ── L-3 ───────────────────────────────────────────────────────────────────
+
+test('L-3: members see connections and their autonomy, never settings.config; admins see it all', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('cfg'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'cfg', external_id: 'w1' });
+    reg.setSettings(conn.id, { autonomy: { 'card.create': 'ask' }, config: { channel: 'C123', repos: ['acme/secret'] } });
+    const list = async (who) => (await h.api(await h.login(who), 'GET', '/api/integrations')).body.connections.find((c) => c.id === conn.id);
+    const asMember = await list('bob');
+    assert.deepEqual(asMember.settings, { autonomy: { 'card.create': 'ask' } });
+    assert.equal(asMember.health, null);
+    const asAdmin = await list('alice');
+    assert.deepEqual(asAdmin.settings, { autonomy: { 'card.create': 'ask' }, config: { channel: 'C123', repos: ['acme/secret'] } });
+    // The audit log stays member-readable (it holds ids and codes only).
+    assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
+  } finally { await h.close(); }
+});

@@ -174,8 +174,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       if (!c || c.status === 'revoked' || integrations.orgOf(id) !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
       return c;
     };
+    // Members may read what's connected (by design, D42), but a connector's
+    // config (channel ids, repo lists, …) is the admins' business.
+    const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
     route('GET', '/api/integrations', ({ member }) => ({
-      available: integrations.connectors(), connections: integrations.list(member.org_id), vault: hub.vault.available,
+      available: integrations.connectors(), connections: integrations.list(member.org_id).map((c) => forMember(member, c)), vault: hub.vault.available,
     }));
     route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
       api.requireAdmin(member);
