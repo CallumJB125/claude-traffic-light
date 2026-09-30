@@ -422,6 +422,15 @@ export class Run {
     }
   }
 
+  // App quit (D37a): the handover window, stop, a pushed snapshot at the
+  // current fence, then release{requeue} so the card goes back to the queue
+  // instead of failing. → true once the hub requeued it; false leaves the run
+  // (and its ledger entry) to the next start's orphan handling.
+  parkForQuit(waitMs) {
+    if (this.handover || this.ending || this.ended || this.fenced || !this.backend || !this.sup.connected) return Promise.resolve(false);
+    return this.#beginHandover('quit', waitMs);
+  }
+
   #beginHandover(mode, waitMs) {
     if (this.handover || this.ending) return;
     const text = 'The board asked for a handover: write your final handover now via board_write_handover (plan, done, hypothesis, dead_ends, next, questions), then stop working.';
@@ -439,13 +448,30 @@ export class Run {
     h.done = true;
     this.log.info('handover finishing', { run_id: this.run_id, why, mode: h.mode });
     this.ending = true;
-    this.endReason = h.mode === 'park' ? 'parked' : 'handed_over';
+    this.endReason = h.mode === 'handover' ? 'handed_over' : 'parked';
     await this.backend?.stop();
     this.flushFacts();
     await this.snapshotNow({ push: true, why: 'final handover' });
     if (h.mode === 'handover') this.emit({ kind: 'handover.complete' });
+    if (h.mode === 'quit') {
+      const ok = await this.#releaseForQuit();
+      h.resolve(ok);
+      if (ok) this.#end();
+      return;
+    }
     h.resolve();
     this.#end();
+  }
+
+  async #releaseForQuit() {
+    try {
+      const r = await this.sup.rpc(this, 'board_release', { reason: 'The desktop app quit; parked with a final handover.', requeue: true }, { timeoutMs: 5000 });
+      this.released = true;
+      this.releaseRequeued = r.state === 'queued';
+    } catch (e) {
+      this.log.warn('quit: release failed; left to orphan handling', { run_id: this.run_id, err: e.message });
+    }
+    return this.releaseRequeued;
   }
 
   // Only a stop from the hub, park, a takeover or a requeueing release bump the

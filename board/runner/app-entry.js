@@ -5,13 +5,17 @@
 //   {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
 // over process.parentPort and the credentials stay in memory, used only for
 // the hub WS connect. data_dir replaces BOARD_HOME (runs, worktrees, outbox).
-// Replies: runner.ready, runner.status {state, detail?}, runner.fatal {message}.
-// `runner.presence` feeds team presence (D37b). SIGTERM → graceful shutdown, exit 0.
+// Replies: runner.ready, runner.status {state, detail?}, runner.fatal {message},
+// runner.stopped {parked, orphaned}. `runner.presence` feeds team presence
+// (D37b). SIGTERM/SIGINT → park every live run (bounded), exit 0.
 import path from 'node:path';
 import { WS_CLOSE } from '../shared/protocol.js';
 import { Supervisor } from './supervisor.js';
 import { PresenceReporter } from './presence.js';
 import { makeLogger } from './util.js';
+
+const QUIT_BUDGET_MS = 25_000;   // the app waits for us; exit 0 by then whatever is left
+const QUIT_HANDOVER_MS = 10_000; // the agent's final-handover window inside that budget
 
 const STATE_OF_CLOSE = {
   [WS_CLOSE.UNAUTHENTICATED]: 'unauthenticated',
@@ -101,9 +105,22 @@ async function stop(signal) {
   if (stopping) return;
   stopping = true;
   log.info('runner stopping', { signal });
+  status('stopping');
   presence?.stop();
+  const runs = sup ? [...sup.runs.values()].filter((r) => !r.ended) : [];
+  let parked = 0;
+  if (sup) sup.quitting = true;
+  let budget;
+  await Promise.race([
+    Promise.all(runs.map((r) => r.parkForQuit(QUIT_HANDOVER_MS).then((ok) => { if (ok) parked += 1; }, (e) => log.warn('park failed', { run_id: r.run_id, err: e.message })))),
+    new Promise((r) => { budget = setTimeout(r, QUIT_BUDGET_MS); }),
+  ]);
+  clearTimeout(budget);
+  const orphaned = runs.length - parked;
+  if (orphaned) log.warn('quit: runs not parked; the next start treats them as orphans', { orphaned });
   try { await sup?.shutdown({ stopRuns: false }); } catch (e) { log.error('shutdown failed', { err: e.message }); }
-  process.exit(0);
+  post({ type: 'runner.stopped', parked, orphaned });
+  setTimeout(() => process.exit(0), 100);   // let the message leave first
 }
 process.on('SIGTERM', () => stop('SIGTERM'));
 process.on('SIGINT', () => stop('SIGINT'));

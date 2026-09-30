@@ -9,7 +9,7 @@ import { PRESENCE_TTL_MS } from '../../shared/liveness.js';
 import { DEFAULT_LIMITS } from '../ratelimit.js';
 import { startHub, settle } from './helpers.js';
 
-const sess = (over = {}) => ({ session_id: 'h-1', agent: 'claude', repo_id: 'x', branch: 'feat/a', state: 'working', since: 1_790_000_000_000, summary: 'editing the parser', ...over });
+const sess = (over = {}) => ({ session_id: 'h-1', agent: 'claude', repo_id: 'x', branch: 'feat/a', state: 'working', since: '2026-09-30T10:00:00Z', summary: 'editing the parser', ...over });
 const latest = (b) => b.all('team.presence').at(-1);
 
 async function setup(opts) {
@@ -27,7 +27,7 @@ test('presence: board-linked repos only, exact browser shape, same view over HTT
     const journal0 = h.db.get('SELECT COUNT(*) AS n FROM journal').n;
     r.send({ type: 'presence', sessions: [sess({ repo_id: h.ids.repo }), sess({ session_id: 'h-2', repo_id: 'repo-not-on-any-board', summary: 'secret project' })] });
     const { __taken, ...f } = await b.next('team.presence', (m) => m.members.length === 1, { fresh: true });
-    assert.deepEqual(f, { type: 'team.presence', members: [{ member_id: h.ids.alice, name: 'Alice', sessions: [{ agent: 'claude', repo_short: 'app', branch: 'feat/a', state: 'working', since: 1_790_000_000_000, summary: 'editing the parser' }] }] });
+    assert.deepEqual(f, { type: 'team.presence', members: [{ member_id: h.ids.alice, name: 'Alice', sessions: [{ agent: 'claude', repo_short: 'app', branch: 'feat/a', state: 'working', since: '2026-09-30T10:00:00Z', summary: 'editing the parser' }] }] });
     const http = await h.api(alice, 'GET', `/api/boards/${h.ids.board}/presence`);
     assert.equal(http.status, 200);
     assert.deepEqual(http.body, { members: f.members });
@@ -141,10 +141,11 @@ test('presence: GET is rate limited per member (429 + Retry-After)', async () =>
   }
 });
 
-test('presence: malformed frames are refused (agent, state, summary over 120, no repo)', async () => {
+test('presence: malformed frames are refused (agent, state, summary over 120, no repo, since not ISO-8601 ≤ 40)', async () => {
   const { h, r, b } = await setup();
   try {
-    for (const bad of [sess({ repo_id: h.ids.repo, agent: 'bogus' }), sess({ repo_id: h.ids.repo, state: 'busy' }), sess({ repo_id: h.ids.repo, summary: 'x'.repeat(121) }), { ...sess(), repo_id: undefined }]) {
+    const badSince = [1_790_000_000_000, '1790000000000', '2026-09-30', '2026-09-30T10:00:00', `2026-09-30T10:00:00.${'1'.repeat(30)}Z`, null].map((since) => sess({ repo_id: h.ids.repo, since }));
+    for (const bad of [sess({ repo_id: h.ids.repo, agent: 'bogus' }), sess({ repo_id: h.ids.repo, state: 'busy' }), sess({ repo_id: h.ids.repo, summary: 'x'.repeat(121) }), { ...sess(), repo_id: undefined }, ...badSince]) {
       const id = randomUUID();
       r.send({ type: 'presence', id, sessions: [bad] });
       const e = await r.next('error', (m) => m.re === id);

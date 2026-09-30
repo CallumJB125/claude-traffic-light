@@ -18,15 +18,16 @@ function stubSup() {
 
 const where = { '/w/app': { toplevel: '/w/app', remote_url: 'git@github.com:acme/app.git', branch: 'main' }, '/w/other': { toplevel: '/w/other', remote_url: 'git@github.com:acme/other.git', branch: 'main' } };
 const resolve = async (cwd) => where[cwd] ?? null;
-const s = (over = {}) => ({ session_id: 'a', agent: 'claude', cwd: '/w/app', state: 'working', since: 1, ...over });
+const s = (over = {}) => ({ session_id: 'a', agent: 'claude', cwd: '/w/app', state: 'working', since: '2026-09-30T10:00:00Z', ...over });
 
 test('presence reporter: throttled changes, keepalive, default deny, clear on disable', async () => {
   const sup = stubSup();
   const p = new PresenceReporter(sup, { minMs: 300, keepaliveMs: 100_000, resolve });
   try {
-    await p.update({ enabled: true, sessions: [s(), s({ session_id: 'b', cwd: '/w/other' }), s({ session_id: 'c', cwd: '/nowhere' })] });
+    await p.update({ enabled: true, sessions: [s(), s({ session_id: 'b', cwd: '/w/other' }), s({ session_id: 'c', cwd: '/nowhere' }), s({ session_id: 'd', since: 1_790_000_000_000 }), s({ session_id: 'e', since: 'yesterday' })] });
     assert.equal(sup.sent.length, 1, 'first change goes at once');
-    assert.deepEqual(sup.sent[0].f.sessions.map((x) => x.repo_id), [REPO_ID]);
+    assert.deepEqual(sup.sent[0].f.sessions.map((x) => x.repo_id), [REPO_ID], 'other repos and non-ISO since are dropped');
+    assert.equal(sup.sent[0].f.sessions[0].since, '2026-09-30T10:00:00Z');
 
     await p.update({ enabled: true, sessions: [s({ state: 'waiting' })] });
     await p.update({ enabled: true, sessions: [s({ state: 'idle' })] });

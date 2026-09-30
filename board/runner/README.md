@@ -27,16 +27,21 @@ the app posts the config over `process.parentPort`:
 ```
 app → runner  {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
 runner → app  {type:'runner.ready'}
-runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable', detail?}
+runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable'|'stopping', detail?}
 runner → app  {type:'runner.fatal', message}          then exit 2 (bad config) / 1 (startup failed)
-app → runner  {type:'runner.presence', enabled, sessions:[{session_id, agent, cwd, state, since, summary?}]}
+runner → app  {type:'runner.stopped', parked, orphaned} then exit 0 (after SIGTERM/SIGINT)
+app → runner  {type:'runner.presence', enabled, sessions:[{session_id, agent, cwd, state, since, summary?}]}   since: ISO-8601, ≤ 40 chars
 ```
 
 `data_dir` (absolute) takes the place of `BOARD_HOME`. The token and the Access
 service-token pair live only in memory and only in the WS connect headers; they never
-reach a log line. SIGTERM takes the same path as `cli.js start`: `shutdown({stopRuns:false})`
-closes the socket and the control socket, then exit 0. Live runs stay in the ledger; the
-next start treats them as orphans (stop recipe, snapshot, `run.failed{supervisor crash}`).
+reach a log line. SIGTERM (or SIGINT) parks every live run instead of orphaning it: the
+agent gets the final-handover prompt (10 s window), then the stop recipe, a pushed snapshot
+to `refs/board/<KEY>/r<fence>`, and `board_release{requeue:true}` at the run's fence, so the
+card goes back to the queue with its handover. New offers are ignored meanwhile. After at
+most 25 s the runner posts `runner.stopped` and exits 0; a run that could not be parked (hub
+unreachable, release refused, budget spent) stays in the ledger and the next start treats it
+as an orphan (stop recipe, snapshot, `run.failed{supervisor crash}`).
 
 Team presence (`runner.presence`) is off until the app enables it. Each session's `cwd`
 is mapped to its repo's configured origin; sessions in repos that are not on one of the
@@ -61,7 +66,7 @@ clears it at once.
 | `git.js` | Scope inputs, worktree per run, snapshot via private `GIT_INDEX_FILE` + secret scan + size cap |
 | `procs.js` | pid + lstart identity, process table, tree kill |
 | `policy.js` | Offer decision, advertise set, approval answerer re-check |
-| `app-entry.js` | Desktop-app entry (D37a): config over `parentPort`, ready/status/fatal replies, SIGTERM → exit 0 |
+| `app-entry.js` | Desktop-app entry (D37a): config over `parentPort`, ready/status/fatal replies, SIGTERM → park live runs, exit 0 |
 | `presence.js` | Team presence reporter (D37b): cwd → repo, default deny, hashing, redaction, throttle + keepalive |
 
 ## Tests

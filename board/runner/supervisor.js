@@ -68,6 +68,7 @@ export class Supervisor extends EventEmitter {
     this.originDown = false;
     this.attempt = 0;
     this.stopped = false;
+    this.quitting = false;
     this.memberId = this.device.member_id ?? null;
     this.allowlist = [];
     this.hubEpoch = null;
@@ -404,6 +405,7 @@ export class Supervisor extends EventEmitter {
   }
 
   async handleOffer(offer) {
+    if (this.quitting) return;   // the app is parking its runs (D37a): claim nothing new
     if ([...this.runs.values()].some((r) => r.card_id === offer.card_id && !r.ended)) return;
     // The hub re-sends pending offers on every hello: one decision per request_id at a time.
     if (this.inFlightOffers.has(offer.request_id)) return;

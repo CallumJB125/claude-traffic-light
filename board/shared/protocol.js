@@ -146,14 +146,21 @@ export const PRESENCE_AGENTS = Object.freeze(['claude', 'codex', 'cursor', 'gemi
 export const PRESENCE_STATES = Object.freeze(['working', 'waiting', 'idle']);
 export const PRESENCE_MAX_SESSIONS = 50;
 export const PRESENCE_SUMMARY_MAX = 120;
-export const PRESENCE_SESSION = Object.freeze({ session_id: 'string', agent: 'string', repo_id: 'string', branch: 'string?', state: 'string', since: 'any', summary: 'string?' });
+export const PRESENCE_SINCE_MAX = 40;
+export const PRESENCE_SESSION = Object.freeze({ session_id: 'string', agent: 'string', repo_id: 'string', branch: 'string?', state: 'string', since: 'string', summary: 'string?' });
+
+// `since`: an ISO-8601 date-time with a zone (Z or ±hh:mm), ≤ 40 chars.
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/;
+export function isPresenceSince(v) {
+  return typeof v === 'string' && v.length <= PRESENCE_SINCE_MAX && ISO_DATE_TIME.test(v) && Number.isFinite(Date.parse(v));
+}
 
 function presenceItemError(s) {
   const e = checkShape(PRESENCE_SESSION, s);
   if (e) return e.message;
   if (!PRESENCE_AGENTS.includes(s.agent)) return `agent ${s.agent} unknown`;
   if (!PRESENCE_STATES.includes(s.state)) return `state ${s.state} unknown`;
-  if (!(Number.isFinite(s.since) || (typeof s.since === 'string' && s.since.length <= 64))) return 'since must be a number or a short string';
+  if (!isPresenceSince(s.since)) return `since must be an ISO-8601 date-time ≤ ${PRESENCE_SINCE_MAX} chars`;
   if (s.session_id.length > 64 || (s.branch != null && s.branch.length > 200)) return 'session_id or branch too long';
   if (s.summary != null && s.summary.length > PRESENCE_SUMMARY_MAX) return `summary over ${PRESENCE_SUMMARY_MAX}`;
   return null;

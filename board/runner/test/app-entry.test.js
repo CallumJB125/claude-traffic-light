@@ -9,7 +9,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WS_CLOSE } from '../../shared/protocol.js';
-import { startFakeHub, makeRepo, tmpDir, rm, waitFor, REPO_ID } from './helpers.js';
+import { snapshotRef } from '../../shared/fence.js';
+import { startFakeHub, makeRepo, tmpDir, rm, waitFor, fakeClaudeBin, offerFor, REPO_ID } from './helpers.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.resolve(HERE, '..', 'app-entry.js');
@@ -145,9 +146,9 @@ test('app mode presence: default deny, no paths, hashed ids, redacted ≤ 120-ch
     await app.next('runner.status', (m) => m.state === 'connected');
     const longSummary = `editing ${repo.checkout}/src/parser.js and /Users/someone/notes.txt with sk-ant-api03-SECRETSECRETSECRET ${'x'.repeat(200)}`;
     app.child.send({ type: 'runner.presence', enabled: true, sessions: [
-      { session_id: 'local-session-1', agent: 'claude', cwd: path.join(repo.checkout, 'src'), state: 'working', since: 1_790_000_000_000, summary: longSummary },
-      { session_id: 'local-session-2', agent: 'codex', cwd: other.checkout, state: 'idle', since: 1_790_000_000_000, summary: 'the other repo' },
-      { session_id: 'local-session-3', agent: 'cursor', cwd: plain, state: 'waiting', since: 1_790_000_000_000 },
+      { session_id: 'local-session-1', agent: 'claude', cwd: path.join(repo.checkout, 'src'), state: 'working', since: '2026-09-30T10:00:00Z', summary: longSummary },
+      { session_id: 'local-session-2', agent: 'codex', cwd: other.checkout, state: 'idle', since: '2026-09-30T10:00:00Z', summary: 'the other repo' },
+      { session_id: 'local-session-3', agent: 'cursor', cwd: plain, state: 'waiting', since: '2026-09-30T10:00:00Z' },
       { session_id: 'local-session-4', agent: 'unknown-agent', cwd: repo.checkout, state: 'working', since: 1 },
     ] });
     const f = await waitFor(() => hub.of('presence')[0], { what: 'presence frame', timeout: 15000 });
@@ -172,6 +173,106 @@ test('app mode presence: default deny, no paths, hashed ids, redacted ≤ 120-ch
     app.child.kill('SIGTERM');
     assert.equal(await app.exited, 0);
     assertNoSecrets(app.logs());
+  } finally {
+    app.child.kill('SIGKILL');
+    await hub.close();
+    rm(root);
+  }
+});
+
+// A live run under the app, then SIGTERM: the handover window, a pushed
+// snapshot at the run's fence and release{requeue}, not a crash orphan.
+function appWithRepo(root, scenario) {
+  const repo = makeRepo(root);
+  const data = path.join(root, 'app-data');
+  fs.mkdirSync(data, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({
+    repos: { [REPO_ID]: { opt_in: true, local_path: repo.checkout, max_concurrent: 2, approvals_from: [] } },
+    accept_from: {}, backends: { claude: fakeClaudeBin(root, scenario) }, never_auto_labels: ['never_auto'],
+  }), { mode: 0o600 });
+  return repo;
+}
+
+const HANDOVER_SCENARIO = {
+  steps: [{ result: 'success' }],
+  on_input: { 'asked for a handover': [{ mcp: 'board_write_handover', args: { patch: { next: 'finish the parser after the restart' } } }, { result: 'success' }] },
+};
+
+test('app mode quit: SIGTERM parks a live run (handover, pushed snapshot, release{requeue}); the next start finds no orphan', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  hub.rpcReply = (f) => ({ ok: true, result: f.method === 'board_release' ? { state: 'queued' } : {} });
+  appWithRepo(root, HANDOVER_SCENARIO);
+  let app = spawnApp(root);
+  try {
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    hub.send(offerFor({ key: 'Q-1' }));
+    const claim = await waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 });
+    await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
+    await waitFor(() => hub.facts('cost').length, { what: 'the first turn ended (idle)', timeout: 15000 });
+
+    const t0 = Date.now();
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
+    assert.ok(Date.now() - t0 < 26_000, 'bounded by the quit budget');
+    assert.deepEqual(app.statuses().slice(-1), ['stopping']);
+    const stopped = app.messages.find((m) => m.type === 'runner.stopped');
+    assert.deepEqual({ ...stopped }, { type: 'runner.stopped', parked: 1, orphaned: 0 });
+
+    const fence = claim.expected_fence + 1;
+    assert.equal(hub.outs('handover.write')[0]?.patch.next, 'finish the parser after the restart');
+    const snap = hub.outs('snapshot').at(-1);
+    assert.equal(snap.fence, fence);
+    assert.equal(snap.ref, snapshotRef('Q-1', fence));
+    const rel = hub.of('rpc').filter((f) => f.method === 'board_release');
+    assert.equal(rel.length, 1);
+    assert.equal(rel[0].params.requeue, true);
+    assert.equal(rel[0].fence, fence);
+    assert.equal(hub.outs('run.failed').length, 0, 'never run.failed');
+    assert.equal(hub.outs('handover.complete').length, 0, 'not a hub-requested handover');
+    const iWrite = hub.frames.findIndex((f) => f.type === 'out' && f.msg.kind === 'handover.write');
+    const iSnap = hub.frames.lastIndexOf(hub.frames.findLast((f) => f.type === 'out' && f.msg.kind === 'snapshot'));
+    assert.ok(iWrite < iSnap && iSnap < hub.frames.indexOf(rel[0]), 'handover, then snapshot, then release');
+    assert.equal(hub.of('claim').length, 1, 'the requeued card is not claimed again while quitting');
+
+    app = spawnApp(root);
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(hub.outs('run.failed').length, 0, 'no supervisor-crash orphan on the next start');
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
+    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, orphaned: 0 });
+  } finally {
+    app.child.kill('SIGKILL');
+    await hub.close();
+    rm(root);
+  }
+});
+
+test('app mode quit: a release the hub refuses leaves the run to the next start\'s orphan handling', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  hub.rpcReply = (f) => (f.method === 'board_release' ? { ok: false, error: { code: 'POLICY_DENIED', message: 'never_auto' } } : { ok: true, result: {} });
+  appWithRepo(root, HANDOVER_SCENARIO);
+  let app = spawnApp(root);
+  try {
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    hub.send(offerFor({ key: 'Q-2' }));
+    await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
+    assert.deepEqual(app.messages.find((m) => m.type === 'runner.stopped'), { type: 'runner.stopped', parked: 0, orphaned: 1 });
+    assert.equal(hub.outs('run.failed').length, 0);
+
+    app = spawnApp(root);
+    app.child.send(config(hub, root));
+    const f = await waitFor(() => hub.outs('run.failed')[0], { what: 'orphan run.failed', timeout: 15000 });
+    assert.equal(f.reason, 'supervisor crash');
+    app.child.kill('SIGTERM');
+    assert.equal(await app.exited, 0);
   } finally {
     app.child.kill('SIGKILL');
     await hub.close();
