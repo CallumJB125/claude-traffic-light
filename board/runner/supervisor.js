@@ -161,6 +161,7 @@ export class Supervisor extends EventEmitter {
     this.pendingRpc.clear();
     if (wasConnected) this.emit('disconnected', { code });
     if (this.stopped) return;
+    this.emit('hub_closed', { code });   // every failed or dropped connection (the app's runner.status, D37a)
     if (code === WS_CLOSE.PROTOCOL_UNSUPPORTED || code === WS_CLOSE.REVOKED || code === WS_CLOSE.UNAUTHENTICATED) {
       this.log.error('hub refused this runner; not reconnecting', { code });
       this.notifyLocal({ event: 'hub_refused', code });

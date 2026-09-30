@@ -18,6 +18,33 @@ path (default `board/mcp/server.js`). Buddy later spawns `cli.js start --foregro
 itself and talks NDJSON on `~/.board/runner.sock` (`status`, `subscribe`, `opt_in`,
 `confirm_offer`, `stop_all`, `host_suspending`, `host_resumed`).
 
+## Under the desktop app (D37)
+
+The app runs `runner/app-entry.js` as an Electron `utilityProcess` (never `cli.js`,
+never detached: the app is the supervisor). No device file and no env secret is read;
+the app posts the config over `process.parentPort`:
+
+```
+app → runner  {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
+runner → app  {type:'runner.ready'}
+runner → app  {type:'runner.status', state:'connected'|'backoff'|'unauthenticated'|'revoked'|'unavailable', detail?}
+runner → app  {type:'runner.fatal', message}          then exit 2 (bad config) / 1 (startup failed)
+app → runner  {type:'runner.presence', enabled, sessions:[{session_id, agent, cwd, state, since, summary?}]}
+```
+
+`data_dir` (absolute) takes the place of `BOARD_HOME`. The token and the Access
+service-token pair live only in memory and only in the WS connect headers; they never
+reach a log line. SIGTERM takes the same path as `cli.js start`: `shutdown({stopRuns:false})`
+closes the socket and the control socket, then exit 0. Live runs stay in the ledger; the
+next start treats them as orphans (stop recipe, snapshot, `run.failed{supervisor crash}`).
+
+Team presence (`runner.presence`) is off until the app enables it. Each session's `cwd`
+is mapped to its repo's configured origin; sessions in repos that are not on one of the
+member's boards are dropped. The hub gets `{hashed session_id, agent, repo_id, branch,
+state, since, redacted summary ≤ 120}` in a `presence` frame, on change at most every
+5 s and every 60 s as a keepalive. `enabled:false` sends one empty frame so the hub
+clears it at once.
+
 ## Modules
 
 | File | Role |
@@ -34,6 +61,8 @@ itself and talks NDJSON on `~/.board/runner.sock` (`status`, `subscribe`, `opt_i
 | `git.js` | Scope inputs, worktree per run, snapshot via private `GIT_INDEX_FILE` + secret scan + size cap |
 | `procs.js` | pid + lstart identity, process table, tree kill |
 | `policy.js` | Offer decision, advertise set, approval answerer re-check |
+| `app-entry.js` | Desktop-app entry (D37a): config over `parentPort`, ready/status/fatal replies, SIGTERM → exit 0 |
+| `presence.js` | Team presence reporter (D37b): cwd → repo, default deny, hashing, redaction, throttle + keepalive |
 
 ## Tests
 
