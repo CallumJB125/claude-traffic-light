@@ -27,4 +27,6 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
   answerRequest: (id, decision) => ipcRenderer.invoke('answer-request', id, decision),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
+  awayOpen: (i) => ipcRenderer.invoke('away-open', i),
+  awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
 });

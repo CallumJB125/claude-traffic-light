@@ -199,8 +199,9 @@ const env = (over = {}) => ({ spend: { budget: { level: null }, budgetText: null
 
 test('rules: spend signals are virtual, remappable signals', () => {
   for (const id of ['runaway', 'budget-warning', 'budget-exceeded']) assert.equal(R.SIGNALS.find((s) => s.id === id)?.kind, 'virtual', id);
-  // F2's git signals are appended after the session signals; idle still closes those.
-  assert.equal(R.SIGNALS.filter((s) => s.kind !== 'git').at(-1).id, 'idle');
+  // Spend signals sit before idle (F2 git and F5 busy signals are appended after it).
+  const at = (id) => R.SIGNALS.findIndex((s) => s.id === id);
+  for (const id of ['runaway', 'budget-warning', 'budget-exceeded']) assert.ok(at(id) < at('idle'), id);
 });
 
 test('rules: default spend rules sit under offline and above Task finished', () => {

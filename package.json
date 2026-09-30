@@ -6,16 +6,17 @@
   "scripts": {
     "start": "electron .",
     "install-hooks": "node hooks/install.js",
-    "dist": "electron-builder --mac",
+    "dist": "npm run calendar-helper && electron-builder --mac",
     "test": "node --test test/*.test.js test/adapters/*.test.js",
     "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "cameos": "python3 scripts/build-cameos.py",
     "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac",
+    "dist:mac": "npm run calendar-helper && electron-builder --mac",
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",
-    "tune": "electron tools/tuning-main.js"
+    "tune": "electron tools/tuning-main.js",
+    "calendar-helper": "sh scripts/build-calendar-helper.sh"
   },
   "author": "",
   "license": "MIT",
@@ -71,7 +72,23 @@
     "mac": {
       "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools",
-      "target": "dmg"
+      "target": "dmg",
+      "extendInfo": {
+        "NSCalendarsFullAccessUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
+        "NSCalendarsUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on."
+      },
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [
+        {
+          "from": "native/bin",
+          "to": "calendar-helper",
+          "filter": [
+            "buddy-calendar"
+          ]
+        }
+      ],
+      "sign": "./build/sign.js"
     },
     "win": {
       "target": [

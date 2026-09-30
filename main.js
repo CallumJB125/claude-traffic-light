@@ -151,6 +151,13 @@ const DEFAULT_CONFIG = {
   gitRepos: [],
   gitDeployWorkflows: [],
   spend: { ...Spend.DEFAULTS },
+  // Busy sources (F5): hold non-urgent pings while you're in a meeting or a Focus.
+  busyHold: true,
+  busyCalendar: false, // off until ticked in Settings, which is what asks macOS for access
+  busyCalendarTitles: false,
+  busyIcsUrl: '',
+  busyFocus: true,
+  busyFocusShortcut: '',
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -555,7 +562,7 @@ function computeState(opts = {}) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, tasks, away: BusyWatch.recap() };
   }
   const override = readManualOverride();
   if (override) {
@@ -567,16 +574,17 @@ function computeState(opts = {}) {
   // the session files say (the hook blocks before Notification fires). It
   // replaces the look only; the chips, number and season still apply.
   const spend = spendSnapshot(config);
+  const env = { offline: !online, ...BusyWatch.env(), git: config.gitSignals !== false ? git.active() : [], spend };
   const { look, fired, owned } = pending.length
-    ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }])
-    : Rules.resolve(config.rules, sessions, Date.now(), { offline: !online, git: config.gitSignals !== false ? git.active() : [], spend });
+    ? Rules.resolve(config.rules, [{ signal: 'permission-ask', cwd: pending[0].cwd }], Date.now(), env)
+    : Rules.resolve(config.rules, sessions, Date.now(), env);
   const agentCount = Rules.liveAgents(sessions).length;
   if (config.seasonal) {
     if (look.costume === 'none') look.costume = Rules.seasonalCostume() || 'none';
     if (look.effect === 'none') look.effect = Rules.seasonalEffect() || 'none';
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend) };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, tasks, minions, spend, spendNote: spendNote(config.rules, fired, sessions, spend), away: BusyWatch.recap(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -604,6 +612,81 @@ function withNumber(look, sessions, tasks) {
 
 // ── Sounds ──────────────────────────────────────────────────────────────────
 const { playSound, speak } = require('./src/sound.js')({ getWin: () => win });
+
+// ── Busy / free (F5) ────────────────────────────────────────────────────────
+// Calendar, ICS and Focus decide whether you're busy; while you are, pings
+// (sounds, notifications, knocks) wait unless the rule behind them lets them
+// through, and the lamps carry on as normal. src/busy-watch.js has the rest.
+const BusyWatch = require('./src/busy-watch.js')({
+  rootDir: ROOT_DIR,
+  home: os.homedir(),
+  helperPath: app.isPackaged ? path.join(process.resourcesPath, 'calendar-helper', 'buddy-calendar') : path.join(__dirname, 'native', 'bin', 'buddy-calendar'),
+  loadConfig,
+  isDevRun: IS_DEV_RUN,
+  fakeFile: IS_DEV_RUN ? process.env.CLAUDE_BUDDY_FAKE_BUSY || null : null,
+  tickMs: IS_DEV_RUN && Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) ? Number(process.env.CLAUDE_BUDDY_BUSY_TICK_MS) : undefined,
+  exec: (file, args, timeout) => new Promise((resolve, reject) => execFile(file, args, { timeout }, (err, out) => (err ? reject(err) : resolve(out)))),
+  readFile: (f) => fs.readFileSync(f, 'utf8'),
+  writeFile: (f, text) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(f, text); },
+  removeFile: (f) => fs.rmSync(f, { force: true }),
+  exists: (f) => fs.existsSync(f),
+  fetch: (url) => net.fetch(url),
+  log: (...a) => console.log(...a),
+  onChange: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); },
+});
+
+// Whether a ping from this rule may sound now. Not busy: always.
+// Every ping that waits is noted by rule and signal for the recap; any
+// feature with a ping of its own (a budget warning, say) goes through here.
+function pingAllowed(ruleId, opts = {}) {
+  if (!BusyWatch.holding()) return true;
+  const rule = loadConfig().rules.find((r) => r.id === ruleId);
+  if (Rules.pingsWhileBusy(rule, opts)) return true;
+  BusyWatch.noteHeld(rule ? rule.name : null, opts.signal || firedSignal(rule));
+  return false;
+}
+// Which of a rule's signals is live right now (a virtual one, like
+// long-running, isn't in the session list: then its first signal).
+function firedSignal(rule) {
+  if (!rule) return null;
+  const live = new Set(aggregateState({ ignoreTravel: true }).sessions.map((s) => s.signal));
+  return rule.when.signal.find((x) => live.has(x)) || rule.when.signal[0] || null;
+}
+// A notification kind is a signal; the first enabled rule listening for it
+// decides, so "Needs your input" follows that rule's busy setting.
+function notificationAllowed(n) {
+  if (!BusyWatch.holding()) return true;
+  const rule = Rules.orderedRules(loadConfig().rules).find((r) => r.enabled && r.when.signal.includes(n.kind));
+  const ok = rule ? Rules.pingsWhileBusy(rule, { session: n.session }) : n.kind !== 'turn-failed';
+  if (!ok) BusyWatch.noteHeld(rule ? rule.name : n.title, n.kind);
+  return ok;
+}
+
+// The recap as the widget and the summary notification show it.
+function showAwayRecap(recap) {
+  console.log(`[busy] back — ${recap.headline}`);
+  const config = loadConfig();
+  if (IS_DEV_RUN || config.notifyOnStates === false || !Notification.isSupported()) return;
+  const note = new Notification({ title: 'While you were away', body: recap.headline, silent: true });
+  liveNotifications.add(note);
+  note.on('click', () => { liveNotifications.delete(note); openAwayItem(0); });
+  note.on('close', () => liveNotifications.delete(note));
+  note.show();
+}
+async function openAwayItem(i) {
+  const recap = BusyWatch.recap();
+  const item = recap && recap.items[Number(i) || 0];
+  if (!item) return { opened: 'none' };
+  if (item.cwd) clipboard.writeText(item.cwd);
+  const activated = await activateTerminalApp(item.folder, item.hostApp || undefined);
+  return { opened: activated?.app || 'none-found', folder: item.folder };
+}
+ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
+ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+ipcMain.handle('busy-status', () => BusyWatch.status());
+// Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
+ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
+ipcMain.handle('busy-open-privacy', () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
 function createWindow() {
   const saved = readBounds();
@@ -855,7 +938,7 @@ function createHelpWindow() {
 
 function helpState() {
   const real = aggregateState({ ignoreTravel: true });
-  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null });
+  return Help.explain(real, loadConfig().rules, { travel: travelLook ? travelLook.name : null, busy: BusyWatch.status() });
 }
 
 ipcMain.handle('open-help', createHelpWindow);
@@ -881,6 +964,7 @@ function maybeNotify(st) {
   const { keys, fire } = Help.notifications(notifyKeys, { sessions: st.sessions, pending: st.pending, offline: !online, spend: st.spend }, loadConfig());
   notifyKeys = keys;
   for (const n of fire) {
+    if (!notificationAllowed({ ...n, session: st.sessions.find((s) => n.key.endsWith(`:${s.sessionId}`)) || null })) { console.log(`[notify] held while busy: ${n.key}`); continue; }
     console.log(`[notify] ${n.key} — ${n.title}`);
     if (IS_DEV_RUN || !Notification.isSupported()) continue;
     // Silent: the widget's own sound channel already speaks for these states.
@@ -1459,9 +1543,11 @@ function broadcastStatus() {
   helpWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
+    const recap = BusyWatch.observe(st.sessions);
+    if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
-    applyStrip(!!(st.pending && st.pending.length) && !travelLook);
+    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -1617,6 +1703,15 @@ function maybeRoam(st) {
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
   const due = roamState.lastKnock === 0 || Date.now() - roamState.lastKnock > 10 * 60 * 1000;
   if (!due) return;
+  // A knock is a ping: while you're busy only the lamp owner's rule can send
+  // one. Noted once per waiting spell, not on every broadcast.
+  if (BusyWatch.holding()) {
+    const rule = loadConfig().rules.find((r) => r.id === (st.owned && st.owned.lamp));
+    if (!Rules.pingsWhileBusy(rule, { lamp: st.look.lamp })) {
+      if (roamState.heldFor !== roamState.waitingSince) { roamState.heldFor = roamState.waitingSince; BusyWatch.noteHeld(rule ? `${rule.name} (knock)` : 'Knock', firedSignal(rule)); }
+      return;
+    }
+  }
   // maybeRoam runs from every broadcast, and the checks above it are all
   // synchronous — but deciding whether to roam needs three osascript spawns.
   // Without this guard a waiting session fired a fresh trio of `osascript`
@@ -1923,9 +2018,11 @@ ipcMain.handle('save-config', (e, partial) => {
 });
 // saveConfig plus everything a changed setting has to reach outside config.json.
 function commitConfig(partial) {
-  const before = loadConfig().askFromWidget;
+  const prev = loadConfig();
+  const before = prev.askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
+  if (partial.busyCalendar === true && !prev.busyCalendar) BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message));
   if ('showWidget' in partial) applyWidgetVisibility();
   if ('menuBarMode' in partial || 'showWidget' in partial) createTray();
   broadcastStatus();
@@ -2290,16 +2387,20 @@ ipcMain.handle('answer-request', (e, id, decision) => {
   return ok;
 });
 
-// The widget grows a strip of Allow / Deny buttons while a request waits.
+// The widget grows a strip of Allow / Deny buttons while a request waits,
+// or the "While you were away" recap once a busy spell ends. The ask wins:
+// it is the one that blocks a session.
 const STRIP_PX = 46;
-let stripShown = false;
-function applyStrip(show) {
-  if (!win || show === stripShown) return;
-  stripShown = show;
+const AWAY_PX = 64;
+let stripPx = 0;
+function applyStrip(asking, away = false) {
+  const px = asking ? STRIP_PX : away ? AWAY_PX : 0;
+  if (!win || px === stripPx) return;
   const b = win.getBounds();
   win.setAspectRatio(0);
-  win.setBounds({ ...b, height: b.height + (show ? STRIP_PX : -STRIP_PX) });
-  if (!show) win.setAspectRatio(WIDGET_ASPECT);
+  win.setBounds({ ...b, height: b.height + px - stripPx });
+  stripPx = px;
+  if (!px) win.setAspectRatio(WIDGET_ASPECT);
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));
@@ -2452,7 +2553,8 @@ function maybePlayAlertSound() {
   const { look, reason, owned } = aggregateState();
   if (reason === 'preview') return;
   const { key, restored } = GitSignals.soundKey(look, owned, config.rules, config.gitSignals !== false ? git.active() : []);
-  if (config.soundOnAmber && key && key !== lastSoundKey && !restored) playSound(look.sound);
+  // F5: a git rule's sound is held while you're busy like any other rule's.
+  if (config.soundOnAmber && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
   lastSoundKey = key;
 }
 
@@ -2605,6 +2707,7 @@ app.whenReady().then(() => {
   every(10 * 60 * 1000, sweepSessionFiles, 'session-sweep');
   checkOnline();
   every(5000, checkOnline, 'net');
+  BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); }

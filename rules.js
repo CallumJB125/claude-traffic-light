@@ -202,6 +202,7 @@
     const out = [];
     if (sessions.length >= 3) out.push({ signal: 'many-sessions', virtual: true });
     if (env.offline) for (const s of sessions) out.push({ signal: 'offline', cwd: s.cwd, virtual: true });
+    out.push(...busySignals(env));
     let agentTotal = 0;
     const lastTouch = lastTouchOf(sessions);
     for (const s of sessions) {
@@ -295,6 +296,39 @@
 
   // macOS system sounds, by name; 'beep' is the system alert; 'file:<path>' plays a chosen file.
   const SOUNDS = ['beep', 'Glass', 'Pop', 'Funk', 'Hero', 'Submarine', 'Sosumi', 'Blow', 'Ping', 'Purr'];
+
+  // F5 busy/free ─────────────────────────────────────────────────────────────
+  // env.busy comes from the app's busy sources (calendar, ICS, Focus): true or
+  // false, or null when none is switched on, and then neither signal fires so
+  // a 'free' rule can't claim a lamp for someone who never set this up.
+  // env.backFromBusy is the short window after a busy spell, while the
+  // "While you were away" recap is up.
+  SIGNALS.push(
+    { id: 'busy', label: "You're busy (calendar or Focus)", hook: null, kind: 'virtual' },
+    { id: 'free', label: "You're free (no meeting, no Focus)", hook: null, kind: 'virtual' },
+    { id: 'back-from-busy', label: 'Just back from being busy', hook: null, kind: 'virtual' },
+  );
+  function busySignals(env = {}) {
+    const out = [];
+    if (env.busy === true) out.push({ signal: 'busy', virtual: true });
+    if (env.busy === false) out.push({ signal: 'free', virtual: true });
+    if (env.backFromBusy) out.push({ signal: 'back-from-busy', virtual: true });
+    return out;
+  }
+  // A rule's pings (its sound, the notification and the knock for its state)
+  // while you're busy. Unset: red comes through, amber and green wait for the
+  // recap. 'mine' is red only for cards you own; until the board says who
+  // owns what, a session counts as yours unless it carries mine: false.
+  const BUSY_PINGS = ['always', 'never', 'mine'];
+  function pingsWhileBusy(rule, { lamp = null, session = null } = {}) {
+    const mode = rule && rule.then ? rule.then.busyPing : null;
+    if (mode === 'always') return true;
+    if (mode === 'never') return false;
+    const red = ((rule && rule.then && rule.then.lamp) || lamp) === 'red';
+    if (mode === 'mine') return red && !(session && session.mine === false);
+    return red;
+  }
+  const F5_EXPORTS = { busySignals, BUSY_PINGS, pingsWhileBusy };
 
   // Seasonal costume for a date, or null. Applied by the app only when no
   // rule set a costume, and only if the seasonal toggle is on.
@@ -516,6 +550,7 @@
         agents: AGENT_STYLES.includes(r.then?.agents) ? r.then.agents : null,
         agentsColor: /^#[0-9a-f]{6}$/i.test(r.then?.agentsColor || '') ? r.then.agentsColor : null,
         clicks: normalizeClicks(r.then?.clicks),
+        ...(BUSY_PINGS.includes(r.then?.busyPing) ? { busyPing: r.then.busyPing } : {}),
       },
     };
   }
@@ -604,8 +639,10 @@
   function resolve(rules, sessions, now = Date.now(), env = {}) {
     const list = orderedRules(rules.map(normalizeRule));
     const real = sessions.filter((s) => sessionSignal(s));
+    // F1 spend adds nothing on an empty desk (spendSessions needs a live
+    // session), so only offline, F5 busy and F2 git ride on idle.
     const live = (real.length ? real.concat(virtualSessions(real, now, env))
-      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [])).concat(gitSessions(env));
+      : [{ signal: 'idle' }].concat(env.offline ? [{ signal: 'offline', virtual: true }] : [], busySignals(env))).concat(gitSessions(env));
     const fired = [];
     const look = { lamp: 'off', lampColor: null, lampFx: 'none', sign: 'h3', lampShape: 'square', signFx: 'none', numberOf: null, screenFx: 'none', eyes: 'default', pose: 'none', text: null, costume: 'none', cameo: 'none', body: 'claude', bodyColor: null, effect: 'none', pet: 'none', agents: 'robot', agentsColor: null, sound: null, celebrate: false, name: null, ruleId: null, waitMinutes: waitMinutes(real, now), minions: [], clicks: {} };
     const owned = {};
@@ -680,5 +717,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
 });

@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   mcpSetEnabled: (on) => ipcRenderer.invoke('mcp-set-enabled', on),
   gitStatus: () => ipcRenderer.invoke('git-status'),
   spend: () => ipcRenderer.invoke('get-spend'),
+  busyStatus: () => ipcRenderer.invoke('busy-status'),
+  busyOpenPrivacy: () => ipcRenderer.invoke('busy-open-privacy'),
+  busyReconnectCalendar: () => ipcRenderer.invoke('busy-reconnect-calendar'),
 });
