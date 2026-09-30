@@ -1,14 +1,24 @@
 // Migration runner for the hub DB (Node only: reads the .sql files).
 // Works with node:sqlite's DatabaseSync (exec/prepare). Migration 1 is
-// schema.sql; later ones are migrations/NNN_name.sql, applied in order, each
-// in its own transaction, recorded in schema_migrations. Never edit an
+// schema.sql; later ones are migrations/NNN_name.sql, applied in version order,
+// each in its own transaction, recorded in schema_migrations. Never edit an
 // applied migration: add a new file.
+//
+// Versions may have gaps (D50): parallel branches reserve numbers, so every
+// shipped version not yet in schema_migrations is applied, even one lower than
+// a version already applied (a reserved 007 that lands after 009).
+//
+// A file whose first line is `-- migrate: foreign_keys=off` (table rebuilds,
+// SQLite's 12-step procedure) runs with foreign keys off, which only works
+// outside a transaction; a foreign_key_check before COMMIT rolls it back if the
+// rebuild broke a reference.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const FK_OFF = /^--[ \t]*migrate:[ \t]*foreign_keys=off[ \t]*(\r?\n|$)/;
 
 export function loadMigrations(dir = join(HERE, 'migrations')) {
   const list = [{ version: 1, name: 'init', sql: readFileSync(join(HERE, 'schema.sql'), 'utf8') }];
@@ -22,7 +32,7 @@ export function loadMigrations(dir = join(HERE, 'migrations')) {
     }
   }
   for (let i = 1; i < list.length; i++) {
-    if (list[i].version !== list[i - 1].version + 1) throw new Error(`migration gap before ${list[i].version}`);
+    if (list[i].version === list[i - 1].version) throw new Error(`two migrations with version ${list[i].version}`);
   }
   return list;
 }
@@ -39,18 +49,27 @@ export function currentVersion(db) {
 export function migrate(db, { migrations = loadMigrations(), wal = false, now = () => new Date().toISOString() } = {}) {
   db.exec('PRAGMA foreign_keys = ON');
   if (wal) db.exec('PRAGMA journal_mode = WAL');
-  const have = currentVersion(db);
+  currentVersion(db);
+  const have = new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
   const applied = [];
   for (const m of migrations) {
-    if (m.version <= have) continue;
+    if (have.has(m.version)) continue;
+    const fkOff = FK_OFF.test(m.sql);
+    if (fkOff) db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     try {
       db.exec(m.sql);
+      if (fkOff) {
+        const bad = db.prepare('PRAGMA foreign_key_check').all();
+        if (bad.length) throw new Error(`foreign key check failed: ${bad.slice(0, 3).map((r) => `${r.table}→${r.parent}`).join(', ')}`);
+      }
       db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(m.version, m.name, now());
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
       throw new Error(`migration ${String(m.version).padStart(3, '0')}_${m.name} failed: ${e.message}`);
+    } finally {
+      if (fkOff) db.exec('PRAGMA foreign_keys = ON');
     }
     applied.push(m.version);
   }

@@ -13,7 +13,7 @@ function fresh() {
   const db = new DatabaseSync(':memory:');
   migrate(db, { now: () => NOW });
   db.exec(`
-    INSERT INTO orgs VALUES ('o1','Org','${NOW}');
+    INSERT INTO orgs (id, name, created_at) VALUES ('o1','Org','${NOW}');
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at)
       VALUES ('m1','o1',1,'callum','c@x.io','Callum','owner','${NOW}'), ('m2','o1',2,'james','j@x.io','James','member','${NOW}');
     INSERT INTO devices (id, member_id, name, kind, token_hash, created_at) VALUES ('d1','m1','MacBook','runner','h1','${NOW}');
@@ -55,8 +55,58 @@ test('migrate: later files apply in order in their own transaction; a failing on
     assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /003_bad failed/);
     assert.equal(currentVersion(db), 2);
     assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='y'").get().n, 0);
-    writeFileSync(join(dir, '005_gap.sql'), 'SELECT 1;');
-    assert.throws(() => loadMigrations(dir), /gap/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: gaps are allowed and a reserved lower version landing later is still applied (D50)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_a.sql'), 'CREATE TABLE a (x INTEGER);');
+    writeFileSync(join(dir, '005_c.sql'), 'CREATE TABLE c (x INTEGER);');
+    const db = new DatabaseSync(':memory:');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [1, 2, 5]);
+    writeFileSync(join(dir, '003_b.sql'), 'CREATE TABLE b (x INTEGER);');
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [3]);
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), []);
+    writeFileSync(join(dir, '003_dup.sql'), 'SELECT 1;');
+    assert.throws(() => loadMigrations(dir), /two migrations with version 3/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrate: `-- migrate: foreign_keys=off` rebuilds a referenced table with ids intact; a broken reference rolls back', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mig-'));
+  try {
+    writeFileSync(join(dir, '002_base.sql'), `
+      CREATE TABLE people (id TEXT PRIMARY KEY, login TEXT NOT NULL);
+      CREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL REFERENCES people);
+      INSERT INTO people VALUES ('p1','a'), ('p2','b');
+      INSERT INTO posts VALUES ('x1','p1'), ('x2','p2');`);
+    const db = new DatabaseSync(':memory:');
+    migrate(db, { migrations: loadMigrations(dir) });
+    // Without the directive, DROP TABLE people fails (posts refer to it).
+    writeFileSync(join(dir, '003_rebuild.sql'), `-- migrate: foreign_keys=off
+      CREATE TABLE people_new (id TEXT PRIMARY KEY, login TEXT);
+      INSERT INTO people_new SELECT id, login FROM people;
+      DROP TABLE people;
+      ALTER TABLE people_new RENAME TO people;`);
+    assert.deepEqual(migrate(db, { migrations: loadMigrations(dir) }), [3]);
+    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1, 'foreign keys back on');
+    assert.deepEqual(db.prepare('SELECT p.id FROM posts x JOIN people p ON p.id = x.author ORDER BY p.id').all().map((r) => r.id), ['p1', 'p2']);
+    assert.equal(db.prepare("SELECT * FROM pragma_table_info('people') WHERE name = 'login'").get().notnull, 0, 'NOT NULL dropped');
+    writeFileSync(join(dir, '004_breaks.sql'), `-- migrate: foreign_keys=off
+      DELETE FROM people WHERE id = 'p2';`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /004_breaks failed: foreign key check failed: posts→people/);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM people').get().n, 2, 'rolled back');
+    assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+    // The directive counts only on the first line.
+    writeFileSync(join(dir, '004_breaks.sql'), `SELECT 1;
+      -- migrate: foreign_keys=off
+      DELETE FROM people WHERE id = 'p2';`);
+    assert.throws(() => migrate(db, { migrations: loadMigrations(dir) }), /FOREIGN KEY/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
