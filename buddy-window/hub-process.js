@@ -14,7 +14,6 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
-const path = require('node:path');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -95,7 +94,9 @@ function createHubSupervisor(opts) {
       fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
       fs.chmodSync(dataDir, 0o700);
       const env = hubEnv({ mode, dataDir, port, devSecret });
-      const c = fork(hubEntry, [], { env, cwd: path.dirname(path.dirname(hubEntry)), serviceName: 'Buddy Board Hub', stdio: 'pipe' });
+      // No cwd: in a packaged app the hub lives inside app.asar, which is not a
+      // real directory, and a cwd there makes the fork fail without a word.
+      const c = fork(hubEntry, [], { env, serviceName: 'Buddy Board Hub', stdio: 'pipe' });
       child = c;
       c.stderr?.on?.('data', (d) => log('stderr', String(d).trimEnd()));
       c.stdout?.on?.('data', (d) => log('stdout', String(d).trimEnd()));
@@ -106,6 +107,7 @@ function createHubSupervisor(opts) {
           else if (m?.type === 'board.fatal') reject(new Error(String(m.message ?? 'board hub failed to start')));
         });
         c.once('exit', (code) => reject(new Error(`board hub exited during start (code ${code})`)));
+        c.on('error', (type, location) => reject(new Error(`board hub process error: ${type}${location ? ` at ${location}` : ''}`)));
       });
       reported.catch(() => {});
 
