@@ -396,9 +396,13 @@ const SCREENS = {
     }
     for (const h of s.hubs) {
       const sec = el('section', { class: 'acct-section' }, el('h2', {}, h.host));
+      const sums = toggle(h.summaries && h.share, `Include one-line summaries for every team on ${h.host}`, (on) => api.summaries(h.host, on), { disabled: !h.share });
       sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Share my live sessions with my teams'), el('span', { class: 'acct-mail' }, `Everyone in every team on ${h.host} sees which project folders your Claude sessions are in (the folder name, not the path) and whether they’re working. Off unless you turn it on.`)),
-        toggle(h.share, `Share my live sessions with every team on ${h.host}`, (on) => api.presence(h.host, on))));
+        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Share my live sessions'), el('span', { class: 'acct-mail' }, `Applies to every team on ${h.host}: everyone in them sees which project folders your Claude sessions are in (the folder name, not the path) and whether they’re working. Off unless you turn it on.`)),
+        toggle(h.share, `Share my live sessions with every team on ${h.host}`, async (on) => { const r = await api.presence(h.host, on); if (r?.ok) render(); return r; })));
+      sec.append(el('div', { class: 'acct-item acct-item-toggle acct-item-sub' },
+        el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, 'Include one-line summaries'), el('span', { class: 'acct-mail' }, h.share ? `Adds a short line about what each session is doing, for every team on ${h.host}. Paths are removed before it leaves this Mac. Off unless you turn it on.` : 'Turn on sharing first.')),
+        sums));
       for (const t of h.teams) {
         const viewer = t.role === 'viewer';
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },
@@ -417,7 +421,10 @@ const RUNNER = {
 };
 function runnerText(t) {
   const base = !t.enabled && t.state === 'off' ? 'Off' : (['missing', 'failed'].includes(t.state) ? (t.detail ?? 'Stopped') : (RUNNER[t.state] ?? t.state));
-  return t.parked > 0 ? `${base} · Parked ${t.parked} run${t.parked === 1 ? '' : 's'}` : base;
+  const parts = [base];
+  if (t.parked > 0) parts.push(`Parked ${t.parked} run${t.parked === 1 ? '' : 's'}`);
+  if (t.parkedPending > 0) parts.push(`${t.parkedPending} run${t.parkedPending === 1 ? ' is' : 's are'} being handed over`);
+  return parts.join(' · ');
 }
 
 function expires(iso) {

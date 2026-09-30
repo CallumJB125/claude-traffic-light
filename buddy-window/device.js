@@ -41,11 +41,19 @@ function runnerTokenFrom(r) {
   return typeof t === 'string' && /^brt_[A-Za-z0-9_-]{10,200}$/.test(t) ? t : null;
 }
 
-/** The widget's live sessions, cut down to what teammates may see. */
-function presenceSessions(sessions = []) {
+// A session's one line for teammates: its own summary if it has one, else
+// the tool it is using. The runner redacts it again before it leaves.
+function summaryOf(s) {
+  const t = typeof s.summary === 'string' && s.summary.trim() ? s.summary : (typeof s.tool === 'string' && s.tool ? `Using ${s.tool}` : '');
+  const line = t.replace(/\s+/g, ' ').trim().slice(0, 120);
+  return line || null;
+}
+
+/** The widget's live sessions, cut down to what teammates may see; summaries only when asked for. */
+function presenceSessions(sessions = [], { summaries = false } = {}) {
   return sessions.filter((s) => s && typeof s.sessionId === 'string').slice(0, 50).map((s) => {
     const t = Date.parse(s.signalSince ?? s.updatedAt ?? '');
-    return {
+    const out = {
       session_id: s.sessionId.slice(0, 100),
       agent: typeof s.via === 'string' && s.via ? s.via.slice(0, 40) : 'claude',
       // The folder name only: a full path says who you are and how your disk is laid out.
@@ -53,7 +61,38 @@ function presenceSessions(sessions = []) {
       state: typeof s.signal === 'string' ? s.signal.slice(0, 40) : 'unknown',
       since: new Date(Number.isFinite(t) ? t : Date.now()).toISOString(),
     };
+    const sum = summaries ? summaryOf(s) : null;
+    return sum ? { ...out, summary: sum } : out;
   });
+}
+
+/** The token rides this URL: https or wss, or cleartext only to this machine (the runner refuses anything else too). */
+function hubUrlOk(url) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol === 'https:' || u.protocol === 'wss:') return true;
+  return (u.protocol === 'http:' || u.protocol === 'ws:') && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+}
+
+/**
+ * The runner's data_dir: created 0700, then checked, not trusted: a real
+ * directory (not a symlink), ours, and 0700. → null, or why it isn't safe.
+ */
+function ensurePrivateDir(dir, { uid = process.getuid?.() } = {}) {
+  try {
+    // Look before making: mkdir would follow a symlink or trip over a file.
+    let st = null;
+    try { st = fs.lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!st) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); st = fs.lstatSync(dir); }
+    if (st.isSymbolicLink() || !st.isDirectory()) return 'not a directory';
+    if (uid != null && st.uid !== uid) return 'owned by someone else';
+    if ((st.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
+    st = fs.lstatSync(dir);
+    if (st.isSymbolicLink() || (st.mode & 0o777) !== 0o700) return 'not private';
+    return null;
+  } catch (e) {
+    return e.code ?? 'unusable';
+  }
 }
 
 function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
@@ -67,7 +106,8 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
   let runner = { state: 'off', detail: null };
   let wanted = !!creds?.enabled;
   let parked = 0;
-  let presence = { enabled: false, sessions: [] };
+  let parkedPending = 0; // runs waiting on the hub to take them over
+  let presence = { enabled: false, share_summaries: false, sessions: [] };
   const restarts = [];
 
   const view = () => ({
@@ -77,6 +117,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     enabled: wanted,
     runner,
     parked,
+    parkedPending,
   });
   const emit = () => { try { onStatus(view()); } catch { /* UI gone */ } };
 
@@ -97,8 +138,9 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     try { token = creds.runner_token ?? (await account.accessToken()); } catch { token = null; } finally { starting = false; }
     if (child || !creds || !wanted) return;
     if (!token) { setRunner('unauthenticated'); return; }
-    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    fs.chmodSync(dataDir, 0o700);
+    if (!hubUrlOk(account.origin)) { setRunner('failed', 'This team hub isn’t on https, so the runner won’t send it your sign-in.'); return; }
+    const unsafe = ensurePrivateDir(dataDir);
+    if (unsafe) { log('runner data folder refused', unsafe); setRunner('failed', 'The runner’s folder on this Mac isn’t private to you, so it won’t start.'); return; }
     // No args and no cwd: the entry refuses to run without a parentPort, and a
     // cwd inside app.asar makes the fork fail silently.
     const c = fork(runnerEntry, [], { serviceName: RUNNER_SERVICE, stdio: 'pipe', env: { HOME: process.env.HOME, PATH: process.env.PATH, USER: process.env.USER, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR } }); // privacy-flow: team-hub-runner
@@ -111,13 +153,19 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     c.on('message', (m) => {
       if (c !== child || !m || typeof m.type !== 'string') return;
       if (m.type === 'runner.ready') { c.ready = true; setRunner('connecting'); if (presence.enabled) send(c, presence); } else if (m.type === 'runner.status') setRunner(RUNNER_STATES.includes(m.state) ? m.state : 'unknown', typeof m.detail === 'string' ? m.detail.slice(0, 200) : null);
-      else if (m.type === 'runner.stopped') { parked = Number.isInteger(m.parked) && m.parked > 0 ? m.parked : 0; emit(); } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', String(m.message ?? 'The runner stopped.').slice(0, 200)); }
+      else if (m.type === 'runner.stopped') {
+        const n = (v) => (Number.isInteger(v) && v > 0 ? Math.min(v, 1000) : 0);
+        parked = n(m.parked);
+        parkedPending = n(m.parked_pending);
+        emit();
+      } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', String(m.message ?? 'The runner stopped.').slice(0, 200)); }
     });
     c.once('exit', (code) => onExit(c, code));
-    c.postMessage({ type: 'runner.config', hub_url: account.origin, device_token: token, team_id: teamId, data_dir: dataDir }); // privacy-flow: team-hub-runner
+    const deviceId = account.deviceId?.() ?? null;
+    c.postMessage({ type: 'runner.config', hub_url: account.origin, ...(deviceId ? { device_id: deviceId } : {}), device_token: token, team_id: teamId, data_dir: dataDir }); // privacy-flow: team-hub-runner
   }
 
-  function send(c, p) { try { c.postMessage({ type: 'runner.presence', enabled: p.enabled, sessions: p.enabled ? p.sessions : [] }); } catch { /* exiting */ } } // privacy-flow: team-hub-runner
+  function send(c, p) { try { c.postMessage({ type: 'runner.presence', enabled: p.enabled, share_summaries: p.enabled && p.share_summaries, sessions: p.enabled ? p.sessions : [] }); } catch { /* exiting */ } } // privacy-flow: team-hub-runner
 
   function onExit(c, code) {
     if (c !== child) return;
@@ -205,9 +253,10 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
       setRunner('off');
     },
     running: () => wanted && RUNNING.has(runner.state),
-    /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. */
-    setPresence(enabled, sessions = []) {
-      const next = { enabled: !!enabled, sessions: enabled ? presenceSessions(sessions) : [] };
+    /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. Summaries need both switches. */
+    setPresence(enabled, sessions = [], { shareSummaries = false } = {}) {
+      const summaries = !!enabled && shareSummaries === true;
+      const next = { enabled: !!enabled, share_summaries: summaries, sessions: enabled ? presenceSessions(sessions, { summaries }) : [] };
       if (JSON.stringify(next) === JSON.stringify(presence)) return;
       presence = next;
       if (child?.ready) send(child, presence);
@@ -218,4 +267,4 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
   };
 }
 
-module.exports = { createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, NO_RUNNER };
+module.exports = { createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, ensurePrivateDir, hubUrlOk, NO_RUNNER };

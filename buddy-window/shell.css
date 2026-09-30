@@ -154,6 +154,7 @@ ul { padding: 0; list-style: none; }
 .acct-btns { display: flex; gap: 2px; }
 .acct-spacer { width: 1px; }
 .acct-row-form { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
+.acct-item-sub { margin-left: 24px; }
 .acct-providers { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .btn-provider { justify-content: center; min-height: 40px; font-weight: 600; margin-top: 0; }
 .acct-emailcode { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }

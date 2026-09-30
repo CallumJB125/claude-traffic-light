@@ -22,7 +22,7 @@ const ACCT_ARGS = {
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], deleteTeam: ['string', 'string'], addBoard: ['string', 'string'],
   joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
-  deleteConfirm: ['string'], cancelDelete: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'],
+  deleteConfirm: ['string'], cancelDelete: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
 };
 
 const TEAM_CHANGED = { ok: false, error: 'The team changed while this page was open. Look again, then try once more.' };
@@ -120,7 +120,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
         ui.devicesChanged();
       },
     });
-    d.setPresence(store.sharesPresence(ws.hub), lastSessions);
+    d.setPresence(store.sharesPresence(ws.hub), lastSessions, { shareSummaries: store.sharesSummaries(ws.hub) });
     devices.set(ws.id, { hub: ws.hub, name: ws.name, d });
     return d;
   }
@@ -307,9 +307,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const hubs = store.hubs().filter(signedIn).map((h) => ({
         host: hostOf(h),
         share: store.sharesPresence(h),
+        summaries: store.wantsSummaries(h),
         teams: store.list().filter((w) => w.kind === 'team' && w.hub === h).map((w) => {
           const st = devices.has(w.id) || hasDeviceFile(w) ? deviceFor(w).status() : { enrolled: false, enabled: false, runner: { state: 'off' }, parked: 0 };
-          return { id: w.id, name: w.name, role: w.role, enabled: st.enabled, enrolled: st.enrolled, state: st.runner.state, detail: st.runner.detail, parked: st.parked };
+          return { id: w.id, name: w.name, role: w.role, enabled: st.enabled, enrolled: st.enrolled, state: st.runner.state, detail: st.runner.detail, parked: st.parked, parkedPending: st.parkedPending ?? 0 };
         }),
       }));
       return { ...base, hubs };
@@ -569,7 +570,13 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     async presence(host, on) {
       const origin = hubByHost(host);
       if (!origin || !store.setSharesPresence(origin, on)) return { ok: false };
-      for (const e of devices.values()) if (e.hub === origin) e.d.setPresence(on, lastSessions);
+      for (const e of devices.values()) if (e.hub === origin) e.d.setPresence(on, lastSessions, { shareSummaries: store.sharesSummaries(origin) });
+      return { ok: true };
+    },
+    async summaries(host, on) {
+      const origin = hubByHost(host);
+      if (!origin || !store.setSharesSummaries(origin, on)) return { ok: false };
+      for (const e of devices.values()) if (e.hub === origin) e.d.setPresence(store.sharesPresence(origin), lastSessions, { shareSummaries: store.sharesSummaries(origin) });
       return { ok: true };
     },
   };
@@ -600,7 +607,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged(sessions) {
       lastSessions = Array.isArray(sessions) ? sessions : [];
-      for (const e of devices.values()) e.d.setPresence(store.sharesPresence(e.hub), lastSessions);
+      for (const e of devices.values()) e.d.setPresence(store.sharesPresence(e.hub), lastSessions, { shareSummaries: store.sharesSummaries(e.hub) });
     },
     /** Names of the teams this Mac is running cards for right now. */
     runningTeams: () => [...devices.entries()].filter(([, e]) => e.d.running()).map(([id, e]) => store.get(id)?.name ?? e.name),

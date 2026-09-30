@@ -105,7 +105,7 @@ function buildWorkspaceList({ hubs = [], teams = {}, access = [], signedIn = () 
 function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true } = {}) {
   const norm = (u) => normalizeHubUrl(u, { allowOrigins });
   const isOrigin = (u) => { try { return norm(u) === u; } catch { return false; } };
-  let data = { active: 'local', hubs: [], teams: {}, access: [], lastHub: null, presence: {} };
+  let data = { active: 'local', hubs: [], teams: {}, access: [], lastHub: null, presence: {}, summaries: {} };
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (raw.version === 2) {
@@ -116,7 +116,9 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
         .map((t) => ({ url: t.url, name: t.name.slice(0, 60), accessTeam: t.accessTeam && /^[a-z0-9-]+$/.test(t.accessTeam) ? t.accessTeam : null }));
       const presence = {};
       for (const h of hubs) if (raw.presence?.[h] === true) presence[h] = true;
-      data = { hubs, teams, access, presence, active: raw.active, lastHub: hubs.includes(raw.lastHub) ? raw.lastHub : (hubs.at(-1) ?? null) };
+      const summaries = {};
+      for (const h of hubs) if (raw.summaries?.[h] === true) summaries[h] = true;
+      data = { hubs, teams, access, presence, summaries, active: raw.active, lastHub: hubs.includes(raw.lastHub) ? raw.lastHub : (hubs.at(-1) ?? null) };
     } else if (Array.isArray(raw.teams)) {
       // v1: [{name, url, accessTeam}], one entry per hub, from before accounts
       // existed: every entry passed the old probe as an Access hub, including
@@ -125,7 +127,7 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
       const v1 = raw.teams.filter((t) => isOrigin(t?.url) && typeof t.name === 'string');
       const access = v1.map((t) => ({ url: t.url, name: t.name.slice(0, 60), accessTeam: t.accessTeam && /^[a-z0-9-]+$/.test(t.accessTeam) ? t.accessTeam : null }));
       const was = v1.find((t) => `team:${hostOf(t.url)}` === raw.active);
-      data = { hubs: [], teams: {}, access, presence: {}, active: was ? accessWsId(was.url) : 'local', lastHub: null };
+      data = { hubs: [], teams: {}, access, presence: {}, summaries: {}, active: was ? accessWsId(was.url) : 'local', lastHub: null };
     }
   } catch { /* first run or unreadable: local only */ }
 
@@ -135,7 +137,7 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
   function save() {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 2, active: data.active, lastHub: data.lastHub, hubs: data.hubs, teams: data.teams, access: data.access, presence: data.presence }, null, 2), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 2, active: data.active, lastHub: data.lastHub, hubs: data.hubs, teams: data.teams, access: data.access, presence: data.presence, summaries: data.summaries }, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, file);
   }
 
@@ -202,6 +204,15 @@ function createWorkspaceStore(file, { allowOrigins = [], signedIn = () => true }
     setSharesPresence(origin, on) {
       if (!data.hubs.includes(origin)) return false;
       if (on) data.presence[origin] = true; else delete data.presence[origin];
+      save();
+      return true;
+    },
+    /** "Include one-line summaries", per hub; off unless turned on, and only counts while sharing is on. */
+    sharesSummaries: (origin) => data.presence[origin] === true && data.summaries[origin] === true,
+    wantsSummaries: (origin) => data.summaries[origin] === true,
+    setSharesSummaries(origin, on) {
+      if (!data.hubs.includes(origin)) return false;
+      if (on) data.summaries[origin] = true; else delete data.summaries[origin];
       save();
       return true;
     },

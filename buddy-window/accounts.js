@@ -215,6 +215,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     user: () => saved()?.user ?? null,
     /** For main's own requests and the runner's config; never for a page. */
     accessToken: async () => saved()?.token ?? null,
+    /** The runner names this install to the hub with it (runner.config device_id). */
+    deviceId: () => saved()?.device_id ?? null,
 
     async startEmail(email, dev = {}) {
       const e = String(email ?? '').trim().toLowerCase();

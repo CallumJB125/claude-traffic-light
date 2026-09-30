@@ -536,7 +536,8 @@ test('device enrol via the account against the mock hub', async () => withHub(as
   assert.equal((await d.enroll({ name: 'Mac' })).ok, true);
   assert.equal(hub.enrolments().length, 1);
   assert.equal(hub.enrolments()[0].team_id, team.id);
-  assert.deepEqual(Object.keys(sent[0]).sort(), ['data_dir', 'device_token', 'hub_url', 'team_id', 'type']);
+  assert.deepEqual(Object.keys(sent[0]).sort(), ['data_dir', 'device_id', 'device_token', 'hub_url', 'team_id', 'type']);
+  assert.match(sent[0].device_id, /^udev_/, 'the runner names this install (app-entry requires device_id)');
   assert.equal(sent[0].device_token, await c.accessToken(), 'the account’s own bdt_ token');
   assert.equal(sent[0].team_id, team.id);
   await d.remove();
@@ -681,13 +682,94 @@ test('presence: off by default; on sends the minimal session fields once ready; 
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 1, 'nothing before ready');
   c.emit('message', { type: 'runner.ready' });
-  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, sessions: [{ session_id: 's1', agent: 'claude', project: 'proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
+  assert.deepEqual(c.sent[1], { type: 'runner.presence', enabled: true, share_summaries: false, sessions: [{ session_id: 's1', agent: 'claude', project: 'proj', state: 'tool-use', since: '2026-09-30T10:00:00.000Z' }] });
   assert.ok(!JSON.stringify(c.sent).includes('/Users/'), 'never an absolute path');
   d.setPresence(true, sessions);
   assert.equal(c.sent.length, 2, 'unchanged: not resent');
   d.setPresence(false, sessions);
-  assert.deepEqual(c.sent[2], { type: 'runner.presence', enabled: false, sessions: [] });
+  assert.deepEqual(c.sent[2], { type: 'runner.presence', enabled: false, share_summaries: false, sessions: [] });
   assert.deepEqual(presenceSessions([{ nope: 1 }, null]), []);
+});
+
+test('presence summaries: sent only when sharing and summaries are both on; one line, never a path from the app', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  const c = h.children[0];
+  c.emit('message', { type: 'runner.ready' });
+  const sessions = [{ sessionId: 's1', cwd: '/Users/me/p/proj', signal: 'tool-use', tool: 'Bash', signalSince: '2026-09-30T10:00:00.000Z' }, { sessionId: 's2', cwd: '/x/y', signal: 'working', summary: '  fixing\nthe   login  bug '.padEnd(300, '!') }];
+  d.setPresence(false, sessions, { shareSummaries: true });
+  d.setPresence(true, sessions, { shareSummaries: false });
+  let last = c.sent.at(-1);
+  assert.equal(last.share_summaries, false);
+  assert.ok(last.sessions.every((x) => x.summary === undefined), 'no summaries unless asked');
+  d.setPresence(true, sessions, { shareSummaries: true });
+  last = c.sent.at(-1);
+  assert.equal(last.share_summaries, true);
+  assert.equal(last.sessions[0].summary, 'Using Bash');
+  assert.ok(last.sessions[1].summary.startsWith('fixing the login bug'));
+  assert.ok(last.sessions[1].summary.length <= 120 && !last.sessions[1].summary.includes('\n'));
+  d.setPresence(false, sessions, { shareSummaries: true });
+  assert.deepEqual(c.sent.at(-1), { type: 'runner.presence', enabled: false, share_summaries: false, sessions: [] });
+});
+
+test('runner.stopped: parked_pending is read and shown as runs being handed over', async () => {
+  const h = deviceHarness();
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  const c = h.children[0];
+  c.emit('message', { type: 'runner.stopped', parked: 1, parked_pending: 3, orphaned: 0 });
+  assert.deepEqual([d.status().parked, d.status().parkedPending], [1, 3]);
+  c.emit('message', { type: 'runner.stopped', parked: 0, parked_pending: -2 });
+  assert.equal(d.status().parkedPending, 0);
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.match(page, /being handed over/);
+});
+
+test('runner.config: data_dir is made 0700, ours and not a symlink, else the runner does not start', async () => {
+  const { ensurePrivateDir, hubUrlOk } = require('../buddy-window/device');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-priv-'));
+  const fresh = path.join(dir, 'a', 'b');
+  assert.equal(ensurePrivateDir(fresh), null);
+  assert.equal(fs.statSync(fresh).mode & 0o777, 0o700);
+  const loose = path.join(dir, 'loose');
+  fs.mkdirSync(loose, { mode: 0o755 });
+  fs.chmodSync(loose, 0o755);
+  assert.equal(ensurePrivateDir(loose), null, 'tightened');
+  assert.equal(fs.statSync(loose).mode & 0o777, 0o700);
+  const link = path.join(dir, 'link');
+  fs.symlinkSync(loose, link);
+  assert.equal(ensurePrivateDir(link), 'not a directory');
+  assert.equal(ensurePrivateDir(fresh, { uid: 12345 }), 'owned by someone else');
+  const file = path.join(dir, 'file');
+  fs.writeFileSync(file, 'x');
+  assert.equal(ensurePrivateDir(file), 'not a directory');
+  // Through the controller: a symlinked data_dir means no fork at all.
+  const hh = deviceHarness();
+  fs.symlinkSync(loose, path.join(hh.dir, 'runner'));
+  const d = hh.make();
+  await d.enroll({ name: 'Mac' });
+  assert.equal(hh.children.length, 0);
+  assert.equal(d.status().runner.state, 'failed');
+  for (const u of ['https://app.plexiform.dev', 'wss://app.plexiform.dev', 'http://127.0.0.1:4100', 'http://localhost:3000', 'ws://[::1]:1']) assert.equal(hubUrlOk(u), true, u);
+  for (const u of ['http://app.plexiform.dev', 'ws://10.0.0.2', 'ftp://x', 'nope']) assert.equal(hubUrlOk(u), false, u);
+});
+
+test('runner.config: a cleartext hub that is not this machine never gets the token', async () => {
+  const h = deviceHarness({ account: { origin: 'http://buddy.example.com', enrol: async (t) => ({ ok: true, enrollment_id: 'e', team_id: t }), unenrol: async () => ({ ok: true }), accessToken: async () => 'bdt_x' } });
+  const d = h.make();
+  await d.enroll({ name: 'Mac' });
+  assert.equal(h.children.length, 0);
+  assert.match(d.status().runner.detail, /https/);
+});
+
+test('embedded hub env drops the hub-side secrets even when the parent env has them', () => {
+  const secret = { BOARD_GITHUB_TOKEN: 'ghp_x', BOARD_PUBLIC_URL: 'https://x', BOARD_TUNNEL_PROBE_URL: 'https://p', BOARD_ACCESS_TEAM: 't', BOARD_ACCESS_AUD: 'aud', BOARD_ENC_KEY: 'k'.repeat(44), BOARD_LOCAL_SECRET: 's'.repeat(40) };
+  for (const mode of ['local', 'dev']) {
+    const env = hubEnv({ mode, dataDir: '/d', port: 1, devSecret: 'dev', baseEnv: { HOME: '/h', PATH: '/bin', ...secret } });
+    for (const k of Object.keys(secret)) assert.equal(env[k], undefined, `${mode}: ${k}`);
+    assert.equal(env.HOME, '/h');
+  }
 });
 
 test('creds for another hub or team are ignored', async () => {

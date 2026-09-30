@@ -817,3 +817,27 @@ test('sign-in methods: GET /api/auth/methods decides the buttons; each combinati
   const { ROUTES } = require('../buddy-window/accounts');
   assert.deepEqual([ROUTES.authMethods, ROUTES.oauthStart, ROUTES.oauthExchange], [['GET', '/api/auth/methods'], ['POST', '/api/auth/oauth/start'], ['POST', '/api/auth/oauth/exchange']]);
 }));
+
+test('This Mac: “Include one-line summaries” is its own per-hub switch, off by default, effective only while sharing is on', async () => harness(async (h) => {
+  await h.signInAs('me@example.com');
+  const { child } = await runnerOn(h);
+  h.flow.sessionsChanged([{ sessionId: 's1', cwd: '/Users/me/p/proj', signal: 'tool-use', tool: 'Edit', signalSince: '2026-09-30T10:00:00.000Z' }]);
+  await h.A.go('thismac');
+  let hub = (await h.A.state()).hubs[0];
+  assert.deepEqual([hub.share, hub.summaries], [false, false]);
+  assert.equal((await h.A.summaries(h.host, true)).ok, true);
+  assert.equal(child.sent.filter((m) => m.type === 'runner.presence').length, 0, 'summaries alone share nothing');
+  await h.A.presence(h.host, true);
+  const p = child.sent.filter((m) => m.type === 'runner.presence').at(-1);
+  assert.deepEqual([p.enabled, p.share_summaries, p.sessions[0].summary, p.sessions[0].project], [true, true, 'Using Edit', 'proj']);
+  await h.A.summaries(h.host, false);
+  const q = child.sent.filter((m) => m.type === 'runner.presence').at(-1);
+  assert.deepEqual([q.enabled, q.share_summaries, q.sessions[0].summary], [true, false, undefined]);
+  hub = (await h.A.state()).hubs[0];
+  assert.deepEqual([hub.share, hub.summaries], [true, false]);
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.match(page, /'Share my live sessions'/);
+  assert.match(page, /'Include one-line summaries'/);
+  assert.match(page, /disabled: !h\.share/);
+  assert.match(page, /Applies to every team on/);
+}));

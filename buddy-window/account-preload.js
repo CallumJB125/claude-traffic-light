@@ -40,5 +40,6 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   cancelDelete: () => call('cancelDelete'),
   runner: (id, on) => call('runner', str(id), !!on),
   presence: (host, on) => call('presence', str(host), !!on),
+  summaries: (host, on) => call('summaries', str(host), !!on),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
 });
