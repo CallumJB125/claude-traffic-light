@@ -344,6 +344,33 @@
     <g class="eyefx eyefx-laser">
       <rect class="beam" x="26.5" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" /><rect class="beam" x="42" y="45" width="60" height="1.6" fill="#ff3b30" opacity="0.9" />
     </g>
+    <!-- loading: spinner rings where the eyes are -->
+    <g class="eyefx eyefx-loading" fill="none" stroke="#211f1c" stroke-width="1.2" stroke-linecap="round">
+      <path class="spin-eye" d="M24.25 43.4 a2.35 2.35 0 1 1 -2.05 1.2" /><path class="spin-eye" d="M39.75 43.4 a2.35 2.35 0 1 1 -2.05 1.2" />
+    </g>
+    <!-- scan: dark robotic eyes with a sweeping bar -->
+    <g class="eyefx eyefx-scan">
+      <rect x="21" y="43.5" width="6.5" height="4.5" rx="0.6" fill="#0a1a2a" /><rect x="36.5" y="43.5" width="6.5" height="4.5" rx="0.6" fill="#0a1a2a" />
+      <rect class="scanbar" x="21" y="43.5" width="6.5" height="1.1" fill="#38bdf8" /><rect class="scanbar" x="36.5" y="43.5" width="6.5" height="1.1" fill="#38bdf8" />
+    </g>
+    <!-- wide: big alarmed eyes -->
+    <g class="eyefx eyefx-wide">
+      <circle cx="24.25" cy="45.75" r="3.7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" /><circle cx="39.75" cy="45.75" r="3.7" fill="#f2efe8" stroke="#211f1c" stroke-width="0.5" />
+      <circle cx="24.25" cy="45.75" r="1.9" fill="#211f1c" /><circle cx="39.75" cy="45.75" r="1.9" fill="#211f1c" />
+    </g>
+    <!-- content: calm closed upward eyes (peaceful) -->
+    <g class="eyefx eyefx-content" fill="none" stroke="#211f1c" stroke-width="1.3" stroke-linecap="round">
+      <path d="M21.5 44.5 q2.8 3 5.6 0" /><path d="M37 44.5 q2.8 3 5.6 0" />
+    </g>
+    <!-- side: side-eye, pupils cut to one side (skeptical) -->
+    <g class="eyefx eyefx-side">
+      <rect x="22" y="43.5" width="4.5" height="4.5" fill="#f2efe8" /><rect x="37.5" y="43.5" width="4.5" height="4.5" fill="#f2efe8" />
+      <rect x="24.4" y="44.6" width="2" height="2.4" fill="#211f1c" /><rect x="39.9" y="44.6" width="2" height="2.4" fill="#211f1c" />
+    </g>
+    <!-- glow: luminous eyes that softly pulse -->
+    <g class="eyefx eyefx-glow" fill="#38bdf8">
+      <circle class="glow-eye" cx="24.25" cy="45.75" r="2.6" /><circle class="glow-eye" cx="39.75" cy="45.75" r="2.6" />
+    </g>
     </g><!-- /eye-anchor -->
     <!-- cameos (front layer): eyewear, over the eyes -->
     <g class="cameo cameo-neo">
@@ -603,6 +630,41 @@
   <g class="effect effect-beard">
     <path class="beard" d="M22 51 q10 6 20 0 v3 q-10 8 -20 0 z" fill="#5a4636" />
   </g>
+  <!-- stars: a night sky twinkling above -->
+  <g class="effect effect-stars" fill="#f2efe8">
+    <g class="twinkle sx1"><rect x="8" y="4" width="1" height="1" /><rect x="7.2" y="4.4" width="2.6" height="0.2" /><rect x="8.4" y="3.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx2"><rect x="22" y="2" width="1" height="1" /><rect x="21.2" y="2.4" width="2.6" height="0.2" /><rect x="22.4" y="1.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx3"><rect x="40" y="3" width="1" height="1" /><rect x="39.2" y="3.4" width="2.6" height="0.2" /><rect x="40.4" y="2.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx4"><rect x="53" y="6" width="1" height="1" /><rect x="52.2" y="6.4" width="2.6" height="0.2" /><rect x="53.4" y="5.6" width="0.2" height="2.6" /></g>
+    <g class="twinkle sx5"><rect x="31" y="8" width="0.8" height="0.8" /></g><g class="twinkle sx2"><rect x="15" y="9" width="0.8" height="0.8" /></g><g class="twinkle sx4"><rect x="47" y="10" width="0.8" height="0.8" /></g>
+  </g>
+  <!-- bubbles: soap bubbles drifting up -->
+  <g class="effect effect-bubbles" fill="#9fd3ff" fill-opacity="0.25" stroke="#7dc0f5" stroke-width="0.5">
+    <circle class="bubble bu1" cx="14" cy="72" r="2.4" /><circle class="bubble bu2" cx="30" cy="72" r="1.6" /><circle class="bubble bu3" cx="46" cy="72" r="3" /><circle class="bubble bu4" cx="22" cy="72" r="1.9" /><circle class="bubble bu5" cx="52" cy="72" r="1.4" />
+  </g>
+  <!-- leaves: autumn leaves tumbling down -->
+  <g class="effect effect-leaves">
+    <path class="leaf lf1" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#d97a2b" /><path class="leaf lf2" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#c8202a" /><path class="leaf lf3" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#f2a200" /><path class="leaf lf4" d="M0 0 q3 -2 4 1 q-1 3 -4 3 q-2 -2 0 -4 z" fill="#b8571f" />
+  </g>
+  <!-- matrix: a thin rain of green code -->
+  <g class="effect effect-matrix" fill="#2fae3e" font-family="ui-monospace, Menlo, monospace" font-size="4" font-weight="700">
+    <text class="glyph gm1" x="10" y="0">1</text><text class="glyph gm2" x="20" y="0">0</text><text class="glyph gm3" x="31" y="0">1</text><text class="glyph gm4" x="42" y="0">0</text><text class="glyph gm5" x="52" y="0">1</text>
+  </g>
+  <!-- hearts: little hearts floating up -->
+  <g class="effect effect-hearts" fill="#f472b6">
+    <path class="floatheart fh1" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" /><path class="floatheart fh2" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" /><path class="floatheart fh3" d="M2.4 4.6 L0 2.2 A1.4 1.4 0 0 1 2.4 0.6 A1.4 1.4 0 0 1 4.8 2.2 Z" />
+  </g>
+  <!-- fireflies: warm glowing dots drifting -->
+  <g class="effect effect-fireflies" fill="#f2d16b">
+    <circle class="firefly ffa" cx="12" cy="30" r="1.1" /><circle class="firefly ffb" cx="50" cy="26" r="1.1" /><circle class="firefly ffc" cx="34" cy="20" r="1" /><circle class="firefly ffd" cx="20" cy="16" r="1" />
+  </g>
+  <!-- rainbow: a still arc over Claude -->
+  <g class="effect effect-rainbow" fill="none" stroke-width="1.5">
+    <path stroke="#e2231a" d="M4 34 a28 28 0 0 1 56 0" /><path stroke="#f28c28" d="M6 34 a26 26 0 0 1 52 0" /><path stroke="#f2d16b" d="M8 34 a24 24 0 0 1 48 0" /><path stroke="#2fae3e" d="M10 34 a22 22 0 0 1 44 0" /><path stroke="#38bdf8" d="M12 34 a20 20 0 0 1 40 0" /><path stroke="#8b5cf6" d="M14 34 a18 18 0 0 1 36 0" />
+  </g>
+  <!-- petals: cherry blossom drifting down -->
+  <g class="effect effect-petals" fill="#f4a7c0">
+    <path class="petal pt1" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /><path class="petal pt2" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" fill="#f7c3d6" /><path class="petal pt3" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /><path class="petal pt4" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" fill="#f7c3d6" /><path class="petal pt5" d="M2 0 q2.4 1.6 0 4 q-2.4 -2.4 0 -4 z" /></g>
   <!-- speech bubble pose -->
   <g class="prop prop-bubble">
     <rect x="30" y="0" width="34" height="13" rx="4" fill="#f2efe8" stroke="#211f1c" stroke-width="0.8" />
@@ -684,8 +746,8 @@
   const SMOKE_STEPS = [['flick', 1200], ['stomp', 1300], ['draw', 1800]];
   const SMOKE_MIN_CYCLE_MS = 8000;
   const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
-  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser'];
-  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden'];
+  const EYE_MOODS = ['heart', 'happy', 'angry', 'sad', 'surprised', 'wink', 'star', 'money', 'sleepy', 'suspicious', 'roll', 'googly', 'dizzy', 'x', 'tears', 'laser', 'loading', 'scan', 'wide', 'content', 'side', 'glow'];
+  const EFFECTS = ['none', 'rain', 'sun', 'snow', 'sparkles', 'fire', 'beard', 'garden', 'stars', 'bubbles', 'leaves', 'matrix', 'hearts', 'fireflies', 'rainbow', 'petals'];
   const PETS = ['none', 'duck', 'cat', 'blob', 'dog', 'bunny', 'parrot', 'frog', 'snail', 'dragon'];
   const DEFAULT_TEXT = 'INPUT NEEDED';
   // The three state lamps take the colour-vision-safe palette from tokens.css.
