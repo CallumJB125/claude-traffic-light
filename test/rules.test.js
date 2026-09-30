@@ -875,6 +875,17 @@ test('migrateRules: offline and failed-turn you deleted on v2+ stay deleted thro
   assert.ok(v1.includes('offline') && v1.includes('failed-turn'), 'a v1 config gains them');
 });
 
+test('rulesVersionOf: a preset, share code or file without a rulesVersion is read as v4', () => {
+  assert.equal(R.LEGACY_RULES_VERSION, 4);
+  for (const c of [undefined, null, [], {}, { rulesVersion: null }, { rulesVersion: 'x' }]) assert.equal(R.rulesVersionOf(c), 4, JSON.stringify(c));
+  assert.equal(R.rulesVersionOf({ rulesVersion: 0 }), 0);
+  assert.equal(R.rulesVersionOf({ rulesVersion: '5' }), 5);
+  const v4 = rules().filter((r) => r.id !== 'started' && r.id !== 'offline').map(R.normalizeRule);
+  const ids = R.migrateRules(v4, R.rulesVersionOf({ rules: v4 })).map((r) => r.id);
+  assert.ok(ids.includes('started'), 'gets v5');
+  assert.ok(!ids.includes('offline'), 'a rule it left out stays out');
+});
+
 test('presentSignal: a young notification ask shows what came before it', () => {
   const now = Date.parse('2026-09-10T12:00:00Z');
   const at = (ms) => new Date(now - ms).toISOString();

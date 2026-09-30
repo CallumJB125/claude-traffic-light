@@ -245,17 +245,36 @@ test('merge: adds presets and faces, keeps rules and settings, renames clashes a
   assert.deepEqual(again.partial.presets, ps);
 });
 
-test('migration: a rules-only export from before rulesVersion gets the rules added since', () => {
-  const old = Rules.defaultRules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn');
+test('migration: a rules-only export from before rulesVersion is read as v4 — it gains v5 rules, and ones it left out stay out', () => {
+  const old = Rules.defaultRules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn' && r.id !== 'started');
   const p = S.readSetup(JSON.stringify({ v: 1, app: 'claude-traffic-light', rules: old }));
   assert.equal(p.v, 0);
-  assert.equal(p.rulesVersion, 0);
+  assert.equal(p.rulesVersion, Rules.LEGACY_RULES_VERSION);
   const ids = p.config.rules.map((r) => r.id);
-  assert.ok(ids.includes('offline') && ids.includes('failed-turn'));
-  assert.ok(ids.indexOf('failed-turn') < ids.indexOf('done'));
+  assert.ok(ids.includes('started'));
+  assert.ok(!ids.includes('offline') && !ids.includes('failed-turn'));
   assert.deepEqual(Object.keys(p.config), ['rules']);
   assert.equal(p.hasCameos, false);
   assert.equal(S.summarize(p).old, true);
+});
+
+test('migration: a rules-only export stamped with an old rulesVersion gets the rules added since', () => {
+  const old = Rules.defaultRules().filter((r) => r.id !== 'offline' && r.id !== 'failed-turn');
+  const ids = S.readSetup(JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: 1, rules: old })).config.rules.map((r) => r.id);
+  assert.ok(ids.includes('offline') && ids.includes('failed-turn'));
+  assert.ok(ids.indexOf('failed-turn') < ids.indexOf('done'));
+  const current = S.readSetup(JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: Rules.RULES_VERSION, rules: old }));
+  assert.deepEqual(current.config.rules.map((r) => r.id), old.map((r) => r.id));
+});
+
+test('migration: presets in an older setup migrate with it', () => {
+  const v4 = Rules.defaultRules().filter((r) => r.id !== 'started')
+    .map((r) => (r.id === 'working' ? { ...r, when: { signal: r.when.signal.filter((x) => x !== 'permission-denied').concat('session-start') } } : r));
+  const p = S.readSetup(JSON.stringify({ kind: S.KIND, v: 1, rulesVersion: 4, config: { presets: [{ id: 'p1', name: 'Mine', rules: v4 }] } }));
+  const rules = p.config.presets[0].rules;
+  assert.ok(rules.some((r) => r.id === 'started'));
+  const working = rules.find((r) => r.id === 'working').when.signal;
+  assert.ok(working.includes('permission-denied') && !working.includes('session-start'));
 });
 
 test('migration: a setup at an older rulesVersion is upgraded; a deleted default stays deleted at the current one', () => {

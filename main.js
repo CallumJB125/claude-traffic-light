@@ -291,14 +291,15 @@ function buildConfig() {
   config.rulesVersion = Rules.RULES_VERSION;
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
-    .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: p.rules.map(Rules.normalizeRule) }));
+    .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: Rules.migrateRules(p.rules.map(Rules.normalizeRule), Rules.rulesVersionOf(p)), rulesVersion: Rules.RULES_VERSION }));
   return config;
 }
 
 function saveConfig(partial) {
   const next = { ...loadConfig(), ...partial };
   if (partial.rules) next.rules = partial.rules.map(Rules.normalizeRule);
-  if (partial.presets) next.presets = partial.presets;
+  // Presets reach here from loadConfig or Lights, so their rules are current.
+  if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   configCache = { key: null, value: null }; // two writes inside one ms would share an mtime
@@ -2803,7 +2804,7 @@ ipcMain.handle('preview-sound', (e, name) => playSound(name));
 ipcMain.handle('export-rules', async (e, rules) => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
-  fs.writeFileSync(r.filePath, JSON.stringify({ v: 1, app: 'claude-traffic-light', rules: (rules || []).map(Rules.normalizeRule) }, null, 2));
+  fs.writeFileSync(r.filePath, JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: Rules.RULES_VERSION, rules: (rules || []).map(Rules.normalizeRule) }, null, 2));
   return r.filePath;
 });
 
@@ -2814,7 +2815,7 @@ ipcMain.handle('import-rules', async () => {
     const parsed = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
     const rules = Array.isArray(parsed) ? parsed : parsed.rules;
     if (!Array.isArray(rules)) return { error: 'No rules in that file' };
-    return { rules: rules.map(Rules.normalizeRule) };
+    return { rules: Rules.migrateRules(rules.map(Rules.normalizeRule), Rules.rulesVersionOf(parsed)) };
   } catch (err) { return { error: `Could not read: ${err.message}` }; }
 });
 

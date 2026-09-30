@@ -17,8 +17,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await h?.cleanup(); });
 
-function shareCode(rules) {
-  const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', rules });
+function shareCode(rules, extra = {}) {
+  const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', ...extra, rules });
   return `ctl1:${zlib.deflateRawSync(json).toString('base64url')}`;
 }
 
@@ -42,6 +42,20 @@ test('a pasted share code shows its commands and loads nothing until confirmed',
   await lights.click('#presets-btn');
   await lights.click('#share-paste');
   await lights.fill('#share-code', shareCode(STRANGER));
+  await lights.click('#share-form button[type=submit]');
+  await lights.click('#rules-choice [data-rules=load]');
+  // A code from before rulesVersion migrates like an old config: v5 slots in
+  // its "session open" rule.
+  await expect(lights.locator('#rule-list li')).toHaveCount(2);
+  await expect(lights.locator('#rule-list li').first()).toContainText('Looks harmless');
+  await expect(lights.locator('#rule-list li').nth(1)).toContainText('Session open');
+});
+
+test('a share code stamped with the current rulesVersion loads exactly as shared', async () => {
+  const rulesVersion = await lights.evaluate(() => window.TrafficLightRules.RULES_VERSION);
+  await lights.click('#presets-btn');
+  await lights.click('#share-paste');
+  await lights.fill('#share-code', shareCode(STRANGER, { rulesVersion }));
   await lights.click('#share-form button[type=submit]');
   await lights.click('#rules-choice [data-rules=load]');
   await expect(lights.locator('#rule-list li')).toHaveCount(1);

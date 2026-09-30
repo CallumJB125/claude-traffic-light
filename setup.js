@@ -110,7 +110,7 @@ function cleanCameos(list) {
 // Older bundle shapes, oldest first: UPGRADES[v] turns a v bundle into v+1.
 // v0 is the rules-only file Lights' "Export to file…" writes.
 const UPGRADES = [
-  (raw) => ({ kind: KIND, v: 1, rulesVersion: Number(raw.rulesVersion) || 0, config: { rules: raw.rules } }),
+  (raw) => ({ kind: KIND, v: 1, rulesVersion: Rules.rulesVersionOf(raw), config: { rules: raw.rules } }),
 ];
 
 function exportSetup({ config, cameoIndex = {}, readPng, now = Date.now() }) {
@@ -143,6 +143,7 @@ function readSetup(text) {
   const config = cleanConfig(bundle.config);
   // As an old config.json does on load: default rules added since slot in.
   if (config.rules) config.rules = Rules.migrateRules(config.rules, rulesVersion);
+  if (config.presets) config.presets = config.presets.map((p) => ({ ...p, rules: Rules.migrateRules(p.rules, rulesVersion) }));
   const { cameos, dropped } = cleanCameos(bundle.cameos);
   return { v: from, rulesVersion, config, cameos, hasCameos: Array.isArray(bundle.cameos), dropped };
 }

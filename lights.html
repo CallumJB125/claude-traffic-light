@@ -2479,7 +2479,7 @@
   // ── Sharing: a compact code (deflate + base64url) or a JSON file. Codes
   // are versioned ("ctl1:") so a future format can still read old ones.
   async function encodeShare(rulesToShare) {
-    const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', rules: rulesToShare.map(R.normalizeRule) });
+    const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', rulesVersion: R.RULES_VERSION, rules: rulesToShare.map(R.normalizeRule) });
     const bytes = new TextEncoder().encode(json);
     const cs = new CompressionStream('deflate-raw');
     const w = cs.writable.getWriter(); w.write(bytes); w.close();
@@ -2498,7 +2498,8 @@
     const json = await new Response(ds.readable).text();
     const parsed = JSON.parse(json);
     if (!parsed || !Array.isArray(parsed.rules)) throw new Error('Share code has no rules');
-    return parsed.rules;
+    // Codes made before v5 carry no rulesVersion; they migrate like a saved config.
+    return R.migrateRules(parsed.rules.map(R.normalizeRule), R.rulesVersionOf(parsed));
   }
   function flash(msg) { $('save-state').textContent = msg; setTimeout(() => { if (!dirty) $('save-state').textContent = ''; else setDirty(true); }, 2200); }
   $('share-copy').addEventListener('click', async (e) => { e.stopPropagation(); const code = await encodeShare(rules); await navigator.clipboard.writeText(code); $('presets').hidden = true; flash(`Share code copied (${code.length} chars)`); });
