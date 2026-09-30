@@ -2285,7 +2285,9 @@ function runCcusage(args) {
     // ccusage walks every transcript on disk; it must never be allowed to run
     // forever or pile up, so it gets a hard timeout and is killed on expiry.
     execFile('ccusage', [...args, '--json', '--offline'], {
-      env: { ...process.env, PATH: `${process.env.PATH || ''}:/opt/homebrew/bin:/usr/local/bin` },
+      env: require('./src/tool-path.js').toolEnv(),
+      // Windows: npm installs ccusage as a .cmd, which only runs through a shell (the args are fixed words).
+      shell: IS_WIN,
       maxBuffer: 16 * 1024 * 1024,
       timeout: 25000,
       killSignal: 'SIGKILL',
