@@ -55,11 +55,14 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
   const logs = [];
   const opened = [];
   let browser = realBrowser;
+  let afterHub = null; // runs once the hub has answered, before the client sees the answer
   const fetchImpl = async (u, init) => {
     requests.push(new URL(u));
     if (init?.body) bodies.push(String(init.body));
     if (!u.startsWith(origin)) throw new TypeError('fetch failed');
-    return fetch(u, init);
+    const res = await fetch(u, init);
+    if (afterHub) await afterHub(u);
+    return res;
   };
   const clients = new Map();
   let flow = null;
@@ -124,7 +127,7 @@ async function harness(fn, { oauthTimeoutMs } = {}) {
     await c.verifyCode(hub.lastCode(email));
     return c;
   };
-  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, host: hostOf(origin) };
+  const h = { hub, origin, dir, devDir, store, flow, A, requests, shown, selects, sessions, signedOutHubs, children, deviceFile, signInAs, other, vault, mails, bodies, logs, opened, setBrowser: (b) => { browser = b; }, setAfterHub: (f) => { afterHub = f; }, host: hostOf(origin) };
   try { await fn(h); } finally { await flow.stopDevices(); await hub.close(); }
 }
 
@@ -654,6 +657,7 @@ test('oauth: Continue with Google, full path against the mock: loopback, exchang
   const logged = h.logs.join('\n');
   for (const secret of [ex.code, ex.code_verifier, h.vault(h.origin).load().token, ex.state]) assert.ok(!logged.includes(secret), 'never logged');
   assert.ok(h.opened[0].startsWith(`${h.origin}/dev/oauth/authorize`));
+  assert.equal(h.hub.liveTokens(), 1, 'the token it keeps is live on the hub');
   // The listener is gone: replaying the callback reaches nothing.
   await assert.rejects(fetch(h.hub.oauthCallback()));
 }));
@@ -734,6 +738,44 @@ test('oauth: the listener times out; Cancel closes it; a second sign-in replaces
   await assert.rejects(fetch(second), 'cancel closes the listener');
   assert.equal(h.vault(h.origin).load(), null);
 }, { oauthTimeoutMs: 300 }));
+
+test('oauth: Cancel while the exchange is in flight: the token the hub still mints is revoked there, never stored, no workspace', async () => harness(async (h) => {
+  h.hub.setOAuthIdentity('google', { email: 'callum@example.com' });
+  await h.A.hub(h.origin);
+  h.setAfterHub(async (u) => { if (u.includes('/oauth/exchange')) await h.A.cancelOAuth(); });
+  await h.A.oauth('google');
+  const r = await h.flow.pendingOAuth();
+  h.setAfterHub(null);
+  assert.deepEqual(r, { ok: false, cancelled: true });
+  assert.equal(h.vault(h.origin).load(), null, 'nothing sealed');
+  assert.equal(h.hub.liveTokens(), 0, 'revoked on the hub');
+  assert.ok(h.requests.some((u) => u.pathname === '/api/auth/signout'));
+  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team'), []);
+  assert.ok(!h.store.hubs().includes(h.origin), 'no hub added');
+  assert.equal(h.flow.acct.screen, 'email');
+}));
+
+test('oauth: a sign-in replaced by a newer one while its exchange is in flight is revoked, not stored', async () => harness(async (h) => {
+  h.hub.setOAuthIdentity('google', { email: 'callum@example.com' });
+  await h.A.hub(h.origin);
+  h.setAfterHub(async (u) => {
+    if (!u.includes('/oauth/exchange')) return;
+    h.setAfterHub(null);
+    h.setBrowser(async () => {});
+    await h.A.oauth('github');
+  });
+  await h.A.oauth('google');
+  const first = h.flow.pendingOAuth();
+  await until(() => h.hub.oauthStarts().length === 2);
+  assert.deepEqual(await first, { ok: false, cancelled: true });
+  assert.equal(h.vault(h.origin).load(), null, 'nothing sealed');
+  assert.equal(h.hub.liveTokens(), 0, 'revoked on the hub');
+  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team'), []);
+  assert.equal(h.flow.acct.screen, 'browser', 'the newer sign-in still waits on the browser');
+  const second = h.flow.pendingOAuth();
+  await h.A.cancelOAuth();
+  assert.equal((await second).cancelled, true);
+}));
 
 test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and non-GET are refused', async () => {
   const l = await listenOnce({ brand: 'Plexiform', timeoutMs: 5000 });

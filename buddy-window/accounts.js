@@ -164,12 +164,13 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     return s;
   }
 
-  async function call(name, { params, body, auth = true } = {}) {
+  // `token`: a token that must not be stored, sent in place of the saved one (the revoke of a cancelled sign-in).
+  async function call(name, { params, body, auth = true, token = null } = {}) {
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
     const headers = { Accept: 'application/json' };
-    const s = auth ? saved() : null;
+    const s = token ? { token } : auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
     if (s) headers.Authorization = `Bearer ${s.token}`;
     // The team the call acts in; a URL id in another team makes the hub answer 404.
@@ -262,9 +263,17 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return { ok: true, flow_id: r.flow_id, url: r.url, state: r.state };
     },
 
-    /** Step 2: the loopback's code plus the verifier; the answer is the same as a verified email code. */
-    async exchangeOAuth({ flowId, code, state, verifier, provider }, dev = {}) {
+    /**
+     * Step 2: the loopback's code plus the verifier; the answer is the same as a verified email code.
+     * `keep()` is asked once the hub has answered: false (the member cancelled, or another sign-in
+     * replaced this one) and the new token is revoked on the hub without ever being stored.
+     */
+    async exchangeOAuth({ flowId, code, state, verifier, provider }, dev = {}, { keep = () => true } = {}) {
       const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false });
+      if (!keep()) {
+        if (r.ok && typeof r.device_token === 'string' && r.device_token) await call('signOut', { body: {}, token: r.device_token });
+        return { ok: false, cancelled: true };
+      }
       if (!r.ok) return oauthOutcome(r, provider, host);
       const done = signedInWith(r);
       return done.ok ? { ...done, email: r.user?.email ?? null } : done;

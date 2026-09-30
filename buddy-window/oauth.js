@@ -151,7 +151,8 @@ function startProviderSignIn({ client, provider, device = {}, openExternal, bran
       return { ok: false, error: `Sign-in with ${PROVIDER_NAME[provider]} was cancelled.` };
     }
     if (cancelled) return { ok: false, cancelled: true };
-    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider }, device);
+    // Cancel can land while the exchange is in flight: the hub may still mint a token, which must not outlive this run.
+    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider }, device, { keep: () => !cancelled });
   })();
   return {
     done,

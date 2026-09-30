@@ -539,6 +539,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     setOAuthIdentity: (provider, who) => { identities[provider] = { verified: true, ...who, email: String(who.email).toLowerCase() }; },
     oauthStarts: () => oauthStarts.slice(),
     oauthCallback: () => lastCallback,
+    liveTokens: () => [...tokens.values()].filter((t) => !t.revoked).length,
     revokeAll: (email) => { const id = byEmail.get(email); for (const [h, t] of tokens) if (t.user_id === id) revoke(h); },
     enrolments: () => enrolments.slice(),
   };
