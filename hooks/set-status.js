@@ -333,7 +333,7 @@ function failureOf(payload) {
   return { failReason: [error, detail].filter(Boolean).join(': ').slice(0, 120) || null, failKind };
 }
 
-function nextSession(prev, { hostApp, pid }) {
+function nextSession(prev, { hostApp, pid, terminal }) {
   const now = new Date().toISOString();
   const t = stepOf(prev, now);
   // Task progress for the current turn: created/done counts, reset per prompt.
@@ -354,6 +354,8 @@ function nextSession(prev, { hostApp, pid }) {
   const agents = updateAgents(prev?.agents, resolved === 'compact' ? 'compact' : signal, data, now);
   return {
     sessionId, host: HOST_TAG, hostApp, claudePid: pid || undefined, cwd, signal: signalOut,
+    // Where the exact tab is (terminal-id.js): recorded at SessionStart only.
+    terminal: terminal || prev?.terminal || undefined,
     tool: signalOut === resolved ? tool : (prev?.tool ?? null),
     prevSignal: t.prevSignal,
     signalSince: t.signalSince,
@@ -455,6 +457,19 @@ if (prevOnEntry && resolved !== 'subagent-start' && resolved !== 'subagent-done'
   const last = Date.parse(agentChurn ? prev.agentsAt : prev.updatedAt);
   if ((agentChurn || (prev.signal === resolved && prev.tool === tool)) && Date.now() - last < 1000) finish();
 }
-// Outside the lock: the host-app and pid lookups can shell out to ps.
-writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
+// Outside the lock: the host-app and pid lookups can shell out to ps. The
+// terminal lookup costs one more ps, so it runs at SessionStart only.
+const pidNow = claudePid(prevOnEntry?.claudePid);
+let terminal = null;
+if (signal === 'session-start') {
+  try {
+    const { execFileSync } = require('child_process');
+    terminal = require('./terminal-id.js').captureTerminal({
+      env: process.env,
+      pid: pidNow || process.ppid,
+      run: (file, args) => execFileSync(file, args, { encoding: 'utf8', timeout: 1000 }),
+    });
+  } catch { /* the jump falls back to activating the app */ }
+}
+writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: pidNow, terminal });
 finish();

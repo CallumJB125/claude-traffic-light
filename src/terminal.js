@@ -1,11 +1,15 @@
 // Terminal / Dock / AppleScript integration, extracted verbatim from main.js.
 // A factory so the one call that needs the live session list (runningTerminal)
 // can read it without this module importing the aggregation core.
-const { app, screen } = require('electron');
+const { app, screen, Notification, shell } = require('electron');
+const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const { execFile } = require('child_process');
 const Rules = require('../rules.js');
 const HostApp = require('../hostapp.js');
+const Focus = require('./focus/index.js');
+const Permission = require('./focus/permission.js');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -88,6 +92,44 @@ function activateTerminalApp(folderHint, preferApp = null) {
       resolve(app && app !== 'NONE' ? { app, exact: precision === 'exact' } : null);
     });
   });
+}
+
+// ── Jump to the exact tab ───────────────────────────────────────────────────
+// The session file says where the session's tab is (hooks/terminal-id.js);
+// src/focus/ has one adapter per terminal. Anything short of a hit (an old
+// session with nothing recorded, another machine's session, a refused
+// permission, a timeout) falls back to activating the app, as before.
+const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
+const EXPLAINED_FILE = path.join(ROOT_DIR, 'automation-explained.json');
+const LOCAL_HOST = os.hostname().split('.')[0];
+const liveNotes = new Set(); // held so a click still reaches its handler after GC
+const explainer = Permission.createExplainer({
+  load: () => JSON.parse(fs.readFileSync(EXPLAINED_FILE, 'utf8')),
+  save: (list) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(EXPLAINED_FILE, JSON.stringify(list)); },
+  notify: ({ title, body, onClick }) => {
+    console.log(`[jump] ${title}`);
+    if (!Notification.isSupported()) return;
+    const note = new Notification({ title, body, silent: true });
+    liveNotes.add(note);
+    note.on('click', () => { liveNotes.delete(note); if (onClick) onClick(); });
+    note.on('close', () => liveNotes.delete(note));
+    note.show();
+  },
+  openSettings: () => shell.openExternal(Permission.SETTINGS_URL),
+});
+
+// Same shape as activateTerminalApp's answer: { app, exact } or null.
+async function jumpToSession(session, folderHint, preferApp = null) {
+  if (IS_MAC && session && session.terminal && session.host === LOCAL_HOST) {
+    const r = await Focus.focusSession(session, { onNeeds: (needs) => explainer.onNeeds(needs) });
+    if (r.ok) {
+      const adapter = Focus.ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
+      return { app: r.app || session.hostApp || adapter?.app || 'terminal', exact: !!r.exact };
+    }
+    console.log(`[jump] ${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; activating the app instead`);
+    if (r.denied) explainer.onDenied(r.needs);
+  }
+  return activateTerminalApp(folderHint, preferApp);
 }
 
 // Serialised, time-boxed AppleScript. System Events can stall for minutes
@@ -182,6 +224,7 @@ module.exports = ({ getSessions }) => {
     TERMINAL_APPS,
     escapeForAppleScript,
     activateTerminalApp,
+    jumpToSession,
     osa,
     frontmostApp,
     dockIconRect,

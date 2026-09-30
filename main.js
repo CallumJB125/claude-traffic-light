@@ -24,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => aggregateState().sessions });
 const {
-  TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, osa, frontmostApp,
+  TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
   runningTerminal, bounceOwnDock,
 } = Terminal;
@@ -978,7 +978,10 @@ function maybeNotify(st) {
     note.on('click', () => {
       liveNotifications.delete(note);
       // A runaway's whole point is the jump, so it goes even without a known host app.
-      if (n.hostApp || n.kind === 'runaway') activateTerminalApp(String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
+      if (n.hostApp || n.kind === 'runaway') {
+        const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
+        jumpToSession(s, String(n.cwd || '').split('/').filter(Boolean).pop() || '', n.hostApp);
+      }
     });
     note.on('close', () => liveNotifications.delete(note));
     note.show();
@@ -2000,7 +2003,7 @@ ipcMain.handle('go-to-needing-session', async () => {
 
   clipboard.writeText(target.cwd);
   const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
-  const activated = await activateTerminalApp(folderHint);
+  const activated = await jumpToSession(target, folderHint);
   return {
     opened: activated?.app || 'none-found',
     exact: activated?.exact || false,
@@ -2317,7 +2320,7 @@ async function runAction(action, st) {
       return { feedback: r };
     }
     case 'terminal': {
-      const a = await activateTerminalApp(folderHint);
+      const a = await jumpToSession(target, folderHint);
       return { feedback: a ? `→ ${a.app}` : 'no terminal running' };
     }
     case 'allow': case 'deny': {
@@ -2372,7 +2375,7 @@ async function jumpToNeeding() {
   cycleIndex += 1;
   clipboard.writeText(target.cwd);
   const folderHint = target.cwd.split('/').filter(Boolean).pop() || '';
-  const activated = await activateTerminalApp(folderHint);
+  const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
   return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
 }
