@@ -27,6 +27,14 @@ Topology: hub bound to 127.0.0.1:8787 → Cloudflare Tunnel (remotely managed; i
 6. Verify from outside the tailnet (a phone on mobile data): unauthenticated → blocked at the
    Cloudflare edge; an allowed email → one-time PIN → board.
 
+## Staging beside production
+
+`TARGET=staging PI="ssh …" board/deploy/pi/deploy.sh` deploys a second instance: unit `buddy-hub-staging`,
+code in `/opt/buddy-hub-staging`, data in `/var/lib/buddy-hub-staging`, env `/etc/buddy-hub/staging.env`
+(create it from `hub.env.example`; set `BOARD_PORT=8788`, its own `BOARD_PUBLIC_URL`, and never share the
+production data dir). It never touches production's backup timer. Point a separate tunnel ingress at
+`127.0.0.1:8788`. Any of `UNIT APP_ROOT ENV_FILE DATA_DIR PORT` can be overridden.
+
 Rollback: `deploy.sh` keeps the previous tree at `/opt/buddy-hub/board.prev`; move it back and
 restart. Restore a snapshot by stopping the hub, copying it over `board.db` and starting with
 `BOARD_RESTORE=1` once.
