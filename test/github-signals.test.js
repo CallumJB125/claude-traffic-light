@@ -302,6 +302,37 @@ test('poll: a repo you cannot see is skipped, the rest still polled', async () =
   assert.equal(p.status().state, 'ok');
 });
 
+test('poll: a 403/404 repo is skipped for 30 minutes, then tried again', async () => {
+  const git2 = fakeGit({ '/work/widget': { remote: 'git@github.com:acme/widget.git', branch: 'feat/x' }, '/work/secret': { remote: 'https://github.com/acme/secret', branch: 'main' } });
+  const { p, gh, advance } = poller({ git: git2 });
+  const both = [...SESSIONS, { cwd: '/work/secret' }];
+  await p.tick({ sessions: both, config: {} });
+  const secretCalls = () => gh.calls.filter((c) => c.apiPath.startsWith('repos/acme/secret/')).length;
+  assert.equal(secretCalls(), 1);
+  assert.equal(Date.parse(p.status().repos.find((r) => r.repo === 'acme/secret').skipUntil) - NOW, G.REPO_SKIP_MS);
+  for (let i = 0; i < 5; i += 1) { advance(G.ACTIVE_MS); await p.tick({ sessions: both, config: {} }); }
+  assert.equal(secretCalls(), 1, 'rested, though rediscovered every poll');
+  assert.ok(gh.calls.filter((c) => c.apiPath.startsWith('repos/acme/widget/')).length > 5, 'the other repo keeps polling');
+  advance(G.REPO_SKIP_MS);
+  await p.tick({ sessions: both, config: {} });
+  assert.equal(secretCalls(), 2);
+});
+
+test('poll: a 403 on user is a failure that escalates the backoff', async () => {
+  const forbidden = raw('not-found.404.txt').replace('404 Not Found', '403 Forbidden');
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'user-403.txt'), forbidden);
+  const q = poller({ routes: { user: path.relative(FIX, path.join(dir, 'user-403.txt')) } });
+  const delays = [];
+  for (let i = 0; i < 3; i += 1) {
+    await q.p.tick({ sessions: SESSIONS, config: {} });
+    delays.push(Date.parse(q.p.status().nextPollAt) - q.now());
+    q.advance(delays[i]);
+  }
+  assert.equal(q.p.status().state, 'backoff');
+  assert.deepEqual(delays, [60000, 120000, 240000]);
+});
+
 test('poll: manual repos are watched without a session (no CI, since no branch); no sessions → idle cadence', async () => {
   const { p } = poller();
   const fired = await p.tick({ sessions: [], config: { gitRepos: ['acme/widget'] } });

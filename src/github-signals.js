@@ -42,6 +42,7 @@ const FRESH_MS = 15 * 60 * 1000;
 const LOW_RATE = 100;
 const MAX_OWN_PRS = 5;
 const PULLS_PAGE = 100;
+const REPO_SKIP_MS = 30 * 60 * 1000;
 const HOLD_MS = {
   'pr-review-requested': 10 * 60 * 1000,
   'pr-changes-requested': 10 * 60 * 1000,
@@ -277,7 +278,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
       if (info.branch && !r.branches.includes(info.branch)) r.branches.push(info.branch);
       if (!r.cwds.includes(cwd)) r.cwds.push(cwd);
     }
-    for (const [repo, r] of Object.entries(fresh)) st.repos[repo] = { ...r, seenAt: t, manual: false };
+    for (const [repo, r] of Object.entries(fresh)) st.repos[repo] = { ...st.repos[repo], ...r, seenAt: t, manual: false };
     for (const repo of Object.keys(st.repos)) if (!fresh[repo] && !st.repos[repo].manual && t - st.repos[repo].seenAt > REPO_KEEP_MS) delete st.repos[repo];
     for (const repo of Object.keys(st.repos)) if (st.repos[repo].manual && !manual.includes(repo) && !fresh[repo]) delete st.repos[repo];
     for (const repo of manual) if (!st.repos[repo]) st.repos[repo] = { branches: [], cwds: [], seenAt: t, manual: true };
@@ -353,12 +354,16 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
         }
         const deployWorkflows = Array.isArray(config.gitDeployWorkflows) ? config.gitDeployWorkflows : [];
         for (const [repo, info] of Object.entries(st.repos)) {
+          // A repo that answered 403/404 (gone, renamed, no access) rests a while.
+          if (info.skipUntil && t < info.skipUntil) continue;
           try {
             fired = fired.concat(record(await pollRepo(repo, info, deployWorkflows), 'poll'));
             info.error = null;
+            info.skipUntil = 0;
           } catch (e) {
             if (e.kind !== 'repo') throw e;
             info.error = e.message;
+            info.skipUntil = t + REPO_SKIP_MS;
           }
         }
         st.state = 'ok';
@@ -367,7 +372,8 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
       } catch (e) {
         st.state = e.kind === 'no-gh' || e.kind === 'no-auth' ? e.kind : e.kind === 'rate' ? 'rate-limited' : 'backoff';
         st.error = e.message;
-        if (e.kind === 'error' || e.kind === 'rate') st.failures += 1;
+        // 'repo' here means a 403/404 outside any one repo (on `user`), so it escalates too.
+        if (e.kind === 'error' || e.kind === 'rate' || e.kind === 'repo') st.failures += 1;
         retryAfterMs = e.retryAfterMs || 0;
         log(`[git] ${st.state}: ${e.message}`);
       }
@@ -398,7 +404,7 @@ function create({ stateFile, runGh = defaultRunGh, git = defaultGit, now = Date.
       hint: SETUP_HINT[st.state] || null,
       error: st.error,
       login: st.login,
-      repos: Object.entries(st.repos).map(([repo, r]) => ({ repo, branches: r.branches, cwds: r.cwds, manual: !!r.manual, error: r.error || null })),
+      repos: Object.entries(st.repos).map(([repo, r]) => ({ repo, branches: r.branches, cwds: r.cwds, manual: !!r.manual, error: r.error || null, skipUntil: r.skipUntil ? new Date(r.skipUntil).toISOString() : null })),
       active: active(t),
       recent: st.events.slice(-10).reverse(),
       rate: st.rate,
@@ -426,4 +432,4 @@ function readState(stateFile, t = Date.now()) {
   return { ...rest, active: saved.state === 'disabled' ? [] : activeEvents(events, t), recent: (Array.isArray(events) ? events : []).slice(-10).reverse() };
 }
 
-module.exports = { SIGNALS, validSegment, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, lastPagePath, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
+module.exports = { SIGNALS, validSegment, REPO_SKIP_MS, HOLD_MS, FRESH_MS, ACTIVE_MS, IDLE_MS, UNAVAILABLE_MS, MAX_BACKOFF_MS, SETUP_HINT, normalizeRemote, normalizeRepoList, lastPagePath, isDeployWorkflow, parseResponse, repoEvents, newEvents, activeEvents, nextDelay, folderRepo, create, readState };
