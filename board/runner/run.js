@@ -445,6 +445,14 @@ export class Run {
   // hb.ack current:false / fenced / rpc FENCED|RUN_ENDED → zombie revival (§6.9).
   async onFenced(reason) {
     if (this.fenced) return;
+    // board_complete/board_release already ended the run on the hub: RUN_ENDED
+    // is the expected answer, not a takeover. Deny further tools and finish normally.
+    if ((this.completed || this.released) && reason === 'RUN_ENDED') {
+      this.fenced = true;
+      this.postFence = true;
+      if (!this.ending) await this.finish(this.completed ? 'completed' : 'released');
+      return;
+    }
     this.fenced = true;
     this.postFence = true;
     this.localState = 'fenced';
