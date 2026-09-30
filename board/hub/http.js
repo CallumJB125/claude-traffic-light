@@ -13,7 +13,7 @@ import { publicMember } from './api.js';
 import { LOCAL_ONLY } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
-import { clientIp, limitOrThrow } from './ratelimit.js';
+import { clientIp, failBucketKey, limitOrThrow } from './ratelimit.js';
 import { redact } from './log.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -281,12 +281,19 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         // Unknown or inactive → 404 before a byte of the body is read; so is
         // an IP that keeps failing signatures (checked, not spent, here).
         if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
-        const ip = clientIp(req, config);
+        const ip = failBucketKey(clientIp(req, config));
         const peek = hub.limiter.peek('webhook_fail_ip', ip);
         if (!peek.ok) throw new HubError('RATE_LIMITED', 'too many failed deliveries', { retry_after_s: Math.max(1, Math.ceil(peek.retry_after_ms / 1000)) });
         const chunks = [];
         let n = 0;
-        for await (const c of req) { n += c.length; if (n > MAX_BODY) return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } }); chunks.push(c); }
+        for await (const c of req) {
+          n += c.length;
+          if (n > MAX_BODY) {
+            hub.limiter.take('webhook_fail_ip', ip);
+            return sendJson(res, 413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+          }
+          chunks.push(c);
+        }
         // webhook() spends webhook_conn only once the signature is verified.
         const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: Buffer.concat(chunks) });
         if (out.status === 401) hub.limiter.take('webhook_fail_ip', ip);

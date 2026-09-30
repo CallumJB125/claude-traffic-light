@@ -422,19 +422,24 @@ export function createIntegrations({
   }
 
   /**
-   * Lease a delivery id: → {ok:true, until} (we run it), {dup:'done'} or {dup:'busy'}.
-   * A lease that outlived its handler (crash, hang) is taken over atomically.
+   * Lease a delivery under all its keys: → {ok:true, until} (we run it),
+   * {dup:'done'} when any key is done, {dup:'busy'} when any is leased.
+   * A lease that outlived its handler (crash, hang) is taken over.
    */
-  function reserve(provider, key) {
+  function reserve(provider, keys) {
     if (random() < 0.01) sweepDedupe();
     const t = now();
     const until = new Date(hub.wallMs() + handlerTimeoutMs + 30_000).toISOString();
-    const ins = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES (?, ?, ?, 'processing', ?)", provider, key, t, until);
-    if (Number(ins.changes) === 1) return { ok: true, until };
-    const ex = db.get('SELECT state FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ?', provider, key);
-    if (ex?.state === 'done') return { dup: 'done' };
-    const took = db.run("UPDATE inbound_dedupe SET lease_until = ?, received_at = ? WHERE provider = ? AND dedupe_key = ? AND state = 'processing' AND lease_until < ?", until, t, provider, key, t);
-    return Number(took.changes) === 1 ? { ok: true, until } : { dup: 'busy' };
+    return db.tx(() => {
+      const rows = keys.map((k) => db.get('SELECT state, lease_until FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ?', provider, k));
+      if (rows.some((r) => r?.state === 'done')) return { dup: 'done' };
+      if (rows.some((r) => r && !(r.lease_until < t))) return { dup: 'busy' };
+      for (const k of keys) {
+        db.run(`INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES (?, ?, ?, 'processing', ?)
+          ON CONFLICT (provider, dedupe_key) DO UPDATE SET received_at = excluded.received_at, lease_until = excluded.lease_until`, provider, k, t, until);
+      }
+      return { ok: true, until };
+    });
   }
 
   /** The HTTP layer asks this before reading a body: unknown or inactive → 404 unread. */
@@ -455,16 +460,20 @@ export function createIntegrations({
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
     }
-    // Spent only by verified deliveries: whoever merely knows the URL can't drain it.
-    limitOrThrow(hub, 'webhook_conn', c.id);
     let payload;
     try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
-    const key = `${c.id}:${String(v.dedupe_key).slice(0, 200)}`;
-    const lease = reserve(c.provider, key);
+    // The connector's key alone may rest on an unsigned delivery header: the
+    // hash of the signed body is a second key, so a captured request replayed
+    // under a new delivery id is still a duplicate.
+    const keys = [`${c.id}:${String(v.dedupe_key).slice(0, 200)}`, `${c.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
+    const lease = reserve(c.provider, keys);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
     if (lease.dup === 'busy') return { status: 200, body: { ok: true, in_progress: true } };
-    const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key = ? AND lease_until = ?", c.provider, key, lease.until);
-    const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ? AND lease_until = ?', c.provider, key, lease.until);
+    const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", c.provider, ...keys, lease.until);
+    const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', c.provider, ...keys, lease.until);
+    // Spent only by verified deliveries that will run: whoever merely knows
+    // the URL, or replays a finished delivery, can't drain it.
+    try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))

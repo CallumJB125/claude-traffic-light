@@ -2,6 +2,7 @@
 // client IP for logins and mutations, and per connection for WS frames. They
 // run on the hub monotonic clock, so tests drive them with the fake clock.
 
+import { isIPv6 } from 'node:net';
 import { isLoopback } from './config.js';
 import { HubError } from './db.js';
 
@@ -82,4 +83,18 @@ export function clientIp(req, config) {
   const peer = String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
   const cf = config.auth === 'access' && isLoopback(peer) ? req.headers['cf-connecting-ip'] : null;
   return typeof cf === 'string' && cf ? cf : peer;
+}
+
+/**
+ * The failure-bucket key for a client IP: an IPv6 client usually holds a whole
+ * /64, so it is keyed on that prefix (one address per failure would never run
+ * out); IPv4 and IPv4-mapped addresses stay as they are.
+ */
+export function failBucketKey(ip) {
+  const a = String(ip ?? '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
+  if (!isIPv6(a)) return a;
+  const [head, tail] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const full = tail === undefined ? h : [...h, ...Array(8).fill('0')].slice(0, 8 - (tail ? tail.split(':').length : 0));
+  return `${full.slice(0, 4).map((x) => parseInt(x, 16).toString(16)).join(':')}::/64`;
 }

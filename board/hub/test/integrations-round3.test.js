@@ -6,11 +6,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { request } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Api } from '../api.js';
 import * as busModule from '../bus.js';
 import { createIntegrations } from '../integrations/registry.js';
 import { defineConnector } from '../integrations/connector.js';
+import fake, { sign } from '../integrations/fake/index.js';
+import * as ratelimit from '../ratelimit.js';
 import { startHub } from './helpers.js';
 
 const { createBus } = busModule;
@@ -193,4 +196,89 @@ test('M-B: a handler that never settles is dead-lettered after BUSY_DEAD_AFTER b
     await b.bus.settle();
     assert.deepEqual(seen, [1, 2], 'the stuck call no longer blocks the next row');
   } finally { await h.close(); }
+});
+
+// ── M-C ───────────────────────────────────────────────────────────────────
+
+test('M-C: a captured signed body replayed under new delivery ids is a duplicate: the handler runs once and webhook_conn is not spent', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    let runs = 0;
+    reg.register(defineConnector({ ...fake, id: 'fakecount', handleWebhook: (a) => { runs += 1; return fake.handleWebhook(a); } }));
+    const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
+    const conn = reg.createConnection({ ...v, orgId: h.ids.org, memberId: h.ids.alice, provider: 'fakecount' });
+    h.hub.limiter.limits.webhook_conn = { capacity: 2, per_ms: 60_000 };
+    const hook = (raw, delivery = randomUUID()) => fetch(`${h.base}/integrations/${conn.id}/webhook`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-fake-signature': sign('whsec_abcdef123456', Buffer.from(raw)), 'x-fake-delivery': delivery }, body: raw,
+    });
+    const raw = JSON.stringify({ event: 'issue.opened', issue: { id: 'I-1', title: 'Captured' } });
+    const first = await hook(raw, 'delivery-0001');
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { ok: true });
+    for (const d of ['delivery-0001', randomUUID(), randomUUID(), randomUUID()]) {
+      const r = await hook(raw, d);
+      assert.equal(r.status, 200, d);
+      assert.deepEqual(await r.json(), { ok: true, duplicate: true });
+    }
+    assert.equal(runs, 1, 'the handler ran once');
+    assert.equal(h.hub.limiter.peek('webhook_conn', conn.id).ok, true, 'replays spent nothing');
+    const other = await hook(JSON.stringify({ event: 'issue.opened', issue: { id: 'I-2', title: 'New' } }));
+    assert.equal(other.status, 200);
+    assert.equal(runs, 2);
+    assert.equal(h.hub.limiter.peek('webhook_conn', conn.id).ok, false, 'a new delivery spends');
+    assert.equal((await hook(raw, randomUUID())).status, 200, 'a finished replay is answered even with the bucket empty');
+  } finally { await h.close(); }
+});
+
+test('M-C: the connector dedupe key still dedupes a changed body; a failed delivery releases both keys', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    let runs = 0;
+    let fail = true;
+    reg.register(probe('twokeys', { handleWebhook: async () => { runs += 1; if (fail) throw new Error('boom'); } }));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'twokeys', external_id: 'w1' });
+    assert.equal((await hookPost(reg, conn, 'd1', '{"a":1}')).status, 500);
+    fail = false;
+    assert.equal((await hookPost(reg, conn, 'd1', '{"a":1}')).status, 200, 'the retry runs');
+    assert.deepEqual((await hookPost(reg, conn, 'd1', '{"a":2}')).body, { ok: true, duplicate: true }, 'same delivery id, other body');
+    assert.deepEqual((await hookPost(reg, conn, 'd2', '{"a":1}')).body, { ok: true, duplicate: true }, 'same body, other delivery id');
+    assert.equal(runs, 2);
+  } finally { await h.close(); }
+});
+
+// ── L-6 ───────────────────────────────────────────────────────────────────
+
+test('L-6: an oversized body (413) spends the failure bucket', async () => {
+  const h = await hubWith();
+  try {
+    const reg = h.app.integrations;
+    reg.register(probe('big'));
+    const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'big', external_id: 'w1' });
+    h.hub.limiter.limits.webhook_fail_ip = { capacity: 1, per_ms: 60_000 };
+    const u = new URL(`${h.base}/integrations/${conn.id}/webhook`);
+    const status = await new Promise((resolve, reject) => {
+      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(2 * 1024 * 1024) } }, (res) => { res.resume(); resolve(res.statusCode); });
+      req.on('error', () => {});
+      req.write(Buffer.alloc(2 * 1024 * 1024, 0x20));
+      setTimeout(() => reject(new Error('no answer')), 3000).unref();
+    });
+    assert.equal(status, 413);
+    const next = await fetch(u, { method: 'POST', headers: { 'x-ok': '1', 'x-id': 'd1' }, body: '{}' });
+    assert.equal(next.status, 429);
+  } finally { await h.close(); }
+});
+
+test('L-6: the webhook failure bucket keys an IPv6 client on its /64', () => {
+  const key = ratelimit.failBucketKey;
+  assert.equal(typeof key, 'function');
+  assert.equal(key('2001:db8:1:2:aaaa::1'), key('2001:db8:1:2:ffff:ffff:ffff:ffff'));
+  assert.equal(key('2001:0db8:0001:0002::9'), key('2001:db8:1:2::1'));
+  assert.notEqual(key('2001:db8:1:2::1'), key('2001:db8:1:3::1'));
+  assert.equal(key('::1'), key('::2'));
+  assert.equal(key('203.0.113.7'), '203.0.113.7');
+  assert.notEqual(key('203.0.113.7'), key('203.0.113.8'));
+  assert.equal(key('::ffff:203.0.113.7'), '203.0.113.7');
+  assert.equal(key('not-an-ip'), 'not-an-ip');
 });

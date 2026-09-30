@@ -155,7 +155,7 @@ test('H2: a failed handler releases the delivery so the provider retry runs; old
     h.db.run("INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('flaky', 'ancient', ?, 'done')", old);
     reg.sweepDedupe();
     assert.equal(h.db.get("SELECT COUNT(*) AS n FROM inbound_dedupe WHERE dedupe_key = 'ancient'").n, 0);
-    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = ?', 'flaky').n, 1);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = ?', 'flaky').n, 2, 'the delivery key and the body hash');
   } finally { await h.close(); }
 });
 

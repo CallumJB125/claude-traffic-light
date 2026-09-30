@@ -246,12 +246,12 @@ test('M-2: unauthenticated spam never spends the connection bucket; only verifie
     const lim = h.hub.limiter.limits;
     lim.webhook_fail_ip = { capacity: 100, per_ms: 60_000 };
     lim.webhook_conn = { capacity: 3, per_ms: 60_000 };
-    const raw = JSON.stringify({ event: 'noop' });
-    const hook = (sig) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-fake-signature': sig, 'x-fake-delivery': randomUUID() }, body: raw });
+    // Distinct bodies: an identical signed body is a duplicate (round 3, M-C).
+    const hook = (sig, raw = JSON.stringify({ event: 'noop' })) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-fake-signature': sig, 'x-fake-delivery': randomUUID() }, body: raw });
     for (let i = 0; i < 10; i += 1) assert.equal((await hook('sha256=00')).status, 401);
-    const good = sign('whsec_abcdef123456', Buffer.from(raw));
-    for (let i = 0; i < 3; i += 1) assert.equal((await hook(good)).status, 200, `delivery ${i}`);
-    const over = await hook(good);
+    const good = (n) => { const raw = JSON.stringify({ event: 'noop', n }); return hook(sign('whsec_abcdef123456', Buffer.from(raw)), raw); };
+    for (let i = 0; i < 3; i += 1) assert.equal((await good(i)).status, 200, `delivery ${i}`);
+    const over = await good(3);
     assert.equal(over.status, 429);
     assert.ok(Number(over.headers.get('retry-after')) >= 1);
   } finally { await h.close(); }
