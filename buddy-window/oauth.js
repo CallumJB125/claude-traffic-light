@@ -52,7 +52,7 @@ const same = (a, b) => {
  * text: nothing from the request is ever echoed back. `finish` runs at most
  * once, for the one request that ends the flow.
  */
-function callbackHandler({ port, state, brand, finish }) {
+function callbackHandler({ port, state, brand, finish, confirming = false }) {
   // `state` is a string or a function: the hub mints it in oauth/start, after this listener (whose port
   // goes into redirect_uri) is already up. Until it is known every request is refused.
   const expected = typeof state === 'function' ? state : () => state;
@@ -61,7 +61,7 @@ function callbackHandler({ port, state, brand, finish }) {
     res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', connection: 'close', ...extra });
     res.end(text);
   };
-  const bad = `This sign-in link isn’t valid. Go back to ${brand} and try again.`;
+  const bad = `This ${confirming ? 'confirmation' : 'sign-in'} link isn’t valid. Go back to ${brand} and try again.`;
   return (req, res) => {
     if (!LOOPBACK.has(req.socket?.remoteAddress)) { req.socket?.destroy?.(); return; }
     // A page elsewhere reaching us by a rebound name carries its own Host.
@@ -76,13 +76,14 @@ function callbackHandler({ port, state, brand, finish }) {
     // The provider said no (or the member closed it): that ends the flow too.
     if (!code && u.searchParams.get('error')) {
       done = true;
-      reply(res, 200, `Sign-in was cancelled. You can close this tab and go back to ${brand}.`);
+      reply(res, 200, `${confirming ? 'Confirming' : 'Sign-in'} was cancelled. You can close this tab and go back to ${brand}.`);
       finish({ ok: false, reason: 'denied' });
       return;
     }
     if (!code || !CODE_RE.test(code)) { reply(res, 400, bad); return; }
     done = true;
-    reply(res, 200, `Finish signing in in ${brand}. You can close this tab.`);
+    // Neither text claims the exchange has happened yet.
+    reply(res, 200, confirming ? `Finish confirming in ${brand}. You can close this tab.` : `Finish signing in in ${brand}. You can close this tab.`);
     finish({ ok: true, code });
   };
 }
@@ -92,7 +93,7 @@ function callbackHandler({ port, state, brand, finish }) {
  * {ok:true, code} for the one valid request, else {ok:false, reason:'timeout'|
  * 'cancelled'|'denied'}. The server closes as soon as it resolves.
  */
-function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.createServer }) {
+function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.createServer, confirming = false }) {
   return new Promise((resolve, reject) => {
     let expectedState = typeof state === 'string' && state.length >= 16 ? state : null;
     let settle;
@@ -111,7 +112,7 @@ function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.c
     server.on('error', (e) => { if (!server.listening) reject(e); });
     server.listen(0, '127.0.0.1', () => { // privacy-flow: team-hub-account
       const { port } = server.address();
-      server.on('request', callbackHandler({ port, state: () => expectedState, brand, finish }));
+      server.on('request', callbackHandler({ port, state: () => expectedState, brand, finish, confirming }));
       timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
       timer.unref?.();
       // An empty or short state would let a callback that carries none (or a guessable one) through.
@@ -135,7 +136,7 @@ function startProviderSignIn({ client, provider, purpose = 'signin', device = {}
   const done = (async () => {
     if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
     const { verifier, challenge } = pkcePair();
-    try { listener = await listenOnce({ brand, timeoutMs }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
+    try { listener = await listenOnce({ brand, timeoutMs, confirming: purpose === 'delete' }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
     const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose });
     if (cancelled || !start.ok) { listener.close(); return cancelled ? { ok: false, cancelled: true } : start; }

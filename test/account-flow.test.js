@@ -780,6 +780,19 @@ test('oauth: a sign-in replaced by a newer one while its exchange is in flight i
   assert.equal((await second).cancelled, true);
 }));
 
+test('oauth: a delete check’s tab says it is confirming, never signing in', () => {
+  const page = (confirming, url) => {
+    const handler = callbackHandler({ port: 4242, state: 'st', brand: 'Plexiform', finish() {}, confirming });
+    const res = { body: null, writeHead() {}, end(b) { this.body = b; } };
+    handler({ method: 'GET', url, headers: { host: '127.0.0.1:4242' }, socket: { remoteAddress: '127.0.0.1' } }, res);
+    return res.body;
+  };
+  assert.equal(page(true, '/callback?code=abc&state=st'), 'Finish confirming in Plexiform. You can close this tab.');
+  assert.equal(page(true, '/callback?error=access_denied&state=st'), 'Confirming was cancelled. You can close this tab and go back to Plexiform.');
+  assert.equal(page(true, '/callback?state=zz&code=abc'), 'This confirmation link isn’t valid. Go back to Plexiform and try again.');
+  assert.equal(page(false, '/callback?code=abc&state=st'), 'Finish signing in in Plexiform. You can close this tab.');
+});
+
 test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and non-GET are refused', async () => {
   const l = await listenOnce({ brand: 'Plexiform', timeoutMs: 5000 });
   assert.equal(typeof l.expect, 'function');
