@@ -274,6 +274,7 @@ const IS_WIN = process.platform === 'win32';
 // Linux panels are often dark and don't recolour template images, so it gets its own colour icon.
 const TRAY_ICON = IS_WIN ? 'tray-win.png' : process.platform === 'linux' ? 'tray-linux.png' : 'trayTemplate.png';
 require('./src/spellcheck.js').keepOffline({ app, getDefaultSession: () => require('electron').session.defaultSession });
+require('./src/desktop-shell.js').setup({ app, Menu });
 
 function claudeHookOpts() {
   return { home: os.homedir(), runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget };
