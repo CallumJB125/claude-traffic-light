@@ -213,3 +213,19 @@ test('M-3: at most 20 cards an hour per connection: the 21st is RATE_LIMITED and
     await ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).comment(cardId, { request_id: randomUUID(), body: 'still here' }));
   } finally { await h.close(); }
 });
+
+// ── L-1 ───────────────────────────────────────────────────────────────────
+
+test('L-1: a hub under a parentPort refuses BOARD_ENC_KEY from env in every auth mode, not only local', async () => {
+  const had = Object.getOwnPropertyDescriptor(process, 'parentPort');
+  Object.defineProperty(process, 'parentPort', { value: { on() {}, postMessage() {} }, configurable: true, writable: true });
+  process.env.BOARD_ENC_KEY = randomBytes(32).toString('hex');
+  try {
+    const started = await startHub().catch((e) => e);
+    if (!(started instanceof Error)) await started.close();
+    assert.match(String(started?.message), /refused under the desktop app/);
+  } finally {
+    delete process.env.BOARD_ENC_KEY;
+    if (had) Object.defineProperty(process, 'parentPort', had); else delete process.parentPort;
+  }
+});

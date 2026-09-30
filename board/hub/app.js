@@ -45,7 +45,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // D41: a hub outside the desktop app loads its integrations key from
   // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
   if (config.auth !== 'local') {
-    const key = loadKey({ dataDir: config.dataDir, hasParentPort: false });
+    const key = loadKey({ dataDir: config.dataDir, hasParentPort: !!process.parentPort });
     if (key) hub.setVaultKey(key);
   }
 
