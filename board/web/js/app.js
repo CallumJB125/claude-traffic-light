@@ -4,8 +4,13 @@
 import { h, render } from './h.js';
 import { api, errorText, setOrg, currentOrg } from './api.js';
 import { connectBoard } from './socket.js';
-import { displayFace, alertsForViewer, isHumanOwned } from './view.js';
+import { displayFace, alertsForViewer, isHumanOwned, agedView } from './view.js';
 import { boardScreen, loadingScreen } from './render-board.js';
+import { tableScreen } from './render-table.js';
+import { DEFAULT_SORT, nextSort } from './table.js';
+import { dashboardScreen } from './render-dashboard.js';
+import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
+import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
@@ -33,6 +38,10 @@ const state = {
   theme: 'system',
   showAllDone: false,
   repos: null,
+  view: 'board',
+  table: { sort: DEFAULT_SORT, filter: '' },
+  dash: null, // set below: freshDash(), status idle | loading | ok | error
+  cardsRev: 0,
 };
 
 let socket = null;
@@ -51,6 +60,29 @@ function setTheme(t) {
   state.theme = ['dark', 'light'].includes(t) ? t : 'system';
   try { localStorage.setItem('board-theme', state.theme); } catch { /* private mode */ }
   applyTheme();
+  update();
+}
+
+// ── views ───────────────────────────────────────────────────────────────────
+// ?view= wins (the app window's sidebar links straight to a view), then the
+// last one this browser used.
+
+function loadView() {
+  const want = new URLSearchParams(location.search).get('view');
+  let saved = null;
+  try { saved = localStorage.getItem('board-view'); } catch { /* private mode */ }
+  state.view = VIEWS.some((v) => v.id === want) ? want : VIEWS.some((v) => v.id === saved) ? saved : 'board';
+}
+function setView(v) {
+  if (!VIEWS.some((x) => x.id === v) || state.view === v) return;
+  state.view = v;
+  if (v === 'dashboard') loadJournal();
+  try { localStorage.setItem('board-view', v); } catch { /* private mode */ }
+  try {
+    const q = new URLSearchParams(location.search);
+    q.set('view', v);
+    history.replaceState(null, '', `${location.pathname}?${q}${location.hash}`);
+  } catch { /* sandboxed */ }
   update();
 }
 
@@ -96,7 +128,88 @@ function buildModel() {
     showAllDone: state.showAllDone,
     openCardId: state.detail?.cardId ?? null,
     readOnly: state.me?.member?.role === 'viewer',
+    view: state.view,
+    table: state.table,
+    dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
   };
+}
+
+// ── dashboard ────────────────────────────────────────────────────────────────
+// Journal pages are folded into per-card histories as they arrive (metrics.js)
+// and dropped, and the journal is append-only, so after the first full read a
+// refresh only asks for rows past the last seq. Refreshes: on opening the
+// view, every 60 s while it is open and visible, and after card changes at
+// most once per 10 s (the first change after a refresh schedules it, later
+// ones ride along: a throttle, not a debounce).
+
+const JOURNAL_PAGE = 1000;
+const DASH_REFRESH_MS = 60_000;
+const DASH_UPSERT_THROTTLE_MS = 10_000;
+let dashToken = 0;
+
+const freshDash = () => ({ status: 'idle', fold: emptyFold(), offset: 0, error: null, updatedAt: null, epoch: null });
+state.dash = freshDash();
+
+async function loadJournal() {
+  if (!state.boardId || state.dash.status === 'loading') return;
+  const token = ++dashToken;
+  const boardId = state.boardId;
+  state.dash = { ...state.dash, status: 'loading' };
+  update();
+  try {
+    const res = await pullJournal(state.dash.fold, (after, limit) => api.journal(boardId, after, limit), { pageSize: JOURNAL_PAGE });
+    if (token !== dashToken) return;
+    state.dash = { ...state.dash, status: 'ok', fold: res.fold, offset: res.offset ?? state.dash.offset, error: null, updatedAt: Date.now() };
+  } catch (err) {
+    if (token !== dashToken) return;
+    state.dash = { ...state.dash, status: 'error', error: errorText(err) };
+  }
+  update();
+}
+
+function resetDashboard() {
+  dashToken++;
+  state.dash = freshDash();
+  winMemo = null;
+  cardMemo = null;
+}
+
+// A new hub epoch (a restart, or a restore that may have rewritten history
+// the fold holds) drops the fold: one full re-read per restart.
+function onHubEpoch(epoch) {
+  const prev = state.dash.epoch;
+  if (prev && epoch && prev !== epoch) {
+    resetDashboard();
+    if (state.view === 'dashboard') loadJournal();
+  }
+  state.dash.epoch = epoch ?? null;
+}
+
+let dashUpsertTimer = null;
+function dashboardSoon() {
+  if (state.view !== 'dashboard' || dashUpsertTimer) return;
+  dashUpsertTimer = setTimeout(() => { dashUpsertTimer = null; if (state.view === 'dashboard') loadJournal(); }, DASH_UPSERT_THROTTLE_MS);
+}
+
+// The window sums walk every card's history: only when rows arrive or the
+// minute turns. The join with live cards is cheap and runs on card changes.
+let winMemo = null;
+let cardMemo = null;
+function dashboardModel(entries) {
+  const d = state.dash;
+  const base = { status: d.status, error: d.error, updated_at: d.updatedAt, metrics: null };
+  if (d.updatedAt == null) return base;
+  // Journal times are the hub's; so is "now".
+  const now = Date.now() + d.offset;
+  const minute = Math.floor(now / 60_000);
+  if (winMemo?.fold !== d.fold || winMemo.version !== d.fold.version || winMemo.minute !== minute) {
+    winMemo = { fold: d.fold, version: d.fold.version, minute, win: windowMetrics(d.fold, now) };
+    cardMemo = null;
+  }
+  if (cardMemo?.rev !== state.cardsRev) {
+    cardMemo = { rev: state.cardsRev, metrics: cardMetrics(winMemo.win, d.fold, entries.map((e) => agedView(e.view, e.elapsed_ms))) };
+  }
+  return { ...base, metrics: cardMemo.metrics };
 }
 
 function toasts() {
@@ -112,7 +225,8 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  return h('div', { class: 'app-shell' }, boardScreen(model), drawer(model), dialog(model), toasts());
+  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : null;
+  return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
 let queued = false;
@@ -172,6 +286,7 @@ async function boot() {
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
   if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · Claude Buddy`;
+  resetDashboard();
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
   update();
@@ -194,23 +309,28 @@ function onStatus({ status, retryAt }) {
 function onMessage(msg) {
   const now = perf();
   switch (msg.type) {
-    case 'welcome': break;
+    case 'welcome': onHubEpoch(msg.hub_epoch); break;
     case 'snapshot': {
       if (msg.board_id !== state.boardId) return;
       state.board = msg.board;
       state.members = new Map(msg.members.map((m) => [m.member_id, m]));
       state.cards = new Map(msg.cards.map((c) => [c.id, { view: c, rx: now }]));
+      state.cardsRev += 1;
       if (state.detail) refreshDetail(state.detail.cardId);
+      if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
       break;
     }
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
       state.cards.set(msg.card.id, { view: msg.card, rx: now });
+      state.cardsRev += 1;
       if (state.detail?.cardId === msg.card.id) refreshDetailSoon(msg.card.id);
+      dashboardSoon();
       break;
     }
     case 'card.remove': {
       state.cards.delete(msg.card_id);
+      state.cardsRev += 1;
       if (state.detail?.cardId === msg.card_id) closeDrawer();
       break;
     }
@@ -268,7 +388,8 @@ function closeDrawer() {
   state.detail = null;
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* sandboxed */ }
   update();
-  if (id) queueMicrotask(() => root.querySelector(`[data-card-id="${CSS.escape(id)}"] .card-open`)?.focus());
+  // Back to what opened it: the card or row, else a dashboard list entry.
+  if (id) queueMicrotask(() => (root.querySelector(`[data-card-id="${CSS.escape(id)}"] .card-open`) ?? root.querySelector(`[data-action="open"][data-card="${CSS.escape(id)}"]`))?.focus());
 }
 
 // The hub prints http://…/#dev_secret=<secret> at startup: keep it for this tab
@@ -321,7 +442,9 @@ function refreshBoardCard() {
 }
 
 function applyCard(res) {
-  if (res?.card) state.cards.set(res.card.id, { view: res.card, rx: perf() });
+  if (!res?.card) return;
+  state.cards.set(res.card.id, { view: res.card, rx: perf() });
+  state.cardsRev += 1;
 }
 
 const viewOf = (id) => state.cards.get(id)?.view;
@@ -580,6 +703,9 @@ function onClick(e) {
     case 'theme': setTheme(el.dataset.next); return;
     case 'reconnect': socket?.reconnectNow(); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
+    case 'view': setView(el.dataset.view); return;
+    case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
+    case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
     default:
   }
@@ -590,6 +716,11 @@ function onSubmit(e) {
   if (!form) return;
   e.preventDefault();
   submitDialogForm(form, e.submitter);
+}
+
+function onInput(e) {
+  const el = e.target.closest?.('[data-input]');
+  if (el?.dataset.input === 'table-filter') { state.table = { ...state.table, filter: el.value }; update(); }
 }
 
 function onChange(e) {
@@ -619,6 +750,17 @@ function onKeydown(e) {
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
     openNewCard();
+    return;
+  }
+  if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !state.detail && state.view === 'table' && !root.querySelector('dialog[open]')) {
+    e.preventDefault();
+    root.querySelector('[data-input="table-filter"]')?.focus();
+    return;
+  }
+  if (typing && e.key === 'Escape' && e.target.dataset?.input === 'table-filter' && e.target.value) {
+    e.preventDefault();
+    state.table = { ...state.table, filter: '' };
+    update();
     return;
   }
   const tab = e.target.closest?.('[role="tab"]');
@@ -669,6 +811,7 @@ function onImgError(e) {
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
 document.addEventListener('change', onChange);
+document.addEventListener('input', onInput);
 document.addEventListener('keydown', onKeydown);
 document.addEventListener('close', onDialogClose, true);
 document.addEventListener('dragstart', onDragStart);
@@ -680,7 +823,9 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 
 // Ages advance between pushes (§5.1): re-derive every face once a second.
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
+setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
 
 loadTheme();
+loadView();
 takeDevSecretFromHash();
 boot();

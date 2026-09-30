@@ -71,7 +71,7 @@ export const OUTBOX_KINDS = Object.freeze([
 export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
-  'approval_cancel',
+  'approval_cancel', 'board_create_card', 'board_add_lesson',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
 export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel']);
@@ -80,8 +80,38 @@ export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel']
 export const MCP_TOOLS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_update_status', 'board_append_progress', 'board_write_handover',
   'board_ask_human', 'board_comment', 'board_attach_evidence', 'board_complete', 'board_release',
-  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval',
+  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson',
 ]);
+
+// Least-privilege scope of each board-mcp tool (CONTRACT §7.3). Every tool is
+// also inside the run's repo scope: the hub verifies run token, fence and
+// repo_id before any method runs, and a run exists only for an opted-in repo.
+export const TOOL_SCOPES = Object.freeze({
+  'card:read': "read this run's card, its parent and its children",
+  'repo:read': "read titles, overlaps and notes of this board's cards in this run's repo",
+  'card:write': "write to this run's own card only",
+  'card:create_child': "create a todo child card of this run's card on the same board and repo; never dispatched, assigned or budgeted",
+  'lesson:suggest': "append a lesson suggestion for this run's repo in the board's org; never read back to agents",
+  'permission:ask': "ask this card's approvers for a tool permission; cannot grant one",
+});
+export const MCP_TOOL_SCOPES = Object.freeze({
+  board_get_card: 'card:read',
+  board_list_cards: 'repo:read',
+  board_update_status: 'card:write',
+  board_append_progress: 'card:write',
+  board_write_handover: 'card:write',
+  board_ask_human: 'card:write',
+  board_comment: 'card:write',
+  board_attach_evidence: 'card:write',
+  board_complete: 'card:write',
+  board_release: 'card:write',
+  board_declare_plan: 'card:write',
+  board_check_overlap: 'repo:read',
+  board_recall: 'repo:read',
+  board_create_card: 'card:create_child',
+  board_add_lesson: 'lesson:suggest',
+  approval: 'permission:ask',
+});
 // Tools whose hub effect goes through the durable outbox (return {queued:true} offline).
 export const MCP_OUTBOX_TOOLS = Object.freeze({
   board_update_status: 'status.update',

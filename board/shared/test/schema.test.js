@@ -164,3 +164,16 @@ test('overlaps: run_a < run_b, unique per reason; memories body ≤ 1200', () =>
   mem.run('m1', 'x'.repeat(1200), NOW, NOW);
   assert.throws(() => mem.run('m2', 'x'.repeat(1201), NOW, NOW), /CHECK/);
 });
+
+test('lessons are append-only: UPDATE, DELETE and INSERT OR REPLACE all abort', () => {
+  const db = fresh();
+  const ins = (verb, text) => db.prepare(`${verb} INTO lessons (id, org_id, repo_id, text, created_at) VALUES ('l1','o1','r1',?,?)`).run(text, NOW);
+  ins('INSERT', 'run db:reset before the API tests');
+  assert.throws(() => ins('INSERT OR REPLACE', 'rewritten lesson text here'), /append-only/);
+  assert.throws(() => ins('REPLACE', 'rewritten lesson text here'), /append-only/);
+  assert.throws(() => db.exec("UPDATE lessons SET text = 'rewritten lesson text here'"), /append-only/);
+  assert.throws(() => db.exec('DELETE FROM lessons'), /append-only/);
+  assert.equal(db.prepare('SELECT text FROM lessons').get().text, 'run db:reset before the API tests');
+  db.prepare("INSERT INTO lessons (id, org_id, repo_id, text, created_at) VALUES ('l2','o1','r1','a second distinct lesson',?)").run(NOW);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM lessons').get().n, 2, 'new ids still insert');
+});

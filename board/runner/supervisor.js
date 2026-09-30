@@ -512,7 +512,7 @@ export class Supervisor extends EventEmitter {
     writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     writeFileAtomic(path.join(run.runDir, HOOK_TOKEN_FILE), run.run_token);
     const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart });
-    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, trusted: trustedInstructions(repo.local_path) });
+    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path) });
     const Backend = this.opts.Backend ?? ClaudeBackend;
     const backend = new Backend({
       bin: this.claudeBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
@@ -520,7 +520,7 @@ export class Supervisor extends EventEmitter {
       log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
     });
     run.attach(backend);
-    backend.start(resume ? 'Board connection restored and your run is still current. Continue where you left off.' : firstPrompt({ key: run.key, title: run.offer.title }));
+    backend.start(resume ? 'Board connection restored and your run is still current. Continue where you left off.' : firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }));
     this.saveLedger(run);
     return backend;
   }

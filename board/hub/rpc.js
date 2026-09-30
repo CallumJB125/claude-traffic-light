@@ -3,11 +3,12 @@
 // repo_id = the run's repo). Network work (GitHub) happens before the queue.
 
 import { randomUUID } from 'node:crypto';
-import { RPC_METHODS } from '../shared/protocol.js';
-import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
+import { RPC_METHODS, TOOL_SCOPES } from '../shared/protocol.js';
+import { PLAN_APPROVAL_LABEL, POLICY_LABELS } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
 import { prNumberOf } from './github.js';
+import { limitOrThrow } from './ratelimit.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
 const clip = (s, n) => {
@@ -16,6 +17,10 @@ const clip = (s, n) => {
 };
 export const relPath = (p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.startsWith('/') && !p.startsWith('~')
   && !/^[a-z]:/i.test(p) && !p.includes('\0') && !p.split('/').includes('..');
+
+// Plan paths are shown to other runs' agents: no whitespace or '<' that could
+// carry prose or a tag inside a "path".
+const planPath = (p) => relPath(p) && !/[\s<]/u.test(p);
 
 export function verifyRun(hub, device, msg) {
   const tok = parseRunToken(hub.secret, msg.run_token);
@@ -31,6 +36,19 @@ export function verifyRun(hub, device, msg) {
   if (run.ended_at) throw new HubError('RUN_ENDED', 'run has ended');
   if (row.active_run_id !== run.id) throw new HubError('FENCED', 'run is no longer the active run');
   return { run, row };
+}
+
+const optText = (v, max, what) => {
+  if (v == null) return null;
+  if (typeof v !== 'string' || v.length > max) throw new HubError('VALIDATION', `${what} must be a string of at most ${max} characters`);
+  return v.trim() || null;
+};
+
+// The member a run works for must still be able to write (not a viewer).
+function runMember(hub, run) {
+  const m = hub.activeMember(run.on_behalf_of);
+  if (!hub.canWrite(m)) throw new HubError('FORBIDDEN', 'the member this run is for cannot write to this board');
+  return m;
 }
 
 function brief(hub, row) {
@@ -119,7 +137,7 @@ const METHODS = {
 
   board_declare_plan(hub, { run, row }, params) {
     if (!Array.isArray(params.paths)) throw new HubError('VALIDATION', 'paths must be an array');
-    const paths = [...new Set(params.paths.filter(relPath))].slice(0, 200);
+    const paths = [...new Set(params.paths.filter(planPath))].slice(0, 200);
     hub.txn(() => {
       hub.db.run('UPDATE runs SET planned_paths = ? WHERE id = ?', JSON.stringify(paths), run.id);
       hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'plan.declare', payload: { paths } });
@@ -136,7 +154,7 @@ const METHODS = {
   board_recall(hub, { run, row }, params) {
     const kinds = Array.isArray(params.kinds) ? params.kinds.filter((k) => k === 'handoff') : ['handoff'];
     if (!kinds.length) return { memories: [] };
-    let rows = hub.db.all("SELECT * FROM memories WHERE repo_id = ? AND kind = 'handoff' AND status != 'archived' ORDER BY created_at DESC LIMIT 100", run.repo_id);
+    let rows = hub.db.all("SELECT * FROM memories WHERE repo_id = ? AND card_id IN (SELECT id FROM cards WHERE board_id = ?) AND kind = 'handoff' AND status != 'archived' ORDER BY created_at DESC LIMIT 100", run.repo_id, row.board_id);
     if (Array.isArray(params.paths) && params.paths.length) {
       const ps = params.paths.filter((p) => typeof p === 'string');
       rows = rows.filter((m) => m.path == null || ps.some((p) => p.startsWith(m.path) || m.path.startsWith(p)));
@@ -192,10 +210,83 @@ const METHODS = {
     return { state: 'cancelled' };
   },
 
+  // D31: a follow-up card, as a child of this run's card, on the same board
+  // and repo, in todo. Never dispatched, assigned or budgeted here; the only
+  // labels are the parent's policy labels, so a child cannot shed never_auto.
+  board_create_card(hub, { run, row }, params) {
+    const title = optText(params.title, 200, 'title');
+    if (!title) throw new HubError('VALIDATION', 'title required');
+    const body = optText(params.body, 20_000, 'body') ?? '';
+    const acceptance = optText(params.acceptance, 10_000, 'acceptance');
+    const member = runMember(hub, run);
+    if (!hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, run.repo_id)) throw new HubError('FORBIDDEN', 'this repo is no longer on the board');
+    limitOrThrow(hub, 'agent_card_member', member.id);
+    const id = randomUUID();
+    const now = hub.iso();
+    const labels = JSON.stringify(hub.labels(row).filter((l) => POLICY_LABELS.includes(l)));
+    let key;
+    hub.txn(() => {
+      const b = hub.board(row.board_id);
+      key = `${b.key_prefix}-${b.next_key}`;
+      hub.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', row.board_id);
+      hub.db.insert('cards', {
+        id, board_id: row.board_id, key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels,
+        parent_card_id: row.id, created_by: member.id, created_by_run_id: run.id, created_at: now, updated_at: now, state_since: now,
+      });
+      hub.journal({ board_id: row.board_id, card_id: id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'card.create', payload: {
+        key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels, budget_cents: null, column_name: 'todo', assignees: [], parent_card_id: row.id, request_id: null,
+      } });
+      hub.feed(id, 'created', { parent_key: row.key }, { run });
+      hub.later(() => hub.broadcastCard(id));
+    });
+    return { card_id: id, key, column: 'todo', parent_key: row.key };
+  },
+
+  // D32: append-only, org- and repo-scoped; exact repeats return the first row.
+  board_add_lesson(hub, { run, row }, params) {
+    const text = optText(params.text, 2000, 'text')?.replace(/\s+/g, ' ');
+    if (!text || text.length < 10 || text.length > 500) throw new HubError('VALIDATION', 'text must be 10–500 characters');
+    const evidence = optText(params.evidence, 1000, 'evidence');
+    const member = runMember(hub, run);
+    // Before the lookup: "is this text already a lesson?" must not be free to ask.
+    limitOrThrow(hub, 'agent_lesson_member', member.id);
+    const orgId = hub.board(row.board_id).org_id;
+    const dup = hub.db.get('SELECT id FROM lessons WHERE org_id = ? AND repo_id = ? AND text = ?', orgId, run.repo_id, text);
+    if (dup) return { lesson_id: dup.id, status: 'suggested', duplicate: true };
+    const id = randomUUID();
+    hub.txn(() => {
+      hub.db.insert('lessons', {
+        id, org_id: orgId, repo_id: run.repo_id, card_id: row.id, author_run_id: run.id, author_member_id: member.id, text, evidence, created_at: hub.iso(),
+      });
+      hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'lesson.create', payload: { lesson_id: id, repo_id: run.repo_id } });
+    });
+    return { lesson_id: id, status: 'suggested' };
+  },
+
   team_context(hub, { run }) {
     return hub.teamContext(run.id);
   },
 };
+
+// The scope (protocol TOOL_SCOPES) each runner RPC is held to, runner-only
+// plumbing included. A method missing here is refused, so a new RPC cannot
+// ship without a declared scope.
+export const METHOD_SCOPES = Object.freeze({
+  board_get_card: 'card:read',
+  board_list_cards: 'repo:read',
+  board_ask_human: 'card:write',
+  board_attach_evidence: 'card:write',
+  board_complete: 'card:write',
+  board_release: 'card:write',
+  board_declare_plan: 'card:write',
+  board_check_overlap: 'repo:read',
+  board_recall: 'repo:read',
+  approval: 'permission:ask',
+  team_context: 'repo:read',
+  approval_cancel: 'permission:ask',
+  board_create_card: 'card:create_child',
+  board_add_lesson: 'lesson:suggest',
+});
 
 async function attachEvidence(hub, device, msg) {
   const params = msg.params ?? {};
@@ -234,6 +325,7 @@ async function attachEvidence(hub, device, msg) {
 
 export async function handleRpc(hub, device, msg) {
   if (!RPC_METHODS.includes(msg.method)) throw new HubError('VALIDATION', `unknown method ${msg.method}`);
+  if (!Object.hasOwn(METHOD_SCOPES, msg.method) || !TOOL_SCOPES[METHOD_SCOPES[msg.method]]) throw new HubError('FORBIDDEN', `method ${msg.method} has no declared scope`);
   if (msg.method === 'board_attach_evidence') return attachEvidence(hub, device, msg);
   const row = hub.card(msg.card_id);
   if (!row) throw new HubError('NOT_FOUND', 'card not found');

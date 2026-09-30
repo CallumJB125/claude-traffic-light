@@ -62,3 +62,24 @@ test('stdio: missing env → exits non-zero without serving', async () => {
   assert.equal(r.status, 1);
   assert.match(String(r.stderr), /BOARD_RUN_SOCKET is not set/);
 });
+
+test('stdio: loaded by the plugin outside a run → serves no tools, explains why', async () => {
+  const transport = new StdioClientTransport({ command: process.execPath, args: [SERVER], env: { PATH: process.env.PATH, BOARD_MCP_PLUGIN: '1' }, stderr: 'pipe' });
+  const client = new Client({ name: 'stdio-test', version: '0' });
+  try {
+    await client.connect(transport);
+    assert.deepEqual((await client.listTools()).tools, []);
+    assert.match(client.getInstructions(), /only inside a board run/);
+    const res = await client.callTool({ name: 'board_get_card', arguments: {} });
+    assert.deepEqual([res.isError, res.content[0].text], [true, 'VALIDATION: not inside a board run']);
+  } finally {
+    await client.close();
+  }
+});
+
+test('stdio: the plugin flag never masks a run with half its env', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync(process.execPath, [SERVER], { env: { PATH: process.env.PATH, BOARD_MCP_PLUGIN: '1', BOARD_RUN_SOCKET: '/tmp/x.sock' }, input: '', timeout: 10_000 });
+  assert.equal(r.status, 1);
+  assert.match(String(r.stderr), /BOARD_RUN_TOKEN is not set/);
+});

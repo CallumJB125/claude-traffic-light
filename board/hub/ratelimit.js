@@ -3,6 +3,7 @@
 // run on the hub monotonic clock, so tests drive them with the fake clock.
 
 import { isLoopback } from './config.js';
+import { HubError } from './db.js';
 
 // {capacity, per_ms}: at most `capacity` at once, refilled at capacity/per_ms.
 export const DEFAULT_LIMITS = Object.freeze({
@@ -11,6 +12,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   mutate_member: { capacity: 120, per_ms: 60_000 },
   dispatch_member: { capacity: 30, per_ms: 60_000 },   // dispatch, retry, take_over_with_claude
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
+  agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
+  agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
 });
@@ -39,9 +42,23 @@ export class RateLimiter {
     return { ok: false, retry_after_ms: Math.ceil((1 - b.tokens) / rate) };
   }
 
+  // A bucket may go only once it would have refilled anyway: an hourly rule
+  // swept after 10 idle minutes would come back full and could be waited out.
   sweep() {
     const now = this.now();
-    for (const [k, b] of this.buckets) if (now - b.at > IDLE_SWEEP_MS) this.buckets.delete(k);
+    for (const [k, b] of this.buckets) {
+      const per = this.limits[k.slice(0, k.indexOf('|'))]?.per_ms ?? 0;
+      if (now - b.at > Math.max(IDLE_SWEEP_MS, per)) this.buckets.delete(k);
+    }
+  }
+}
+
+/** Take one token or throw RATE_LIMITED with retry_after_s (HTTP routes and runner RPCs). */
+export function limitOrThrow(hub, rule, key) {
+  const r = hub.limiter.take(rule, key);
+  if (!r.ok) {
+    const s = Math.max(1, Math.ceil(r.retry_after_ms / 1000));
+    throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
   }
 }
 
