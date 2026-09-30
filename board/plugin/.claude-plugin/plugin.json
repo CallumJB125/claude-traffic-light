@@ -1,0 +1,10 @@
+{
+  "name": "team-board",
+  "displayName": "Team board",
+  "version": "0.1.0",
+  "description": "The team board's MCP server (board): card tools for Claude runs started from the board. Outside a board run it lists no tools.",
+  "author": { "name": "Callum Baker" },
+  "repository": "https://github.com/CallumJB125/claude-traffic-light",
+  "license": "MIT",
+  "keywords": ["team-board", "mcp", "cards", "handover"]
+}
