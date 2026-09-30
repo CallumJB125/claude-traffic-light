@@ -525,10 +525,10 @@
     document.getElementById('help').addEventListener('mousedown', (e) => e.stopPropagation());
     document.getElementById('help').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.openHelp(); });
 
-    // Right-click the widget → Lights editor.
+    // Right-click the widget → Lights editor (on Linux, the tray menu).
     app.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      window.trafficLight.openLights();
+      window.trafficLight.widgetMenu();
     });
   </script>
 </body>
