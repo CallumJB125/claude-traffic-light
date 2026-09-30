@@ -259,3 +259,20 @@ export function buildCards(now) {
 
   return cards;
 }
+
+// Team presence (D37b): ages instead of timestamps, turned into ISO `since`
+// at send time like everything else here. Sam shares nothing; one session is
+// waiting; one summary carries markup to prove it stays text.
+export const PRESENCE = [
+  { member_id: 'm-alice', name: 'Alice', sessions: [
+    { agent: 'claude', repo_short: 'bondly', branch: 'board/BDL-142-r2', state: 'working', since_ago_ms: 18 * 60_000 + 20_000, summary: 'Re-keying the anonymous draft on auth success' },
+    { agent: 'codex', repo_short: 'bondly-frontend', branch: 'feat/table-filter', state: 'idle', since_ago_ms: 41 * 60_000 },
+  ] },
+  { member_id: 'm-bob', name: 'Bob', sessions: [
+    { agent: 'claude', repo_short: 'bondly-frontend', branch: 'feat/release-note', state: 'waiting', since_ago_ms: 4 * 60_000 + 10_000, summary: 'Needs a decision: ship 2.4 notes with or without the changelog link?' },
+  ] },
+  { member_id: 'm-james', name: 'James', sessions: [
+    { agent: 'cursor', repo_short: 'bondly', state: 'working', since_ago_ms: 52_000, summary: '<img src=x onerror=alert(1)> tidying the auth tests' },
+    { agent: 'gemini', repo_short: 'bondly', branch: 'spike/rate-limit', state: 'idle', since_ago_ms: 2 * 3_600_000 + 5 * 60_000 },
+  ] },
+];
