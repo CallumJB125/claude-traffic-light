@@ -358,7 +358,8 @@ export class Run {
     this.ended = true;
     for (const a of this.approvals.values()) a.resolve({ behavior: 'deny', message: 'The run ended.' });
     this.approvals.clear();
-    this.handover?.resolve?.();
+    // A quit window reads false (not parked) whichever path ends the run first.
+    this.handover?.resolve?.(this.handover.mode === 'quit' ? false : undefined);
     this.flushFacts();
     this.sup.runEnded(this);
     this.resolveDone();
