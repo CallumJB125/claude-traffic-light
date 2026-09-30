@@ -355,7 +355,8 @@ body.is-card-dragging .board { scroll-snap-type: none; }
 .quickadd-confirm span { flex-basis: 100%; }
 /* ── filter bar ──────────────────────────────────────────────────────── */
 
-.filterbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 20px 0; }
+/* position: the sr-only labels inside are absolute; without it they escape the bar's scroll clip and widen the page on phones */
+.filterbar { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 20px 0; }
 .filter-search {
   display: inline-flex; align-items: center; gap: 7px; flex: 0 1 260px; min-width: 180px; min-height: 30px; padding: 0 8px;
   background: var(--panel); border: 1px solid var(--line-input); border-radius: var(--radius); color: var(--muted);
