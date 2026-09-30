@@ -87,6 +87,8 @@ test('isInstalled is false when the wrapper runs a different binary (a reinstall
     const memFs = {
       readFileSync: (f) => { if (!files.has(f)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return files.get(f); },
       writeFileSync: (f, t) => files.set(f, String(t)),
+      renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); },
+      unlinkSync: (f) => files.delete(f),
       mkdirSync: () => {},
       chmodSync: () => {},
     };
