@@ -444,7 +444,7 @@ test('M8: an unknown webhook target never holds the hub past the read deadline',
   try {
     const u = new URL(`${h.base}/integrations/${randomUUID()}/webhook`);
     const status = await new Promise((resolve, reject) => {
-      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
+      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(500_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
       req.on('error', reject);
       req.write('{"partial":');
       setTimeout(() => reject(new Error('the hub waited past its deadline')), 2000).unref();

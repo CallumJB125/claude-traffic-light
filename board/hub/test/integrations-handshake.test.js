@@ -409,3 +409,170 @@ test('defineConnector refuses handshake without ackBody, without connect.prepare
   assert.throws(() => defineConnector({ ...base, connect: { ...base.connect, handshake: true } }), /handshake/);
   assert.throws(() => defineConnector({ ...base, connect: { ...base.connect, handshake: 'url_verification' } }), /handshake/);
 });
+
+// ── review follow-up: one read bucket for every non-connection id ─────────
+
+// → {answered, req}: a read held open (part of a body sent, the rest withheld).
+function held(h, id, { length = 500_000, headers = {} } = {}) {
+  const u = new URL(`${h.base}/integrations/${id}/webhook`);
+  const out = {};
+  out.answered = new Promise((resolve) => {
+    out.req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(length), ...headers } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', () => resolve({ status: res.statusCode, body: null }));
+    });
+    out.req.on('error', () => resolve({ status: null, body: null }));
+  });
+  out.req.write('{"partial":');
+  return out;
+}
+const promote = async (h, p) => {
+  const cb = await fetch(`${h.base}/integrations/hand/callback?${new URLSearchParams({ state: p.state, code: 'c' })}`, { headers: { cookie: p.cookie } });
+  assert.equal(cb.status, 200, await cb.text());
+};
+
+test('every id that is not a live connection shares one in-flight read bucket (perUnknown): when it is full a random UUID and a ready pending id get the same unread 503; a live connection\'s reads are counted apart, both ways', async () => {
+  const { h, beh, alice } = await setup({ config: { webhookReads: { perPair: 4, perIp: 100, perConn: 2, perUnknown: 2, deadlineMs: 5_000 } } });
+  try {
+    const l = await ready(h, beh, alice);
+    await promote(h, l);
+    const p = await ready(h, beh, await otherAdmin(h));
+
+    // The live connection's own cap full: pending and unknown ids still read.
+    const liveHeld = [held(h, l.id), held(h, l.id)];
+    await tick();
+    assert.equal((await send(h, l.id, signed(verification(), l.secret))).status, 503, 'the live connection is at its own cap');
+    const c0 = challengeOf();
+    const ok0 = await send(h, p.id, signed(verification(c0), p.secret));
+    assert.equal(ok0.status, 200, 'a pending id is not held up by a live connection\'s reads');
+    assert.equal(await ok0.text(), c0);
+    assert.equal((await send(h, randomUUID(), signed(verification(), null))).status, 404);
+    for (const x of liveHeld) x.req.destroy();
+    await tick();
+
+    // The non-connection bucket full, from two different chosen ids.
+    const unknownHeld = [held(h, randomUUID()), held(h, randomUUID())];
+    await tick();
+    const verifiedBefore = beh.verified.length;
+    const u = await norm(await send(h, randomUUID(), signed(verification(), p.secret)));
+    const pend = await norm(await send(h, p.id, signed(verification(), p.secret)));
+    assert.equal(u.status, 503);
+    assert.deepEqual(pend, u, 'a ready pending id and a random UUID: the same 503');
+    assert.deepEqual(JSON.parse(u.body), { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } });
+    assert.ok(u.headers.some(([k, v]) => k === 'retry-after' && v === '1'));
+    assert.equal(beh.verified.length, verifiedBefore, 'body unread: verify() never ran');
+    const c1 = challengeOf();
+    const ok1 = await send(h, l.id, signed(verification(c1), l.secret));
+    assert.equal(ok1.status, 200, 'the live connection still reads while the bucket is full');
+    assert.equal(await ok1.text(), c1);
+
+    // An aborted read gives its slot back.
+    for (const x of unknownHeld) x.req.destroy();
+    await tick();
+    const c2 = challengeOf();
+    const ok2 = await send(h, p.id, signed(verification(c2), p.secret));
+    assert.equal(ok2.status, 200, 'slots released on abort');
+    assert.equal(await ok2.text(), c2);
+    await h.hub.idle();
+  } finally { await h.close(); }
+});
+
+test('the non-connection read slot is released when a read ends: success, an over-size body, the deadline', async () => {
+  const { h, beh, alice } = await setup({ config: { webhookReads: { perPair: 4, perIp: 100, perUnknown: 1, deadlineMs: 400 }, rateLimits: { webhook_fail_ip: { capacity: 1000, per_ms: 60_000 } } } });
+  try {
+    const p = await ready(h, beh, alice);
+    for (let i = 0; i < 3; i++) assert.equal((await send(h, randomUUID(), signed(verification(), null))).status, 404, `success ${i}`);
+    // Chunked: no content-length to refuse up front, so the read itself hits the cap.
+    const big = await new Promise((resolve) => {
+      const u = new URL(`${h.base}/integrations/${randomUUID()}/webhook`);
+      const r = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'transfer-encoding': 'chunked' } }, (res) => { res.resume(); resolve(res.statusCode); });
+      r.on('error', () => {});
+      r.write(Buffer.alloc(1024 * 1024 + 10, 0x20));
+    });
+    assert.equal(big, 413);
+    await tick();
+    assert.equal((await send(h, randomUUID(), signed(verification(), null))).status, 404, 'released after a 413');
+    const slowOne = held(h, randomUUID());
+    assert.equal((await slowOne.answered).status, 408);
+    slowOne.req.destroy();
+    const c = challengeOf();
+    const ok = await send(h, p.id, signed(verification(c), p.secret));
+    assert.equal(ok.status, 200, 'released after the deadline');
+    assert.equal(await ok.text(), c);
+  } finally { await h.close(); }
+});
+
+test('a declared content-length over 1 MiB is 413 at once, unread, for every id alike (live, pending, unknown); the non-connection ones byte-identical', async () => {
+  const { h, beh, alice } = await setup({ config: { webhookReads: { deadlineMs: 5_000 } } });
+  try {
+    const l = await ready(h, beh, alice);
+    await promote(h, l);
+    const p = await ready(h, beh, await otherAdmin(h));
+    const got = [];
+    for (const id of [randomUUID(), p.id, l.id]) {
+      const x = held(h, id, { length: 1024 * 1024 + 1 });
+      got.push(await x.answered);
+      x.req.destroy();
+    }
+    assert.deepEqual(got.map((g) => g.status), [413, 413, 413]);
+    assert.equal(got[0].body, got[1].body);
+    assert.deepEqual(JSON.parse(got[2].body), { error: { code: 'PAYLOAD_TOO_LARGE', message: 'body over 1 MiB' } });
+  } finally { await h.close(); }
+});
+
+test('an unknown id, a not-ready pending id and a ready pending id without a timestamp header each pay one HMAC over the body', async () => {
+  const { h, reg, beh, alice } = await setup();
+  const real = crypto.createHmac;
+  const seen = [];
+  try {
+    const notReady = await ready(h, beh, await otherAdmin(h), {});
+    const p = await ready(h, beh, alice);
+    crypto.createHmac = (...a) => {
+      const m = real(...a);
+      const up = m.update.bind(m);
+      m.update = (d, ...r) => { seen.push(Buffer.from(d)); return up(d, ...r); };
+      return m;
+    };
+    syncBuiltinESMExports();
+    for (const [name, id] of [['unknown', randomUUID()], ['not ready', notReady.id], ['ready, no timestamp', p.id]]) {
+      const raw = Buffer.from(JSON.stringify({ ...verification(), marker: randomUUID() }));
+      const out = await reg.webhook(id, { headers: { 'content-type': 'application/json' }, rawBody: raw });
+      assert.equal(out.status, 404, name);
+      assert.equal(seen.filter((b) => b.includes(raw)).length, 1, `${name}: one HMAC over the body`);
+    }
+  } finally {
+    crypto.createHmac = real;
+    syncBuiltinESMExports();
+    await h.close();
+  }
+});
+
+test('a pending row whose connector has no connect object is the unknown-id 404, not a throw', async () => {
+  const { h, reg } = await setup();
+  try {
+    reg.register({ id: 'bare', name: 'Bare', verify: () => ({ ok: true, dedupe_key: 'k' }), ackBody: () => 'x' });
+    const member = h.db.get('SELECT id FROM members WHERE org_id = ? LIMIT 1', h.ids.org).id;
+    const id = randomUUID();
+    h.db.insert('integration_pending', { id, org_id: h.ids.org, provider: 'bare', created_by: member, match: '{"app_id":"A1"}', created_at: h.hub.iso(), expires_at: new Date(h.hub.wallMs() + 3_600_000).toISOString() });
+    const raw = Buffer.from(JSON.stringify(verification()));
+    assert.deepEqual(await reg.webhook(id, { headers: {}, rawBody: raw }), await reg.webhook(randomUUID(), { headers: {}, rawBody: raw }));
+  } finally { await h.close(); }
+});
+
+test('an id promoted while its body is read is answered as the live connection it now is: its failure spends the connection\'s own bucket', async () => {
+  const { h, beh, alice } = await setup({ config: { webhookReads: { deadlineMs: 5_000 } } });
+  try {
+    const p = await ready(h, beh, alice);
+    const body = `{"partial":${JSON.stringify(verification())}}`;
+    const x = held(h, p.id, { length: Buffer.byteLength(body), headers: { 'content-type': 'application/json', 'x-hand-ts': String(nowTs()) } });
+    await tick();
+    await promote(h, p);
+    x.req.end(body.slice('{"partial":'.length));
+    const got = await x.answered;
+    assert.equal(got.status, 401, 'a live connection\'s bad signature');
+    assert.ok(bucketKeys(h).includes(`webhook_fail_ip|${p.id}|127.0.0.1`), 'spent on the connection + client IP');
+    assert.ok(!bucketKeys(h).includes('webhook_fail_ip|-|127.0.0.1'), 'not on the non-connection bucket');
+  } finally { await h.close(); }
+});

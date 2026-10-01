@@ -268,14 +268,14 @@ test('M-2: a (connection, IP) pair has at most 4 body reads in flight (hardening
     const conn = await connectFake(h, reg);
     const u = new URL(`${h.base}/integrations/${conn.id}/webhook`);
     const held = Array.from({ length: 4 }, () => {
-      const r = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } });
+      const r = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(500_000) } });
       r.on('error', () => {});
       r.write('{"partial":');
       return r;
     });
     await new Promise((r) => setTimeout(r, 100));
     const res = await new Promise((resolve, reject) => {
-      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (r) => { r.resume(); resolve(r); });
+      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(500_000) } }, (r) => { r.resume(); resolve(r); });
       req.on('error', reject);
       req.write('{"partial":');
       setTimeout(() => reject(new Error('the hub waited for the body')), 2000).unref();
