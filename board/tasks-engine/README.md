@@ -93,8 +93,12 @@ Electron. The UI states this explicitly.
   queued for the next turn, rather than claiming live steering.
 - Trust (§3, §9.2): `tasks.token` is the UI/CLI's; relays get scoped `btr_`
   tokens (`relay-tokens.js addRelayToken`) that bind their source and verified sender
-  (`userId`), or require their parent session (`parentSessionId` for MCP), and can't
-  approve, answer, take over or accept a start. `bypass` refused; `mcp` and
+  (`userId`), or require their active parent session (`parentSessionId` for MCP).
+  MCP reads/actions/pushes stay on that parent and its children; other sources
+  need explicit task grants or creation repos, and own only their created tasks.
+  Grants expire (24h default) and revoke per token/source; queued actions and
+  live pushes recheck authority. Relays cannot impersonate local-user messages,
+  approve, answer, take over, accept a start or set device limits. `bypass` refused; `mcp` and
   remote sources clamped to `auto-edits` (spin-offs also to the parent's level,
   in the parent's repo); remote work needs `policy.json`
   `repos[<path|canonical>].remote_tasks: true`, is forced plan-first and waits

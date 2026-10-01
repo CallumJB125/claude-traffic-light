@@ -91,13 +91,32 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     conn.write(`${line}\n`);
   }
 
+  function livePrincipal(conn) {
+    if (conn.hello?.dead || conn.destroyed) return null;
+    const p = authOf(conn.hello?.token);
+    if (!p || !engine.relayActive(p)) {
+      send(conn, { id: null, error: { code: 'UNAUTHENTICATED', message: 'authorization revoked or expired' } });
+      send(conn, { push: 'bye', reason: 'authorization revoked' });
+      conn.hello.dead = true;
+      conn.end();
+      return null;
+    }
+    return p;
+  }
+
+  function sendPush(conn, frame) {
+    if (livePrincipal(conn)) send(conn, frame);
+  }
+
   function pushEvent(sub, s, e) {
     const { conn } = s;
     if (conn.destroyed) return;
+    const p = livePrincipal(conn);
+    if (!p || !engine.canAccess(e.taskId, p)) return;
     if (conn.writableLength > BACKPRESSURE_BYTES) {
       // Never block other clients or the tasks: drop this subscription and say where to resume once drained.
       subs.delete(sub);
-      conn.once('drain', () => send(conn, { push: 'lagged', sub, lastSeq: s.lastSent }));
+      conn.once('drain', () => sendPush(conn, { push: 'lagged', sub, lastSeq: s.lastSent }));
       return;
     }
     s.lastSent = e.seq;
@@ -120,6 +139,10 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
       st.dead = true;
       return;
     }
+    // One authenticated principal per connection; subscriptions must never
+    // retain a stronger token after a caller switches credentials.
+    if (st.hello && st.token !== msg.token) { fail('UNAUTHENTICATED', 'connection principal changed'); conn.destroy(); return; }
+    const ctx = { principal, auth: () => authOf(msg.token) };
     const re = validate(SCHEMA, 'Request', msg);
     if (re) {
       if (typeof msg.method === 'string' && !METHODS.includes(msg.method)) return fail('UNKNOWN_METHOD', 'unknown method');
@@ -137,14 +160,16 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     try {
       switch (msg.method) {
         case 'hello': {
+          if (!engine.relayActive(principal)) { fail('POLICY_DENIED', 'relay parent is no longer active'); conn.end(); return; }
           const r = engine.hello(params);
           st.hello = true;
+          st.token = msg.token;
           clearTimeout(st.helloTimer);
           return send(conn, { id, result: r });
         }
         case 'subscribe': {
           if ([...subs.values()].filter((s) => s.conn === conn).length >= MAX_SUBS_PER_CONN) return fail('VALIDATION', 'too many subscriptions on this connection');
-          const { reset, events } = engine.replay(params.id, params.fromSeq, params.epoch);
+          const { reset, events } = engine.replay(params.id, params.fromSeq, params.epoch, ctx);
           const sub = `sub_${crypto.randomBytes(6).toString('hex')}`;
           const latestSeq = engine.seq;
           // A replay is paged: past BACKPRESSURE_BYTES it stops and says `lagged`, and the
@@ -155,11 +180,11 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
           const page = events.slice(0, n);
           // Response first, then the reset or the replay, then live (§4).
           send(conn, { id, result: { sub, epoch: engine.epoch, latestSeq, replayed: page.length } });
-          if (reset) send(conn, { push: 'reset', sub, reason: reset, latestSeq });
-          for (const e of page) send(conn, { push: 'event', sub, event: e });
+          if (reset) sendPush(conn, { push: 'reset', sub, reason: reset, latestSeq });
+          for (const e of page) { const p = livePrincipal(conn); if (p && engine.canAccess(e.taskId, p)) sendPush(conn, { push: 'event', sub, event: e }); }
           if (n < events.length) {
             const lastSeq = page.at(-1)?.seq ?? (params.fromSeq ?? 1) - 1;
-            const lagged = () => send(conn, { push: 'lagged', sub, lastSeq });
+            const lagged = () => sendPush(conn, { push: 'lagged', sub, lastSeq });
             if (conn.writableLength > 0) conn.once('drain', lagged); else lagged();
             return undefined;
           }
@@ -172,7 +197,15 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
           return send(conn, { id, result: {} });
         }
         default:
-          return send(conn, { id, result: await engine[msg.method](params ?? {}, { principal }) });
+          {
+            let result = await engine[msg.method](params ?? {}, ctx);
+            const p = livePrincipal(conn);
+            if (!p) return undefined;
+            if (params?.id && !engine.canAccess(params.id, p)) return fail('NOT_FOUND', 'no such task');
+            if (msg.method === 'listTasks') result = result.filter((t) => engine.canAccess(t.id, p));
+            if (msg.method === 'getClaims') result = { ...result, claims: result.claims.filter((c) => engine.canAccess(c.taskId, p)) };
+            return send(conn, { id, result });
+          }
       }
     } catch (e) {
       if (e instanceof ApiError) return fail(e.code, e.message, e.details);
@@ -237,11 +270,12 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
   });
   fs.chmodSync(socketPath, 0o600);
 
-  // The green lease (§6.2): every hello'd client hears about every leased task every hbMs.
+  // Recheck auth for every push; revoked clients receive no task data.
   const hb = setInterval(() => {
-    const tasks = engine.hbTasks();
-    const frame = { push: 'hb', epoch: engine.epoch, uptimeMs: Math.max(0, Date.now() - startedAt), tasks };
-    for (const c of conns) if (c.hello?.hello) send(c, frame);
+    for (const c of conns) if (c.hello?.hello) {
+      const p = livePrincipal(c);
+      if (p) send(c, { push: 'hb', epoch: engine.epoch, uptimeMs: Math.max(0, Date.now() - startedAt), tasks: engine.hbTasks(p) });
+    }
   }, hbMs);
   hb.unref?.();
 

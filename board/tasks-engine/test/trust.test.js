@@ -23,7 +23,7 @@ test('relay tokens force their source and cannot approve, answer, take over or a
   const m = await setup();
   try {
     writePolicy(m.dataDir, { repos: { [m.repo.checkout]: { remote_tasks: true } } });
-    const token = addRelayToken({ dataDir: m.dataDir, source: 'phone', label: 'phone bridge' });
+    const token = addRelayToken({ dataDir: m.dataDir, source: 'phone', label: 'phone bridge', userId: 'phone-owner', allowCreate: true, repoRoots: [m.repo.checkout] });
     assert.match(token, /^btr_[A-Za-z0-9_-]{43}$/);
     const stored = fs.readFileSync(path.join(m.dataDir, 'relay-tokens.json'), 'utf8');
     assert.ok(!stored.includes(token), 'stored hashed');
@@ -72,16 +72,17 @@ test('relay sender trust is bound by its private token record, never caller meta
   try {
     writePolicy(m.dataDir, { accept_from: ['trusted-user'], repos: { [m.repo.checkout]: { remote_tasks: true } } });
     const relay = async (userId) => {
-      const c = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'phone', userId }) });
+      const c = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'phone', userId, allowCreate: true, repoRoots: [m.repo.checkout] }) });
       relays.push(c); return c;
     };
-    const unbound = await relay(null);
+    assert.throws(() => addRelayToken({ dataDir: m.dataDir, source: 'phone', allowCreate: true, repoRoots: [m.repo.checkout] }), /verified owner/);
+    const unbound = await relay('untrusted-user');
     const bound = await relay('trusted-user');
     const requestId = 'same-request-across-principals';
     const a = await unbound.createTask({ ...m.spec, sourceMeta: { userId: 'trusted-user' } }, { requestId });
     const ad = await m.client.getTask(a.id);
     assert.equal(ad.awaitingConfirm, true, 'forged accept_from identity does not start');
-    assert.equal(ad.spec.sourceMeta.userId, undefined);
+    assert.equal(ad.spec.sourceMeta.userId, 'untrusted-user');
     const b = await bound.createTask({ ...m.spec, sourceMeta: { userId: 'forged-other' } }, { requestId });
     const bd = await m.client.getTask(b.id);
     assert.notEqual(b.id, a.id, 'idempotency cache is principal scoped');
@@ -106,8 +107,7 @@ test('MCP relay cannot omit or replace its authenticated parent to widen repo or
       assert.equal(kid.permissionLevel, 'plan');
       assert.equal(kid.spec.sourceMeta.parentSessionId, parent.sessionId);
     }
-    const stale = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'mcp', parentSessionId: '00000000-0000-4000-8000-000000000000' }) });
-    try { await assert.rejects(stale.createTask(m.spec), (e) => e.code === 'POLICY_DENIED'); } finally { stale.close(); }
+    await assert.rejects(connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'mcp', parentSessionId: '00000000-0000-4000-8000-000000000000' }) }), (e) => e.code === 'POLICY_DENIED');
   } finally { relay?.close(); await m.done(); }
 });
 
@@ -146,7 +146,7 @@ test('bound MCP parent inherits effective unapproved plan mode and inactive pare
     assert.equal(d.permissionLevel, 'plan', 'nominal auto-edits cannot bypass effective parent plan mode');
     assert.equal(d.planFirst, true);
     await m.client.act(id, 'stop', {});
-    await assert.rejects(relay.createTask(m.spec), (e) => e.code === 'POLICY_DENIED', 'token is stale after terminal parent');
+    await assert.rejects(relay.createTask(m.spec), (e) => ['POLICY_DENIED', 'UNAUTHENTICATED'].includes(e.code), 'token is stale after terminal parent');
   } finally { relay?.close(); await m.done(); }
 });
 
