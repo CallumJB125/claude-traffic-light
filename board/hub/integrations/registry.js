@@ -61,6 +61,8 @@ const LINK_STATUS_MAX = 512;
 const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
 const ACK_MAX = 4096;
+const ACKED_FAILURE_MS = 10_000;
+const SHORT_CODE = /^[a-z0-9_]{1,40}$/;
 // A pending id's only answer (D97): Slack's challenge, nothing that could carry markup.
 const HANDSHAKE_ACK = /^[\x20-\x7e]{1,256}$/;
 // Keys the HMAC an id with no answering pending row runs over the body, as a
@@ -96,6 +98,8 @@ const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArra
 // instance is refused, so a forgotten `async` can't slip through).
 const isBareObject = (v) => isPlainObject(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
 const POISON_KEYS = ['__proto__', 'constructor', 'prototype'];
+// A structured copy, or null when it can't be copied (a function, a symbol…).
+const copyOf = (v) => { try { return structuredClone(v); } catch { return null; } };
 // An https URL on one of `hosts`, no port or credentials; else null.
 function urlOn(u, hosts) {
   let url;
@@ -159,9 +163,17 @@ const safeEq = (a, b) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** The member an integration acts as was removed or can no longer write: retrying won't help. */
+/**
+ * The member an integration acts as was removed or can no longer write:
+ * retrying won't help. scope 'connection': connections.created_by (an admin
+ * must reconnect); 'member': a linked member (that act only, D42 addendum C2).
+ */
 export class ActorUnavailable extends Error {
-  constructor() { super('the member this integration acts as was removed or can no longer write'); this.code = 'ACTOR_UNAVAILABLE'; }
+  constructor(scope = 'connection') {
+    super('the member this integration acts as was removed or can no longer write');
+    this.code = 'ACTOR_UNAVAILABLE';
+    this.scope = scope === 'member' ? 'member' : 'connection';
+  }
 }
 
 const tagged = (message, healthCode) => Object.assign(new Error(message), { healthCode });
@@ -410,6 +422,16 @@ export function createIntegrations({
       const m = l && hub.member(l.member_id);
       return m && m.org_id === c.org_id && !m.removed_at && hub.canWrite(m) ? m.id : null;
     }
+    // The member a subject is linked to on this connection, whatever their state.
+    const linkedMember = (subject) => (typeof subject === 'string' && subject && subject.length <= SUBJECT_MAX
+      ? db.get('SELECT member_id FROM external_identities WHERE connection_id = ? AND subject = ?', c.id, subject)?.member_id ?? null
+      : null);
+    // C2: what a connector may tell the user, never who the member is.
+    const linkState = (subject) => {
+      if (!linkedMember(subject)) return 'none';
+      return memberFor(subject) ? 'active' : 'unavailable';
+    };
+    const scopeOf = (memberId) => (memberId === c.created_by ? 'connection' : 'member');
     // …and back, for reaching a member (a viewer too) on the provider.
     function subjectFor(memberId) {
       const l = typeof memberId === 'string' ? db.get('SELECT subject FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId) : null;
@@ -421,7 +443,7 @@ export function createIntegrations({
     function actor(memberId) {
       const m = hub.member(memberId);
       if (!m || m.org_id !== c.org_id) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
-      if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable();
+      if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable(scopeOf(memberId));
       // Admin rights never pass to a tool (Api uses role for "involved" checks).
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
     }
@@ -448,7 +470,20 @@ export function createIntegrations({
       // the member who connected it, never as some other linked member.
       // Checked again on every call.
       const bound = () => {
-        if (subject != null ? memberFor(subject) !== memberId : memberId !== c.created_by) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+        const forbidden = () => new HubError('FORBIDDEN', 'this integration may not act as that member');
+        if (subject == null) {
+          if (memberId !== c.created_by) throw forbidden();
+          return;
+        }
+        if (memberFor(subject) === memberId) return;
+        // Still that subject's member (or its link went with the member's
+        // removal, 023), who can't act now: unavailable, not someone else.
+        const m = typeof memberId === 'string' ? hub.member(memberId) : null;
+        const linked = linkedMember(subject);
+        if (m && m.org_id === c.org_id && (m.removed_at || !hub.canWrite(m)) && (linked === memberId || (linked == null && m.removed_at))) {
+          throw new ActorUnavailable(scopeOf(memberId));
+        }
+        throw forbidden();
       };
       bound();
       const first = actor(memberId);
@@ -476,7 +511,7 @@ export function createIntegrations({
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        for (const [rule, key] of rules) limitOrThrow(hub, rule, key);
+        for (const [rule, key] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
@@ -499,7 +534,10 @@ export function createIntegrations({
         member: { id: first.id, role: first.role },
         // A D8 replay answers with the first card whatever board it names: the
         // same request on another board is a conflict, not that card.
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), cardRules, boardOfOrg(boardId)).then((out) => {
+        // A request that already made its card (integration_requests) spends no
+        // card token: a repeat can't probe or drain a bucket (C2, F-2).
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)),
+          () => (db.get('SELECT 1 AS x FROM integration_requests WHERE connection_id = ? AND request_id = ?', c.id, body.request_id) ? [] : cardRules), boardOfOrg(boardId)).then((out) => {
           const on = hub.card(out?.card?.id)?.board_id;
           if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
           return out;
@@ -804,6 +842,7 @@ export function createIntegrations({
       verifiedPr,
       memberFor,
       subjectFor,
+      linkState,
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
@@ -973,6 +1012,7 @@ export function createIntegrations({
     // Before the handler starts, so it can't see what the handler did to payload.
     const early = conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
     const ack = early ? earlyAck(conn, payload, headers) : null;
+    const asParsed = early && conn.onAckedFailure ? copyOf({ payload, headers }) : null;
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
@@ -982,33 +1022,48 @@ export function createIntegrations({
       try {
         await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
-        if (early) deadLetter(c, e);
-        if (e?.code === 'TIMEOUT') {
-          // The handler may still be running: the lease stays (a retry answers
-          // in_progress) and the row settles when it really ends, or the lease
-          // expires and a later retry takes it over.
-          running.then(done, release);
-          setHealth(c.id, false, 'handler_timeout');
-          warn('integration webhook handler timed out', c, e);
-          return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
-        }
-        if (e instanceof ActorUnavailable) {
-          // An admin has to reconnect it; the provider's retries would fail the same way.
-          done();
-          setHealth(c.id, false, 'actor_unavailable');
-          warn('integration acts as a removed member', c, e);
-          return { status: 200, body: { ok: true, skipped: true } };
-        }
-        // Released: the provider's retry (or, after an early ack, a manual
-        // redelivery) gets another go.
-        release();
-        setHealth(c.id, false, errCode(e));
-        warn('integration webhook handler failed', c, e);
-        return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+        const out = failed(e);
+        if (early) await ackedFailure(conn, asParsed, e);
+        return out;
       }
       done();
       setHealth(c.id, true);
       return { status: 200, body: { ok: true } };
+    };
+    const failed = (e) => {
+      // A linked member who can't act (C2): that act was audited; the answer is
+      // a success's, and nothing marks the connection broken.
+      if (e instanceof ActorUnavailable && e.scope === 'member') {
+        done();
+        log?.info?.('integration act skipped', { integration: c.provider, connection_id: c.id, code: 'actor_unavailable' });
+        return { status: 200, body: { ok: true } };
+      }
+      if (early) deadLetter(c, e);
+      if (e?.code === 'TIMEOUT') {
+        // The handler may still be running: the lease stays (a retry answers
+        // in_progress) and the row settles when it really ends, or the lease
+        // expires and a later retry takes it over. After an early ack it ends
+        // done either way: no provider retry is coming, and a captured copy
+        // must not re-run it.
+        running.then(done, early ? done : release);
+        setHealth(c.id, false, 'handler_timeout');
+        warn('integration webhook handler timed out', c, e);
+        return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+      }
+      if (e instanceof ActorUnavailable) {
+        // An admin has to reconnect it; the provider's retries would fail the same way.
+        done();
+        setHealth(c.id, false, 'actor_unavailable');
+        warn('integration acts as a removed member', c, e);
+        return { status: 200, body: { ok: true, skipped: true } };
+      }
+      // Late: released, so the provider's retry gets another go. Early: done
+      // (C2), so a replay within the provider's window can't run it again.
+      if (early) done();
+      else release();
+      setHealth(c.id, false, errCode(e));
+      warn('integration webhook handler failed', c, e);
+      return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
     };
     if (!early) return settle();
     // Acknowledged before the handler runs (a provider that needs an answer
@@ -1039,6 +1094,24 @@ export function createIntegrations({
       try { out = { raw: JSON.stringify(v), type: 'application/json; charset=utf-8' }; } catch { return empty; }
     } else return empty;
     return typeof out.raw === 'string' && Buffer.byteLength(out.raw) <= ACK_MAX ? out : empty;
+  }
+
+  // The connector's fixed-text "couldn't do that" (C2): a short code, never the
+  // error; the restricted fetch without retries, cut after 10 s; it can't
+  // change the answer, which was already sent.
+  async function ackedFailure(conn, parsed, e) {
+    if (!conn.onAckedFailure || !parsed) return;
+    const code = SHORT_CODE.test(errCode(e)) ? errCode(e) : 'handler_failed';
+    const controller = new AbortController();
+    const once = restrictedFetch(conn);
+    const fetch = (u, init = {}) => once(u, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal });
+    try {
+      await withTimeout(Promise.resolve().then(() => conn.onAckedFailure({ payload: parsed.payload, headers: parsed.headers, error_code: code, fetch })), ACKED_FAILURE_MS, controller);
+    } catch {
+      log?.warn?.('integration onAckedFailure failed', { integration: conn.id, err: 'connector_error' });
+    } finally {
+      controller.abort();
+    }
   }
 
   // A delivery acknowledged early whose handler failed: no provider retry is
@@ -1674,6 +1747,11 @@ export function createIntegrations({
       } catch (e) {
         if (e?.code === 'TIMEOUT') entry.timedOut = true;
         const code = errCode(e);
+        // A linked member who can't act: that act was audited; the connection is fine.
+        if (e instanceof ActorUnavailable && e.scope === 'member') {
+          log?.info?.('integration act skipped', { integration: c.provider, connection_id: c.id, code });
+          return;
+        }
         setHealth(c.id, false, code);
         if (e instanceof ActorUnavailable) { warn('integration acts as a removed member', c, e); return; }
         throw new Error(`${code}: ${redact(e?.message ?? e)}`);

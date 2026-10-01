@@ -244,6 +244,7 @@ export function defineConnector(spec) {
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
   if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
+  if (spec?.onAckedFailure !== undefined && (typeof spec.onAckedFailure !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('onAckedFailure is a function ({payload, headers, error_code, fetch}), for a connector that declares ackEarly');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
