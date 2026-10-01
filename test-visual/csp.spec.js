@@ -192,6 +192,7 @@ test('usage pop-out: renders under the policy, and an inline handler and a fetch
   await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Usage…').click());
   const pop = await windowByFile(h.app, 'usage-pop.html');
   await pop.waitForLoadState('load');
+  await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Usage')?.emit('focus')); // headless: no real focus, and an unfocused pop-out closes itself
   await watch(pop, 'usage-pop');
   await expect(pop.locator('#note')).not.toHaveText('', { timeout: 10000 });
   await pop.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });

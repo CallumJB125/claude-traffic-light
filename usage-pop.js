@@ -1,5 +1,6 @@
 // textContent only: the summary comes from main already worded.
 function show(s) {
+  if (!s) return;
   const rows = document.getElementById('rows');
   rows.replaceChildren();
   for (const r of s.rows) {
@@ -22,6 +23,6 @@ function show(s) {
 }
 
 window.usagePop.onUpdate(show);
-window.usagePop.get().then(show);
+window.usagePop.get().then(show).catch(() => {});
 document.getElementById('full').addEventListener('click', () => window.usagePop.openFull());
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.usagePop.close(); });

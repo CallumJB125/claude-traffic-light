@@ -1133,7 +1133,7 @@ function createUpdatesWindow() {
   });
 }
 
-// The Usage pop-out: a small read-only glance (today, this week, top model)
+// The Usage pop-out: a small read-only glance (today, this week, busiest model)
 // next to whatever opened it. The full analytics page stays in the Lights
 // editor's Model mix view, behind the footer link and the sidebar's Usage.
 const USAGE_POP_SIZE = { width: 300, height: 260 };
@@ -1144,56 +1144,75 @@ async function usagePopSummary() {
   return UsagePopView.build(await getUsageTurns(), { mode: Spend.normalize(loadConfig().spend).mode });
 }
 async function pushUsagePop() {
-  if (!usagePopWin || usagePopWin.isDestroyed()) return;
-  const summary = await usagePopSummary();
-  if (usagePopWin && !usagePopWin.isDestroyed()) usagePopWin.webContents.send('usage-pop:update', summary);
+  const w = usagePopWin;
+  if (!w || w.isDestroyed()) return;
+  try {
+    const summary = await usagePopSummary();
+    if (usagePopWin === w && !w.isDestroyed()) w.webContents.send('usage-pop:update', summary);
+  } catch (err) { console.warn('[usage-pop] refresh failed:', err.message); }
 }
-// Beside the widget when it opened this, under (or over) the tray icon otherwise.
+// Beside the widget when it opened this and is on screen, under (or over) the
+// tray icon otherwise, and by the cursor when neither is there.
 function usagePopBounds(from) {
-  const widgetB = win && !win.isDestroyed() ? win.getBounds() : null;
+  const widgetB = win && !win.isDestroyed() && win.isVisible() ? win.getBounds() : null;
   const trayB = tray && !tray.isDestroyed() && tray.getBounds().width ? tray.getBounds() : null;
-  const beside = from === 'widget' || !trayB;
-  const anchor = beside ? widgetB : trayB;
+  const beside = !!widgetB && (from === 'widget' || !trayB);
+  const anchor = beside ? widgetB : trayB || { ...screen.getCursorScreenPoint(), width: 1, height: 1 };
   const { width, height } = USAGE_POP_SIZE;
-  if (!anchor) { const wa = screen.getPrimaryDisplay().workArea; return { x: wa.x + wa.width - width - 16, y: wa.y + 16, width, height }; }
   const wa = screen.getDisplayMatching(anchor).workArea;
   let x = beside ? anchor.x - width - 8 : Math.round(anchor.x + anchor.width / 2 - width / 2);
   if (beside && x < wa.x) x = anchor.x + anchor.width + 8;
   const y = beside ? anchor.y : anchor.y + anchor.height / 2 < wa.y + wa.height / 2 ? anchor.y + anchor.height + 4 : anchor.y - height - 4;
   return { x: Math.min(Math.max(x, wa.x), wa.x + wa.width - width), y: Math.min(Math.max(y, wa.y), wa.y + wa.height - height), width, height };
 }
+// Forgotten at once, so opening it again while the old one is still closing
+// makes a fresh window instead of re-showing a dying one.
+function closeUsagePop() {
+  const w = usagePopWin;
+  usagePopWin = null;
+  clearInterval(usagePopTimer);
+  usagePopTimer = null;
+  if (w && !w.isDestroyed()) w.close();
+}
+// If the OS refuses it focus (focus-stealing prevention) it could never see a
+// click-away or Esc, so it gives up rather than stay on top for good.
+const USAGE_POP_FOCUS_GRACE_MS = 1500;
 function createUsagePopWindow(from = 'tray') {
   if (usagePopWin && !usagePopWin.isDestroyed()) { usagePopWin.setBounds(usagePopBounds(from)); usagePopWin.show(); usagePopWin.focus(); pushUsagePop(); return; }
-  usagePopWin = new BrowserWindow({
+  const w = new BrowserWindow({
     ...usagePopBounds(from),
     frame: false, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
     alwaysOnTop: true, show: false, title: 'Usage', backgroundColor: '#1c1a1f',
     webPreferences: { spellcheck: false, preload: path.join(__dirname, 'usage-pop-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
-  const w = usagePopWin;
+  usagePopWin = w;
   w.setAlwaysOnTop(true, 'floating', 1);
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   const stay = (e, url) => { if (!/\/usage-pop\.html(\?|#|$)/.test(url)) e.preventDefault(); };
   w.webContents.on('will-navigate', stay);
   w.webContents.on('will-redirect', stay);
+  const done = () => { if (usagePopWin === w) closeUsagePop(); else if (!w.isDestroyed()) w.close(); };
   // Esc is also handled in the page; this one works before the page has focus.
-  w.webContents.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { e.preventDefault(); w.close(); } });
+  w.webContents.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { e.preventDefault(); done(); } });
   // Click-away closes it, but only once it has really had focus: the menu that
   // opened it hands focus back as it closes, which is not a click-away.
   let focused = false;
   w.on('focus', () => { focused = true; });
-  w.on('blur', () => { if (focused && !w.isDestroyed()) w.close(); });
-  // From the tray the app is not frontmost, and an unfocused pop-out could never see a click-away.
-  w.once('ready-to-show', () => { if (IS_MAC) app.focus({ steal: true }); w.show(); w.focus(); });
+  w.on('blur', () => { if (focused) done(); });
+  w.once('ready-to-show', () => {
+    w.show(); w.focus(); w.moveTop();
+    setTimeout(() => { if (!focused && !w.isDestroyed()) done(); }, USAGE_POP_FOCUS_GRACE_MS);
+  });
   w.loadFile('usage-pop.html');
+  clearInterval(usagePopTimer);
   usagePopTimer = setInterval(pushUsagePop, USAGE_POP_REFRESH_MS);
-  w.on('closed', () => { clearInterval(usagePopTimer); usagePopTimer = null; usagePopWin = null; });
+  w.on('closed', () => { if (usagePopWin === w) closeUsagePop(); });
 }
 ipcMain.handle('usage-pop:get', (e) => (usagePopWin && e.sender === usagePopWin.webContents ? usagePopSummary() : null));
-ipcMain.handle('usage-pop:close', (e) => { if (usagePopWin && e.sender === usagePopWin.webContents) usagePopWin.close(); });
+ipcMain.handle('usage-pop:close', (e) => { if (usagePopWin && e.sender === usagePopWin.webContents) closeUsagePop(); });
 ipcMain.handle('usage-pop:open-full', (e) => {
   if (!usagePopWin || e.sender !== usagePopWin.webContents) return;
-  usagePopWin.close();
+  closeUsagePop();
   openLightsMix();
 });
 
