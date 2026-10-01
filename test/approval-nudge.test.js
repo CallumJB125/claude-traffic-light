@@ -107,3 +107,25 @@ test('a v1 counter file (plain hashes) is dropped on load', () => {
   assert.equal(saved.v, 2);
   assert.ok(!(plain in saved.counts) && !(plain in saved.muted));
 });
+
+test('the counter file is replaced atomically (temp file, rename, 0600), never written in place', () => {
+  const file = tmpFile();
+  const c = counter({ file });
+  c.record(bash('ls'));
+  const renames = [];
+  const orig = fs.renameSync;
+  fs.renameSync = (a, b) => { renames.push([a, b]); return orig(a, b); };
+  try { c.record(bash('ls')); } finally { fs.renameSync = orig; }
+  assert.equal(renames.length, 1);
+  assert.equal(renames[0][1], file);
+  assert.notEqual(renames[0][0], file);
+  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((n) => n !== path.basename(file)), [], 'no temp file left behind');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).counts[c.keyFor(bash('ls'))].n, 2);
+});
+
+test('PRIVACY.md lists the counter and its secret', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
+  assert.match(doc, /`approval-counts\.json`/);
+  assert.match(doc, /`approval-secret\.json`/);
+});

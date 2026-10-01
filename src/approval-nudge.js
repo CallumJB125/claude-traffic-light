@@ -57,11 +57,17 @@ function createNudgeCounter({ file, secret, threshold = THRESHOLD, now = () => D
     if (keys.length > MAX_KEYS) {
       keys.sort((a, b) => (data.counts[a].at || 0) - (data.counts[b].at || 0)).slice(0, keys.length - MAX_KEYS).forEach((k) => delete data.counts[k]);
     }
+    // Whole or not at all: a crash mid-write must not reset the counts or the mutes.
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
-      fs.chmodSync(file, 0o600); // mode only applies when the file is created
-    } catch { /* a counter that can't be saved just counts in memory */ }
+      fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600, flag: 'wx' });
+      fs.renameSync(tmp, file);
+      fs.chmodSync(file, 0o600);
+    } catch {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to tidy */ }
+      // a counter that can't be saved just counts in memory
+    }
   }
 
   // An approval the person clicked. → { key, count, nudge: rule|null }. A

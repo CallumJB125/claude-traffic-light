@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
 
 let verdict = null;
 try {
@@ -20,6 +21,11 @@ try {
 // → null when Enter may allow it, else why not.
 function enterBlockedReason(req) {
   if (typeof verdict !== 'function') return 'the allow-list is not available here';
+  // Relative paths in the request are resolved against the session folder,
+  // so it must be a real, absolute folder (else a relative symlink escapes).
+  const cwd = req && req.cwd;
+  if (!(typeof cwd === 'string' && path.isAbsolute(cwd))) return 'no session folder';
+  try { fs.realpathSync.native(cwd); } catch { return 'the session folder is not there'; }
   try {
     const v = verdict({ toolName: req && req.tool, toolInput: (req && req.toolInput) || {}, cwd: (req && req.cwd) || null, repoLabels: [] });
     return v && v.blocked === false ? null : (v && v.reason) || 'not on the allow-list';
@@ -32,7 +38,8 @@ function enterBlockedReason(req) {
 // answer only what Enter could: exactly one waiting request, a permission,
 // with main's danger === null and enterAllow === true.
 // → { req } to allow, or { why } (go and look instead).
-function gestureAllowTarget(pending, inputs) {
+const SETTLE_MS = 600;
+function gestureAllowTarget(pending, inputs, now = Date.now()) {
   const reqs = Array.isArray(pending) ? pending : [];
   if (!reqs.length) return { req: null };
   if (reqs.length !== 1) return { why: `${reqs.length} waiting: answer from the bubble` };
@@ -40,6 +47,9 @@ function gestureAllowTarget(pending, inputs) {
   if (req.kind && req.kind !== 'permission') return { why: 'open it to answer' };
   const input = (Array.isArray(inputs) ? inputs : []).find((i) => i && i.id === req.id);
   if (!input || input.danger !== null || input.enterAllow !== true) return { why: 'look at it first: answer from the bubble' };
+  // Not one that appeared a moment ago, under the very click that answers it.
+  const born = Date.parse(req.createdAt);
+  if (!Number.isFinite(born) || now - born < SETTLE_MS) return { why: 'it just arrived: look at it first' };
   return { req };
 }
 

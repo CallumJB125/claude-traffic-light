@@ -15,7 +15,16 @@ function createSecretStore({ file, safeStorage, log = () => {} }) {
   return function secret() {
     if (failed) throw failed;
     let d = null;
-    try { d = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { d = null; }
+    try { d = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
+      // Only "no file" or "not JSON" may make a new secret; any other read
+      // error (EACCES, EIO…) leaves the existing one alone.
+      if (!(e && (e.code === 'ENOENT' || e instanceof SyntaxError))) {
+        failed = new Error(`approval counter secret unreadable (${(e && e.code) || 'error'}): not counting this run`);
+        log(failed.message);
+        throw failed;
+      }
+      d = null;
+    }
     if (d && typeof d === 'object') {
       let hex = null;
       try { hex = d.sealed ? safeStorage.decryptString(Buffer.from(String(d.data), 'base64')) : String(d.data); } catch { hex = null; }

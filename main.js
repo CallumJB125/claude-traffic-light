@@ -3125,6 +3125,8 @@ function inputSenderOk(e) {
 }
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
+  // Answering from the widget is a setting: off means off, even for a request file still on disk.
+  if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
   const req = readRequests().find((r) => r.id === String(id));
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const m = more && typeof more === 'object' ? more : {};

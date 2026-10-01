@@ -173,14 +173,32 @@ test('S-M2: wildcard caps: two per command word, four per path, never **/**', ()
 
 // ── Enter: allow-list based (src/enter-allow.js) ─────────────────────────
 const E = require('../src/enter-allow.js');
-const enterOk = (tool, toolInput, cwd = '/w/app') => A.danger({ tool, toolInput }) === null && E.enterBlockedReason({ tool, toolInput, cwd }) === null;
+// A real project folder: Enter needs the session folder to exist (it is realpath'd).
+const PROJ = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-enter-')));
+fs.mkdirSync(path.join(PROJ, 'src'));
+const enterOk = (tool, toolInput, cwd = PROJ) => A.danger({ tool, toolInput, cwd }) === null && E.enterBlockedReason({ tool, toolInput, cwd }) === null;
+
+test('Enter needs an absolute session folder that exists', () => {
+  assert.equal(E.enterBlockedReason({ tool: 'Bash', toolInput: { command: 'ls' }, cwd: 'relative/app' }), 'no session folder');
+  assert.equal(E.enterBlockedReason({ tool: 'Bash', toolInput: { command: 'ls' }, cwd: null }), 'no session folder');
+  assert.equal(E.enterBlockedReason({ tool: 'Bash', toolInput: { command: 'ls' }, cwd: path.join(PROJ, 'gone') }), 'the session folder is not there');
+  assert.equal(E.enterBlockedReason({ tool: 'Bash', toolInput: { command: 'ls' }, cwd: PROJ }), null);
+});
+
+test('Enter: a relative symlink to a secret is resolved against the session folder', () => {
+  const secret = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-enter-secret-'));
+  fs.mkdirSync(path.join(secret, '.ssh'));
+  fs.writeFileSync(path.join(secret, '.ssh', 'id_ed25519'), 'x');
+  fs.symlinkSync(path.join(secret, '.ssh', 'id_ed25519'), path.join(PROJ, 'notes.txt'));
+  assert.equal(enterOk('Bash', { command: 'cat notes.txt' }), false);
+});
 
 test('Enter may allow only allow-listed, unflagged requests', () => {
   assert.equal(E.available(), true);
-  for (const [tool, input] of [['Bash', { command: 'ls -la' }], ['Bash', { command: 'git status' }], ['Read', { file_path: '/w/app/src/a.js' }], ['Edit', { file_path: '/w/app/src/a.js', old_string: 'a', new_string: 'b' }]]) {
+  for (const [tool, input] of [['Bash', { command: 'ls -la' }], ['Bash', { command: 'git status' }], ['Read', { file_path: `${PROJ}/src/a.js` }], ['Edit', { file_path: `${PROJ}/src/a.js`, old_string: 'a', new_string: 'b' }]]) {
     assert.equal(enterOk(tool, input), true, JSON.stringify(input));
   }
-  for (const [tool, input] of [['Bash', { command: 'npm test' }], ['Read', { file_path: '/Users/x/.ssh/id_rsa' }], ['Edit', { file_path: '/elsewhere/a.js' }], ['Write', { file_path: '/w/app/package.json', content: '{}' }], ['WebFetch', { url: 'https://example.com' }], ['mcp__x__y', {}]]) {
+  for (const [tool, input] of [['Bash', { command: 'npm test' }], ['Read', { file_path: '/Users/x/.ssh/id_rsa' }], ['Edit', { file_path: '/elsewhere/a.js' }], ['Write', { file_path: `${PROJ}/package.json`, content: '{}' }], ['WebFetch', { url: 'https://example.com' }], ['mcp__x__y', {}]]) {
     assert.equal(enterOk(tool, input), false, `${tool} ${JSON.stringify(input)}`);
   }
 });
@@ -203,18 +221,19 @@ test('Enter: file tools by the shared allow-list (Grep scope, files that run cod
   assert.equal(enterOk('Grep', { pattern: 'x', path: '~' }), false, 'Grep over home');
   assert.equal(enterOk('Grep', { pattern: 'x', path: '~/.config' }), false, 'Grep over config');
   assert.equal(enterOk('Grep', { pattern: 'x', path: 'src' }), true, 'Grep inside the project');
-  for (const f of ['CLAUDE.md', 'pyproject.toml']) assert.equal(enterOk('Write', { file_path: `/w/app/${f}`, content: 'x' }), false, f);
-  assert.equal(enterOk('Edit', { file_path: '/srv/app/src/a.js', old_string: 'a', new_string: 'b' }, '/srv/app'), true, 'a project outside home is fine');
+  for (const f of ['CLAUDE.md', 'pyproject.toml']) assert.equal(enterOk('Write', { file_path: `${PROJ}/${f}`, content: 'x' }), false, f);
+  assert.ok(!PROJ.startsWith(os.homedir()), 'the temp project is outside home');
+  assert.equal(enterOk('Edit', { file_path: `${PROJ}/src/a.js`, old_string: 'a', new_string: 'b' }), true, 'a project outside home is fine');
 });
 
 test('Enter: an emoji in a commit message is not danger, but git commit still needs a click (not on the allow-list)', () => {
-  const req = { tool: 'Bash', toolInput: { command: 'git commit -m "fix: tidy ✨ the widget"' }, cwd: '/w/app' };
+  const req = { tool: 'Bash', toolInput: { command: 'git commit -m "fix: tidy ✨ the widget"' }, cwd: PROJ };
   assert.equal(A.danger(req), null);
   assert.equal(enterOk('Bash', req.toolInput), false);
 });
 
 test('N5: a gesture or click-rule "allow" answers only one allow-listed, unflagged permission', () => {
-  const req = { id: 'r1', kind: 'permission' };
+  const req = { id: 'r1', kind: 'permission', createdAt: new Date(Date.now() - 5000).toISOString() };
   const input = (over) => ({ id: 'r1', kind: 'permission', danger: null, enterAllow: true, ...over });
   assert.deepEqual(E.gestureAllowTarget([req], [input()]), { req });
   assert.deepEqual(E.gestureAllowTarget([], []), { req: null });
@@ -228,6 +247,13 @@ test('N5: a gesture or click-rule "allow" answers only one allow-listed, unflagg
 
 test('danger judges a patch’s own paths against the session directory', () => {
   const patch = '*** Begin Patch\n*** Update File: .git/hooks/pre-commit\n@@\n-echo a\n+echo b\n*** End Patch';
-  assert.ok(A.danger({ tool: 'apply_patch', toolInput: { input: patch }, cwd: '/w/app' }), 'a patch that writes a git hook is flagged');
+  assert.ok(A.danger({ tool: 'apply_patch', toolInput: { input: patch }, cwd: PROJ }), 'a patch that writes a git hook is flagged');
   assert.equal(enterOk('apply_patch', { input: patch }), false);
+});
+
+test('a gesture "allow" never answers a request younger than 600 ms', () => {
+  const input = { id: 'r1', kind: 'permission', danger: null, enterAllow: true };
+  assert.ok(E.gestureAllowTarget([{ id: 'r1', kind: 'permission', createdAt: new Date().toISOString() }], [input]).why);
+  assert.ok(E.gestureAllowTarget([{ id: 'r1', kind: 'permission' }], [input]).why, 'no creation time: not known to be old enough');
+  assert.ok(E.gestureAllowTarget([{ id: 'r1', kind: 'permission', createdAt: new Date(Date.now() - 1000).toISOString() }], [input]).req);
 });

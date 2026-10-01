@@ -68,7 +68,7 @@
   const canOpen = (input) => (input?.actions || []).includes('open') || input?.kind === 'blocked';
 
   // What Enter does. Never the riskiest choice: never a session-wide grant,
-  // never a guess at a question's answer or a form's content, and for a
+  // never a plan, never a guess at a question's answer or a form's content, and for a
   // permission only what main marked enterAllow (on the allow-list, nothing
   // flagged; danger must be exactly null: undefined means unchecked).
   function primary(input, now = Date.now()) {
@@ -79,7 +79,7 @@
       if (input.danger !== null || input.enterAllow !== true) return null;
       return has('allow') ? { type: 'option', id: 'allow' } : null;
     }
-    if (input.kind === 'plan') return has('allow') ? { type: 'option', id: 'allow' } : null;
+    // A plan is approved by a click after reading it, never by Enter.
     return null;
   }
 

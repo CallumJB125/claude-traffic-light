@@ -449,3 +449,18 @@ test('a deny reason typed for what the input said before is dropped when it chan
   const r2 = t.$('.ib-reason');
   assert.ok(!r2 || r2.value === '', 'the old reason is not offered for the new content');
 });
+
+test('Enter never approves a plan; ⌘. still sends it back to planning', async () => {
+  const plan = { v: 1, id: 'rp', kind: 'plan', source: 'hook', tool: 'ExitPlanMode', cwd: '/w/app', title: 'Plan ready: approve?', text: '# Plan\n1. do it', created_at: ago(1), expires_at: later(40), answerable: true, actions: ['answer', 'open'],
+    options: [{ id: 'allow', label: 'Approve' }, { id: 'allow-accept-edits', label: 'Approve, auto-accept edits' }, { id: 'deny', label: 'Keep planning' }] };
+  for (const mode of ['widget', 'page']) {
+    const t = setup({ mode });
+    t.show([plan]);
+    t.key('Enter');
+    await tick();
+    assert.equal(t.calls.answer.length, 0, mode);
+    t.key('.', { metaKey: true });
+    await tick();
+    assert.deepEqual(t.calls.answer.map((c) => c[1]), ['deny'], mode);
+  }
+});

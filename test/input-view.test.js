@@ -47,7 +47,8 @@ test('Enter: allow once for a plain permission, never a session grant, never a f
   assert.equal(V.primary(perm({ enterAllow: false }), NOW), null, 'not on the allow-list: a click');
   assert.equal(V.primary(perm({ enterAllow: undefined }), NOW), null);
   assert.equal(V.primary(perm({ options: [{ id: 'allow-session-0', label: 'x' }, { id: 'deny', label: 'Deny' }] }), NOW), null);
-  assert.deepEqual(V.primary(perm({ kind: 'plan', options: [{ id: 'allow' }, { id: 'allow-accept-edits' }, { id: 'deny' }] }), NOW), { type: 'option', id: 'allow' }, 'approve, not auto-accept edits');
+  assert.equal(V.primary(perm({ kind: 'plan', options: [{ id: 'allow' }, { id: 'allow-accept-edits' }, { id: 'deny' }] }), NOW), null, 'a plan is approved by a click after reading, never by Enter');
+  assert.equal(V.denyOption(perm({ kind: 'plan', options: [{ id: 'allow' }, { id: 'deny' }] }), NOW), 'deny', '⌘. still means keep planning');
   assert.equal(V.primary(perm({ kind: 'question', options: [{ id: 'q0o0' }, { id: 'deny' }] }), NOW), null, 'no guessing an answer');
   assert.equal(V.primary(perm({ kind: 'elicitation', options: [{ id: 'accept' }] }), NOW), null);
   assert.deepEqual(V.primary({ kind: 'dialog', actions: ['open'], answerable: false }, NOW), { type: 'open' });

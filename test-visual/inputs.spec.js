@@ -45,7 +45,9 @@ test('permission: the real command, answered from the bubble; the hook gets it a
 });
 
 test('keyboard: Enter allows an allow-listed command once it has settled', async () => {
-  const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd-ok', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'git status' } });
+  // Enter needs a real session folder (it resolves relative paths against it).
+  const proj = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ctl-vis-proj-'));
+  const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd-ok', cwd: proj, tool_name: 'Bash', tool_input: { command: 'git status' } });
   await expect(widget.locator('.ib-head')).toHaveText('Bash: git status', { timeout: 10000 });
   await widget.locator('.ib-title').click();
   await widget.waitForTimeout(700);
@@ -68,13 +70,17 @@ test('keyboard: Enter never allows a deny-listed or off-list command; ⌘. denie
   await expect(widget.locator('.ib-item')).toHaveCount(0, { timeout: 10000 });
 });
 
-test('plan: the plan text, Enter approves (not auto-accept edits)', async () => {
+test('plan: the plan text; Enter never approves it, a click does (not auto-accept edits)', async () => {
   const plan = '# Add dark mode\n\n1. Add tokens for the dark palette\n2. Switch on prefers-color-scheme\n3. Update the three visual baselines\n4. Run the full suite';
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-plan', cwd: '/visual/app', tool_name: 'ExitPlanMode', tool_input: { plan } });
   await expect(widget.locator('.ib-item.kind-plan .ib-text')).toContainText('Switch on prefers-color-scheme', { timeout: 10000 });
   await bubbleShot('bubble-plan.png');
   await widget.locator('.ib-title').click();
+  await widget.waitForTimeout(900);
   await widget.keyboard.press('Enter');
+  await expect(widget.locator('.ib-err')).toHaveText('Pick an option.');
+  await widget.waitForTimeout(900); // the message made the bubble taller: it settles again
+  await widget.locator('.ib-item.kind-plan [data-option="allow"]').click();
   const { out } = await hook.done;
   const d = JSON.parse(out).hookSpecificOutput.decision;
   expect(d.behavior).toBe('allow');
@@ -231,5 +237,16 @@ test('the Waiting page sits in the Plexiform window as a local page', async () =
     await expect(sidebar.locator('[aria-current="page"]')).toContainText('Waiting on you', { timeout: 10000 });
     await page.waitForTimeout(900);
     await expect(page).toHaveScreenshot('waiting-embedded.png', SHOT);
+  } finally { await hh.cleanup(); }
+});
+
+// Its own app: answering from the widget turned off.
+test('with "answer from the widget" off, a request file still on disk cannot be answered', async () => {
+  const hh = await launchApp({ config: { askFromWidget: false } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    F.staleRequest(hh, { id: 'vis-off', tool: 'Bash', toolInput: { command: 'ls' }, createdAt: minsAgo(0.1), expiresAt: new Date(Date.now() + 40000).toISOString() });
+    const r = await w.evaluate(() => window.trafficLight.answerInput('vis-off', 'allow', {}));
+    expect(r).toEqual({ ok: false, error: 'off' });
   } finally { await hh.cleanup(); }
 });

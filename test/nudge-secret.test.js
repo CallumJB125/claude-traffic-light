@@ -51,3 +51,21 @@ test('a file that isn’t JSON is replaced with a new secret', () => {
   assert.equal(s.length, 32);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).sealed, true);
 });
+
+test('an unreadable secret file (not missing, not bad JSON) is never replaced: counting stops', { skip: process.getuid && process.getuid() === 0 }, () => {
+  const file = tmpFile();
+  createSecretStore({ file, safeStorage: fakeSafe() })();
+  const before = fs.readFileSync(file, 'utf8');
+  fs.chmodSync(file, 0o000);
+  try {
+    const read = createSecretStore({ file, safeStorage: fakeSafe() });
+    assert.throws(read, /not counting/);
+  } finally { fs.chmodSync(file, 0o600); }
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('a missing file makes a new secret', () => {
+  const file = tmpFile();
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(createSecretStore({ file, safeStorage: fakeSafe() })().length, 32);
+});
