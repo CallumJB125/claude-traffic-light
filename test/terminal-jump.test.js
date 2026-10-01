@@ -145,7 +145,7 @@ function fakeExec(answers = () => ({ ok: true, stdout: 'ok' })) {
   const exec = async (file, args, opts) => { calls.push({ file, args, opts }); return { stdout: '', stderr: '', ...answers(file, args) }; };
   return { calls, exec };
 }
-const ctxOf = (over = {}) => ({ platform: 'darwin', which: (bins) => bins[0], isDir: () => true, tmuxServerOk: () => true, ...over });
+const ctxOf = (over = {}) => ({ platform: 'darwin', which: (bins) => bins[0], isDir: () => true, tmuxServerOk: () => true, uid: TEST_UID, env: {}, ...over });
 const sess = (env = {}, extra = {}) => ({ host: HOST, cwd: '/Users/me/proj', terminal: { env, tty: null, cwd: '/Users/me/proj' }, ...extra });
 
 // Payloads a hostile session file might carry.
@@ -256,7 +256,10 @@ test('binary discovery includes Nix profiles', () => {
 // session id, window id, session group, grouped, session name
 const DISPLAY = '$2\t@3\t\t0\twork\n';
 const GROUPED = '$2\t@3\tg1\t1\twork\n';
-const TMUX_ENV = { TMUX: '/private/tmp/tmux-501/default,812,0', TMUX_PANE: '%5' };
+// The uid is injected into the focus context, never read from the machine running the tests.
+const TEST_UID = Number(process.env.CTL_TEST_UID || 501);
+const DEFAULT_SOCK = `/private/tmp/tmux-${TEST_UID}/default`;
+const TMUX_ENV = { TMUX: `${DEFAULT_SOCK},812,0`, TMUX_PANE: '%5' };
 const tmuxAnswers = (clients = '/dev/ttys009\t$1\t100\n/dev/ttys003\t$0\t50\n') => (file, args) => {
   if (args.includes('display-message')) return { ok: true, stdout: DISPLAY };
   if (args.includes('list-clients')) return { ok: true, stdout: clients };
@@ -269,7 +272,7 @@ test('tmux: the one client on the session\'s own socket has its outer tab focuse
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, true);
   assert.equal(r.adapter, 'tmux+iterm');
-  const sock = ['-S', '/private/tmp/tmux-501/default'];
+  const sock = ['-S', DEFAULT_SOCK];
   assert.deepEqual(calls.map((c) => (c.file === Tmux.BINS[0] ? c.args.slice(2)[0] : c.file)), ['display-message', 'list-clients', '/usr/bin/osascript', 'select-window', 'select-pane']);
   assert.deepEqual(calls[0].args, [...sock, 'display-message', '-p', '-t', '%5', '#{session_id}\t#{window_id}\t#{session_group}\t#{session_grouped}\t#{session_name}']);
   assert.deepEqual(calls[3].args, [...sock, 'select-window', '-t', '$2:@3']);
@@ -348,9 +351,9 @@ test('tmux detached with no clients at all: nothing is selected, not even on the
 });
 
 test('tmux detached: the attach command names the socket when it is not the default, and is dropped for an unsafe session name', async () => {
-  const other = { TMUX: '/private/tmp/tmux-501/work-sock,812,0', TMUX_PANE: '%5' };
+  const other = { TMUX: `/private/tmp/tmux-${TEST_UID}/work-sock,812,0`, TMUX_PANE: '%5' };
   const r = await Focus.focusSession(sess(other), ctxOf({ exec: fakeExec(namedAnswers('')).exec }));
-  assert.equal(r.command, `tmux -S /private/tmp/tmux-501/work-sock attach -t work`);
+  assert.equal(r.command, `tmux -S /private/tmp/tmux-${TEST_UID}/work-sock attach -t work`);
   const bad = await Focus.focusSession(sess(TMUX_ENV), ctxOf({ exec: fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: '$2\t@3\t\t0\t-x; rm -rf ~\n' } : tmuxAnswers('')(f, a))).exec }));
   assert.equal(bad.detached, true);
   assert.equal(bad.command, undefined);
@@ -527,7 +530,7 @@ test('every command any adapter runs is on the focus-only allow-list', async () 
   for (const a of [Tmux, Kitty, WezTerm]) assert.ok(ran.has(a.BINS[0]), `${a.id} ran`);
   for (const { file, args } of calls) {
     if (file === Tmux.BINS[0]) {
-      assert.deepEqual(args.slice(0, 2), ['-S', '/private/tmp/tmux-501/default']);
+      assert.deepEqual(args.slice(0, 2), ['-S', DEFAULT_SOCK]);
       assert.ok(['display-message', 'list-clients', 'switch-client', 'select-window', 'select-pane'].includes(args[2]), args[2]);
     } else if (file === Kitty.BINS[0]) {
       assert.equal(args[0], '@');
