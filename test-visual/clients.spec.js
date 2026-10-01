@@ -34,22 +34,27 @@ test('OAuth client without a mailer accepts and reads status in the scoped authe
     expect((await hub.call('GET', '/api/auth/methods')).body.email).toBe(false);
     app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), `--user-data-dir=${temp}`], env: { ...process.env, PLEXIFORM_CLIENT_TEST_HUB: hub.base, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: hub.base, token: guest.device_token, device_id: guest.device_id, user: guest.user }) } });
     await expect.poll(() => app.evaluate(() => global.__clientTestInit), { timeout: 15000 }).toMatchObject({ stage: 'connected', result: { ok: true }, status: { screen: 'clients' } });
-    await expect.poll(() => app.windows().some((p) => p.url().includes('account.html?screen=clients')), { timeout: 15000 }).toBe(true);
-    const account = app.windows().find((p) => p.url().includes('account.html?screen=clients'));
-    await account.locator('button:has-text("Open client projects")').click();
-    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${hub.base}/clients`))).toBe(true);
-    const portal = app.windows().find((p) => p.url().startsWith(`${hub.base}/clients`));
-    await portal.locator('[data-action="accept"]').click();
-    await expect(portal.locator('.client-item')).toContainText('Published delivery');
-    expect(await portal.locator('form[data-form="publish"], form[data-form="workspace"]').count()).toBe(0);
-    expect(await portal.locator('text=Internal repository details').count()).toBe(0);
+    // BaseWindow's WebContentsViews are not Electron BrowserWindows. Follow
+    // the actual production view rather than adding a window just for tests.
+    const pane = (match, js) => app.evaluate(async ({ webContents }, [url, code]) => {
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(url));
+      return wc ? { found: true, value: await wc.executeJavaScript(code) } : { found: false };
+    }, [match, js]);
+    await expect.poll(() => pane('account.html?screen=clients', '!![...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects")'), { timeout: 15000 }).toEqual({ found: true, value: true });
+    await pane('account.html?screen=clients', '[...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects").click()');
+    const portal = (js) => pane(`${hub.base}/clients`, js);
+    await expect.poll(() => portal('!!document.querySelector("[data-action=accept]")'), { timeout: 15000 }).toEqual({ found: true, value: true });
+    await portal('document.querySelector("[data-action=accept]").click()');
+    await expect.poll(async () => (await portal('[...document.querySelectorAll(".client-item")].map(e => e.textContent).join(" ")')).value).toContain('Published delivery');
+    expect((await portal('document.querySelectorAll("form[data-form=publish], form[data-form=workspace]").length')).value).toBe(0);
+    expect((await portal('document.body.textContent.includes("Internal repository details")')).value).toBe(false);
     expect((await hub.call('GET', '/api/account', { token: guest.device_token })).body.teams).toHaveLength(0);
     expect(hub.db.get('SELECT COUNT(*) n FROM runner_enrollments').n).toBe(0);
     const prefs = await app.evaluate(({ webContents }) => webContents.getAllWebContents().find((w) => w.getURL().includes('/clients')).getLastWebPreferences());
     expect(prefs.sandbox).toBe(true); expect(prefs.contextIsolation).toBe(true); expect(prefs.nodeIntegration).toBe(false); expect(prefs.preload ?? '').toBe('');
-    const renderer = await portal.evaluate(() => ({ bridge: typeof window.buddyAccount, token: [document.cookie, localStorage.getItem('token'), sessionStorage.getItem('token')].join(' ') }));
+    const renderer = (await portal('({ bridge: typeof window.buddyAccount, token: [document.cookie, localStorage.getItem("token"), sessionStorage.getItem("token")].join(" ") })')).value;
     expect(renderer.bridge).toBe('undefined'); expect(renderer.token).not.toContain(guest.device_token);
-    await portal.locator('[data-action="signout"]').click();
+    await portal('document.querySelector("[data-action=signout]").click()');
     await expect.poll(async () => (await hub.call('GET', `/api/client/projects/${project.id}`, { token: guest.device_token })).status).toBe(401);
     await expect.poll(() => fs.readdirSync(path.join(temp, 'buddy-accounts')).length).toBe(0);
   } finally { await app?.close(); await hub.close(); fs.rmSync(temp, { recursive: true, force: true }); }
