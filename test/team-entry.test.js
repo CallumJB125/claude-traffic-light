@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const TeamEntry = require('../src/team-entry.js');
+const AppMenu = require('../src/app-menu.js');
 
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 
@@ -31,8 +32,29 @@ test('settings view: neutral, signed out, signed in', () => {
   assert.match(TeamEntry.settingsView({ signedIn: true, name: 'Ada' }, 'h').line, /no team yet/);
 });
 
-test('tray: Team and Integrations open their pages, sit after Waiting on you', () => {
-  assert.match(main, /\{ label: 'Waiting on you…', click: createWaitingWindow \},\n\s+\{ label: 'Team…', click: \(\) => openBuddy\('team'\) \},\n\s+\{ label: 'Integrations…', click: \(\) => openBuddy\('integrations'\) \},/);
+test('tray and widget right-click are built from the same template', () => {
+  assert.match(main, /\.\.\.AppMenu\.appItems\(\{ pages: BuddyPages\.PAGES, groups: BuddyPages\.GROUPS, open: openBuddy/);
+  assert.match(main, /buildWidgetMenu = buildMenu;\n\s+trayMenu = buildMenu\(\);/);
+  assert.match(main, /const menu = buildWidgetMenu\(\);/);
+  assert.match(main, /ipcMain\.handle\('widget-menu', \(e\) => \{\n\s+if \(!win \|\| win\.isDestroyed\(\) \|\| e\.sender !== win\.webContents\) return;/);
+});
+
+test('app menu: every page is there, soon ones disabled, actions open the page', () => {
+  const { PAGES, GROUPS } = require('../buddy-window/pages');
+  const opened = [];
+  const items = AppMenu.appItems({ pages: PAGES, groups: GROUPS, open: (id) => opened.push(id ?? null), openLabel: 'Open Plexiform…' });
+  assert.equal(items[0].label, 'Open Plexiform…');
+  assert.equal(items[0].accelerator, 'CmdOrCtrl+B');
+  for (const p of PAGES) {
+    const it = items.find((i) => i.label && i.label.startsWith(`Open ${p.title}…`));
+    assert.ok(it, p.title);
+    if (p.kind === 'soon') { assert.equal(it.enabled, false); assert.match(it.label, /\(soon\)$/); assert.equal(it.click, undefined); }
+    else { it.click(); assert.equal(opened.pop(), p.id); }
+  }
+  assert.equal(items.find((i) => i.label === 'Open Lights…').accelerator, 'CmdOrCtrl+L');
+  assert.equal(items.find((i) => i.label === 'Open Settings…').accelerator, 'CmdOrCtrl+,');
+  const fb = { label: 'Something\u2019s off / Idea…', click() {} };
+  assert.ok(AppMenu.appItems({ pages: PAGES, groups: GROUPS, open() {}, openLabel: 'x', feedback: fb }).includes(fb));
 });
 
 test('IPC: the account handlers answer Settings only, the hint handlers the widget only, and the page is never the renderer\'s', () => {

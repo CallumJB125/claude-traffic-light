@@ -20,14 +20,13 @@ test.describe('tray and Settings', () => {
   test.afterAll(async () => { await h?.cleanup(); });
 
   test('the tray has Team and Integrations, and they open those pages', async () => {
-    await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Team…');
+    await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
     const labels = await trayLabels(h.app);
-    expect(labels).toContain('Team…');
-    expect(labels).toContain('Integrations…');
-    expect(labels.indexOf('Team…')).toBe(labels.indexOf('Waiting on you…') + 1);
-    await trayClick(h.app, 'Integrations…');
+    for (const l of ['Open Team…', 'Open Integrations…', 'Open Waiting on you…', 'Open Usage…', 'Open Account…', 'Open Settings…', 'Open Tasks… (soon)']) expect(labels).toContain(l);
+    expect(await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Tasks… (soon)').enabled)).toBe(false);
+    await trayClick(h.app, 'Open Integrations…');
     await shownPage(h.app, 'Integrations');
-    await trayClick(h.app, 'Team…');
+    await trayClick(h.app, 'Open Team…');
     await shownPage(h.app, 'Team');
     await accountScreen(h.app, 'team');
   });
@@ -69,6 +68,22 @@ test.describe('tray and Settings', () => {
   test('only the Settings window may use the account IPC', async () => {
     const widget = await windowByFile(h.app, 'index.html');
     expect(await widget.evaluate(() => typeof window.settingsApi)).toBe('undefined');
+  });
+});
+
+test.describe('widget right-click', () => {
+  test('opens the same full-app menu plus the widget items, and only for the widget', async () => {
+    const h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_MENU_SPY: '1' } });
+    try {
+      const w = await windowByFile(h.app, 'index.html');
+      await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
+      await w.evaluate(() => window.trafficLight.widgetMenu());
+      const labels = await h.app.evaluate(() => global.__buddyWidgetMenu.items.map((i) => i.label).filter(Boolean));
+      for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks… (soon)', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
+      expect(labels).toEqual(await trayLabels(h.app).then((t) => t.filter(Boolean)));
+      const lights = h.app.windows().filter((p) => p.url().includes('lights.html'));
+      expect(lights).toHaveLength(0);
+    } finally { await h.cleanup(); }
   });
 });
 

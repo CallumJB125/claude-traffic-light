@@ -33,7 +33,8 @@ test('deep links: main registers plexiform:// and claudebuddy:// and routes both
   const re = new RegExp(`^(${require('../buddy-window/brand').SCHEMES.join('|')}):`, 'i');
   assert.ok(re.test('plexiform://invite/x') && re.test('claudebuddy://invite/x') && re.test('Plexiform://invite/x'));
   assert.ok(!re.test('plexi://invite/x') && !re.test('https://x/invite#y'));
-  assert.match(src, /label: BRAND\.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl\+B'/);
+  assert.match(src, /openLabel: BRAND\.OPEN_MENU_LABEL/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'src', 'app-menu.js'), 'utf8'), /openAccelerator = 'CmdOrCtrl\+B'/);
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.deepEqual(pkg.build.mac.protocols, [{ name: 'Plexiform', schemes: ['plexiform', 'claudebuddy'] }]);
 });

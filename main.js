@@ -1162,6 +1162,8 @@ ipcMain.handle('open-updates', () => createUpdatesWindow());
 // The Plexiform main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
 const BRAND = require('./buddy-window/brand');
+const BuddyPages = require('./buddy-window/pages');
+const AppMenu = require('./src/app-menu.js');
 // plexiform:// and the legacy claudebuddy:// open the same links.
 const DEEP_LINK_RE = new RegExp(`^(${BRAND.SCHEMES.join('|')}):`, 'i');
 let buddyWin = null;
@@ -2357,7 +2359,7 @@ function createTray() {
   };
   const buildMenu = () => Menu.buildFromTemplate([
     ...scopeItem(),
-    { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: null }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -2375,12 +2377,6 @@ function createTray() {
     },
     { type: 'separator' },
     { label: 'What does this mean?…', click: createHelpWindow },
-    { label: 'Waiting on you…', click: createWaitingWindow },
-    { label: 'Team…', click: () => openBuddy('team') },
-    { label: 'Integrations…', click: () => openBuddy('integrations') },
-    { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
-    { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
-    { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
     { label: 'Health…', click: showHealth },
     { label: 'Knock now', enabled: IS_MAC, click: () => { knockNow().then((r) => console.log('[knock now]', JSON.stringify(r))); } },
     { type: 'separator' },
@@ -2408,13 +2404,13 @@ function createTray() {
     },
     { type: 'separator' },
     ...updaterTrayItems(),
-    { label: 'About & Updates…', click: createUpdatesWindow },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
   // Rebuilt in place (never by recreating the tray) when the update items change;
   // trayMenu is also what the widget pops up on Linux, where there may be no tray.
   const mine = tray;
+  buildWidgetMenu = buildMenu;
   trayMenu = buildMenu();
   rebuildTrayMenu = () => {
     trayMenu = buildMenu();
@@ -2431,12 +2427,17 @@ function createTray() {
   updateTrayMode();
 }
 
-// Right-click on the widget: the Lights editor, or on Linux the tray's menu,
-// since GNOME shows no tray at all and that menu is the only way to Quit.
+// Right-click on the widget: the tray's menu, built fresh from the same
+// template (the whole app plus the widget's own items), and on Linux the only
+// way to Quit where GNOME shows no tray. Before a tray exists: the Lights editor.
 let trayMenu = null;
-ipcMain.handle('widget-menu', () => {
-  if (IS_LINUX && trayMenu && win && !win.isDestroyed()) { trayMenu.popup({ window: win }); return; }
-  createLightsWindow();
+let buildWidgetMenu = null;
+ipcMain.handle('widget-menu', (e) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  if (!buildWidgetMenu) { createLightsWindow(); return; }
+  const menu = buildWidgetMenu();
+  if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_MENU_SPY === '1') { global.__buddyWidgetMenu = menu; return; } // specs read it: a native popup would block them
+  menu.popup({ window: win });
 });
 
 ipcMain.handle('open-claude', () => {
