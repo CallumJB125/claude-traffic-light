@@ -89,7 +89,7 @@ export class Api {
   // HTTP credentials are private server context, never fields of a card body.
   // Recheck after body reads and after waiting for the board queue: a revoked
   // account or removed/downgraded membership cannot finish an earlier write.
-  currentWriter(member, cred = null) {
+  currentMember(member, cred = null) {
     if (cred) {
       if (!['device', 'session'].includes(cred.kind) || !this.hub.accounts?.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
       const owner = cred.kind === 'device'
@@ -100,16 +100,22 @@ export class Api {
     const current = this.hub.activeMember(member?.id);
     const org = current && this.db.get('SELECT 1 AS x FROM orgs WHERE id = ? AND deleted_at IS NULL', current.org_id);
     const user = current?.user_id == null || this.db.get('SELECT 1 AS x FROM users WHERE id = ? AND deleted_at IS NULL', current.user_id);
-    if (!current || current.org_id !== member.org_id || current.user_id !== member.user_id || !org || !user || !this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
+    if (!current || current.org_id !== member.org_id || current.user_id !== member.user_id || !org || !user) throw new HubError('FORBIDDEN', 'current membership cannot access this board');
     return current;
   }
 
-  collaborationScope(member, { boardId = null, cardId = null }, cred = null) {
+  currentWriter(member, cred = null) {
+    const current = this.currentMember(member, cred);
+    if (!this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
+    return current;
+  }
+
+  collaborationScope(member, { boardId = null, cardId = null, allowArchived = false }, cred = null) {
     const current = this.currentWriter(member, cred);
     const card = cardId ? this.cardFor(current, cardId) : null;
     const board = this.boardFor(current, card?.board_id ?? boardId);
     this.writableBoard(board.id);
-    if (card?.archived_at) throw archivedError();
+    if (card?.archived_at && !allowArchived) throw archivedError();
     return current;
   }
 
@@ -228,7 +234,7 @@ export class Api {
         const b = this.hub.board(boardId);
         this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
         this.db.insert('cards', {
-          id, board_id: boardId, key: `${board.key_prefix}-${b.next_key}`, title, body: text, acceptance, repo_id: body.repo_id ?? null,
+          id, board_id: boardId, key: `${b.key_prefix}-${b.next_key}`, title, body: text, acceptance, repo_id: body.repo_id ?? null,
           base_ref: baseRef, labels: JSON.stringify(labels), budget_cents: body.budget_usd != null ? Math.round(body.budget_usd * 100) : null, cover,
           created_by: member.id, created_at: now, updated_at: now, state_since: now,
         });
@@ -326,11 +332,14 @@ export class Api {
 
   // ── archive (D94) ─────────────────────────────────────────────────────────
   // Only a card with no live run: no run yet, or done / failed. Idempotent.
-  async archive(member, cardId, body) {
+  async archive(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     this.requireWrite(member);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
-      const row = this.hub.card(cardId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (!row.archived_at) {
         if (row.run_state != null && row.run_state !== 'done' && row.run_state !== 'failed') {
           throw new HubError('CONFLICT', 'stop, cancel or finish the run before archiving', { reason: 'RUN_ACTIVE' });
@@ -343,14 +352,17 @@ export class Api {
         });
       }
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
-    });
+    }, { member, cred });
   }
 
-  async restore(member, cardId, body) {
+  async restore(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     this.requireWrite(member);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
-      const row = this.hub.card(cardId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (row.archived_at) {
         this.hub.txn(() => {
           this.db.run('UPDATE cards SET archived_at = NULL, archived_by = NULL, version = version + 1, updated_at = ? WHERE id = ?', this.hub.iso(), cardId);
@@ -359,7 +371,7 @@ export class Api {
         });
       }
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
-    });
+    }, { member, cred });
   }
 
   // ── label registry (D91) ──────────────────────────────────────────────────
@@ -377,13 +389,16 @@ export class Api {
   }
 
   // POST: create, or recolour the entry of that name (its spelling stays: renaming is an admin's).
-  async createLabel(member, boardId, body) {
+  async createLabel(member, boardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);
     this.requireLabel(member, 'label.write');
     const name = labelName(body.name);
     const color = colorToken(body.color, 'color');
     const description = 'description' in body ? str(body.description, 200, 'description') : undefined;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
       const old = this.labelByName(boardId, name);
       if (old) return { label: this.updateLabelLocked(member, boardId, old, { color, description }, body.request_id).label };
       const plan = this.db.get('SELECT o.plan FROM orgs o JOIN boards b ON b.org_id = o.id WHERE b.id = ?', boardId).plan;
@@ -399,10 +414,11 @@ export class Api {
         this.hub.later(() => this.hub.broadcastLabels(boardId));
       });
       return { label: labelDef(this.db.get('SELECT * FROM board_labels WHERE id = ?', id)) };
-    });
+    }, { member, cred });
   }
 
-  async patchLabel(member, boardId, name, body) {
+  async patchLabel(member, boardId, name, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);
     this.requireLabel(member, 'label.write');
     if (isReservedLabel(name)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
@@ -411,11 +427,13 @@ export class Api {
       color: 'color' in body ? colorToken(body.color, 'color') : undefined,
       description: 'description' in body ? str(body.description, 200, 'description') : undefined,
     };
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.write');
       const old = this.labelByName(boardId, name);
       if (!old) throw new HubError('NOT_FOUND', 'label not found');
       return this.updateLabelLocked(member, boardId, old, patch, body.request_id);
-    });
+    }, { member, cred });
   }
 
   updateLabelLocked(member, boardId, old, { name, color, description }, requestId) {
@@ -443,12 +461,15 @@ export class Api {
     return { label: labelDef(this.db.get('SELECT * FROM board_labels WHERE id = ?', old.id)), cards_updated: hits.length };
   }
 
-  async deleteLabel(member, boardId, name, body) {
+  async deleteLabel(member, boardId, name, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     this.boardFor(member, boardId);
     this.requireLabel(member, 'label.manage');
     if (isReservedLabel(name)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
     const strip = body.strip === true;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      this.requireLabel(member, 'label.manage');
       const old = this.labelByName(boardId, name);
       if (!old) throw new HubError('NOT_FOUND', 'label not found');
       const hits = strip ? this.labelRewrite(boardId, old.name, null) : [];
@@ -460,7 +481,7 @@ export class Api {
         this.hub.later(() => this.hub.broadcastLabels(boardId));
       });
       return { ok: true, cards_updated: hits.length };
-    });
+    }, { member, cred });
   }
 
   // Every card on the board (archived ones too) holding `from`, ignoring case,
@@ -509,11 +530,18 @@ export class Api {
     return true;
   }
 
-  async action(member, cardId, action, body) {
+  async action(member, cardId, action, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     const type = ACTION_EVENTS[action];
     if (!type) throw new HubError('NOT_FOUND', `unknown action ${action}`);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => this.actionLocked(member, cardId, action, type, body));
+    return this.withWritableBoard(row0.board_id, (current) => {
+      const row = this.cardFor(current, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (['dispatch', 'retry', 'take_over_with_claude', 'request_changes'].includes(action) && row.repo_id != null
+        && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+      return this.actionLocked(current, cardId, action, type, body);
+    }, { member, cred });
   }
 
   actionLocked(member, cardId, action, type, body) {
@@ -603,15 +631,20 @@ export class Api {
     return { card: cardView(this.hub, this.hub.card(cardId), me), ...(res.run_id ? { run_id: res.run_id } : {}) };
   }
 
-  async answerPermission(member, prId, body) {
+  async answerPermission(member, prId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     const pr0 = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
     if (!pr0) throw new HubError('NOT_FOUND', 'permission request not found');
     const row0 = this.cardFor(member, pr0.card_id);
     if (!['allow', 'deny'].includes(body.decision)) throw new HubError('VALIDATION', 'decision must be allow or deny');
     const scope = body.scope ?? 'once';
     if (!['once', 'run'].includes(scope)) throw new HubError('VALIDATION', 'scope must be once or run');
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
       const pr = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
+      if (!pr || pr.card_id !== row0.id) throw new HubError('NOT_FOUND', 'permission request not found');
+      const row = this.cardFor(member, pr.card_id);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (!['open', 'parked'].includes(pr.state)) {
         throw new HubError('ALREADY_ANSWERED', 'another approver answered first', { answered_by: this.hub.memberName(pr.answered_by), state: pr.state });
       }
@@ -638,7 +671,7 @@ export class Api {
         permission_request: { id: after.id, tool: after.tool, input_summary: after.input_summary, state: after.state, scope: after.scope, approvers: json(after.approvers, []), answered_by_name: member.display_name },
         card: cardView(this.hub, this.hub.card(cardId), member.id),
       };
-    });
+    }, { member, cred });
   }
 
   // ── comments ──────────────────────────────────────────────────────────────
