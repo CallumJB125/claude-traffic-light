@@ -35,7 +35,7 @@
       case 'permission': h = `${i.tool || 'tool'}: ${i.headline || oneLine(i.text) || i.title || ''}`; break;
       case 'plan': h = `Plan: ${oneLine(i.text) || 'ready for approval'}`; break;
       case 'question': h = oneLine(i.questions?.[0]?.question || i.text) || i.title; break;
-      case 'blocked': h = `blocked: needs your decision${i.tool ? ` (${i.tool})` : ''}`; break;
+      case 'blocked': h = 'Needs your decision'; break;
       default: h = oneLine(i.title) || oneLine(i.text);
     }
     return cut(oneLine(h) || KIND_LABEL[i.kind] || 'Waiting', HEADLINE_MAX);
@@ -68,14 +68,15 @@
   const canOpen = (input) => (input?.actions || []).includes('open') || input?.kind === 'blocked';
 
   // What Enter does. Never the riskiest choice: never a session-wide grant,
-  // never allow for a command main flagged (deny-list or destructive), never
-  // a guess at a question's answer or a form's content.
+  // never a guess at a question's answer or a form's content, and for a
+  // permission only what main marked enterAllow (on the allow-list, nothing
+  // flagged; danger must be exactly null: undefined means unchecked).
   function primary(input, now = Date.now()) {
     if (!input) return null;
     if (!canAnswer(input, now)) return canOpen(input) ? { type: 'open' } : null;
     const has = (id) => (input.options || []).some((o) => o.id === id);
     if (input.kind === 'permission') {
-      if (input.danger !== null && input.danger !== undefined) return null;
+      if (input.danger !== null || input.enterAllow !== true) return null;
       return has('allow') ? { type: 'option', id: 'allow' } : null;
     }
     if (input.kind === 'plan') return has('allow') ? { type: 'option', id: 'allow' } : null;
@@ -126,7 +127,9 @@
   function formFields(schema) {
     const props = schema && typeof schema === 'object' && schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
     const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
-    return Object.keys(props).slice(0, 20).map((name) => {
+    // Names that are Object.prototype's own (constructor, toString…) are
+    // dropped: a form value lookup must never find an inherited one.
+    return Object.keys(props).filter((name) => !(name in Object.prototype)).slice(0, 20).map((name) => {
       const p = props[name] && typeof props[name] === 'object' ? props[name] : {};
       const values = Array.isArray(p.enum) ? p.enum.filter((v) => typeof v === 'string').slice(0, 30) : null;
       const type = values ? 'enum' : ['string', 'number', 'integer', 'boolean'].includes(p.type) ? p.type : 'string';
@@ -143,7 +146,7 @@
   function formContent(fields, values = {}) {
     const content = {};
     for (const f of fields) {
-      const v = values[f.name];
+      const v = values && Object.hasOwn(values, f.name) ? values[f.name] : undefined;
       if (f.type === 'boolean') { content[f.name] = !!v; continue; }
       const s = typeof v === 'string' ? v.trim() : '';
       if (!s) { if (f.required) return { error: `${f.label} is required` }; continue; }
@@ -159,10 +162,10 @@
     return { content };
   }
 
-  // Oldest first (they have waited longest), capped for the widget; the rest
-  // become "+N more".
-  function visible(inputs, max = 2) {
-    const list = (Array.isArray(inputs) ? inputs : []).slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  // What can be answered here first (so it never hides behind "+N more"),
+  // then oldest first; capped for the widget, the rest become "+N more".
+  function visible(inputs, max = 2, now = Date.now()) {
+    const list = (Array.isArray(inputs) ? inputs : []).slice().sort((a, b) => (canAnswer(b, now) - canAnswer(a, now)) || String(a.created_at).localeCompare(String(b.created_at)));
     return { shown: list.slice(0, max), more: Math.max(0, list.length - max) };
   }
 

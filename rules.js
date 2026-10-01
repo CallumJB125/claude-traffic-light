@@ -169,8 +169,8 @@
   // rule. A set that already has a rule for the signal (the user's own) is
   // left alone. Idempotent.
   function placeBlockedRule(list, rule = BLOCKED_RULE) {
+    if (!rule || list.some((r) => r.id === 'blocked' || (r.when && Array.isArray(r.when.signal) && r.when.signal.includes('blocked')))) return list;
     const out = list.slice();
-    if (!rule || out.some((r) => r.id === 'blocked' || (r.when && Array.isArray(r.when.signal) && r.when.signal.includes('blocked')))) return out;
     const after = ['runaway', 'offline', 'permission'].map((id) => out.findIndex((r) => r.id === id)).find((i) => i >= 0);
     const at = after !== undefined ? after + 1 : out.findIndex((r) => !r.locked);
     out.splice(at < 0 ? out.length : at, 0, JSON.parse(JSON.stringify(rule)));
@@ -551,7 +551,8 @@
     if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule).map((r) => fitForTemplate(template, r)).filter(Boolean)));
     // v9: a classifier denial ("blocked: needs your decision") is red.
     if (version < 9) out.splice(0, out.length, ...placeBlockedRule(out, fitForTemplate(template, normalizeRule(BLOCKED_RULE))));
-    return out;
+    // Nothing to add: the caller keeps the very list it gave (callers compare identity).
+    return out.length === rules.length && out.every((r, i) => r === rules[i]) ? rules : out;
   }
 
   // Rule sets kept or passed around outside config.json (saved presets, share

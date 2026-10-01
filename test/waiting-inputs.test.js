@@ -343,3 +343,12 @@ test('blocked: the command is kept up to 1000 characters, and the input shows al
   runSync('permission-denied', home, { session_id: 's2', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'x'.repeat(1500) }, reason: 'r' });
   assert.equal(session(home, 's2').blocked.summary.length, 1000, 'still capped');
 });
+
+test('a permission input says how much of a long command it could not show', () => {
+  const PI = require('../src/pending-inputs.js');
+  const req = { id: 'r', kind: 'permission', channel: 'PermissionRequest', tool: 'Bash', toolInput: { command: `echo ${'x'.repeat(25000)}` }, createdAt: new Date().toISOString() };
+  const i = PI.fromRequest(req);
+  assert.ok(i.detail_cut > 0);
+  assert.equal(i.text.length + i.detail_cut, `echo ${'x'.repeat(25000)}`.length);
+  assert.equal(PI.fromRequest({ ...req, toolInput: { command: 'ls' } }).detail_cut, 0);
+});

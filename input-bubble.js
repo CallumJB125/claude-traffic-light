@@ -37,7 +37,21 @@
     svg.appendChild(p);
     return svg;
   }
-  const keyOf = (inputs, scopes = {}) => inputs.map((i) => `${i.id}|${i.created_at}|${i.expires_at}|${i.danger || ''}|${i.text && i.text.length}|${i.title}|${(scopes[i.session] && scopes[i.session].state) || ''}`).join('\n');
+  // A short hash of what an input says, so a changed text (same length or
+  // not) counts as a different input.
+  function hash(str) {
+    let h = 5381;
+    for (let k = 0; k < str.length; k++) h = ((h * 33) ^ str.charCodeAt(k)) >>> 0;
+    return h.toString(36);
+  }
+  const itemKey = (i) => hash(JSON.stringify([i.id, i.created_at, i.expires_at, i.danger ?? null, i.enterAllow ?? null, i.title, i.text, (i.options || []).map((o) => o && o.id)]));
+  const keyOf = (inputs) => inputs.map((i) => `${i.id}:${itemKey(i)}`).join('\n');
+  // What a blocked call's suggestions say here (the ids are the core's).
+  const BLOCKED_LABELS = { 'run-yourself': 'Open the terminal', 'switch-mode': 'How to allow it' };
+  // A click or Enter within this long of an item appearing (or changing)
+  // under the cursor is not a decision about it.
+  const SETTLE_MS = 600;
+  const NUDGE_MS = 60000;
 
   function create(container, opts = {}) {
     const api = opts.api || {};
@@ -54,6 +68,13 @@
     let collapsedByUser = false;
     let dismissedKey = null;
     let nudge = null;
+    let nudgeTimer = null;
+    const noAutoExpand = new Set(); // ids on screen when something was answered: they wait for a deliberate open
+    const shownAt = new Map(); // id → when its body appeared, or its content last changed
+    const shownKey = new Map();
+    let lastBody = null;
+    let settleTimer = null;
+    const denyOpen = new Set(); // ids whose Deny was clicked: the reason field and Send show
     const sending = new Set();
     const answered = new Set();
     const errors = new Map();
@@ -61,7 +82,7 @@
     const notes = new Map(); // id → explanation shown under a blocked input
     const picked = new Map(); // id → { questionId: [optionId] }
     const typed = new Map(); // id → { questionId: text }
-    const formValues = new Map(); // id → { field: value }
+    const formValues = new Map(); // id → field values (no prototype: field names are the agent's)
     const reasons = new Map(); // id → deny reason typed
 
     container.classList.add('ib', `ib-${mode}`);
@@ -71,11 +92,9 @@
     live.setAttribute('aria-live', 'polite');
 
     const live_ = () => inputs.filter((i) => !answered.has(i.id));
-    const current = () => {
-      const list = live_();
-      if (expanded && list.some((i) => i.id === expanded)) return list.find((i) => i.id === expanded);
-      return null;
-    };
+    // Only the expanded, drawn input: the keyboard never acts on one you can't see.
+    const current = () => (expanded && lastBody === expanded ? live_().find((i) => i.id === expanded) || null : null);
+    const settled = (id) => now() - (shownAt.has(id) ? shownAt.get(id) : -Infinity) >= SETTLE_MS;
 
     function setError(id, msg) { if (msg) errors.set(id, msg); else errors.delete(id); render(); }
 
@@ -90,8 +109,10 @@
       sending.delete(input.id);
       if (r && r.ok) {
         answered.add(input.id);
+        if (expanded === input.id) expanded = null;
+        for (const i of live_()) noAutoExpand.add(i.id);
         live.textContent = 'Answer sent';
-        if (r.nudge) { nudge = r.nudge; }
+        if (r.nudge) showNudge(r.nudge);
       } else errors.set(input.id, (r && r.error) || 'Could not send: answer it in the terminal.');
       render();
     }
@@ -109,8 +130,8 @@
       b.dataset.option = o.id;
       if (o.description) b.title = o.description;
       b.setAttribute('aria-label', `${o.label}${o.description ? `: ${o.description}` : ''} (${V.KIND_LABEL[input.kind] || 'input'} in ${V.project(input)})`);
-      b.disabled = sending.has(input.id) || !V.canAnswer(input, now());
-      b.addEventListener('click', (e) => { e.stopPropagation(); if (onClick) onClick(); else send(input, o.id, extra ? extra() : undefined); });
+      b.disabled = sending.has(input.id) || !V.canAnswer(input, now()) || !settled(input.id);
+      b.addEventListener('click', (e) => { e.stopPropagation(); if (!settled(input.id)) return; if (onClick) onClick(); else send(input, o.id, extra ? extra() : undefined); });
       return b;
     }
 
@@ -130,6 +151,8 @@
       pre.tabIndex = 0;
       pre.setAttribute('aria-label', `Full text from ${V.project(input)}`);
       wrap.appendChild(pre);
+      const cut = Number(input.detail_cut) || 0;
+      if (cut > 0) wrap.appendChild(el('div', 'ib-warn', `${cut} more characters not shown — check the terminal`));
       if (text.length > LONG_TEXT || text.split('\n').length > 4) {
         const more = el('button', 'ib-link', full.has(input.id) ? 'Show less' : 'Show full');
         more.type = 'button';
@@ -217,24 +240,24 @@
     function elicitationControls(input, body) {
       const accept = (input.options || []).find((o) => o.id === 'accept');
       const fields = accept && accept.needsContent ? V.formFields(input.schema) : [];
-      const vals = formValues.get(input.id) || {};
+      const vals = formValues.get(input.id) || Object.create(null);
       if (fields.length) {
         const form = el('div', 'ib-form');
         for (const f of fields) {
           const lab = el('label', 'ib-flabel');
           lab.appendChild(el('span', null, `${f.label}${f.required ? ' *' : ''}`));
           let ctl;
-          if (f.type === 'boolean') { ctl = el('input'); ctl.type = 'checkbox'; ctl.checked = !!vals[f.name]; ctl.addEventListener('change', () => { vals[f.name] = ctl.checked; formValues.set(input.id, vals); }); }
+          if (f.type === 'boolean') { ctl = el('input'); ctl.type = 'checkbox'; ctl.checked = Object.hasOwn(vals, f.name) && !!vals[f.name]; ctl.addEventListener('change', () => { vals[f.name] = ctl.checked; formValues.set(input.id, vals); }); }
           else if (f.type === 'enum') {
             ctl = el('select', 'ib-field');
             ctl.appendChild(el('option', null, '—')).value = '';
             for (const v of f.values) { const o = el('option', null, v); o.value = v; ctl.appendChild(o); }
-            ctl.value = vals[f.name] || '';
+            ctl.value = Object.hasOwn(vals, f.name) ? vals[f.name] : '';
             ctl.addEventListener('change', () => { vals[f.name] = ctl.value; formValues.set(input.id, vals); });
           } else {
             ctl = el('input', 'ib-field');
             ctl.type = f.type === 'string' ? 'text' : 'number';
-            ctl.value = vals[f.name] || '';
+            ctl.value = Object.hasOwn(vals, f.name) ? vals[f.name] : '';
             ctl.addEventListener('input', () => { vals[f.name] = ctl.value; formValues.set(input.id, vals); });
           }
           ctl.dataset.focusKey = `${input.id}:f:${f.name}`;
@@ -249,7 +272,7 @@
       for (const o of input.options || []) {
         if (o.id === 'accept' && fields.length) {
           row.appendChild(optionButton(input, o, null, () => {
-            const r = V.formContent(fields, formValues.get(input.id) || {});
+            const r = V.formContent(fields, formValues.get(input.id) || Object.create(null));
             if (r.error) { setError(input.id, r.error); return; }
             send(input, 'accept', { content: r.content });
           }));
@@ -262,9 +285,10 @@
       if (input.reason && !String(input.text || '').includes(input.reason)) body.appendChild(el('div', 'ib-reason-text', `Reason: ${input.reason}`));
       const row = el('div', 'ib-opts');
       for (const o of input.options || []) {
-        const b = el('button', 'ib-opt tone-plain', o.label);
+        const b = el('button', 'ib-opt tone-plain', BLOCKED_LABELS[o.id] || o.label);
         b.type = 'button';
         b.dataset.option = o.id;
+        if (o.id === 'switch-mode') b.setAttribute('aria-expanded', String(!!notes.get(input.id)));
         b.addEventListener('click', (e) => {
           e.stopPropagation();
           // Suggestions only: none of these is ever sent to Claude Code.
@@ -298,12 +322,20 @@
     // Work scope: a small badge, "Not team work" (this session) and, tucked
     // behind "⋯", the repo-wide choice. Undo for a session marked personal.
     function scopeLine(input) {
-      const v = W.scopeView(scopes[input.session]);
+      const scope = scopes[input.session];
+      const v = W.scopeView(scope);
       if (!v || !input.session) return null;
       const line = el('div', `ib-scope-line tone-${v.tone}`);
-      line.appendChild(el('span', `ib-scope tone-${v.tone}`, v.label));
+      const badge = el('span', `ib-scope tone-${v.tone}`, v.label);
+      if (v.state === 'watching') badge.title = 'Not counted for your team until it makes a change';
+      line.appendChild(badge);
       const link = (label, aria, fn) => { const b = el('button', 'ib-link', label); b.type = 'button'; b.setAttribute('aria-label', aria); b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
-      if (v.markPersonal && api.setSessionScope) line.appendChild(link('Not team work', `Not team work: don’t track this ${V.project(input)} session`, () => setScope(input, api.setSessionScope, input.session, 'personal')));
+      const board = scope && scope.board && typeof scope.board.name === 'string' && scope.board.name.trim() ? scope.board.name.trim().slice(0, 60) : 'your team';
+      if (v.markPersonal && api.setSessionScope) {
+        const b = link('Not team work', `Not team work: don’t track this ${V.project(input)} session`, () => setScope(input, api.setSessionScope, input.session, 'personal'));
+        b.title = `Won’t count toward ${board}`;
+        line.appendChild(b);
+      }
       if (v.undo && api.setSessionScope) line.appendChild(link('Undo', `Undo personal: track this ${V.project(input)} session again if it counts`, () => setScope(input, api.setSessionScope, input.session, 'auto')));
       if (v.repoUrl && api.setRepoScope) {
         const more = link('⋯', 'More work-scope choices', () => { if (scopeMore.has(input.id)) scopeMore.delete(input.id); else scopeMore.add(input.id); render(); });
@@ -318,7 +350,7 @@
       const t = now();
       const body = el('div', 'ib-body');
       body.id = `ib-body-${input.id}`;
-      if (input.title && input.kind !== 'question') body.appendChild(el('div', 'ib-title', input.title));
+      if (input.title && input.kind !== 'question' && input.title.trim() !== V.headline(input)) body.appendChild(el('div', 'ib-title', input.title));
       const sl = scopeLine(input);
       if (sl) body.appendChild(sl);
       if (input.danger) {
@@ -336,10 +368,22 @@
       switch (input.kind) {
         case 'permission': case 'plan':
           if (V.canAnswer(input, t)) {
-            if (mode === 'page' || input.kind === 'permission') body.appendChild(reasonField(input));
             const row = el('div', 'ib-opts');
-            for (const o of input.options || []) row.appendChild(optionButton(input, o, o.id === 'deny' ? denyExtra(input) : null));
+            for (const o of input.options || []) {
+              // Deny on a permission asks for an optional reason first; ⌘. still denies at once.
+              if (o.id === 'deny' && input.kind === 'permission') {
+                row.appendChild(optionButton(input, o, null, () => { denyOpen.add(input.id); render(); }));
+              } else row.appendChild(optionButton(input, o));
+            }
             body.appendChild(row);
+            if (input.kind === 'permission' && denyOpen.has(input.id)) {
+              body.appendChild(reasonField(input));
+              const confirm = el('div', 'ib-opts');
+              const sendBtn = optionButton(input, { id: 'deny', label: 'Send' }, denyExtra(input));
+              sendBtn.classList.add('ib-deny-send');
+              confirm.appendChild(sendBtn);
+              body.appendChild(confirm);
+            }
           }
           break;
         case 'question': questionControls(input, body); break;
@@ -371,8 +415,6 @@
       row.setAttribute('aria-label', V.rowLabel(input, t));
       row.appendChild(icon(input.kind));
       row.appendChild(el('span', 'ib-proj', V.project(input)));
-      const sv = W.scopeView(scopes[input.session]);
-      if (sv) row.appendChild(el('span', `ib-scope tone-${sv.tone}`, sv.label));
       row.appendChild(el('span', 'ib-head', V.headline(input)));
       row.appendChild(el('span', 'ib-age', V.expired(input, t) ? 'answer in terminal' : V.ageText(input, t)));
       row.addEventListener('click', (e) => {
@@ -382,7 +424,17 @@
         render();
       });
       sec.appendChild(row);
-      if (isOpen) sec.appendChild(itemBody(input));
+      if (isOpen) {
+        // A body that has just appeared, or whose input changed, settles before it can be answered.
+        const k = itemKey(input);
+        if (lastBody !== input.id || shownKey.get(input.id) !== k) {
+          shownAt.set(input.id, t);
+          shownKey.set(input.id, k);
+          clearTimeout(settleTimer);
+          settleTimer = setTimeout(render, SETTLE_MS + 20);
+        }
+        sec.appendChild(itemBody(input));
+      }
       return sec;
     }
 
@@ -401,11 +453,20 @@
       return card;
     }
 
+    function showNudge(n) {
+      nudge = n;
+      clearTimeout(nudgeTimer);
+      nudgeTimer = setTimeout(() => { nudge = null; render(); }, NUDGE_MS);
+      if (nudgeTimer && nudgeTimer.unref) nudgeTimer.unref(); // under Node (tests) it mustn't hold the process
+      render();
+    }
+
     function render() {
       const active = document.activeElement;
       const focusKey = active && container.contains(active) ? active.dataset.focusKey : null;
       const list = live_();
-      const key = keyOf(list, scopes);
+      const key = keyOf(list);
+      let drawnBody = null;
       const kids = [];
       if (nudge) kids.push(nudgeCard());
       if (list.length && dismissedKey === key && mode === 'widget') {
@@ -414,11 +475,11 @@
         pill.addEventListener('click', (e) => { e.stopPropagation(); dismissedKey = null; render(); });
         kids.push(pill);
       } else if (list.length) {
-        const { shown, more } = V.visible(list, maxRows);
+        const { shown, more } = V.visible(list, maxRows, now());
         const openItem = expanded && list.find((i) => i.id === expanded);
         // An expanded input beyond the cap swaps in for the last row.
         const rows = openItem && !shown.includes(openItem) ? [...shown.slice(0, -1), openItem] : shown;
-        for (const i of rows) kids.push(item(i));
+        for (const i of rows) { kids.push(item(i)); if (i.id === expanded) drawnBody = i.id; }
         if (more > 0) {
           const m = el('button', 'ib-more', `+${more} more waiting`);
           m.type = 'button';
@@ -430,6 +491,7 @@
         kids.push(el('p', 'ib-empty', 'Nothing is waiting on you.'));
       }
       kids.push(live);
+      lastBody = drawnBody;
       container.replaceChildren(...kids);
       container.classList.toggle('has-items', list.length > 0 || !!nudge);
       if (focusKey) {
@@ -443,14 +505,18 @@
       inputs = Array.isArray(next) ? next.filter((i) => i && typeof i.id === 'string') : [];
       scopes = extra.scopes && typeof extra.scopes === 'object' ? extra.scopes : {};
       const ids = new Set(inputs.map((i) => i.id));
-      for (const s of [answered, sending, full, scopeMore]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
-      for (const m of [errors, notes, picked, typed, formValues, reasons]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
+      for (const s of [answered, sending, full, scopeMore, denyOpen, noAutoExpand]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
+      for (const m of [errors, notes, picked, typed, formValues, reasons, shownAt, shownKey]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
       const list = live_();
       if (expanded && !list.some((i) => i.id === expanded)) expanded = null;
-      // One waiting input opens straight away, like the old Allow/Deny strip.
-      if (!expanded && !collapsedByUser && list.length === 1 && mode === 'widget') expanded = list[0].id;
-      if (mode === 'page' && !expanded && list.length && !collapsedByUser) expanded = list[0].id;
-      const key = keyOf(list, scopes);
+      // One waiting input opens straight away, like the old Allow/Deny strip
+      // (not right after an answer: the next one waits for a deliberate open).
+      if (!expanded && !collapsedByUser && list.length === 1 && mode === 'widget' && !noAutoExpand.has(list[0].id)) expanded = list[0].id;
+      if (mode === 'page' && !expanded && list.length && !collapsedByUser) {
+        const first = V.visible(list, 1, now()).shown[0];
+        if (!noAutoExpand.has(first.id)) expanded = first.id;
+      }
+      const key = keyOf(list);
       if (key !== lastKey) {
         if (lastKey !== null && list.length > (lastKey ? lastKey.split('\n').length : 0)) live.textContent = `${list.length} waiting on you`;
         lastKey = key;
@@ -464,27 +530,29 @@
     function keydown(e) {
       const tag = e.target && e.target.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-      const cur = current() || (live_().length === 1 ? live_()[0] : null);
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
-        const id = cur && V.denyOption(cur, now());
+      if (e.repeat) return false; // a held key is not a decision
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === '.') {
+        const cur = current();
+        const id = cur && settled(cur.id) && V.denyOption(cur, now());
         if (!id) return false;
         e.preventDefault();
         send(cur, id, id === 'deny' ? denyExtra(cur)() : undefined);
         return true;
       }
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         if (typing && e.target.blur) e.target.blur();
-        if (expanded) { expanded = null; collapsedByUser = true; } else if (mode === 'widget') dismissedKey = keyOf(live_(), scopes);
+        if (expanded) { expanded = null; collapsedByUser = true; } else if (mode === 'widget') dismissedKey = keyOf(live_());
         render();
         return true;
       }
       if (e.key === 'Enter' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         if (tag === 'BUTTON' || tag === 'PRE') return false; // the focused control's own action
-        if (!cur) return false;
+        const cur = current();
+        if (!cur || !settled(cur.id)) return false;
         e.preventDefault();
         const p = V.primary(cur, now());
-        if (!p) { setError(cur.id, cur.danger ? 'Enter won’t allow this one: click Allow if you mean it.' : 'Pick an option.'); return true; }
+        if (!p) { setError(cur.id, cur.kind === 'permission' ? 'Enter only allows read-only commands and edits inside the project: click Allow if you mean it.' : 'Pick an option.'); return true; }
         if (p.type === 'open') open(cur); else send(cur, p.id, undefined);
         return true;
       }
@@ -506,7 +574,7 @@
 
     return {
       update, keydown, tick,
-      showNudge(n) { nudge = n; render(); },
+      showNudge,
       get count() { return live_().length; },
     };
   }

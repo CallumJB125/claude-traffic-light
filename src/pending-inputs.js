@@ -35,7 +35,7 @@ function fromRequest(req) {
   };
   if (kind === 'permission') {
     const d = describeRequest(req);
-    return { ...base, title: view.title, text: d.detail, headline: d.headline, options: view.options.map(publicOption) };
+    return { ...base, title: view.title, text: d.detail, detail_cut: d.detailCutChars, headline: d.headline, options: view.options.map(publicOption) };
   }
   return {
     ...base, title: text(view.title, 200), text: text(view.text, 20000), options: view.options.map(publicOption),

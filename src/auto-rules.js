@@ -1,7 +1,7 @@
 // Auto-answer rules (P3+): "allow Bash `npm test *`", "allow Read under
 // ~/Development/**", "deny WebFetch". Stored in config.json as
 // `autoAnswer: { v: 1, sealed: null, rules: [...] }`. The storage is final;
-// nothing evaluates the rules yet (not on for go-live).
+// nothing auto-answers yet (not on for go-live).
 //
 // Agreed design for the evaluator (with the hook core's owner, 2026-10-01):
 //   - main evaluates when a request appears and answers through writeAnswer
@@ -119,6 +119,8 @@ function pathRefusal(glob, tools, home) {
   if (!(glob.startsWith('/') || glob.startsWith('~/'))) return 'The path must start with / or ~/ so it can’t mean different folders in different projects.';
   if (glob.split('/').includes('..')) return 'The path can’t contain “..”.';
   if (/[\p{Cc}\p{Cf}]/u.test(glob)) return 'The path contains invisible characters.';
+  if (glob.includes('**/**')) return 'Use one ** for “any depth”.';
+  if ((glob.match(/\*\*|\*|\?/g) || []).length > 4) return 'Too many wildcards: at most four in a path.';
   const dir = staticDir(glob, home);
   if (within(home, dir)) return 'Too broad: that covers your whole home folder (and your keys and settings in it). Pick a project folder.';
   if (CREDENTIAL_PATHS.test(expandHome(glob, home))) return 'That path holds credentials or agent settings: always ask a person.';
@@ -134,6 +136,7 @@ function commandRefusal(pattern) {
   if (/[;&|<>`$()\\\n]/.test(pattern)) return 'Only a single plain command: no ; && | > $( ) or backslashes. Each part would need its own rule.';
   const words = pattern.split(/\s+/).filter(Boolean);
   if (!words.length || words.every((w) => /^[*?]+$/.test(w))) return 'Too broad: that matches every command.';
+  if (words.some((w) => (w.match(/[*?]/g) || []).length > 2)) return 'Too many wildcards: at most two in each word.';
   const cmd = words[0];
   if (isWild(cmd) || cmd.includes('/') || cmd.includes('=')) return 'Start with the program’s plain name (no wildcards, paths or VAR=value).';
   if (broadRule({ toolName: 'Bash', ruleContent: pattern })) return `${cmd} runs any code it is given: always ask a person.`;
@@ -190,22 +193,29 @@ function sanitize(rules, opts) {
 }
 
 // ── matching (reference for the hook side; not wired in) ─────────────────
-function globRe(glob, home) {
-  const g = expandHome(glob, home);
-  let re = '';
-  for (let i = 0; i < g.length; i++) {
-    const c = g[i];
-    if (c === '*' && g[i + 1] === '*') { re += '.*'; i++; if (g[i + 1] === '/') i++; }
-    else if (c === '*') re += '[^/]*';
-    else if (c === '?') re += '[^/]';
-    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+// Wildcard matching without regular expressions (a pattern like a*a*a*…b
+// made a backtracking regex take seconds): two pointers that only ever go
+// back to the last *, so the work is bounded by pattern × text.
+function wild(p, t, isStar, isOne, eq) {
+  let i = 0, j = 0, star = -1, mark = 0;
+  while (j < t.length) {
+    if (i < p.length && !isStar(p[i]) && (isOne(p[i]) || eq(p[i], t[j]))) { i++; j++; }
+    else if (i < p.length && isStar(p[i])) { star = i++; mark = j; }
+    else if (star >= 0) { i = star + 1; j = ++mark; }
+    else return false;
   }
-  return new RegExp(`^${re}$`);
+  while (i < p.length && isStar(p[i])) i++;
+  return i === p.length;
+}
+// One word or path segment: * any run, ? one character.
+const charGlob = (pat, s) => wild(pat, s, (c) => c === '*', (c) => c === '?', (a, b) => a === b);
+// A path: ** is any number of whole segments; * and ? stay inside a segment.
+function pathGlob(glob, target, home) {
+  return wild(expandHome(glob, home).split('/'), String(target).split('/'), (seg) => seg === '**', () => false, (seg, t) => charGlob(seg, t));
 }
 
 function wordMatch(pat, word) {
-  if (!isWild(pat)) return pat === word;
-  return new RegExp(`^${pat.split('*').map((s) => s.replace(/[.+^${}()|[\]\\?]/g, '\\$&')).join('[^\\s]*')}$`).test(word);
+  return /[*?]/.test(pat) ? charGlob(pat, word) : pat === word;
 }
 
 // A trailing lone * matches any remaining arguments (none included).
@@ -252,14 +262,14 @@ function targetPath(req, realpath) {
 
 function ruleMatches(r, req, { home, realpath }) {
   if (!r.enabled || !r.tools.includes(req.tool)) return false;
-  if (r.cwd && !(typeof req.cwd === 'string' && globRe(r.cwd, home).test(path.resolve(req.cwd)))) return false;
+  if (r.cwd && !(typeof req.cwd === 'string' && pathGlob(r.cwd, path.resolve(req.cwd), home))) return false;
   if (SHELL_TOOLS.has(req.tool) && r.command) {
     const words = simpleCommand(req.toolInput?.command);
     return !!words && commandMatch(r.command, words);
   }
   if (FILE_TOOLS.has(req.tool) && r.path) {
     const p = targetPath(req, realpath);
-    return !!p && globRe(r.path, home).test(p);
+    return !!p && pathGlob(r.path, p, home);
   }
   return !r.command && !r.path;
 }
@@ -282,7 +292,7 @@ function danger(req) {
   if (!req || typeof req.tool !== 'string') return null;
   const input = req.toolInput && typeof req.toolInput === 'object' ? req.toolInput : {};
   const deny = evaluateDenyList(DENY_LIST, { toolName: req.tool, toolInput: input });
-  if (deny.blocked) return deny.reason;
+  if (deny.blocked) return deny.ruleId === 'input-too-large' ? 'Too long to review here — check the terminal' : deny.reason;
   if (SHELL_TOOLS.has(req.tool) && typeof input.command === 'string') {
     const { cmds, hazards } = parseShell(input.command.slice(0, 8192));
     if (hazards.has('substitution') || hazards.has('process-substitution')) return 'runs a nested command';
@@ -294,4 +304,4 @@ function danger(req) {
   return null;
 }
 
-module.exports = { MAX_RULES, SHELL_TOOLS, FILE_TOOLS, normalizeRule, refusal, sanitize, matchRule, mustAsk, danger, simpleCommand, commandMatch, globRe };
+module.exports = { MAX_RULES, SHELL_TOOLS, FILE_TOOLS, normalizeRule, refusal, sanitize, matchRule, mustAsk, danger, simpleCommand, commandMatch, pathGlob, charGlob };

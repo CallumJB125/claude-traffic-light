@@ -40,8 +40,8 @@ for (const [state, label] of [['watching', 'watching locally'], ['counting', 'co
     const id = `ws-${state}`;
     fixture({ [id]: { state, board: { id: 'b1', name: 'Platform' }, repo: REPO } });
     waiting(id);
-    await expect(widget.locator('.ib-row .ib-scope')).toHaveText(label, { timeout: 10000 });
-    await widget.waitForTimeout(500);
+    await expect(widget.locator('.ib-body .ib-scope')).toHaveText(label, { timeout: 10000 });
+    await widget.waitForTimeout(900);
     await expect(widget).toHaveScreenshot(`scope-${state}.png`, SHOT);
   });
 }
@@ -62,15 +62,15 @@ test('outside, or a session the core gives no scope: no badge, and the tray item
 test('Not team work → personal → Undo, and the repo-wide choice behind ⋯', async () => {
   fixture({ 'ws-flow': { state: 'counting', board: { id: 'b1', name: 'Platform' }, repo: REPO } });
   waiting('ws-flow');
-  await expect(widget.locator('.ib-row .ib-scope')).toHaveText('counting for Platform', { timeout: 10000 });
+  await expect(widget.locator('.ib-body .ib-scope')).toHaveText('counting for Platform', { timeout: 10000 });
   const before = calls().length;
   await widget.getByRole('button', { name: /^Not team work/ }).click();
-  await expect(widget.locator('.ib-row .ib-scope')).toHaveText('personal', { timeout: 10000 });
+  await expect(widget.locator('.ib-body .ib-scope')).toHaveText('personal', { timeout: 10000 });
   await widget.getByRole('button', { name: /^Undo personal/ }).click();
-  await expect(widget.locator('.ib-row .ib-scope')).toHaveText('counting for Platform', { timeout: 10000 });
+  await expect(widget.locator('.ib-body .ib-scope')).toHaveText('counting for Platform', { timeout: 10000 });
   await widget.getByRole('button', { name: 'More work-scope choices' }).click();
   await widget.getByRole('button', { name: /^Always treat/ }).click();
-  await expect(widget.locator('.ib-row .ib-scope')).toHaveText('personal', { timeout: 10000 });
+  await expect(widget.locator('.ib-body .ib-scope')).toHaveText('personal', { timeout: 10000 });
   expect(calls().slice(before)).toEqual([
     { fn: 'setSessionScope', args: ['ws-flow', 'personal'] },
     { fn: 'setSessionScope', args: ['ws-flow', 'auto'] },

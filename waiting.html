@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" />
 <title>Waiting on you</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="input-bubble.css" />
@@ -27,7 +27,7 @@
   </header>
   <div id="off">Answering from here is off, so tool permissions show only in their terminal. Turn on “Answer permission prompts from the widget” in Preferences to answer them here too.</div>
   <main id="list"></main>
-  <p id="keys"><kbd>Enter</kbd> answers with the safe choice of the open item (never a risky allow) · <kbd>⌘.</kbd> denies · <kbd>Esc</kbd> closes it</p>
+  <p id="keys"><kbd>Enter</kbd> on the open item allows only read-only commands and edits inside its project; anything else needs a click · <kbd>⌘.</kbd> denies · <kbd>Esc</kbd> closes it</p>
   <script src="brand.js"></script>
   <script src="src/input-view.js"></script>
   <script src="src/work-scope-view.js"></script>

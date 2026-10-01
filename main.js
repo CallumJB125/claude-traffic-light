@@ -125,7 +125,7 @@ const MAX_WIDTH = 320;
 
 function resizeBy(factor) {
   // The bubble or the recap has grown the window past the widget's shape.
-  if (!win || stripPx) return;
+  if (!win || strip.px) return;
   const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
   const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
   const newHeight = Math.round(newWidth / WIDGET_ASPECT);
@@ -362,7 +362,9 @@ const PendingInputs = require('./src/pending-inputs.js');
 // and may not exist yet. Without it every session's scope is null and the
 // widget shows nothing about scope.
 let WorkScope = null;
-try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code === 'MODULE_NOT_FOUND' && /work-scope/.test(e.message))) throw e; }
+// Only the module itself missing is "no core yet"; a missing dependency of a
+// present module is a real error.
+try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code === 'MODULE_NOT_FOUND' && /Cannot find module '\.\/src\/work-scope\.js'/.test(e.message))) throw e; }
 // Specs inject scope states through a mock that is never packaged.
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK) WorkScope = require('./test-visual/work-scope-mock.js').create(process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK);
 const WorkScopeView = require('./src/work-scope-view.js');
@@ -378,16 +380,42 @@ function withScope(sessions) {
 }
 const AutoRules = require('./src/auto-rules.js');
 const ApprovalNudge = require('./src/approval-nudge.js');
-const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json') });
-// Why Enter must not allow a permission request (deny-list or destructive):
-// the widget still shows Allow, it just never makes it the default.
+// The counter's keys are HMACs under a per-install secret, kept encrypted by
+// safeStorage (the OS keychain) where it can be; otherwise a random salt in
+// a 0600 file. A secret that can't be read is replaced: the counts restart.
+function nudgeSecret() {
+  const { safeStorage } = require('electron');
+  const f = path.join(ROOT_DIR, 'approval-secret.json');
+  const sealable = (() => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } })();
+  try {
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const hex = d.sealed ? safeStorage.decryptString(Buffer.from(d.data, 'base64')) : d.data;
+    if (/^[0-9a-f]{64}$/.test(hex)) return Buffer.from(hex, 'hex');
+  } catch { /* none yet, or unreadable */ }
+  const hex = require('crypto').randomBytes(32).toString('hex');
+  const d = sealable ? { v: 1, sealed: true, data: safeStorage.encryptString(hex).toString('base64') } : { v: 1, sealed: false, data: hex };
+  fs.mkdirSync(ROOT_DIR, { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(d), { mode: 0o600 });
+  fs.chmodSync(f, 0o600);
+  return Buffer.from(hex, 'hex');
+}
+const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json'), secret: nudgeSecret });
+// The "make it a rule?" card stays hidden while auto-answer is off: a rule
+// that nothing applies would only mislead. Counting carries on.
+const SHOW_RULE_NUDGE = false;
+// Why a permission request needs a careful look (deny-list or destructive):
+// shown as a warning. enterAllow: Enter may allow it only when nothing is
+// flagged AND it is on the allow-list (src/enter-allow.js); the widget still
+// shows Allow either way, Enter just never stands in for that click.
+const EnterAllow = require('./src/enter-allow.js');
 function withDanger(inputs, requests) {
   const byId = new Map(requests.map((r) => [r.id, r]));
   return inputs.map((i) => {
     if (i.kind !== 'permission' || !byId.has(i.id)) return i;
+    const req = byId.get(i.id);
     let danger;
-    try { danger = AutoRules.danger(byId.get(i.id)); } catch { danger = 'it could not be checked'; }
-    return { ...i, danger };
+    try { danger = AutoRules.danger(req); } catch { danger = 'it could not be checked'; }
+    return { ...i, danger, enterAllow: danger === null && EnterAllow.enterBlockedReason(req) === null };
   });
 }
 const PaneDialogs = require('./src/pane-dialogs.js');
@@ -441,8 +469,8 @@ let gardenRun = null;
 function saveBounds() {
   if (!win || gardenRun || roamState.busy) return;
   // The widget's own size, without the bubble or the recap under it.
-  const b = win.getBounds();
-  fs.writeFileSync(BOUNDS_FILE, JSON.stringify({ x: b.x + stripDx, y: b.y, width: b.width - stripW, height: b.height - stripPx }, null, 2));
+  if (applyingStrip) return; // applyStrip saves the base once it is done
+  fs.writeFileSync(BOUNDS_FILE, JSON.stringify(WidgetStrip.baseOf(win.getBounds(), strip), null, 2));
 }
 
 function readManualOverride() {
@@ -1740,6 +1768,7 @@ function overlayGarden(payload) {
 }
 
 async function runGarden(base) {
+  if (strip.px) return; // the garden walks the widget's own rect, not the grown one
   console.log('[garden] start');
   // `run` is declared before anything that can throw: the finally block below
   // reads it, and a throw from gardenGeometry() used to hit the temporal dead
@@ -2080,6 +2109,8 @@ async function roamAndKnock(st, { force = false } = {}) {
   if (!IS_MAC) return { ok: false, why: 'macOS only' };
   if (!win) return { ok: false, why: 'no widget' };
   if (roamState.busy) return { ok: false, why: 'already roaming' };
+  // Roaming moves the grown window as if it were the widget: wait for the bubble to go.
+  if (strip.px) return { ok: false, why: 'something is showing under the widget' };
   if (gardenRun) return { ok: false, why: 'gardening' };
   // busy goes up BEFORE the first await. Deciding whether to knock costs three
   // osascript calls, and claiming the flag only afterwards is what let every
@@ -2149,7 +2180,7 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun || strip.px) return;
   const waiting = st.pending?.length || localSessions(st.sessions).some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -2366,7 +2397,7 @@ function stopGlide() { glideTimer = stopTimer(glideTimer); }
 
 function glideFrom(vx, vy) {
   stopGlide();
-  if (!win || win.isDestroyed() || gardenRun || roamState.busy) return false;
+  if (!win || win.isDestroyed() || gardenRun || roamState.busy || strip.px) return false;
   const G = Motion.MOTION.glide;
   const E = Motion.MOTION.edge;
   const speed = Math.hypot(vx, vy);
@@ -3101,7 +3132,14 @@ ipcMain.handle('answer-request', (e, id, decision) => {
 // option id (plus free-text answers, form content or a deny message); the
 // answer itself is rebuilt from the request file, never taken from the
 // renderer. First answer wins (answer-file.js); every answer is logged.
+// Who may read and answer waiting inputs: the widget and the Waiting page
+// (its own window, or the Plexiform window's view of it), by webContents.
+function inputSenderOk(e) {
+  const wc = e.sender;
+  return !!wc && ((win && wc === win.webContents) || (waitingWin && wc === waitingWin.webContents) || (buddyWin && wc === buddyWin.pageWebContents('waiting')));
+}
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
+  if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   const req = readRequests().find((r) => r.id === String(id));
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const m = more && typeof more === 'object' ? more : {};
@@ -3114,12 +3152,17 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   setTimeout(broadcastStatus, 250);
   if (!w.ok) return { ok: false, error: w.error };
   // "Allow once" only: a session-wide allow was already a broader choice.
-  const n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null;
-  return n && n.nudge ? { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } } : { ok: true };
+  // The answer is already written: a counter problem must not turn it into an error.
+  let n = null;
+  try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
+  if (!SHOW_RULE_NUDGE || !n || !n.nudge) return { ok: true };
+  nudger.offer(n.key);
+  return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });
 
 // The Waiting page (waiting.html, standalone or in the Plexiform window).
-ipcMain.handle('get-inputs', () => {
+ipcMain.handle('get-inputs', (e) => {
+  if (!inputSenderOk(e)) return null;
   const st = aggregateState();
   return { inputs: st.reason === 'travel' ? [] : (st.inputs || []), scopes: WorkScopeView.scopesBySession(st.sessions), askFromWidget: !!loadConfig().askFromWidget };
 });
@@ -3128,11 +3171,8 @@ ipcMain.handle('get-inputs', () => {
 // the core's module is there, and only from the widget, the Waiting page
 // (its own window or the Plexiform window's view) or Settings.
 const SCOPE_MODES = new Set(['personal', 'auto']);
-const WAITING_PAGE_URL = require('url').pathToFileURL(path.join(__dirname, 'waiting.html')).href;
 function scopeSenderOk(e) {
-  const wc = e.sender;
-  if ((win && wc === win.webContents) || (waitingWin && wc === waitingWin.webContents) || (settingsWin && wc === settingsWin.webContents)) return true;
-  try { const u = new URL(e.senderFrame?.url || ''); u.search = ''; u.hash = ''; return u.href === WAITING_PAGE_URL; } catch { return false; }
+  return inputSenderOk(e) || (!!settingsWin && e.sender === settingsWin.webContents);
 }
 function scopeChanged() { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); }
 if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRepoScope === 'function') {
@@ -3152,10 +3192,13 @@ if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRep
     scopeChanged();
     return { ok: true };
   });
-  if (typeof WorkScope.onChange === 'function') WorkScope.onChange(scopeChanged);
+  if (typeof WorkScope.onChange === 'function') {
+    const unsubscribe = WorkScope.onChange(scopeChanged);
+    if (typeof unsubscribe === 'function') app.on('will-quit', unsubscribe);
+  }
 }
-ipcMain.handle('open-waiting', () => { createWaitingWindow(); return true; });
-ipcMain.handle('nudge-mute', (e, key) => nudger.mute(String(key)));
+ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
+ipcMain.handle('nudge-mute', (e, key) => (inputSenderOk(e) ? nudger.mute(String(key)) : false));
 
 // Lights → Auto-answer, prefilled. From a nudge the rule is the one main
 // remembered for that key; from an input it is rebuilt from the request or
@@ -3186,14 +3229,16 @@ function autoRulePrefill(from) {
   return AutoRules.SHELL_TOOLS.has(b.tool) ? { action: 'allow', tools: [b.tool], command: summary, note } : { action: 'allow', tools: [b.tool], note };
 }
 ipcMain.handle('open-auto-rule', (e, from) => {
+  if (!inputSenderOk(e)) return false;
   const prefill = autoRulePrefill(from);
   showLightsView('auto', prefill ? { event: 'auto-rule-prefill', data: prefill } : null);
   return !!prefill;
 });
-ipcMain.handle('check-auto-rule', (e, rule) => ({ reason: AutoRules.refusal(rule) }));
+ipcMain.handle('check-auto-rule', (e, rule) => (lightsWin && e.sender === lightsWin.webContents ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
 
 // "Open it": jump to the pane or tab the input is waiting in. Never types.
 ipcMain.handle('open-input', async (e, id) => {
+  if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   const item = (aggregateState().inputs || []).find((i) => i.id === String(id));
   if (!item) return { ok: false, error: 'gone' };
   const dialog = item.source === 'tmux' ? paneDialogs.find((d) => `dialog-${d.key}` === item.id) : null;
@@ -3211,15 +3256,15 @@ const AWAY_PX = 64;
 const UPDATE_PX = 72;
 const BUBBLE_MAX_PX = 300;
 const BUBBLE_MIN_W = 230;
-let stripPx = 0;
+const WidgetStrip = require('./src/widget-strip.js');
+let strip = WidgetStrip.NONE;
+let applyingStrip = false;
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
   if (e.sender !== win?.webContents || !!on === updateRowShown) return;
   updateRowShown = !!on;
   broadcastStatus();
 });
-let stripW = 0;
-let stripDx = 0;
 let bubblePx = 0;
 let stripAway = false;
 ipcMain.on('set-bubble-height', (e, px) => {
@@ -3227,25 +3272,29 @@ ipcMain.on('set-bubble-height', (e, px) => {
   bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, Math.round(Number(px) || 0)));
   applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
 });
-// The widget's size is the base; the strip adds height (and width, so the
-// bubble is readable on a small widget, split evenly so Claude doesn't move).
-// Computed from the base every time, never by adding deltas, so a clamp
-// can't make the widget creep.
+// The widget's size is the base (src/widget-strip.js); the strip adds the
+// bubble's or the recap's height, and width for the bubble. Computed from the
+// base every time, so a clamp can't make the widget creep, and saved bounds
+// never include it.
 function applyStrip(asking, away = false, update = false) {
-  const px = asking ? Math.min(BUBBLE_MAX_PX, asking) : away ? AWAY_PX : update ? UPDATE_PX : 0;
-  if (!win || px === stripPx) return;
-  const b = win.getBounds();
-  const base = { x: b.x + stripDx, width: b.width - stripW, height: b.height - stripPx };
-  const extra = asking ? Math.max(0, BUBBLE_MIN_W - base.width) : 0;
-  const dx = Math.round(extra / 2);
+  if (!win) return;
+  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
+  if (WidgetStrip.sameStrip(strip, next)) return;
+  // The garden or a roam is moving the widget's own rect: grow once it's home
+  // (the next broadcast tries again).
+  if (gardenRun || roamState.busy) return;
+  const cur = win.getBounds();
+  const r = WidgetStrip.stripBounds(cur, strip, next, screen.getDisplayMatching(WidgetStrip.baseOf(cur, strip)).workArea);
   const maxH = Math.round(MAX_WIDTH / WIDGET_ASPECT);
-  win.setAspectRatio(0);
-  win.setMaximumSize(Math.max(MAX_WIDTH, base.width + extra), maxH + px);
-  win.setBounds({ x: base.x - dx, y: b.y, width: base.width + extra, height: base.height + px });
-  stripPx = px;
-  stripW = extra;
-  stripDx = dx;
-  if (!px) { win.setMaximumSize(MAX_WIDTH, maxH); win.setAspectRatio(WIDGET_ASPECT); }
+  applyingStrip = true;
+  strip = r.strip;
+  try {
+    win.setAspectRatio(0);
+    win.setMaximumSize(Math.max(MAX_WIDTH, r.bounds.width), maxH + r.strip.px);
+    win.setBounds(r.bounds);
+    if (!r.strip.px) { win.setMaximumSize(MAX_WIDTH, maxH); win.setAspectRatio(WIDGET_ASPECT); }
+  } finally { applyingStrip = false; }
+  saveBounds();
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));

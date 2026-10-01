@@ -253,16 +253,16 @@ test('rules v8: spend rules are slotted in once; deleting them sticks', () => {
     assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id), `from v${from}`);
     assert.deepEqual(R.migrateRules(m, from), m, 'never duplicated');
   }
-  assert.ok(R.RULES_VERSION >= 8);
+  assert.equal(R.RULES_VERSION, 9);
 });
 
 test('rules v8: spend rules deleted on v8 stay deleted, one or all', () => {
   const ids = R.SPEND_RULES.map((r) => r.id);
   const none = R.defaultRules().filter((r) => !ids.includes(r.id)).map(R.normalizeRule);
-  // (v9 still runs from v8; these sets already hold its blocked rule.)
-  assert.deepEqual(R.migrateRules(none, 8), none);
+  // (v9 still runs from v8; these sets already hold its blocked rule, so nothing changes.)
+  assert.equal(R.migrateRules(none, 8), none);
   const noRunaway = R.defaultRules().filter((r) => r.id !== 'runaway').map(R.normalizeRule);
-  assert.deepEqual(R.migrateRules(noRunaway, 8), noRunaway);
+  assert.equal(R.migrateRules(noRunaway, 8), noRunaway);
   assert.ok(!R.migrateRules(noRunaway, 8).some((r) => r.id === 'runaway'));
   // Carried forward through a later version too.
   assert.equal(R.migrateRules(none, 9), none);

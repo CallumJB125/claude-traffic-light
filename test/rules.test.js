@@ -1301,3 +1301,9 @@ test('v9 blocked: saved Minimal and Pair templates get it lamp-only, red', () =>
     assert.ok(R.applyTemplate(template).some((r) => r.id === 'blocked'), `${template}: a fresh template has it too`);
   }
 });
+
+test('v9 blocked: a set that needs nothing comes back as the very same list', () => {
+  const d = R.defaultRules().map(R.normalizeRule);
+  assert.equal(R.placeBlockedRule(d), d);
+  assert.equal(R.migrateRules(d, 8), d);
+});

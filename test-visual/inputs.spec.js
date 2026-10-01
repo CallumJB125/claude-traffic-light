@@ -6,21 +6,15 @@ const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
 const F = require('./inputs-fixtures');
-const { suggestionFor } = require('../src/approval-nudge.js');
 
 let h;
 let widget;
 const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
 const minsAgo = (m) => new Date(Date.now() - m * 60000).toISOString();
 
-// Four approvals of `npm test` already counted: the next one earns the nudge.
-const NUDGE_KEY = suggestionFor({ kind: 'permission', tool: 'Bash', toolInput: { command: 'npm test' } }).key;
 
 test.beforeAll(async () => {
-  h = await launchApp({
-    config: { askFromWidget: true },
-    files: { 'approval-counts.json': JSON.stringify({ v: 1, counts: { [NUDGE_KEY]: { n: 4, at: 0 } }, muted: {} }) },
-  });
+  h = await launchApp({ config: { askFromWidget: true } });
   widget = await windowByFile(h.app, 'index.html');
   await widget.emulateMedia({ reducedMotion: 'reduce' });
 });
@@ -33,7 +27,8 @@ test.beforeEach(async () => {
   await expect(widget.locator('.ib-item')).toHaveCount(0, { timeout: 10000 });
 });
 
-const bubbleShot = async (name) => { await widget.waitForTimeout(500); await expect(widget).toHaveScreenshot(name, SHOT); };
+const bubbleShot = async (name) => { await widget.waitForTimeout(900); // past the 600 ms settle: answer buttons enabled
+  await expect(widget).toHaveScreenshot(name, SHOT); };
 
 test('permission: the real command, answered from the bubble; the hook gets it and the row is gone', async () => {
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-perm', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'npm run build -- --prod', description: 'Build for production' } });
@@ -49,12 +44,23 @@ test('permission: the real command, answered from the bubble; the hook gets it a
   expect(await widget.evaluate(() => document.body.classList.contains('asking'))).toBe(false);
 });
 
-test('keyboard: Enter never allows a deny-listed command; ⌘. denies it', async () => {
+test('keyboard: Enter allows an allow-listed command once it has settled', async () => {
+  const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd-ok', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'git status' } });
+  await expect(widget.locator('.ib-head')).toHaveText('Bash: git status', { timeout: 10000 });
+  await widget.locator('.ib-title').click();
+  await widget.waitForTimeout(700);
+  await widget.keyboard.press('Enter');
+  const { out } = await hook.done;
+  expect(JSON.parse(out).hookSpecificOutput.decision.behavior).toBe('allow');
+});
+
+test('keyboard: Enter never allows a deny-listed or off-list command; ⌘. denies it', async () => {
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-kbd', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'rm -rf build' } });
   await expect(widget.locator('.ib-warn')).toContainText('recursive delete', { timeout: 10000 });
   await widget.locator('.ib-title').click();
+  await widget.waitForTimeout(700);
   await widget.keyboard.press('Enter');
-  await expect(widget.locator('.ib-err')).toContainText('Enter won’t allow');
+  await expect(widget.locator('.ib-err')).toContainText('Enter only allows');
   await widget.keyboard.press('Meta+Period');
   const { out } = await hook.done;
   expect(JSON.parse(out).hookSpecificOutput.decision.behavior).toBe('deny');
@@ -83,17 +89,22 @@ test('question: options as buttons, one click answers it', async () => {
   expect(JSON.parse(out).hookSpecificOutput.updatedInput.answers).toEqual({ 'Which test runner should the new package use?': 'vitest' });
 });
 
-test('several waiting: two compact rows, the oldest escalated, "+N more" opens the Waiting page', async () => {
+test('several waiting: answerable first, then the oldest (escalated); "+N more" opens the Waiting page', async () => {
   // A hook request lives at most 90 s; what waits for minutes is a prompt
   // left in the terminal, known from the session's notification.
   F.hookSync(h, 'notification', { session_id: 'vis-old', cwd: '/visual/api', notification_type: 'permission_prompt', title: 'Permission needed', message: 'Claude needs your permission to use Bash' });
   F.ageSession(h, 'vis-old', 6.5 * 60000);
+  F.hookSync(h, 'notification', { session_id: 'vis-new', cwd: '/visual/docs', notification_type: 'permission_prompt', title: 'Permission needed', message: 'Claude needs your permission to use WebFetch' });
+  F.ageSession(h, 'vis-new', 2.5 * 60000);
   const far = new Date(Date.now() + 40000).toISOString();
   F.staleRequest(h, { id: 'vis-b', sessionId: 'b', cwd: '/visual/web', tool: 'Edit', toolInput: { file_path: '/visual/web/src/theme.ts', old_string: 'dark: false', new_string: 'dark: true' }, createdAt: minsAgo(0.4), expiresAt: far });
-  F.staleRequest(h, { id: 'vis-c', sessionId: 'c', cwd: '/visual/docs', tool: 'Bash', toolInput: { command: 'npm run migrate -- --env staging && npm run seed -- --env staging --reset-first' }, createdAt: minsAgo(0.2), expiresAt: far });
   await expect(widget.locator('.ib-more')).toHaveText('+1 more waiting', { timeout: 10000 });
   await expect(widget.locator('.ib-item')).toHaveCount(2);
+  await expect(widget.locator('.ib-item').first()).toHaveAttribute('data-id', 'vis-b');
   await expect(widget.locator('.ib-item.late .ib-age')).toHaveText('waiting 6 min');
+  // The fixtures land one by one; whichever was briefly alone may have opened.
+  if (await widget.locator('.ib-body').count()) await widget.keyboard.press('Escape');
+  await expect(widget.locator('.ib-body')).toHaveCount(0);
   await bubbleShot('bubble-collapsed.png');
   await widget.locator('.ib-item[data-id="vis-b"] .ib-row').click();
   await expect(widget.locator('.ib-item[data-id="vis-b"] .ib-body')).toBeVisible();
@@ -106,7 +117,7 @@ test('several waiting: two compact rows, the oldest escalated, "+N more" opens t
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.ib-item')).toHaveCount(3, { timeout: 10000 });
   await expect(page.locator('#sub')).toHaveText('3 waiting · 1 for 5 min or more');
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(800);
   await expect(page).toHaveScreenshot('waiting-page.png', SHOT);
   await page.close();
 });
@@ -121,7 +132,9 @@ test('expired: the hook stopped waiting, so the bubble says "answer in terminal"
 
 test('blocked: "needs your decision" with the reason; "Add a rule" opens the rules prefilled and says why it can’t', async () => {
   F.hookSync(h, 'permission-denied', { session_id: 'vis-blocked', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' }, reason: '[Irreversible Local Destruction]' });
-  await expect(widget.locator('.ib-item.kind-blocked .ib-head')).toHaveText('blocked: needs your decision (Bash)', { timeout: 10000 });
+  await expect(widget.locator('.ib-item.kind-blocked .ib-head')).toHaveText('Needs your decision', { timeout: 10000 });
+  await expect(widget.locator('[data-option="run-yourself"]')).toHaveText('Open the terminal');
+  await expect(widget.locator('[data-option="switch-mode"]')).toHaveText('How to allow it');
   await expect(widget.locator('.ib-text')).toContainText('Reason: [Irreversible Local Destruction]');
   await expect(widget.locator('.ib-reason-text')).toHaveCount(0);
   await widget.locator('[data-option="switch-mode"]').click();
@@ -149,26 +162,22 @@ test('dialog: read off a real tmux pane, shown with its choices and "Open it" on
   } finally { t.kill(); }
 });
 
-test('the fifth approval of the same command offers a rule, prefilled in Lights', async () => {
+test('the "make it a rule?" nudge stays hidden while auto-answer is off', async () => {
   const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-nudge', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'npm test' } });
   await expect(widget.locator('[data-option="allow"]')).toBeVisible({ timeout: 10000 });
   await widget.locator('[data-option="allow"]').click();
   await hook.done;
-  await expect(widget.locator('.ib-nudge-q')).toHaveText('You’ve approved this 5 times — make it a rule?', { timeout: 10000 });
-  await expect(widget.locator('.ib-nudge-rule')).toHaveText('Bash: npm test');
-  await bubbleShot('bubble-nudge.png');
-  await widget.locator('.ib-nudge button', { hasText: 'Make it a rule' }).click();
+  await expect(widget.locator('.ib-item')).toHaveCount(0, { timeout: 10000 });
+  await widget.waitForTimeout(500);
+  await expect(widget.locator('.ib-nudge')).toHaveCount(0);
+  // The rules page still saves only what main allows.
+  await widget.evaluate(() => window.trafficLight.openAutoRule({}));
   const lights = await windowByFile(h.app, 'lights.html');
-  await expect(lights.locator('#auto-command')).toHaveValue('npm test', { timeout: 10000 });
-  await expect(lights.locator('#auto-why')).toContainText('OK');
-  await lights.locator('#auto-save').click();
-  await expect(lights.locator('#auto-list .what')).toHaveText(['Bash: npm test']);
-  // The page asked; main checks again and keeps only what the UI would allow.
   const saved = await lights.evaluate(() => window.lightsApi.saveConfig({ autoAnswer: { v: 1, rules: [{ tools: ['Bash'], command: 'rm *' }, { tools: ['Bash'], command: 'npm test' }] } }));
   expect(saved.autoAnswer.rules.map((r) => r.command)).toEqual(['npm test']);
+  expect(saved.autoAnswer.sealed).toBeNull();
   await lights.evaluate(() => window.lightsApi.saveConfig({ autoAnswer: { v: 1, rules: [] } }));
   await lights.close();
-  await widget.locator('.ib-nudge button', { hasText: 'Not now' }).click({ timeout: 1000 }).catch(() => {});
 });
 
 // Its own app: no other window of this file can bring the widget back.
@@ -219,7 +228,7 @@ test('the Waiting page sits in the Plexiform window as a local page', async () =
     expect(await page.evaluate(() => document.body.classList.contains('standalone'))).toBe(false);
     const sidebar = await windowByFile(hh.app, 'sidebar.html');
     await expect(sidebar.locator('[aria-current="page"]')).toContainText('Waiting on you', { timeout: 10000 });
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(900);
     await expect(page).toHaveScreenshot('waiting-embedded.png', SHOT);
   } finally { await hh.cleanup(); }
 });

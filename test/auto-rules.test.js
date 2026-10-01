@@ -141,3 +141,63 @@ test('the shared deny-list ships in src/deny as ES modules: loads with no module
   assert.equal(r.stdout.trim(), 'ok');
   assert.doesNotMatch(r.stderr, /MODULE_TYPELESS_PACKAGE_JSON|Reparsing as ES module/);
 });
+
+test('S-M2: matching is linear: pathological patterns against 10k-character inputs finish fast', () => {
+  const long = 'a'.repeat(10000);
+  const cases = [
+    () => A.charGlob('a*a*a*a*a*a*a*a*a*a*b', long),
+    () => A.charGlob('*a*a*a*a*a*a*a*a*a*b*', long),
+    () => A.pathGlob('/**/a*a*a*b/**', `/${'a/'.repeat(5000)}x`, HOME),
+    () => A.pathGlob('/w/**/**/**/**/x', `/w/${'d/'.repeat(5000)}y`, HOME),
+    () => A.commandMatch('cat a*a*a*a*a*a*a*a*b', ['cat', long]),
+  ];
+  for (const run of cases) {
+    const t0 = process.hrtime.bigint();
+    assert.equal(run(), false);
+    assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 20, `took ${Number(process.hrtime.bigint() - t0) / 1e6} ms`);
+  }
+  assert.equal(A.charGlob('a*b*c', 'axxbyyc'), true);
+  assert.equal(A.charGlob('a?c', 'abc'), true);
+  assert.equal(A.pathGlob('/w/**', '/w/a/b/c.js', HOME), true);
+  assert.equal(A.pathGlob('/w/*', '/w/a/b.js', HOME), false, '* stays inside one folder');
+  assert.equal(A.pathGlob('/w/*/x.js', '/w/a/x.js', HOME), true);
+  assert.equal(A.pathGlob('~/dev/**', `${HOME}/dev/a`, HOME), true);
+});
+
+test('S-M2: wildcard caps: two per command word, four per path, never **/**', () => {
+  assert.match(refuse(bash('npm test a*b*c*')), /at most two/);
+  assert.equal(refuse(bash('npm test a*b*')), null);
+  assert.match(refuse(files('/opt/w/*/*/*/*/*')), /at most four/);
+  assert.match(refuse(files('/opt/w/**/**')), /one \*\*/);
+});
+
+// ── Enter: allow-list based (src/enter-allow.js) ─────────────────────────
+const E = require('../src/enter-allow.js');
+const enterOk = (tool, toolInput, cwd = '/w/app') => A.danger({ tool, toolInput }) === null && E.enterBlockedReason({ tool, toolInput, cwd }) === null;
+
+test('Enter may allow only allow-listed, unflagged requests', () => {
+  assert.equal(E.available(), true);
+  for (const [tool, input] of [['Bash', { command: 'ls -la' }], ['Bash', { command: 'git status' }], ['Read', { file_path: '/w/app/src/a.js' }], ['Edit', { file_path: '/w/app/src/a.js', old_string: 'a', new_string: 'b' }]]) {
+    assert.equal(enterOk(tool, input), true, JSON.stringify(input));
+  }
+  for (const [tool, input] of [['Bash', { command: 'npm test' }], ['Read', { file_path: '/Users/x/.ssh/id_rsa' }], ['Edit', { file_path: '/elsewhere/a.js' }], ['Write', { file_path: '/w/app/package.json', content: '{}' }], ['WebFetch', { url: 'https://example.com' }], ['mcp__x__y', {}]]) {
+    assert.equal(enterOk(tool, input), false, `${tool} ${JSON.stringify(input)}`);
+  }
+});
+
+// Bypass probes from the security review. Each must need a click.
+const PROBES = [
+  'docker run -v /:/host alpine sh', "awk 'BEGIN{system(\"rm -rf x\")}'", 'vim -c ":!rm -rf x" a.txt', ': > important.txt', 'cp /dev/null important.txt',
+  'ln -sf /etc/passwd notes.txt', "sed -i 's/a/b/' src/a.js", 'python3 script.py', 'bash script.sh', 'source ./env.sh', 'make all', 'npm run build',
+  'npm install left-pad', 'pip install requests', 'pnpm dlx create-thing', 'uv run task.py', 'psql -c "DROP TABLE users"', 'aws s3 rm s3://bucket --recursive',
+  'gcloud projects delete my-proj', 'heroku apps:destroy my-app', 'firebase deploy', 'supabase db reset', 'printenv',
+];
+// The tokenizer/deny-list fixes for these land in fix/deny-list-bypasses.
+const PENDING_PROBES = ['env -S "rm -rf build"', 'git -c core.sshCommand="sh -c id" fetch', 'git -c core.pager="sh -c id" log', 'git -c core.fsmonitor="sh -c id" status', 'git -c core.hooksPath=/tmp/h status', 'cat .env'];
+for (const command of PROBES) {
+  test(`Enter needs a click: ${command}`, () => assert.equal(enterOk('Bash', { command }), false));
+}
+for (const command of PENDING_PROBES) {
+  // enable after fix/deny-list-bypasses
+  test(`Enter needs a click: ${command}`, { todo: 'enable after fix/deny-list-bypasses' }, () => assert.equal(enterOk('Bash', { command }), false));
+}

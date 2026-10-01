@@ -731,6 +731,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     devBrowser: (fn) => { devBrowser = fn; },
     // Dev only: drive the account page as a person would (fills and clicks in the page).
     devPage: (js) => (content === accountView && accountView ? accountView.webContents.executeJavaScript(js) : Promise.resolve(null)),
+    // A local page's webContents, for main's sender checks (null if not open).
+    pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
     // Dev hook: capture what's on screen.
     async capture() {
       if (!win) return null;

@@ -31,7 +31,7 @@ function create(dir) {
       if (sessionMarks.has(session.sessionId) || (f.repo && repoMarks.has(f.repo.canonicalUrl))) return { ...f, state: 'personal' };
       return f;
     },
-    onChange(cb) { listeners.push(cb); },
+    onChange(cb) { listeners.push(cb); return () => { const i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1); }; },
   };
 }
 
