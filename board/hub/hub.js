@@ -7,7 +7,7 @@
 import { createVault } from './vault.js';
 import { EventEmitter } from 'node:events';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { step, fromDb, toDb, ACTIVE, PLAN_APPROVAL_LABEL, EVENTS } from '../shared/states.js';
 import { CARD_STATE } from '../shared/journal.js';
@@ -92,7 +92,34 @@ export class Hub extends EventEmitter {
     if (previous != null && (!Buffer.isBuffer(previous) || previous.length !== 32)) throw new Error('previous vault key must be 32 bytes');
     this.vaultPrevKey = previous ? Buffer.from(previous) : null;
     this.vaultKey = Buffer.from(buf);
+    if (this.vaultPrevKey) {
+      // Rows left sealed under the previous key would keep it needed until
+      // each connection happened to be used: re-seal them all now.
+      try { this.resealVault(); } catch (e) { this.log.error('vault re-seal failed; rows re-seal on their next read', { err: e }); }
+    }
     this.emit('vault-key');
+  }
+
+  /**
+   * Seal every connection secret not under the current key again with it, in
+   * one transaction (all or nothing). Idempotent; a row no key opens is left
+   * and counted. Logs counts only. → {resealed, unopened}
+   */
+  resealVault() {
+    const v = this.vault;
+    let resealed = 0;
+    let unopened = 0;
+    this.db.tx(() => {
+      for (const r of this.db.all('SELECT connection_id, kind, key_id, nonce, ciphertext FROM connection_secrets WHERE key_id != ?', v.keyId)) {
+        let plain;
+        try { plain = v.open(r.connection_id, r.kind, r); } catch { unopened += 1; continue; }
+        const s = v.seal(r.connection_id, r.kind, plain);
+        this.db.run('UPDATE connection_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE connection_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.connection_id, r.kind, r.key_id);
+        resealed += 1;
+      }
+    });
+    this.log.info('vault re-sealed under the current key', { resealed, unopened });
+    return { resealed, unopened };
   }
 
   // Sealed connector secrets (D41), built from the key D36 hands in; keyless
@@ -222,6 +249,20 @@ export class Hub extends EventEmitter {
   revokeDeletedTeamConnections(now) {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+  }
+
+  /**
+   * An external identifier an integration names (issue id, branch, request
+   * id) as the journal may carry it: members read the journal, and it can
+   * never be erased, so it holds an HMAC under a per-hub key instead. Equal
+   * inputs hash equal on this hub; deleting hub_meta 'journal_ref_key' (a
+   * new one is minted on next use) makes every earlier hash unlinkable.
+   */
+  refHash(value) {
+    if (value == null) return null;
+    let k = this.db.meta('journal_ref_key');
+    if (!k) { k = randomBytes(32).toString('hex'); this.db.setMeta('journal_ref_key', k); }
+    return createHmac('sha256', Buffer.from(k, 'hex')).update(String(value)).digest('hex').slice(0, 32);
   }
 
   // ── journal (P-1): append-only, same transaction as the change ─────────────

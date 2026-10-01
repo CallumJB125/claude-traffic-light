@@ -189,7 +189,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -204,17 +204,62 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
   old.close();
 
   // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
+  // 017 needs 008's tables, so that DB stops at 016.
   const skipped = new DatabaseSync(':memory:');
-  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8) });
+  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version !== 17) });
   assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 16/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
-  assert.deepEqual(triggers(skipped), want);
+  const from017 = [...all.find((m) => m.version === 17).sql.matchAll(/CREATE TRIGGER (xteam_\w+)/g)].map((x) => x[1]);
+  assert.deepEqual(triggers(skipped), want.filter((t) => !from017.includes(t)));
   skipped.close();
+});
+
+test('migrate refuses a DB whose applied version carries another name (the branch-era 014_integration_requests) and applies nothing', () => {
+  const all = loadMigrations();
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: all.filter((m) => m.version <= 13) });
+  const branch = { ...all.find((m) => m.version === 17), version: 14 };
+  migrate(db, { migrations: [...all.filter((m) => m.version <= 13), branch] });
+  assert.equal(db.prepare('SELECT name FROM schema_migrations WHERE version = 14').get().name, 'integration_requests');
+  assert.throws(() => migrate(db, { migrations: all }), /migration 014 was applied as 014_integration_requests but this hub ships 014_oauth/);
+  assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 14, 'nothing applied');
+  db.close();
+});
+
+test('017: a connection cannot link, audit or record a card of another team', () => {
+  const db = new DatabaseSync(':memory:');
+  migrate(db);
+  const NOW = '2026-09-30T10:00:00.000Z';
+  db.exec(`
+    INSERT INTO orgs (id, name, created_at) VALUES ('oa','A','${NOW}'), ('ob','B','${NOW}');
+    INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}'), ('mb','ob',2,'b','b@x.io','B','owner','${NOW}');
+    INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('ba','oa','A','AAA'), ('bb','ob','B','BBB');
+    INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at) VALUES ('ca','ba','AAA-1','a','ma','${NOW}','${NOW}'), ('cb','bb','BBB-1','b','mb','${NOW}','${NOW}');
+    INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at) VALUES ('ka','oa','github','1','ma','${NOW}');
+  `);
+  const bad = {
+    'link to a B card': `INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES ('cb','ka','pr','1','${NOW}')`,
+    'audit row on a B card': `INSERT INTO integration_audit (id, connection_id, action, decision, card_id, at) VALUES ('x1','ka','card.link','auto','cb','${NOW}')`,
+    'request for a B card': `INSERT INTO integration_requests (connection_id, request_id, card_id, created_at) VALUES ('ka','r1','cb','${NOW}')`,
+  };
+  for (const [name, sql] of Object.entries(bad)) assert.throws(() => db.exec(sql), /cross-team reference/, name);
+  db.exec(`
+    INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES ('ca','ka','pr','1','${NOW}');
+    INSERT INTO integration_audit (id, connection_id, action, decision, card_id, at) VALUES ('x2','ka','card.link','auto','ca','${NOW}'), ('x3','ka','notify.post','auto',NULL,'${NOW}');
+    INSERT INTO integration_requests (connection_id, request_id, card_id, created_at) VALUES ('ka','r2','ca','${NOW}');
+  `);
+  const moves = {
+    'link moved to a B card': "UPDATE external_links SET card_id = 'cb'",
+    'audit moved to a B card': "UPDATE integration_audit SET card_id = 'cb' WHERE id = 'x2'",
+    'request moved to a B card': "UPDATE integration_requests SET card_id = 'cb'",
+  };
+  for (const [name, sql] of Object.entries(moves)) assert.throws(() => db.exec(sql), /cross-team reference/, name);
+  db.close();
 });

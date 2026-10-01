@@ -72,6 +72,7 @@ export const api = {
   startConnect: (provider) => mut('POST', `/api/integrations/${enc(provider)}/start`),
   patchIntegration: (id, patch) => mut('PATCH', `/api/integrations/${enc(id)}`, patch),
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
+  // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.

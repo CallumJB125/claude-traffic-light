@@ -17,7 +17,8 @@ import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
-import { AUTONOMY, cleanLinkStatus } from './connector.js';
+import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
+import { BlockList, isIP } from 'node:net';
 import { prNumberOf } from '../github.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -29,8 +30,15 @@ const FETCH_TRIES = 4;
 const HANDLER_TIMEOUT_MS = 60_000;
 const DEDUPE_KEEP_MS = 30 * 24 * 3600_000;
 const CONFIG_MAX_BYTES = 8 * 1024;
+const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
+const REQUEST_ID_MAX = 200;
+const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
+const AUDIT_REF_MAX = 80;
+// An id (PR number, issue key, branch, sha, slug): never free text, which a
+// connector could pass by mistake and admins would then read as ours.
+const AUDIT_ID = /^[\w.:#\/@-]{1,128}$/;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
 const BRANCH_MAX = 255;
 // Unicode spaces, controls and invisible format characters: never in a board branch.
@@ -104,10 +112,18 @@ function auditJson(v) {
   for (const [k, x] of Object.entries(v)) {
     if (k.length > 64) continue;
     if ((typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean' || x === null) out[k] = x;
-    else if (typeof x === 'string' && x.length <= AUDIT_STR_MAX) out[k] = x;
+    else if (typeof x === 'string' && x.length <= AUDIT_STR_MAX && AUDIT_ID.test(x)) out[k] = x;
   }
   const s = JSON.stringify(out);
   return Buffer.byteLength(s) <= AUDIT_JSON_MAX ? s : JSON.stringify({ truncated: true });
+}
+
+// external_ref as the Activity list shows it: control, format (bidi) and
+// line-separator characters can't reorder or hide what an admin reads.
+function auditRef(v) {
+  if (v == null) return null;
+  const t = String(v).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').slice(0, AUDIT_REF_MAX);
+  return t || null;
 }
 
 export function createIntegrations({
@@ -115,6 +131,7 @@ export function createIntegrations({
   handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random,
 }) {
   const connectors = new Map();
+  const ingress = new Map(); // provider → BlockList of its ingressCidrs
   const db = hub.db;
   const now = () => hub.iso();
   const inflight = new Map(); // consumer name → {seq, running}: the onEvent call still running after its timeout
@@ -142,6 +159,11 @@ export function createIntegrations({
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
     for (const k of Object.keys(secrets)) if (!conn.secrets.includes(k)) throw new HubError('VALIDATION', `${provider} does not declare secret ${k}`);
+    // Anything else would be sealed as its String() ("[object Object]"); the
+    // message never carries the value, and nothing is written.
+    for (const v of Object.values(secrets)) {
+      if (typeof v !== 'string' || !v || Buffer.byteLength(v) > SECRET_MAX_BYTES) throw new HubError('VALIDATION', `${conn.name} returned a secret this hub will not store`);
+    }
     hub.txn(() => {
       // Unique per org among live rows (partial index); revoked rows stay for their audit history.
       if (db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext)) {
@@ -300,8 +322,10 @@ export function createIntegrations({
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
+        // Never cut: two ids sharing 200 chars would be one request (integration_requests).
+        if (body.request_id.length > REQUEST_ID_MAX) throw new HubError('VALIDATION', `request_id is at most ${REQUEST_ID_MAX} chars`);
         // Namespaced per connection: never collides with the member's own browser request ids.
-        const rid = `int:${c.id}:${body.request_id.slice(0, 200)}`;
+        const rid = `int:${c.id}:${body.request_id}`;
         const hit = hub.cachedResponse(member.id, rid);
         if (hit) {
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
@@ -323,7 +347,13 @@ export function createIntegrations({
       };
       return {
         member: { id: first.id, role: first.role },
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn'),
+        // A D8 replay answers with the first card whatever board it names: the
+        // same request on another board is a conflict, not that card.
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn').then((out) => {
+          const on = hub.card(out?.card?.id)?.board_id;
+          if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
+          return out;
+        }),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
           return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));
@@ -386,20 +416,18 @@ export function createIntegrations({
 
     /**
      * The card's newest hub_verified PR evidence (what the merge poll acts
-     * on): {number, repo?, url?} | null. `repo` ('owner/name' on github.com,
-     * else 'host/owner/name') only when the evidence ref names one.
+     * on): {number, repo, url} | null. The number is the one the hub checked;
+     * `repo` ('owner/name' on github.com, else 'host/owner/name') and `url`
+     * come from the card's repo on the hub, never from the runner's text.
      */
     function verifiedPr(cardId) {
-      if (!cardInOrg(cardId)) return null;
+      const card = cardInOrg(cardId);
+      if (!card) return null;
       const ref = String(db.get("SELECT ref FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", cardId)?.ref ?? '').trim();
       const number = prNumberOf(ref);
-      if (number == null) return null;
-      const at = ref.lastIndexOf('/pull/');
-      if (at === -1) return { number };
-      const canon = normalizeRemoteUrl(ref.slice(0, at));
-      // A ref that names a repo we cannot read binds to nothing.
-      if (!canon) return null;
-      return { number, repo: shortRepo(canon), ...(/^https:\/\//i.test(ref) ? { url: ref } : {}) };
+      const canon = hub.repo(card.repo_id)?.canonical_url;
+      if (number == null || !canon) return null;
+      return { number, repo: shortRepo(canon), url: `https://${canon}/pull/${number}` };
     }
 
     function link(cardId, kind, externalId, url = null) {
@@ -409,6 +437,10 @@ export function createIntegrations({
       if (String(kind) === 'pr') {
         const have = linkedByCard(cardId, 'pr');
         if (have === String(externalId)) return;
+        // Once the hub verified the card's PR, no other PR takes the slot (the
+        // number comes from the PR url, else the id; no number is a refusal).
+        const v = verifiedPr(cardId);
+        if (v && (prNumberOf(url) ?? prNumberOf(externalId)) !== v.number) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
         if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
       }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -450,7 +482,7 @@ export function createIntegrations({
       const mode = autonomyOf(action);
       const base = {
         connection_id: c.id, action, card_id: cardInOrg(meta?.card_id)?.id ?? null,
-        external_ref: meta?.external_ref == null ? null : String(meta.external_ref).slice(0, 200),
+        external_ref: auditRef(meta?.external_ref),
         detail: auditJson(meta?.detail) ?? '{}', undo: auditJson(meta?.undo),
       };
       const audit = (decision) => { const id = randomUUID(); db.insert('integration_audit', { id, ...base, decision, at: now() }); return id; };
@@ -506,7 +538,7 @@ export function createIntegrations({
       const mode = autonomyOf(action);
       const audit = (decision, error = null) => db.insert('integration_audit', {
         id: randomUUID(), connection_id: c.id, action, decision, error, card_id: card.id,
-        external_ref: String(external_ref ?? external_id).slice(0, 200), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
+        external_ref: auditRef(external_ref ?? external_id), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
       });
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
@@ -561,11 +593,12 @@ export function createIntegrations({
 
   function sweepDedupe() {
     db.run('DELETE FROM inbound_dedupe WHERE received_at < ?', new Date(hub.wallMs() - DEDUPE_KEEP_MS).toISOString());
+    db.run('DELETE FROM integration_audit WHERE at < ?', new Date(hub.wallMs() - AUDIT_KEEP_MS).toISOString());
   }
 
   /**
    * Lease a delivery under all its keys: → {ok:true, until} (we run it),
-   * {dup:'done'} when any key is done, {dup:'busy'} when any is leased.
+   * {dup:'done'} when any key is done, {dup:'busy', until} when any is leased.
    * A lease that outlived its handler (crash, hang) is taken over.
    */
   function reserve(provider, keys) {
@@ -575,7 +608,8 @@ export function createIntegrations({
     return db.tx(() => {
       const rows = keys.map((k) => db.get('SELECT state, lease_until FROM inbound_dedupe WHERE provider = ? AND dedupe_key = ?', provider, k));
       if (rows.some((r) => r?.state === 'done')) return { dup: 'done' };
-      if (rows.some((r) => r && !(r.lease_until < t))) return { dup: 'busy' };
+      const busy = rows.filter((r) => r && !(r.lease_until < t)).map((r) => r.lease_until).sort();
+      if (busy.length) return { dup: 'busy', until: busy.at(-1) };
       for (const k of keys) {
         db.run(`INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES (?, ?, ?, 'processing', ?)
           ON CONFLICT (provider, dedupe_key) DO UPDATE SET received_at = excluded.received_at, lease_until = excluded.lease_until`, provider, k, t, until);
@@ -584,13 +618,25 @@ export function createIntegrations({
     });
   }
 
+  /** A client address inside the connector's declared ingressCidrs (the provider's own senders). */
+  function trustedIngress(connectionId, ip) {
+    const list = ingress.get(row(connectionId)?.provider);
+    const a = String(ip ?? '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
+    const family = isIP(a);
+    return !!(list && family && list.check(a, family === 4 ? 'ipv4' : 'ipv6'));
+  }
+
   /** The HTTP layer asks this before reading a body: unknown or inactive → 404 unread. */
   function webhookTarget(connectionId) {
     const c = row(connectionId);
     return !!(c && c.status === 'active' && connectors.get(c.provider)?.handleWebhook);
   }
 
-  /** → {status, body}. Never echoes why a signature failed to the caller. */
+  /**
+   * → {status, body, headers?, verified?}. Never echoes why a signature failed to the
+   * caller. `verified`: the signature checked out and the delivery was new to
+   * this hub (the HTTP layer trusts that sender's network a little more).
+   */
   async function webhook(connectionId, { headers, rawBody }) {
     const c = row(connectionId);
     const conn = c && connectors.get(c.provider);
@@ -599,8 +645,12 @@ export function createIntegrations({
     // A key problem is the hub's, not the caller's: 500, and no failure spent.
     let secrets;
     try { secrets = secretsOf(c); } catch (e) {
-      setHealth(c.id, false, 'vault_error');
-      warn('integration secrets could not be opened', c, e);
+      // Recorded once a minute per connection: a broken key must not turn
+      // every delivery (anyone can post one) into a DB write and a log line.
+      if (hub.limiter.take('vault_health_conn', c.id).ok) {
+        setHealth(c.id, false, 'vault_error');
+        warn('integration secrets could not be opened', c, e);
+      }
       return { status: 500, body: { error: { code: 'INTERNAL', message: 'internal error' } } };
     }
     let v;
@@ -609,6 +659,13 @@ export function createIntegrations({
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
     }
+    const out = await verifiedWebhook(c, conn, { headers, rawBody, v });
+    // Only a delivery that took a fresh lease vets its sender: anyone holding
+    // a captured signed request can replay it as a duplicate.
+    return { ...out, verified: !out.body?.duplicate && !out.body?.in_progress };
+  }
+
+  async function verifiedWebhook(c, conn, { headers, rawBody, v }) {
     let payload;
     try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
     // The connector's key alone may rest on an unsigned delivery header: the
@@ -617,7 +674,13 @@ export function createIntegrations({
     const keys = [`${c.id}:${String(v.dedupe_key).slice(0, 200)}`, `${c.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
     const lease = reserve(c.provider, keys);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
-    if (lease.dup === 'busy') return { status: 200, body: { ok: true, in_progress: true } };
+    // Never 200: the first attempt may still fail and release the delivery,
+    // and a provider that got 200 for the retry would never send it again.
+    if (lease.dup === 'busy') {
+      const left = Math.ceil((Date.parse(lease.until) - hub.wallMs()) / 1000);
+      const s = Number.isFinite(left) ? Math.min(60, Math.max(1, left)) : 60;
+      return { status: 503, body: { ok: false, in_progress: true, retry_after_s: s }, headers: { 'retry-after': String(s) } };
+    }
     const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", c.provider, ...keys, lease.until);
     const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', c.provider, ...keys, lease.until);
     // Spent only by verified deliveries that will run: whoever merely knows
@@ -627,34 +690,56 @@ export function createIntegrations({
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
       .finally(() => controller.abort(handlerEnded()));
-    try {
-      await withTimeout(running, handlerTimeoutMs, controller);
-    } catch (e) {
-      if (e?.code === 'TIMEOUT') {
-        // The handler may still be running: the lease stays (a retry answers
-        // in_progress) and the row settles when it really ends, or the lease
-        // expires and a later retry takes it over.
-        running.then(done, release);
-        setHealth(c.id, false, 'handler_timeout');
-        warn('integration webhook handler timed out', c, e);
+    // → the answer; with ackEarly nobody hears it, so a failure is also audited.
+    const settle = async () => {
+      try {
+        await withTimeout(running, handlerTimeoutMs, controller);
+      } catch (e) {
+        if (conn.ackEarly) deadLetter(c, e);
+        if (e?.code === 'TIMEOUT') {
+          // The handler may still be running: the lease stays (a retry answers
+          // in_progress) and the row settles when it really ends, or the lease
+          // expires and a later retry takes it over.
+          running.then(done, release);
+          setHealth(c.id, false, 'handler_timeout');
+          warn('integration webhook handler timed out', c, e);
+          return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+        }
+        if (e instanceof ActorUnavailable) {
+          // An admin has to reconnect it; the provider's retries would fail the same way.
+          done();
+          setHealth(c.id, false, 'actor_unavailable');
+          warn('integration acts as a removed member', c, e);
+          return { status: 200, body: { ok: true, skipped: true } };
+        }
+        // Released: the provider's retry (or, after an early ack, a manual
+        // redelivery) gets another go.
+        release();
+        setHealth(c.id, false, errCode(e));
+        warn('integration webhook handler failed', c, e);
         return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
       }
-      if (e instanceof ActorUnavailable) {
-        // An admin has to reconnect it; the provider's retries would fail the same way.
-        done();
-        setHealth(c.id, false, 'actor_unavailable');
-        warn('integration acts as a removed member', c, e);
-        return { status: 200, body: { ok: true, skipped: true } };
-      }
-      // Released: the provider's retry gets another go.
-      release();
-      setHealth(c.id, false, errCode(e));
-      warn('integration webhook handler failed', c, e);
-      return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
-    }
-    done();
-    setHealth(c.id, true);
-    return { status: 200, body: { ok: true } };
+      done();
+      setHealth(c.id, true);
+      return { status: 200, body: { ok: true } };
+    };
+    if (!conn.ackEarly) return settle();
+    // Acknowledged before the handler runs (a provider that needs an answer
+    // within seconds); the hub waits for it on shutdown like a board queue.
+    const bg = settle().catch((e) => warn('integration webhook settle failed', c, e));
+    hub.inflight.add(bg);
+    bg.finally(() => hub.inflight.delete(bg));
+    return { status: 200, body: { ok: true, accepted: true } };
+  }
+
+  // A delivery acknowledged early whose handler failed: no provider retry is
+  // coming, so the audit log is where an admin sees it (a short code only).
+  function deadLetter(c, e) {
+    try {
+      db.insert('integration_audit', {
+        id: randomUUID(), connection_id: c.id, action: 'webhook', decision: 'failed', error: errCode(e), card_id: null, external_ref: null, detail: '{}', undo: null, at: now(),
+      });
+    } catch (err) { warn('integration dead letter not recorded', c, err); }
   }
 
   // ── OAuth / app-install connect ─────────────────────────────────────────
@@ -816,6 +901,11 @@ export function createIntegrations({
   function register(conn) {
     if (connectors.has(conn.id)) throw new Error(`integration ${conn.id} registered twice`);
     connectors.set(conn.id, conn);
+    if (conn.ingressCidrs?.length) {
+      const list = new BlockList();
+      for (const r of conn.ingressCidrs.map(parseCidr)) if (r) list.addSubnet(r.address, r.prefix, r.type);
+      ingress.set(conn.id, list);
+    }
     for (const c of db.all("SELECT * FROM connections WHERE provider = ? AND status = 'active'", conn.id)) subscribe(c);
   }
 
@@ -856,6 +946,7 @@ export function createIntegrations({
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, error, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC, rowid DESC LIMIT ?', id, Math.min(500, Math.max(1, Number(limit) || 100)))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),
     webhookTarget,
+    trustedIngress,
     webhook,
     sweepDedupe,
     oauthStart,

@@ -56,6 +56,13 @@ test('disconnect asks inline first; activity lists audit entries as text', () =>
   assert.equal(byAttr(v, 'data-action', 'open')[0].props['data-card'], 'k1');
 });
 
+test('members see no Activity (the audit log is admin-only)', () => {
+  const v = integrationsScreen(m({ open: 'c1', audit: { c1: [{ id: 'a', action: 'card.create', decision: 'auto', at: '2026-09-30T19:00:00Z' }] } }, 'member'));
+  assert.equal(byAttr(v, 'data-action', 'integ-activity').length, 0);
+  assert.ok(!/Activity|Done automatically/.test(textOf(v)));
+  assert.equal(byAttr(integrationsScreen(m({}, 'admin')), 'data-action', 'integ-activity').length, 1);
+});
+
 test('token form, loading and error states', () => {
   assert.equal(byAttr(integrationsScreen(m({ tokenFor: 'fake' })), 'data-form', 'integ-token').length, 1);
   assert.match(textOf(integrationsScreen(m({ status: 'loading', data: null }))), /Loading integrations/);

@@ -100,8 +100,8 @@ test('M-1: bad posts from an IP to connection A never block that IP’s verified
   } finally { await h.close(); }
 });
 
-test('M-1: a flooding (connection, IP) pair gets one body read at a time; another connection is unaffected', async () => {
-  const h = await hubWith();
+test('M-1: a flooding (connection, IP) pair gets its pair cap of body reads (hardening M-1: 1 here); another connection is unaffected', async () => {
+  const h = await hubWith({ config: { webhookReads: { perPair: 1 } } });
   try {
     const reg = h.app.integrations;
     reg.register(probe('fa'));
@@ -123,7 +123,7 @@ test('M-1: a flooding (connection, IP) pair gets one body read at a time; anothe
     const flood = Array.from({ length: 5 }, () => open(a));
     const other = open(b);
     await new Promise((r) => setTimeout(r, 300));
-    assert.deepEqual(flood.map((f) => f.status), [429, 429, 429, 429, 429], 'refused before their bodies are read');
+    assert.deepEqual(flood.map((f) => f.status), [503, 503, 503, 503, 503], 'refused before their bodies are read');
     assert.equal(held.status, null, 'the one read in flight goes on');
     assert.equal(other.status, null, 'another connection is read as usual');
     for (const x of [held, other, ...flood]) x.req.destroy();
@@ -150,11 +150,15 @@ test('M-2: an integration’s card.create journals hashes and ids, never the tit
     const p = JSON.parse(row.payload);
     for (const f of ['title', 'body', 'acceptance']) {
       assert.equal(f in p, false, `${f} is not journaled`);
-      assert.match(p[`${f}_sha256`], /^[0-9a-f]{16}$/);
+      assert.match(p[`${f}_hmac`], /^[0-9a-f]{32}$/);
+      assert.equal(`${f}_sha256` in p, false, 'no unkeyed hash: a short title is guessable from it');
     }
-    assert.equal(p.title_sha256, createHash('sha256').update(secret).digest('hex').slice(0, 16));
+    assert.equal(p.title_hmac, h.hub.refHash(secret), 'keyed (L3)');
+    assert.notEqual(p.title_hmac, createHash('sha256').update(secret).digest('hex').slice(0, 32));
     assert.equal(p.connection_id, conn.id);
-    assert.equal(p.external_ref, 'ISS-9');
+    // A keyed hash, never the id itself (hardening M-3b).
+    assert.equal('external_ref' in p, false);
+    assert.equal(p.external_ref_hmac, h.hub.refHash('ISS-9'));
     assert.equal(p.key, card.key);
     // Replay rebuilds the card (its title lives in `cards`), the Dashboard shows the live title.
     const rows = h.db.all('SELECT * FROM journal ORDER BY seq');
@@ -307,8 +311,9 @@ test('L-3: members see connections and their autonomy, never settings.config; ad
     assert.equal(asMember.health, null);
     const asAdmin = await list('alice');
     assert.deepEqual(asAdmin.settings, { autonomy: { 'card.create': 'ask' }, config: { channel: 'C123', repos: ['acme/secret'] } });
-    // The audit log stays member-readable (it holds ids and codes only).
-    assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
+    // The audit log is admin-only (F2).
+    assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 403);
+    assert.equal((await h.api(await h.login('alice'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
   } finally { await h.close(); }
 });
 

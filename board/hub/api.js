@@ -2,7 +2,7 @@
 // change is hub.apply() → states.step() inside the board's queue; the rest are
 // plain row edits that never touch run state.
 
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
@@ -138,10 +138,18 @@ export class Api {
     const assignees = body.assignees ?? [];
     if (!Array.isArray(assignees)) throw new HubError('VALIDATION', 'assignees must be an array');
     for (const a of assignees) this.orgMember(member, a);
+    // An integration's request_id is durable (integration_requests, D42): a
+    // redelivery after a restart or a swept dedupe row returns the same card.
+    const via = this.hub.viaScope.getStore();
+    const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
+      ? { connection_id: via.connection_id, request_id: body.request_id } : null;
     return this.hub.withBoard(boardId, () => {
       const id = randomUUID();
       const now = this.hub.iso();
+      let prior = null;
       this.hub.txn(() => {
+        prior = once && this.db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? AND request_id = ?', once.connection_id, once.request_id)?.card_id;
+        if (prior) return;
         const b = this.hub.board(boardId);
         this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
         this.db.insert('cards', {
@@ -150,21 +158,29 @@ export class Api {
           created_by: member.id, created_at: now, updated_at: now, state_since: now,
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
+        if (once) this.db.insert('integration_requests', { ...once, card_id: id, created_at: now });
         const c = this.hub.card(id);
-        // An integration's card text is external text: the append-only
-        // journal can never erase it, so it keeps only hashes (D41); the
-        // text lives in `cards`, where replay and the Dashboard read it.
-        const via = this.hub.viaScope.getStore();
-        const texts = via?.member_id === member.id
-          ? { title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id, external_ref: via.external_ref ?? null }
-          : { title, body: text, acceptance };
-        this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload: {
-          key: c.key, ...texts, repo_id: c.repo_id, base_ref: baseRef, labels: c.labels, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)], request_id: body.request_id ?? null,
-        } });
+        // An integration's card text and external identifiers (the act()
+        // external_ref, base_ref, request_id) are external: the append-only
+        // journal can never erase them, so they go in as keyed hashes
+        // (hub.refHash: a plain hash of a short title is guessable) and its
+        // labels only as via:<provider> (D41); the text lives in `cards`,
+        // where replay and the Dashboard read it.
+        const common = { key: c.key, repo_id: c.repo_id, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)] };
+        const payload = via?.member_id === member.id
+          ? {
+            ...common, title_hmac: this.hub.refHash(title), body_hmac: this.hub.refHash(text), acceptance_hmac: this.hub.refHash(acceptance), connection_id: via.connection_id,
+            external_ref_hmac: this.hub.refHash(via.external_ref), base_ref_hmac: this.hub.refHash(baseRef), request_id_hmac: this.hub.refHash(body.request_id),
+            labels: JSON.stringify(labels.filter((l) => l.startsWith('via:'))),
+          }
+          : { ...common, title, body: text, acceptance, base_ref: baseRef, labels: c.labels, request_id: body.request_id ?? null };
+        this.hub.journal({ board_id: boardId, card_id: id, actor_kind: 'member', actor_id: member.id, kind: 'card.create', payload });
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
       });
-      return { card: cardView(this.hub, this.hub.card(id), member.id) };
+      // The same request naming another board is not a replay of this one.
+      if (prior && this.hub.card(prior).board_id !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
+      return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
     });
   }
 
@@ -197,9 +213,19 @@ export class Api {
         if (!Array.isArray(body.assignees)) throw new HubError('VALIDATION', 'assignees must be an array');
         for (const a of body.assignees) this.orgMember(member, a);
       }
+      // A card an integration created holds external text; a person's edit
+      // must not journal it in the clear either (D41), so those fields go in
+      // as keyed hashes under *_hmac names (replay never reads them as text).
+      const external = !!this.db.get(
+        "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
+        cardId, cardId);
       this.hub.txn(() => {
         const fields = {};
-        for (const k of Object.keys(set)) if (set[k] !== row[k]) fields[k] = [row[k], set[k]];
+        for (const k of Object.keys(set)) {
+          if (set[k] === row[k]) continue;
+          if (external && EXTERNAL_TEXT.has(k)) fields[`${k}_hmac`] = [this.hub.refHash(row[k]), this.hub.refHash(set[k])];
+          else fields[k] = [row[k], set[k]];
+        }
         if ('assignees' in body) fields.assignees = [this.hub.assignees(cardId), [...new Set(body.assignees)]];
         set.version = row.version + 1;
         set.updated_at = this.hub.iso();
@@ -507,7 +533,7 @@ export class Api {
   }
 }
 
-const shortHash = (s) => (s == null ? null : createHash('sha256').update(s).digest('hex').slice(0, 16));
+const EXTERNAL_TEXT = new Set(['title', 'body', 'acceptance', 'base_ref', 'labels']);
 
 function stripErr(e) {
   const { code, message, ...rest } = e;

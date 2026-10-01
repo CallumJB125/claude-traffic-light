@@ -75,7 +75,7 @@ test('H1: a linked pr_merged moves an in_review card to done and flushes the aft
     h.db.run("INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, 'pr', '#77', 'hub_verified', ?, ?)", randomUUID(), cardId, h.hub.iso(), h.hub.iso());
     let journalEvents = 0;
     h.hub.on('journal', () => { journalEvents += 1; });
-    const r = await post(reg, conn, { event: 'pr.merged', pr: { id: 'PR-77', number: 77, merged_by: 'octo-cat' } });
+    const r = await post(reg, conn, { event: 'pr.merged', pr: { id: 'PR-77', number: 77, merged_by: 'octo-cat', repo: 'acme/app' } });
     assert.equal(r.status, 200);
     const card = h.db.get('SELECT run_state, column_name FROM cards WHERE id = ?', cardId);
     assert.equal(card.column_name, 'done');
@@ -117,7 +117,11 @@ test('H2: two concurrent deliveries with one id run once (lease); an expired lea
     const delivery = randomUUID();
     const [a, b] = await Promise.all([post(reg, conn, issue('ISS-C1', 'Concurrent'), { delivery }), post(reg, conn, issue('ISS-C1', 'Concurrent'), { delivery })]);
     assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Concurrent'").length, 1);
-    assert.deepEqual([a.body, b.body].map((x) => JSON.stringify(x)).sort(), [JSON.stringify({ ok: true }), JSON.stringify({ ok: true, in_progress: true })].sort());
+    // The retry of a delivery still running is 503 + Retry-After (hardening M-2), never 200.
+    assert.deepEqual([a.status, b.status].sort(), [200, 503]);
+    const busy = a.status === 503 ? a : b;
+    assert.equal(busy.body.in_progress, true);
+    assert.equal(busy.headers['retry-after'], String(busy.body.retry_after_s));
     assert.equal(h.db.get('SELECT state FROM inbound_dedupe WHERE dedupe_key = ?', `${conn.id}:${delivery}`).state, 'done');
     assert.deepEqual((await post(reg, conn, issue('ISS-C1'), { delivery })).body, { ok: true, duplicate: true });
     // A crashed handler's lease (in the past) doesn't block the retry forever.
@@ -130,7 +134,10 @@ test('H2: two concurrent deliveries with one id run once (lease); an expired lea
     const live = randomUUID();
     const future = new Date(h.hub.wallMs() + 60_000).toISOString();
     h.db.run("INSERT INTO inbound_dedupe (provider, dedupe_key, received_at, state, lease_until) VALUES ('fake', ?, ?, 'processing', ?)", `${conn.id}:${live}`, past, future);
-    assert.deepEqual((await post(reg, conn, issue('ISS-C3', 'Leased'), { delivery: live })).body, { ok: true, in_progress: true });
+    const leased = await post(reg, conn, issue('ISS-C3', 'Leased'), { delivery: live });
+    assert.equal(leased.status, 503);
+    assert.deepEqual(leased.body, { ok: false, in_progress: true, retry_after_s: 60 });
+    assert.deepEqual(leased.headers, { 'retry-after': '60' });
     assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'Leased'").length, 0);
   } finally { await h.close(); }
 });
@@ -329,9 +336,9 @@ test('M4: link only to this org’s cards; pr and by are validated before they r
     h.db.run("UPDATE cards SET repo_id = ?, run_state = 'in_review', column_name = 'in_review' WHERE id = ?", h.ids.repo, cardId);
     h.db.run("INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, 'pr', '#5', 'hub_verified', ?, ?)", randomUUID(), cardId, h.hub.iso(), h.hub.iso());
     // A pr that is not an integer is dropped, so it is never the verified PR.
-    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5.5 })).reason, 'not_the_verified_pr');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5.5, repo: 'acme/app' })).reason, 'not_the_verified_pr');
     assert.deepEqual(reg.audit(conn.id).find((a) => a.action === 'system.pr_merged').detail, { pr: null });
-    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5, by: '<img src=x onerror=alert(1)>' });
+    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5, repo: 'acme/app', by: '<img src=x onerror=alert(1)>' });
     assert.equal(r.done, true);
     assert.deepEqual(JSON.parse(h.db.get("SELECT payload FROM events WHERE card_id = ? AND kind = 'merged'", cardId).payload), { pr: 5, by: null });
   } finally { await h.close(); }

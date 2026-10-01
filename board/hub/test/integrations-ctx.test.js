@@ -247,11 +247,12 @@ test('system.event: a decoy PR merged from the card\'s branch into another base 
   const { h, reg } = await setup();
   try {
     const { conn, ctx, cardId, branch, column } = await inReview(h, reg, 'BDL-60');
-    addEvidence(h, cardId, 'https://github.com/acme/app/pull/10');
-    // #11: same board branch, into `scratch`, merged by someone with push access.
+    // #11: same board branch, into `scratch`, merged by someone with push access;
+    // linked before the hub verified #10 (after, the link is refused: L4).
     const found = ctx.cardForBranch('acme/app', branch);
     assert.equal(found.card_id, cardId);
     await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-11'));
+    addEvidence(h, cardId, 'https://github.com/acme/app/pull/10');
     const decoy = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 11, repo: 'acme/app', by: 'mallory' });
     assert.deepEqual(decoy, { done: false, reason: 'not_the_verified_pr' });
     assert.equal(column(), 'in_review', 'review was not bypassed');
@@ -272,13 +273,14 @@ test('system.event: a decoy closed unmerged does not send the card back to To do
   const { h, reg } = await setup();
   try {
     const { ctx, cardId, column } = await inReview(h, reg, 'BDL-61');
-    addEvidence(h, cardId, '#10');
     await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-12'));
+    addEvidence(h, cardId, '#10');
     assert.deepEqual(await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'not_the_verified_pr' });
     assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12' })).reason, 'not_the_verified_pr', 'no pr number is never the verified one');
     assert.equal(column(), 'in_review');
-    // Evidence '#10' names no repo: the number alone binds it.
-    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10 })).done, true);
+    // Evidence '#10' names no repo: the card's repo on the hub binds it, so the event must name it.
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10 })).reason, 'not_the_verified_pr');
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10, repo: 'acme/app' })).done, true);
     assert.equal(column(), 'todo');
   } finally { await h.close(); }
 });
@@ -307,7 +309,28 @@ test('system.event: a card with no hub_verified PR evidence is never moved by an
   } finally { await h.close(); }
 });
 
-test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo?, url?}); null without one or for another org\'s card', async () => {
+test('L4: once the card has a verified PR, s.link(…, \'pr\', …) accepts only that PR number; anything else is CONFLICT', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { conn, ctx, cardId } = await inReview(h, reg, 'BDL-66');
+    addEvidence(h, cardId, '#10');
+    const link = (id, url) => ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', id, url));
+    for (const [id, url] of [['gh-11', 'https://github.com/acme/app/pull/11'], ['gh-12', undefined], ['#11', undefined], ['gh-10', 'https://github.com/acme/app/pull/10x']]) {
+      await assert.rejects(link(id, url), (e) => e.code === 'CONFLICT', `${id} ${url}`);
+    }
+    assert.equal(reg.audit(conn.id)[0].error, 'conflict');
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), null, 'nothing took the slot');
+    await link('gh-10', 'https://github.com/acme/app/pull/10');
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-10');
+    await link('gh-10', 'https://github.com/acme/app/pull/10');
+    // A card with no verified PR still takes any first PR.
+    const free = await inReview(h, reg, 'BDL-67');
+    await ctx.act('link.pr', {}, async (s) => s.link(free.cardId, 'pr', 'gh-99'));
+    assert.equal(ctx.linkedByCard(free.cardId, 'pr'), 'gh-99');
+  } finally { await h.close(); }
+});
+
+test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo, url} from the card\'s repo on the hub); null without one or for another org\'s card', async () => {
   const { h, reg, conn } = await setup();
   try {
     const ctx = reg.ctxFor(conn.id);
@@ -316,13 +339,18 @@ test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo?, u
     addEvidence(h, r.cardId, '#7', { verification: 'self_reported' });
     assert.equal(ctx.verifiedPr(r.cardId), null);
     addEvidence(h, r.cardId, '7');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 7 });
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 7, repo: 'acme/app', url: 'https://github.com/acme/app/pull/7' });
     addEvidence(h, r.cardId, 'https://github.com/Acme/App/pull/9');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 9, repo: 'acme/app', url: 'https://github.com/Acme/App/pull/9' });
-    addEvidence(h, r.cardId, 'https://ghe.example.com/acme/app/pull/12/');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 12, repo: 'ghe.example.com/acme/app', url: 'https://ghe.example.com/acme/app/pull/12/' });
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 9, repo: 'acme/app', url: 'https://github.com/acme/app/pull/9' });
+    // A (legacy) ref naming another host or repo: only its number is read.
+    addEvidence(h, r.cardId, 'https://ghe.example.com/evil/app/pull/12/');
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 12, repo: 'acme/app', url: 'https://github.com/acme/app/pull/12' });
     addEvidence(h, r.cardId, 'not a pr');
     assert.equal(ctx.verifiedPr(r.cardId), null, 'the newest is unreadable: nothing, not an older one');
+    const loose = addRun(h, { key: 'BDL-65', fence: 1 });
+    addEvidence(h, loose.cardId, '#4');
+    h.db.run('UPDATE cards SET repo_id = NULL WHERE id = ?', loose.cardId);
+    assert.equal(ctx.verifiedPr(loose.cardId), null, 'no repo on the hub: binds to nothing');
     const o = addOrg(h);
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-9', fence: 1 });
     addEvidence(h, theirs.cardId, '#3');
@@ -354,10 +382,10 @@ test('link: at most one live pr link per card per connection (same id is a no-op
     await ctx2.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-11'));
     assert.equal(ctx2.linkedByCard(r.cardId, 'pr'), 'PR-11');
     assert.equal(ctx.linkedByCard(r.cardId, 'pr'), 'PR-10');
-    // Another org's card reads null even if a row names it.
+    // Another org's card reads null; a row naming it cannot be written (migration 017).
     const o = addOrg(h);
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-10', fence: 1 });
-    h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso());
+    assert.throws(() => h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso()), /cross-team reference/);
     assert.equal(ctx.linkedByCard(theirs.cardId, 'pr'), null);
   } finally { await h.close(); }
 });

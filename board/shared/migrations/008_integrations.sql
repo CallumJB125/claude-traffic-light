@@ -6,7 +6,7 @@
 -- This migration REBUILDS `journal` and `comments` (DROP + RENAME), and DROP
 -- TABLE silently drops every trigger and index on the table. It recreates
 -- only the ones it knows (journal_board_seq, journal_card_seq,
--- journal_no_update, journal_no_delete). A migration is plain SQL here (no
+-- journal_no_update, journal_no_delete, exactly as 003 defined them). A migration is plain SQL here (no
 -- dynamic SQL to re-run saved definitions), so any OTHER trigger or index on
 -- either table (e.g. the accounts branch's xteam_comments_ins/upd, if its
 -- 009-011 were ever applied before this) makes 008 abort, rolled back, rather
@@ -17,9 +17,16 @@ CREATE TEMP TABLE _m008_guard (n INTEGER NOT NULL);
 CREATE TEMP TRIGGER _m008_guard_check BEFORE INSERT ON _m008_guard WHEN NEW.n > 0 BEGIN
   SELECT RAISE(ABORT, '008 rebuilds journal and comments and would drop triggers or indexes it does not recreate: apply 008 before any migration that adds them');
 END;
+-- tbl_name keeps the case a trigger was written with (ON JOURNAL), so it is
+-- compared lower-cased; a known name counts only with the exact definition
+-- 003 gave it (a same-named object with another body would be replaced).
 INSERT INTO _m008_guard SELECT COUNT(*) FROM sqlite_master
-  WHERE tbl_name IN ('journal', 'comments') AND type IN ('trigger', 'index') AND sql IS NOT NULL
-    AND name NOT IN ('journal_board_seq', 'journal_card_seq', 'journal_no_update', 'journal_no_delete');
+  WHERE lower(tbl_name) IN ('journal', 'comments') AND type IN ('trigger', 'index') AND sql IS NOT NULL
+    AND (name, sql) NOT IN (VALUES
+      ('journal_board_seq', 'CREATE INDEX journal_board_seq ON journal (board_id, seq)'),
+      ('journal_card_seq', 'CREATE INDEX journal_card_seq ON journal (card_id, seq)'),
+      ('journal_no_update', 'CREATE TRIGGER journal_no_update BEFORE UPDATE ON journal BEGIN SELECT RAISE(ABORT, ''journal is append-only''); END'),
+      ('journal_no_delete', 'CREATE TRIGGER journal_no_delete BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT, ''journal is append-only''); END'));
 DROP TABLE _m008_guard;
 
 -- An integration's own actions are journaled as actor_kind 'integration',

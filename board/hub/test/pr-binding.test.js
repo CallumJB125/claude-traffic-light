@@ -31,6 +31,22 @@ test('a legit same-repo PR is verified and its binding stored', async () => {
   } finally { await h.destroy(); }
 });
 
+test('L1: a verified PR is stored as the hub’s canonical URL, not the runner’s text; a self-reported one keeps its text', async () => {
+  const h = await startHub();
+  try {
+    const { runner, run } = await setup(h);
+    h.github.setPull(6, { head_ref: run.branch });
+    const r = await runner.rpc(run, 'board_attach_evidence', { kind: 'pr', ref: 'https://evil.example/mallory/app/pull/6' });
+    assert.equal(r.result.verification, 'hub_verified');
+    assert.equal(h.db.get('SELECT ref FROM evidence WHERE id = ?', r.result.evidence_id).ref, 'https://github.com/acme/app/pull/6');
+    const row = h.db.all("SELECT payload FROM journal WHERE kind = 'evidence.create'").map((x) => JSON.parse(x.payload)).find((p) => p.evidence_id === r.result.evidence_id);
+    assert.equal(row.ref, 'https://github.com/acme/app/pull/6');
+    const self = await runner.rpc(run, 'board_attach_evidence', { kind: 'pr', ref: '#404' });
+    assert.equal(self.result.verification, 'self_reported');
+    assert.equal(h.db.get('SELECT ref FROM evidence WHERE id = ?', self.result.evidence_id).ref, '#404');
+  } finally { await h.destroy(); }
+});
+
 test('a fork PR with the matching branch is self_reported', async () => {
   const h = await startHub();
   try {

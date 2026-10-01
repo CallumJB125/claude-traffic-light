@@ -81,14 +81,14 @@ function connectedCard(conn, m) {
       h('h4', null, 'On its own'),
       autonomyRows(conn, connector, m.canEdit, m.busy.has(`integ:${conn.id}`))),
     h('div', { class: 'integ-card-actions' },
-      h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity'),
+      m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
       m.canEdit ? (confirming
         ? h('span', { class: 'integ-confirm' },
           h('span', { class: 'small' }, `Disconnect ${connector?.name ?? conn.provider}? Cards stay; it stops syncing.`),
           h('button', { type: 'button', class: 'btn btn-sm btn-danger', 'data-action': 'integ-disconnect', 'data-conn': conn.id }, 'Disconnect'),
           h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-disconnect-cancel' }, 'Keep'))
         : h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'integ-disconnect-ask', 'data-conn': conn.id }, 'Disconnect')) : null),
-    open ? h('section', { class: 'integ-section', 'aria-label': 'Activity' }, h('h4', null, 'Activity'), activity(m.audit[conn.id])) : null);
+    open && m.canEdit ? h('section', { class: 'integ-section', 'aria-label': 'Activity' }, h('h4', null, 'Activity'), activity(m.audit[conn.id])) : null);
 }
 
 // A provider's App-manifest flow (GitHub) takes a POSTed form, not a link:

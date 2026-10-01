@@ -2,8 +2,8 @@
 // that rebuilds every card's state from the rows alone. Browser-safe.
 
 export const JOURNAL_KINDS = Object.freeze([
-  'card.create',        // {key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, parent_card_id?}; by an integration {title_sha256, body_sha256, acceptance_sha256, connection_id, external_ref} instead of the text (D41: replay has no title, `cards` does)
-  'card.update',        // {fields: {name: [before, after]}}: human PATCH, dispatch budget
+  'card.create',        // {key, title, body, acceptance, repo_id, base_ref, labels, budget_cents, column_name, parent_card_id?}; by an integration {title_hmac, body_hmac, acceptance_hmac, connection_id, external_ref_hmac, base_ref_hmac, request_id_hmac} instead of the text and ids, labels only via:<provider> (D41: replay has no title or base_ref, `cards` does)
+  'card.update',        // {fields: {name: [before, after]}}: human PATCH, dispatch budget; on an integration's card title/body/acceptance/base_ref/labels are <name>_hmac: [refHash, refHash] (D41)
   'card.transition',    // {rule, event, from, to, state: CARD_STATE, effects: [type]} — every state.step() applied
   'run.create',         // {fence, device_id, branch, snapshot_ref, dispatch_request_id}
   'run.snapshot',       // {status, sha, ref, provenance?}
