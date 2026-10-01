@@ -31,6 +31,7 @@ function freePort() {
 }
 
 async function main() {
+  const fromDist = !process.argv[2];
   const exe = process.argv[2] || findExecutable();
   if (!exe || !fs.existsSync(exe)) throw new Error(`no packaged app found (looked in ${DIST}); pass its path`);
   const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'plexiform-smoke-'));
@@ -65,6 +66,8 @@ async function main() {
     process.exit(1);
   }
   console.log('smoke: ok');
+  // A local run leaves no extra app registered with macOS (a no-op on CI).
+  if (fromDist) require('./forget-local-build.js').forgetLocalBuild({ dist: DIST });
 }
 
 main().catch((err) => { console.error(`smoke: ${err.message}`); process.exit(1); });
