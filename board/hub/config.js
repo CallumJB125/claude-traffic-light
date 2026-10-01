@@ -98,8 +98,8 @@ export function isExposed(cfg) {
 export const MAIL_PROVIDERS = Object.freeze(['resend', 'ses']);
 export const SES_REGION = /^[a-z]{2}(-[a-z]+)+-[0-9]$/;
 export const SES_ACCESS_KEY_ID = /^[A-Z0-9]{16,128}$/;
-export const SES_SECRET = /^[\x21-\x7e]{1,256}$/;
-export const SES_SESSION_TOKEN = /^[\x21-\x7e]{1,4096}$/;
+export const PRINTABLE_256 = /^[\x21-\x7e]{1,256}$/;
+export const PRINTABLE_4096 = /^[\x21-\x7e]{1,4096}$/;
 const MAIL_ADDRESS = /^[^\s@<>,;"'\p{C}]+@[^\s@<>,;"'\p{C}]+$/u;
 
 /** The mailer the config asks for: 'resend', 'ses' or null. Unset BOARD_MAIL_PROVIDER keeps D66: Resend when its key is set. */
@@ -137,8 +137,8 @@ function validateMail(cfg) {
   if (!cfg.mailFrom) throw new Error('BOARD_MAIL_PROVIDER=ses needs BOARD_MAIL_FROM');
   if (typeof cfg.sesRegion !== 'string' || !SES_REGION.test(cfg.sesRegion)) throw new Error('BOARD_SES_REGION must look like af-south-1');
   if (typeof cfg.sesAccessKeyId !== 'string' || !SES_ACCESS_KEY_ID.test(cfg.sesAccessKeyId)) throw new Error('BOARD_SES_ACCESS_KEY_ID is not an AWS access key id');
-  if (typeof cfg.sesSecretAccessKey !== 'string' || !SES_SECRET.test(cfg.sesSecretAccessKey)) throw new Error('BOARD_SES_SECRET_ACCESS_KEY must be 1 to 256 printable characters');
-  if (cfg.sesSessionToken != null && (typeof cfg.sesSessionToken !== 'string' || !SES_SESSION_TOKEN.test(cfg.sesSessionToken))) throw new Error('BOARD_SES_SESSION_TOKEN must be 1 to 4096 printable characters');
+  if (typeof cfg.sesSecretAccessKey !== 'string' || !PRINTABLE_256.test(cfg.sesSecretAccessKey)) throw new Error('BOARD_SES_SECRET_ACCESS_KEY must be 1 to 256 printable characters');
+  if (cfg.sesSessionToken != null && (typeof cfg.sesSessionToken !== 'string' || !PRINTABLE_4096.test(cfg.sesSessionToken))) throw new Error('BOARD_SES_SESSION_TOKEN must be 1 to 4096 printable characters');
   const format = cfg.sesFromFormat ?? 'display';
   if (format !== 'display' && format !== 'bare') throw new Error('BOARD_SES_FROM_FORMAT takes display or bare');
   if (!sesFromAddress(cfg.mailFrom, format)) throw new Error('BOARD_MAIL_FROM is not a usable From address');

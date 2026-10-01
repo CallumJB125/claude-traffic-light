@@ -7,7 +7,7 @@
 // person at the terminal, never through the log), and an outbox for tests.
 
 import { createHash, createHmac } from 'node:crypto';
-import { isExposed, mailProvider, isMailAddress, sesFromAddress, SES_REGION, SES_ACCESS_KEY_ID, SES_SECRET, SES_SESSION_TOKEN } from '../config.js';
+import { isExposed, mailProvider, isMailAddress, sesFromAddress, SES_REGION, SES_ACCESS_KEY_ID, PRINTABLE_256, PRINTABLE_4096 } from '../config.js';
 // Plain text only: no HTML built from user input (design §9.2).
 
 const RESEND_URL = 'https://api.resend.com/emails';
@@ -91,8 +91,8 @@ const timedOut = (e) => e?.name === 'TimeoutError' || e?.name === 'AbortError';
 // error (which can carry the request), a response body or a header.
 export function sesMailer({ region, accessKeyId, secretAccessKey, sessionToken = null, from, fromFormat = 'display', fetchImpl = globalThis.fetch, now = () => new Date() }) { // privacy-flow: hub-server
   if (typeof region !== 'string' || !SES_REGION.test(region)) throw new Error('SES mailer: bad region');
-  if (typeof accessKeyId !== 'string' || !SES_ACCESS_KEY_ID.test(accessKeyId) || typeof secretAccessKey !== 'string' || !SES_SECRET.test(secretAccessKey)
-    || (sessionToken != null && (typeof sessionToken !== 'string' || !SES_SESSION_TOKEN.test(sessionToken)))) throw new Error('SES mailer: bad credentials');
+  if (typeof accessKeyId !== 'string' || !SES_ACCESS_KEY_ID.test(accessKeyId) || typeof secretAccessKey !== 'string' || !PRINTABLE_256.test(secretAccessKey)
+    || (sessionToken != null && (typeof sessionToken !== 'string' || !PRINTABLE_4096.test(sessionToken)))) throw new Error('SES mailer: bad credentials');
   const fromAddress = sesFromAddress(from, fromFormat);
   if (!fromAddress) throw new Error('SES mailer: bad From');
   const host = `email.${region}.amazonaws.com`;
