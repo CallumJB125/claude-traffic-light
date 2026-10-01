@@ -28,10 +28,20 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),
   onEvent: (cb) => ipcRenderer.on('event', (e, name) => cb(name)),
   onSoundFlash: (cb) => ipcRenderer.on('sound-flash', () => cb()),
-  answerRequest: (id, decision) => ipcRenderer.invoke('answer-request', id, decision),
   // PendingInput (docs/waiting-inputs.md): answer by option id; open = jump to its terminal.
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
+  // The bubble's height: main grows the window by it so Claude keeps his size.
+  setBubbleHeight: (px) => ipcRenderer.send('set-bubble-height', px),
+  // main has given the bubble that much room (until then it may be clipped).
+  onStripApplied: (cb) => ipcRenderer.on('strip-applied', (e, px) => cb(px)),
+  openWaiting: () => ipcRenderer.invoke('open-waiting'),
+  // Lights → Auto-answer, prefilled from an input ({inputId}) or a nudge ({nudgeKey}).
+  openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
+  nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),
+  // Work scope (§C2): mode 'personal' | 'auto'. Absent core → these reject.
+  setSessionScope: (sessionId, mode) => ipcRenderer.invoke('set-session-scope', sessionId, mode),
+  setRepoScope: (canonicalUrl, mode) => ipcRenderer.invoke('set-repo-scope', canonicalUrl, mode),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
   // In-app update row (src/update-view.js). The widget may read the state and ask
   // for an install (never forced); nothing else of the updater reaches it.

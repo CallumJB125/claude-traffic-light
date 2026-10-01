@@ -12,6 +12,8 @@ const Input = require('../hooks/pending-input.js');
 
 const ASK_MS = 55000;
 const BLOCKED_KEEP_MS = 30 * 60 * 1000;
+// A blocked call's command or path: long enough for a real command line.
+const BLOCKED_SUMMARY_CHARS = 1000;
 const iso = (t) => (Number.isFinite(t) ? new Date(t).toISOString() : null);
 const text = (v, n = 4000) => reveal(typeof v === 'string' ? v : '').slice(0, n);
 
@@ -33,7 +35,7 @@ function fromRequest(req) {
   };
   if (kind === 'permission') {
     const d = describeRequest(req);
-    return { ...base, title: view.title, text: d.detail, headline: d.headline, options: view.options.map(publicOption) };
+    return { ...base, title: view.title, text: d.detail, detail_cut: d.detailCutChars, headline: d.headline, options: view.options.map(publicOption) };
   }
   return {
     ...base, title: text(view.title, 200), text: text(view.text, 20000), options: view.options.map(publicOption),
@@ -77,7 +79,7 @@ function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}
   if (b && Number.isFinite(bAt) && now - bAt < BLOCKED_KEEP_MS) {
     out.push({ ...base, id: `blocked-${s.host}-${s.sessionId}-${bAt}`, kind: 'blocked', tool: b.tool || null,
       title: `Blocked: ${text(b.tool, 80) || 'a tool call'} needs your decision`,
-      text: [text(b.summary, 300), b.reason ? `Reason: ${text(b.reason, 500)}` : ''].filter(Boolean).join('\n'),
+      text: [text(b.summary, BLOCKED_SUMMARY_CHARS), b.reason ? `Reason: ${text(b.reason, 500)}` : ''].filter(Boolean).join('\n'),
       reason: b.reason ? text(b.reason, 500) : null,
       // Not prompts: what the person can do about it. None is automatic.
       options: [
@@ -111,4 +113,4 @@ function collect({ requests = [], sessions = [], dialogs = [], now = Date.now() 
   return [...kept, ...dialogs.map(fromDialog)].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 }
 
-module.exports = { fromRequest, fromSession, fromDialog, answerFor, collect, BLOCKED_KEEP_MS };
+module.exports = { fromRequest, fromSession, fromDialog, answerFor, collect, BLOCKED_KEEP_MS, BLOCKED_SUMMARY_CHARS };

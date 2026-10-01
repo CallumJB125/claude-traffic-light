@@ -929,11 +929,11 @@ test('migrateRules: a saved config gains offline and failed-turn once, in their 
   assert.deepEqual(R.migrateRules(m, 0), m, 'never duplicated');
   assert.equal(R.migrateRules(saved, R.RULES_VERSION), saved, 'a config already on this version keeps its deletions');
   const custom = R.migrateRules([R.normalizeRule({ id: 'mine', when: { signal: ['stop'] }, then: { lamp: 'green' } })], 1);
-  assert.deepEqual(custom.map((r) => r.id), ['offline', 'runaway', ...R.gitDefaultRules().map((r) => r.id), 'mine', 'failed-turn', 'budget-exceeded', 'budget-warning', 'started']);
+  assert.deepEqual(custom.map((r) => r.id), ['offline', 'runaway', 'blocked', ...R.gitDefaultRules().map((r) => r.id), 'mine', 'failed-turn', 'budget-exceeded', 'budget-warning', 'started']);
 });
 
 test('migrateRules: a v6 config gains the git (v7) and spend (v8) rules once each; deleting them afterwards sticks', () => {
-  const added = [...R.gitDefaultRules().map((r) => r.id), ...R.SPEND_RULES.map((r) => r.id)];
+  const added = [...R.gitDefaultRules().map((r) => r.id), ...R.SPEND_RULES.map((r) => r.id), 'blocked']; // blocked: v9
   const v6 = R.defaultRules().filter((r) => !added.includes(r.id)).map(R.normalizeRule);
   const m = R.migrateRules(v6, 6);
   assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id));
@@ -1243,4 +1243,67 @@ test('templates: a rule added by a later migration follows the template it was s
   assert.ok(nonLamp(plain.find((r) => r.id === 'offline')).length > 0);
   // git rules have no lamp, so a lamp-only set never gets them
   assert.ok(!R.migrateRules(base, 6, 'minimal').some((r) => r.id.startsWith('git-')));
+});
+
+// ── v9: blocked ("needs your decision") is red ───────────────────────────
+const blockedAt = (min) => ({ sessionId: 'b', signal: 'tool-done', cwd: '/w', updatedAt: new Date().toISOString(), blocked: { tool: 'Bash', summary: 'rm -rf x', reason: 'r', at: new Date(Date.now() - min * 60000).toISOString() } });
+
+test('v9 blocked: a fresh config has the lamp-only red rule under the red block, and it lights red', () => {
+  const d = R.defaultRules();
+  const ids = d.map((r) => r.id);
+  assert.equal(R.RULES_VERSION, 9);
+  assert.equal(ids.indexOf('blocked'), ids.indexOf('runaway') + 1);
+  assert.ok(ids.indexOf('blocked') < ids.indexOf('working') && ids.indexOf('blocked') < ids.indexOf('done'));
+  assert.deepEqual(R.normalizeRule(d.find((r) => r.id === 'blocked')).then.lamp, 'red');
+  const t = d.find((r) => r.id === 'blocked').then;
+  assert.deepEqual(Object.keys(t), ['lamp'], 'lamp only: no sound, banner or pose');
+  assert.equal(R.resolve(d, [blockedAt(1)]).look.lamp, 'red');
+  assert.equal(R.resolve(d, [blockedAt(1)]).look.ruleId, 'blocked');
+  assert.equal(R.resolve(d, [blockedAt(31)]).look.lamp, 'green', 'gone with the bubble after 30 minutes');
+  assert.equal(R.BLOCKED_KEEP_MS, require('../src/pending-inputs.js').BLOCKED_KEEP_MS, 'the lamp and the bubble agree');
+});
+
+test('v9 blocked: a saved v8 config gains it once, in place; migrating twice adds it once', () => {
+  const v8 = R.defaultRules().filter((r) => r.id !== 'blocked').map(R.normalizeRule);
+  const m = R.migrateRules(v8, 8);
+  assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id));
+  assert.deepEqual(R.migrateRules(m, 8), m, 'idempotent');
+  assert.equal(R.migrateRules(m, 8).filter((r) => r.id === 'blocked').length, 1);
+  const deleted = m.filter((r) => r.id !== 'blocked');
+  assert.equal(R.migrateRules(deleted, 9), deleted, 'deleting it on v9 sticks');
+});
+
+test('v9 blocked: a customised config (reordered, disabled, its own blocked rule) is respected', () => {
+  const v8 = R.defaultRules().filter((r) => r.id !== 'blocked').map(R.normalizeRule);
+  const reordered = [v8.find((r) => r.id === 'working'), ...v8.filter((r) => r.id !== 'working' && r.id !== 'offline' && r.id !== 'runaway')];
+  const m = R.migrateRules(reordered, 8).map((r) => r.id);
+  assert.equal(m[m.indexOf('permission') + 1], 'blocked', 'no runaway/offline: right under Needs your input');
+  const disabled = v8.map((r) => (r.id === 'runaway' ? { ...r, enabled: false } : r));
+  const d = R.migrateRules(disabled, 8);
+  assert.equal(d[d.findIndex((r) => r.id === 'runaway') + 1].id, 'blocked');
+  assert.equal(d.find((r) => r.id === 'runaway').enabled, false, 'other rules untouched');
+  const mine = R.normalizeRule({ id: 'my-blocked', name: 'Blocked my way', when: { signal: ['blocked'] }, then: { lamp: 'amber', sound: 'Glass' } });
+  const own = R.migrateRules([...v8, mine], 8);
+  assert.equal(own.filter((r) => r.when.signal.includes('blocked')).length, 1, 'the user’s own rule stands alone');
+  const onlyLocked = R.migrateRules(v8.filter((r) => r.locked), 8).map((r) => r.id);
+  assert.deepEqual(onlyLocked.slice(-1), ['blocked']);
+});
+
+test('v9 blocked: saved Minimal and Pair templates get it lamp-only, red', () => {
+  for (const template of ['minimal', 'pair']) {
+    const v8 = R.applyTemplate(template).filter((r) => r.id !== 'blocked');
+    const m = R.migrateRules(v8, 8, template);
+    const b = m.find((r) => r.id === 'blocked');
+    assert.ok(b, template);
+    assert.equal(b.then.lamp, 'red', template);
+    for (const k of ['sound', 'pose', 'text', 'effect', 'eyes', 'screenFx']) assert.ok(!b.then[k] || b.then[k] === 'none' || b.then[k] === 'default', `${template}: ${k}`);
+    assert.deepEqual(R.migrateRules(m, 8, template), m, `${template}: idempotent`);
+    assert.ok(R.applyTemplate(template).some((r) => r.id === 'blocked'), `${template}: a fresh template has it too`);
+  }
+});
+
+test('v9 blocked: a set that needs nothing comes back as the very same list', () => {
+  const d = R.defaultRules().map(R.normalizeRule);
+  assert.equal(R.placeBlockedRule(d), d);
+  assert.equal(R.migrateRules(d, 8), d);
 });

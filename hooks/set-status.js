@@ -388,7 +388,7 @@ function blockedOf(prev, nowIso) {
   const input = data?.tool_input && typeof data.tool_input === 'object' ? data.tool_input : {};
   const summary = typeof input.command === 'string' ? input.command : typeof input.file_path === 'string' ? input.file_path : typeof input.url === 'string' ? input.url : '';
   return {
-    tool: tool || 'tool', summary: summary.slice(0, 300),
+    tool: tool || 'tool', summary: summary.slice(0, 1000), // = BLOCKED_SUMMARY_CHARS in src/pending-inputs.js
     reason: typeof data?.reason === 'string' ? data.reason.slice(0, 500) : null,
     agentId: typeof data?.agent_id === 'string' ? data.agent_id.slice(0, 100) : undefined,
     at: nowIso,

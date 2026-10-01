@@ -246,18 +246,20 @@ test('rules: no env.spend (usage not read yet) changes nothing', () => {
 
 test('rules v8: spend rules are slotted in once; deleting them sticks', () => {
   const ids = R.SPEND_RULES.map((r) => r.id);
-  const v6 = R.defaultRules().filter((r) => !ids.includes(r.id)).map(R.normalizeRule);
+  // A real v6/v7 config predates v9's blocked rule as well.
+  const v6 = R.defaultRules().filter((r) => !ids.includes(r.id) && r.id !== 'blocked').map(R.normalizeRule);
   for (const from of [6, 7]) {
     const m = R.migrateRules(v6, from);
     assert.deepEqual(m.map((r) => r.id), R.defaultRules().map((r) => r.id), `from v${from}`);
     assert.deepEqual(R.migrateRules(m, from), m, 'never duplicated');
   }
-  assert.equal(R.RULES_VERSION, 8);
+  assert.equal(R.RULES_VERSION, 9);
 });
 
 test('rules v8: spend rules deleted on v8 stay deleted, one or all', () => {
   const ids = R.SPEND_RULES.map((r) => r.id);
   const none = R.defaultRules().filter((r) => !ids.includes(r.id)).map(R.normalizeRule);
+  // (v9 still runs from v8; these sets already hold its blocked rule, so nothing changes.)
   assert.equal(R.migrateRules(none, 8), none);
   const noRunaway = R.defaultRules().filter((r) => r.id !== 'runaway').map(R.normalizeRule);
   assert.equal(R.migrateRules(noRunaway, 8), noRunaway);

@@ -16,6 +16,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { Worker } = require('worker_threads');
 const Rules = require('./rules.js');
+const Brand = require('./brand.js');
 const Adapters = require('./adapters/index.js');
 const Stats = require('./stats.js');
 const Usage = require('./usage.js');
@@ -123,18 +124,19 @@ const MIN_WIDTH = 80;
 const MAX_WIDTH = 320;
 
 function resizeBy(factor) {
-  if (!win) return;
-  const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
-  const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
-  const newHeight = Math.round(newWidth / WIDGET_ASPECT);
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  win.setBounds({
-    x: Math.round(cx - newWidth / 2),
-    y: Math.round(cy - newHeight / 2),
-    width: newWidth,
-    height: newHeight,
-  });
+  // The bubble or the recap has grown the window past the widget's shape; the
+  // update row just rides along under the resized widget.
+  if (!win || WidgetStrip.blocksTravel(strip)) return;
+  const cur = win.getBounds();
+  const r = WidgetStrip.resizeBase(cur, strip, factor, { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH, aspect: WIDGET_ASPECT }, screen.getDisplayMatching(cur).workArea);
+  if (!strip.kind) { win.setBounds(r.bounds); return; }
+  applyingStrip = true;
+  strip = r.strip;
+  try {
+    win.setMaximumSize(Math.max(MAX_WIDTH, r.bounds.width), Math.round(MAX_WIDTH / WIDGET_ASPECT) + r.strip.px);
+    win.setBounds(r.bounds);
+  } finally { applyingStrip = false; }
+  saveBounds();
 }
 
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
@@ -183,6 +185,9 @@ const DEFAULT_CONFIG = {
   // Accept paired devices' events on the Tailscale address too (loopback
   // only otherwise, which an ssh -R tunnel reaches).
   remoteTailscale: false,
+  // Auto-answer rules (src/auto-rules.js). Saved and shown in Lights; nothing
+  // answers from them until the hook side evaluates them.
+  autoAnswer: { v: 1, sealed: null, rules: [] },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -229,6 +234,8 @@ function buildConfig() {
   }
   if (Array.isArray(saved.rules)) config.rules = Rules.migrateRules(config.rules, Number(saved.rulesVersion) || 0, saved.template);
   config.rulesVersion = Rules.RULES_VERSION;
+  // Re-checked on every read: config.json is a file anyone running as you can edit.
+  config.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(saved.autoAnswer && saved.autoAnswer.rules).rules };
   config.presets = (Array.isArray(saved.presets) ? saved.presets : [])
     .filter((p) => p && typeof p.name === 'string' && Array.isArray(p.rules))
     .map((p) => ({ id: String(p.id || Rules.uid()), name: p.name.slice(0, 30), rules: Rules.migrateRules(p.rules.map(Rules.normalizeRule), Rules.rulesVersionOf(p)), rulesVersion: Rules.RULES_VERSION }));
@@ -242,6 +249,9 @@ function saveConfig(partial) {
   if (partial.rules && !('template' in partial)) next.template = null;
   // Presets reach here from loadConfig or Lights, so their rules are current.
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
+  // A renderer can't save a rule the UI would refuse.
+  // `sealed` is reserved for the rules' safeStorage HMAC (src/auto-rules.js); null until the evaluator ships.
+  if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   configCache = { key: null, value: null }; // two writes inside one ms would share an mtime
@@ -348,6 +358,53 @@ const { localSessions } = require('./src/remote-devices.js');
 // (state.inputs; schema in docs/waiting-inputs.md). Dialogs no hook can see
 // are read off the session's tmux pane, read-only and rate-limited.
 const PendingInputs = require('./src/pending-inputs.js');
+// Work scope (accounts contract §C2): src/work-scope.js is the core's module
+// and may not exist yet. Without it every session's scope is null and the
+// widget shows nothing about scope.
+let WorkScope = null;
+// Only the module itself missing is "no core yet"; a missing dependency of a
+// present module is a real error.
+try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code === 'MODULE_NOT_FOUND' && /Cannot find module '\.\/src\/work-scope\.js'/.test(e.message))) throw e; }
+// Specs inject scope states through a mock that is never packaged.
+if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK) WorkScope = require('./test-visual/work-scope-mock.js').create(process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK);
+const WorkScopeView = require('./src/work-scope-view.js');
+function withScope(sessions) {
+  if (typeof WorkScope?.scopeFor !== 'function') return sessions;
+  const linked = typeof WorkScope.linkedRepos === 'function' ? WorkScope.linkedRepos() : undefined;
+  return sessions.map((s) => {
+    if (s.remote) return { ...s, scope: null };
+    let scope = null;
+    try { scope = WorkScope.scopeFor(s, linked) || null; } catch { scope = null; }
+    return { ...s, scope };
+  });
+}
+const AutoRules = require('./src/auto-rules.js');
+const ApprovalNudge = require('./src/approval-nudge.js');
+// The counter's keys are HMACs under a per-install secret (src/nudge-secret.js).
+const nudgeSecret = require('./src/nudge-secret.js').createSecretStore({
+  file: path.join(ROOT_DIR, 'approval-secret.json'),
+  safeStorage: require('electron').safeStorage,
+  log: (m) => console.warn('[nudge]', m),
+});
+const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json'), secret: nudgeSecret });
+// The "make it a rule?" card stays hidden while auto-answer is off: a rule
+// that nothing applies would only mislead. Counting carries on.
+const SHOW_RULE_NUDGE = false;
+// Why a permission request needs a careful look (deny-list or destructive):
+// shown as a warning. enterAllow: Enter may allow it only when nothing is
+// flagged AND it is on the allow-list (src/enter-allow.js); the widget still
+// shows Allow either way, Enter just never stands in for that click.
+const EnterAllow = require('./src/enter-allow.js');
+function withDanger(inputs, requests) {
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  return inputs.map((i) => {
+    if (i.kind !== 'permission' || !byId.has(i.id)) return i;
+    const req = byId.get(i.id);
+    let danger;
+    try { danger = AutoRules.danger(req); } catch { danger = 'it could not be checked'; }
+    return { ...i, danger, enterAllow: danger === null && EnterAllow.enterBlockedReason(req) === null };
+  });
+}
 const PaneDialogs = require('./src/pane-dialogs.js');
 const Owned = require('./hooks/owned.js');
 const AnswerFile = require('./hooks/answer-file.js');
@@ -398,7 +455,9 @@ function readBounds() {
 let gardenRun = null;
 function saveBounds() {
   if (!win || gardenRun || roamState.busy) return;
-  fs.writeFileSync(BOUNDS_FILE, JSON.stringify(win.getBounds(), null, 2));
+  // The widget's own size, without the bubble or the recap under it.
+  if (applyingStrip) return; // applyStrip saves the base once it is done
+  fs.writeFileSync(BOUNDS_FILE, JSON.stringify(WidgetStrip.baseOf(win.getBounds(), strip), null, 2));
 }
 
 function readManualOverride() {
@@ -671,10 +730,10 @@ function cameosChanged() {
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
-  const sessions = readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config));
+  const sessions = withScope(readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config)));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
-  const inputs = PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs });
+  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs }), pending);
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
@@ -1108,6 +1167,36 @@ app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
 app.on('web-contents-created', (_e, wc) => Updater.guardNavigation(wc));
 // Only an installed app may claim the scheme: a dev run would steal it from it.
 if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
+// Open Lights on a view, then hand it one event (a prefill) once it can hear it.
+function showLightsView(view, then = null) {
+  const fresh = !lightsWin;
+  createLightsWindow();
+  const go = () => { lightsWin?.webContents.send('show-view', view); if (then) lightsWin?.webContents.send(then.event, then.data); };
+  if (fresh || lightsWin?.webContents.isLoading()) lightsWin?.webContents.once('did-finish-load', go); else go();
+}
+
+// "Waiting on you" on its own (the same page sits in the Plexiform window).
+let waitingWin = null;
+function createWaitingWindow() {
+  if (waitingWin) { waitingWin.show(); waitingWin.focus(); return; }
+  waitingWin = new BrowserWindow({
+    width: 560, height: 640, minWidth: 380, minHeight: 320,
+    title: `Waiting on you — ${Brand.name}`,
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#1c1a1f',
+    webPreferences: { preload: path.join(__dirname, 'waiting-preload.js'), contextIsolation: true, sandbox: true, spellcheck: false },
+  });
+  waitingWin.setMenuBarVisibility(false);
+  waitingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  waitingWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  waitingWin.loadFile('waiting.html');
+  if (IS_MAC) app.dock.show();
+  waitingWin.on('closed', () => {
+    waitingWin = null;
+    if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+
 let lightsWin = null;
 
 function createLightsWindow() {
@@ -1666,6 +1755,7 @@ function overlayGarden(payload) {
 }
 
 async function runGarden(base) {
+  if (WidgetStrip.blocksTravel(strip)) return; // the garden walks the widget's own rect, not one grown by the bubble or recap
   console.log('[garden] start');
   // `run` is declared before anything that can throw: the finally block below
   // reads it, and a throw from gardenGeometry() used to hit the temporal dead
@@ -1901,6 +1991,7 @@ function broadcastStatus() {
   }
   lightsWin?.webContents.send('status-changed');
   helpWin?.webContents.send('status-changed');
+  waitingWin?.webContents.send('status-changed');
   try {
     const st = aggregateState();
     // A paused widget catches up when the gate lifts (it broadcasts then),
@@ -1912,7 +2003,10 @@ function broadcastStatus() {
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
-    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook, updateRowShown);
+    const tk = JSON.stringify(WorkScopeView.trayItem(localSessions(st.sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' }));
+    if (tk !== trayScopeKey) { trayScopeKey = tk; refreshTrayMenu(); }
+    stripAway = !!st.away && !travelLook;
+    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -2002,6 +2096,8 @@ async function roamAndKnock(st, { force = false } = {}) {
   if (!IS_MAC) return { ok: false, why: 'macOS only' };
   if (!win) return { ok: false, why: 'no widget' };
   if (roamState.busy) return { ok: false, why: 'already roaming' };
+  // Roaming moves the grown window as if it were the widget: wait for the bubble to go.
+  if (WidgetStrip.blocksTravel(strip)) return { ok: false, why: 'something is showing under the widget' };
   if (gardenRun) return { ok: false, why: 'gardening' };
   // busy goes up BEFORE the first await. Deciding whether to knock costs three
   // osascript calls, and claiming the flag only afterwards is what let every
@@ -2071,7 +2167,7 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun || WidgetStrip.blocksTravel(strip)) return;
   const waiting = st.pending?.length || localSessions(st.sessions).some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -2134,6 +2230,10 @@ function maybeRandomEvent(st) {
 }
 
 const LoginItem = require('./src/login-item.js').create({ app, name: require('./brand.js').name });
+// Rebuilds the tray menu in place (the session-scope item follows the most
+// recently active session); createTray sets it.
+let refreshTrayMenu = () => {};
+let trayScopeKey = null;
 function createTray() {
   if (tray) {
     tray.destroy();
@@ -2163,11 +2263,20 @@ function createTray() {
 
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
+  const scopeItem = () => {
+    const item = WorkScopeView.trayItem(localSessions(aggregateState().sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' });
+    if (!item) return [];
+    return [{
+      label: item.label, type: 'checkbox', checked: item.checked, enabled: item.enabled,
+      click: () => { if (!item.sessionId) return; WorkScope.setSessionScope(item.sessionId, item.checked ? 'auto' : 'personal'); scopeChanged(); },
+    }, { type: 'separator' }];
+  };
   const buildMenu = () => Menu.buildFromTemplate([
+    ...scopeItem(),
     { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
-    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
+    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
     {
       label: 'Floating Widget',
       type: 'checkbox',
@@ -2182,6 +2291,7 @@ function createTray() {
     },
     { type: 'separator' },
     { label: 'What does this mean?…', click: createHelpWindow },
+    { label: 'Waiting on you…', click: createWaitingWindow },
     { label: 'Lights…', accelerator: 'CmdOrCtrl+L', click: createLightsWindow },
     { label: 'Model mix…', click: () => { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); } },
     { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
@@ -2220,7 +2330,15 @@ function createTray() {
   // trayMenu is also what the widget pops up on Linux, where there may be no tray.
   const mine = tray;
   trayMenu = buildMenu();
-  rebuildTrayMenu = () => { trayMenu = buildMenu(); if (mine && tray === mine) tray.setContextMenu(trayMenu); };
+  rebuildTrayMenu = () => {
+    trayMenu = buildMenu();
+    if (mine && tray === mine) tray.setContextMenu(trayMenu);
+    // Specs read and click the real menu; there is no getter on a Tray.
+    if (IS_DEV_RUN && !app.isPackaged) global.__buddyTrayMenu = trayMenu;
+  };
+  // The session-scope item follows the most recently active session.
+  refreshTrayMenu = rebuildTrayMenu;
+  if (IS_DEV_RUN && !app.isPackaged) global.__buddyTrayMenu = trayMenu;
   if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
   tray.setToolTip('Claude Buddy');
   tray.setContextMenu(trayMenu);
@@ -2266,7 +2384,7 @@ function stopGlide() { glideTimer = stopTimer(glideTimer); }
 
 function glideFrom(vx, vy) {
   stopGlide();
-  if (!win || win.isDestroyed() || gardenRun || roamState.busy) return false;
+  if (!win || win.isDestroyed() || gardenRun || roamState.busy || WidgetStrip.blocksTravel(strip)) return false;
   const G = Motion.MOTION.glide;
   const E = Motion.MOTION.edge;
   const speed = Math.hypot(vx, vy);
@@ -2821,8 +2939,12 @@ async function runAction(action, st) {
     }
     case 'allow': case 'deny': {
       // Tool permissions only: a plan, question or elicitation is answered
-      // from its own options, never by a gesture.
-      const req = st.pending && st.pending[0];
+      // from its own options, never by a gesture. A gesture can't see what it
+      // approves, so it allows only what Enter could: exactly one waiting
+      // permission, allow-listed and unflagged. Anything else: go and look.
+      const pick = action.type === 'allow' ? EnterAllow.gestureAllowTarget(st.pending, st.inputs) : { req: st.pending && st.pending[0] };
+      if (pick.why) { if (win && !win.isVisible()) win.showInactive(); return { feedback: pick.why }; }
+      const req = pick.req;
       if (!req) return { feedback: 'nothing to answer' };
       if (req.kind && req.kind !== 'permission') return { feedback: 'open it to answer' };
       const ok = answerRequest(req.id, action.type);
@@ -2990,18 +3112,21 @@ ipcMain.handle('voice-status', () => ({
   hotkeyTaken: voiceHotkeyTaken,
 }));
 
-// allow | deny for a tool permission only (answerRequest checks both).
-ipcMain.handle('answer-request', (e, id, decision) => {
-  const ok = answerRequest(String(id), String(decision));
-  setTimeout(broadcastStatus, 250);
-  return ok;
-});
 
 // A click on a PendingInput option: the renderer sends the input id and the
 // option id (plus free-text answers, form content or a deny message); the
 // answer itself is rebuilt from the request file, never taken from the
 // renderer. First answer wins (answer-file.js); every answer is logged.
+// Who may read and answer waiting inputs: the widget and the Waiting page
+// (its own window, or the Plexiform window's view of it), by webContents.
+function inputSenderOk(e) {
+  const wc = e.sender;
+  return !!wc && ((win && wc === win.webContents) || (waitingWin && wc === waitingWin.webContents) || (buddyWin && wc === buddyWin.pageWebContents('waiting')));
+}
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
+  if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
+  // Answering from the widget is a setting: off means off, even for a request file still on disk.
+  if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
   const req = readRequests().find((r) => r.id === String(id));
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const m = more && typeof more === 'object' ? more : {};
@@ -3012,11 +3137,95 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
-  return w.ok ? { ok: true } : { ok: false, error: w.error };
+  if (!w.ok) return { ok: false, error: w.error };
+  // "Allow once" only: a session-wide allow was already a broader choice.
+  // The answer is already written: a counter problem must not turn it into an error.
+  let n = null;
+  try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
+  if (!SHOW_RULE_NUDGE || !n || !n.nudge) return { ok: true };
+  nudger.offer(n.key);
+  return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });
+
+// The Waiting page (waiting.html, standalone or in the Plexiform window).
+ipcMain.handle('get-inputs', (e) => {
+  if (!inputSenderOk(e)) return null;
+  const st = aggregateState();
+  return { inputs: st.reason === 'travel' ? [] : (st.inputs || []), scopes: WorkScopeView.scopesBySession(st.sessions), askFromWidget: !!loadConfig().askFromWidget };
+});
+
+// "Not team work" / Undo / "Always treat this repo as personal". Only when
+// the core's module is there, and only from the widget, the Waiting page
+// (its own window or the Plexiform window's view) or Settings.
+const SCOPE_MODES = new Set(['personal', 'auto']);
+function scopeSenderOk(e) {
+  return inputSenderOk(e) || (!!settingsWin && e.sender === settingsWin.webContents);
+}
+function scopeChanged() { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); }
+if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRepoScope === 'function') {
+  ipcMain.handle('set-session-scope', (e, sessionId, mode) => {
+    if (!scopeSenderOk(e)) return { ok: false, error: 'not allowed' };
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128 || !SCOPE_MODES.has(mode)) return { ok: false, error: 'bad arguments' };
+    WorkScope.setSessionScope(sessionId, mode);
+    console.log(`[scope] session ${sessionId} → ${mode}`);
+    scopeChanged();
+    return { ok: true };
+  });
+  ipcMain.handle('set-repo-scope', (e, canonicalUrl, mode) => {
+    if (!scopeSenderOk(e)) return { ok: false, error: 'not allowed' };
+    if (typeof canonicalUrl !== 'string' || !canonicalUrl || canonicalUrl.length > 300 || !SCOPE_MODES.has(mode)) return { ok: false, error: 'bad arguments' };
+    WorkScope.setRepoScope(canonicalUrl, mode);
+    console.log(`[scope] repo ${canonicalUrl} → ${mode}`);
+    scopeChanged();
+    return { ok: true };
+  });
+  if (typeof WorkScope.onChange === 'function') {
+    const unsubscribe = WorkScope.onChange(scopeChanged);
+    if (typeof unsubscribe === 'function') app.on('will-quit', unsubscribe);
+  }
+}
+ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
+ipcMain.handle('nudge-mute', (e, key) => (inputSenderOk(e) ? nudger.mute(String(key)) : false));
+
+// Lights → Auto-answer, prefilled. From a nudge the rule is the one main
+// remembered for that key; from an input it is rebuilt from the request or
+// the session's recorded denial. The renderer only names which.
+function autoRulePrefill(from) {
+  const f = from && typeof from === 'object' ? from : {};
+  if (typeof f.nudgeKey === 'string') return nudger.take(f.nudgeKey);
+  if (typeof f.inputId !== 'string') return null;
+  const st = aggregateState();
+  const input = (st.inputs || []).find((i) => i.id === f.inputId);
+  if (!input) return null;
+  if (input.source === 'hook') {
+    const req = readRequests().find((r) => r.id === input.id);
+    const s = req && ApprovalNudge.suggestionFor(req);
+    return s ? s.rule : (input.tool ? { action: 'allow', tools: [input.tool] } : null);
+  }
+  const b = (st.sessions || []).find((x) => x.sessionId === input.session)?.blocked;
+  if (input.kind !== 'blocked' || !b || typeof b.tool !== 'string') return input.tool ? { action: 'allow', tools: [input.tool] } : null;
+  // The classifier's own reason names the rule. A summary longer than a rule
+  // can hold (or one that hit its own cap) may be cut, so it never becomes a
+  // command or path: a cut command could allow something else.
+  const note = typeof b.reason === 'string' ? b.reason.slice(0, 200) : '';
+  const summary = typeof b.summary === 'string' && b.summary.length <= 500 ? b.summary : '';
+  if (!summary) return { action: 'allow', tools: [b.tool], note };
+  const toolInput = AutoRules.FILE_TOOLS.has(b.tool) ? { file_path: summary } : { command: summary };
+  const s = ApprovalNudge.suggestionFor({ kind: 'permission', tool: b.tool, toolInput });
+  if (s) return { ...s.rule, note };
+  return AutoRules.SHELL_TOOLS.has(b.tool) ? { action: 'allow', tools: [b.tool], command: summary, note } : { action: 'allow', tools: [b.tool], note };
+}
+ipcMain.handle('open-auto-rule', (e, from) => {
+  if (!inputSenderOk(e)) return false;
+  const prefill = autoRulePrefill(from);
+  showLightsView('auto', prefill ? { event: 'auto-rule-prefill', data: prefill } : null);
+  return !!prefill;
+});
+ipcMain.handle('check-auto-rule', (e, rule) => (lightsWin && e.sender === lightsWin.webContents ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
 
 // "Open it": jump to the pane or tab the input is waiting in. Never types.
 ipcMain.handle('open-input', async (e, id) => {
+  if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   const item = (aggregateState().inputs || []).find((i) => i.id === String(id));
   if (!item) return { ok: false, error: 'gone' };
   const dialog = item.source === 'tmux' ? paneDialogs.find((d) => `dialog-${d.key}` === item.id) : null;
@@ -3026,28 +3235,66 @@ ipcMain.handle('open-input', async (e, id) => {
   return { ok: !!r, app: r ? r.app : null };
 });
 
-// The widget grows a strip of Allow / Deny buttons while a request waits,
-// or the "While you were away" recap once a busy spell ends. The ask wins:
-// it is the one that blocks a session.
-// The quiet "Update ready" row comes last: it never hides either of those.
-const STRIP_PX = 46;
+// The widget grows by the waiting-input bubble's height (the renderer
+// measures it) or the "While you were away" recap once a busy spell ends.
+// The bubble wins: it is what blocks a session. The quiet "Update ready"
+// row comes last: it never hides either of those.
 const AWAY_PX = 64;
 const UPDATE_PX = 72;
-let stripPx = 0;
+const BUBBLE_MAX_PX = 300;
+const BUBBLE_MIN_W = 230;
+const WidgetStrip = require('./src/widget-strip.js');
+let strip = WidgetStrip.NONE;
+let applyingStrip = false;
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {
   if (e.sender !== win?.webContents || !!on === updateRowShown) return;
   updateRowShown = !!on;
   broadcastStatus();
 });
+let bubblePx = 0;
+let stripAway = false;
+ipcMain.on('set-bubble-height', (e, px) => {
+  if (!win || e.sender !== win.webContents) return;
+  bubbleAsked = Math.round(Number(px) || 0);
+  bubbleAcked = null;
+  bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, bubbleAsked));
+  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+});
+// The widget's size is the base (src/widget-strip.js); the strip adds the
+// bubble's or the recap's height, and width for the bubble. Computed from the
+// base every time, so a clamp can't make the widget creep, and saved bounds
+// never include it.
+// The widget hears when the bubble really has its room: until then its body
+// may be clipped (a roam or the garden defers the resize), so nothing in it
+// counts as seen and it can't be answered.
+let bubbleAsked = 0;
+let bubbleAcked = null;
+function ackStrip() {
+  if (strip.kind !== 'bubble' || bubbleAcked === bubbleAsked || !win || win.isDestroyed()) return;
+  bubbleAcked = bubbleAsked;
+  win.webContents.send('strip-applied', bubbleAsked);
+}
 function applyStrip(asking, away = false, update = false) {
-  const px = asking ? STRIP_PX : away ? AWAY_PX : update ? UPDATE_PX : 0;
-  if (!win || px === stripPx) return;
-  const b = win.getBounds();
-  win.setAspectRatio(0);
-  win.setBounds({ ...b, height: b.height + px - stripPx });
-  stripPx = px;
-  if (!px) win.setAspectRatio(WIDGET_ASPECT);
+  if (!win) return;
+  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
+  if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
+  // The garden or a roam is moving the widget's own rect: grow once it's home
+  // (the next broadcast tries again).
+  if (gardenRun || roamState.busy) return;
+  const cur = win.getBounds();
+  const r = WidgetStrip.stripBounds(cur, strip, next, screen.getDisplayMatching(WidgetStrip.baseOf(cur, strip)).workArea);
+  const maxH = Math.round(MAX_WIDTH / WIDGET_ASPECT);
+  applyingStrip = true;
+  strip = r.strip;
+  try {
+    win.setAspectRatio(0);
+    win.setMaximumSize(Math.max(MAX_WIDTH, r.bounds.width), maxH + r.strip.px);
+    win.setBounds(r.bounds);
+    if (!r.strip.px) { win.setMaximumSize(MAX_WIDTH, maxH); win.setAspectRatio(WIDGET_ASPECT); }
+  } finally { applyingStrip = false; }
+  saveBounds();
+  ackStrip();
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));

@@ -1240,7 +1240,7 @@
   function setView(v) {
     $('main').dataset.view = v;
     $('frame').dataset.view = v;
-    for (const k of ['rules', 'stats', 'mix']) {
+    for (const k of ['rules', 'stats', 'mix', 'auto']) {
       $(`view-${k}`).classList.toggle('on', v === k);
       $(`view-${k}`).setAttribute('aria-selected', v === k);
     }
@@ -1255,6 +1255,7 @@
   });
   $('view-stats').addEventListener('click', () => setView('stats'));
   $('view-mix').addEventListener('click', () => setView('mix'));
+  $('view-auto').addEventListener('click', () => setView('auto'));
 
   let rangeDays = 7;
   let projectFilter = null;
@@ -1610,7 +1611,7 @@
     const q = new URLSearchParams(location.search);
     selectedId = (q.get('select') && rules.find((r) => r.id === q.get('select'))?.id) || rules[0]?.id || null;
     if (q.get('mode') === 'live') previewMode = 'live';
-    if (q.get('view') === 'stats' || q.get('view') === 'mix') setView(q.get('view'));
+    if (['stats', 'mix', 'auto'].includes(q.get('view'))) setView(q.get('view'));
     if (q.get('event')) setTimeout(() => stage.playEvent(q.get('event')), 100);
     if (q.get('scroll')) setTimeout(() => { ({ stats: $('stats'), mix: $('mix') }[q.get('view')] || $('editor')).scrollTop = Number(q.get('scroll')); }, q.get('view') === 'mix' ? 3000 : 400);
     setDirty(false);

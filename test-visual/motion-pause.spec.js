@@ -249,7 +249,7 @@ test('a paused widget still gets its waiting inputs, and they can be answered wh
     const req = { id: 'paused-ask', sessionId: 'visual', cwd: '/visual/app', tool: 'Bash', summary: '', toolInput: { command: 'echo paused' }, toolInputHash: 'x', createdAt: new Date().toISOString() };
     req.decisionHash = require('../hooks/answer-file.js').decisionHashOf(req);
     fs.writeFileSync(path.join(dir, `${req.id}.json`), JSON.stringify(req));
-    await expect(w.locator('#ask-what')).toContainText('echo paused', { timeout: 10000 });
+    await expect(w.locator('.ib-head')).toContainText('echo paused', { timeout: 10000 });
     expect(await w.evaluate(() => document.body.classList.contains('motion-paused'))).toBe(true);
     const answered = await w.evaluate(async () => {
       const st = await window.trafficLight.getAggregateStatus();
