@@ -36,6 +36,8 @@ export const REQUEST_LIMITS = Object.freeze({
 // Card bodies (create, patch, actions, comments, permission answers) keep 1 MiB; every other API body is capped at smallBodyMax.
 const bigBodyRoute = (pattern) => pattern === '/api/boards/:board_id/cards' || pattern.startsWith('/api/cards/') || pattern.startsWith('/api/permission-requests/');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const requestBinding = (route, params, body) => createHash('sha256').update(JSON.stringify({ method: route.method, route: route.pattern, params, body }, (_key, value) =>
+  value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)).digest('hex');
 // The prepare body carries an admin's pasted configuration token (D97), and a
 // /start answer a signed state, bind and the org it was given: their D8 replay
 // entry is this, never the first answer.
@@ -267,10 +269,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null } = {}) => {
+  // Serialize matching collaboration retries until their response is cached.
+  // The board queue alone cannot deduplicate two concurrent cache misses.
+  const collaborationRequests = new Map();
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, maxBody: bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -350,15 +355,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }));
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
-  route('POST', '/api/boards/:board_id/cards', ({ member, params, body }) => api.createCard(member, params.board_id, body));
+  route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
-  route('PATCH', '/api/cards/:card_id', ({ member, params, body }) => api.patchCard(member, params.card_id, body));
+  route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body }) => api.action(member, params.card_id, params.action, body));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/comments', ({ member, params, body }) => api.comment(member, params.card_id, body));
+  route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);
     if (query.get('format') === 'md') {
@@ -720,29 +725,52 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      const paidAction = DISPATCH_ACTIONS.has(params.action);
+      if (ident && (r.replay === false || paidAction) && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+      if (r.collaboration) member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
-      const rid = actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
-      if (rid) {
-        const hit = hub.cachedResponse(actor, rid);
-        if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
-      }
-      if (actor && r.mutating) {
-        limitOrThrow(hub, 'mutate_member', actor);
-        if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', actor);
-      }
-      if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
-      let status = 200;
-      let out;
-      try {
-        out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
-      } catch (e) {
-        if (!(e instanceof HubError)) throw e;
-        status = httpStatus(e.code);
-        out = errorBody(e);
-      }
-      if (out === undefined) return undefined;
-      if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out);
-      return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
+      // Client operations always pass through their live grant/role checks.
+      // Workspace creation and acceptance have durable transactional retries;
+      // an old response must not bypass later removal or guest revocation.
+      // Paid dispatches use their durable, choice-bound row instead of a
+      // generic response cache that could replay a different AI/budget.
+      const rid = r.replay !== false && !paidAction && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      const binding = rid && r.collaboration ? requestBinding(r, params, body) : null;
+      const runRequest = async () => {
+        if (r.collaboration) member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
+        if (rid) {
+          const hit = hub.cachedResponse(actor, rid);
+          if (hit) {
+            if ((binding != null || hit.binding != null) && binding !== hit.binding) throw new HubError('CONFLICT', 'request_id reused for a different request');
+            return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
+          }
+        }
+        if (actor && r.mutating) {
+          limitOrThrow(hub, 'mutate_member', actor);
+          if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', actor);
+        }
+        if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
+        let status = 200;
+        let out;
+        try {
+          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
+        } catch (e) {
+          if (!(e instanceof HubError)) throw e;
+          status = httpStatus(e.code);
+          out = errorBody(e);
+        }
+        if (out === undefined) return undefined;
+        if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
+        return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
+      };
+      if (!r.collaboration || !rid) return await runRequest();
+      const key = `${actor}|${rid}`;
+      const previous = collaborationRequests.get(key) ?? Promise.resolve();
+      const pending = previous.then(runRequest, runRequest);
+      collaborationRequests.set(key, pending);
+      const clear = () => { if (collaborationRequests.get(key) === pending) collaborationRequests.delete(key); };
+      pending.then(clear, clear);
+      return await pending;
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
       hub.log.error('http handler failed', { path: url.pathname, err: e });

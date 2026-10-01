@@ -86,8 +86,48 @@ export class Api {
     if (!this.hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot change the board');
   }
 
+  // HTTP credentials are private server context, never fields of a card body.
+  // Recheck after body reads and after waiting for the board queue: a revoked
+  // account or removed/downgraded membership cannot finish an earlier write.
+  currentWriter(member, cred = null) {
+    if (cred) {
+      if (!['device', 'session'].includes(cred.kind) || !this.hub.accounts?.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+      const owner = cred.kind === 'device'
+        ? this.db.get('SELECT user_id FROM user_devices WHERE id = ?', cred.id)
+        : this.db.get('SELECT user_id FROM sessions WHERE id = ?', cred.id);
+      if (!owner || owner.user_id !== member?.user_id) throw new HubError('UNAUTHENTICATED', 'credential does not belong to this member');
+    }
+    const current = this.hub.activeMember(member?.id);
+    const org = current && this.db.get('SELECT 1 AS x FROM orgs WHERE id = ? AND deleted_at IS NULL', current.org_id);
+    const user = current?.user_id == null || this.db.get('SELECT 1 AS x FROM users WHERE id = ? AND deleted_at IS NULL', current.user_id);
+    if (!current || current.org_id !== member.org_id || current.user_id !== member.user_id || !org || !user || !this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
+    return current;
+  }
+
+  collaborationScope(member, { boardId = null, cardId = null }, cred = null) {
+    const current = this.currentWriter(member, cred);
+    const card = cardId ? this.cardFor(current, cardId) : null;
+    const board = this.boardFor(current, card?.board_id ?? boardId);
+    this.writableBoard(board.id);
+    if (card?.archived_at) throw archivedError();
+    return current;
+  }
+
   requireAdmin(member) {
     if (!this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'admin only');
+  }
+
+  writableBoard(boardId) {
+    if (this.hub.board(boardId)?.archived_at) throw new HubError('CONFLICT', 'this board is archived: restore it first', { reason: 'BOARD_ARCHIVED' });
+  }
+
+  withWritableBoard(boardId, fn, { member = null, cred = null } = {}) {
+    return this.hub.withBoard(boardId, () => {
+      const current = member ? this.currentWriter(member, cred) : null;
+      if (current) this.boardFor(current, boardId);
+      this.writableBoard(boardId);
+      return fn(current);
+    });
   }
 
   // ── reads ─────────────────────────────────────────────────────────────────
@@ -156,9 +196,9 @@ export class Api {
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
-  async createCard(member, boardId, body) {
-    this.requireWrite(member);
-    const board = this.boardFor(member, boardId);
+  async createCard(member, boardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
+    this.boardFor(member, boardId);
     const title = str(body.title, 200, 'title', { required: true });
     const text = str(body.body, 20_000, 'body') ?? '';
     const acceptance = str(body.acceptance, 10_000, 'acceptance');
@@ -175,7 +215,10 @@ export class Api {
     const via = this.hub.viaScope.getStore();
     const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
       ? { connection_id: via.connection_id, request_id: body.request_id } : null;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, (current) => {
+      member = current;
+      if (body.repo_id != null && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', boardId, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+      for (const a of assignees) this.orgMember(member, a);
       const id = randomUUID();
       const now = this.hub.iso();
       let prior = null;
@@ -213,14 +256,16 @@ export class Api {
       // The same request naming another board is not a replay of this one.
       if (prior && this.hub.card(prior).board_id !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
       return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
-    });
+    }, { member, cred });
   }
 
-  async patchCard(member, cardId, body) {
-    this.requireWrite(member);
+  async patchCard(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
-      const row = this.hub.card(cardId);
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
       if (row.archived_at) throw archivedError();
       if (!Number.isSafeInteger(body.version) || body.version !== row.version) throw new HubError('VERSION_CONFLICT', 'card changed since you loaded it', { version: row.version });
       const set = {};
@@ -268,7 +313,7 @@ export class Api {
         this.hub.later(() => this.hub.broadcastCard(cardId));
       });
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
-    });
+    }, { member, cred });
   }
 
   // An integration created it (an integration_requests row or an integration
@@ -609,12 +654,15 @@ export class Api {
     return id;
   }
 
-  async comment(member, cardId, body) {
+  async comment(member, cardId, body, { cred = null } = {}) {
+    member = this.currentWriter(member, cred);
     const row0 = this.cardFor(member, cardId);
-    if (!this.hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot comment');
     const text = str(body.body, 10_000, 'body', { required: true });
-    return this.hub.withBoard(row0.board_id, () => {
-      if (this.hub.card(cardId).archived_at) throw archivedError();
+    return this.withWritableBoard(row0.board_id, (current) => {
+      member = current;
+      const row = this.cardFor(member, cardId);
+      if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
+      if (row.archived_at) throw archivedError();
       let id;
       this.hub.txn(() => {
         id = this.insertComment(member, cardId, { body: text, for_agent: body.for_agent === true, reply_to: body.reply_to });
@@ -623,7 +671,7 @@ export class Api {
       if (body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
       return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
-    });
+    }, { member, cred });
   }
 
   // ── devices, repos, members ───────────────────────────────────────────────
