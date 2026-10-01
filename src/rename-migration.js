@@ -43,6 +43,20 @@ const SKIP = new Set([
   'Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache', 'Crashpad',
 ]);
 
+// A file, folder or link this user can read. Sockets, FIFOs and devices
+// can't be copied (a FIFO would block the copy for good).
+function copyable(src, fsImpl) {
+  try {
+    const st = fsImpl.lstatSync(src);
+    if (st.isSymbolicLink()) return true;
+    if (st.isDirectory()) { fsImpl.accessSync(src, fs.constants.R_OK | fs.constants.X_OK); return true; }
+    if (st.isFile()) { fsImpl.accessSync(src, fs.constants.R_OK); return true; }
+    return false;
+  } catch { return false; }
+}
+
+const migrated = (state) => !!state && state.status !== 'retry';
+
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 // What Electron itself may have put in the new folder before main.js copies:
@@ -56,13 +70,29 @@ const FRESH = new Set(['Crashpad', '.DS_Store']);
  * leaves no new folder and the next launch copies again. A new folder that
  * is fresh (see FRESH) is replaced; one this migration wrote, or one with
  * anything else in it, is left alone.
+ *
+ * When the copy can't happen this launch (the old app won't quit, or the
+ * copy itself fails), the new folder gets a "retry" marker instead: this
+ * launch runs on it, and the next one replaces it with a fresh copy.
+ * Unreadable files, sockets and FIFOs are left out one by one (skipped).
+ * quitOld() → whether the old app is gone; asked only when a copy is about
+ * to happen, as its open databases must not be copied mid-write.
  */
-function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = fs, log = console.log, pid = process.pid, now = () => new Date() }) {
+function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = fs, log = console.log, pid = process.pid, now = () => new Date(), quitOld = () => true }) {
   const from = path.join(appData, oldName);
   const to = userData;
   const skip = (reason) => { log(`[rename] not copying ${from} to ${to}: ${reason}`); return { copied: false, from, to, reason }; };
-  if (fsImpl.existsSync(to)) {
-    if (readState(to, fsImpl)) return skip('already migrated');
+  const retryLater = (reason) => {
+    try {
+      fsImpl.mkdirSync(to, { recursive: true });
+      fsImpl.writeFileSync(path.join(to, STATE_FILE), JSON.stringify({ status: 'retry', reason, at: now().toISOString() }, null, 2), { mode: 0o600 });
+    } catch (err) { log(`[rename] could not mark ${to} for another try: ${err.message}`); }
+    log(`[rename] could not copy ${from} to ${to} (${reason}); trying again next launch`);
+    return { copied: false, from, to, reason, retry: true };
+  };
+  const state = fsImpl.existsSync(to) ? readState(to, fsImpl) : null;
+  if (migrated(state)) return skip('already migrated');
+  if (!state && fsImpl.existsSync(to)) {
     let names = [];
     try { names = fsImpl.readdirSync(to); } catch (err) { return skip(`the new folder can't be read (${err.message})`); }
     const used = names.filter((n) => !FRESH.has(n));
@@ -71,6 +101,7 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
   let stat = null;
   try { stat = fsImpl.lstatSync(from); } catch { /* no old install */ }
   if (!stat || !stat.isDirectory()) return skip('no old folder');
+  if (!quitOld()) return retryLater('the old app is still running');
 
   const prefix = `${path.basename(to)}.migrating-`;
   try {
@@ -94,6 +125,7 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
         if (!rel) return true;
         const top = rel.split(path.sep)[0];
         if (SKIP.has(top)) { skipped.add(top); return false; }
+        if (!copyable(src, fsImpl)) { skipped.add(rel); return false; }
         entries.add(top);
         return true;
       },
@@ -111,9 +143,8 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
   } catch (err) {
     fsImpl.rmSync(tmp, { recursive: true, force: true });
     // Another launch got there first: its copy stands.
-    if (readState(to, fsImpl)) return skip('already migrated');
-    log(`[rename] could not copy ${from} to ${to}: ${err.message}`);
-    return { copied: false, from, to, reason: err.message };
+    if (migrated(readState(to, fsImpl))) return skip('already migrated');
+    return retryLater(err.message);
   }
   log(`[rename] copied ${from} to ${to} (${[...entries].sort().join(', ') || 'empty'}; left out: ${[...skipped].sort().join(', ') || 'nothing'}); the old folder is untouched`);
   return { copied: true, from, to, entries: [...entries].sort(), skipped: [...skipped].sort() };
@@ -148,15 +179,15 @@ const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
  * needs no Automation permission prompt. Then waits (up to waitMs, blocking:
  * this runs once, before any window) for it to go, because on its way out it
  * frees the signal port and deletes the port file this app is about to write.
- * → the pids asked.
+ * → { asked, running }: the pids asked, and those still running after the wait.
  * listProcesses: () → [{ pid, command }] (the full executable path on macOS,
  * the command line on Linux).
  */
 function quitOldInstance({ platform, listProcesses, kill = process.kill, isAlive = alive, sleep = sleepSync, waitMs = 5000, self = process.pid, log = console.log }) {
   const re = platform === 'darwin' ? OLD.macExecutable : platform === 'linux' ? OLD.linuxExecutable : null;
-  if (!re) return [];
+  if (!re) return { asked: [], running: [] };
   let procs = [];
-  try { procs = listProcesses(); } catch (err) { log(`[rename] could not list processes: ${err.message}`); return []; }
+  try { procs = listProcesses(); } catch (err) { log(`[rename] could not list processes: ${err.message}`); return { asked: [], running: [] }; }
   const asked = [];
   for (const p of procs) {
     if (p.pid === self || !re.test(p.command)) continue;
@@ -165,7 +196,7 @@ function quitOldInstance({ platform, listProcesses, kill = process.kill, isAlive
   for (let waited = 0; asked.some(isAlive) && waited < waitMs; waited += 100) sleep(100);
   const still = asked.filter(isAlive);
   if (still.length) log(`[rename] the old app (pid ${still.join(', ')}) is still running`);
-  return asked;
+  return { asked, running: still };
 }
 
 /**

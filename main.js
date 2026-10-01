@@ -157,7 +157,18 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 // The folder is worked out, not asked for: asking Electron for it creates it.
 const RenameMigration = require('./src/rename-migration.js');
 const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && !app.commandLine.hasSwitch('user-data-dir');
-if (RENAME_MIGRATES) RenameMigration.copyUserData({ appData: app.getPath('appData'), userData: path.join(app.getPath('appData'), app.getName()) });
+// macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args.
+const listOldProcesses = () => RenameMigration.parsePs(process.platform === 'darwin'
+  ? require('child_process').execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
+  : require('child_process').execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
+// The old app is asked to quit first, so its databases aren't copied mid-write; if it won't, the copy waits for the next launch.
+if (RENAME_MIGRATES) {
+  RenameMigration.copyUserData({
+    appData: app.getPath('appData'),
+    userData: path.join(app.getPath('appData'), app.getName()),
+    quitOld: () => RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses }).running.length === 0,
+  });
+}
 
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
@@ -3708,15 +3719,10 @@ if (!gotLock) {
 // src/rename-migration.js, after ready; each step runs once.
 function renameFollowUp() {
   const home = os.homedir();
-  // macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args.
-  const { execFileSync } = require('child_process');
-  const listProcesses = () => RenameMigration.parsePs(process.platform === 'darwin'
-    ? execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
-    : execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
   return RenameMigration.runFollowUp({
     userData: app.getPath('userData'),
     steps: {
-      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses }); },
+      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses }); },
       // From a translocated copy the hooks would point at a temporary path: try again next launch.
       hooks: () => { if (!AUTO_INSTALL_HOOKS) return false; RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }); },
       login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },

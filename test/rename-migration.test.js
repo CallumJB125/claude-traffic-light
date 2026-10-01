@@ -152,6 +152,75 @@ test('userData: nothing to copy without an old folder; a dead launch\'s half cop
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('userData: the old app still running at copy time → nothing copied, a retry marker; the next launch copies over the folder this one used', () => {
+  const home = tmpHome();
+  const { appData, old, userData } = oldProfile(home);
+  const before = snapshot(old);
+  const procs = [{ pid: 111, command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' }];
+  const kills = [];
+  let live = true;
+  const quitOld = () => M.quitOldInstance({ platform: 'darwin', listProcesses: () => procs, kill: (pid, sig) => kills.push([pid, sig]), isAlive: () => live, sleep: () => {}, waitMs: 500, log: quiet }).running.length === 0;
+  const logs = [];
+  const r = M.copyUserData({ appData, userData, quitOld, log: (m) => logs.push(m) });
+  assert.deepEqual([r.copied, r.retry, r.reason], [false, true, 'the old app is still running']);
+  assert.deepEqual(kills, [[111, 'SIGTERM']], 'SIGTERM only, never SIGKILL');
+  assert.equal(M.readState(userData).status, 'retry');
+  assert.deepEqual(M.pending(userData), [], 'no follow-up runs on a folder that was not copied');
+  assert.match(logs.at(-1), /trying again next launch/);
+  assert.deepEqual(snapshot(old), before);
+  // This launch carries on with the folder: Chromium fills it.
+  fs.writeFileSync(path.join(userData, 'Local State'), '{"new":1}');
+  fs.mkdirSync(path.join(userData, 'Crashpad'));
+
+  live = false;
+  const r2 = M.copyUserData({ appData, userData, quitOld, log: quiet });
+  assert.equal(r2.copied, true);
+  assert.equal(fs.readFileSync(path.join(userData, 'Local State'), 'utf8'), fs.readFileSync(path.join(old, 'Local State'), 'utf8'));
+  assert.deepEqual(M.readState(userData).pending, M.STEPS);
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy']);
+  assert.deepEqual(snapshot(old), before);
+
+  // The old app is asked only when a copy is about to happen.
+  let asked = 0;
+  M.copyUserData({ appData, userData, quitOld: () => { asked += 1; return true; }, log: quiet });
+  fs.rmSync(old, { recursive: true, force: true });
+  fs.rmSync(userData, { recursive: true, force: true });
+  M.copyUserData({ appData, userData, quitOld: () => { asked += 1; return true; }, log: quiet });
+  assert.equal(asked, 0);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: unreadable files, unreadable folders and FIFOs are left out one by one; a copy that fails as a whole is retried next launch', () => {
+  const home = tmpHome();
+  const { appData, old, userData } = oldProfile(home);
+  fs.writeFileSync(path.join(old, 'locked.json'), 'x');
+  fs.chmodSync(path.join(old, 'locked.json'), 0);
+  fs.mkdirSync(path.join(old, 'board', 'private'));
+  fs.chmodSync(path.join(old, 'board', 'private'), 0);
+  require('node:child_process').execFileSync('/usr/bin/mkfifo', [path.join(old, 'pipe')]);
+  const r = M.copyUserData({ appData, userData, log: quiet });
+  assert.equal(r.copied, true);
+  for (const f of ['locked.json', 'pipe', path.join('board', 'private')]) assert.ok(r.skipped.includes(f), `${f} recorded in skipped: ${r.skipped}`);
+  assert.deepEqual(M.readState(userData).skipped, r.skipped);
+  assert.equal(fs.readFileSync(path.join(userData, 'board', 'hub.db'), 'utf8'), 'db', 'the rest of board/ came across');
+  fs.chmodSync(path.join(old, 'locked.json'), 0o600);
+  fs.chmodSync(path.join(old, 'board', 'private'), 0o700);
+
+  // ENOSPC halfway: no copy, a retry marker; the next launch copies.
+  fs.rmSync(userData, { recursive: true, force: true });
+  fs.rmSync(path.join(old, 'pipe'));
+  const full = { ...fs, cpSync: () => { const e = new Error('ENOSPC: no space left on device'); e.code = 'ENOSPC'; throw e; } };
+  const failed = M.copyUserData({ appData, userData, fsImpl: full, log: quiet });
+  assert.deepEqual([failed.copied, failed.retry], [false, true]);
+  assert.match(failed.reason, /ENOSPC/);
+  assert.equal(M.readState(userData).status, 'retry');
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'the half copy went');
+  const again = M.copyUserData({ appData, userData, log: quiet });
+  assert.equal(again.copied, true);
+  assert.equal(fs.readFileSync(path.join(userData, 'locked.json'), 'utf8'), 'x');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 // ── hooks and MCP ───────────────────────────────────────────────────────────
 
 const OLD_APP = '/Applications/Claude Buddy.app';
@@ -262,19 +331,21 @@ test('old instance: the old main process is asked to quit (SIGTERM) and waited f
   const kills = [];
   const live = new Set([111, 114]);
   let slept = 0;
-  const asked = M.quitOldInstance({
+  const { asked, running } = M.quitOldInstance({
     platform: 'darwin', listProcesses: () => procs, self: 113, log: quiet,
     kill: (pid, sig) => kills.push([pid, sig]),
     isAlive: (pid) => live.has(pid),
     sleep: () => { slept += 1; if (slept === 3) live.clear(); },
   });
   assert.deepEqual(asked, [111, 114]);
+  assert.deepEqual(running, []);
   assert.deepEqual(kills, [[111, 'SIGTERM'], [114, 'SIGTERM']]);
   assert.equal(slept, 3);
 
   const stuck = [];
-  M.quitOldInstance({ platform: 'darwin', listProcesses: () => procs.slice(0, 1), kill: () => {}, isAlive: () => true, sleep: () => {}, waitMs: 300, log: (m) => stuck.push(m) });
+  const r = M.quitOldInstance({ platform: 'darwin', listProcesses: () => procs.slice(0, 1), kill: () => {}, isAlive: () => true, sleep: () => {}, waitMs: 300, log: (m) => stuck.push(m) });
   assert.match(stuck.at(-1), /still running/);
+  assert.deepEqual(r, { asked: [111], running: [111] }, 'never SIGKILLed: it is reported as still running');
 
   const debKills = [];
   M.quitOldInstance({ platform: 'linux', listProcesses: () => [{ pid: 7, command: '/opt/Claude Buddy/plexiform --no-sandbox' }, { pid: 8, command: '/opt/Plexiform/plexiform' }], kill: (pid) => debKills.push(pid), isAlive: () => false, log: quiet });
@@ -282,7 +353,7 @@ test('old instance: the old main process is asked to quit (SIGTERM) and waited f
 
   for (const platform of ['win32']) {
     let listed = false;
-    assert.deepEqual(M.quitOldInstance({ platform, listProcesses: () => { listed = true; return procs; }, kill: () => assert.fail('no kill'), log: quiet }), []);
+    assert.deepEqual(M.quitOldInstance({ platform, listProcesses: () => { listed = true; return procs; }, kill: () => assert.fail('no kill'), log: quiet }), { asked: [], running: [] });
     assert.equal(listed, false);
   }
   assert.deepEqual(M.parsePs('  111 /Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy\n 9 /sbin/launchd\n\n'), [{ pid: 111, command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' }, { pid: 9, command: '/sbin/launchd' }]);
@@ -377,7 +448,7 @@ test('main.js copies userData before the instance lock and anything else that op
   const firstUserData = src.search(/getPath\('userData'\)/);
   assert.ok(firstUserData > src.indexOf('const RENAME_MIGRATES'), 'nothing reads userData before the migration decides');
   assert.match(src, /const RENAME_MIGRATES = app\.isPackaged && !IS_DEV_RUN && !app\.commandLine\.hasSwitch\('user-data-dir'\);/);
-  assert.match(src, /copyUserData\(\{ appData: app\.getPath\('appData'\), userData: path\.join\(app\.getPath\('appData'\), app\.getName\(\)\)/, 'the target is worked out, not getPath(userData), which would create it');
+  assert.match(src, /copyUserData\(\{\s+appData: app\.getPath\('appData'\),\s+userData: path\.join\(app\.getPath\('appData'\), app\.getName\(\)\),\s+quitOld: \(\) => RenameMigration\.quitOldInstance\(/, 'the target is worked out, not getPath(userData), which would create it; the old app is asked to quit before the copy');
   // The follow-up runs before the startup hook check, and never for a smoke run.
   const follow = src.indexOf('if (RENAME_MIGRATES && gotLock) renameFollowUp()');
   assert.ok(follow > src.indexOf('if (smokeReport) {') && follow < src.indexOf('if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();'));
