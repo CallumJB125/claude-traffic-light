@@ -7,7 +7,7 @@ const Rules = require('../rules.js');
 
 const ROOT = path.join(__dirname, '..');
 // The characters load before the rig, as in every page that mounts one.
-const RIG_SRC = ['characters/contract.js', 'characters/builtin/core.js', 'rig.js'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
+const RIG_SRC = ['characters/contract.js', 'characters/builtin/core.js', 'characters/builtin/starter.js', 'rig.js'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
 const RIG_CSS = fs.readFileSync(path.join(ROOT, 'rig.css'), 'utf8');
 
 // rig.js is a renderer <script>: it runs against a window, reads the bare

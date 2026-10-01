@@ -6,8 +6,7 @@
   const C = typeof module === 'object' && module.exports ? require('../contract.js') : root.BuddyCharacters;
   const defs = factory(C.REF);
   for (const d of defs) C.register(d, { builtin: true });
-  // later waves register before this seal moves to the last of them
-  C.sealBuiltins();
+  // the seal is in the last wave to register (starter.js)
   if (typeof module === 'object' && module.exports) module.exports = defs;
 })(typeof self !== 'undefined' ? self : this, function (REF) {
   const claudeShaped = (over = {}) => ({ ...REF, skinParts: [], ...over });
