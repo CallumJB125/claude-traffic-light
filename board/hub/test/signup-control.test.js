@@ -437,3 +437,33 @@ test('email start: a real code goes out exactly when verify would accept it (an 
     assert.equal(shapes.size, 1, 'one answer shape');
   } finally { await r.h.close(); }
 });
+
+test('email start: a refused address costs the same work as a real one (one code HMAC, the same three writes), and its dud kills none of the address\'s live flows', async () => {
+  const r = await rig();
+  try {
+    const acc = r.h.hub.accounts;
+    const count = (email) => {
+      const seen = { hash: 0, run: 0, insert: 0 };
+      const orig = { hash: acc.codeHash, run: r.h.db.run, insert: r.h.db.insert };
+      acc.codeHash = function (...a) { seen.hash++; return orig.hash.apply(this, a); };
+      r.h.db.run = function (...a) { seen.run++; return orig.run.apply(this, a); };
+      r.h.db.insert = function (...a) { seen.insert++; return orig.insert.apply(this, a); };
+      return r.start(email).finally(() => { acc.codeHash = orig.hash; r.h.db.run = orig.run; r.h.db.insert = orig.insert; }).then((s) => ({ s, seen }));
+    };
+    const real = await count('real@allowed.test');
+    const dud = await count('refused@nope.test');
+    assert.equal(r.h.db.get('SELECT code_hash FROM login_flows WHERE id = ?', dud.s.body.flow_id).code_hash.slice(0, 4), 'dud:');
+    assert.deepEqual(dud.seen, real.seen);
+    assert.equal(real.seen.hash, 1);
+    assert.equal(real.seen.insert, 2, 'the flow and its audit row');
+    // A dud for an address with live flows (here: the start limit silences it) leaves them live.
+    const live = () => r.h.db.get("SELECT COUNT(*) AS n FROM login_flows WHERE email = 'real@allowed.test' AND dead_at IS NULL AND code_hash NOT LIKE 'dud:%'").n;
+    for (let i = 0; i < 2; i++) await r.start('real@allowed.test');
+    assert.equal(live(), 3);
+    const take = r.h.hub.limiter.take.bind(r.h.hub.limiter);
+    r.h.hub.limiter.take = (name, key) => (name === 'auth_start_email' ? { ok: false, retry_after_ms: 1000 } : take(name, key));
+    const quiet = await count('real@allowed.test');
+    assert.deepEqual(quiet.seen, real.seen);
+    assert.equal(live(), 3, 'the dud killed nothing');
+  } finally { await r.h.close(); }
+});

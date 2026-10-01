@@ -298,22 +298,22 @@ export class Accounts {
     // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
       ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email) && !this.signupAllowed(email) ? 'signup_closed' : !this.mailBudget(email) ? 'mail_cap' : null;
-    if (quiet) {
-      this.hub.txn(() => {
-        this.db.insert('login_flows', { ...row, code_hash: `${DUD}${randomBytes(32).toString('hex')}` });
-        this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: quiet }, ip });
-      });
-      return out;
-    }
+    // A dud does the same work as a real start (a code and its HMAC, the same
+    // statements), so the time a refusal takes doesn't tell it apart; its
+    // update matches no row (it kills none of the address's flows) and its
+    // stored hash carries the dud prefix, so no code ever matches it.
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const hash = this.codeHash(flowId, code);
     this.hub.txn(() => {
       // At most three live flows per address: older ones die (duds don't count).
       this.db.run(`UPDATE login_flows SET dead_at = ? WHERE id IN (
         SELECT id FROM login_flows WHERE email = ? AND purpose = ? AND dead_at IS NULL AND consumed_at IS NULL AND expires_at > ? AND code_hash NOT LIKE '${DUD}%'
-        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, LIVE_FLOWS_PER_EMAIL - 1);
-      this.db.insert('login_flows', { ...row, code_hash: this.codeHash(flowId, code) });
-      this.audit('auth.code.sent', { user: userId, target: flowId, detail: { email_ref: this.emailRef(email), client, purpose }, ip });
+        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, quiet ? 1_000_000_000 : LIVE_FLOWS_PER_EMAIL - 1);
+      this.db.insert('login_flows', { ...row, code_hash: quiet ? `${DUD}${hash}` : hash });
+      if (quiet) this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: quiet }, ip });
+      else this.audit('auth.code.sent', { user: userId, target: flowId, detail: { email_ref: this.emailRef(email), client, purpose }, ip });
     });
+    if (quiet) return out;
     const link = client === 'web' && purpose === 'signin' ? this.linkOrigin(req) : null;
     const mail = codeMail({ purpose, client, code, deviceName, platform, link: link && `${link}/auth/email#f=${flowId}&c=${code}` });
     this.mailer.send({ to: email, ...mail, idempotencyKey: flowId })
