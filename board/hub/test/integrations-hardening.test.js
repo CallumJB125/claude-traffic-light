@@ -294,6 +294,41 @@ test('M-3b: an integration’s card.create journal row, as a member reads it, ca
   } finally { await h.close(); }
 });
 
+test('F1: a person editing a card an integration created journals its text fields as keyed hashes, never the text', async () => {
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'f1a');
+    const ctx = h.app.integrations.ctxFor(conn.id);
+    // Built at runtime: text a provider would carry (a customer's name and address).
+    const who = ['Jane', 'Q', 'Customer'].join(' ');
+    const addr = `${12 + 30} Elm Street`;
+    const { card } = (await ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(h.ids.board, {
+      request_id: 'f1-1', title: `Refund for ${who}`, body: `Ship to ${addr}`, labels: [`cust:${who}`],
+    }))).result;
+    const alice = h.db.get('SELECT * FROM members WHERE id = ?', h.ids.alice);
+    const before = h.hub.card(card.id);
+    const after = { title: `Refund for ${who} (urgent)`, body: `Ship to ${addr}, flat 2`, acceptance: `Call ${who}`, base_ref: `fix/${who.toLowerCase().replace(/ /g, '-')}`, labels: [`cust:${who}`, 'vip'] };
+    await h.app.api.patchCard(alice, card.id, { version: before.version, request_id: 'p-1', column: 'in_progress', ...after });
+    const bob = h.db.get('SELECT * FROM members WHERE id = ?', h.ids.bob);
+    assert.equal(bob.role, 'member');
+    const row = h.app.api.journalPage(bob, h.ids.board, { after_seq: 0, limit: 1000 }).rows.find((r) => r.kind === 'card.update' && r.card_id === card.id);
+    const text = JSON.stringify(row);
+    for (const raw of [who, addr, 'Elm', 'Jane', 'urgent', 'vip', 'jane-q']) assert.ok(!text.includes(raw), `the journal never holds ${raw}`);
+    const f = row.payload.fields;
+    for (const k of ['title', 'body', 'acceptance', 'base_ref', 'labels']) assert.equal(k in f, false, `${k} is not journaled in the clear`);
+    assert.deepEqual(f.title_hmac, [h.hub.refHash(before.title), h.hub.refHash(after.title)]);
+    assert.deepEqual(f.labels_hmac, [h.hub.refHash(before.labels), h.hub.refHash(JSON.stringify(after.labels))]);
+    assert.deepEqual(f.acceptance_hmac, [null, h.hub.refHash(after.acceptance)]);
+    assert.deepEqual(f.column_name, ['todo', 'in_progress'], 'other fields stay plain');
+    assert.equal(h.hub.card(card.id).title, after.title, 'the card itself is edited');
+    // A person's own card is journaled as before.
+    const mine = (await h.app.api.createCard(alice, h.ids.board, { request_id: 'f1-mine', title: 'Mine' })).card;
+    await h.app.api.patchCard(alice, mine.id, { version: h.hub.card(mine.id).version, title: 'Mine 2' });
+    const own = JSON.parse(h.db.get("SELECT payload FROM journal WHERE kind = 'card.update' AND card_id = ?", mine.id).payload);
+    assert.deepEqual(own.fields.title, ['Mine', 'Mine 2']);
+  } finally { await h.close(); }
+});
+
 // ── Low-a: migration 008's guard ────────────────────────────────────────
 
 test('Low-a: 008 aborts, changing nothing, for a trigger written ON JOURNAL / ON Comments, or a known name with another definition', async () => {

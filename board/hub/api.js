@@ -210,9 +210,19 @@ export class Api {
         if (!Array.isArray(body.assignees)) throw new HubError('VALIDATION', 'assignees must be an array');
         for (const a of body.assignees) this.orgMember(member, a);
       }
+      // A card an integration created holds external text; a person's edit
+      // must not journal it in the clear either (D41), so those fields go in
+      // as keyed hashes under *_hmac names (replay never reads them as text).
+      const external = !!this.db.get(
+        "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
+        cardId, cardId);
       this.hub.txn(() => {
         const fields = {};
-        for (const k of Object.keys(set)) if (set[k] !== row[k]) fields[k] = [row[k], set[k]];
+        for (const k of Object.keys(set)) {
+          if (set[k] === row[k]) continue;
+          if (external && EXTERNAL_TEXT.has(k)) fields[`${k}_hmac`] = [this.hub.refHash(row[k]), this.hub.refHash(set[k])];
+          else fields[k] = [row[k], set[k]];
+        }
         if ('assignees' in body) fields.assignees = [this.hub.assignees(cardId), [...new Set(body.assignees)]];
         set.version = row.version + 1;
         set.updated_at = this.hub.iso();
@@ -520,6 +530,7 @@ export class Api {
   }
 }
 
+const EXTERNAL_TEXT = new Set(['title', 'body', 'acceptance', 'base_ref', 'labels']);
 const shortHash = (s) => (s == null ? null : createHash('sha256').update(s).digest('hex').slice(0, 16));
 
 function stripErr(e) {
