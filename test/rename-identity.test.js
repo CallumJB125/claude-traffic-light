@@ -69,8 +69,9 @@ test('identity: the updater, the feed and the signed manifest say plexiform', ()
 // ── no stray old name ───────────────────────────────────────────────────────
 const OLD_NAME = /claude(?:%20|[ _-])?buddy|com\.callumbaker/i;
 // Kept everywhere: the claudebuddy:// scheme old links use, and the dev-only
-// CLAUDE_BUDDY_* environment switches.
-const ALLOW_ANYWHERE = [/claudebuddy/g, /CLAUDE_BUDDY_[A-Z_]+/g];
+// CLAUDE_BUDDY_* environment switches. The bare scheme name is allowed only
+// where it is declared (brand.js's LEGACY_SCHEMES and its mirrors).
+const ALLOW_ANYWHERE = [/claudebuddy:\/\//g, /CLAUDE_BUDDY_[A-Z_]+/g];
 // Kept on purpose, per file.
 const ALLOW = {
   'src/rename-migration.js': [/^.*$/g], // the old identity, to migrate from
@@ -82,14 +83,15 @@ const ALLOW = {
   'MCP.md': [/claude-buddy/g],
   'settings.html': [/<code>claude-buddy<\/code>/g],
   'PRIVACY.md': [/`claude-buddy`/g], // the MCP entry and the old data folder's name
-  'package.json': [/"name": "claude-buddy"/g], // the npm name: the .deb package and updater cache keep it
+  'package.json': [/"name": "claude-buddy"/g, /"schemes": \["plexiform", "claudebuddy"\]/g], // the npm name: the .deb package and updater cache keep it; the old links' scheme
   'package-lock.json': [/"name": "claude-buddy"/g],
   'remote/package.json': [/@claude-buddy\/remote/g],
-  'brand.js': [/'Claude Buddy'/g], // formerNames
+  'brand.js': [/'Claude Buddy'/g, /LEGACY_SCHEMES = \['claudebuddy'\]/g], // formerNames; the old links' scheme
   'README.md': [/Formerly \*Claude Buddy\*/g],
   'site/src/partials/footer.html': [/Formerly Claude Buddy\./g],
   'main.js': [/rename from Claude Buddy/g],
   'docs/RELEASING.md': [/`com\.callumbaker\.claude-buddy`|`claude-buddy`/g], // what a pre-rename build was
+  'board/shared/brand.js': [/legacyDeepLinkScheme: 'claudebuddy'/g], // brand.js's LEGACY_SCHEMES, for the board
   'board/CONTRACT.md': [/\.\.\/claude-buddy-board-[\w-]+\.md/g], // design documents outside the repo
 };
 const TEXT = /\.(?:js|mjs|cjs|json|html|css|md|sh|nsh|plist|swift|ya?ml|toml|txt|entitlements)$/;
