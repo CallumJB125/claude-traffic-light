@@ -34,6 +34,7 @@ const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const REQUEST_ID_MAX = 200;
+const SUBJECT_MAX = 128;
 const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
 const AUDIT_REF_MAX = 80;
 // An id (PR number, issue key, branch, sha, slug): never free text, which a
@@ -341,14 +342,14 @@ export function createIntegrations({
       return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track, external_ref }) {
+    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
-      const call = (body, fn, rule = null, pre = null) => {
+      const call = (body, fn, rules = [], pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn, rule, pre));
+        return track(callLive(body, fn, rules, pre));
       };
-      const callLive = async (body, fn, rule, pre) => {
+      const callLive = async (body, fn, rules, pre) => {
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -366,7 +367,7 @@ export function createIntegrations({
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        if (rule) limitOrThrow(hub, rule, c.id);
+        for (const [rule, key] of rules) limitOrThrow(hub, rule, key);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
@@ -379,6 +380,9 @@ export function createIntegrations({
       };
       // A board of another team (or none) is the Api's own NOT_FOUND, but
       // before any rate token: probing board ids must not drain the budget.
+      // The provider user's bucket first: one past it spends none of the
+      // connection's, so a single user can't use up everyone's cards.
+      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id]];
       const boardOfOrg = (boardId) => () => {
         if (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== c.org_id) throw new HubError('NOT_FOUND', 'board not found');
       };
@@ -386,7 +390,7 @@ export function createIntegrations({
         member: { id: first.id, role: first.role },
         // A D8 replay answers with the first card whatever board it names: the
         // same request on another board is a conflict, not that card.
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn', boardOfOrg(boardId)).then((out) => {
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), cardRules, boardOfOrg(boardId)).then((out) => {
           const on = hub.card(out?.card?.id)?.board_id;
           if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
           return out;
@@ -568,7 +572,7 @@ export function createIntegrations({
     }
 
     /**
-     * act(action, {card_id?, external_ref?, detail?, undo?}, run(scope)) — the
+     * act(action, {card_id?, external_ref?, detail?, undo?, subject?}, run(scope)) — the
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
@@ -577,6 +581,12 @@ export function createIntegrations({
      */
     async function act(action, meta, run) {
       if (signal?.aborted) throw handlerEnded();
+      const subject = meta?.subject;
+      if (subject != null && (typeof subject !== 'string' || !subject || subject.length > SUBJECT_MAX)) {
+        throw new HubError('VALIDATION', `subject is a provider user id of at most ${SUBJECT_MAX} characters`);
+      }
+      // Keyed hash only (hub.refHash): the provider user id is never kept or logged.
+      const subjectKey = subject ? `${c.id}|${hub.refHash(subject)}` : null;
       const mode = autonomyOf(action);
       const base = {
         connection_id: c.id, action, card_id: cardInOrg(meta?.card_id)?.id ?? null,
@@ -598,7 +608,7 @@ export function createIntegrations({
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';

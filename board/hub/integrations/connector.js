@@ -80,6 +80,8 @@
 //   // side effect runs inside ctx.act(action, meta, (s) => s.actAs(member)…);
 //   // card actions are limited to cancel/stop/approve_done (approve_done only
 //   // under an action declared 'ask'), comments are never for the agent.
+//   // ctx.act(action, { subject: '<provider user id>' }, …) limits that
+//   // user's createCard to integration_card_subject (5/h) too.
 //   // createCard(boardId, …) takes a board of the connection's team only
 //   // (else NOT_FOUND, before any rate token) and the card starts in todo.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },

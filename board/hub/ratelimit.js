@@ -44,6 +44,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   webhook_conn: { capacity: 600, per_ms: 60_000 },          // inbound webhooks, per connection
   integration_conn: { capacity: 120, per_ms: 60_000 },      // actAs calls, per connection (never mutate_member)
   integration_card_conn: { capacity: 20, per_ms: 3_600_000 }, // actAs().createCard, per connection
+  integration_card_subject: { capacity: 5, per_ms: 3_600_000 }, // … and per (connection, provider user) when act() names meta.subject
   webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook deliveries, per connection + client IP (/64)
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
   ws_browser: { capacity: 60, per_ms: 10_000 },

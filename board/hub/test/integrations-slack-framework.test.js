@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { defineConnector } from '../integrations/connector.js';
 import { startHub } from './helpers.js';
+import { silentLogger } from '../log.js';
 
 async function setup() {
   const h = await startHub();
@@ -268,4 +269,48 @@ test('F6: createCard targets a board of the connection\'s team only (another tea
       ...Array(4).fill(['failed', 'not_found']), ['auto', null],
     ]);
   } finally { await h.close(); }
+});
+
+// ── F8 per-provider-user card limit ───────────────────────────────────────
+
+test('F8: act() meta.subject caps createCard at 5/h per (connection, provider user), beside the connection cap; replays are free; the subject is never stored or logged raw', async () => {
+  const { h, reg } = await setup();
+  const logs = [];
+  const saved = { ...silentLogger };
+  for (const k of ['debug', 'info', 'warn', 'error']) silentLogger[k] = (...a) => logs.push(a);
+  try {
+    const conn = connect(h, 'f8a');
+    const ctx = reg.ctxFor(conn.id);
+    // Built at runtime: a distinctive provider user id to search for.
+    const [u1, u2, u3] = ['A', 'B', 'C'].map((x) => `U${x}${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`);
+    h.hub.limiter.limits.integration_card_conn = { capacity: 12, per_ms: 3_600_000 };
+    const make = (subject, rid) => ctx.act('card.create', { subject, external_ref: rid }, (s) => s.actAs(ctx.connection.created_by).createCard(h.ids.board, { request_id: rid, title: `Card ${rid}` }));
+    for (let i = 0; i < 5; i += 1) assert.equal((await make(u1, `u1-${i}`)).decision, 'auto');
+    await assert.rejects(make(u1, 'u1-5'), (e) => e.code === 'RATE_LIMITED');
+    assert.deepEqual([reg.audit(conn.id)[0].decision, reg.audit(conn.id)[0].error], ['failed', 'rate_limited']);
+    // A D8 replay of an earlier request answers its card without spending anything.
+    assert.equal((await make(u1, 'u1-0')).decision, 'auto');
+    // Another provider user still can; the connection's own cap (12 here) still holds.
+    for (let i = 0; i < 5; i += 1) await make(u2, `u2-${i}`);
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title LIKE 'Card u2-%'").n, 5);
+    // 10 of 12 spent: u1's refused card took none of the connection's.
+    await make(u3, 'u3-0');
+    await make(u3, 'u3-1');
+    await assert.rejects(make(u3, 'u3-2'), (e) => e.code === 'RATE_LIMITED', 'the connection total caps across users');
+    // Without a subject only the connection cap applies (unchanged).
+    await assert.rejects(make(undefined, 'none-0'), (e) => e.code === 'RATE_LIMITED');
+    // Validated: never another type, empty or over 128 chars; nothing is audited for it.
+    const before = reg.audit(conn.id).length;
+    for (const bad of ['', 'x'.repeat(129), 42, { id: u1 }]) await assert.rejects(make(bad, 'bad'), (e) => e.code === 'VALIDATION');
+    assert.equal(reg.audit(conn.id).length, before);
+    await assert.rejects(make(null, 'null-ok'), (e) => e.code === 'RATE_LIMITED', 'null is no subject: it reaches the connection cap, not VALIDATION');
+    // Never stored or logged raw: every table, the limiter's keys and the logs.
+    const tables = h.db.all("SELECT name FROM sqlite_master WHERE type = 'table'").map((t) => t.name);
+    const dump = JSON.stringify([tables.map((t) => h.db.all(`SELECT * FROM "${t}"`)), [...h.hub.limiter.buckets.keys()], logs]);
+    for (const u of [u1, u2, u3]) assert.ok(!dump.includes(u), 'no raw subject anywhere');
+    assert.ok([...h.hub.limiter.buckets.keys()].some((k) => k.startsWith(`integration_card_subject|${conn.id}|`)));
+  } finally {
+    Object.assign(silentLogger, saved);
+    await h.close();
+  }
 });
