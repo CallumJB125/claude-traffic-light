@@ -247,11 +247,12 @@ test('system.event: a decoy PR merged from the card\'s branch into another base 
   const { h, reg } = await setup();
   try {
     const { conn, ctx, cardId, branch, column } = await inReview(h, reg, 'BDL-60');
-    addEvidence(h, cardId, 'https://github.com/acme/app/pull/10');
-    // #11: same board branch, into `scratch`, merged by someone with push access.
+    // #11: same board branch, into `scratch`, merged by someone with push access;
+    // linked before the hub verified #10 (after, the link is refused: L4).
     const found = ctx.cardForBranch('acme/app', branch);
     assert.equal(found.card_id, cardId);
     await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-11'));
+    addEvidence(h, cardId, 'https://github.com/acme/app/pull/10');
     const decoy = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-11', pr: 11, repo: 'acme/app', by: 'mallory' });
     assert.deepEqual(decoy, { done: false, reason: 'not_the_verified_pr' });
     assert.equal(column(), 'in_review', 'review was not bypassed');
@@ -272,8 +273,8 @@ test('system.event: a decoy closed unmerged does not send the card back to To do
   const { h, reg } = await setup();
   try {
     const { ctx, cardId, column } = await inReview(h, reg, 'BDL-61');
-    addEvidence(h, cardId, '#10');
     await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-12'));
+    addEvidence(h, cardId, '#10');
     assert.deepEqual(await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'not_the_verified_pr' });
     assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12' })).reason, 'not_the_verified_pr', 'no pr number is never the verified one');
     assert.equal(column(), 'in_review');
@@ -305,6 +306,27 @@ test('system.event: a card with no hub_verified PR evidence is never moved by an
     reg.setSettings(conn.id, { autonomy: { 'system.pr_merged': 'ask' } });
     assert.equal((await ev()).reason, 'not_the_verified_pr');
     assert.equal(reg.audit(conn.id)[0].decision, 'failed');
+  } finally { await h.close(); }
+});
+
+test('L4: once the card has a verified PR, s.link(…, \'pr\', …) accepts only that PR number; anything else is CONFLICT', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { conn, ctx, cardId } = await inReview(h, reg, 'BDL-66');
+    addEvidence(h, cardId, '#10');
+    const link = (id, url) => ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', id, url));
+    for (const [id, url] of [['gh-11', 'https://github.com/acme/app/pull/11'], ['gh-12', undefined], ['#11', undefined], ['gh-10', 'https://github.com/acme/app/pull/10x']]) {
+      await assert.rejects(link(id, url), (e) => e.code === 'CONFLICT', `${id} ${url}`);
+    }
+    assert.equal(reg.audit(conn.id)[0].error, 'conflict');
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), null, 'nothing took the slot');
+    await link('gh-10', 'https://github.com/acme/app/pull/10');
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-10');
+    await link('gh-10', 'https://github.com/acme/app/pull/10');
+    // A card with no verified PR still takes any first PR.
+    const free = await inReview(h, reg, 'BDL-67');
+    await ctx.act('link.pr', {}, async (s) => s.link(free.cardId, 'pr', 'gh-99'));
+    assert.equal(ctx.linkedByCard(free.cardId, 'pr'), 'gh-99');
   } finally { await h.close(); }
 });
 

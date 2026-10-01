@@ -437,6 +437,10 @@ export function createIntegrations({
       if (String(kind) === 'pr') {
         const have = linkedByCard(cardId, 'pr');
         if (have === String(externalId)) return;
+        // Once the hub verified the card's PR, no other PR takes the slot (the
+        // number comes from the PR url, else the id; no number is a refusal).
+        const v = verifiedPr(cardId);
+        if (v && (prNumberOf(url) ?? prNumberOf(externalId)) !== v.number) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
         if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
       }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
