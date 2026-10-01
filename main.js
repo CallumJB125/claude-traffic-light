@@ -6,8 +6,8 @@ if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js')
 // before any window, lock or data folder is touched (the .deb's prerm runs
 // the same code through hooks/uninstall-hooks.js).
 if (process.argv.includes('--uninstall-hooks')) {
-  require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
-  process.exit(0);
+  const results = require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
+  process.exit(require('./hooks/uninstall-hooks.js').exitCode(results));
 }
 // `--rename-dry-run`: prints what the first launch after the rename from Claude Buddy
 // would do on this machine, writes nothing and exits, before anything creates
