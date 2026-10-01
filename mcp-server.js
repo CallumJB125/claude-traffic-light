@@ -184,7 +184,9 @@ async function buddyStatus({ root, now = Date.now(), online, live } = {}) {
   }
   const liveStatus = live === undefined ? await fetchLive() : live;
   const look = pickLook(st.look);
-  const liveLook = liveStatus ? pickLook(liveStatus.look) : null;
+  const usableLook = liveStatus?.look && typeof liveStatus.look === 'object'
+    && !Array.isArray(liveStatus.look) && typeof liveStatus.look.lamp === 'string';
+  const liveLook = usableLook ? pickLook(liveStatus.look) : null;
   return {
     look,
     reason: st.reason,
@@ -201,9 +203,11 @@ async function buddyStatus({ root, now = Date.now(), online, live } = {}) {
     online: { value: st.online, source: 'network interfaces (the app uses Electron net.isOnline)' },
     // F1 spend: only the running app prices transcripts on every poll; buddy_spend reads them itself.
     spend: liveStatus && liveStatus.spend ? liveStatus.spend : null,
-    app: liveStatus
+    app: liveLook
       ? { running: true, look: liveLook, agrees: ['lamp', 'pose', 'eyes', 'costume', 'effect', 'pet', 'cameo'].every((k) => liveLook[k] === look[k]) }
-      : { running: false, note: 'widget not reachable on its local /status endpoint; look computed from disk only' },
+      : { running: false, note: liveStatus
+        ? 'widget did not return a usable local status; look computed from disk only'
+        : 'widget not reachable on its local /status endpoint; look computed from disk only' },
     note: 'Computed from disk with rules.js. If app.agrees is false, the widget is showing something only it knows: a Lights preview, the walk to your terminal, a different online state, or a spend signal (runaway / budget; see spend and buddy_spend).',
   };
 }
