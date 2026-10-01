@@ -119,3 +119,32 @@ test('benign forms keep their verdicts', () => {
   for (const c of ['git -c color.ui=always diff', 'npm test', 'npm run test', 'docker ps', 'node --version']) assert.equal(remote(c).blocked, true, c);
   for (const c of ['npm test', 'npm run test', 'npm run lint -- --fix', 'go test ./...', 'cargo test']) assert.equal(remote(c, { trustTestCommands: true }).blocked, false, c);
 });
+
+test('allow-list: edits are desk-only when the session directory is /, home or above home', () => {
+  const w = (file_path, cwd, opts = {}) => remoteVerdict(rules, { toolName: 'Write', toolInput: { file_path, content: 'x' }, cwd }, opts).blocked;
+  const home = { home: '/Users/x' };
+  for (const p of ['/Users/x/.gitconfig', '/Users/x/.config/git/config', '/Users/x/.config/fish/config.fish', '/Users/x/.local/bin/ls', '/Users/x/bin/git', '/Users/x/notes.txt']) {
+    assert.equal(w(p, '/Users/x', home), true, `${p} with cwd = home`);
+    assert.equal(w(p, '/Users/x'), true, `${p} with cwd = home, home unknown`);
+  }
+  for (const p of ['/etc/hosts', '/usr/local/bin/node', 'etc/hosts']) assert.equal(w(p, '/', home), true, `${p} with cwd = /`);
+  assert.equal(w('/Users/x/a.txt', '/Users', home), true, 'cwd above home');
+  assert.equal(w('/Users/x/app/src/a.ts', '/Users/x/app', home), false, 'a project under home');
+  assert.equal(w('/Users/x/app/bin/cli.js', '/Users/x/app', home), false, "a project's own bin/ stays editable");
+  for (const p of ['/Users/x/.gitconfig', '/Users/x/.config/git/config', '/Users/x/.config/fish/config.fish', '/Users/x/.local/bin/ls', '/Users/x/bin/git']) {
+    assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: p, content: 'x' } }).blocked, true, `deny-list: ${p}`);
+  }
+});
+
+test('shell history counts as credentials', () => {
+  for (const p of ['/Users/x/.zsh_history', '/Users/x/.bash_history', '/Users/x/.history', '/Users/x/.local/share/fish/fish_history']) {
+    assert.equal(evaluateDenyList(rules, { toolName: 'Read', toolInput: { file_path: p } }).blocked, true, p);
+    assert.equal(deny(`cat ${p}`).blocked, true, p);
+  }
+});
+
+test('allow-list: sort / uniq / tree that write a file are desk-only', () => {
+  for (const c of ['sort -o /Users/x/.zshrc /dev/null', 'sort --output=.husky/pre-commit x', 'uniq evil.txt .git/hooks/pre-commit', 'tree -o .git/hooks/post-checkout', 'sort -o Makefile x']) {
+    assert.equal(remote(c).blocked, true, c);
+  }
+});

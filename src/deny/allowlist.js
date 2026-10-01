@@ -15,6 +15,10 @@
 // Paths are checked as written: this module is pure (it also runs in the
 // phone PWA). Where a filesystem exists the caller can pass `realpath` (e.g.
 // fs.realpathSync) and paths are also checked after resolving symlinks.
+// "Inside the session directory" means nothing when that directory is /, the
+// home directory or above it (the hook's cwd can be any of these): edits are
+// then desk-only. Pass `home` (os.homedir()); without it any cwd fewer than
+// three levels deep (/, /Users, /Users/x) is treated as home or above.
 // The deny-list (denylist.js) still runs first, as defence in depth.
 import { tokenize, commands, SHELLS, INTERPRETERS, GLOB, TILDE, BRACE } from './shell.js';
 import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList } from './denylist.js';
@@ -109,6 +113,17 @@ function resolvedPath(p, cwd, realpath) {
   try { return `${realpath(abs.slice(0, k) || '/').replace(/\/+$/, '')}/${abs.slice(k + 1)}`; } catch { return null; }
 }
 
+function broadCwd(cwd, home) {
+  if (typeof cwd !== 'string') return false;
+  const c = cwd.replace(/\/+$/, '') || '/';
+  if (c === '/') return true;
+  if (typeof home === 'string' && home.startsWith('/')) {
+    const h = home.replace(/\/+$/, '');
+    if (c === h || h.startsWith(c + '/')) return true;
+  }
+  return c.split('/').filter(Boolean).length < 3;
+}
+
 const isSecret = (p) => CREDENTIAL_PATHS.test(p) || SECRET_FILES.test(p);
 
 function bashReason(command, allow, cwd, realpath) {
@@ -151,7 +166,7 @@ function inside(dir, p) {
 }
 
 // null = remotely approvable; otherwise why it is desk-only.
-export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFAULT_BASH_ALLOW, trustTestCommands = false, realpath = null } = {}) {
+export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFAULT_BASH_ALLOW, trustTestCommands = false, realpath = null, home = null } = {}) {
   const name = String(toolName ?? '');
   const input = toolInput ?? {};
   if (READ_TOOLS.test(name)) {
@@ -165,6 +180,7 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
     if (!p) return 'no file path';
     if (isSecret(p) || RUNS_CODE_LATER.test(p)) return 'protected path';
     if (!inside(cwd, p)) return 'outside the session directory';
+    if (broadCwd(cwd, home)) return 'the session directory is / or the home directory';
     const real = resolvedPath(p, cwd, realpath);
     if (real) {
       if (isSecret(real) || RUNS_CODE_LATER.test(real)) return 'protected path (through a symlink)';

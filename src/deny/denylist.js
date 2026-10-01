@@ -36,9 +36,9 @@ export const SHELL_TOOLS = /^(Bash|BashOutput|shell|run_shell_command|exec_comma
 export const FILE_WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|write_file|edit_file|replace|apply_patch|str_replace_editor|create_file)$/i;
 
 // Paths whose contents are secrets or grant access.
-export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains)(\/|\b|$)/;
+export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains|\.zsh_history|\.bash_history|\.history|fish_history)(\/|\b|$)/;
 // Files that run code later: writing one is as good as running it.
-export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$)/;
+export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$|\.gitconfig$|\.config\/(git|fish)\/|\.local\/bin\/)|(^~|^\/Users\/[^/]+|^\/home\/[^/]+|^\/root)\/bin\/|^\/(usr\/(local\/)?|opt\/homebrew\/)?s?bin\//;
 
 // ── git ────────────────────────────────────────────────────────────────────
 // Config keys whose value is a program git runs (or a file of such keys).
