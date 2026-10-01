@@ -159,9 +159,10 @@ async function loadIntegrations() {
   update();
 }
 
-async function connectIntegration(provider, kind) {
+// `input`: a start form's values (takeInput already emptied the fields); sent, never kept.
+async function connectIntegration(provider, kind, input) {
   if (kind === 'token') { state.integ = { ...state.integ, tokenFor: provider }; update(); return; }
-  const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider));
+  const res = await withBusy(`integ-connect:${provider}`, () => api.startConnect(provider, input));
   if (res?.form && res.bind) {
     // Submitted by the admin from the page; same window target as a link.
     state.integ = { ...state.integ, manifest: { provider, ...res.form, target: connectWindowTarget(provider, res.bind, navigator.userAgent) } };
@@ -891,6 +892,7 @@ async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
+  if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
   if (kind === 'label-create') {
     const fd0 = new FormData(form);
     const name = String(fd0.get('name') ?? '').trim();
