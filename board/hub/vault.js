@@ -78,10 +78,10 @@ export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!p
  * sealed with it (their key_id), which are then sealed again with the current
  * key; nothing is ever sealed with it. Same rules as BOARD_ENC_KEY.
  */
-export function loadPreviousKey({ env = process.env, hasParentPort = !!process.parentPort } = {}) {
+export function loadPreviousKey({ env = process.env, hasParentPort = !!process.parentPort, refusePlaceholder = false } = {}) {
   if (!env.BOARD_ENC_KEY_PREVIOUS) return null;
   if (hasParentPort) throw new Error('BOARD_ENC_KEY_PREVIOUS is refused under the desktop app: the key comes over parentPort');
-  const key = decodeKey(env.BOARD_ENC_KEY_PREVIOUS);
+  const key = decodeKey(env.BOARD_ENC_KEY_PREVIOUS, { name: 'BOARD_ENC_KEY_PREVIOUS', refusePlaceholder });
   delete env.BOARD_ENC_KEY_PREVIOUS;
   return key;
 }

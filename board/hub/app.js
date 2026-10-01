@@ -66,7 +66,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // BOARD_ENC_KEY or a keyfile outside the data dir (D36 covers local mode).
   if (config.auth !== 'local') {
     const key = loadKey({ dataDir: config.dataDir, hasParentPort: !!process.parentPort, refusePlaceholder: config.auth === 'accounts' });
-    const previous = loadPreviousKey({ hasParentPort: !!process.parentPort });
+    const previous = loadPreviousKey({ hasParentPort: !!process.parentPort, refusePlaceholder: config.auth === 'accounts' });
     if (key) hub.setVaultKey(key, previous);
   }
 

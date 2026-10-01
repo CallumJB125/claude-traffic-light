@@ -171,6 +171,12 @@ export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
 // What hub.env.example ships with: an accounts hub refuses to start on any of it.
 export const PLACEHOLDER = /change-me|replace-with|example|placeholder/i;
 const EXAMPLE_DOMAIN = /(^|\.)example\.(com|org|net)\.?$/i;
+// Every other credential an accounts hub reads, checked only when set.
+const SECRET_VARS = Object.freeze([
+  ['BOARD_SES_ACCESS_KEY_ID', 'sesAccessKeyId'], ['BOARD_SES_SECRET_ACCESS_KEY', 'sesSecretAccessKey'], ['BOARD_SES_SESSION_TOKEN', 'sesSessionToken'],
+  ['BOARD_RESEND_API_KEY', 'resendApiKey'], ['BOARD_GOOGLE_CLIENT_SECRET', 'googleClientSecret'], ['BOARD_GITHUB_CLIENT_SECRET', 'githubClientSecret'],
+  ['BOARD_GITHUB_TOKEN', 'githubToken'],
+]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
 const SIGNUP_ALLOW_MAX_CHARS = 8192;
@@ -222,6 +228,9 @@ function validateAccounts(cfg) {
   const loop = isLoopback(cfg.bind);
   if (!cfg.secret) throw new Error('BOARD_AUTH=accounts needs BOARD_SECRET (at least 32 bytes)');
   if (PLACEHOLDER.test(cfg.secret)) throw new Error('BOARD_SECRET still has its example placeholder: set a real secret (openssl rand -base64 48)');
+  for (const [name, key] of SECRET_VARS) {
+    if (typeof cfg[key] === 'string' && PLACEHOLDER.test(cfg[key])) throw new Error(`${name} still has an example placeholder: set the real value`);
+  }
   let url = null;
   if (cfg.publicUrl) {
     try { url = new URL(cfg.publicUrl); } catch { throw new Error(`BOARD_PUBLIC_URL is not a URL: ${cfg.publicUrl}`); }

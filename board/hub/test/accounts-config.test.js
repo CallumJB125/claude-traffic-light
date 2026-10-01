@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadKey } from '../vault.js';
+import { loadKey, loadPreviousKey } from '../vault.js';
 
 const base = (over = {}) => ({ ...testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true }), ...over });
 
@@ -392,5 +392,64 @@ test('BOARD_ENC_KEY / BOARD_ENC_KEY_FILE text that still has a placeholder word 
   for (let i = 0; i < 20; i++) {
     const k = randomBytes(32).toString(i % 2 ? 'hex' : 'base64');
     assert.equal(loadKey({ env: { BOARD_ENC_KEY: k }, hasParentPort: false, refusePlaceholder: true }).length, 32, 'a random key');
+  }
+});
+
+test('accounts refuses a placeholder in every secret-ish variable that is set (the deploy kit\'s own values included), naming the variable, never the value', () => {
+  const hex = (n) => randomBytes(n).toString('hex');
+  const base64 = (n) => randomBytes(n).toString('base64');
+  const envFor = (over = {}) => ({ BOARD_AUTH: 'accounts', BOARD_SECRET: base64(48), BOARD_ACCOUNTS_DEV: '1', ...over });
+  const ses = { BOARD_MAIL_PROVIDER: 'ses', BOARD_SES_REGION: 'af-south-1', BOARD_SES_ACCESS_KEY_ID: hex(10).toUpperCase(), BOARD_SES_SECRET_ACCESS_KEY: base64(30), BOARD_MAIL_FROM: 'a@b.co' };
+  const cases = {
+    BOARD_SES_ACCESS_KEY_ID: ses,
+    BOARD_SES_SECRET_ACCESS_KEY: ses,
+    BOARD_SES_SESSION_TOKEN: ses,
+    BOARD_RESEND_API_KEY: { BOARD_MAIL_FROM: 'a@b.co' },
+    BOARD_GOOGLE_CLIENT_SECRET: { BOARD_GOOGLE_CLIENT_ID: 'g-id' },
+    BOARD_GITHUB_CLIENT_SECRET: { BOARD_GITHUB_CLIENT_ID: 'gh-id' },
+    BOARD_GITHUB_TOKEN: {},
+  };
+  const priv = hex(5).toUpperCase();
+  for (const [name, extra] of Object.entries(cases)) {
+    // The real thing passes; each placeholder word refuses it.
+    assert.doesNotThrow(() => loadConfig(envFor({ ...extra, [name]: name === 'BOARD_SES_ACCESS_KEY_ID' ? hex(10).toUpperCase() : base64(30) })), `${name}: a real-looking value`);
+    for (const w of WORDS) {
+      const value = `${w}-${priv}`;
+      assert.throws(() => loadConfig(envFor({ ...extra, [name]: value })), (e) => e.message === `${name} still has an example placeholder: set the real value` && !e.message.includes(priv), `${name} ${w}`);
+    }
+  }
+  // AWS's documentation key id shape passes the format check, not this one.
+  assert.throws(() => loadConfig(envFor({ ...ses, BOARD_SES_ACCESS_KEY_ID: `${priv}EXAM${'PLE'}` })), (e) => e.message === 'BOARD_SES_ACCESS_KEY_ID still has an example placeholder: set the real value');
+  // Exactly what hub.env.example ships with.
+  const kit = { BOARD_SECRET: `${WORDS[0]}-openssl-rand-base64-48-before-first-start` };
+  assert.equal(kit.BOARD_SECRET.length, 51);
+  assert.throws(() => loadConfig(envFor(kit)), /^Error: BOARD_SECRET still has its example placeholder/);
+  assert.throws(() => loadConfig(envFor({ ...ses, BOARD_SES_SECRET_ACCESS_KEY: WORDS[0] })), /^Error: BOARD_SES_SECRET_ACCESS_KEY still has an example placeholder/);
+  assert.throws(() => loadConfig(envFor({ BOARD_PUBLIC_URL: `https://app.${['exam', 'ple.com'].join('')}`, BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google' })), /^Error: BOARD_PUBLIC_URL still names an example host/);
+  assert.throws(() => loadConfig(envFor({ BOARD_SIGNUP_ALLOW: `domain:${['exam', 'ple.com'].join('')}` })), /^Error: BOARD_SIGNUP_ALLOW still has an example/);
+  // Other modes read none of these as accounts secrets: unchanged.
+  assert.doesNotThrow(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_GITHUB_TOKEN: `${WORDS[0]}-x` }));
+  // The previous encryption key too.
+  assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: `${WORDS[3]}${'A'.repeat(32)}=` }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY_PREVIOUS still has an example placeholder: set a real key (openssl rand -base64 32)');
+  assert.equal(loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: base64(32) }, hasParentPort: false, refusePlaceholder: true }).length, 32);
+});
+
+test('app: an accounts hub refuses a placeholder BOARD_ENC_KEY / BOARD_ENC_KEY_PREVIOUS at start; a dev hub takes the same 32 bytes', async () => {
+  const text = `${WORDS[2]}${'A'.repeat(43 - WORDS[2].length)}=`;
+  for (const name of ['BOARD_ENC_KEY', 'BOARD_ENC_KEY_PREVIOUS']) {
+    try {
+      if (name === 'BOARD_ENC_KEY_PREVIOUS') process.env.BOARD_ENC_KEY = randomBytes(32).toString('hex');
+      process.env[name] = text;
+      const started = await startAccounts().catch((e) => e);
+      if (!(started instanceof Error)) await started.close();
+      assert.equal(started?.message, `${name} still has an example placeholder: set a real key (openssl rand -base64 32)`);
+      if (name === 'BOARD_ENC_KEY_PREVIOUS') process.env.BOARD_ENC_KEY = randomBytes(32).toString('hex');
+      process.env[name] = text;
+      const dev = await startHub();
+      await dev.close();
+    } finally {
+      delete process.env.BOARD_ENC_KEY;
+      delete process.env.BOARD_ENC_KEY_PREVIOUS;
+    }
   }
 });
