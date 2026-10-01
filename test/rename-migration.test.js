@@ -294,7 +294,7 @@ test('hooks: Buddy\'s entries at the old .app path now run the new app; foreign 
   // Again: nothing more to change, and the backup is still the original.
   const settled = fs.readFileSync(settingsFile, 'utf8');
   const again = M.rewriteHooks({ home, runtime: newRt, askFromWidget: true, mcpEntry: mcpEntryAt(NEW_APP), log: quiet });
-  assert.deepEqual(again.map((x) => x.id), ['claude', 'cursor', 'codex'], 'MCP already current');
+  assert.deepEqual(again, [], 'nothing names the old app any more');
   assert.equal(fs.readFileSync(settingsFile, 'utf8'), settled);
   assert.equal(fs.readFileSync(`${settingsFile}.buddy-backup`, 'utf8'), before);
   fs.rmSync(home, { recursive: true, force: true });
@@ -317,6 +317,31 @@ test('hooks: a foreign MCP server under the same name, an unparsable settings fi
   assert.ok(r[0].error);
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), '{ not json');
   assert.equal(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'), theirs);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: entries and an MCP entry that run a dev checkout (not the old app) are left alone; only the old app\'s are re-pointed', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const devRt = Runtime.make({ execPath: '/usr/local/bin/node', platform: 'darwin', hooksDir: '/Users/me/dev/ctl/hooks', dataDir });
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify(Claude.apply({ model: 'opus' }, devRt, { home }), null, 2));
+  const devMcp = { command: 'node', args: ['/Users/me/dev/ctl/mcp-server.js'] };
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'claude-buddy': devMcp } }));
+  const before = { s: fs.readFileSync(settingsFile, 'utf8'), m: fs.readFileSync(path.join(home, '.claude.json'), 'utf8') };
+  assert.ok(commandsOf(JSON.parse(before.s)).some((c) => Claude.isOurs(c)), 'the fixture holds Buddy entries');
+  const logs = [];
+  const r = M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), mcpEntry: mcpEntryAt(NEW_APP), log: (m) => logs.push(m) });
+  assert.deepEqual(r, []);
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), before.s);
+  assert.equal(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'), before.m);
+  assert.ok(!fs.existsSync(`${settingsFile}.buddy-backup`));
+  assert.ok(logs.some((m) => /claude: left alone, its entries run another copy/.test(m)));
+
+  // The old Windows exe counts as the old app, in the MCP entry as in hooks.
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'claude-buddy': { command: 'C:\\Users\\me\\AppData\\Local\\Programs\\claude-buddy\\Claude Buddy.exe', args: ['C:/Users/me/AppData/Local/Programs/claude-buddy/resources/app.asar/mcp-server.js'] } } }));
+  assert.deepEqual(M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), mcpEntry: mcpEntryAt(NEW_APP), log: quiet }).map((x) => [x.id, x.changed]), [['mcp', true]]);
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -349,7 +374,7 @@ test('old instance: the old main process is asked to quit (SIGTERM) and waited f
   assert.deepEqual(r, { asked: [111], running: [111] }, 'never SIGKILLed: it is reported as still running');
 
   const debKills = [];
-  M.quitOldInstance({ platform: 'linux', listProcesses: () => [{ pid: 7, command: '/opt/Claude Buddy/plexiform --no-sandbox' }, { pid: 8, command: '/opt/Plexiform/plexiform' }], kill: (pid) => debKills.push(pid), isAlive: () => false, log: quiet });
+  M.quitOldInstance({ platform: 'linux', listProcesses: () => [{ pid: 7, command: '/opt/Claude Buddy/plexiform --no-sandbox' }, { pid: 8, command: '/opt/Plexiform/plexiform' }, { pid: 9, command: '/opt/Claude Buddy/plexiform --type=renderer --enable-sandbox' }, { pid: 10, command: '/opt/Claude Buddy/plexiform --type=zygote' }], kill: (pid) => debKills.push(pid), isAlive: () => false, log: quiet });
   assert.deepEqual(debKills, [7]);
 
   for (const platform of ['win32']) {
@@ -387,26 +412,82 @@ test('old app: Keep does nothing; Remove bins exactly that path; never asked off
   assert.deepEqual(binned, ['/Applications/Claude Buddy.app']);
   assert.deepEqual(M.oldAppPaths(home), ['/Applications/Claude Buddy.app', '/Users/fixture/Applications/Claude Buddy.app']);
 
+  // Configs that still name the old app are named in the dialog and the log.
+  dialogs.length = 0;
+  there.add('/Applications/Claude Buddy.app');
+  const logs = [];
+  await M.offerRemoveOldApp({ platform: 'darwin', home, name: 'Plexiform', stillUsedBy: ['/Users/fixture/.claude/settings.json'], exists: (p) => p === '/Applications/Claude Buddy.app', log: (m) => logs.push(m), showDialog: async (o) => { dialogs.push(o); return { response: 1 }; }, trashItem: async () => {} });
+  assert.match(dialogs[0].detail, /would stop working if it goes: \/Users\/fixture\/\.claude\/settings\.json\./);
+  assert.match(logs[0], /still naming the old app: \/Users\/fixture\/\.claude\/settings\.json/);
+  assert.doesNotMatch((await (async () => { dialogs.length = 0; await run(1); return dialogs[0].detail; })()), /would stop working/);
+  there.delete('/Applications/Claude Buddy.app');
+
   // A Bin that refuses is reported, not thrown.
   there.add('/Users/fixture/Applications/Claude Buddy.app');
   const r = await M.offerRemoveOldApp({ platform: 'darwin', home, name: 'Plexiform', exists, log: quiet, showDialog: async () => ({ response: 0 }), trashItem: async () => { throw new Error('nope'); } });
   assert.deepEqual(r, [{ path: '/Users/fixture/Applications/Claude Buddy.app', removed: false, error: 'nope' }]);
 });
 
+test('old app: agent configs that still name the old .app are found (foreign entries this app does not re-point)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: '"/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy" --lights' }] }] } }));
+  fs.mkdirSync(path.join(home, '.gemini'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.gemini', 'settings.json'), '{"theme":"dark"}');
+  assert.deepEqual(M.findOldReferences({ home }), [path.join(home, '.claude', 'settings.json')]);
+  // Re-pointing leaves it: it is not Buddy's entry.
+  M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), log: quiet });
+  assert.deepEqual(M.findOldReferences({ home }), [path.join(home, '.claude', 'settings.json')]);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('login item: turned on for the new app where the old one had set it up; the old Windows entry goes; Linux rewrites its own file', () => {
   const calls = [];
   const loginItem = (on) => ({ get: () => on, set: (v) => calls.push(['set', v]) });
-  const app = { setLoginItemSettings: (o) => calls.push(['electron', o]) };
+  let oldItems = [];
+  const app = { setLoginItemSettings: (o) => calls.push(['electron', o]), getLoginItemSettings: (o) => { calls.push(['read', o]); return { openAtLogin: false, launchItems: oldItems }; } };
   M.moveLoginItem({ platform: 'darwin', app, loginItem: loginItem(false), autoLaunchConfigured: true });
   assert.deepEqual(calls.splice(0), [['set', true]]);
   M.moveLoginItem({ platform: 'darwin', app, loginItem: loginItem(false), autoLaunchConfigured: false });
   assert.deepEqual(calls.splice(0), []);
-  M.moveLoginItem({ platform: 'win32', app, loginItem: loginItem(false), autoLaunchConfigured: true });
-  assert.deepEqual(calls.splice(0), [['set', true], ['electron', { openAtLogin: false, name: 'com.callumbaker.claude-buddy' }]]);
+  // Windows: the old Run entry decides, not the first-run marker.
+  const execPath = 'C:\\Users\\me\\AppData\\Local\\Programs\\claude-buddy\\Plexiform.exe';
+  const read = ['read', { path: 'C:\\Users\\me\\AppData\\Local\\Programs\\claude-buddy\\Claude Buddy.exe' }];
+  const removeOld = ['electron', { openAtLogin: false, name: 'com.callumbaker.claude-buddy' }];
+  M.moveLoginItem({ platform: 'win32', app, loginItem: loginItem(false), autoLaunchConfigured: true, execPath });
+  assert.deepEqual(calls.splice(0), [read, removeOld], 'marker set but no old Run entry: not turned on');
+  oldItems = [{ name: 'com.callumbaker.claude-buddy', path: read[1].path, args: [], scope: 'user', enabled: true }];
+  M.moveLoginItem({ platform: 'win32', app, loginItem: loginItem(false), autoLaunchConfigured: false, execPath });
+  assert.deepEqual(calls.splice(0), [read, ['set', true], removeOld]);
+  oldItems = [{ name: 'com.callumbaker.claude-buddy', path: read[1].path, args: [], scope: 'user', enabled: false }, { name: 'something-else', enabled: true }];
+  M.moveLoginItem({ platform: 'win32', app, loginItem: loginItem(false), autoLaunchConfigured: true, execPath });
+  assert.deepEqual(calls.splice(0), [read, removeOld], 'turned off in Task Manager stays off');
   M.moveLoginItem({ platform: 'linux', app, loginItem: loginItem(true), autoLaunchConfigured: true });
   assert.deepEqual(calls.splice(0), [['set', true]]);
   M.moveLoginItem({ platform: 'linux', app, loginItem: loginItem(false), autoLaunchConfigured: true });
   assert.deepEqual(calls.splice(0), []);
+});
+
+test('approval secret: one sealed under the old app\'s key is set aside as .pre-rename so a new one is made; an unsealed one stays', () => {
+  const home = tmpHome();
+  const file = path.join(home, 'approval-secret.json');
+  const logs = [];
+  assert.equal(M.setAsideSealedSecret({ file, log: quiet }), false, 'none there');
+  fs.writeFileSync(file, JSON.stringify({ v: 1, sealed: true, data: 'b2xk' }));
+  assert.equal(M.setAsideSealedSecret({ file, log: (m) => logs.push(m) }), true);
+  assert.ok(!fs.existsSync(file));
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${file}.pre-rename`, 'utf8')), { v: 1, sealed: true, data: 'b2xk' });
+  assert.match(logs[0], /set aside/);
+  // nudge-secret makes a new one where there is none.
+  const make = require('../src/nudge-secret.js').createSecretStore({ file, safeStorage: { isEncryptionAvailable: () => false } });
+  assert.equal(make().length, 32);
+  assert.equal(M.setAsideSealedSecret({ file, log: quiet }), false, 'an unsealed secret opens anywhere: left');
+  assert.ok(fs.existsSync(file));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /if \(copied\) RenameMigration\.setAsideSealedSecret\(\{ file: path\.join\(ROOT_DIR, 'approval-secret\.json'\) \}\);/);
+  assert.ok(src.indexOf('setAsideSealedSecret(') < src.indexOf("createSecretStore({"), 'before the store is made');
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('follow-up: each pending step runs once, in order; a step that returns false or throws stays pending', async () => {

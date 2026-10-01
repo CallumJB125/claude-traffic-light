@@ -28,6 +28,11 @@ const OLD = Object.freeze({
   macExecutable: /\/Claude Buddy\.app\/Contents\/MacOS\/Claude Buddy$/,
   // the old .deb installed into /opt/<productName>
   linuxExecutable: /^\/opt\/Claude Buddy\/plexiform(?: |$)/,
+  // NSIS installs into Programs\<npm name>, which the rename keeps
+  winExecutable: 'Claude Buddy.exe',
+  // An installed old app's own path, as hook commands, the hook wrapper and
+  // the MCP entry name it (JSON-escaped backslashes included).
+  appPath: /\/Claude Buddy\.app\/|\/opt\/Claude Buddy\/|[\\/]Claude Buddy\.exe/i,
 });
 
 const STATE_FILE = 'rename-migration.json';
@@ -193,7 +198,8 @@ function quitOldInstance({ platform, listProcesses, kill = process.kill, isAlive
   try { procs = listProcesses(); } catch (err) { log(`[rename] could not list processes: ${err.message}`); return { asked: [], running: [] }; }
   const asked = [];
   for (const p of procs) {
-    if (p.pid === self || !re.test(p.command)) continue;
+    // Chromium's helpers run the same binary, with --type=
+    if (p.pid === self || !re.test(p.command) || (platform === 'linux' && p.command.includes(' --type='))) continue;
     try { kill(p.pid, 'SIGTERM'); asked.push(p.pid); log(`[rename] asked the old app (pid ${p.pid}) to quit`); } catch (err) { log(`[rename] could not ask pid ${p.pid} to quit: ${err.message}`); }
   }
   for (let waited = 0; asked.some(isAlive) && waited < waitMs; waited += 100) sleep(100);
@@ -203,19 +209,29 @@ function quitOldInstance({ platform, listProcesses, kill = process.kill, isAlive
 }
 
 /**
- * Points every agent config that holds Buddy's entries at this app, through
- * each adapter's own install (it strips Buddy's entries, whatever app path
- * they name, and adds the current ones; foreign entries and other keys stay),
- * and the MCP entry if it is Buddy's and names another path. Claude Code's
- * settings get their one-time .buddy-backup first. → [{ id, file, changed, error? }]
+ * Points every agent config whose Buddy entries run the old installed app at
+ * this app, through each adapter's own install (it strips Buddy's entries and
+ * adds the current ones; foreign entries and other keys stay), and the MCP
+ * entry if it is Buddy's and names the old app. Entries that run something
+ * else, such as a dev checkout, are left alone. Claude Code's settings get
+ * their one-time .buddy-backup first. → [{ id, file, changed, error? }]
  */
-function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters = require('../adapters/index.js'), holdsOurs = require('../adapters/uninstall-all.js').holdsOurs, mcp = require('../mcp-install.js'), fsImpl = fs, log = console.log }) {
+function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters = require('../adapters/index.js'), holdsOurs = require('../adapters/uninstall-all.js').holdsOurs, commandsIn = require('../adapters/uninstall-all.js').commandsIn, mcp = require('../mcp-install.js'), fsImpl = fs, log = console.log }) {
   const Runtime = adapters.Runtime;
   const results = [];
+  // macOS/Linux argv hooks run the wrapper, whose path never changes: what it execs says whose they are.
+  const wrapper = Runtime.wrapperPath(runtime);
+  let wrapperOld = false;
+  try { wrapperOld = OLD.appPath.test(fsImpl.readFileSync(wrapper, 'utf8')); } catch { /* no wrapper */ }
+  const runsOld = (c) => OLD.appPath.test(c) || (wrapperOld && c.includes(wrapper));
   for (const adapter of adapters.list()) {
     const file = adapter.configPath(home);
     try {
       if (!fsImpl.existsSync(file) || !holdsOurs(adapter, file)) continue;
+      const ours = adapter.id === 'codex'
+        ? fsImpl.readFileSync(file, 'utf8').split('\n').filter((l) => adapter.isOurs(l))
+        : commandsIn(Runtime.readJsonConfig(file).hooks).filter((c) => adapter.isOurs(c));
+      if (!ours.some(runsOld)) { log(`[rename] ${adapter.id}: left alone, its entries run another copy ${file}`); continue; }
       if (adapter.id === 'claude') Runtime.backupOnce(file);
       const r = adapter.install({ home, runtime, ...(adapter.id === 'claude' ? { askFromWidget } : {}) });
       results.push({ id: adapter.id, file, changed: !!r.ok, ...(r.ok ? {} : { error: r.error }) });
@@ -228,7 +244,7 @@ function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters
     try {
       const st = mcp.status({ home, entry: mcpEntry });
       if (st.error) throw new Error(st.error);
-      if (st.installed && !st.current) { mcp.install({ home, entry: mcpEntry }); results.push({ id: 'mcp', file, changed: true }); }
+      if (st.installed && !st.current && OLD.appPath.test(JSON.stringify(st.entry))) { mcp.install({ home, entry: mcpEntry }); results.push({ id: 'mcp', file, changed: true }); }
     } catch (err) {
       results.push({ id: 'mcp', file, changed: false, error: err.message });
     }
@@ -238,21 +254,42 @@ function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters
 }
 
 /**
- * Open at Login follows the app across. The old app set it up on its first
- * run (the marker in ~/.claude-traffic-light); macOS gives no way to read or
- * remove another app's login item, so it is turned on for this one. On
- * Windows the old Run entry, named after the old AppUserModelID, goes. On
- * Linux the autostart file has the same name and only its Exec changes.
+ * Open at Login follows the app across. On macOS there is no way to read or
+ * remove another app's login item, so it is turned on for this one where the
+ * old app set it up on its first run (the marker in ~/.claude-traffic-light).
+ * On Windows the old Run entry, named after the old AppUserModelID, says
+ * whether it was on, and goes. On Linux the autostart file has the same name
+ * and only its Exec changes.
  */
-function moveLoginItem({ platform, app, loginItem, autoLaunchConfigured, log = console.log }) {
+function moveLoginItem({ platform, app, loginItem, autoLaunchConfigured, execPath = process.execPath, log = console.log }) {
   if (platform === 'linux') {
     if (loginItem.get()) loginItem.set(true);
     return;
   }
-  if (autoLaunchConfigured) loginItem.set(true);
-  if (platform === 'win32') {
-    try { app.setLoginItemSettings({ openAtLogin: false, name: OLD.appId }); } catch (err) { log(`[rename] could not remove the old login item: ${err.message}`); }
+  if (platform !== 'win32') {
+    if (autoLaunchConfigured) loginItem.set(true);
+    return;
   }
+  const oldExe = path.win32.join(path.win32.dirname(execPath), OLD.winExecutable);
+  let wasOn = false;
+  try { wasOn = (app.getLoginItemSettings({ path: oldExe }).launchItems || []).some((i) => i.name === OLD.appId && i.enabled !== false); } catch (err) { log(`[rename] could not read the old login item: ${err.message}`); }
+  if (wasOn) loginItem.set(true);
+  try { app.setLoginItemSettings({ openAtLogin: false, name: OLD.appId }); } catch (err) { log(`[rename] could not remove the old login item: ${err.message}`); }
+}
+
+/**
+ * The approval counter's secret (src/nudge-secret.js) is sealed with
+ * safeStorage under the old app's Keychain item, so it never opens here and
+ * the counter would stay off for good. It is set aside as .pre-rename, and a
+ * new one is made. → whether it was.
+ */
+function setAsideSealedSecret({ file, fsImpl = fs, log = console.log }) {
+  let d = null;
+  try { d = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch { return false; }
+  if (!d || !d.sealed) return false;
+  try { fsImpl.renameSync(file, `${file}.pre-rename`); } catch (err) { log(`[rename] could not set aside ${file}: ${err.message}`); return false; }
+  log(`[rename] set aside ${file} (sealed under the old app's key) as ${path.basename(file)}.pre-rename`);
+  return true;
 }
 
 // Whether the old app is still on disk, so its Open at Login may start it again.
@@ -262,6 +299,13 @@ function oldAppInstalled({ platform, home, exists = fs.existsSync }) {
   return false;
 }
 
+// Agent configs that still name the old .app (entries this app doesn't own,
+// or couldn't re-point): binning it would break them. → [file]
+function findOldReferences({ home, adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js'), fsImpl = fs }) {
+  const files = [...new Set([...adapters.list().map((a) => a.configPath(home)), mcp.configPath(home)])];
+  return files.filter((f) => { try { return fsImpl.readFileSync(f, 'utf8').includes(OLD.macBundleName); } catch { return false; } });
+}
+
 const oldAppPaths = (home) => ['/Applications', path.join(home, 'Applications')].map((d) => path.join(d, OLD.macBundleName));
 
 /**
@@ -269,9 +313,11 @@ const oldAppPaths = (home) => ['/Applications', path.join(home, 'Applications')]
  * showDialog(options) → { response } (dialog.showMessageBox); trashItem(path)
  * → Promise (shell.trashItem). → [{ path, removed, error? }]
  */
-async function offerRemoveOldApp({ platform, home, name, exists = fs.existsSync, showDialog, trashItem, log = console.log }) {
+async function offerRemoveOldApp({ platform, home, name, stillUsedBy = [], exists = fs.existsSync, showDialog, trashItem, log = console.log }) {
   if (platform !== 'darwin') return [];
   const out = [];
+  const breaks = stillUsedBy.length ? `\n\nThese still name the old app and would stop working if it goes: ${stillUsedBy.join(', ')}.` : '';
+  if (stillUsedBy.length) log(`[rename] still naming the old app: ${stillUsedBy.join(', ')}`);
   for (const p of oldAppPaths(home).filter((x) => exists(x))) {
     const { response } = await showDialog({
       type: 'question',
@@ -279,7 +325,7 @@ async function offerRemoveOldApp({ platform, home, name, exists = fs.existsSync,
       defaultId: 1,
       cancelId: 1,
       message: `Remove the old ${OLD.productName} app?`,
-      detail: `${OLD.productName} is now ${name}, and your settings have come across. Remove moves ${p} to the Bin. If you keep it, quit it and turn off its Open at Login, or the two will both try to run.`,
+      detail: `${OLD.productName} is now ${name}, and your settings have come across. Remove moves ${p} to the Bin. If you keep it, quit it and turn off its Open at Login, or the two will both try to run.${breaks}`,
     });
     if (response !== 0) { out.push({ path: p, removed: false }); log(`[rename] kept ${p}`); continue; }
     try {
@@ -317,4 +363,4 @@ async function runFollowUp({ userData, steps, fsImpl = fs, log = console.log }) 
   }
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, oldAppInstalled, oldAppPaths, offerRemoveOldApp, runFollowUp };
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };

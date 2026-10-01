@@ -163,11 +163,12 @@ const listOldProcesses = () => RenameMigration.parsePs(process.platform === 'dar
   : require('child_process').execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
 // The old app is asked to quit first, so its databases aren't copied mid-write; if it won't, the copy waits for the next launch.
 if (RENAME_MIGRATES) {
-  RenameMigration.copyUserData({
+  const copied = RenameMigration.copyUserData({
     appData: app.getPath('appData'),
     userData: path.join(app.getPath('appData'), app.getName()),
     quitOld: () => RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses }).running.length === 0,
-  });
+  }).copied;
+  if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
 }
 
 const DEFAULT_CONFIG = {
@@ -3733,7 +3734,7 @@ function renameFollowUp() {
       login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },
       // A translocated copy can't re-point the hooks, so the old app stays until it can.
       'remove-old-app': () => !TRANSLOCATED && RenameMigration.offerRemoveOldApp({
-        platform: process.platform, home, name: Brand.name,
+        platform: process.platform, home, name: Brand.name, stillUsedBy: RenameMigration.findOldReferences({ home }),
         showDialog: (opts) => { app.focus({ steal: true }); return dialog.showMessageBox(opts); },
         trashItem: (p) => shell.trashItem(p),
       }),
