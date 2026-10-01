@@ -27,7 +27,10 @@ const BRAND = require('./brand');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
-const LOCAL_PAGES = new Set(['sidebar.html', 'info.html', 'account.html'].map((f) => pathToFileURL(path.join(DIR, f)).href));
+const LOCAL_PAGES = new Set([
+  ...['sidebar.html', 'info.html', 'account.html'].map((f) => pathToFileURL(path.join(DIR, f)).href),
+  ...PAGES.filter((p) => p.file).map((p) => pathToFileURL(path.join(DIR, '..', p.file)).href),
+]);
 const fileKey = hubKey;
 const isLocalPage = (url) => { try { const u = new URL(url); u.search = ''; u.hash = ''; return LOCAL_PAGES.has(u.href); } catch { return false; } };
 
@@ -164,6 +167,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   let hubView = null;
   let infoView = null;
   let accountView = null;
+  const localViews = new Map(); // page id → its own view, kept so a page keeps its state
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -264,6 +268,20 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     };
     infoView.webContents.loadFile(path.join(DIR, 'info.html'), { query }).catch(() => {});
     attach(infoView);
+  }
+
+  function showLocal(page) {
+    if (!win || !page) return;
+    let v = localViews.get(page.id);
+    if (v && v.webContents.isDestroyed()) { localViews.delete(page.id); v = null; } // a crashed renderer is rebuilt, not re-attached
+    if (!v) {
+      v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', page.preload) } });
+      v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
+      lockLocal(v);
+      localViews.set(page.id, v);
+      v.webContents.loadFile(path.join(DIR, '..', page.file)).catch(() => {});
+    }
+    attach(v);
   }
 
   // Local pages load our own files only; nothing navigates them anywhere else.
@@ -566,11 +584,12 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const page = pageById(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
-    if (page.kind === 'local') { flow.show(page.screen); return; }
+    if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);
+    else if (page.kind === 'local' && page.file) showLocal(page);
     else showInfo(page);
   }
 
@@ -664,7 +683,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
-      for (const v of [sidebar, infoView, hubView, accountView]) dispose(v, null);
+      for (const v of [sidebar, infoView, hubView, accountView, ...localViews.values()]) dispose(v, null);
+      localViews.clear();
       win = null; sidebar = null; content = null; hubView = null; infoView = null; accountView = null;
       onClosed();
     });

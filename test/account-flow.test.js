@@ -1569,7 +1569,7 @@ test('the team delete page: text only, the slug typed before any code, the same 
   assert.match(preload, /deleteTeam: \(team\) => call\('deleteTeam', str\(team\)\)/);
   assert.deepEqual([ACCT_ARGS.teamDeleteStart, ACCT_ARGS.teamDeleteCode, ACCT_ARGS.teamDeleteResend, ACCT_ARGS.teamDeleteOAuth, ACCT_ARGS.deleteTeam], [['string', 'string'], ['string', 'string'], ['string'], ['string', 'string'], ['string']]);
   const main = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
-  assert.match(main, /if \(page\.kind === 'local'\) \{ flow\.show\(page\.screen\); return; \}\n\s+flow\.leftAccountPages\(\);/, 'a board or another page drops a team’s check');
+  assert.match(main, /if \(page\.kind === 'local' && page\.screen\) \{ flow\.show\(page\.screen\); return; \}\n\s+flow\.leftAccountPages\(\);/, 'a board or another page drops a team’s check');
 });
 
 test('delete team: Send a new code replaces the flow; the old code no longer confirms', async () => harness(async (h) => {

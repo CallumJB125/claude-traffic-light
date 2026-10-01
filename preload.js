@@ -33,6 +33,13 @@ contextBridge.exposeInMainWorld('trafficLight', {
   answerInput: (id, optionId, more) => ipcRenderer.invoke('answer-input', id, optionId, more),
   openInput: (id) => ipcRenderer.invoke('open-input', id),
   gesture: (g) => ipcRenderer.invoke('gesture', g),
+  // In-app update row (src/update-view.js). The widget may read the state and ask
+  // for an install (never forced); nothing else of the updater reaches it.
+  getUpdaterState: () => ipcRenderer.invoke('updater:get-state'),
+  onUpdaterState: (cb) => ipcRenderer.on('updater:state', (_e, state) => cb(state)),
+  updaterInstall: (when) => ipcRenderer.invoke('updater:install', { when: when === 'now' ? 'now' : 'idle' }),
+  openUpdates: () => ipcRenderer.invoke('open-updates'),
+  updateRowShown: (on) => ipcRenderer.send('update-row', !!on),
   awayOpen: (i) => ipcRenderer.invoke('away-open', i),
   awayDismiss: () => ipcRenderer.invoke('away-dismiss'),
   // Push-to-talk (F7): long-press starts and ends a question; main pushes

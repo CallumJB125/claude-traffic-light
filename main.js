@@ -36,6 +36,7 @@ const Health = require('./src/health.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
+const UpdateView = require('./src/update-view.js');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
@@ -981,9 +982,67 @@ function createSettingsWindow() {
   if (IS_MAC) app.dock.show();
   settingsWin.on('closed', () => {
     settingsWin = null;
-    if (process.platform === 'darwin' && !lightsWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
+
+// About & Updates, standalone (the tray opens it; the Buddy window has it as a page).
+let updatesWin = null;
+function createUpdatesWindow() {
+  if (updatesWin) {
+    updatesWin.show();
+    updatesWin.focus();
+    return;
+  }
+  updatesWin = new BrowserWindow({
+    width: 520,
+    height: 640,
+    useContentSize: true,
+    minimizable: false,
+    maximizable: false,
+    title: 'About & Updates',
+    backgroundColor: '#1c1a1f',
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'updates-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  updatesWin.setMenuBarVisibility(false);
+  // Feed text lives on this page: it never opens a window or leaves updates.html.
+  updatesWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const stay = (e, url) => { if (!/\/updates\.html(\?|#|$)/.test(url)) e.preventDefault(); };
+  updatesWin.webContents.on('will-navigate', stay);
+  updatesWin.webContents.on('will-redirect', stay);
+  updatesWin.loadFile('updates.html');
+  if (IS_MAC) app.dock.show();
+  updatesWin.on('closed', () => {
+    updatesWin = null;
+    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+
+// The updater service (or, in a visual-test run, a fixture stand-in). The tray is rebuilt only when its update items change.
+let updaterService = null;
+let updaterTrayKey = null;
+let rebuildTrayMenu = null; // set by createTray: swaps the menu without recreating the tray icon
+function updaterTrayItems() {
+  const items = UpdateView.trayItems(updaterService && updaterService.getState());
+  return items.map((i) => {
+    const item = { label: i.label, enabled: i.enabled };
+    if (i.id === 'check') item.click = () => { createUpdatesWindow(); updaterService.check({ user: true }); }; // a user check, so an offline or server error is shown, not swallowed
+    if (i.id === 'install') item.click = async () => { const r = await updaterService.install({ when: 'now' }); if (r && (r.deferred || r.ok === false)) createUpdatesWindow(); };
+    return item;
+  });
+}
+function watchUpdater() {
+  const key = () => UpdateView.trayKey(updaterService.getState());
+  updaterTrayKey = key();
+  updaterService.subscribe(() => {
+    const next = key();
+    if (next === updaterTrayKey) return;
+    updaterTrayKey = next;
+    if (rebuildTrayMenu) rebuildTrayMenu();
+  });
+}
+
+ipcMain.handle('open-updates', () => createUpdatesWindow());
 
 // The Plexiform main window (board, views, integrations…): buddy-window/.
 const { createBuddyWindow } = require('./buddy-window');
@@ -1007,7 +1066,7 @@ function getBuddy() {
         else if (which === 'settings') createSettingsWindow();
         else if (which === 'mix') { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
       },
-      onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin) app.dock.hide(); },
+      onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
     });
   }
@@ -1178,7 +1237,7 @@ function createLightsWindow() {
     // The next editor opens shown; only the machine-wide reasons carry over.
     lightsMotion.set('hidden', false);
     lightsMotion.set('minimized', false);
-    if (process.platform === 'darwin' && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (process.platform === 'darwin' && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
 
@@ -1853,7 +1912,7 @@ function broadcastStatus() {
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);
     updateOverlay(st.look);
-    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook);
+    applyStrip(!!(st.pending && st.pending.length) && !travelLook, !!st.away && !travelLook, updateRowShown);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -2104,7 +2163,7 @@ function createTray() {
 
   const hooksLabel = areHooksInstalled() ? 'Reinstall Claude Code Hooks' : 'Install Claude Code Hooks (required)';
 
-  const menu = Menu.buildFromTemplate([
+  const buildMenu = () => Menu.buildFromTemplate([
     { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
@@ -2152,12 +2211,19 @@ function createTray() {
       click: (item) => LoginItem.set(item.checked),
     },
     { type: 'separator' },
+    ...updaterTrayItems(),
+    { label: 'About & Updates…', click: createUpdatesWindow },
+    { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
-  trayMenu = menu;
+  // Rebuilt in place (never by recreating the tray) when the update items change;
+  // trayMenu is also what the widget pops up on Linux, where there may be no tray.
+  const mine = tray;
+  trayMenu = buildMenu();
+  rebuildTrayMenu = () => { trayMenu = buildMenu(); if (mine && tray === mine) tray.setContextMenu(trayMenu); };
   if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
   tray.setToolTip('Claude Buddy');
-  tray.setContextMenu(menu);
+  tray.setContextMenu(trayMenu);
   updateTrayMode();
 }
 
@@ -2963,11 +3029,19 @@ ipcMain.handle('open-input', async (e, id) => {
 // The widget grows a strip of Allow / Deny buttons while a request waits,
 // or the "While you were away" recap once a busy spell ends. The ask wins:
 // it is the one that blocks a session.
+// The quiet "Update ready" row comes last: it never hides either of those.
 const STRIP_PX = 46;
 const AWAY_PX = 64;
+const UPDATE_PX = 72;
 let stripPx = 0;
-function applyStrip(asking, away = false) {
-  const px = asking ? STRIP_PX : away ? AWAY_PX : 0;
+let updateRowShown = false;
+ipcMain.on('update-row', (e, on) => {
+  if (e.sender !== win?.webContents || !!on === updateRowShown) return;
+  updateRowShown = !!on;
+  broadcastStatus();
+});
+function applyStrip(asking, away = false, update = false) {
+  const px = asking ? STRIP_PX : away ? AWAY_PX : update ? UPDATE_PX : 0;
   if (!win || px === stripPx) return;
   const b = win.getBounds();
   win.setAspectRatio(0);
@@ -3316,11 +3390,19 @@ app.whenReady().then(() => {
   }
 
   createWindow();
+  // In-app updates on every platform, each checked against the signed release
+  // (src/updater/). A dev run gets the IPC but never installs; the visual tests
+  // stand in a fixture-driven stub instead (excluded from the package).
+  if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_UPDATER_STUB) {
+    const UpdateStub = require('./src/update-stub.js');
+    updaterService = UpdateStub.create(process.env.CLAUDE_BUDDY_UPDATER_STUB);
+    UpdateStub.register(ipcMain, updaterService);
+  } else {
+    updaterService = Updater.start({ app, ipcMain, net, dev: IS_DEV_RUN, isBusy: () => Updater.busyReason(aggregateState({ ignoreTravel: true })) });
+    Updater.markLaunched({ app });
+  }
+  watchUpdater();
   createTray();
-  // In-app updates on every platform, each checked against the signed
-  // release (src/updater/). A dev run gets the IPC but never installs.
-  Updater.start({ app, ipcMain, net, dev: IS_DEV_RUN, isBusy: () => Updater.busyReason(aggregateState({ ignoreTravel: true })) });
-  Updater.markLaunched({ app });
   signalServer = startSignalServer();
   signalServer.on('error', (e) => { signalServerError = e.code || e.message; });
   signalServer.on('listening', () => { signalServerError = null; });
