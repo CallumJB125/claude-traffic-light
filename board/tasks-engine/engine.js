@@ -18,7 +18,7 @@ import {
   AIS, CAPABILITIES, LOCAL_SOURCES,
 } from '../tasks-api/protocol.js';
 import { T_QUIET_MS } from '../shared/liveness.js';
-import { redact, filterPath } from '../shared/scope.js';
+import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS } from '../runner/launch.js';
@@ -64,6 +64,10 @@ const PROTECTED_IN_PLACE = /^(?:\.|Library$)/;
 const PROTECTED_SEGMENTS = new Set(['.git', '.claude']);
 const PROTECTED_NAMES = new Set(['.mcp.json', 'CLAUDE.md', 'AGENTS.md']);
 const PLAN_TOOLS = new Set(['Read', 'Glob', 'Grep']);
+const MAX_WAITING_PER_SOURCE = 100;
+const MAX_PARALLEL = 8;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RELAY_DENIED = new Set(['approve', 'answer', 'takeover']);
 
 export class ApiError extends Error {
   constructor(code, message, details) { super(message); this.code = code; this.details = details; }
@@ -84,7 +88,7 @@ const PROCEED = { stdout: {}, exit_code: 0 };
 export class TasksEngine extends EventEmitter {
   /**
    * opts: dataDir, store (TaskStore), backends ({id: Backend class}), log, now (wall ms),
-   * env (the parent env the allowlist is built from), maxParallel, acceptFrom ([userId]),
+   * env (the parent env the allowlist is built from), maxParallel (≤ 8), retentionDays, retentionMax,
    * mcpServer, interruptWaitMs, stopGraceMs, tickMs.
    */
   constructor(opts) {
@@ -97,7 +101,6 @@ export class TasksEngine extends EventEmitter {
     this.now = opts.now ?? Date.now;
     this.env = opts.env ?? process.env;
     this.mcpServer = opts.mcpServer ?? MCP_SERVER;
-    this.acceptFrom = new Set(opts.acceptFrom ?? []);
     this.epoch = crypto.randomUUID();
     this.startedAt = this.now();
     this.lstart = lstartOf(process.pid);
@@ -114,7 +117,7 @@ export class TasksEngine extends EventEmitter {
     this.closed = false;
     const ramGb = Math.round(os.totalmem() / 2 ** 30);
     this.ramGb = ramGb;
-    this.limits = { maxParallel: opts.maxParallel ?? defaultMaxParallel(ramGb), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
+    this.limits = { maxParallel: Math.min(opts.maxParallel ?? defaultMaxParallel(ramGb), 8), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
     this.messages = new MessageStore(path.join(this.dataDir, 'mesh'));
     const gitBin = resolveGit(this.env);
     this.git = gitBin ? makeGit(gitBin, this.env) : () => Promise.reject(Object.assign(new Error('no git'), { code: 'NO_GIT' }));
@@ -130,9 +133,10 @@ export class TasksEngine extends EventEmitter {
     for (const t of this.tasks.values()) if (t.lastSeq > this.seq) this.seq = t.lastSeq;
     await this.#detect();
     this.#recover();
+    this.#prune();
     this.tick = setInterval(() => this.#tick(), this.opts.tickMs ?? 1000);
     this.tick.unref?.();
-    this.detectTimer = setInterval(() => { this.#detect().catch(() => {}); }, DETECT_EVERY_MS);
+    this.detectTimer = setInterval(() => { this.#prune(); this.#detect().catch(() => {}); }, DETECT_EVERY_MS);
     this.detectTimer.unref?.();
     this.#schedule();
   }
@@ -257,7 +261,7 @@ export class TasksEngine extends EventEmitter {
 
   // ── events, state, persistence ────────────────────────────────────────────
   #save(task) {
-    if (this.closed) return;
+    if (this.closed || this.tasks.get(task.id) !== task) return;
     this.store.saveTask(task, this.tasks);
   }
 
@@ -290,6 +294,30 @@ export class TasksEngine extends EventEmitter {
     if (state !== prev) task.stateSince = this.now();
     this.#save(task);
     this.#stateEvent(task, prev);
+    if (state === 'done' || state === 'failed') this.#prune();
+  }
+
+  // Retention: finished tasks older than retentionDays (30) or beyond the newest
+  // retentionMax (500) go, with their messages, run dir and cache dir. A failed
+  // task whose worktree still exists stays (that is the user's work).
+  #prune() {
+    const max = this.opts.retentionMax ?? 500;
+    const days = this.opts.retentionDays ?? 30;
+    const now = this.now();
+    const hasWorktree = (t) => !t.workInPlace && t.worktreeCreated && fs.existsSync(t.worktree);
+    const finished = [...this.tasks.values()].filter((t) => t.state === 'done' || (t.state === 'failed' && !hasWorktree(t)) )
+      .sort((a, b) => b.stateSince - a.stateSince);
+    const drop = finished.filter((t, i) => i >= max || now - t.stateSince > days * DAY_MS);
+    if (!drop.length) return;
+    for (const t of drop) {
+      this.tasks.delete(t.id);
+      this.locks.delete(t.id);
+      this.messages.cache.delete(t.id);
+      for (const f of [path.join(this.dataDir, 'mesh', `${t.id}.ndjson`), path.join(this.dataDir, 'run', t.id), this.#cacheDir(t)]) {
+        try { fs.rmSync(f, { recursive: true, force: true }); } catch { /* gone */ }
+      }
+    }
+    this.store.compactTasks(this.tasks);
   }
 
   #audit(task, kind, action, detail = null, name = null) {
@@ -352,8 +380,10 @@ export class TasksEngine extends EventEmitter {
   }
 
   // ── create ────────────────────────────────────────────────────────────────
-  async createTask({ requestId, spec }) {
+  async createTask({ requestId, spec }, ctx = {}) {
     this.#gc();
+    // A relay token decides the source; what the client claims is not trusted (§9.2).
+    if (ctx.principal?.kind === 'relay') spec = { ...spec, source: ctx.principal.source };
     const hash = crypto.createHash('sha256').update(JSON.stringify(spec)).digest('hex');
     const prior = this.createCache.get(requestId);
     if (prior) {
@@ -375,12 +405,19 @@ export class TasksEngine extends EventEmitter {
   async #create(spec) {
     if (this.closed) throw new ApiError('INTERNAL', 'shutting down');
     const source = spec.source ?? 'local';
-    const remote = REMOTE_SOURCES.includes(source);
+    // A spin-off's parent: the task whose session asked for it (§9.2, inherited rules).
+    const parent = source === 'mcp' && spec.sourceMeta?.parentSessionId
+      ? [...this.tasks.values()].find((t) => t.sessionId === spec.sourceMeta.parentSessionId) ?? null : null;
+    // Remote rules: a remote source, or a spin-off of a task that runs under them.
+    const remote = REMOTE_SOURCES.includes(source) || !!parent?.remoteRules;
+    const waiting = [...this.tasks.values()].filter((t) => t.source === source && t.state === 'queued').length;
+    if (waiting >= MAX_WAITING_PER_SOURCE) throw new ApiError('RATE_LIMITED', `${MAX_WAITING_PER_SOURCE} tasks from ${source} are already waiting`);
     let level = spec.permissionLevel ?? 'auto-edits';
     if (level === 'bypass') throw new ApiError('POLICY_DENIED', 'bypass needs a per-project opt-in, which this version does not offer');
     const clamps = [];
-    // §9.2: agent-authored tasks never exceed auto-edits (the parent's level is not known here, so auto-edits is the cap).
+    // §9.2: agent-authored and remote tasks never exceed auto-edits, nor a spin-off its parent's level.
     if ((source === 'mcp' || remote) && LEVEL_RANK[level] > LEVEL_RANK['auto-edits']) { clamps.push(`${level} clamped to auto-edits`); level = 'auto-edits'; }
+    if (parent && LEVEL_RANK[level] > LEVEL_RANK[parent.permissionLevel]) { clamps.push(`${level} clamped to the parent's ${parent.permissionLevel}`); level = parent.permissionLevel; }
     const surface = spec.surface ?? 'background';
     if (surface !== 'background') throw new ApiError('CAPABILITY_MISSING', 'only background runs are available yet', { capability: 'surface' });
     if (spec.model != null && !MODEL_RE.test(spec.model)) throw new ApiError('VALIDATION', 'model is not a model name');
@@ -403,6 +440,9 @@ export class TasksEngine extends EventEmitter {
     if (!top && !local) throw new ApiError('POLICY_DENIED', `tasks from ${source} need a git repo`);
     const workInPlace = !top || (!!spec.workInPlace && local);
     if (workInPlace && this.#protectedFolder(top ?? cwd)) throw new ApiError('POLICY_DENIED', "this folder can't be used for a task in place");
+    if (parent && (!parent.repo || parent.repo.root !== top)) throw new ApiError('POLICY_DENIED', "a spin-off works only in its parent task's repo");
+    const policy = this.#policy();
+    if (remote && !(await this.#remoteAllowed(top, policy))) throw new ApiError('POLICY_DENIED', 'tasks from other people or devices are not turned on for this repo');
     const root = top ?? cwd;
     let worktree = root;
     let branch = null;
@@ -428,7 +468,8 @@ export class TasksEngine extends EventEmitter {
     }
 
     const now = this.now();
-    const remoteNeedsAccept = remote && !this.acceptFrom.has(spec.sourceMeta?.userId ?? '');
+    const originUserId = parent ? parent.originUserId ?? null : spec.sourceMeta?.userId ?? null;
+    const remoteNeedsAccept = remote && !policy.acceptFrom.has(originUserId ?? '');
     const task = {
       id, title: (spec.title ?? spec.text.split('\n')[0]).slice(0, 120) || 'Task', text: spec.text, spec,
       state: 'queued', blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null,
@@ -439,7 +480,7 @@ export class TasksEngine extends EventEmitter {
       cost: { usd: 0, budgetUsd: spec.budgetUsd ?? null }, numTurns: 0, turn: 0, createdAt: now, stateSince: now, lastSeq: 0,
       handover: null, evidence: null, pr: null, limitResetAt: null, resumeAtReset: false, openApprovals: [], openAsk: null, audit: [],
       finalPrompt: null, lastActivity: null, touched: [], lastAssistant: null, tests: null, testCommand: null, run: null, pendingStart: null,
-      stoppedBy: null, lastGreen: false,
+      stoppedBy: null, lastGreen: false, remoteRules: remote, originUserId, parentId: parent?.id ?? null,
     };
     task.finalPrompt = this.#finalPrompt(task);
     this.tasks.set(id, task);
@@ -456,6 +497,34 @@ export class TasksEngine extends EventEmitter {
       this.#schedule();
     }
     return id;
+  }
+
+  /** policy.json in the data dir, re-read on every create; ignored unless it is ours and nobody else can write it. */
+  #policy() {
+    const f = path.join(this.dataDir, 'policy.json');
+    try {
+      const st = fs.lstatSync(f);
+      if (!st.isFile() || (st.mode & 0o022) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) throw new Error('unsafe');
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return {
+        acceptFrom: new Set(Array.isArray(j.accept_from) ? j.accept_from.filter((x) => typeof x === 'string') : []),
+        repos: j.repos && typeof j.repos === 'object' && !Array.isArray(j.repos) ? j.repos : {},
+      };
+    } catch { return { acceptFrom: new Set(), repos: {} }; }
+  }
+
+  /** A repo opted in to remote work: policy.repos[<realpath or canonical remote>].remote_tasks === true. */
+  async #remoteAllowed(top, policy) {
+    if (!top) return false;
+    for (const [key, v] of Object.entries(policy.repos)) {
+      if (v?.remote_tasks !== true || !path.isAbsolute(key)) continue;
+      let real = key;
+      try { real = fs.realpathSync(key); } catch { /* as given */ }
+      if (real === top) return true;
+    }
+    const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
+    const canon = url ? normalizeRemoteUrl(url) : null;
+    return !!canon && policy.repos[canon]?.remote_tasks === true;
   }
 
   #protectedFolder(dir) {
@@ -577,7 +646,7 @@ export class TasksEngine extends EventEmitter {
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
       worktree: task.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
-      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel,
+      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [],
     }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
     writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
@@ -600,6 +669,10 @@ export class TasksEngine extends EventEmitter {
     run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     this.runs.set(task.id, run);
     const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
+    // Package-manager caches live in a per-task dir, never the user's global caches.
+    const cacheDir = this.#cacheDir(task);
+    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+    Object.assign(env, { npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: path.join(cacheDir, 'xdg'), PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') });
     const dataReal = fs.realpathSync(this.dataDir);
     const remaining = task.cost.budgetUsd != null ? Math.max(0.01, round2(task.cost.budgetUsd - task.cost.usd)) : null;
     const backend = new B({
@@ -625,6 +698,8 @@ export class TasksEngine extends EventEmitter {
     this.#audit(task, 'supervisor', resume ? 'resumed' : 'started', `${AI_LABEL[task.ai.id]} session ${resume ? 'resumed' : 'started'}`);
     this.#save(task);
   }
+
+  #cacheDir(task) { return path.join(this.env.TMPDIR || os.tmpdir(), `buddy-task-${task.id}`); }
 
   #isLive(task, run) { return !this.closed && this.runs.get(task.id) === run; }
 
@@ -1046,8 +1121,10 @@ export class TasksEngine extends EventEmitter {
   }
 
   // ── act ───────────────────────────────────────────────────────────────────
-  async act({ id, action, payload = {}, requestId }) {
+  async act({ id, action, payload = {}, requestId }, ctx = {}) {
     this.#gc();
+    // Only the UI/CLI token approves, answers, takes over or accepts a start (§9.2).
+    if (ctx.principal?.kind === 'relay' && RELAY_DENIED.has(action)) throw new ApiError('POLICY_DENIED', `a relay can't ${action}`);
     const cached = this.actCache.get(requestId);
     if (cached) return cached.pending;
     const task = this.tasks.get(id);
@@ -1244,7 +1321,12 @@ export class TasksEngine extends EventEmitter {
     return { protocol: TASKS_PROTOCOL_VERSION, serverVersion: `engine-${RUNNER_VERSION}`, epoch: this.epoch, mock: false };
   }
 
-  listTasks(p) { return [...this.tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done').map((t) => this.#view(t)); }
+  /** One page, in creation order: `after` = the previous page's last id; `limit` 1-500 (default 200). */
+  listTasks(p) {
+    const all = [...this.tasks.values()].filter((t) => p.includeDone !== false || t.state !== 'done').sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+    const from = p.after ? all.findIndex((t) => t.id === p.after) + 1 : 0;
+    return all.slice(from, from + Math.min(p.limit ?? 200, 500)).map((t) => this.#view(t));
+  }
 
   getTask({ id }) {
     const t = this.tasks.get(id);
@@ -1262,8 +1344,8 @@ export class TasksEngine extends EventEmitter {
   }
 
   setLimits(p) {
-    if (p.maxParallel != null) this.limits.maxParallel = p.maxParallel;
-    if (p.perAi) Object.assign(this.limits.perAi, p.perAi);
+    if (p.maxParallel != null) this.limits.maxParallel = Math.min(p.maxParallel, MAX_PARALLEL);
+    if (p.perAi) for (const [k, v] of Object.entries(p.perAi)) this.limits.perAi[k] = Math.min(v, MAX_PARALLEL);
     this.#schedule();
     return this.getLimits();
   }

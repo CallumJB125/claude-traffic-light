@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startEngine, makeRepo, waitFor, fakeLog, alive, rm, tmpDir, ENV } from './helpers.js';
+import { startEngine, makeRepo, waitFor, fakeLog, alive, rm, tmpDir, ENV, writePolicy } from './helpers.js';
 import { validate } from '../../tasks-api/validate.js';
 import { SCHEMA } from '../../tasks-api/mock-server.js';
 
@@ -19,6 +19,7 @@ async function withEngine(scenario, fn, opts = {}) {
   const dir = tmpDir();
   const repo = makeRepo(dir);
   const m = await startEngine({ scenario, dir, ...opts });
+  writePolicy(m.dataDir, { repos: { [repo.checkout]: { remote_tasks: true } } });
   const events = [];
   await m.client.subscribe('*', { fromSeq: 1 }, (e) => events.push(e));
   try { await fn({ ...m, repo, events, spec: { text: 'Fix the README', cwd: repo.checkout } }); } finally {
@@ -334,8 +335,9 @@ test('in place: non-local origins need a git repo; local in place refuses $HOME,
   const dir = tmpDir();
   const home = path.join(dir, 'users', 'me');
   for (const d of ['proj', '.config/x', '.ssh', 'Library/LaunchAgents', '.local/bin']) fs.mkdirSync(path.join(home, d), { recursive: true });
-  makeRepo(dir);
+  const repo = makeRepo(dir);
   const m = await startEngine({ dir, engineOpts: { env: { ...ENV, HOME: home } }, scenario: { steps: [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 60000 }] } });
+  writePolicy(m.dataDir, { repos: { [repo.checkout]: { remote_tasks: true } } });
   try {
     for (const source of ['mcp', 'phone', 'slack', 'board', 'voice']) {
       await assert.rejects(m.client.createTask({ text: 't', cwd: path.join(home, 'proj'), source }), (e) => e.code === 'POLICY_DENIED', source);

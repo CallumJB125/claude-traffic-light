@@ -62,6 +62,8 @@ export async function startTarget(target, opts = {}) {
     dataDir: dir, backends: fakeBackends(root, opts.scenario ?? ENGINE_SCENARIO), env: ENV, hbMs: opts.hbMs ?? 200,
     log: { info() {}, warn() {}, error() {}, debug() {} }, interruptWaitMs: 400, stopGraceMs: 600, buddyHome: null,
   });
+  // Remote work in this repo is opted in, as the user would in policy.json.
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify({ repos: { [repo.checkout]: { remote_tasks: true } } }), { mode: 0o600 });
   const client = await connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
   let closed = false;
   const shut = async () => { if (closed) return; closed = true; client.close(); await srv.close(); };

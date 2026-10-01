@@ -124,7 +124,12 @@ export class TasksClient extends EventEmitter {
       case 'lagged': {
         // Dropped for backpressure: resubscribe from where we got to; the ring replays the gap.
         const s = this.subs.get(msg.sub);
-        if (!s) return;
+        if (!s) {
+          // A paged replay can say "lagged" before subscribe() has seen its reply.
+          if (!this.early.has(msg.sub)) this.early.set(msg.sub, []);
+          this.early.get(msg.sub).push({ lagged: msg });
+          return;
+        }
         this.subs.delete(msg.sub);
         this.emit('lagged', msg);
         this.#resubscribe(s, msg.sub).catch((e) => this.emit('error', e));
@@ -163,7 +168,12 @@ export class TasksClient extends EventEmitter {
     this.early.delete(sub);
     for (const e of early) {
       if (e.reset) this.#reset(s, e.reset);
-      else this.#dispatch(s, e);
+      else if (e.lagged) {
+        this.subs.delete(sub);
+        this.emit('lagged', e.lagged);
+        this.#resubscribe(s, sub).catch((err) => this.emit('error', err));
+        return;
+      } else this.#dispatch(s, e);
     }
   }
 
@@ -194,7 +204,17 @@ export class TasksClient extends EventEmitter {
   }
 
   createTask(spec, { requestId = newRequestId() } = {}) { return this.call('createTask', { requestId, spec }); }
-  listTasks(opts = {}) { return this.call('listTasks', opts); }
+  /** All tasks, paged (`after` = last id, `limit` per page) so no reply nears the frame cap. */
+  async listTasks(opts = {}) {
+    const out = [];
+    let after;
+    for (;;) {
+      const page = await this.call('listTasks', { ...opts, limit: 200, ...(after ? { after } : {}) });
+      out.push(...page);
+      if (page.length < 200) return out;
+      after = page.at(-1).id;
+    }
+  }
   getTask(id) { return this.call('getTask', { id }); }
   listMessages(id, { afterSeq } = {}) { return this.call('listMessages', afterSeq == null ? { id } : { id, afterSeq }); }
   detectAIs() { return this.call('detectAIs'); }

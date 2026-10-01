@@ -5,7 +5,7 @@ same socket API as `tasks-api/mock-server.js`, so the UI, the `buddy` CLI and
 the MCP tools use `tasks-api/client.js` against either one unchanged.
 
 ```
-startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, acceptFrom?, hbMs? })
+startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, retentionDays?, retentionMax?, hbMs? })
   → { socketPath, tokenPath, token, epoch, tasks, engine, close({ leaveRuns? }) }
 ```
 
@@ -22,6 +22,8 @@ startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, acceptFro
 <dataDir>/              0700, must not be a symlink or another user's dir
   runner.sock           0600 (refuses to start over a live socket, a non-socket, or another user's socket)
   tasks.token           0600 btk_…; reused across restarts, replaced if it was loosened or malformed
+  relay-tokens.json     0600, sha256 hashes of the relay tokens and their forced source
+  policy.json           optional, written by the UI: {accept_from:[userId], repos:{<path|canonical>:{remote_tasks:true}}}
   store/                tasks.jsonl, events.jsonl (0600)
   mesh/<taskId>.ndjson  human messages (tasks-api/mesh.js MessageStore)
   run/<taskId>/         per-run dir: settings.json, mcp.json, hook.token, ipc.sock, shell/
@@ -70,9 +72,16 @@ and its task becomes `orphaned`; nothing restarts on its own.
   `takeover`/`handback`, `discard`, `retry`. `actions` lists only these.
 - AIs: Claude through `runner/backends/claude.js`; Codex is detected but not
   startable (`AI_UNAVAILABLE`, "not available in Plexiform yet").
-- Trust (§9.2): `bypass` refused; `mcp` and remote sources clamped to
-  `auto-edits`; remote sources forced plan-first and wait for a local accept
-  unless `sourceMeta.userId` is in `acceptFrom`.
+- Trust (§3, §9.2): `tasks.token` is the UI/CLI's; relays get scoped `btr_`
+  tokens (`relay-tokens.js addRelayToken`) that force their source and can't
+  approve, answer, take over or accept a start. `bypass` refused; `mcp` and
+  remote sources clamped to `auto-edits` (spin-offs also to the parent's level,
+  in the parent's repo); remote work needs `policy.json`
+  `repos[<path|canonical>].remote_tasks: true`, is forced plan-first and waits
+  for a local accept unless the sender is in `policy.json accept_from`.
+- Limits: `maxParallel` ≤ 8, 100 waiting tasks per source, `listTasks` paged,
+  finished tasks pruned after 30 days / beyond the newest 500, per-task package
+  caches (global caches are not writable).
 
 Not yet: `merge`, `openPr`, `switchAi`, tmux/tab surfaces, task-to-task
 messaging tools, `.buddy/claims.json`, approval/ask timeouts, sleep detection,

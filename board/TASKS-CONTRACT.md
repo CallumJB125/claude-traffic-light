@@ -51,6 +51,7 @@ No new dependencies (CONTRACT.md §1). `face.js`, `protocol.js`, `validate.js` a
 | Coexistence | A frame with a `method` field is a Tasks API request. A frame with a `type` field is the existing runner control protocol (CONTRACT.md §6.10: `status`, `opt_in`, `confirm_offer`, `stop_all`, `host_*`). Both share the socket. (Proposed to the CONTRACT.md owner: token-gate the `type` frames too, §17 P4) |
 | Framing | NDJSON, UTF-8, one JSON object per line, **≤ 1 MiB per line in both directions**. An oversized request line → `PAYLOAD_TOO_LARGE`, then the server closes the connection. The server never sends a line ≥ 1 MiB: large text is chunked (transcript ≤ 64 KiB/event) or truncated with `truncated:true` (diff patch ≤ 256 KiB) |
 | Token | Per-user token in `BOARD_HOME/tasks.token`, file 0600, owner = the user, created by the supervisor at first start: `btk_` + base64url(32 random bytes). Every request carries it. The supervisor compares sha256 digests with `crypto.timingSafeEqual` (constant time; a prefix of the token is still wrong). Wrong or missing → `{id, error:{code:'UNAUTHENTICATED'}}` and the connection is closed |
+| Relay tokens | Every relay (the `buddy_spin_off` MCP tool, phone bridge, Slack, voice, a teammate's board) gets its own `btr_` + base64url(32) token, created by the UI (`tasks-engine/relay-tokens.js addRelayToken`) and stored only as sha256 hashes in `relay-tokens.json` (0600; a file others could write is ignored). A relay token **forces** its `source` on every task it creates (the spec's `source` is overwritten) and cannot `act approve`, `answer` or `takeover` (so it can't accept a remote start either): `POLICY_DENIED`. Only `tasks.token` (UI, CLI) can |
 | Client token read | `client.readToken()` refuses a token file with any group/other permission bits or owned by another uid (`FORBIDDEN`), so a loosened file is noticed, not used |
 | Peer uid | Node has no `getpeereid`/`SO_PEERCRED` API. The OS-level guard is the 0700 `BOARD_HOME` + 0600 socket; the token is the second factor. A native peer-uid check is optional later (it would reject a peer uid ≠ the supervisor's uid) |
 | Windows (later, spec only) | Named pipe `\\.\pipe\buddy-board-<sha256(user SID)[0..16]>` created with a DACL granting only the current user SID (and SYSTEM), `PIPE_REJECT_REMOTE_CLIENTS`. Token file `%LOCALAPPDATA%\Buddy\board\tasks.token` with an ACL for the current user only. Same framing and methods; `net.createConnection(pipePath)` works unchanged in `client.js` |
@@ -79,7 +80,7 @@ push      {push:'event', sub, event}
 |---|---|---|---|
 | `hello` | `HelloParams {protocol, client}` | `HelloResult {protocol, serverVersion, epoch, mock}` | `PROTOCOL_UNSUPPORTED` |
 | `createTask` | `CreateTaskParams {requestId, spec:TaskSpec}` | `CreateTaskResult {id, duplicate}` | `VALIDATION`, `CONFLICT`, `POLICY_DENIED`, `AI_UNAVAILABLE`, `CAPABILITY_MISSING`, `IN_PLACE_BUSY`, `DISK_FULL`, `BUDGET_EXCEEDED` |
-| `listTasks` | `ListTasksParams {includeDone?}` (default true) | `ListTasksResult [TaskView]` | — |
+| `listTasks` | `ListTasksParams {includeDone?, after?, limit?}` (includeDone default true; one page in creation order, `after` = the previous page's last id, `limit` 1–500, default 200) | `ListTasksResult [TaskView]` | — |
 | `getTask` | `GetTaskParams {id}` | `TaskDetail` | `NOT_FOUND` |
 | `subscribe` | `SubscribeParams {id: taskId \| '*', fromSeq?, epoch?}` | `SubscribeResult {sub, epoch, latestSeq, replayed}` | `NOT_FOUND` |
 | `unsubscribe` | `UnsubscribeParams {sub}` | `{}` | — |
@@ -232,7 +233,7 @@ Every event: `{type, seq, taskId, at_age_ms, …}` (`$defs.Event`, one `oneOf` b
 
 - `subscribe(id | '*', {fromSeq?, epoch?})`. Without `fromSeq`: live only, starting after `latestSeq`. With `fromSeq`: the retained events with `seq ≥ fromSeq` for that filter are replayed first (`replayed` = count), then live.
 - The supervisor retains the last **10 000** events (`RING_EVENTS`; the real supervisor also persists them per task, the mock keeps them in memory). If `fromSeq` is older than the ring → push `reset {reason:'gap', latestSeq}`; if the client's `epoch` differs from the supervisor's (it restarted) → `reset {reason:'epoch'}`. After a `reset` the client refetches (`listTasks`/`getTask`/`listMessages`) and carries on from `latestSeq`. A gap is never silent.
-- Backpressure: if a connection's unsent buffer exceeds **4 MiB** (`BACKPRESSURE_BYTES`) the supervisor drops that subscription (never blocks other clients or the tasks) and, once the socket drains, pushes `lagged {sub, lastSeq}`. `client.js` resubscribes with `fromSeq = lastSeq + 1` automatically and dedupes by seq.
+- Backpressure: if a connection's unsent buffer exceeds **4 MiB** (`BACKPRESSURE_BYTES`) the supervisor drops that subscription (never blocks other clients or the tasks) and, once the socket drains, pushes `lagged {sub, lastSeq}`. `client.js` resubscribes with `fromSeq = lastSeq + 1` automatically and dedupes by seq. A long replay is paged the same way: past `BACKPRESSURE_BYTES` the supervisor stops replaying and pushes `lagged` (possibly before the client has seen the subscribe reply). A connection whose unsent buffer passes 16 MiB is closed.
 - Transcript text is chunked (≤ 64 KiB/event) so no event approaches the frame cap.
 
 ## 7. States: the plan's words → board states
@@ -355,10 +356,10 @@ Only the user's own processes that can read the 0600 token can call the API (§3
 | `source` | Who | Rules applied by the supervisor (clients cannot opt out) |
 |---|---|---|
 | `local`, `cli` | The user on this machine | As chosen. `bypass` only with the per-project opt-in; red badge |
-| `mcp` | An agent spun it off (`buddy_spin_off`) | Agent-authored: `permissionLevel` capped at the parent task's level and at most `auto-edits`; never `bypass`; the UI shows "Claude spun off a task" with Stop. If the parent was remote-sourced, the remote rules apply (inherited via `sourceMeta.parentSessionId`) |
-| `board` (a teammate), `phone`, `slack`, `voice` | Remote | **Always `planFirst`**; never more than `auto-edits` without a confirm on this machine (`auto` is clamped, `bypass` refused); auto-accept only if `sourceMeta.userId` is in the runner's trusted list (`policy.json accept_from`), otherwise the task waits in `queued` with `awaitingConfirm:true` and a `StartTask` approval (`approve` starts it, `deny` discards it) |
+| `mcp` | An agent spun it off (`buddy_spin_off`) | Agent-authored: needs a git repo, never in place; `permissionLevel` capped at the parent task's level and at most `auto-edits`; never `bypass`; with a known parent task (by `sourceMeta.parentSessionId`) only in the parent's repo; the UI shows "Claude spun off a task" with Stop. If the parent ran under the remote rules, they apply (repo opt-in, plan first, local accept unless the original sender is in `accept_from`) |
+| `board` (a teammate), `phone`, `slack`, `voice` | Remote | **Always `planFirst`**; never more than `auto-edits` without a confirm on this machine (`auto` is clamped, `bypass` refused); only in a git repo opted in with `policy.json repos[<realpath or canonical remote>].remote_tasks: true` (else `POLICY_DENIED`), always in a worktree; auto-accept only if `sourceMeta.userId` is in `policy.json accept_from` (the data dir's `policy.json`, re-read on every create, ignored if others can write it), otherwise the task waits in `queued` with `awaitingConfirm:true` and a `StartTask` approval naming the resolved folder (`approve` starts it, `deny` discards it) |
 
-Relays (phone bridge, Slack app, voice) are local processes that hold the token; they must pass `source` honestly. v2 will give relays their own scoped tokens so a relay can't claim `local` (§17 P5).
+Relays (phone bridge, Slack app, voice, the spin-off MCP tool) hold their own scoped relay token (§3), which fixes their `source`; they never hold `tasks.token`. Only `local`/`cli` tasks may work in place, never in `$HOME`, an ancestor of it, or a dot-dir or `Library` directly under it; in place, file tools may not touch `.git/`, `.claude/`, `.mcp.json`, `CLAUDE.md` or `AGENTS.md`. At most 100 tasks per source wait in `queued` (`RATE_LIMITED`). Finished tasks are pruned after 30 days or beyond the newest 500.
 
 ### 9.3 Task text is data
 
@@ -411,7 +412,7 @@ Offline hub → hub-routed acts fail with `HUB_UNREACHABLE`; the task keeps runn
 
 ## 13. Limits, queueing, claims
 
-- `Limits {maxParallel, maxParallelDefault, perAi, ramGb, running, queued}`. `maxParallelDefault` = 1 below 16 GB RAM, 2 from 16 GB, 4 from 32 GB (plan §10); `setLimits` overrides (1–64). A slot is held by `claimed`, `running`, `quiet`, `blocked`, `handing_over`. Extra tasks stay `queued` with a reason ("2 tasks running · starts when one finishes"); memory/CPU pressure holds the queue too.
+- `Limits {maxParallel, maxParallelDefault, perAi, ramGb, running, queued}`. `maxParallelDefault` = 1 below 16 GB RAM, 2 from 16 GB, 4 from 32 GB (plan §10); `setLimits` overrides (1–8, `perAi` 0–8). A slot is held by `claimed`, `running`, `quiet`, `blocked`, `handing_over`. Extra tasks stay `queued` with a reason ("2 tasks running · starts when one finishes"); memory/CPU pressure holds the queue too.
 - Per-AI concurrency (`perAi`) and usage windows: when an AI's 5-hour window is nearly used (stream `rate_limit_event`, spike 1a), new tasks for it stay queued with "starts after reset", or the user picks another AI.
 - `getClaims(repo)` → `{repo, claims:[{taskId, branch, paths, areas, note, claimedAgeMs}]}` from the supervisor-written `.buddy/claims.json` (git-ignored); `claims` events announce changes; `overlap` events come from `shared/overlap.js`.
 
@@ -477,7 +478,7 @@ Proposed to the CONTRACT.md owner (not edited here):
 - **P2** `buddy_message` and `check_messages` in the per-run MCP tool surface (CONTRACT.md §7.3 says "no other tools exist").
 - **P3** `buddy_spin_off` in the per-run MCP surface.
 - **P4** Token-gate the `type`-framed control commands on `runner.sock` with the same `tasks.token`.
-- **P5** Scoped relay tokens (a phone/Slack relay can't claim `source:'local'`).
+- **P5** Scoped relay tokens (a phone/Slack relay can't claim `source:'local'`): done in the engine (§3).
 
 ## 18. Still to verify before the supervisor implements (plan §12)
 

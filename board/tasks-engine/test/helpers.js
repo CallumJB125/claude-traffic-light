@@ -67,6 +67,13 @@ export async function startEngine({ scenario = { steps: [{ result: 'success' }] 
   };
 }
 
+/** policy.json in the engine data dir (0600), e.g. {accept_from:[…], repos:{<path|canonical>:{remote_tasks:true}}}. */
+export function writePolicy(dataDir, policy) {
+  const f = path.join(dataDir, 'policy.json');
+  fs.writeFileSync(`${f}.tmp`, JSON.stringify(policy), { mode: 0o600 });
+  fs.renameSync(`${f}.tmp`, f);
+}
+
 export async function waitFor(fn, { timeoutMs = 10000, stepMs = 20, label = 'condition' } = {}) {
   const until = Date.now() + timeoutMs;
   for (;;) {

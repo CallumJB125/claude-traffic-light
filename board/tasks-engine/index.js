@@ -16,7 +16,7 @@ import { startTransport } from './transport.js';
  *   log       {info, warn, error, debug} JSON-line logger (never given tokens or task text)
  *   now       wall clock ms (default Date.now)
  *   env       env the CLI allowlist is built from (default process.env)
- *   maxParallel, acceptFrom ([userId] trusted remote senders), hbMs, mcpServer,
+ *   maxParallel (≤ 8), retentionDays (30), retentionMax (500), hbMs, mcpServer,
  *   interruptWaitMs, stopGraceMs
  * → {socketPath, tokenPath, token, epoch, tasks, engine, close({leaveRuns})}
  */

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { validate } from '../tasks-api/validate.js';
 import { MAX_FRAME_BYTES, HB_PUSH_MS, BACKPRESSURE_BYTES, SOCKET_NAME, TOKEN_NAME, METHODS } from '../tasks-api/protocol.js';
 import { ApiError, SCHEMA } from './engine.js';
+import { relayLookup } from './relay-tokens.js';
 
 const PARAMS_DEF = {
   hello: 'HelloParams', createTask: 'CreateTaskParams', listTasks: 'ListTasksParams', getTask: 'GetTaskParams',
@@ -18,7 +19,8 @@ const PARAMS_DEF = {
 };
 export const MAX_SOCKET_PATH = 103;     // AF_UNIX sun_path is 104 bytes on macOS
 const MAX_CONNECTIONS = 32;
-const MAX_SUBS_PER_CONN = 64;
+const MAX_SUBS_PER_CONN = 16;
+const MAX_WRITE_BUFFER = 16 * 1024 * 1024;   // a client that stops reading is cut off here
 const MAX_INFLIGHT_PER_CONN = 64;
 const HELLO_WITHIN_MS = 10000;
 const TOKEN_RE = /^btk_[A-Za-z0-9_-]{43}$/;
@@ -67,13 +69,20 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
   await clearSocketPath(socketPath);
   const token = ensureToken(tokenPath);
   const tokenHash = crypto.createHash('sha256').update(token).digest();
-  const tokenOk = (t) => typeof t === 'string' && crypto.timingSafeEqual(crypto.createHash('sha256').update(t).digest(), tokenHash);
+  const relay = relayLookup(dir);
+  // The UI/CLI token is the full principal; a relay token is scoped to its source.
+  const authOf = (t) => {
+    if (typeof t !== 'string' || t.length > 256) return null;
+    if (crypto.timingSafeEqual(crypto.createHash('sha256').update(t).digest(), tokenHash)) return { kind: 'full' };
+    return relay(t);
+  };
   const conns = new Set();
   const subs = new Map();      // sub → {conn, filter, lastSent}
   const startedAt = Date.now();
 
   function send(conn, obj) {
     if (conn.destroyed) return;
+    if (conn.writableLength > MAX_WRITE_BUFFER) { conn.destroy(); return; }
     let line = JSON.stringify(obj);
     if (Buffer.byteLength(line) >= MAX_FRAME_BYTES) {
       if (obj.push) { log.warn('dropped an oversize push', { kind: obj.push }); return; }
@@ -104,7 +113,8 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     const id = typeof msg?.id === 'string' && msg.id.length <= 128 ? msg.id : null;
     const fail = (code, message, details) => send(conn, { id, error: { code, message, ...(details ? { details } : {}) } });
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return fail('VALIDATION', 'a frame must be a JSON object');
-    if (!tokenOk(msg.token)) {
+    const principal = authOf(msg.token);
+    if (!principal) {
       fail('UNAUTHENTICATED', 'bad or missing token');
       conn.end();
       st.dead = true;
@@ -137,11 +147,23 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
           const { reset, events } = engine.replay(params.id, params.fromSeq, params.epoch);
           const sub = `sub_${crypto.randomBytes(6).toString('hex')}`;
           const latestSeq = engine.seq;
+          // A replay is paged: past BACKPRESSURE_BYTES it stops and says `lagged`, and the
+          // client resubscribes from where it got to. Never one unbounded burst.
+          let bytes = 0;
+          let n = 0;
+          while (n < events.length && bytes < BACKPRESSURE_BYTES) bytes += JSON.stringify(events[n++]).length;
+          const page = events.slice(0, n);
           // Response first, then the reset or the replay, then live (§4).
-          send(conn, { id, result: { sub, epoch: engine.epoch, latestSeq, replayed: events.length } });
+          send(conn, { id, result: { sub, epoch: engine.epoch, latestSeq, replayed: page.length } });
           if (reset) send(conn, { push: 'reset', sub, reason: reset, latestSeq });
-          for (const e of events) send(conn, { push: 'event', sub, event: e });
-          subs.set(sub, { conn, filter: params.id, lastSent: events.at(-1)?.seq ?? latestSeq });
+          for (const e of page) send(conn, { push: 'event', sub, event: e });
+          if (n < events.length) {
+            const lastSeq = page.at(-1)?.seq ?? (params.fromSeq ?? 1) - 1;
+            const lagged = () => send(conn, { push: 'lagged', sub, lastSeq });
+            if (conn.writableLength > 0) conn.once('drain', lagged); else lagged();
+            return undefined;
+          }
+          subs.set(sub, { conn, filter: params.id, lastSent: page.at(-1)?.seq ?? latestSeq });
           return undefined;
         }
         case 'unsubscribe': {
@@ -150,7 +172,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
           return send(conn, { id, result: {} });
         }
         default:
-          return send(conn, { id, result: await engine[msg.method](params ?? {}) });
+          return send(conn, { id, result: await engine[msg.method](params ?? {}, { principal }) });
       }
     } catch (e) {
       if (e instanceof ApiError) return fail(e.code, e.message, e.details);
