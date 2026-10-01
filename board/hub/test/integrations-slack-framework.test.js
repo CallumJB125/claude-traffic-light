@@ -234,3 +234,38 @@ test('F2b: ackEarly as a function decides per verified, parsed delivery; a throw
   } finally { await h.close(); }
   assert.throws(() => probe('f2b3', { ackEarly: 'sometimes' }), /ackEarly is a boolean or a function/);
 });
+
+// ── F6 board target ───────────────────────────────────────────────────────
+
+function addOrg(h, name = 'Other') {
+  const org = randomUUID();
+  const board = randomUUID();
+  const admin = randomUUID();
+  const t = h.hub.iso();
+  h.db.run('INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)', org, name, t);
+  h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, 'Zeta', 'OTH')", board, org);
+  h.db.run("INSERT INTO members (id, org_id, github_id, github_login, display_name, role, created_at) VALUES (?, ?, ?, ?, 'Carol', 'owner', ?)", admin, org, -Math.floor(Math.random() * 1e9), `carol-${org.slice(0, 8)}`, t);
+  return { org, board, admin };
+}
+
+const createIn = (ctx, boardId, body) => ctx.act('card.create', { external_ref: body.request_id }, (s) => s.actAs(ctx.connection.created_by).createCard(boardId, body));
+
+test('F6: createCard targets a board of the connection\'s team only (another team\'s or an unknown board is NOT_FOUND before any rate token); the card starts in todo', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = connect(h, 'f6a');
+    const other = addOrg(h);
+    h.hub.limiter.limits.integration_card_conn = { capacity: 1, per_ms: 3_600_000 };
+    const ctx = reg.ctxFor(conn.id);
+    for (const bad of [other.board, randomUUID(), undefined, 42]) {
+      await assert.rejects(createIn(ctx, bad, { request_id: `r-${randomUUID()}`, title: 'Probe' }), (e) => e.code === 'NOT_FOUND' && e.message === 'board not found');
+    }
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title = 'Probe'").n, 0);
+    const { result } = await createIn(ctx, h.ids.board, { request_id: 'r-own', title: 'From chat', column: 'done', column_name: 'in_review' });
+    assert.equal(result.card.column, 'todo');
+    assert.equal(h.db.get('SELECT column_name, board_id FROM cards WHERE id = ?', result.card.id).column_name, 'todo');
+    assert.deepEqual(reg.audit(conn.id).map((a) => [a.decision, a.error]).reverse(), [
+      ...Array(4).fill(['failed', 'not_found']), ['auto', null],
+    ]);
+  } finally { await h.close(); }
+});

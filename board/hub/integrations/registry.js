@@ -337,17 +337,18 @@ export function createIntegrations({
     const cardBody = (body) => {
       const via = `via:${conn.id}`;
       const labels = Array.isArray(body.labels) ? [...body.labels.filter((l) => !(typeof l === 'string' && l.startsWith('via:'))), via] : (body.labels ?? [via]);
-      return { ...body, budget_usd: undefined, labels };
+      // Nor a column: a card from outside starts in todo, like a person's.
+      return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
     function actAs(memberId, { live, action: actName, track, external_ref }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
-      const call = (body, fn, rule = null) => {
+      const call = (body, fn, rule = null, pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn, rule));
+        return track(callLive(body, fn, rule, pre));
       };
-      const callLive = async (body, fn, rule) => {
+      const callLive = async (body, fn, rule, pre) => {
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -360,6 +361,8 @@ export function createIntegrations({
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
           return hit.body;
         }
+        const cacheError = (e) => { if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } }); };
+        try { pre?.(); } catch (e) { cacheError(e); throw e; }
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
@@ -368,17 +371,22 @@ export function createIntegrations({
         try {
           out = await hub.actVia(via, () => fn(member));
         } catch (e) {
-          if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
+          cacheError(e);
           throw e;
         }
         hub.cacheResponse(member.id, rid, 200, out);
         return out;
       };
+      // A board of another team (or none) is the Api's own NOT_FOUND, but
+      // before any rate token: probing board ids must not drain the budget.
+      const boardOfOrg = (boardId) => () => {
+        if (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== c.org_id) throw new HubError('NOT_FOUND', 'board not found');
+      };
       return {
         member: { id: first.id, role: first.role },
         // A D8 replay answers with the first card whatever board it names: the
         // same request on another board is a conflict, not that card.
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn').then((out) => {
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn', boardOfOrg(boardId)).then((out) => {
           const on = hub.card(out?.card?.id)?.board_id;
           if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
           return out;
