@@ -893,9 +893,8 @@ test('follow-up: a hook rewrite that reports an error keeps hooks pending, so Re
 
 test('main.js: an app run from a disk image (/Volumes) or a translocated copy installs no hooks and offers no Remove (70 #2)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const m = /const EPHEMERAL = (\/.+\/)\.test\(process\.execPath\);/.exec(src);
-  assert.ok(m, 'EPHEMERAL is defined from the exec path');
-  const re = eval(m[1]); // eslint-disable-line no-eval
+  assert.match(src, /const EPHEMERAL = RenameMigration\.EPHEMERAL_PATH\.test\(process\.execPath\);/, 'EPHEMERAL is defined from the exec path');
+  const re = M.EPHEMERAL_PATH;
   for (const p of ['/Volumes/Plexiform/Plexiform.app/Contents/MacOS/Plexiform', '/private/var/folders/x/T/AppTranslocation/ABC/d/Plexiform.app/Contents/MacOS/Plexiform']) assert.ok(re.test(p), p);
   for (const p of ['/Applications/Plexiform.app/Contents/MacOS/Plexiform', '/Users/me/Applications/Plexiform.app/Contents/MacOS/Plexiform', '/Users/me/Volumes/Plexiform.app/x']) assert.ok(!re.test(p), p);
   assert.match(src, /const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;/);

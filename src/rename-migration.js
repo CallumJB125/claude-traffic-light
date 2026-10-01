@@ -656,4 +656,278 @@ async function runFollowUp({ userData, steps, fsImpl = fs, log = console.log }) 
   }
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, MAX_TRIES, assessTarget, copyDecision, copyUserData, readState, pending, markDone, parsePs, parseTasklist, findOldProcesses, quitOldInstance, rewriteConfigText, planHooks, backupName, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };
+// ── the dry run (--rename-dry-run) ──────────────────────────────────────────
+// Everything below only reads. It uses the same decisions as the real run
+// (assessTarget, copyDecision, planHooks/rewriteConfigText, findOldProcesses,
+// backupName, findOldReferences), so the plan can't drift from what happens.
+
+// A run from one of these paths is ephemeral: the hooks would point at a
+// temporary copy (AppTranslocation) or a disk image that goes when ejected.
+const EPHEMERAL_PATH = /\/AppTranslocation\/|^\/Volumes\//;
+
+// The running processes, as main.js lists them to find the old app:
+// macOS's comm is the full executable path; Linux's is cut to 15 characters,
+// so its args; Windows has tasklist.
+function listProcesses(platform = process.platform) {
+  const { execFileSync } = require('child_process');
+  if (platform === 'win32') return parseTasklist(execFileSync('tasklist', ['/FO', 'CSV', '/NH', '/FI', `IMAGENAME eq ${OLD.winExecutable}`], { encoding: 'utf8', windowsHide: true }));
+  if (platform === 'darwin') return parsePs(execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' }));
+  return parsePs(execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
+}
+
+// The copy as cpSync would make it, walked with the same filter → { copy: [{ name, bytes }], skip: [{ name, bytes, why }] }.
+function planCopy(from, fsImpl = fs) {
+  const copy = new Map();
+  const skip = [];
+  const sizeOf = (p) => {
+    let st;
+    try { st = fsImpl.lstatSync(p); } catch { return 0; }
+    if (!st.isDirectory()) return st.isFile() ? st.size : 0;
+    let n = 0;
+    try { for (const e of fsImpl.readdirSync(p)) n += sizeOf(path.join(p, e)); } catch { /* unreadable */ }
+    return n;
+  };
+  const walk = (dir) => {
+    let names = [];
+    try { names = fsImpl.readdirSync(dir).sort(); } catch { return; }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      const d = copyDecision(from, p, fsImpl);
+      if (!d.take) { skip.push({ name: SKIP.has(d.top) ? d.top : d.rel, bytes: sizeOf(p), why: d.why }); continue; }
+      let st;
+      try { st = fsImpl.lstatSync(p); } catch { continue; }
+      if (!copy.has(d.top)) copy.set(d.top, 0);
+      if (st.isDirectory()) walk(p);
+      else if (st.isFile()) copy.set(d.top, copy.get(d.top) + st.size);
+    }
+  };
+  walk(from);
+  return { copy: [...copy].map(([name, bytes]) => ({ name, bytes })), skip };
+}
+
+/**
+ * What the first launch after the rename would do here, writing nothing.
+ * Takes what main.js would pass (the runtime, the MCP entry); exists and
+ * listProcesses default to the real machine.
+ */
+function planRename({ home, appData, newName, platform, runtime, mcpEntry, askFromWidget = false, rootDir, packaged = true, execPath = process.execPath, listProcesses: list = () => listProcesses(platform), exists = fs.existsSync /* the old .app in /Applications */, fsImpl = fs, isAlive = alive, now = () => new Date(), adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js') }) {
+  const from = path.join(appData, OLD.userDataName);
+  const to = path.join(appData, newName);
+  let fromIsDir = false;
+  try { fromIsDir = fsImpl.lstatSync(from).isDirectory(); } catch { /* none */ }
+  const target = assessTarget(to, { fsImpl, isAlive });
+  const not = whyNot(target, newName);
+  const wouldCopy = !not && fromIsDir;
+  const userData = {
+    from, to, fromIsDir, target, wouldCopy,
+    why: not || (fromIsDir ? null : 'no old folder'),
+    aside: wouldCopy && target.kind !== 'absent' ? `${to}.pre-migration-${stampOf(now())}` : null,
+    ...(fromIsDir ? planCopy(from, fsImpl) : { copy: [], skip: [] }),
+  };
+  const steps = wouldCopy ? STEPS.slice() : target.kind === 'migrated' && Array.isArray(target.state.pending) ? target.state.pending.filter((p) => STEPS.includes(p)) : [];
+  const oldUserData = from;
+  const procs = findOldProcesses({ platform, home, listProcesses: list, oldUserData, isAlive, fsImpl, log: () => {} });
+  const hooks = planHooks({ home, runtime, askFromWidget, mcpEntry, adapters, mcp, fsImpl });
+  const backups = [...hooks.configs.filter((c) => c.after != null).map((c) => c.file), ...(hooks.mcp?.after ? [hooks.mcp.file] : [])].map((f) => backupName(f, now, fsImpl));
+  // What the files would hold once the hooks step has run.
+  const after = new Map(hooks.configs.filter((c) => c.after != null).map((c) => [c.file, c.after]));
+  if (hooks.wrapper) after.set(hooks.wrapper.file, hooks.wrapper.after);
+  if (hooks.mcp?.after) {
+    const data = Runtime.parseJsonConfig(fsImpl.readFileSync(hooks.mcp.file, 'utf8'), hooks.mcp.file);
+    after.set(hooks.mcp.file, JSON.stringify({ ...data, mcpServers: { ...data.mcpServers, [mcp.NAME]: hooks.mcp.after } }));
+  }
+  const runsHooks = steps.includes('hooks');
+  const readText = (f) => (runsHooks && after.has(f) ? after.get(f) : fsImpl.readFileSync(f, 'utf8'));
+  const stillNaming = findOldReferences({ home, runtime, adapters, mcp, fsImpl, readText });
+  // main.js's own start-up install for Claude Code runs when its hooks aren't current afterwards, and strips every entry of ours.
+  const claude = adapters.list().find((a) => a.id === 'claude');
+  let startup = null;
+  try {
+    const file = claude.configPath(home);
+    const text = (() => { try { return readText(file); } catch (err) { if (err.code === 'ENOENT') return ''; throw err; } })();
+    const settings = Runtime.parseJsonConfig(text, file);
+    const current = claude.check(settings, runtime, { askFromWidget, home });
+    const current2 = new Set(hookEntries(claude.apply({}, runtime, { askFromWidget, home }).hooks).map((e) => e.command));
+    startup = { file, runs: !current, removes: current ? [] : hookEntries(settings.hooks).filter((e) => claude.isOurs(e.command) && !current2.has(e.command)) };
+  } catch (err) { startup = { error: err.message }; }
+  const secretFile = path.join(rootDir, 'approval-secret.json');
+  let sealed = false;
+  try { sealed = !!JSON.parse(fsImpl.readFileSync(secretFile, 'utf8')).sealed; } catch { /* none */ }
+  const oldApps = platform === 'darwin' ? oldAppPaths(home).filter((p) => exists(p)) : [];
+  return {
+    home, platform, packaged, execPath, ephemeral: EPHEMERAL_PATH.test(execPath), runtime, steps, userData,
+    oldProcess: procs, hooks, backups, stillNaming, startup,
+    login: { platform, autoLaunchConfigured: fsImpl.existsSync(path.join(rootDir, '.auto-launch-configured')) },
+    secret: { file: secretFile, sealed, setAside: sealed && wouldCopy },
+    oldApps,
+  };
+}
+
+// Line diff → unified-diff text (3 lines of context).
+function unifiedDiff(a, b, { from = 'before', to = 'after', context = 3 } = {}) {
+  const A = String(a ?? '').split('\n');
+  const B = String(b ?? '').split('\n');
+  let pre = 0;
+  while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre += 1;
+  let suf = 0;
+  while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf]) suf += 1;
+  const a2 = A.slice(pre, A.length - suf);
+  const b2 = B.slice(pre, B.length - suf);
+  const n = a2.length;
+  const m = b2.length;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) dp[i][j] = a2[i] === b2[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = A.slice(0, pre).map((l) => [' ', l]);
+  for (let i = 0, j = 0; i < n || j < m;) {
+    if (i < n && j < m && a2[i] === b2[j]) { ops.push([' ', a2[i]]); i += 1; j += 1; } else if (i < n && (j >= m || dp[i + 1][j] >= dp[i][j + 1])) { ops.push(['-', a2[i]]); i += 1; } else { ops.push(['+', b2[j]]); j += 1; }
+  }
+  for (const l of A.slice(A.length - suf)) ops.push([' ', l]);
+  const changed = ops.map((o, k) => (o[0] === ' ' ? -1 : k)).filter((k) => k >= 0);
+  if (!changed.length) return '';
+  const aBefore = [];
+  const bBefore = [];
+  let ac = 0;
+  let bc = 0;
+  for (const [t] of ops) { aBefore.push(ac); bBefore.push(bc); if (t !== '+') ac += 1; if (t !== '-') bc += 1; }
+  const out = [`--- ${from}`, `+++ ${to}`];
+  for (let g = 0; g < changed.length;) {
+    let last = g;
+    while (last + 1 < changed.length && changed[last + 1] - changed[last] <= 2 * context) last += 1;
+    const start = Math.max(0, changed[g] - context);
+    const end = Math.min(ops.length - 1, changed[last] + context);
+    const slice = ops.slice(start, end + 1);
+    const aCount = slice.filter(([t]) => t !== '+').length;
+    const bCount = slice.filter(([t]) => t !== '-').length;
+    out.push(`@@ -${aBefore[start] + (aCount ? 1 : 0)},${aCount} +${bBefore[start] + (bCount ? 1 : 0)},${bCount} @@`);
+    for (const [t, l] of slice) out.push(`${t}${l}`);
+    g = last + 1;
+  }
+  return out.join('\n');
+}
+
+const sizeText = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+
+// The plan, as text for a person to read.
+function formatPlan(plan) {
+  const tilde = (p) => (plan.home && String(p).startsWith(`${plan.home}/`) ? `~${String(p).slice(plan.home.length)}` : String(p));
+  const L = [];
+  const indent = (text, pad) => String(text).split('\n').map((l) => `${pad}${l}`).join('\n');
+  const u = plan.userData;
+  L.push(`${OLD.productName} → Plexiform: what the first launch would do (dry run: nothing was written)`);
+  L.push('');
+  if (!plan.packaged) L.push('WARNING: this is not the installed app. The installed app plans with its own paths; run the dry run from it.', '');
+  if (plan.ephemeral) L.push(`NOTE: running from ${plan.execPath}, a temporary copy or a disk image: the hooks step stays pending and Remove is never offered from here.`, '');
+
+  L.push('1. App data');
+  L.push(`   old folder: ${tilde(u.from)}${u.fromIsDir ? `  (${sizeText([...u.copy, ...u.skip].reduce((n, e) => n + e.bytes, 0))})` : '  (not there)'}`);
+  const t = u.target;
+  const state = t.kind === 'absent' ? 'absent' : t.kind === 'fresh' ? `fresh (holds only: ${t.names.join(', ') || 'nothing'})` : t.kind === 'retry' ? `a launch that couldn't copy ran on it (try ${t.state.attempts || 1} of ${MAX_TRIES}: ${t.state.reason})` : t.kind === 'migrated' ? (t.state.status === 'kept' ? 'kept as it is after the last try' : `already migrated (${t.state.copiedAt || ''})`) : t.kind === 'live' ? `in use: Plexiform is running on it (pid ${t.pid})` : t.kind === 'used' ? `in use (${t.used.slice(0, 8).join(', ')}${t.used.length > 8 ? ', …' : ''})` : `unreadable (${t.error})`;
+  L.push(`   new folder: ${tilde(u.to)}  state: ${state}`);
+  if (u.wouldCopy) {
+    L.push(`   → copies the old folder (the old folder is never changed)${u.aside ? `; what is at the new folder now is renamed to ${tilde(u.aside)} and kept (removed only if empty)` : ''}`);
+  } else L.push(`   → no copy: ${u.why}`);
+  if (u.fromIsDir) {
+    L.push(`   copied (${u.copy.length}, ${sizeText(u.copy.reduce((n, e) => n + e.bytes, 0))}):`);
+    for (const e of u.copy) L.push(`     ${e.name.padEnd(36)} ${sizeText(e.bytes)}`);
+    L.push(`   left out (${u.skip.length}, ${sizeText(u.skip.reduce((n, e) => n + e.bytes, 0))}):`);
+    for (const e of u.skip) L.push(`     ${e.name.padEnd(36)} ${sizeText(e.bytes).padEnd(10)} ${e.why}`);
+  }
+  L.push(`   steps that would run after it: ${plan.steps.length ? plan.steps.join(', ') : 'none (they run only on a migrated folder)'}`);
+  L.push('');
+
+  L.push('2. The old app, if running');
+  const procs = plan.oldProcess.procs;
+  if (!procs.length) L.push(`   none found${plan.oldProcess.via === 'lock' ? ' (the process list failed; no live SingletonLock in the old folder)' : ''}`);
+  else if (plan.oldProcess.via === 'lock') L.push(`   the process list failed; the old folder's SingletonLock names live pid ${procs[0].pid}: taken as running, never signalled, so no copy this launch`);
+  else {
+    for (const p of procs) L.push(`   would get ${plan.platform === 'win32' ? 'a close request (taskkill, no /F)' : 'SIGTERM'}: pid ${p.pid} ${p.command}`);
+    L.push('   then waits up to 5 s; if it is still running, nothing is copied this launch and the next launch tries again');
+  }
+  L.push('');
+
+  L.push(`3. Agent configs (the hooks step${plan.steps.includes('hooks') ? '' : ': would NOT run this launch; shown for when it does'})`);
+  if (!plan.hooks.configs.length) L.push('   none present');
+  for (const c of plan.hooks.configs) {
+    L.push(`   ${tilde(c.file)} (${c.label})`);
+    if (c.error) { L.push(`     can't be read: ${c.error}; left alone, and the hooks step stays pending (Remove is not offered)`); continue; }
+    if (c.removed.length) {
+      L.push(`     re-pointed: ${c.removed.length} of Plexiform's entries run the old app${c.after == null ? ' (the file text stays the same: the wrapper change below re-points them)' : ''}`);
+      for (const e of c.removed) L.push(`       - ${e.where}: ${e.command}`);
+      for (const e of c.added) L.push(`       + ${e.where}: ${e.command}`);
+    } else L.push('     no change');
+    if (c.leftAlone.length) {
+      L.push('     left alone:');
+      for (const e of c.leftAlone) L.push(`       ${e.where}: ${e.command}\n         (${e.reason})`);
+    }
+    if (c.after != null) {
+      L.push(`     backup first: ${tilde(plan.backups.find((x) => x.startsWith(`${c.file}.pre-plexiform`)))}`);
+      if (/\n$/.test(c.before) && !/\n$/.test(c.after)) L.push('     (the rewritten file has no final newline)');
+      L.push('     diff:');
+      L.push(indent(unifiedDiff(c.before, c.after, { from: tilde(c.file), to: `${tilde(c.file)} (after)` }), '       '));
+    }
+  }
+  L.push('');
+
+  L.push(`4. Hook wrapper (${tilde(Runtime.wrapperPath(plan.runtime))})`);
+  if (!plan.hooks.wrapper) L.push('   no change');
+  else {
+    L.push(plan.hooks.wrapper.before == null ? '   would be created:' : '   would be rewritten:');
+    L.push(indent(unifiedDiff(plan.hooks.wrapper.before ?? '', plan.hooks.wrapper.after, { from: 'bin/buddy-hook', to: 'bin/buddy-hook (after)' }), '     '));
+  }
+  L.push('');
+
+  const m = plan.hooks.mcp;
+  L.push('5. MCP entry (mcpServers in ~/.claude.json; nothing else in that file changes)');
+  if (!m) L.push('   not checked');
+  else if (m.error) L.push(`   can't be read: ${m.error}; left alone, and the hooks step stays pending`);
+  else if (m.leftAlone) L.push(`   left alone: ${m.leftAlone}`);
+  else L.push(indent(unifiedDiff(JSON.stringify(m.before, null, 2), JSON.stringify(m.after, null, 2), { from: 'mcpServers["claude-buddy"]', to: 'mcpServers["claude-buddy"] (after)' }), '   '));
+  L.push('');
+
+  L.push('6. Backups that would be made (copies, never overwritten)');
+  if (!plan.backups.length) L.push('   none (no config changes)');
+  for (const b of plan.backups) L.push(`   ${tilde(b)}`);
+  L.push('');
+
+  L.push('7. Open at Login');
+  const lg = plan.login;
+  if (!plan.steps.includes('login')) L.push('   no change (the login step would not run)');
+  else if (lg.platform === 'darwin') L.push(lg.autoLaunchConfigured ? `   turned ON for Plexiform (the old app had set up its own), and a notice says so. The old app's own login item can't be read or removed: turn it off by hand if you keep the old app.` : '   no change (the old app never set it up)');
+  else if (lg.platform === 'win32') L.push(`   on for Plexiform if the old Run entry ${OLD.appId} is on; that old entry is removed`);
+  else L.push('   the autostart file keeps its name; its Exec is rewritten if Open at Login is on');
+  L.push('');
+
+  L.push('8. Approval-counter secret');
+  if (plan.secret.setAside) L.push(`   ${tilde(plan.secret.file)} is sealed under the old app's Keychain item: renamed to ${path.basename(plan.secret.file)}.pre-rename, and a new one is made (the counter starts again)`);
+  else if (plan.secret.sealed) L.push(`   ${tilde(plan.secret.file)} is sealed, but no copy happens this launch, so it is left as it is`);
+  else L.push('   nothing to set aside');
+  L.push('');
+
+  L.push('9. Files that would still name the old app (binning it would break them)');
+  if (!plan.stillNaming.length) L.push('   none');
+  for (const f of plan.stillNaming) L.push(`   ${tilde(f)}`);
+  L.push('');
+
+  L.push("10. Plexiform's start-up hook install for Claude Code (runs on every launch when its hooks aren't current)");
+  const st = plan.startup;
+  if (plan.ephemeral) L.push('   would not run from a temporary copy or a disk image');
+  else if (st.error) L.push(`   can't tell: ${st.error}`);
+  else if (!st.runs) L.push('   would not run: the hooks are current afterwards');
+  else if (!st.removes.length) L.push(`   WOULD run on ${tilde(st.file)}: it adds Plexiform's hooks and removes nothing else`);
+  else {
+    L.push(`   WOULD run on ${tilde(st.file)}, and it removes every entry that runs a script called set-status.js or delegate.js:`);
+    for (const e of st.removes) L.push(`     - ${e.where}: ${e.command}`);
+  }
+  L.push('');
+
+  L.push('11. Offer to move the old app to the Bin (macOS; asks first, defaults to Keep)');
+  if (plan.platform !== 'darwin') L.push('   never offered on this platform');
+  else if (!plan.oldApps.length) L.push('   not offered: the old app is not in /Applications or ~/Applications');
+  else if (plan.ephemeral) L.push('   not offered from a temporary copy or a disk image');
+  else if (!plan.steps.includes('remove-old-app')) L.push('   not offered this launch (the step would not run)');
+  else if (plan.hooks.configs.some((c) => c.error) || plan.hooks.mcp?.error) L.push('   not offered: a config can\'t be rewritten, so the hooks step stays pending');
+  else for (const p of plan.oldApps) L.push(`   would ask about ${p}${plan.stillNaming.length ? ', naming the files in 9' : ''}`);
+  return `${L.join('\n')}\n`;
+}
+
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, MAX_TRIES, EPHEMERAL_PATH, listProcesses, planCopy, planRename, unifiedDiff, formatPlan, assessTarget, copyDecision, copyUserData, readState, pending, markDone, parsePs, parseTasklist, findOldProcesses, quitOldInstance, rewriteConfigText, planHooks, backupName, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };

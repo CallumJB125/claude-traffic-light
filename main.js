@@ -9,6 +9,13 @@ if (process.argv.includes('--uninstall-hooks')) {
   require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
   process.exit(0);
 }
+// `--rename-dry-run`: prints what the first launch after the rename from Claude Buddy
+// would do on this machine, writes nothing and exits, before anything creates
+// the userData folder (Electron is never asked for it; no crash reporter, log file or lock).
+if (process.argv.includes('--rename-dry-run')) {
+  require('./src/rename-dry-run.js').main();
+  process.exit(0);
+}
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
@@ -157,12 +164,7 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 // The folder is worked out, not asked for: asking Electron for it creates it.
 const RenameMigration = require('./src/rename-migration.js');
 const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && !app.commandLine.hasSwitch('user-data-dir');
-// macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args; Windows has tasklist.
-const listOldProcesses = () => (process.platform === 'win32'
-  ? RenameMigration.parseTasklist(require('child_process').execFileSync('tasklist', ['/FO', 'CSV', '/NH', '/FI', `IMAGENAME eq ${RenameMigration.OLD.winExecutable}`], { encoding: 'utf8', windowsHide: true }))
-  : RenameMigration.parsePs(process.platform === 'darwin'
-    ? require('child_process').execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
-    : require('child_process').execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })));
+const listOldProcesses = () => RenameMigration.listProcesses(process.platform);
 // process.kill on Windows is TerminateProcess; taskkill without /F asks the app to close.
 const killOld = process.platform === 'win32'
   ? (pid) => require('child_process').execFileSync('taskkill', ['/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
@@ -363,7 +365,7 @@ function installHooks() {
 // Opened straight from Downloads, macOS runs a random read-only copy; run
 // from a mounted disk image, the app is gone once it is ejected. Hooks pinned
 // to either break, so none are written (Health says why).
-const EPHEMERAL = /\/AppTranslocation\/|^\/Volumes\//.test(process.execPath);
+const EPHEMERAL = RenameMigration.EPHEMERAL_PATH.test(process.execPath);
 const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
