@@ -22,7 +22,8 @@ import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
-import { signinScreen } from './render-signin.js';
+import { signinScreen, noTeamScreen } from './render-signin.js';
+import { accountErrorText, parseJoin } from './account-text.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
 import { BRAND } from '../../shared/brand.js';
 
@@ -30,10 +31,13 @@ const root = document.getElementById('root');
 const perf = () => performance.now();
 
 const state = {
-  auth: 'loading', // loading | signed_out | forbidden | ok
+  auth: 'loading', // loading | signed_out | forbidden | no_team (accounts: signed in, no team yet) | ok
   authMode: null, // /api/health auth: 'dev' | 'access' | 'accounts' | 'local'
   authError: null,
   authBusy: false,
+  methods: null, // accounts: GET /api/auth/methods, for the signed-out screen
+  onboard: { busy: false, error: null, where: null }, // the no-team screen's forms
+  invite: { busy: false, error: null, made: null }, // Team view: the invite just made (its link and code, shown once)
   localCardDismissed: false,
   email: null,
   me: null,
@@ -341,6 +345,8 @@ function buildModel() {
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     localCard: state.authMode === 'local' && !state.localCardDismissed,
+    accounts: state.authMode === 'accounts',
+    invite: state.invite,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     // Presence ages freeze at the drop, like card ages.
@@ -433,8 +439,9 @@ function toasts() {
 
 function screen() {
   if (state.auth === 'loading') return loadingScreen();
+  if (state.auth === 'no_team') return h('div', { class: 'app-shell' }, noTeamScreen({ invites: state.me?.pending_invites ?? [], onboard: state.onboard }), toasts());
   if (state.auth !== 'ok') {
-    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
+    return signinScreen({ status: state.auth, error: state.authError, devLogin: state.authMode === 'dev', accounts: state.authMode === 'accounts', emailOff: state.methods?.email === false, devSecretKnown: !!devSecret(), busy: state.authBusy, email: state.email });
   }
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
@@ -492,6 +499,7 @@ async function boot() {
     }
     state.auth = err.status === 403 ? 'forbidden' : 'signed_out';
     state.email = err.extra?.email ?? null;
+    if (state.authMode === 'accounts' && state.auth === 'signed_out' && !state.methods) state.methods = await api.methods().catch(() => null);
     state.authError = err.status === 401 || err.status === 403 ? null : errorText(err);
     update();
     return;
@@ -501,7 +509,8 @@ async function boot() {
   const wanted = new URLSearchParams(location.search).get('board');
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
-  if (!state.boardId) { state.auth = 'forbidden'; update(); return; }
+  // A new account has no team: offer to create or join one, not "not a member".
+  if (!state.boardId) { state.auth = state.authMode === 'accounts' && !state.me.member ? 'no_team' : 'forbidden'; update(); return; }
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
@@ -509,6 +518,65 @@ async function boot() {
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
   update();
   openFromHash();
+}
+
+// ── accounts: a first team ─────────────────────────────────────────────────
+
+async function enterTeam(teamId, done) {
+  state.onboard = { busy: false, error: null, where: null };
+  setOrg(teamId);
+  await boot();
+  if (done) toast(done);
+}
+
+// One no-team action at a time; its error shows under its own form.
+async function onboardCall(where, step, fn) {
+  if (state.onboard.busy) return null;
+  state.onboard = { busy: true, error: null, where };
+  update();
+  try {
+    return await fn();
+  } catch (err) {
+    if (err.code === 'ALREADY_MEMBER' && err.extra?.team?.id) { enterTeam(String(err.extra.team.id), accountErrorText(err, 'invite')); return null; }
+    state.onboard = { busy: false, error: accountErrorText(err, step), where };
+    update();
+    return null;
+  }
+}
+
+async function createFirstTeam(name) {
+  const r = await onboardCall('create', 'team', () => api.createTeam(name));
+  if (r) await enterTeam(r.team.id, `${r.team.name} is ready. Invite people with the Invite button.`);
+}
+
+async function joinTeam(where, body) {
+  const r = await onboardCall(where, 'invite', () => api.acceptInvite(body));
+  if (r) await enterTeam(r.team.id, `You joined ${r.team.name}.`);
+}
+
+async function createInvite(email, role) {
+  const teamId = state.me?.org?.id;
+  if (!teamId || state.invite.busy) return;
+  state.invite = { busy: true, error: null, made: null };
+  update();
+  try {
+    const r = await api.createInvite(teamId, email, role);
+    state.invite = { busy: false, error: null, made: { email, link: String(r.link ?? ''), code: String(r.code ?? ''), mailed: r.mailed === true } };
+  } catch (err) {
+    state.invite = { busy: false, error: accountErrorText(err, 'invite'), made: null };
+  }
+  update();
+}
+
+async function copyInvite(what) {
+  const v = state.invite.made?.[what === 'code' ? 'code' : 'link'];
+  if (!v) return;
+  try { await navigator.clipboard.writeText(v); toast(what === 'code' ? 'Code copied.' : 'Link copied.'); } catch { toast('Couldn’t copy. Select it and copy it yourself.', 'error'); }
+}
+
+async function signOut() {
+  try { await api.signout(); } catch (err) { if (err.code !== 'UNAUTHENTICATED') { toast(accountErrorText(err), 'error'); return; } }
+  location.assign('/signin');
 }
 
 function onStatus({ status, retryAt }) {
@@ -898,6 +966,24 @@ async function submitDialogForm(form, submitter) {
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
+  if (kind === 'create-team') {
+    const name = String(new FormData(form).get('name') ?? '').trim();
+    if (!name) return undefined;
+    return createFirstTeam(name);
+  }
+  if (kind === 'team-invite') {
+    const fd = new FormData(form);
+    const email = String(fd.get('email') ?? '').trim();
+    if (!email) return undefined;
+    await createInvite(email, String(fd.get('role') ?? 'member'));
+    if (state.invite.made) form.reset();
+    return undefined;
+  }
+  if (kind === 'join-team') {
+    const p = parseJoin(new FormData(form).get('invite'), location.origin);
+    if (p.error) { state.onboard = { busy: false, error: p.error, where: 'join' }; update(); return undefined; }
+    return joinTeam('join', p);
+  }
   if (kind === 'label-create') {
     const fd0 = new FormData(form);
     const name = String(fd0.get('name') ?? '').trim();
@@ -1305,6 +1391,9 @@ function onClick(e) {
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
+    case 'accept-invite': joinTeam('invites', { invite_id: el.dataset.invite }); return;
+    case 'signout': signOut(); return;
+    case 'copy-invite': copyInvite(el.dataset.what); return;
     default:
   }
 }

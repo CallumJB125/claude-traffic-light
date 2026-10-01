@@ -1815,3 +1815,66 @@ test('signed-out pages: signInWith refuses an unknown provider and starts nothin
   h.flow.show('team');
   assert.deepEqual([(await h.A.state()).team, (await h.A.state()).signedInHubs], [null, []]);
 }));
+
+// ── email codes: the words a person sees, and never a code that can't arrive ──
+
+function stubClient(answer, { now = () => 0 } = {}) {
+  const sent = [];
+  const fetchImpl = async (u, init) => {
+    sent.push({ path: new URL(u).pathname, body: init.body ? JSON.parse(init.body) : null });
+    const a = typeof answer === 'function' ? answer(sent.at(-1)) : answer;
+    return { status: a.status, json: async () => a.body };
+  };
+  let v = null;
+  const c = createAccountClient({ origin: 'https://hub.example.com', fetchImpl, now, store: { load: () => v, save: (x) => { v = x; }, clear: () => { v = null; } } });
+  return { c, sent };
+}
+
+test('email start: a hub with email off says so, a failing send says it plainly, never the provider’s words', async () => {
+  const off = stubClient({ status: 404, body: { error: { code: 'METHOD_DISABLED', message: 'email sign-in is not enabled on this hub' } } });
+  assert.equal((await off.c.startEmail('jo@example.com')).error, 'Email sign-in is turned off on hub.example.com.');
+  for (const status of [500, 502, 503]) {
+    const bad = stubClient({ status, body: { error: { code: 'MAIL_FAILED', message: 'SES MessageRejected: Email address is not verified (eu-west-1)' } } });
+    const r = await bad.c.startEmail('jo@example.com');
+    assert.equal(r.error, 'We couldn’t send the email. Try again in a minute.');
+    assert.equal(bad.c.pendingEmail(), null, 'no code screen for a code that never went');
+  }
+});
+
+test('email codes: a new code waits 30 s after the last, never a fourth in 15 minutes; signing in again is no resend', async () => {
+  let t = 1_000_000;
+  let n = 0;
+  const { c, sent } = stubClient((req) => (req.path.endsWith('/verify')
+    ? { status: 200, body: { user: { id: 'u' }, teams: [], device_token: `bdt_${'x'.repeat(43)}`, device_id: 'd' } }
+    : { status: 200, body: { flow_id: `f${++n}`.padEnd(24, '0'), expires_in: 600 } }), { now: () => t });
+  assert.equal((await c.startEmail('jo@example.com')).ok, true);
+  const soon = await c.startEmail('jo@example.com');
+  assert.deepEqual([soon.ok, soon.error], [false, 'You can ask for a new code in 30 seconds.']);
+  assert.equal(sent.length, 1, 'nothing asked of the hub');
+  t += 31_000;
+  assert.equal((await c.startEmail('jo@example.com')).ok, true);
+  assert.equal((await c.verifyCode('123456')).ok, true);
+  assert.equal((await c.startEmail('jo@example.com')).ok, true, 'signed in and out again: no gap');
+  t += 31_000;
+  const fourth = await c.startEmail('jo@example.com');
+  assert.equal(fourth.ok, false);
+  assert.match(fourth.error, /^You can ask for a new code in 14 minutes\.$/);
+  assert.equal((await c.startEmail('other@example.com')).ok, true, 'per address');
+});
+
+test('waits read in hours for a day-long lockout', () => {
+  const { humanError } = require('../buddy-window/accounts');
+  assert.equal(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 86_400 } }, 'h'), 'Too many tries. Wait 24 hours and try again.');
+  assert.equal(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 3600 } }, 'h'), 'Too many tries. Wait 60 minutes and try again.');
+});
+
+test('first sign-in with no team: the screen is the whole choice, create or join with a code or link', async () => harness(async (h) => {
+  await h.signInAs('new@example.com');
+  assert.equal(h.flow.acct.screen, 'create-team');
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  const screen = page.slice(page.indexOf("'create-team'(s) {"), page.indexOf('  integrations(s) {'));
+  assert.match(screen, /heading\('Create or join a team', null\)/);
+  assert.match(screen, /onclick: \(\) => api\.go\('join'\) \}, 'Join with a code or link'\)/);
+  assert.equal((await h.A.go('join')).ok, true);
+  assert.equal(h.flow.acct.screen, 'join');
+}));

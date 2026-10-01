@@ -1126,6 +1126,14 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .loading { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--muted); }
 .loading-mark { width: 44px; height: 48px; }
 .noscript { padding: 24px; }
+.team-invite { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.team-invite-made { display: flex; flex-direction: column; gap: 6px; font-size: var(--text-sm); }
+.team-invite-code { font-size: var(--text-md); font-weight: 650; letter-spacing: 0.08em; align-self: center; }
+.signin-foot { display: flex; flex-wrap: wrap; gap: 6px; }
+.signin-section { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.signin-section h2 { font-size: var(--text-md); font-weight: 650; }
+.signin-row { width: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.signin-row .input { flex: 1; min-width: 160px; }
 .invite-steps { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
 .invite-steps ol { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 

@@ -93,9 +93,26 @@ function codeText(attemptsLeft) {
   return Number.isInteger(n) && n > 0 ? `That code didn’t work. ${n} ${n === 1 ? 'try' : 'tries'} left.` : 'That code didn’t work. Send a new code.';
 }
 
+// A wrong-code lockout can last up to a day: past an hour and a half, hours.
+function waitFor(seconds) {
+  const m = Math.ceil((Number(seconds) > 0 ? Number(seconds) : 60) / 60);
+  return m <= 1 ? 'a minute' : m < 90 ? `${m} minutes` : `${Math.ceil(m / 60)} hours`;
+}
+
 function waitText(retryAfterS, lead = 'Too many tries.') {
-  const m = Math.ceil((Number(retryAfterS) > 0 ? Number(retryAfterS) : 60) / 60);
-  return `${lead} Wait ${m <= 1 ? 'a minute' : `${m} minutes`} and try again.`;
+  return `${lead} Wait ${waitFor(retryAfterS)} and try again.`;
+}
+
+const SEND_FAILED = 'We couldn’t send the email. Try again in a minute.';
+// The hub's quiet limit on codes is 3 per 15 minutes for an address: past it the answer looks
+// the same but no mail goes and the newest flow is a dud, so the app never asks a fourth time.
+// A new code for a sign-in still waiting on one also waits a short gap after the last.
+const RESEND = { gapMs: 30_000, windowMs: 15 * 60_000, max: 3 };
+function resendWaitS(times, t, { resend = false } = {}) {
+  const recent = times.filter((x) => t - x < RESEND.windowMs).sort((a, b) => a - b);
+  if (recent.length >= RESEND.max) return Math.ceil((recent[recent.length - RESEND.max] + RESEND.windowMs - t) / 1000);
+  const last = recent.at(-1);
+  return resend && last != null && t - last < RESEND.gapMs ? Math.ceil((last + RESEND.gapMs - t) / 1000) : 0;
 }
 
 function humanError(status, json, host) {
@@ -180,6 +197,7 @@ function deleteOutcome(r, { again = 'Send a new code and do the check again.' } 
 function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {}, pin = null }) {
   const host = new URL(origin).host;
   let flow = null; // {id, email, purpose:'signin'|'delete', at, verifiedAt?}: the email-code flow in progress
+  const asked = new Map(); // email → when sign-in codes were asked for, this run only
 
   function saved() {
     let s = null;
@@ -253,10 +271,18 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       const e = String(email ?? '').trim().toLowerCase();
       const bad = need(EMAIL_RE.test(e), 'Enter your email address.');
       if (bad) return bad;
+      const times = asked.get(e) ?? [];
+      const wait = resendWaitS(times, now(), { resend: flow?.purpose === 'signin' && flow.email === e });
+      if (wait) return { ok: false, wait, error: `You can ask for a new code in ${wait <= 60 ? `${wait} seconds` : waitFor(wait)}.` };
       // The mail names the device, so a phished person can see what they'd approve.
       const r = await call('emailStart', { body: { email: e, client: 'buddy_desktop', purpose: 'signin', ...device(dev) }, auth: false });
-      if (!r.ok) return r;
+      if (!r.ok) {
+        if (r.code === 'METHOD_DISABLED') return { ...r, error: `Email sign-in is turned off on ${host}.` };
+        // The nearest the app can see of a mailer failing; never the provider's words.
+        return r.status >= 500 ? { ...r, error: SEND_FAILED } : r;
+      }
       if (typeof r.flow_id !== 'string') return { ok: false, error: `${host} didn’t start a sign-in.` };
+      asked.set(e, [...times, now()]);
       flow = { id: r.flow_id, email: e, purpose: 'signin', at: now() };
       return { ok: true, email: e };
     },
@@ -268,7 +294,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (bad) return bad;
       const r = await call('emailVerify', { body: { flow_id: flow.id, code: c, ...device(dev) }, auth: false });
       // The flow stays on a bad code: "Send a new code" reuses its email.
-      if (!r.ok) return r;
+      if (!r.ok) return r.code === 'METHOD_DISABLED' ? { ...r, error: `Email sign-in is turned off on ${host}.` } : r;
       const email = flow.email;
       const done = signedInWith(r);
       if (done.ok) flow = null;
