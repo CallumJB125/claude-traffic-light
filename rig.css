@@ -288,6 +288,9 @@
 .rig .body-default, .rig .sign-assembly > rect:last-child, .rig .thumbs-up, .rig .arms-crossed { fill: var(--body-color, #da7756); }
 .rig.body-ghost .body-ghost { animation: rig-float 2.4s ease-in-out infinite; }
 @keyframes rig-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+/* the blob squashes and stretches, anchored at the ground */
+.rig.body-blob .body-blob { transform-box: fill-box; transform-origin: 50% 100%; animation: rig-squish 2.6s ease-in-out infinite; }
+@keyframes rig-squish { 0%, 100% { transform: scale(1, 1); } 45% { transform: scale(1.04, 0.95); } 70% { transform: scale(0.98, 1.03); } }
 .rig .wag { transform-origin: 59px 53px; }
 .rig.body-dog .wag { animation: rig-wag 0.35s ease-in-out infinite alternate; }
 .rig.body-robot .antenna { animation: rig-flash 0.8s steps(1) infinite; }
@@ -1012,6 +1015,7 @@
   .rig .hp-led, .rig .tassel, .rig .propeller, .rig .pom,
   .rig .twinkle, .rig .bubble, .rig .leaf, .rig .glyph, .rig .floatheart, .rig .firefly, .rig .petal,
   .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms,
+  .rig.body-blob .body-blob,
   .rig .char-back *, .rig .char-body *, .rig .char-front *, .rig .char-face *, .rig .cp-leg-a, .rig .cp-leg-b {
     animation: none !important;
   }

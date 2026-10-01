@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const Characters = require('../characters/contract.js');
 const CORE = require('../characters/builtin/core.js');
+const STARTER = require('../characters/builtin/starter.js');
+const ORIGINAL = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
 const { validateCharacter, sanitizeSvg, checkGeometry } = require('../characters/validate.js');
 const Rules = require('../rules.js');
 
@@ -14,9 +16,9 @@ const claude = () => clone(Characters.get('claude'));
 // ── registry and anchors ──────────────────────────────────────────────────
 
 test('characters: the built-ins are registered, and rules offers exactly them', () => {
-  assert.deepEqual(Characters.ids(), ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost']);
+  assert.deepEqual(Characters.ids(), [...ORIGINAL, 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus']);
   assert.deepEqual(Rules.BODIES, Characters.ids());
-  assert.equal(CORE.length, Characters.ids().length);
+  assert.equal(CORE.length + STARTER.length, Characters.ids().length);
 });
 
 test('characters: every page that mounts the rig loads the contract, then the built-ins, before rig.js', () => {
@@ -24,15 +26,15 @@ test('characters: every page that mounts the rig loads the contract, then the bu
   for (const page of pages) {
     const src = fs.readFileSync(path.join(ROOT, page), 'utf8');
     const at = (f) => src.search(new RegExp(`<script src="(\\.\\./)*${f.replace(/[./]/g, '\\$&')}"`));
-    const [contract, core, rig] = ['characters/contract.js', 'characters/builtin/core.js', 'rig.js'].map(at);
-    assert.ok(contract > 0 && contract < core && core < rig, `${page} loads contract < core < rig`);
+    const [contract, core, starter, rig] = ['characters/contract.js', 'characters/builtin/core.js', 'characters/builtin/starter.js', 'rig.js'].map(at);
+    assert.ok(contract > 0 && contract < core && core < starter && starter < rig, `${page} loads contract < core < starter < rig`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.ok(pkg.build.files.includes('characters/**/*'), 'characters ship in the app');
 });
 
 test('characters: Claude and the original bodies need no fitting (their rig is drawn for them)', () => {
-  for (const def of Characters.list()) {
+  for (const def of Characters.list().filter((d) => ORIGINAL.includes(d.id))) {
     const fit = Characters.anchorVars(def);
     assert.equal(fit.fitted, false, def.id);
     assert.equal(fit.css['--eye-s'], '1');
