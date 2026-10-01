@@ -311,6 +311,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Teams and members (P2, D59–D62). The team comes from the URL; the
     // caller's membership in it is resolved before the handler runs.
     const teams = hub.teams;
+    route('POST', '/api/account/setup', ({ ident, ip }) => teams.setup(ident, { ip }), { auth: 'user' });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));

@@ -362,6 +362,16 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
 
     if (method === 'GET' && path === '/api/account') return needMe() ?? ok(account(me.user));
 
+    if (method === 'POST' && path === '/api/account/setup') {
+      if (needMe()) return needMe();
+      const current = account(me.user);
+      if (current.teams.length) return ok({ ...current, setup: 'existing' });
+      if (current.pending_invites.length) return ok({ ...current, setup: 'invited' });
+      const name = `${firstName(me.user).slice(0, 53)}'s team`;
+      const created = route('POST', '/api/teams', { name }, req, url);
+      return created.status === 200 ? ok({ ...account(me.user), setup: 'created' }) : created;
+    }
+
     if (method === 'DELETE' && path === '/api/account') {
       if (needMe()) return needMe();
       const id = String(body.flow_id ?? '');

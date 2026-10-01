@@ -755,8 +755,11 @@ test('the first run of an adapter that needs Automation explains why, once, and 
   const ex = createExplainer({ load: () => [], save: (l) => { saved = l; }, notify: (n) => notes.push(n), openSettings: () => {} });
   const s = sess({ ITERM_SESSION_ID: `w0t0p0:${UUID}`, TERM_PROGRAM: 'iTerm.app' });
   const { calls, exec } = fakeExec();
-  await Focus.focusSession(s, { exec, platform: 'darwin', onNeeds: (n) => ex.onNeeds(n) });
-  await Focus.focusSession(s, { exec, platform: 'darwin', onNeeds: (n) => ex.onNeeds(n) });
+  // Deadline assertions need a fixed clock: CI may spend a millisecond
+  // between deriving the deadline and passing its remaining time to exec.
+  const ctx = { exec, now: () => 1000, platform: 'darwin', onNeeds: (n) => ex.onNeeds(n) };
+  await Focus.focusSession(s, ctx);
+  await Focus.focusSession(s, ctx);
   assert.equal(notes.length, 1);
   assert.match(notes[0].title, /control iTerm2/);
   assert.match(notes[0].body, /exact iTerm2 tab/);

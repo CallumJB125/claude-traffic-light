@@ -95,8 +95,8 @@ jobs:
         run: |
           node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
 
-      # Gates tag builds only: beta and dry runs report failures without
-      # blocking packaging and the smoke test. Bounded, so a hung test can't
+      # Gates Mac and Linux builds, including beta and dry runs, so a green
+      # candidate job cannot hide failing tests. Bounded, so a hung test can't
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
       # The first release is macOS-first: the Windows suite only reports, and
@@ -117,7 +117,7 @@ jobs:
           run node --test --test-force-exit --test-timeout=120000 test/*.test.js test/adapters/*.test.js || status=1
           node --test --test-force-exit --test-timeout=120000 remote/test/*.test.js || status=1
           exit $status
-        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') || matrix.platform == 'win' }}
+        continue-on-error: ${{ matrix.platform == 'win' }}
 
       - name: Native helpers (Mac)
         if: matrix.platform == 'mac'

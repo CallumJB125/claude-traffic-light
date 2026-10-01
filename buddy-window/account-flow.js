@@ -192,7 +192,9 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   }
 
   async function refreshAccount(origin) {
+    const userId = userOf(origin)?.id;
     const r = await clientFor(origin).me();
+    if (!signedIn(origin) || userOf(origin)?.id !== userId) return { ok: false, error: 'The signed-in account changed. Try again.' };
     if (r.ok) accountSeen(origin, r);
     return r;
   }
@@ -288,17 +290,49 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   }
 
   // After any sign-in: an invite waiting on it, else invites addressed to
-  // this email, else the team board, else "create a team".
+  // this email, else the team board, else create the first team automatically.
   async function afterSignIn(origin) {
+    const userId = userOf(origin)?.id;
+    const current = () => signedIn(origin) && userOf(origin)?.id === userId;
     store.addHub(origin);
     trustedHub = null;
     const r = await refreshAccount(origin);
-    if (pendingInvite && (pendingInvite.hub ?? origin) === origin) { pendingInvite.hub = origin; acct.hub = origin; show('join'); return; }
+    let setupError = null;
+    if (!current()) return;
+    if (pendingInvite && (pendingInvite.hub ?? origin) === origin) {
+      // Opening an invite and signing in to accept it is already the join
+      // intent. Resume that action without asking for another Join click.
+      const inv = pendingInvite;
+      inv.hub = origin;
+      acct.hub = origin;
+      const preview = await clientFor(origin).previewInvite(inv.token);
+      if (pendingInvite !== inv || !current()) return;
+      if (!preview.ok) { show('join', { alert: preview.error }); return; }
+      const accepted = await clientFor(origin).acceptInvite({ t: inv.token });
+      if (pendingInvite !== inv || !current()) return;
+      const result = await joined(origin, accepted);
+      if (result.ok) return;
+      if (result.alreadyIn) { ui.switchWorkspace(result.alreadyIn); return; }
+      show('join', { alert: result.error });
+      return;
+    }
     if (r.ok && r.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+    if (r.ok && !r.teams?.length) {
+      const setup = await clientFor(origin).setupAccount();
+      if (!current()) return;
+      if (setup.ok) {
+        accountSeen(origin, setup);
+        // An invite may have arrived after the account read. The hub's
+        // atomic check takes priority over the client's earlier empty list.
+        if (setup.pending_invites?.length) { acct.hub = origin; show('invites'); return; }
+      } else {
+        setupError = setup.error;
+      }
+    }
     const first = store.list().find((w) => w.kind === 'team' && w.hub === origin);
     if (first) { ui.switchWorkspace(first.id); return; }
     acct.hub = origin;
-    show('create-team');
+    show('create-team', { alert: setupError });
   }
 
   function routePending() {

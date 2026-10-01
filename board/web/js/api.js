@@ -56,6 +56,7 @@ export const api = {
   me: () => call('GET', '/api/me'),
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
+  setupAccount: () => mut('POST', '/api/account/setup'),
   signout: () => mut('POST', '/api/auth/signout'),
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),

@@ -3,7 +3,8 @@
 // which never reaches the server; this script POSTs it, so a link scanner's
 // GET consumes nothing. Another browser than the one that asked must confirm.
 // An invite opened while signed out sends people here with #invite=<token>;
-// once signed in they go back to /invite with it (fragment only, never stored).
+// once signed in their explicit join resumes; failures return to /invite
+// with it (fragment only, never stored).
 import { accountErrorText, EMAIL_OFF, INVITE_TOKEN_RE, resendWaitS, resendWaitText } from './account-text.js';
 
 const $ = (id) => document.getElementById(id);
@@ -13,10 +14,10 @@ let busy = false;
 let invite = null;
 const asked = new Map(); // email → when this page asked for its codes
 
-async function call(method, path, body) {
+async function call(method, path, body, { csrf = null } = {}) {
   let res;
   try {
-    res = await fetch(path, { method, credentials: 'same-origin', headers: body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }); // privacy-flow: board-view
+    res = await fetch(path, { method, credentials: 'same-origin', headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); // privacy-flow: board-view
   } catch {
     return { ok: false, status: 0, error: null, data: null };
   }
@@ -54,7 +55,22 @@ async function askForCode() {
 async function verify(body) {
   showError(null);
   const r = await call('POST', '/api/auth/email/verify', body);
-  if (r.ok) { location.replace(invite ? `/invite#${invite}` : '/'); return; }
+  if (r.ok) {
+    if (invite) {
+      const joined = await call('POST', '/api/invites/accept', { t: invite }, { csrf: r.data?.csrf_token });
+      const team = joined.data?.team ?? (joined.data?.error?.code === 'ALREADY_MEMBER' ? joined.data.error.team : null);
+      if (team?.id && (joined.ok || joined.data?.error?.code === 'ALREADY_MEMBER')) {
+        location.replace(`/?org=${encodeURIComponent(String(team.id))}`);
+        return;
+      }
+      // Wrong-account, expired or rate-limited invitations retain their
+      // existing recovery actions; a failed join never creates a team.
+      location.replace(`/invite#${invite}`);
+      return;
+    }
+    location.replace('/');
+    return;
+  }
   if (r.error?.code === 'CONFIRM_REQUIRED') {
     $('email-form').hidden = true;
     $('code-form').hidden = true;

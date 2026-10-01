@@ -310,7 +310,10 @@ test('L1: all-wildcard rules, odd tool names, shell prefixes and home-equivalent
       ...(process.platform === 'darwin' ? [`/System/Volumes/Data${home}`, '/System/Volumes/Data'] : []), `${home}\u0000`]) {
       assert.equal(kept(dirs(d)), false, JSON.stringify(d));
     }
-    for (const d of [path.join(home, 'Desktop'), path.join(home, 'code', 'proj'), '/tmp', '/Applications']) assert.equal(kept(dirs(d)), true, d);
+    // /tmp contains this fixture's home on Linux, so correctly refused
+    // there. A sibling project exercises an allowed temporary directory.
+    assert.equal(kept(dirs(root)), false, 'the temporary home root is too broad');
+    for (const d of [path.join(home, 'Desktop'), path.join(home, 'code', 'proj'), path.join(root, 'project'), '/Applications']) assert.equal(kept(dirs(d)), true, d);
     // A symlink to home is home.
     const link = path.join(fs.mkdtempSync(path.join(root, 'link-')), 'h');
     fs.symlinkSync(home, link);

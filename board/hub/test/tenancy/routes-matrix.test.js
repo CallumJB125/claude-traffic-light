@@ -30,6 +30,7 @@ const MATRIX = {
   'POST /api/auth/oauth/exchange': { kind: 'public', reason: 'finishes a Google/GitHub sign-in; the flow, state and PKCE verifier are the credential (oauth.test.js)' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
+  'POST /api/account/setup': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
   'DELETE /api/account/devices/:id': { kind: 'cross', path: (fx) => `/api/account/devices/${fx.users.ub.device_id}` },
@@ -203,6 +204,24 @@ test('T-ROUTES: a signed-in user in no team gets 404 from every route that names
   } finally {
     await fx.h.close();
   }
+});
+
+test('T-SETUP: foreign team headers and claimed user ids cannot redirect first account setup', async () => {
+  const fx = await tenancy();
+  try {
+    const before = fx.snapshotB();
+    const r = await fx.as(fx.users.n, 'POST', '/api/account/setup', {
+      user_id: fx.users.ub.id, team_id: fx.B.team, org_id: fx.B.team, name: MARK,
+    }, { 'x-board-team': fx.B.team });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.setup, 'created');
+    assert.equal(r.body.user.id, fx.users.n.id);
+    assert.equal(r.body.teams.length, 1);
+    assert.notEqual(r.body.teams[0].id, fx.B.team);
+    assert.equal(fx.db.get('SELECT user_id FROM members WHERE org_id = ? AND role = ?', r.body.teams[0].id, 'owner').user_id, fx.users.n.id);
+    assert.ok(!r.text.includes(MARK) && !r.text.includes(fx.B.team) && !/beta\.test/.test(r.text));
+    assert.equal(fx.snapshotB(), before, 'foreign team is unchanged');
+  } finally { await fx.h.close(); }
 });
 
 test('T-ROUTES: the webhook ignores a signed-in caller: B\'s connection answers 401 to an unsigned post, with no B data', async () => {

@@ -36,6 +36,13 @@ export function teamName(v) {
   return s;
 }
 
+/** Default first team: the account's first name, within the ordinary name limit. */
+export function personalTeamName(user) {
+  const first = String(user.display_name ?? '').replace(/[\p{C}]/gu, '').trim().split(/\s+/u)[0]
+    .slice(0, NAME_MAX - 7).replace(/[\uD800-\uDBFF]$/, '');
+  return first ? `${first}'s team` : 'My team';
+}
+
 export function slugify(name) {
   const s = String(name).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
@@ -83,6 +90,21 @@ export class Teams {
   activeMembers(orgId) { return this.count('SELECT COUNT(*) AS n FROM members WHERE org_id = ? AND removed_at IS NULL', orgId); }
 
   // ── teams ─────────────────────────────────────────────────────────────────
+
+  /**
+   * POST /api/account/setup: only an empty account without a usable invite
+   * gets a first team. The check and ordinary creation share one immediate
+   * transaction, so simultaneous first sign-ins create it exactly once.
+   */
+  setup(ident, { ip }) {
+    return this.hub.txn(() => {
+      const account = this.accounts.account(ident);
+      if (account.teams.length) return { ...account, setup: 'existing' };
+      if (account.pending_invites.length) return { ...account, setup: 'invited' };
+      this.create(ident, { name: personalTeamName(ident.user) }, { ip });
+      return { ...this.accounts.account(ident), setup: 'created' };
+    });
+  }
 
   /** POST /api/teams {name, slug?} → {team, board}. The creator becomes owner. */
   create(ident, body, { ip }) {
