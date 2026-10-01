@@ -36,7 +36,7 @@ test('tray and widget right-click are built from the same template', () => {
   assert.match(main, /\.\.\.AppMenu\.appItems\(\{ pages: BuddyPages\.PAGES, groups: BuddyPages\.GROUPS, open: openBuddy/);
   assert.match(main, /buildWidgetMenu = buildMenu;\n\s+trayMenu = buildMenu\(\);/);
   assert.match(main, /const menu = buildWidgetMenu\('widget'\);/);
-  assert.match(main, /ipcMain\.handle\('widget-menu', \(e\) => \{\n\s+if \(!win \|\| win\.isDestroyed\(\) \|\| e\.sender !== win\.webContents\) return;/);
+  assert.match(main, /ipcMain\.handle\('widget-menu', \(e, opts\) => \{\n\s+if \(!win \|\| win\.isDestroyed\(\) \|\| e\.sender !== win\.webContents\) return;\n\s+if \(!\(opts && opts\.menu === true\)\) \{ openBuddy\(\); return; \}/);
 });
 
 test('app menu: every page is there, soon ones disabled, actions open the page', () => {

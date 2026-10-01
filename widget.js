@@ -461,8 +461,10 @@ document.getElementById('gear').addEventListener('click', (e) => { e.stopPropaga
 document.getElementById('help').addEventListener('mousedown', (e) => e.stopPropagation());
 document.getElementById('help').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.openHelp(); });
 
-// Right-click the widget → the full app menu (the tray's), on every platform.
+// Right-click the widget → the Plexiform window (one app, on the last page).
+// Shift- or Option-right-click → the tray's menu, which on Linux without a
+// tray is the only way to reach Quit.
 app.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  window.trafficLight.widgetMenu();
+  window.trafficLight.widgetMenu(e.shiftKey || e.altKey);
 });
