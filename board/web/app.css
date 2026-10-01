@@ -1250,6 +1250,9 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .calendar-day.outside-month { background: var(--bg); }
 .planner-card { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); }
 .planner-card .card-open, .planner-card .muted { flex-basis: 100%; text-align: left; overflow-wrap: anywhere; }
+.planner-card .card-open::after { content: none; }
+.planner-card .card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.planner-card .card-open[draggable="true"] { -webkit-user-drag: element; user-select: none; }
 .planning-editor { padding: 16px; margin-bottom: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); }
 .planning-editor form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 .planning-editor label { display: flex; flex-direction: column; gap: 4px; }

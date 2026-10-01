@@ -32,7 +32,7 @@ const cards = [
 const dash = (extra = {}) => model([], { view: 'dashboard', dashboard: { status: 'ok', error: null, updated_at: NOW, metrics: dashboardMetrics({ rows, cards, now: NOW }), ...extra } });
 
 test('Dashboard is a view in the switcher', () => {
-  assert.deepEqual(VIEWS.filter((v) => v.switcher !== false).map((v) => v.id), ['board', 'table', 'dashboard']);
+  assert.deepEqual(VIEWS.filter((v) => v.switcher !== false).map((v) => v.id), ['board', 'table', 'calendar', 'timeline', 'dashboard']);
 });
 
 test('loading, error and empty states', () => {
