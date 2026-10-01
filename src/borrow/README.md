@@ -115,6 +115,63 @@ See the header of `registry.js`: `files`/`dirs` entries may be `{ path, platform
 tables, `allowBlocked` lists the blocklisted paths a source may read (only `~/.ssh/config`,
 opt-in). The listing commands the scanner may run are exactly the registry's `exec` items.
 
+## Read-only transaction core
+
+`transaction-targets.js`, `transaction-core.js` and `transaction-store.js` are
+private main-process modules. They are not wired to Apply, Undo, renderer IPC or
+remote tools in this checkpoint. Their constructors take registered identity,
+source-read and native-confirmation callbacks; a caller cannot supply a target
+path, URL, token, command or execution capability.
+
+The closed target map supports replacement planning for Codex instructions and
+strict JSON object planning for Claude and Gemini settings. JSON merge keeps
+untouched local bytes exactly, retains conflicting local values by default and
+replaces only explicitly selected top-level value ranges. Duplicate decoded
+keys, ambiguous JSON, nonfinite numbers, unknown choices and oversized files
+refuse. TOML, Git includes and Ghostty includes have fixed review recipes but
+remain explicitly unavailable until their format adapters are reviewed. Other
+registry sources and package inventories cannot obtain a target plan here.
+
+Plans bind the current account, team, member, device, dialog generation,
+canonical OS profile, exact immutable source version, local file identity and
+before/proposed hashes. Each plan lasts ten minutes and is consumed once before
+its queue or confirmation waits. Current authority and expiry are checked after
+every await and inside the profile queue. Instructions and code-bearing
+configuration require separate explicit choices. Preparing a plan changes no
+tool file and runs no process. Local values are filled only in main memory;
+decoded JSON string masking prevents escaped local values appearing in previews.
+
+The app-owned `setups-transactions` directory uses private POSIX permissions,
+exclusive files, bounded regular nonblocking/nofollow reads and directory
+identity checks. Each transaction has a random key wrapped with OS safeStorage,
+and AES-256-GCM authenticates the encrypted manifest and before/shared/proposed
+snapshots against profile, transaction, recipe, role, hash and size. Snapshot
+files are synced before the prepared manifest, then the transaction directory
+and its parent are synced. A crash leaves encrypted incomplete records for
+review; records are never automatically discarded to make room. Limits are
+128 targets, 256 KiB per snapshot, 64 MiB per transaction, 128 MiB per store and
+16 incomplete transactions. This first immutable journal has only the
+`prepared` phase, so no completed-transaction retention or applied claim exists.
+
+There is no plaintext wrapping fallback. Linux `basic_text`, unknown or missing
+safeStorage backends refuse; see [Electron's platform semantics](https://www.electronjs.org/docs/latest/api/safe-storage).
+Windows refuses until the separately reviewed native directory privacy and
+rooted reader adapters are available. POSIX chmod cannot prove a Windows DACL.
+These Node pathname observations and app-owned journal writes do not provide a
+user-target content CAS, descriptor-relative mutation or protection from all
+competing writers. The native mutation helper, existing-file Apply,
+conditional Undo and preservation of displaced foreign edits remain separate
+implementation and acceptance gates.
+
+Recovery starts with opaque locked identifiers. A fresh foreground confirmation
+for the same canonical OS profile permits local content-match checks after
+sign-out or team revocation without restoring remote authority. Account/device/
+profile/dialog changes invalidate pending decisions and preview handles. Only
+the previously reviewed shared snapshot can be previewed after confirmation in
+this first core; local before/proposed previews remain withheld on restart until
+their explicit local-value masking can be safely reconstructed. Recovery never
+automatically changes a target file or starts a tool.
+
 ## Deferred sources
 
 Not in the registry yet (each needs its own format or merge rules): Windows Terminal
