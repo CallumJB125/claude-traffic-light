@@ -6,9 +6,13 @@ const fail=()=>{throw new Error('Plugin source is unavailable or differs from it
 const identity=s=>[s.dev,s.ino,s.mode,s.size,s.mtimeNs,s.ctimeNs].map(String).join(':');
 function readBounded(file,max,fsApi=fs){
   const before=fsApi.lstatSync(file,{bigint:true});if(!before.isFile()||before.nlink!==1n||before.size<1n||before.size>BigInt(max))fail();
-  const fd=fsApi.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+  const noFollow=fs.constants.O_NOFOLLOW,nonblock=fs.constants.O_NONBLOCK;
+  if(!Number.isInteger(noFollow)||noFollow<=0||!Number.isInteger(nonblock)||nonblock<=0)fail();
+  // A regular file can become a FIFO between lstat and open. Do not wait for a
+  // writer before fstat gets a chance to reject the actual opened file type.
+  const fd=fsApi.openSync(file,fs.constants.O_RDONLY|noFollow|nonblock);
   try{
-    const opened=fsApi.fstatSync(fd,{bigint:true});if(identity(opened)!==identity(before)||!opened.isFile()||opened.nlink!==1n)fail();
+    const opened=fsApi.fstatSync(fd,{bigint:true});if(!opened.isFile()||opened.nlink!==1n||identity(opened)!==identity(before))fail();
     const bytes=Buffer.alloc(Number(opened.size)+1);let count=0,n;
     do{n=fsApi.readSync(fd,bytes,count,bytes.length-count,null);count+=n;}while(n&&count<bytes.length);
     if(count!==Number(opened.size)||identity(fsApi.fstatSync(fd,{bigint:true}))!==identity(before)||identity(fsApi.lstatSync(file,{bigint:true}))!==identity(before))fail();
@@ -26,7 +30,9 @@ function verifySource(descriptor,{bundleRoot,fsApi=fs,clock=()=>performance.now(
   if(!descriptorValid(descriptor)||typeof bundleRoot!=='string'||!path.isAbsolute(bundleRoot))fail();
   const started=clock();let nodes=0,total=0;
   const budget=()=>{if(++nodes>LIMITS.nodes||clock()-started>LIMITS.timeoutMs)fail();};
-  const canonicalRoot=fsApi.realpathSync(bundleRoot);let root=canonicalRoot;const parents=[];
+  const lexicalRoot=path.resolve(bundleRoot),rootBefore=fsApi.lstatSync(lexicalRoot,{bigint:true});
+  if(!rootBefore.isDirectory()||rootBefore.isSymbolicLink())fail();
+  const canonicalRoot=fsApi.realpathSync(lexicalRoot);let root=canonicalRoot;const parents=[];
   const rememberParent=target=>{const s=fsApi.lstatSync(target,{bigint:true});if(!s.isDirectory()||s.isSymbolicLink())fail();parents.push({path:target,identity:identity(s)});};
   rememberParent(root);
   for(const part of descriptor.source.path.split('/')){root=path.join(root,part);rememberParent(root);}
@@ -66,7 +72,7 @@ function verifySource(descriptor,{bundleRoot,fsApi=fs,clock=()=>performance.now(
       if(!/^[a-z][a-z0-9-]{0,79}$/.test(name)||!closed(value,['url'])||!remoteURL(value.url))fail();servers.push({name,url:value.url});
     }
   }
-  if(clock()-started>LIMITS.timeoutMs||fsApi.realpathSync(root)!==root||parents.some(parent=>identity(fsApi.lstatSync(parent.path,{bigint:true}))!==parent.identity))fail();
+  if(clock()-started>LIMITS.timeoutMs||fsApi.realpathSync(root)!==root||fsApi.realpathSync(lexicalRoot)!==canonicalRoot||identity(fsApi.lstatSync(lexicalRoot,{bigint:true}))!==identity(rootBefore)||parents.some(parent=>identity(fsApi.lstatSync(parent.path,{bigint:true}))!==parent.identity))fail();
   return {root,package_hash:descriptor.package_sha256,descriptor_hash:hash(descriptor),bytes:total,files:files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0),directories:dirs,servers};
 }
 module.exports={verifySource,readBounded,remoteURL};

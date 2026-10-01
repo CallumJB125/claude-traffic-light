@@ -1,5 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+const {spawnSync}=require('node:child_process');
 const V=require('../src/plugins/index-verify'),{verifySource,readBounded,remoteURL}=require('../src/plugins/source-verify'),{createPluginPlanner,productionKeys,REQUIRED_COMMANDS}=require('../src/plugins/plan');
 const NOW=Date.parse('2026-10-01T12:00:00.000Z');
 const pair=crypto.generateKeyPairSync('ed25519'),keys=[{keyId:V.keyId(pair.publicKey),key:pair.publicKey}];
@@ -54,6 +55,12 @@ test('descriptor enforces all byte/file/entry bounds before filesystem reads',t=
 test('actual bounded local source matches full manifest/components/file bytes without writes',t=>{
   const f=fixture(t,{mcp:true}),before=fs.readFileSync(path.join(f.profile,'config.toml')),source=verifySource(f.descriptor,{bundleRoot:f.bundle});assert.equal(source.files.length,3);assert.equal(source.package_hash,f.descriptor.package_sha256);assert.deepEqual(source.servers,[{name:'docs',url:'https://docs.example.com/mcp'}]);assert.ok(fs.readFileSync(path.join(f.profile,'config.toml')).equals(before));
 });
+test('supplied bundle-root leaf links including trailing aliases are refused before any source content read',t=>{
+  const f=fixture(t),alias=path.join(f.dir,'bundle-alias');fs.symlinkSync(f.bundle,alias);let reads=0;
+  const fsApi=new Proxy(fs,{get(object,key){if(key==='readSync')return (...args)=>{reads++;return object.readSync(...args);};return object[key];}});
+  for(const bundleRoot of [alias,alias+'/',alias+'/.'])assert.throws(()=>verifySource(f.descriptor,{bundleRoot,fsApi}));assert.equal(reads,0);
+  assert.equal(verifySource(f.descriptor,{bundleRoot:f.bundle}).files.length,2);
+});
 for(const boundary of ['file-link','root-link','hardlink','extra-file','extra-directory','bytes','case-collision'])test(`actual source refuses ${boundary} without accepting foreign source bytes`,t=>{
   const f=fixture(t),target=path.join(f.root,'skills/delivery-review/SKILL.md'),outside=path.join(f.dir,'outside.md');fs.writeFileSync(outside,f.content.get('skills/delivery-review/SKILL.md'));
   if(boundary==='file-link'){fs.unlinkSync(target);fs.symlinkSync(outside,target);}
@@ -69,6 +76,17 @@ test('actual source refuses opened-file race and finite deadline',t=>{
   const f=fixture(t),target=fs.realpathSync(path.join(f.root,'skills/delivery-review/SKILL.md'));
   const fsApi=new Proxy(fs,{get(object,key){if(key==='openSync')return (...args)=>{const fd=object.openSync(...args);if(args[0]===target)object.writeFileSync(target,'Changed after no-follow open');return fd;};return object[key];}});
   assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,fsApi}));assert.throws(()=>verifySource(f.descriptor,{bundleRoot:f.bundle,clock:(()=>{let n=0;return ()=>n++*10000;})()}));assert.throws(()=>readBounded(target,1));
+});
+for(const boundary of ['read-fifo','read-directory','read-symlink','walk-fifo','walk-file','walk-symlink'])test(`actual bounded child refuses ${boundary} replacement without any content read`,t=>{
+  const f=fixture(t),reading=boundary.startsWith('read-'),target=reading?path.join(f.root,'skills/delivery-review/SKILL.md'):f.root,replacement=path.join(f.dir,'replacement');
+  if(boundary.endsWith('fifo')){const made=spawnSync('/usr/bin/mkfifo',[replacement],{shell:false,timeout:1000});assert.equal(made.status,0);}
+  if(boundary.endsWith('directory'))fs.mkdirSync(replacement);
+  if(boundary.endsWith('file'))fs.writeFileSync(replacement,'Synthetic replacement.');
+  if(boundary.endsWith('symlink'))fs.symlinkSync(reading?path.join(f.root,'plugin.json'):path.join(f.dir,'profile'),replacement);
+  const code=String.raw`const fs=require('node:fs');const {readBounded,verifySource}=require(process.argv[1]);const [target,replacement,boundary,bundle,raw]=process.argv.slice(2);let moved=false,reads=0;const f=new Proxy(fs,{get(object,key){if(key===(boundary.startsWith('read-')?'openSync':'opendirSync'))return(...args)=>{if(!moved){moved=true;fs.renameSync(target,target+'.preserved');fs.renameSync(replacement,target);}return object[key](...args);};if(key==='readSync')return(...args)=>{reads++;return object.readSync(...args);};return object[key];}});let refused=false;try{if(boundary.startsWith('read-'))readBounded(target,1024,f);else verifySource(JSON.parse(raw),{bundleRoot:bundle,fsApi:f});}catch{refused=true;}process.stdout.write(JSON.stringify({refused,reads,moved}));process.exitCode=refused&&reads===0&&moved?0:2;`;
+  const child=spawnSync(process.execPath,['-e',code,require.resolve('../src/plugins/source-verify'),target,replacement,boundary,f.bundle,JSON.stringify(f.descriptor)],{shell:false,encoding:'utf8',timeout:1000,maxBuffer:4096});
+  assert.equal(child.status,0,JSON.stringify({boundary,status:child.status,signal:child.signal,error:child.error?.code,stdout:child.stdout,stderr:child.stderr}));assert.deepEqual(JSON.parse(child.stdout),{refused:true,reads:0,moved:true});
+  const preserved=path.join(target+'.preserved',reading?'':'plugin.json');assert.ok(fs.existsSync(preserved));
 });
 test('remote MCP descriptions accept canonical public DNS only, without network lookup',()=>{
   assert.equal(remoteURL('https://docs.example.com/mcp'),true);
@@ -117,4 +135,11 @@ test('fresh private snapshot after source validation refuses an account switch a
 });
 test('default fixed bundled index remains unavailable without production keys or index files',async t=>{
   const f=fixture(t),planner=createPluginPlanner({snapshot:f.snapshot,bundleRoot:f.bundle});const result=await planner.plan('delivery-review');assert.equal(result.ok,false);assert.equal(result.status,'unavailable');assert.equal(result.plan,null);
+});
+for(const phase of ['snapshot','index','catalog','final-snapshot'])test(`existing plan expiry during awaited ${phase} withholds the reply and retires its handle`,async t=>{
+  const f=fixture(t);let hold=false,release,captures=0;
+  const options={...f.options,snapshot:()=>{captures++;return hold&&(phase==='snapshot'||phase==='final-snapshot'&&captures===4)?new Promise(r=>release=r):f.snapshot();},loadIndex:()=>hold&&phase==='index'?new Promise(r=>release=r):seal(f.index),loadCatalog:()=>hold&&phase==='catalog'?new Promise(r=>release=r):f.catalog};
+  const planner=createPluginPlanner(options),p=await planner.plan('delivery-review');assert.equal(p.ok,true);hold=true;const checking=planner.check(p.plan.id);
+  for(let i=0;i<30&&!release;i++)await new Promise(r=>setImmediate(r));assert.ok(release);f.advance(V.LIMITS.ttlMs+1);hold=false;release(phase.includes('snapshot')?f.snapshot():phase==='index'?seal(f.index):f.catalog);
+  const result=await checking;assert.equal(result.ok,false);assert.equal(result.plan,null);hold=false;assert.equal((await planner.check(p.plan.id)).ok,false);
 });

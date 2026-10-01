@@ -31,6 +31,12 @@ They are parsed locally; no DNS lookup or connection is made. All archives,
 remote retrieval and package-manager sources are unsupported and refused before
 filesystem traversal, so this stage never extracts an archive.
 
+File opens require the platform's no-follow and nonblocking flags before the
+opened regular-file identity check. A platform without either flag fails closed;
+it cannot silently turn a replaced FIFO into an unbounded wait. Directory/file
+replacement probes run in bounded real child processes as well as in-process
+identity checks.
+
 Bounds are 8 MiB/index, 1,024 bytes/signature, 1,000 index entries,
 1,000 files/package, 4 MiB/file, 128 MiB/package, 32 path levels,
 4,000 traversal operations and a five-second source-check deadline. Plans have

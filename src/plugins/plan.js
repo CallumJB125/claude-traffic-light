@@ -61,13 +61,13 @@ function createPluginPlanner({snapshot,bundleRoot=path.join(BUILD,'codex-plugins
       if(!entry||entry.expires<=now()||!live(entry.capture,token))return unavailable('expired-or-changed');
       if(pending>=LIMITS.concurrency)return unavailable('busy');pending++;
       try{
-        const before=await capture();if(!live(entry.capture,token)||!live(before,token)||before.fingerprint!==entry.capture.fingerprint)throw new Error('changed');
-        const verified=await index();if(!live(entry.capture,token)||verified.status!=='verified'||verified.index_hash!==entry.indexHash)throw new Error('changed');
-        const catalogBytes=await catalog();if(!live(entry.capture,token)||!Buffer.isBuffer(catalogBytes)||catalogBytes.length>LIMITS.indexBytes||hash(catalogBytes)!==verified.index.catalog_sha256)throw new Error('changed');
+        const before=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(before,token)||before.fingerprint!==entry.capture.fingerprint)throw new Error('changed');
+        const verified=await index();if(entry.expires<=now()||!live(entry.capture,token)||verified.status!=='verified'||verified.index_hash!==entry.indexHash)throw new Error('changed');
+        const catalogBytes=await catalog();if(entry.expires<=now()||!live(entry.capture,token)||!Buffer.isBuffer(catalogBytes)||catalogBytes.length>LIMITS.indexBytes||hash(catalogBytes)!==verified.index.catalog_sha256)throw new Error('changed');
         const descriptor=verified.index.entries.find(d=>d.id===entry.descriptor.id);if(!descriptor||hash(descriptor)!==entry.source.descriptor_hash)throw new Error('changed');
         const source=verifySource(descriptor,{bundleRoot,fsApi});
-        const after=await capture();if(!live(entry.capture,token)||!live(after,token)||before.fingerprint!==after.fingerprint||canonical(source)!==canonical(entry.source)||canonical(verifySource(descriptor,{bundleRoot,fsApi}))!==canonical(source))throw new Error('changed');
-        if(!live(after,token))throw new Error('changed');return publicPlan(entry);
+        const after=await capture();if(entry.expires<=now()||!live(entry.capture,token)||!live(after,token)||before.fingerprint!==after.fingerprint||canonical(source)!==canonical(entry.source)||canonical(verifySource(descriptor,{bundleRoot,fsApi}))!==canonical(source))throw new Error('changed');
+        if(entry.expires<=now()||!live(after,token))throw new Error('changed');return publicPlan(entry);
       }catch{plans.delete(planId);return unavailable('expired-or-changed');}finally{pending--;}
     },
   };
