@@ -29,7 +29,7 @@ git archive --format=tar HEAD board | $PI "set -e
   stage=\$(mktemp -d); tar -x -C \"\$stage\" -f -
   cd \"\$stage/board\" && npm ci --omit=dev --no-audit --no-fund >/dev/null
   echo $sha > \"\$stage/board/DEPLOYED_SHA\"
-  [ -f $ENV_FILE ] || { echo 'missing $ENV_FILE (create it from deploy/pi/hub.env.example first)' >&2; exit 1; }
+  sudo test -f $ENV_FILE || { echo 'missing $ENV_FILE (create it from deploy/pi/hub.env.example first)' >&2; exit 1; }
   sudo mkdir -p $APP_ROOT
   sudo rm -rf $APP_ROOT/board.prev
   [ -d $APP_ROOT/board ] && sudo mv $APP_ROOT/board $APP_ROOT/board.prev
