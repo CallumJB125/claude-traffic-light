@@ -69,15 +69,16 @@ export function accountErrorText(err, step) {
 
 // The hub's quiet limit on codes is 3 per 15 minutes for an address: past it
 // the answer looks the same but no mail goes and the newest flow is a dud, so
-// the page never asks a fourth time, and leaves a gap between asks.
+// the page never asks a fourth time. A new code for a sign-in still waiting
+// on one (resend) also waits a short gap after the last.
 export const RESEND = Object.freeze({ gapMs: 30_000, windowMs: 15 * 60_000, max: 3 });
 
 /** Seconds to wait before asking for another code (0: now), from when codes were asked for. */
-export function resendWaitS(sentAt, now) {
+export function resendWaitS(sentAt, now, { resend = true } = {}) {
   const recent = sentAt.filter((t) => now - t < RESEND.windowMs).sort((a, b) => a - b);
   if (recent.length >= RESEND.max) return Math.ceil((recent[recent.length - RESEND.max] + RESEND.windowMs - now) / 1000);
   const last = recent.at(-1);
-  return last != null && now - last < RESEND.gapMs ? Math.ceil((last + RESEND.gapMs - now) / 1000) : 0;
+  return resend && last != null && now - last < RESEND.gapMs ? Math.ceil((last + RESEND.gapMs - now) / 1000) : 0;
 }
 
 export const resendWaitText = (s) => (s <= 60 ? `You can ask for a new code in ${s} seconds.` : `You can ask for a new code in ${waitFor(s)}.`);

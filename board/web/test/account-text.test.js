@@ -36,12 +36,14 @@ test('every code gets a short plain sentence; nothing from the hub message leaks
   }
 });
 
-test('resend gate: 30 s between asks, at most 3 in 15 minutes', () => {
+test('resend gate: 30 s between a code and a new one, at most 3 in 15 minutes', () => {
   assert.equal(resendWaitS([], 0), 0);
   assert.equal(resendWaitS([0], 10_000), 20);
   assert.equal(resendWaitS([0], 30_000), 0);
   assert.equal(resendWaitS([0, 40_000, 80_000], 120_000), 780);
   assert.equal(resendWaitS([0, 40_000, 80_000], 900_000), 0);
+  assert.equal(resendWaitS([0], 10_000, { resend: false }), 0, 'signing in again is no resend');
+  assert.equal(resendWaitS([0, 40_000, 80_000], 120_000, { resend: false }), 780, 'the cap holds either way');
 });
 
 test('join: a code, a bare token or this board’s invite link; another board’s link is refused', () => {

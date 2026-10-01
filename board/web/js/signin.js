@@ -42,7 +42,7 @@ function codeStep(lead) {
 
 async function askForCode() {
   const times = asked.get(email) ?? [];
-  const wait = resendWaitS(times, Date.now());
+  const wait = resendWaitS(times, Date.now(), { resend: flowId != null });
   if (wait) { showError(resendWaitText(wait)); return false; }
   const r = await call('POST', '/api/auth/email/start', { email, client: 'web' });
   if (!r.ok || typeof r.data?.flow_id !== 'string') { showError(accountErrorText(errOf(r), 'start')); return false; }
