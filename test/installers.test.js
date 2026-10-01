@@ -331,13 +331,14 @@ test('release-promote.yml: the release environment, both keys only there, signed
   assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY \}\}/);
   assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY_BETA: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY_BETA \}\}/);
   assert.match(yml, /\npermissions:\n {2}contents: read\n/);
-  const order = ['gh release download', 'release-r2.js fetch-live live', 'release-r2.js fetch-live promoted', 'release-sign.js build assets', 'release-sign.js verify-files', 'release-r2.js "$cmd"', 'gh release edit'];
+  const order = ['gh release view', 'gh release download', 'release-r2.js fetch-live live', 'release-r2.js fetch-live promoted', 'release-sign.js build assets', 'release-sign.js verify-files', 'release-r2.js "$cmd"', 'gh release edit'];
   const at = order.map((s) => jobs.promote.indexOf(s));
   assert.ok(at.every((i) => i > 0), JSON.stringify(at));
   assert.deepEqual([...at].sort((a, b) => a - b), at, 'download, live, sign, check R2, promote R2, then publish on GitHub');
   assert.ok(!/resign/.test(jobs.promote), 'never re-signs what R2 serves');
   assert.match(jobs.promote, /extra=\(--rollback --promoted promoted /, 'N4: a rollback is checked against the release.json it was promoted with');
   assert.match(jobs.promote, /\n {6}WINDOWS_RELEASE: \$\{\{ vars\.WINDOWS_RELEASE \}\}\n/, 'N2: sign and promote read the repo variable');
+  assert.match(jobs.promote, /if: env\.WINDOWS_RELEASE != 'true'\n[\s\S]*?grep -E -- '-win-\|\^\(latest\|beta\|alpha\)\\\.yml\$'[\s\S]*?exit 1/, 'L2: a draft holding Windows files is refused unless Windows ships');
 });
 
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.

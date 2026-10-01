@@ -95,6 +95,19 @@ jobs:
             echo "CHANNEL=stable" >> "$GITHUB_ENV"; echo "R2_BETA=" >> "$GITHUB_ENV"
           fi
 
+      # Stage drops Windows files unless it ships, but a draft could still hold
+      # stale ones from an earlier run; publishing the draft would expose them.
+      - name: No Windows assets on the draft unless it ships
+        if: env.WINDOWS_RELEASE != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          win="$(gh release view "v$VERSION" --json assets --jq '.assets[].name' | grep -E -- '-win-|^(latest|beta|alpha)\.yml$' || true)"
+          if [ -n "$win" ]; then
+            echo "::error::v$VERSION's draft holds Windows files while WINDOWS_RELEASE is not true: $win"
+            exit 1
+          fi
+
       - name: Download the GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
