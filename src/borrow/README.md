@@ -19,6 +19,14 @@ Secret detection is `board/shared/secret-patterns.mjs` (shared with the board
 guard and the diagnostics scrubber). This folder adds only dotfile-specific
 layers: structure-aware redaction, machine-value templates, entropy.
 
+Scanner file opens require both no-follow and nonblocking platform flags, then
+check the actual opened regular file's identity before reading. This prevents a
+regular-to-FIFO replacement from waiting indefinitely for a writer. A platform
+without either protection skips the file with a fixed unavailable reason. Real
+bounded child-process tests cover FIFO, directory, link and changed regular-file
+replacements; this does not provide an atomic filesystem lock or an Apply/Undo
+mutation capability.
+
 ## Scrubber contract
 
 ```js
