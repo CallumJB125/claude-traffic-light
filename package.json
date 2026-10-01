@@ -19,6 +19,7 @@
     "predist:mac": "npm run calendar-helper && npm run voice-helper",
     "dist:mac": "electron-builder -c electron-builder.config.js --mac",
     "smoke": "node scripts/smoke-installed.js",
+    "forget-build": "node scripts/forget-local-build.js",
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",
     "tune": "electron tools/tuning-main.js",
