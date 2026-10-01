@@ -154,9 +154,10 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 // across before anything opens it (the instance lock, safeStorage, the
 // updater, the team window). Only for the installed app in its own folder:
 // not dev runs, a checkout, or a --user-data-dir run such as the smoke test.
+// The folder is worked out, not asked for: asking Electron for it creates it.
 const RenameMigration = require('./src/rename-migration.js');
-const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && app.getPath('userData') === path.join(app.getPath('appData'), app.getName());
-if (RENAME_MIGRATES) RenameMigration.copyUserData({ appData: app.getPath('appData'), userData: app.getPath('userData') });
+const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && !app.commandLine.hasSwitch('user-data-dir');
+if (RENAME_MIGRATES) RenameMigration.copyUserData({ appData: app.getPath('appData'), userData: path.join(app.getPath('appData'), app.getName()) });
 
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,

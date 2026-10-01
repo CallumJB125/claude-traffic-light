@@ -45,27 +45,42 @@ const SKIP = new Set([
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+// What Electron itself may have put in the new folder before main.js copies:
+// app.getPath('userData') creates it empty (seen on Electron 44), and a
+// crash reporter adds Crashpad. A folder holding only these was never used.
+const FRESH = new Set(['Crashpad', '.DS_Store']);
+
 /**
  * → { copied, from, to, entries?, skipped?, reason? }. Copies into a temp
  * folder beside the new one and renames it into place, so a crash halfway
- * leaves no new folder and the next launch copies again.
+ * leaves no new folder and the next launch copies again. A new folder that
+ * is fresh (see FRESH) is replaced; one this migration wrote, or one with
+ * anything else in it, is left alone.
  */
 function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = fs, log = console.log, pid = process.pid, now = () => new Date() }) {
   const from = path.join(appData, oldName);
   const to = userData;
-  if (fsImpl.existsSync(to)) return { copied: false, from, to, reason: 'the new folder already exists' };
+  const skip = (reason) => { log(`[rename] not copying ${from} to ${to}: ${reason}`); return { copied: false, from, to, reason }; };
+  if (fsImpl.existsSync(to)) {
+    if (readState(to, fsImpl)) return skip('already migrated');
+    let names = [];
+    try { names = fsImpl.readdirSync(to); } catch (err) { return skip(`the new folder can't be read (${err.message})`); }
+    const used = names.filter((n) => !FRESH.has(n));
+    if (used.length) return skip(`the new folder is already in use (${used.slice(0, 5).join(', ')}${used.length > 5 ? ', …' : ''})`);
+  }
   let stat = null;
   try { stat = fsImpl.lstatSync(from); } catch { /* no old install */ }
-  if (!stat || !stat.isDirectory()) return { copied: false, from, to, reason: 'no old folder' };
+  if (!stat || !stat.isDirectory()) return skip('no old folder');
 
   const prefix = `${path.basename(to)}.migrating-`;
   try {
     for (const n of fsImpl.readdirSync(path.dirname(to))) {
-      if (n.startsWith(prefix) && !alive(Number(n.slice(prefix.length)))) fsImpl.rmSync(path.join(path.dirname(to), n), { recursive: true, force: true });
+      if (n.startsWith(prefix) && !alive(parseInt(n.slice(prefix.length), 10))) fsImpl.rmSync(path.join(path.dirname(to), n), { recursive: true, force: true });
     }
   } catch { /* nothing to tidy */ }
 
   const tmp = `${to}.migrating-${pid}`;
+  const aside = `${tmp}.fresh`;
   const entries = new Set();
   const skipped = new Set();
   fsImpl.rmSync(tmp, { recursive: true, force: true });
@@ -85,11 +100,18 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
     });
     const state = { from, copiedAt: now().toISOString(), entries: [...entries].sort(), skipped: [...skipped].sort(), pending: STEPS.slice() };
     fsImpl.writeFileSync(path.join(tmp, STATE_FILE), JSON.stringify(state, null, 2), { mode: 0o600 });
-    fsImpl.renameSync(tmp, to);
+    // rename() onto a folder fails on Windows even when it is empty, so the
+    // fresh one goes aside first, and comes back if the copy can't take its place.
+    if (fsImpl.existsSync(to)) fsImpl.renameSync(to, aside);
+    try { fsImpl.renameSync(tmp, to); } catch (err) {
+      if (fsImpl.existsSync(aside) && !fsImpl.existsSync(to)) fsImpl.renameSync(aside, to);
+      throw err;
+    }
+    fsImpl.rmSync(aside, { recursive: true, force: true });
   } catch (err) {
     fsImpl.rmSync(tmp, { recursive: true, force: true });
     // Another launch got there first: its copy stands.
-    if (fsImpl.existsSync(to)) return { copied: false, from, to, reason: 'the new folder already exists' };
+    if (readState(to, fsImpl)) return skip('already migrated');
     log(`[rename] could not copy ${from} to ${to}: ${err.message}`);
     return { copied: false, from, to, reason: err.message };
   }
@@ -251,4 +273,4 @@ async function runFollowUp({ userData, steps, fsImpl = fs, log = console.log }) 
   }
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, oldAppPaths, offerRemoveOldApp, runFollowUp };
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, oldAppPaths, offerRemoveOldApp, runFollowUp };

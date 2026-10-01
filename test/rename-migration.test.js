@@ -90,9 +90,11 @@ test('userData: an existing new folder is never overwritten, and a second launch
   fs.mkdirSync(userData, { recursive: true });
   fs.writeFileSync(path.join(userData, 'Preferences'), 'mine');
   const existing = snapshot(userData);
-  const r = M.copyUserData({ appData, userData, log: quiet });
+  const logs = [];
+  const r = M.copyUserData({ appData, userData, log: (m) => logs.push(m) });
   assert.equal(r.copied, false);
-  assert.match(r.reason, /already exists/);
+  assert.match(r.reason, /already in use \(Preferences\)/);
+  assert.match(logs[0], /not copying .* already in use/);
   assert.deepEqual(snapshot(userData), existing);
   assert.equal(M.readState(userData), null);
 
@@ -101,10 +103,35 @@ test('userData: an existing new folder is never overwritten, and a second launch
   assert.equal(M.copyUserData({ appData, userData, log: quiet }).copied, true);
   const once = snapshot(userData);
   const oldOnce = snapshot(old);
-  assert.equal(M.copyUserData({ appData, userData, log: quiet }).copied, false);
+  const second = [];
+  assert.equal(M.copyUserData({ appData, userData, log: (m) => second.push(m) }).copied, false);
+  assert.match(second[0], /not copying .*: already migrated$/, 'the already-migrated branch is logged too');
   assert.deepEqual(snapshot(userData), once);
   assert.deepEqual(snapshot(old), oldOnce);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// Electron creates the new folder before main.js copies: getPath('userData')
+// makes it empty, a crash reporter adds Crashpad. Neither is a used folder.
+test('userData: a new folder Electron made (empty, or only Crashpad) is replaced by the copy; the old folder is untouched', () => {
+  for (const fresh of [[], ['Crashpad/'], ['Crashpad/settings.dat', 'Crashpad/attachments/', '.DS_Store']]) {
+    const home = tmpHome();
+    const { appData, old, userData } = oldProfile(home);
+    fs.mkdirSync(userData, { recursive: true });
+    for (const f of fresh) {
+      if (f.endsWith('/')) fs.mkdirSync(path.join(userData, f), { recursive: true });
+      else { fs.mkdirSync(path.dirname(path.join(userData, f)), { recursive: true }); fs.writeFileSync(path.join(userData, f), 'x'); }
+    }
+    const before = snapshot(old);
+    const r = M.copyUserData({ appData, userData, log: quiet });
+    assert.equal(r.copied, true, JSON.stringify(fresh));
+    assert.equal(fs.readFileSync(path.join(userData, 'Preferences'), 'utf8'), fs.readFileSync(path.join(old, 'Preferences'), 'utf8'));
+    assert.ok(!fs.existsSync(path.join(userData, 'Crashpad')), 'the fresh folder went, Crashpad with it');
+    assert.deepEqual(M.readState(userData).pending, M.STEPS);
+    assert.deepEqual(snapshot(old), before);
+    assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'no temp or set-aside folder left');
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('userData: nothing to copy without an old folder; a dead launch\'s half copy is cleared and the copy redone', () => {
@@ -349,7 +376,8 @@ test('main.js copies userData before the instance lock and anything else that op
   }
   const firstUserData = src.search(/getPath\('userData'\)/);
   assert.ok(firstUserData > src.indexOf('const RENAME_MIGRATES'), 'nothing reads userData before the migration decides');
-  assert.match(src, /const RENAME_MIGRATES = app\.isPackaged && !IS_DEV_RUN && app\.getPath\('userData'\) === path\.join\(app\.getPath\('appData'\), app\.getName\(\)\);/);
+  assert.match(src, /const RENAME_MIGRATES = app\.isPackaged && !IS_DEV_RUN && !app\.commandLine\.hasSwitch\('user-data-dir'\);/);
+  assert.match(src, /copyUserData\(\{ appData: app\.getPath\('appData'\), userData: path\.join\(app\.getPath\('appData'\), app\.getName\(\)\)/, 'the target is worked out, not getPath(userData), which would create it');
   // The follow-up runs before the startup hook check, and never for a smoke run.
   const follow = src.indexOf('if (RENAME_MIGRATES && gotLock) renameFollowUp()');
   assert.ok(follow > src.indexOf('if (smokeReport) {') && follow < src.indexOf('if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();'));
