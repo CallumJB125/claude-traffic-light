@@ -197,7 +197,8 @@ const METHODS = {
   },
 
   board_check_overlap(hub, ctx) {
-    return { overlaps: hub.overlapViews(ctx.row), locks: [], ...hub.ownership.snapshot(ctx) };
+    const ownership = hub.ownership.runnerRead(ctx);
+    return { overlaps: hub.overlapViews(ctx.row), locks: [], ...ownership };
   },
 
   board_recall(hub, { run, row }, params) {

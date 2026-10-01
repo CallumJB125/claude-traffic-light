@@ -16,6 +16,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   presence_member: { capacity: 60, per_ms: 60_000 },   // GET /api/boards/:id/presence (D37b)
   communication_write_member: { capacity: 60, per_ms: 3_600_000 },
   communication_read_member: { capacity: 60, per_ms: 60_000 },
+  ownership_read_member: { capacity: 60, per_ms: 60_000 }, // staff/runner projections, including declaration responses
   search_member: { capacity: 60, per_ms: 60_000 },     // bounded staff search, including invalid queries
   overview_member: { capacity: 30, per_ms: 60_000 },   // bounded selected-team overview
   workflow_member: { capacity: 20, per_ms: 3_600_000 }, // new definitions/versions/task sets

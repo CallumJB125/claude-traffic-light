@@ -7,14 +7,39 @@ import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
 import { packetRelativePath, cleanPacketText } from '../shared/packet-text.js';
 import { TeamCommunication } from './communication.js';
 import { HubError, json } from './db.js';
+import { limitOrThrow } from './ratelimit.js';
 
 export const OWNERSHIP_TTL_MS = 30_000;
-// Validated intents contain only literals or a terminal /**. Compare segment
-// prefixes directly, including a parent directory against a child's /**.
-const intersects = (a, b) => {
-  const left = a.replace(/\/\*\*$/, ''), right = b.replace(/\/\*\*$/, '');
-  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-};
+// Normalize each validated intent once. Literals and terminal /** prefixes
+// share conservative ancestor/descendant semantics at exact segment boundaries.
+const segments = (path) => path.replace(/\/\*\*$/, '').split('/');
+const node = () => ({ terminal: false, children: new Map() });
+function peerIndex(paths) {
+  const root = node();
+  for (const path of paths) {
+    let current = root;
+    for (const segment of segments(path)) {
+      if (current.terminal) break;
+      let child = current.children.get(segment);
+      if (!child) { child = node(); current.children.set(segment, child); }
+      current = child;
+    }
+    // A parent covers all its descendants; redundant source paths need no
+    // extra nodes. This index is discarded before processing the next peer.
+    current.terminal = true;
+    current.children.clear();
+  }
+  return root;
+}
+function intersectsIndex(root, pathSegments) {
+  let current = root;
+  for (const segment of pathSegments) {
+    if (current.terminal) return true;
+    current = current.children.get(segment);
+    if (!current) return false;
+  }
+  return current.terminal || current.children.size > 0;
+}
 export function ownershipPath(value) {
   const p = typeof value === 'string' ? packetRelativePath(value.replace(/\/$/, '')) : null;
   // Literal files/directories and a terminal /** directory prefix only. This
@@ -51,7 +76,11 @@ export class TaskOwnership {
     return this.hub.isAdmin(member) || [run.on_behalf_of, run.dispatched_by, ...this.hub.assignees(row.id), ...(policy?.approvals_from ?? [])].includes(member.id);
   }
   declare(ctx, paths, expectedGeneration) {
-    const scope = this.scope(ctx), record = this.register(scope.run, scope.row);
+    const scope = this.scope(ctx);
+    // Declarations also return a projection. Spend the shared member budget
+    // before registration or durable changes, never after a successful write.
+    limitOrThrow(this.hub, 'ownership_read_member', scope.member.id);
+    const record = this.register(scope.run, scope.row);
     if (record.board_id !== scope.row.board_id || record.repo_id !== scope.row.repo_id || record.fence !== scope.row.fence) throw new HubError('CONFLICT', 'ownership scope changed');
     const live = this.live.get(scope.run.id);
     if (record.intent_version && (record.hub_epoch !== this.hub.epoch || record.connection_generation !== scope.connection.generation
@@ -114,12 +143,20 @@ export class TaskOwnership {
       advisory: true, grants_execution: false, global_filesystem_lock: false };
   }
   snapshot(ctx, { boardIds = null } = {}) {
+    // Internal response after declare() already consumed the member quota.
+    // Read-only RPCs must enter through runnerRead(), staff through staffRead().
     const scope = this.scope(ctx);
     return this.snapshotFor(scope, { boardIds });
+  }
+  runnerRead(ctx, options = {}) {
+    const scope = this.scope(ctx);
+    limitOrThrow(this.hub, 'ownership_read_member', scope.member.id);
+    return this.snapshotFor(scope, options);
   }
   staffRead(member, cardId, cred = null, options = {}) {
     const communication = new TeamCommunication(this.hub);
     const initial = communication.human(member, cardId, cred);
+    limitOrThrow(this.hub, 'ownership_read_member', initial.member.id);
     return this.hub.withBoard(initial.row.board_id, () => {
       const scope = communication.human(member, cardId, cred);
       scope.run = this.hub.run(scope.row.active_run_id);
@@ -142,10 +179,12 @@ export class TaskOwnership {
     const selected = rows.slice(0, 50), intents = selected.map((r) => this.project(r));
     const own = scope.run && this.db.get('SELECT * FROM task_ownership WHERE run_id=?', scope.run.id);
     const paths = own ? json(own.paths, []) : [];
+    const ownSegments = paths.map(segments);
     return { ownership: this.project(own), ownership_intents: intents, ownership_truncated: rows.length > 50,
-      ownership_overlaps: selected.filter((p) => p.run_id !== scope.run?.id).flatMap((p) => {
-        const projection = this.project(p), peerPaths = json(p.paths, []);
-        const overlapping = paths.filter((a) => peerPaths.some((b) => intersects(a, b)));
+      ownership_overlaps: selected.flatMap((p, index) => {
+        if (p.run_id === scope.run?.id) return [];
+        const projection = intents[index], peers = peerIndex(json(p.paths, []));
+        const overlapping = paths.filter((_, i) => intersectsIndex(peers, ownSegments[i]));
         return overlapping.length ? [{ run_id: p.run_id, card_id: p.card_id, board_id: p.board_id, state: projection.state,
           paths: overlapping.slice(0, 20), paths_truncated: overlapping.length > 20 }] : [];
       }), advisory: true, grants_execution: false };
