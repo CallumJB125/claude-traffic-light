@@ -196,3 +196,50 @@ for (const kind of ['repo', 'assignee']) {
     } finally { await fx.h.close(); }
   });
 }
+
+for (const firstOperation of ['create', 'archive']) {
+  test(`concurrent ${firstOperation} and cross-route request reuse cannot both write`, async (t) => {
+    const fx = await tenancy();
+    let release;
+    t.after(() => release?.());
+    try {
+      let entered;
+      const ready = new Promise((resolve) => { entered = resolve; });
+      const held = fx.h.hub.withBoard(fx.A.board, () => { entered(); return new Promise((resolve) => { release = resolve; }); });
+      await ready;
+      const authenticate = fx.h.hub.accounts.authenticate.bind(fx.h.hub.accounts);
+      let accepted = 0;
+      let bothAccepted;
+      let deadline;
+      const observed = new Promise((resolve) => { bothAccepted = resolve; });
+      fx.h.hub.accounts.authenticate = (...args) => {
+        const result = authenticate(...args);
+        if (++accepted === 2) bothAccepted();
+        return result;
+      };
+      const rid = randomUUID();
+      const requestFor = (operation) => operation === 'create'
+        ? fx.as(fx.users.amember, 'POST', `/api/boards/${fx.A.board}/cards`, { request_id: rid, title: 'Concurrent collision' })
+        : fx.as(fx.users.amember, 'POST', `/api/cards/${fx.A.card}/archive`, { request_id: rid });
+      const before = fx.db.get('SELECT count(*) AS n FROM cards').n;
+      const first = requestFor(firstOperation);
+      const second = requestFor(firstOperation === 'create' ? 'archive' : 'create');
+      try {
+        await Promise.race([observed, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('both HTTP requests were not authenticated')), 5000); })]);
+        await new Promise((resolve) => setImmediate(resolve));
+      } finally {
+        clearTimeout(deadline);
+        release();
+        fx.h.hub.accounts.authenticate = authenticate;
+      }
+      await held;
+      const results = await Promise.all([first, second]);
+      // Network arrival can reverse the two requests; exactly one may write.
+      assert.deepEqual(results.map((r) => r.status).sort(), [200, 409], JSON.stringify(results.map((r) => r.body)));
+      assert.equal(results.find((r) => r.status === 409).body.error.code, 'CONFLICT');
+      const winner = results[0].status === 200 ? firstOperation : firstOperation === 'create' ? 'archive' : 'create';
+      assert.equal(fx.db.get('SELECT count(*) AS n FROM cards').n - before, winner === 'create' ? 1 : 0);
+      assert.equal(!!fx.h.hub.card(fx.A.card).archived_at, winner === 'archive');
+    } finally { release?.(); await fx.h.close(); }
+  });
+}
