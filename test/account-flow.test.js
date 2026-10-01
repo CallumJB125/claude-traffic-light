@@ -1457,7 +1457,9 @@ test('delete team (email:false): slug, a Google check for that team, DELETE with
   assert.equal((await h.A.teamDeleteOAuth(ws.id, 'google')).ok, true);
   let r = await h.flow.pendingDeleteCheck();
   assert.equal(r.ok, true, r.error);
-  assert.equal(h.hub.oauthStarts().at(-1).purpose, 'delete');
+  const teamStart = h.hub.oauthStarts().at(-1);
+  assert.deepEqual([teamStart.purpose, teamStart.team_id], ['delete_team', ws.teamId], 'the team’s check names the team');
+  assert.equal('device_name' in teamStart, false);
   s = await h.A.state();
   assert.equal(s.notice, 'Confirmed with Google.');
   assert.deepEqual([s.team.deleteStep.phase, s.team.deleteStep.provider], ['confirmed', 'Google']);
@@ -1491,6 +1493,36 @@ test('delete team (email:false): slug, a Google check for that team, DELETE with
   assert.equal(h.hub.liveTokens(), live);
   const spent = await hubCall(h, 'DELETE', '/api/account', { flow_id: r.flowId });
   assert.deepEqual([spent.status, spent.body.error.code], [401, 'STEP_UP_REQUIRED'], 'single use across both routes');
+}));
+
+test('the hub spends a provider check only where it was made: a team’s on that team, an account’s never on a team', async () => harness(async (h) => {
+  await providerAccount(h);
+  await h.A.createTeam('Alpha');
+  const a = h.store.active();
+  await h.A.createTeam('Beta');
+  const b = h.store.active();
+  const { pkcePair } = require('../buddy-window/oauth');
+  const c = createAccountClient({ origin: h.origin, store: h.vault(h.origin) });
+  const check = async (opts) => {
+    const p = pkcePair();
+    const st = await c.startOAuth('google', { challenge: p.challenge, redirectUri: 'http://127.0.0.1:9/callback' }, {}, opts);
+    assert.equal(st.ok, true, st.error);
+    const loc = (await fetch(st.url, { redirect: 'manual' })).headers.get('location');
+    const code = new URL(loc).searchParams.get('code');
+    const x = await c.exchangeOAuth({ flowId: st.flow_id, code, state: st.state, verifier: p.verifier, provider: 'google', purpose: opts.purpose });
+    assert.equal(x.ok, true, x.error);
+    return st.flow_id;
+  };
+  assert.equal((await hubCall(h, 'POST', '/api/auth/oauth/start', { provider: 'google', purpose: 'delete_team', code_challenge: 'x'.repeat(43), redirect_uri: 'http://127.0.0.1:9/callback' })).status, 400, 'delete_team needs team_id');
+  assert.match((await c.startOAuth('google', { challenge: 'x'.repeat(43), redirectUri: 'http://127.0.0.1:9/callback' }, {}, { purpose: 'delete_team' })).error, /valid team/);
+  const del = (ws, flow) => hubCall(h, 'DELETE', `/api/teams/${ws.teamId}`, { confirm_slug: ws.name.toLowerCase(), flow_id: flow });
+  const account = await check({ purpose: 'delete' });
+  assert.equal((await del(a, account)).status, 401, 'an account check never deletes a team');
+  const forA = await check({ purpose: 'delete_team', teamId: a.teamId });
+  assert.equal((await del(b, forA)).status, 401, 'Alpha’s check never deletes Beta');
+  assert.equal((await hubCall(h, 'DELETE', '/api/account', { flow_id: forA })).status, 401, 'a team’s check never deletes the account');
+  assert.equal((await del(a, forA)).status, 200);
+  assert.equal((await del(b, forA)).status, 401, 'spent');
 }));
 
 test('step-up codes count against the user, never lock the address out of sign-in; someone else’s flow is a plain INVALID_TOKEN', async () => harness(async (h) => {
@@ -1763,3 +1795,10 @@ test('P4: a member’s team screen offers revoke only on their own runner', asyn
   const s = await h.A.state();
   assert.deepEqual(s.runners.map((r) => [r.name, r.canRevoke]), [['Test Mac', true]], 'a member sees only their own');
 }, { live: true }));
+
+test('no copy promises to merge or link accounts: GitHub always makes its own account, Google joins only an authoritative address', () => {
+  const dir = path.join(__dirname, '..', 'buddy-window');
+  const texts = [...fs.readdirSync(dir).filter((f) => /\.(js|html)$/.test(f) && f !== 'mock-accounts-hub.js').map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]), ['PRIVACY.md', fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8')]];
+  const promise = [/\bmerg\w*\b[^.\n]{0,80}\baccounts?\b/i, /\baccounts?\b[^.\n]{0,80}\bmerg\w*/i, /\b(?:link|join|connect)s?\b[^.\n]{0,40}\b(?:to|with) (?:your|an|the) (?:existing |other )?account\b/i, /\bsame account\b/i];
+  for (const [f, t] of texts) for (const re of promise) assert.ok(!re.test(t), `${f}: ${t.match(re)?.[0]}`);
+});

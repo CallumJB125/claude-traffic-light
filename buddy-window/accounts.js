@@ -55,6 +55,8 @@ const INVITE_CODE_RE = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/;
 const ID_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 // The hub counts a verified delete flow as fresh for 5 minutes (D56).
 const STEP_UP_MS = 5 * 60_000;
+// Provider checks before a deletion: the account's, or one team's (which names that team at start).
+const STEP_UP_PURPOSES = ['delete', 'delete_team'];
 
 function routePath(name, params = {}) {
   return ROUTES[name][1].replace(/:(\w+)/g, (_m, k) => {
@@ -281,18 +283,22 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
     /**
      * Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller.
-     * `purpose:'delete'` is the account-deletion check instead: it goes with the Bearer, and names no
-     * device because no token comes of it.
+     * `purpose:'delete'` is the account-deletion check instead, and `'delete_team'` with `teamId` the
+     * check for deleting that one team: they go with the Bearer, and name no device because no token
+     * comes of them. The hub spends a team's check only on that team, and never on the account.
      */
     /** A transport pinned to one of the hub's addresses for a provider sign-in's start and exchange, or null. */
     oauthTransport: () => (pin ? pin(origin).catch(() => null) : Promise.resolve(null)),
 
-    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin', transport = null } = {}) {
+    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin', teamId = null, transport = null } = {}) {
       if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
-      const stepUp = purpose === 'delete';
-      const body = stepUp
-        ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' }
-        : { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) };
+      const stepUp = STEP_UP_PURPOSES.includes(purpose);
+      if (purpose === 'delete_team' && !ID_RE.test(String(teamId ?? ''))) return { ok: false, error: 'That isn’t a valid team.' };
+      const body = !stepUp
+        ? { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) }
+        : purpose === 'delete_team'
+          ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose, team_id: String(teamId) }
+          : { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' };
       const r = await call('oauthStart', { body, auth: stepUp, via: transport });
       if (!r.ok) return oauthOutcome(r, provider, host);
       // The hub mints the state: without one the loopback callback couldn't be checked.
@@ -306,7 +312,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
      * replaced this one) and the new token is revoked on the hub without ever being stored.
      */
     async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true, transport = null } = {}) {
-      if (purpose === 'delete') {
+      if (STEP_UP_PURPOSES.includes(purpose)) {
         // A deletion check proves who you are to the hub and nothing more: whatever else the answer
         // holds, only its expiry is read, and the vault is never touched.
         const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier }, via: transport });

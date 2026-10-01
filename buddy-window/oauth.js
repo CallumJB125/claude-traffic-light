@@ -125,24 +125,24 @@ function listenOnce({ state, brand, timeoutMs = LISTEN_MS, createServer = http.c
  * The whole provider sign-in against one hub's account client:
  *   listener up → POST oauth/start → system browser → callback → POST oauth/exchange.
  * → {done: Promise<{ok, user?} | {ok:false, error, cancelled?}>, cancel()}.
- * `purpose:'delete'` runs the same path as the account-deletion check: done is
- * then {ok, flowId, stepupUntil} and no token is involved.
+ * `purpose:'delete'` (the account) and `'delete_team'` with `teamId` (one team) run the same path as
+ * a deletion check: done is then {ok, flowId, stepupUntil} and no token is involved.
  * The verifier and the code live only in this closure; nothing here logs them.
  */
-function startProviderSignIn({ client, provider, purpose = 'signin', device = {}, openExternal, brand, allowOrigins = [], timeoutMs = LISTEN_MS, log = () => {} }) {
+function startProviderSignIn({ client, provider, purpose = 'signin', teamId = null, device = {}, openExternal, brand, allowOrigins = [], timeoutMs = LISTEN_MS, log = () => {} }) {
   let cancelled = false;
   let listener = null;
   const host = new URL(client.origin).host;
   const done = (async () => {
     if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
     const { verifier, challenge } = pkcePair();
-    try { listener = await listenOnce({ brand, timeoutMs, confirming: purpose === 'delete' }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
+    try { listener = await listenOnce({ brand, timeoutMs, confirming: purpose !== 'signin' }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
     // The hub refuses an exchange from another network than its start, once and for good: both go out
     // over one resolved address (so one address family), or both over the usual fetch.
     const transport = (await client.oauthTransport?.()) ?? null;
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
-    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose, transport });
+    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose, teamId, transport });
     if (cancelled || !start.ok) { listener.close(); return cancelled ? { ok: false, cancelled: true } : start; }
     // The hub's state: the loopback callback must carry exactly this, and the exchange sends it back.
     listener.expect(start.state);

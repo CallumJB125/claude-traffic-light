@@ -33,12 +33,13 @@
 // oauth/exchange checks sha256(verifier) = challenge, the state and the
 // code (single use, 10 minutes).
 //
-// The provider step-up for deleting an account (`purpose:'delete'`, for a hub
-// with no mailer): start and exchange need the Bearer; the exchange answers
-// `{stepup_until}` and never a token, and only when the provider identity is
-// one linked to the signed-in user (else the same INVALID_TOKEN as a bad
-// code). DELETE /api/account, or DELETE /api/teams/:id, then takes that
-// flow_id once, within 5 minutes.
+// The provider step-ups for a hub with no mailer: `purpose:'delete'` (the
+// account) and `purpose:'delete_team'` with `team_id` (one team): start and
+// exchange need the Bearer; the exchange answers `{stepup_until}` and never a
+// token, and only when the provider identity is one linked to the signed-in
+// user (else the same INVALID_TOKEN as a bad code). DELETE /api/account takes
+// only an account check (no team_id); DELETE /api/teams/:id only a check that
+// named that team. Each flow_id is spent once, within 5 minutes.
 //
 // The emailed step-ups: `purpose:'delete'` for the account and
 // `purpose:'delete_team'` for a team, both sent to the signed-in account's own
@@ -268,15 +269,17 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       oauthStarts.push({ ...body });
       const provider = body.provider;
       const purpose = body.purpose ?? 'signin';
-      if (!['signin', 'delete'].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
-      if (purpose === 'delete' && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
+      if (!['signin', ...STEP_UPS].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
+      if (STEP_UPS.includes(purpose) && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
+      // A team's check names its team; an account check with a team_id also serves only that team.
+      if (purpose === 'delete_team' && (typeof body.team_id !== 'string' || !body.team_id)) return err(400, 'VALIDATION', 'team_id required');
       if (!['google', 'github'].includes(provider) || !signInMethods[provider]) return err(400, 'VALIDATION', 'provider not enabled');
       if (!/^[A-Za-z0-9_-]{43}$/.test(String(body.code_challenge ?? ''))) return err(400, 'VALIDATION', 'bad code_challenge');
       if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/callback$/.test(String(body.redirect_uri ?? ''))) return err(400, 'VALIDATION', 'redirect_uri must be the loopback callback');
       // The hub mints the state (the app never sends one) and answers it with the flow.
       const id = crypto.randomBytes(18).toString('base64url');
       const state = crypto.randomBytes(32).toString('base64url');
-      oauthFlows.set(id, { provider, purpose, user_id: purpose === 'delete' ? me.user.id : null, challenge: body.code_challenge, redirect: body.redirect_uri, state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name, stepupUntil: null, used: false });
+      oauthFlows.set(id, { provider, purpose, user_id: STEP_UPS.includes(purpose) ? me.user.id : null, team_id: STEP_UPS.includes(purpose) && typeof body.team_id === 'string' ? body.team_id : null, challenge: body.code_challenge, redirect: body.redirect_uri, state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name, stepupUntil: null, used: false });
       return ok({ flow_id: id, url: `${base}/dev/oauth/authorize?flow=${id}`, state, expires_in: Math.round(CODE_TTL_MS / 1000) });
     }
 
@@ -296,9 +299,9 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     if (method === 'POST' && path === '/api/auth/oauth/exchange') {
       const f = oauthFlows.get(String(body.flow_id ?? ''));
       const invalid = () => err(400, 'INVALID_TOKEN', 'invalid sign-in');
-      if (f?.purpose === 'delete' && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
+      if (STEP_UPS.includes(f?.purpose) && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
       if (!f || f.expires <= now() || !f.codeHash || f.codeUsed) return invalid();
-      if (f.purpose === 'delete' && me.user.id !== f.user_id) return invalid();
+      if (STEP_UPS.includes(f.purpose) && me.user.id !== f.user_id) return invalid();
       if (sha(String(body.code ?? '')) !== f.codeHash) return invalid();
       // A right code is spent whatever else is wrong: no second try with it.
       f.codeUsed = true;
@@ -307,7 +310,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (got !== f.challenge) return invalid();
       const who = identities[f.provider];
       if (!who.verified) return err(403, 'EMAIL_UNVERIFIED', 'the provider has not verified this email');
-      if (f.purpose === 'delete') {
+      if (STEP_UPS.includes(f.purpose)) {
         // Only the same provider identity the account signs in with; never a token.
         if (!links.get(me.user.id)?.has(f.provider) || who.email !== me.user.email) return invalid();
         f.stepupUntil = now() + STEP_UP_MS;
@@ -365,7 +368,8 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       const f = flows.get(id);
       const emailOk = f && f.purpose === 'delete' && f.user_id === me.user.id && !f.used && f.verifiedAt && now() - f.verifiedAt <= STEP_UP_MS;
       const o = oauthFlows.get(id);
-      const oauthOk = o && o.purpose === 'delete' && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
+      // Only an account check: one that names a team never deletes the account.
+      const oauthOk = o && o.purpose === 'delete' && !o.team_id && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
       if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete' });
       const sole = [];
       for (const mm of members.filter((x) => x.user_id === me.user.id && x.role === 'owner')) {
@@ -443,7 +447,8 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
           const f = flows.get(id);
           const emailOk = f && f.purpose === 'delete_team' && f.user_id === me.user.id && !f.used && f.verifiedAt && now() - f.verifiedAt <= STEP_UP_MS;
           const o = oauthFlows.get(id);
-          const oauthOk = o && o.purpose === 'delete' && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
+          // Only a provider check that named this team at start.
+          const oauthOk = o && STEP_UPS.includes(o.purpose) && o.team_id === teamId && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
           if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete_team' });
           (emailOk ? f : o).used = true;
           team.deleted = true;

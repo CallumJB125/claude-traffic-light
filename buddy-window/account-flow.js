@@ -113,7 +113,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   function beginDeleteCheck(step, provider) {
     cancelDeleteRun();
     step.confirmed = null;
-    const run = startProviderSignIn({ client: clientFor(step.hub), provider, purpose: 'delete', openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
+    // A team's check names its team, so the hub spends it on that team only (and never on the account).
+    const run = startProviderSignIn({ client: clientFor(step.hub), provider, ...(step.team ? { purpose: 'delete_team', teamId: step.team.teamId } : { purpose: 'delete' }), openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
     const me = { hub: step.hub, step, provider, run };
     const screen = step.team ? 'team' : 'account';
     me.done = run.done.then((r) => {
