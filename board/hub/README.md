@@ -78,10 +78,16 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_GITHUB_CLIENT_SECRET` | — | `accounts`: that app's client secret. Removed from the environment once read |
 | `BOARD_ACCOUNTS_DEV` | off | `accounts`, loopback bind only: allow running with no `BOARD_PUBLIC_URL` (a local try-out and tests) |
 | `BOARD_RESEND_API_KEY` | — | `accounts`, optional: Resend API key (sending access); with it the hub mails email sign-in codes and invites. Removed from the environment once read. Unset: no mailer, `/api/auth/email/*` answer `404 METHOD_DISABLED` and invites are shared by the inviter (D66) |
+| `BOARD_MAIL_PROVIDER` | — | `accounts`, optional: `resend` or `ses`. Unset: Resend when `BOARD_RESEND_API_KEY` is set, else no mailer. Anything else, a provider without its settings, a `BOARD_SES_*` variable (`BOARD_SES_FROM_FORMAT` included) without `ses`, or `ses` together with `BOARD_RESEND_API_KEY`, refuses to start (D66 addendum) |
+| `BOARD_SES_REGION` | — | With `ses`: the SES region, e.g. `af-south-1` (`^[a-z]{2}(-[a-z]+)+-[0-9]$`). Mail goes only to `https://email.<region>.amazonaws.com` |
+| `BOARD_SES_ACCESS_KEY_ID` | — | With `ses`: the IAM access key id (`^[A-Z0-9]{16,128}$`) |
+| `BOARD_SES_SECRET_ACCESS_KEY` | — | With `ses`: its secret (1–256 printable characters). Removed from the environment once read, never logged or serialised |
+| `BOARD_SES_SESSION_TOKEN` | — | With `ses`, optional: a session token for temporary credentials (sent as `x-amz-security-token`). Never refreshed: sends fail with `ExpiredToken` once it expires. Removed from the environment once read |
+| `BOARD_SES_FROM_FORMAT` | `display` | With `ses`: `display` sends `BOARD_MAIL_FROM` as given (`Name <addr>`, the name plain ASCII or RFC 2047 words, or a quoted string without quotes or backslashes inside); `bare` sends only the address inside the angle brackets |
 | `BOARD_CONSOLE_MAILER` | off | `accounts`, loopback bind and not exposed only: print mails to stderr instead (a local try-out) |
 | `BOARD_AUTH_FAIL_BUDGET` | `20` | `accounts`: wrong email codes per address per 24 h before it is locked out (the lockout doubles on each exhaustion, up to 24 h); 1–100 |
 | `BOARD_MAIL_DAILY_CAP` | `2000` | `accounts`: sign-in, invite and notice mails the hub sends per day, all addresses together, at most half of them to addresses without an account; over it, sign-in starts are silent and invites are not mailed |
-| `BOARD_MAIL_FROM` | — | `accounts` with Resend: the From address, e.g. `Plexiform <signin@mail.example.com>` |
+| `BOARD_MAIL_FROM` | — | `accounts` with Resend or SES: the From address, one line, e.g. `Plexiform <signin@mail.example.com>` |
 | `BOARD_DOWNLOAD_URL` | — | `accounts`: https URL of the desktop app download. `/download` (the invite page's "Download Plexiform for Mac" button) redirects there; unset → `404` |
 | `BOARD_DEV_LOGIN_SECRET` | random per start | With `BOARD_AUTH=dev`: the secret `/api/dev/login` requires in the `Board-Dev-Secret` header (≥ 16 bytes). Unset: a fresh one is generated and printed to stderr at startup as `http://<bind>:<port>/#dev_secret=…` (the web keeps it for the tab) |
 | `BOARD_DEV_SEED` | off | `1`: create org `dev`, board `DEV`, members `alice` (owner) and `bob`. Only with `BOARD_AUTH=dev` |
@@ -128,6 +134,43 @@ dbs:
 To restore: stop the hub, run `litestream restore -o /srv/board/data/board.db s3://bucket/board`,
 `touch /srv/board/data/board.db.restored`, then start the hub. The marker triggers
 the +1000 fence bump, so a zombie runner holding a pre-restore fence is always FENCED.
+
+## Sending mail with Amazon SES (operator note)
+
+Set `BOARD_MAIL_PROVIDER=ses`, `BOARD_SES_REGION`, `BOARD_SES_ACCESS_KEY_ID`,
+`BOARD_SES_SECRET_ACCESS_KEY`, `BOARD_MAIL_FROM` (and `BOARD_SES_SESSION_TOKEN` only
+for temporary credentials; `BOARD_SES_FROM_FORMAT` if needed, below). The hub signs
+its own requests (SigV4, no AWS SDK) and talks only to `email.<region>.amazonaws.com`.
+
+- The credentials go in the hub's environment file on the hub host (mode 600),
+  never in the repository, a compose file that is committed, or a ticket.
+- The supported setup is a long-lived IAM user access key allowed only
+  `ses:SendEmail` on the sending identity's ARN
+  (`arn:aws:ses:<region>:<account>:identity/<domain>`), with a
+  `ses:FromAddress` condition naming the From address. The hub never refreshes
+  a `BOARD_SES_SESSION_TOKEN`: with temporary (STS) credentials every send fails
+  with `SES answered 403 (ExpiredToken)` once they expire, until the operator
+  sets fresh ones and restarts the hub.
+- Addresses are ASCII only (SES's own rule): a recipient with a non-ASCII
+  character, a quoted local part, a comment or an address literal gets no mail,
+  and the person signing in sees the same answer as anyone else.
+- The sender domain needs a verified SES identity in that region, with its DKIM
+  CNAME records published in DNS.
+- A new SES account starts in the sandbox: it sends only to verified addresses and
+  at most 200 mails a day. Production access needs a request to AWS. The hub's own
+  `BOARD_MAIL_DAILY_CAP` still applies on top.
+- If the first real send fails with `SES answered 403 (AccessDenied)` in
+  the log, the IAM `ses:FromAddress` condition may want the bare address: set
+  `BOARD_SES_FROM_FORMAT=bare` and restart the hub.
+- A failed send is logged as `sign-in mail failed` (or `invite mail failed`, …)
+  with `mailer: "ses"` and a fixed `err` text: `SES answered <status>`, plus a
+  short tag such as `(MessageRejected)`, `(MailFromDomainNotVerified)`,
+  `(AccountSuspended)`, `(SendingPaused)`, `(Throttling)` or `(TooManyRequests)`
+  when SES names one; `(RequestExpired)` means the hub host's clock is off by
+  more than a few minutes; `SES request timed out`; `SES request failed`;
+  `SES answer was not understood`. Never the
+  address, SES's message text, a header or a credential. The person signing in
+  sees the same answer either way (the code just does not arrive).
 
 ## Deleting accounts and teams without a mailer
 

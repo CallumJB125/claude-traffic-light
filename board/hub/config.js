@@ -40,6 +40,10 @@ export function loadConfig(env = process.env) {
     trustCfIp: flag(env.BOARD_TRUST_CF_IP),
     resendApiKey: env.BOARD_RESEND_API_KEY || null,
     mailFrom: env.BOARD_MAIL_FROM || null,
+    mailProvider: env.BOARD_MAIL_PROVIDER || null,
+    sesRegion: env.BOARD_SES_REGION || null,
+    // Raw, so a stray value without BOARD_MAIL_PROVIDER=ses is caught; 'display' is applied where it is used.
+    sesFromFormat: env.BOARD_SES_FROM_FORMAT || null,
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -68,6 +72,15 @@ export function loadConfig(env = process.env) {
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
     ...(env.BOARD_WEBHOOK_READ_MS ? { webhookReads: { deadlineMs: int(env.BOARD_WEBHOOK_READ_MS, 3_000) } } : {}),
   };
+  // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
+  const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
+  Object.defineProperties(cfg, {
+    sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
+    sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
+    sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
+  });
+  delete env.BOARD_SES_SECRET_ACCESS_KEY;
+  delete env.BOARD_SES_SESSION_TOKEN;
   delete env.BOARD_LOCAL_SECRET;
   delete env.BOARD_RESEND_API_KEY;
   delete env.BOARD_GOOGLE_CLIENT_SECRET;
@@ -81,6 +94,73 @@ export function isExposed(cfg) {
   if (cfg.tunnelProbeUrl) return true;
   if (!cfg.publicUrl) return false;
   try { return !isLoopback(new URL(cfg.publicUrl).hostname.replace(/^\[|\]$/g, '')); } catch { return true; }
+}
+
+export const MAIL_PROVIDERS = Object.freeze(['resend', 'ses']);
+export const SES_REGION = /^[a-z]{2}(-[a-z]+)+-[0-9]$/;
+export const SES_ACCESS_KEY_ID = /^[A-Z0-9]{16,128}$/;
+export const PRINTABLE_256 = /^[\x21-\x7e]{1,256}$/;
+export const PRINTABLE_4096 = /^[\x21-\x7e]{1,4096}$/;
+// ASCII only, dot-atom local part, hostname labels: what SES takes, with no
+// room for a parsing differential between the hub and SES (no quoted local
+// part, comment or address literal).
+const MAIL_ADDRESS = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+// A From display name: plain atext and spaces (RFC 2047 encoded words fit), or one quoted string without quotes or backslashes inside.
+const DISPLAY_NAME = /^(?:[A-Za-z0-9!#$%&'*+\/=?^_`{|}~ -]*| *"[\x20\x21\x23-\x5b\x5d-\x7e]*" *)$/;
+const NAME_ADDR = /^([^<>]*)<([^<>]+)>$/;
+
+/** The mailer the config asks for: 'resend', 'ses' or null. Unset BOARD_MAIL_PROVIDER keeps D66: Resend when its key is set. */
+export function mailProvider(cfg) {
+  if (cfg.mailProvider) return cfg.mailProvider;
+  return cfg.resendApiKey ? 'resend' : null;
+}
+
+export function isMailAddress(s) {
+  if (typeof s !== 'string' || s.length > 254 || !MAIL_ADDRESS.test(s)) return false;
+  const local = s.slice(0, s.indexOf('@'));
+  return !local.startsWith('.') && !local.endsWith('.') && !local.includes('..');
+}
+
+/** False when a `Name <addr>` From has a name SES and mail clients might read differently (not plain ASCII, not one clean quoted string). */
+export function isDisplayName(from) {
+  const m = NAME_ADDR.exec(from);
+  return !m || DISPLAY_NAME.test(m[1]);
+}
+
+/**
+ * SES FromEmailAddress for BOARD_MAIL_FROM, or null when unusable. 'display'
+ * sends it as given (after checking the address and the name); 'bare' only the
+ * address inside "Name <addr>", for an IAM ses:FromAddress condition that may
+ * compare against the bare address.
+ */
+export function sesFromAddress(from, format) {
+  if (typeof from !== 'string' || !from || from.length > 320 || /[\p{C}\u2028\u2029]/u.test(from)) return null;
+  if (format !== 'display' && format !== 'bare') return null;
+  if (!from.includes('<') && !from.includes('>')) return isMailAddress(from) ? from : null;
+  const m = NAME_ADDR.exec(from);
+  if (!m || !isMailAddress(m[2])) return null;
+  if (format === 'bare') return m[2];
+  return isDisplayName(from) ? from : null;
+}
+
+// Fixed texts only: a value here may be a credential.
+function validateMail(cfg) {
+  const sesSet = cfg.sesRegion || cfg.sesAccessKeyId || cfg.sesSecretAccessKey || cfg.sesSessionToken || cfg.sesFromFormat;
+  if (cfg.mailProvider && !MAIL_PROVIDERS.includes(cfg.mailProvider)) throw new Error(`BOARD_MAIL_PROVIDER takes ${MAIL_PROVIDERS.join(' or ')}`);
+  if (sesSet && cfg.mailProvider !== 'ses') throw new Error('BOARD_SES_* is set but BOARD_MAIL_PROVIDER is not ses');
+  if (cfg.mailProvider === 'resend' && !cfg.resendApiKey) throw new Error('BOARD_MAIL_PROVIDER=resend needs BOARD_RESEND_API_KEY');
+  if (cfg.mailProvider === 'ses' && cfg.resendApiKey) throw new Error('BOARD_RESEND_API_KEY is set but BOARD_MAIL_PROVIDER is ses');
+  if (cfg.mailProvider !== 'ses') return;
+  if (!cfg.sesRegion || !cfg.sesAccessKeyId || !cfg.sesSecretAccessKey) throw new Error('BOARD_MAIL_PROVIDER=ses needs BOARD_SES_REGION, BOARD_SES_ACCESS_KEY_ID and BOARD_SES_SECRET_ACCESS_KEY');
+  if (!cfg.mailFrom) throw new Error('BOARD_MAIL_PROVIDER=ses needs BOARD_MAIL_FROM');
+  if (typeof cfg.sesRegion !== 'string' || !SES_REGION.test(cfg.sesRegion)) throw new Error('BOARD_SES_REGION must look like af-south-1');
+  if (typeof cfg.sesAccessKeyId !== 'string' || !SES_ACCESS_KEY_ID.test(cfg.sesAccessKeyId)) throw new Error('BOARD_SES_ACCESS_KEY_ID is not an AWS access key id');
+  if (typeof cfg.sesSecretAccessKey !== 'string' || !PRINTABLE_256.test(cfg.sesSecretAccessKey)) throw new Error('BOARD_SES_SECRET_ACCESS_KEY must be 1 to 256 printable characters');
+  if (cfg.sesSessionToken != null && (typeof cfg.sesSessionToken !== 'string' || !PRINTABLE_4096.test(cfg.sesSessionToken))) throw new Error('BOARD_SES_SESSION_TOKEN must be 1 to 4096 printable characters');
+  const format = cfg.sesFromFormat ?? 'display';
+  if (format !== 'display' && format !== 'bare') throw new Error('BOARD_SES_FROM_FORMAT takes display or bare');
+  if (format === 'display' && typeof cfg.mailFrom === 'string' && !isDisplayName(cfg.mailFrom)) throw new Error('BOARD_MAIL_FROM display name must be plain ASCII or RFC 2047 words');
+  if (!sesFromAddress(cfg.mailFrom, format)) throw new Error('BOARD_MAIL_FROM is not a usable From address');
 }
 
 export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
@@ -109,6 +189,7 @@ function validateAccounts(cfg) {
   if (url && url.protocol !== 'https:' && !isLoopback(url.hostname.replace(/^\[|\]$/g, ''))) throw new Error('BOARD_PUBLIC_URL must be https unless it names a loopback host');
   if (cfg.trustCfIp && !loop) throw new Error('BOARD_TRUST_CF_IP needs a loopback bind (cloudflared on the same host is the only ingress)');
   if (cfg.resendApiKey && !cfg.mailFrom) throw new Error('BOARD_RESEND_API_KEY needs BOARD_MAIL_FROM');
+  validateMail(cfg);
   const methods = cfg.signinMethods ?? [];
   const bad = methods.filter((m) => !SIGNIN_METHODS.includes(m));
   if (bad.length) throw new Error(`BOARD_SIGNIN_METHODS takes ${SIGNIN_METHODS.join(', ')} (got ${bad.join(', ')})`);
@@ -116,7 +197,7 @@ function validateAccounts(cfg) {
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
     if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
-    if (!cfg.resendApiKey && !methods.length && !oauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM)');
+    if (!mailProvider(cfg) && !methods.length && !oauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
   if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');

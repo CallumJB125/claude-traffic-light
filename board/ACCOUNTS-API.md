@@ -13,7 +13,7 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 
 ## Sign-in methods and mail (D66)
 
-The hub sends **no mail unless a mailer is configured**, and none is required. Sign-in is meant to be Google or GitHub (see "OAuth sign-in" below); the email one-time code exists only on a hub with a mailer (`BOARD_RESEND_API_KEY` + `BOARD_MAIL_FROM`).
+The hub sends **no mail unless a mailer is configured**, and none is required. Sign-in is meant to be Google or GitHub (see "OAuth sign-in" below); the email one-time code exists only on a hub with a mailer (`BOARD_RESEND_API_KEY` + `BOARD_MAIL_FROM`, or `BOARD_MAIL_PROVIDER=ses` with the `BOARD_SES_*` settings: `hub/README.md`).
 
 ### `GET /api/auth/methods`
 
