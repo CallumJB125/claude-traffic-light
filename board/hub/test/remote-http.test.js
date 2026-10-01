@@ -62,7 +62,9 @@ test('actual HTTP OAuth and shipped SDK initialize/list/read/write use stateless
   const transport = new StreamableHTTPClientTransport(new URL(f.h.base + '/api/mcp'), { requestInit: { headers: { authorization: `Bearer ${q.access_token}` } } });
   t.after(() => client.close()); await client.connect(transport);
   assert.equal(transport.sessionId, undefined);
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 11); assert.equal(tools.tools.some(tool => /execute|approve|evidence/.test(tool.name)), false);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 12); assert.equal(tools.tools.some(tool => /execute|approve|evidence/.test(tool.name)), false);
+  assert.ok(tools.tools.some(tool=>tool.name==='plexiform_get_work_context'&&tool.annotations.readOnlyHint));
+  const picture=await client.callTool({name:'plexiform_get_work_context',arguments:{board_id:f.A.board,limit:1}});assert.equal(picture.structuredContent.grants_execution,false);assert.equal(picture.structuredContent.tasks.length,1);
   const read = await client.callTool({ name: 'plexiform_get_card', arguments: { card_id: f.A.card } }); assert.equal(read.structuredContent.card.id, f.A.card);
   const input = { request_id: randomUUID(), board_id: f.A.board, title: 'Actual SDK task' };
   const created = await client.callTool({ name: 'plexiform_create_card', arguments: input });
@@ -85,7 +87,7 @@ test('actual SDK OAuth discovery and DCR through exact HTTPS Claude callback obt
   const result=new URL(approved.data.redirect_uri);assert.equal(result.origin+result.pathname,callback);assert.equal(result.searchParams.get('iss'),f.h.base);
   assert.equal(await auth(provider,{serverUrl:new URL(f.h.base+'/api/mcp'),authorizationCode:result.searchParams.get('code')}),'AUTHORIZED');
   assert.match(tokens.access_token,/^pfm_/);assert.deepEqual(f.authority.authenticate(tokens.access_token,'mcp').boardIds,[f.A.board]);assert.equal(f.authority.authenticate(tokens.access_token,'mcp').mode,'read');
-  assert.equal((await rpc(f,tokens.access_token,'tools/list')).data.result.tools.length,6);
+  assert.equal((await rpc(f,tokens.access_token,'tools/list')).data.result.tools.length,7);
   const oldAccess=tokens.access_token;assert.equal(await auth(provider,{serverUrl:new URL(f.h.base+'/api/mcp')}),'AUTHORIZED');assert.notEqual(tokens.access_token,oldAccess);assert.equal(f.authority.authenticate(tokens.access_token,'mcp').mode,'read');
   const changed=await request(f,'/oauth/authorize?'+new URLSearchParams({...Object.fromEntries(target.searchParams),redirect_uri:'https://claude.ai/api/mcp/auth_callback/other'}));assert.equal(changed.status,400,changed.text);
 });
@@ -141,9 +143,9 @@ test('HTTP code concurrency, refresh reuse and revocation use the durable family
   const revoke=await request(f,'/oauth/revoke',{method:'POST',body:new URLSearchParams({client_id:q.params.client_id,token:newToken}).toString(),headers:{'content-type':'application/x-www-form-urlencoded'}});assert.equal(revoke.status,200);
 });
 
-test('read-only grant advertises six tools and HTTP write refusal carries scope guidance without effects',async t=>{
+test('read-only grant advertises seven tools and HTTP write refusal carries scope guidance without effects',async t=>{
   const f=await remoteRig(t),q=await issue(f,'read'),before=business(f);
-  const listed=await rpc(f,q.access_token,'tools/list');assert.equal(listed.status,200,listed.text);assert.equal(listed.data.result.tools.length,6);
+  const listed=await rpc(f,q.access_token,'tools/list');assert.equal(listed.status,200,listed.text);assert.equal(listed.data.result.tools.length,7);
   const write=await rpc(f,q.access_token,'tools/call',{name:'plexiform_create_card',arguments:{board_id:f.A.board,title:'Denied',request_id:randomUUID()}});assert.equal(write.status,403,write.text);assert.match(write.res.headers.get('www-authenticate'),/insufficient_scope/);
   assert.equal(business(f),before);
 });

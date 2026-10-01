@@ -9,6 +9,7 @@ import { createRemoteContext } from './context.js';
 import { UUID, invalid } from './validation.js';
 import { commentIdentity } from './attribution.js';
 import { boundedResult } from './result.js';
+import { projectWorkContext } from '../work-context.js';
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -179,6 +180,7 @@ export class RemoteActions {
         }).map(card => this.cardProjection(scope, card)) });
       }
       case 'plexiform_get_card': return this.detail(scope, args.card_id);
+      case 'plexiform_get_work_context': return publicText(projectWorkContext(this.hub,scope.member,scope.boardIds,args,{authorityTag:`remote:${scope.grant.id}`}));
       case 'plexiform_read_handover': return { card_id: args.card_id, handover: this.detail(scope, args.card_id).handover };
       case 'plexiform_read_packet': {
         if (!result.packet) return { packet: null };
@@ -230,7 +232,7 @@ export class RemoteActions {
       const { request_id, ...body } = args;
       let result;
       switch (name) {
-        case 'plexiform_list_boards': case 'plexiform_list_cards': case 'plexiform_get_card': case 'plexiform_read_handover': result = {}; break;
+        case 'plexiform_list_boards': case 'plexiform_list_cards': case 'plexiform_get_card': case 'plexiform_read_handover': case 'plexiform_get_work_context': result = {}; break;
         case 'plexiform_create_card': { const { board_id, ...data } = body; result = await this.api.createCard(member, board_id, data, { remote }); break; }
         case 'plexiform_update_card': { const { card_id, ...data } = body; result = await this.api.patchCard(member, card_id, data, { remote }); break; }
         case 'plexiform_add_comment': result = await this.api.comment(member, args.card_id, { body: args.body, for_agent: false }, { remote }); break;

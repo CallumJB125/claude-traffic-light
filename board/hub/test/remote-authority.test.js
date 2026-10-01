@@ -90,7 +90,7 @@ test('read-only scopes and current viewer downgrade cannot acquire writes or wid
  assert.throws(()=>f.authority.authenticate(tokens.access_token,'mcp',true),denied);
  const wide=await grant(f);f.db.run("UPDATE members SET role='viewer' WHERE id=?",f.A.member);
  assert.equal(f.authority.authenticate(wide.token).mode,'read');assert.throws(()=>f.authority.authenticate(wide.token,'integration',true),denied);
- assert.equal(f.actions.catalog(wide.token).length,6);
+ assert.equal(f.actions.catalog(wide.token).length,7);
  assert.throws(()=>f.db.run("UPDATE remote_grants SET mode='collaborate' WHERE id=?",f.authority.authenticate(tokens.access_token,'mcp').grant.id));
  assert.throws(()=>f.db.run('UPDATE remote_grants SET board_ids=? WHERE id=?',JSON.stringify([f.A.board,f.B.board]),wide.grant.id));
 });

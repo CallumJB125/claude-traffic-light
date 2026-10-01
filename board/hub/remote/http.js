@@ -7,6 +7,7 @@ import { RemoteActions } from './actions.js';
 import { authorizationMetadata, resourceMetadata, challenge } from './metadata.js';
 import { serveMcp, validateRpc } from './transport.js';
 import { closed, strictJson, uniqueParams, UUID, invalid } from './validation.js';
+import { boundedResult } from './result.js';
 
 const SECURITY_HEADERS = ['host', 'origin', 'authorization', 'cookie', 'content-type', 'content-length',
   'transfer-encoding', 'mcp-protocol-version', 'mcp-session-id', 'x-csrf-token', 'x-board-team', 'board-org'];
@@ -15,6 +16,7 @@ const PATHS = Object.freeze([
   ['GET', '/.well-known/oauth-authorization-server'], ['GET', '/oauth/authorize'], ['POST', '/oauth/register'],
   ['POST', '/oauth/token'], ['POST', '/oauth/revoke'], ['GET', '/oauth/consent'], ['POST', '/oauth/consent'],
   ['POST', '/api/mcp'], ['GET', '/api/mcp'], ['DELETE', '/api/mcp'],
+  ['GET', '/api/integration/v1'], ['POST', '/api/integration/v1'],
 ]);
 const GRANT_PATH = /^\/api\/teams\/[^/]+\/remote-grants(?:\/(?:gesture|[^/]+))?$/;
 function headers(req, issuer) {
@@ -150,17 +152,18 @@ export function createRemoteHttp(hub) {
       headers(req, authority.issuer());
       if (!PATHS.some(([method, path]) => path === url.pathname && method === req.method)) { json(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'method unavailable' } }); return true; }
       const mcp = url.pathname === '/api/mcp';
+      const integration = url.pathname === '/api/integration/v1', resource = mcp || integration;
       if (url.pathname !== '/oauth/authorize' && url.pathname !== '/oauth/consent' && url.search) throw invalid();
       if (state.inFlight >= authority.limit('httpInFlight', 32) || count(state.ips, ip) >= authority.limit('httpInFlightPerIP', 4)) throw new HubError('RATE_LIMITED', 'remote requests are busy');
-      limitOrThrow(hub, mcp ? 'remote_request_ip' : 'remote_public_ip', ip);
+      limitOrThrow(hub, resource ? 'remote_request_ip' : 'remote_public_ip', ip);
       let token = null;
-      if (mcp) {
-        if (typeof req.headers.authorization !== 'string' || !/^Bearer pfm_[A-Za-z0-9_-]{43}$/.test(req.headers.authorization)) throw new HubError('UNAUTHENTICATED', 'remote bearer required');
+      if (resource) {
+        if (typeof req.headers.authorization !== 'string' || !(mcp ? /^Bearer pfm_[A-Za-z0-9_-]{43}$/ : /^Bearer pfi_[A-Za-z0-9_-]{43}$/).test(req.headers.authorization)) throw new HubError('UNAUTHENTICATED', 'remote bearer required');
         token = req.headers.authorization.slice(7);
-        const scope = authority.authenticate(token, 'mcp'); grantId = scope.grant.id;
+        const scope = authority.authenticate(token, mcp ? 'mcp' : 'integration'); grantId = scope.grant.id;
         if (count(state.grants, grantId) >= authority.limit('httpInFlightPerGrant', 8)) throw new HubError('RATE_LIMITED', 'remote connection is busy');
         limitOrThrow(hub, 'remote_request_grant', grantId);
-        if (req.method !== 'POST') { json(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'stateless resource accepts POST' } }, { allow: 'POST' }); return true; }
+        if (mcp && req.method !== 'POST') { json(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'stateless resource accepts POST' } }, { allow: 'POST' }); return true; }
       } else if (req.headers.authorization != null) throw new HubError('FORBIDDEN', 'ordinary bearer credentials are not accepted here');
       state.inFlight++; state.ips.set(ip, count(state.ips, ip) + 1); if (grantId) state.grants.set(grantId, count(state.grants, grantId) + 1); admitted = true;
       req.once('aborted', abort); res.once('close', abort); res.once('finish', abort);
@@ -172,6 +175,21 @@ export function createRemoteHttp(hub) {
         validateRpc(body, req.headers['mcp-protocol-version']); authority.authenticate(token, 'mcp');
         if (body.method === 'tools/call') actions.guard(token, 'mcp', body.params?.name, body.params?.arguments ?? {});
         await serveMcp({ req, res, body, token, actions, signal: controller.signal, state });
+      } else if (integration) {
+        if(req.headers['mcp-protocol-version']!=null)throw invalid();
+        if(req.method==='GET') {
+          if(req.headers['transfer-encoding']!=null||Number(req.headers['content-length']??0)>0)throw invalid();
+          const tools=actions.catalog(token,'integration');
+          if(controller.signal.aborted)throw new HubError('TIMEOUT','remote request ended');
+          json(res,200,boundedResult({tools:actions.deliver(tools)}));
+        } else {
+          const body=await read(req,controller.signal,64*1024);closed(body,['tool','arguments']);
+          actions.guard(token,'integration',body.tool,body.arguments);
+          const result=await actions.call(token,'integration',body.tool,body.arguments,{signal:controller.signal});
+          // The private proof refreshes the captured authority and projection
+          // synchronously here. No queue, replay or second mutation is run.
+          json(res,200,boundedResult(actions.deliver(result)));
+        }
       } else if (url.pathname.startsWith('/.well-known/oauth-protected-resource')) json(res, 200, resourceMetadata(authority));
       else if (url.pathname === '/.well-known/oauth-authorization-server') json(res, 200, authorizationMetadata(authority));
       else if (url.pathname === '/oauth/authorize') {
@@ -203,8 +221,8 @@ export function createRemoteHttp(hub) {
     } catch (error) {
       if (!res.headersSent && !res.destroyed) {
         const status = error instanceof HubError ? httpStatus(error.code) : 500;
-        if (url.pathname === '/api/mcp') json(res, status, { error: { code: error instanceof HubError ? error.code : 'INTERNAL', message: error instanceof HubError ? error.message : 'remote resource unavailable' } },
-          [401, 403].includes(status) ? { 'www-authenticate': challenge(authority, status === 403) } : {});
+        if (['/api/mcp','/api/integration/v1'].includes(url.pathname)) json(res, status, { error: { code: error instanceof HubError ? error.code : 'INTERNAL', message: error instanceof HubError ? error.message : 'remote resource unavailable' } },
+          [401, 403].includes(status) ? { 'www-authenticate': url.pathname==='/api/mcp'?challenge(authority,status===403):'Bearer realm="Plexiform integration API"'+(status===403?', error="insufficient_scope", scope="boards:read boards:collaborate"':'') } : {});
         else json(res, status === 401 && url.pathname === '/oauth/token' ? 400 : status, { error: status === 401 ? 'invalid_grant' : status === 429 ? 'temporarily_unavailable' : status >= 500 ? 'server_error' : 'invalid_request' });
       }
       if (!req.complete) { res.shouldKeepAlive = false; req.resume(); setTimeout(() => req.socket?.destroy(), 1000).unref(); }

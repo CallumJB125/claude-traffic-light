@@ -80,7 +80,7 @@ for (const dimension of ['grant-revoked','member-owner','role-changed']) test(`a
 test('final catalog reflects current read-only narrowing rather than advertising prior write authority',async t=>{
   const {f,token,scope}=await setup(t);
   const changed=changeAfterProjection(t,f,'catalog',()=>f.db.run("UPDATE remote_grants SET mode='read' WHERE id=?",scope.grant.id));
-  const r=await rpc(f,token,'tools/list');assert.equal(changed(),true);assert.equal(r.body.result.tools.length,6);
+  const r=await rpc(f,token,'tools/list');assert.equal(changed(),true);assert.equal(r.body.result.tools.length,7);
   assert.ok(r.body.result.tools.every(tool=>tool.annotations.readOnlyHint));
 });
 test('unchanged current actor gets a freshly recomputed read and current selected-board projection',async t=>{
@@ -122,7 +122,7 @@ test('delivery proof cannot be JSON cloned, fabricated, moved between authoritie
   const {f,token}=await setup(t),other=await remoteRig(t),catalog=f.actions.catalog(token,'mcp');
   for(const value of [{},JSON.parse(JSON.stringify(catalog)),()=>catalog])assert.throws(()=>f.actions.deliver(value),e=>e.code==='NOT_FOUND');
   assert.throws(()=>other.actions.deliver(catalog),e=>e.code==='NOT_FOUND');
-  assert.equal(f.actions.deliver(catalog).length,11);assert.throws(()=>f.actions.deliver(catalog),e=>e.code==='NOT_FOUND');
+  assert.equal(f.actions.deliver(catalog).length,12);assert.throws(()=>f.actions.deliver(catalog),e=>e.code==='NOT_FOUND');
 });
 test('final fresh read projection enforces the full MCP envelope limit after accumulated material changes',async t=>{
   const {f,token}=await setup(t),changed=changeAfterProjection(t,f,'projectRead',()=>{

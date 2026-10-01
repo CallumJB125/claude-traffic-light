@@ -289,6 +289,12 @@ test('native communication performs actual account packet/message round trips wi
   assert.equal(saved.packet.author.provider, null); assert.equal(saved.packet.author.run_id, null);
   assert.equal((await request(file, 'plexiform_write_packet', packetRequest)).packet.id, saved.packet.id);
   assert.equal((await request(file, 'plexiform_read_packet', { card_id })).packet.data.brief, data.brief);
+  const catalog=await mcp.listTools();assert.equal(catalog.tools.length,12);assert.ok(catalog.tools.some(tool=>tool.name==='plexiform_get_work_context'));
+  const picture=JSON.parse((await mcp.callTool({name:'plexiform_get_work_context',arguments:{board_id:A.board,limit:20}})).content[0].text);
+  assert.equal(picture.ok,true,JSON.stringify(picture));assert.equal(picture.grants_execution,false);
+  assert.ok(picture.tasks.some(task=>task.card.id===card_id&&task.run?.provider==='codex'&&task.next_action?.packet_id===saved.packet.id));
+  assert.equal(JSON.stringify(picture).includes(hidden.run.run_id),false);assert.equal(JSON.stringify(picture).includes('Unselected peer title'),false);
+  assert.equal((await request(file,'plexiform_get_work_context',{board_id:board})).code,'NOT_FOUND');
   assert.equal((await request(file, 'plexiform_write_packet', { ...packetRequest, request_id: crypto.randomUUID() })).code, 'VERSION_CONFLICT');
   const history = await request(file, 'plexiform_list_messages', { card_id }); assert.equal(history.ok, true);
   assert.ok(history.peers.some((p) => p.run_id === b.run.run_id));

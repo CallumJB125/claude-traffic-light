@@ -53,6 +53,7 @@ const ROUTES = {
   nativeWritePacket: ['POST', '/api/cards/:card/packet'],
   nativeMessages: ['GET', '/api/cards/:card/messages'],
   nativeSendMessage: ['POST', '/api/cards/:card/messages'],
+  nativeWorkContext: ['GET', '/api/boards/:board/work-context'],
   captureRoutes: ['GET', '/api/work-capture/routes'],
   myDay: ['GET', '/api/my-day'],
   setupsList: ['GET','/api/teams/:team/setups'],
@@ -243,6 +244,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     if (name.startsWith('native') && params?.boardIds) {
       const narrowed = new URL(url);
       for (const id of params.boardIds) narrowed.searchParams.append('board_id', id);
+      if(name==='nativeWorkContext')for(const key of ['repo_id','limit','cursor'])if(params[key]!=null)narrowed.searchParams.set(key,String(params[key]));
       url = narrowed.href;
     }
     const headers = { Accept: 'application/json' };
@@ -425,9 +427,9 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     // URL or bearer credential supplied by an MCP client.
     nativeBoard(operation, params, body) {
       const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment',
-        readPacket: 'nativeReadPacket', writePacket: 'nativeWritePacket', messages: 'nativeMessages', sendMessage: 'nativeSendMessage' }[operation];
+        readPacket: 'nativeReadPacket', writePacket: 'nativeWritePacket', messages: 'nativeMessages', sendMessage: 'nativeSendMessage', workContext:'nativeWorkContext' }[operation];
       if (!name || !ID_RE.test(String(params?.team ?? ''))) return Promise.resolve({ ok: false, error: 'Invalid board operation.' });
-      if (['readPacket', 'writePacket', 'messages', 'sendMessage'].includes(operation)
+      if (['readPacket', 'writePacket', 'messages', 'sendMessage','workContext'].includes(operation)
         && (!Array.isArray(params.boardIds) || params.boardIds.length < 1 || params.boardIds.length > 32
           || params.boardIds.some((id) => typeof id !== 'string' || !ID_RE.test(id)))) return Promise.resolve({ ok: false, error: 'Choose the permitted boards.' });
       return call(name, { params, body });

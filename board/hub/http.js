@@ -32,6 +32,7 @@ import { myDay } from './my-day.js';
 import { readOwnership, guardOwnership } from './ownership-view.js';
 import { createRemoteHttp } from './remote/http.js';
 import { strictJson } from './remote/validation.js';
+import { readWorkContext, guardWorkContext, workContextArgs } from './work-context.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -459,6 +460,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
   route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred, communicationOptions(query)));
   route('GET', '/api/cards/:card_id/ownership', ({ member, params, query, ident }) => readOwnership(hub, member, params.card_id, ident?.cred, communicationOptions(query)), { replay: false, responseGuard: (_ctx, out) => guardOwnership(hub, out) });
+  route('GET', '/api/boards/:board_id/work-context', ({ member, params, query, ident }) => readWorkContext(hub,member,ident?.cred,communicationOptions(query).boardIds??[params.board_id],workContextArgs(params.board_id,query)), { replay:false, responseGuard:(_ctx,out)=>guardWorkContext(hub,out) });
   route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident, query }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
   route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident, query }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
