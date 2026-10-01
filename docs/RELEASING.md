@@ -36,6 +36,8 @@ To try the build without staging anything: Actions → Release → Run workflow
 
 - Windows does not ship yet. The first release is macOS-first: the Windows Unit tests step only reports (Mac and Linux block), and the stage and promote jobs drop every Windows file (`*-win-*`, `latest.yml`, `beta.yml`) unless the repo variable `WINDOWS_RELEASE` is `true`, so no Windows installer is staged, signed, listed in `release.json` or promoted. Installed Windows apps see such a release as "no update".
 - To ship Windows, only once the Windows suite is green on a tag build, do both together: set the repo variable `WINDOWS_RELEASE=true` (Settings → Secrets and variables → Actions → Variables) AND remove `|| matrix.platform == 'win'` from the Unit tests step's `continue-on-error` in release.yml. One without the other either ships Windows untested or blocks it for nothing.
+- CI runs Node 22 (`node-version: 22` in release.yml), while development machines may run a newer Node. A suite that passes locally can still fail on CI. Before tagging, run the suites under Node 22 from the checkout, without touching node_modules: `npx -y node@22 --test --test-force-exit test/*.test.js test/adapters/*.test.js` and `npx -y node@22 --test --test-force-exit remote/test/`.
+- Lint the workflows after changing them: `actionlint .github/workflows/*.yml` (Homebrew: `brew install actionlint`). GitHub refuses an invalid workflow file outright, which shows as a failed run on every push and blocks every tag and dispatch. test/installers.test.js also parses each file.
 
 ## 2. Promote (make it live, and sign it)
 
