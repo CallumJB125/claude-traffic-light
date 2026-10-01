@@ -32,6 +32,16 @@ const optional = (properties, required) => obj(properties, required);
 
 const ASK_KINDS = [...BLOCKED_KINDS, 'limit', 'auth'];
 const HANDOVER_PROVENANCE = ['continuous', 'checkpoint_complete', 'checkpoint_incomplete', 'takeover', 'frozen'];
+const packetArtifact = { oneOf: [obj({ kind: { const: 'path' }, path: str(PATH) }), obj({ kind: { const: 'commit' }, sha: str({ minLength: 40, maxLength: 64 }) }), obj({ kind: { const: 'pr' }, url: str({ maxLength: 1024 }) })] };
+const packetDataProps = {
+  brief: str({ maxLength: 4000 }), decisions: arr(str({ maxLength: 500 })), progress: str({ maxLength: 4000 }),
+  nextAction: str({ maxLength: 2000 }), artifacts: arr(packetArtifact), reportedChecks: arr(str({ maxLength: 500 })),
+};
+const packet = obj({ schemaVersion: { const: 1 }, version: int({ minimum: 1 }), at: int(),
+  author: obj({ kind: en(['human', 'agent', 'remote', 'supervisor']), id: str(), source: en([...SOURCES, 'engine']) }),
+  provenance: en([...HANDOVER_PROVENANCE, 'participant']), ...packetDataProps,
+  observed: obj({ state: en(STATES), tests: nullable(en(['pass', 'fail', 'none'])) }),
+});
 
 const faceProps = {
   green: bool,
@@ -115,6 +125,7 @@ const taskDetailProps = {
   sessionId: nullable(str()),
   aiDetail: obj({ id: en(AIS), version: nullable(str()), model: nullable(str()), reason: nullable(str()), capabilities: ref('Capabilities') }),
   handover: nullable(obj({ version: int({ minimum: 1 }), markdown: str(DOC), provenance: en(HANDOVER_PROVENANCE), syncedAgeMs: int() })),
+  checkpoint: nullable(ref('Checkpoint')),
   evidence: nullable(ref('Evidence')),
   pr: nullable(obj({ number: int(), url: str(), state: en(['open', 'merged', 'closed']) })),
   limitResetsInMs: nullable(int()),
@@ -202,7 +213,9 @@ const schema = {
     TaskSpec: taskSpec,
     LeaseView: leaseView,
     TaskView: obj(taskViewProps),
-    TaskDetail: obj(taskDetailProps),
+    TaskDetail: obj(taskDetailProps, Object.keys(taskDetailProps).filter((k) => k !== 'checkpoint')),
+    CheckpointData: obj(packetDataProps),
+    Checkpoint: packet,
     Capabilities: obj(Object.fromEntries(CAPABILITIES.map((c) => [c, bool]))),
     DiffStat: obj({ files: int(), added: int(), removed: int() }),
     Evidence: obj({
@@ -259,6 +272,8 @@ const schema = {
     ListTasksResult: arr(ref('TaskView')),
     GetTaskParams: obj({ id: str() }),
     GetTaskResult: ref('TaskDetail'),
+    SaveCheckpointParams: obj({ id: str(), expectedVersion: int(), data: ref('CheckpointData'), requestId: str({ minLength: 8, maxLength: 128 }) }),
+    SaveCheckpointResult: obj({ checkpoint: ref('Checkpoint') }),
     SubscribeParams: obj({ id: str({ minLength: 1 }), fromSeq: int(), epoch: str() }, ['id']),
     SubscribeResult: obj({ sub: str(), epoch: str(), latestSeq: int(), replayed: int() }),
     UnsubscribeParams: obj({ sub: str() }),

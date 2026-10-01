@@ -198,7 +198,7 @@
     if (has('handback')) out.push(go('handback', {}, TV.ACTION_LABEL.handback, 'primary'));
     if (has('merge')) out.push(go('merge', { strategy: 'merge' }, 'Merge into your branch', 'primary'));
     if (has('openPr')) out.push(go('openPr', {}, TV.ACTION_LABEL.openPr));
-    if (has('retry')) { out.push(go('retry', {}, 'Retry')); out.push(go('retry', { fresh: true }, 'Retry from scratch')); }
+    if (has('retry')) { out.push(go('retry', {}, 'Retry')); out.push(go('retry', { fresh: true }, d.detail.checkpoint || d.detail.handover ? 'Restart from checkpoint' : 'Retry from scratch')); }
     if (has('switchAi')) for (const id of Object.keys(TV.AI_NAME)) if (id !== t.ai.id) out.push(go('switchAi', { ai: id }, `Continue with ${TV.AI_NAME[id]}`));
     if (has('pause')) out.push(go('pause', {}, TV.ACTION_LABEL.pause));
     if (has('takeover')) out.push(go('takeover', {}, TV.ACTION_LABEL.takeover));
@@ -376,6 +376,8 @@
   function renderDetails() {
     const pane = $('pane-details');
     if (!pane || !d) return;
+    // Keep typing/caret intact while live progress refreshes the open task.
+    if (d.checkpointDraft && $('checkpoint-editor')) return;
     const t = d.detail; const live = byId(d.id) || t;
     pane.replaceChildren();
     const dl = el('dl', 'facts');
@@ -401,8 +403,62 @@
     if (t.pr) fact('Pull request', `#${t.pr.number} (${t.pr.state})`);
     pane.append(dl);
     pane.append(el('div', 'sect', 'What you asked'), el('pre', 'box', t.text));
-    pane.append(el('div', 'sect', t.handover ? `Handover (version ${t.handover.version}, ${t.handover.provenance.replace(/_/g, ' ')})` : 'Handover'));
-    pane.append(t.handover ? el('pre', 'box', t.handover.markdown) : el('p', 'tx-empty', 'No handover saved yet. One is written as the task works, so it can be picked up later.'));
+    const p = t.checkpoint;
+    pane.append(el('div', 'sect', p ? `Checkpoint · version ${p.version}` : 'Checkpoint'));
+    if (p) {
+      const facts = el('dl', 'facts');
+      const pair = (k, v) => facts.append(el('dt', null, k), el('dd', null, v || '—'));
+      pair('Brief', p.brief); pair('Decisions', p.decisions.join('\n')); pair('Progress (reported)', p.progress); pair('Next action', p.nextAction);
+      pair('Artifacts', p.artifacts.map((a) => `${a.kind}: ${a.path || a.sha || a.url}`).join('\n'));
+      pair('Checks (reported)', p.reportedChecks.join('\n'));
+      pair('Observed tests', { pass: 'Passed', fail: 'Failed', none: 'None ran' }[p.observed.tests] || 'Not observed');
+      pair('Saved by', { human: 'You', agent: 'An authorized agent', remote: 'An authorized participant', supervisor: 'Plexiform' }[p.author.kind]);
+      pane.append(facts);
+    } else pane.append(t.handover ? el('pre', 'box', t.handover.markdown) : el('p', 'tx-empty', 'A checkpoint keeps the brief, decisions and next action so work can resume later.'));
+    pane.append(el('p', 'tx-empty', 'Saved on this device. Resuming uses the current task permissions and requires a new plan review for a fresh session when configured.'));
+    if (!d.checkpointDraft) {
+      const edit = btn(p ? 'Edit checkpoint' : 'Write checkpoint', '', () => {
+        d.checkpointDraft = { expectedVersion: p?.version ?? t.handover?.version ?? 0,
+          brief: p?.brief ?? t.text.slice(0, 4000), decisions: (p?.decisions ?? []).join('\n'), progress: p?.progress ?? '', nextAction: p?.nextAction ?? '',
+          paths: (p?.artifacts ?? []).filter((a) => a.kind === 'path').map((a) => a.path).join('\n'), otherArtifacts: (p?.artifacts ?? []).filter((a) => a.kind !== 'path'), reportedChecks: (p?.reportedChecks ?? []).join('\n'), busy: false };
+        renderDetails(); $('checkpoint-brief')?.focus();
+      });
+      edit.id = 'checkpoint-edit'; edit.disabled = !connected() || !api.saveCheckpoint; pane.append(edit);
+    } else pane.append(checkpointEditor());
+  }
+
+  function checkpointEditor() {
+    const state = d.checkpointDraft, taskId = d.id;
+    const form = el('form'); form.id = 'checkpoint-editor'; form.addEventListener('submit', (e) => e.preventDefault());
+    for (const [key, label, max] of [['brief', 'Brief', 4000], ['decisions', 'Decisions · one per line', 10000], ['progress', 'Current progress (reported)', 4000], ['nextAction', 'Next action', 2000], ['paths', 'Files to resume with · task-relative paths', 32768], ['reportedChecks', 'Checks reported · one per line', 10000]]) {
+      const field = el('div', 'field'), l = el('label', null, label), ta = el('textarea'); ta.id = `checkpoint-${key}`; l.htmlFor = ta.id;
+      ta.value = state[key]; ta.maxLength = max; ta.disabled = state.busy;
+      ta.addEventListener('input', () => { state[key] = ta.value; }); field.append(l, ta); form.append(field);
+    }
+    const error = el('p', 'err', state.error || ''); error.id = 'checkpoint-error'; error.setAttribute('role', 'alert'); form.append(error);
+    const lines = (s) => s.split('\n').map((v) => v.trim()).filter(Boolean);
+    const save = btn('Save checkpoint', 'primary', async () => {
+      if (state.busy) return;
+      state.busy = true; for (const n of form.querySelectorAll('textarea,button')) n.disabled = true;
+      const data = { brief: state.brief, decisions: lines(state.decisions), progress: state.progress, nextAction: state.nextAction,
+        artifacts: [...lines(state.paths).map((p) => ({ kind: 'path', path: p })), ...state.otherArtifacts], reportedChecks: lines(state.reportedChecks) };
+      let r; try { r = await api.saveCheckpoint({ id: taskId, expectedVersion: state.expectedVersion, data }); } catch { r = { ok: false, text: 'Could not save the checkpoint. Try again.' }; }
+      if (!d || d.id !== taskId || d.checkpointDraft !== state) return;
+      state.busy = false;
+      if (r?.ok) { d.detail.checkpoint = r.checkpoint; d.checkpointDraft = null; renderDetails(); }
+      else { state.error = r?.code === 'CONFLICT' ? 'The checkpoint changed while you edited it. Reload the current version before saving.' : r?.text || 'Could not save the checkpoint.'; error.textContent = state.error; for (const n of form.querySelectorAll('textarea,button')) n.disabled = false; }
+    });
+    save.id = 'checkpoint-save';
+    const reload = btn('Reload current checkpoint', '', async () => {
+      let r; try { r = await api.open(taskId); } catch { r = null; }
+      if (d?.id !== taskId || d.checkpointDraft !== state) return;
+      if (r?.ok) { d.detail = r.detail; d.messages = [...r.detail.messages]; for (const e of r.replay || []) applyEvent(e, true); d.checkpointDraft = null; renderDetails(); syncTranscript(); syncThread(); }
+      else { state.error = r?.text || 'Could not reload the checkpoint.'; error.textContent = state.error; }
+    });
+    const cancel = btn('Cancel', '', () => { d.checkpointDraft = null; renderDetails(); });
+    for (const b of [save, reload, cancel]) b.disabled = state.busy;
+    form.append(save, reload, cancel);
+    return form;
   }
 
   // ───────────────────────── live events ─────────────────────────

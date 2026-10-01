@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('tasksApi', {
   open: (id) => ipcRenderer.invoke('tasks:open', id),
   close: () => ipcRenderer.invoke('tasks:close'),
   act: (req) => ipcRenderer.invoke('tasks:act', req),
+  saveCheckpoint: (req) => ipcRenderer.invoke('tasks:checkpoint', req),
   create: (draft) => ipcRenderer.invoke('tasks:create', draft),
   composer: () => ipcRenderer.invoke('tasks:composer'),
   pickFolder: () => ipcRenderer.invoke('tasks:pick-folder'),

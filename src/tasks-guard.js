@@ -86,6 +86,7 @@ function createGuard({ P, taskFace }) {
       worktree: typeof d.worktree === 'string' ? tilde(d.worktree.slice(0, 400), opts.homeDir) : null,
       baseBranch: strOrNull(d.baseBranch, 200),
       handover: d.handover ? { version: int(d.handover.version), markdown: str(d.handover.markdown, P.MAX_TRANSCRIPT_CHUNK), provenance: str(d.handover.provenance, 40), syncedAtMs: now - int(d.handover.syncedAgeMs) } : null,
+      checkpoint: sanitizeCheckpoint(d.checkpoint),
       evidence: ev ? {
         tests: strOrNull(ev.tests, 20), testCommand: strOrNull(ev.testCommand, 200), summary: strOrNull(ev.summary, 2000),
         diffStat: ev.diffStat ? { files: int(ev.diffStat.files), added: int(ev.diffStat.added), removed: int(ev.diffStat.removed) } : null,
@@ -116,7 +117,7 @@ function createGuard({ P, taskFace }) {
       case 'error': return { type: 'error', seq, code: P.ERRORS.includes(e.code) ? e.code : 'INTERNAL' };
       case 'cost': return { type: 'cost', seq, usd: Number.isFinite(e.usd) ? e.usd : 0, budgetUsd: Number.isFinite(e.budgetUsd) ? e.budgetUsd : null };
       case 'state': return { type: 'state', seq, patch: sanitizeTask({ ...e, id: str(e.taskId, 128), title: '', createdAgeMs: 0, stateAgeMs: 0 }, { now }) };
-      case 'approval': case 'ask': return { type: 'refresh', seq };
+      case 'approval': case 'ask': case 'handover': return { type: 'refresh', seq };
       case 'diff': return { type: 'diff', seq, files: (Array.isArray(e.files) ? e.files : []).slice(0, 200).map((f) => ({ path: str(f.path, 300), status: str(f.status, 12), added: int(f.added), removed: int(f.removed) })) };
       default: return null;
     }
@@ -143,6 +144,33 @@ function createGuard({ P, taskFace }) {
   // ── what the page may ask for ──
   const fail = (code) => ({ ok: false, code });
   const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && [...v].length <= max;
+  function checkpointData(v) {
+    const fields = ['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks'];
+    if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== fields.length || Object.keys(v).some((k) => !fields.includes(k))) return null;
+    for (const [k, max] of [['brief', 4000], ['progress', 4000], ['nextAction', 2000]]) if (typeof v[k] !== 'string' || v[k].length > max) return null;
+    for (const k of ['decisions', 'reportedChecks']) if (!Array.isArray(v[k]) || v[k].length > 20 || v[k].some((s) => typeof s !== 'string' || s.length > 500)) return null;
+    if (!Array.isArray(v.artifacts) || v.artifacts.length > 32) return null;
+    const artifacts = [];
+    for (const a of v.artifacts) {
+      const field = { path: 'path', commit: 'sha', pr: 'url' }[a?.kind];
+      if (!field || Object.keys(a).length !== 2 || Object.keys(a).some((k) => !['kind', field].includes(k)) || typeof a[field] !== 'string' || a[field].length > 1024) return null;
+      artifacts.push({ kind: a.kind, [field]: a[field] });
+    }
+    return { brief: v.brief, decisions: [...v.decisions], progress: v.progress, nextAction: v.nextAction, artifacts, reportedChecks: [...v.reportedChecks] };
+  }
+  function sanitizeCheckpoint(p) {
+    if (!p || p.schemaVersion !== 1 || !Number.isSafeInteger(p.version) || p.version < 1) return null;
+    const data = checkpointData(Object.fromEntries(['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks'].map((k) => [k, p[k]])));
+    if (!data) return null;
+    return { schemaVersion: 1, version: p.version, at: int(p.at),
+      author: { kind: pick(p.author?.kind, ['human', 'agent', 'remote', 'supervisor'], 'supervisor'), source: pick(p.author?.source, [...P.SOURCES, 'engine'], 'engine') },
+      provenance: str(p.provenance, 40), ...data, observed: { state: pick(p.observed?.state, STATES, 'queued'), tests: pick(p.observed?.tests, ['pass', 'fail', 'none']) } };
+  }
+  function validateCheckpoint(req) {
+    if (!req || typeof req !== 'object' || Object.keys(req).some((k) => !['id', 'expectedVersion', 'data'].includes(k)) || !text(req.id, 128) || !Number.isSafeInteger(req.expectedVersion) || req.expectedVersion < 0) return fail('VALIDATION');
+    const data = checkpointData(req.data);
+    return data ? { ok: true, id: req.id, expectedVersion: req.expectedVersion, data } : fail('VALIDATION');
+  }
   const bytes = (v) => Buffer.byteLength(v);
 
   function actPayload(action, p, confirmed) {
@@ -219,7 +247,7 @@ function createGuard({ P, taskFace }) {
     }));
   }
 
-  return { sanitizeTask, sanitizeDetail, sanitizeEvent, sanitizeMessage, sanitizeAis, applyState, withLease, validateAct, validateCreate, actPayload };
+  return { sanitizeTask, sanitizeDetail, sanitizeEvent, sanitizeMessage, sanitizeAis, sanitizeCheckpoint, validateCheckpoint, applyState, withLease, validateAct, validateCreate, actPayload };
 }
 
 const SECRET_ENV = /(TOKEN|SECRET|KEY|PASSWORD)/i;

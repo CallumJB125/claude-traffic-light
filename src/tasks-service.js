@@ -165,6 +165,9 @@ function createTasksService(opts) {
     } else if (e.type === 'message' && e.direction === 'in' && e.from?.kind !== 'human') {
       if (isOpen(id)) markSeen(id, e.seq);
       else { unread.set(id, (unread.get(id) || 0) + 1); publishSoon(); }
+    } else if (e.type === 'handover') {
+      // A new packet changes the paused/recoverable row's version and reason.
+      refresh().catch(() => {});
     }
   }
 
@@ -296,8 +299,9 @@ function createTasksService(opts) {
 
   // A prompt that changed (approval, ask, state) is re-fetched, so what is shown is never stale.
   const refreshingOpen = new Set();
+  const pendingOpen = new Set();
   async function refreshOpen(wcId, mine) {
-    if (refreshingOpen.has(mine)) return;
+    if (refreshingOpen.has(mine)) { pendingOpen.add(mine); return; }
     refreshingOpen.add(mine);
     try {
       const raw = await client.getTask(mine.id);
@@ -306,7 +310,26 @@ function createTasksService(opts) {
       if (!detail) return;
       remember(detail);
       opts.onEvent?.(wcId, mine.id, { type: 'detail', detail });
-    } catch { /* the next event retries */ } finally { setTimeout(() => refreshingOpen.delete(mine), 150); }
+    } catch { /* the next event retries */ } finally {
+      refreshingOpen.delete(mine);
+      if (pendingOpen.delete(mine) && slots.get(wcId) === mine && connected()) queueMicrotask(() => refreshOpen(wcId, mine));
+    }
+  }
+
+  async function saveCheckpoint(req, wcId = 0) {
+    if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
+    const v = guard.validateCheckpoint(req);
+    if (!v.ok) return failure(v);
+    const mine = slots.get(wcId);
+    if (!mine || mine.id !== v.id) return failure({ code: 'NOT_FOUND' });
+    try {
+      const r = await client.saveCheckpoint(v.id, v.expectedVersion, v.data);
+      if (!connected() || slots.get(wcId) !== mine) return failure({ code: 'NOT_FOUND' });
+      const checkpoint = guard.sanitizeCheckpoint(r.checkpoint);
+      if (!checkpoint) return failure({ code: 'INTERNAL' });
+      refreshOpen(wcId, mine);
+      return { ok: true, checkpoint };
+    } catch (e) { return failure(e); }
   }
 
   async function closeTask(wcId = 0) {
@@ -413,7 +436,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, copyTakeover, create, composerInfo, registerFolder, markSeen };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, create, composerInfo, registerFolder, markSeen };
 }
 
 module.exports = { createTasksService, OFFLINE };

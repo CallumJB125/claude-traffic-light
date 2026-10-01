@@ -1091,6 +1091,16 @@
             }
           ]
         },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Checkpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "evidence": {
           "anyOf": [
             {
@@ -1344,6 +1354,310 @@
         "openAsk",
         "audit",
         "messages"
+      ],
+      "additionalProperties": false
+    },
+    "CheckpointData": {
+      "type": "object",
+      "properties": {
+        "brief": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "progress": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "nextAction": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "path"
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "commit"
+                  },
+                  "sha": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 40
+                  }
+                },
+                "required": [
+                  "kind",
+                  "sha"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "pr"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "reportedChecks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "required": [
+        "brief",
+        "decisions",
+        "progress",
+        "nextAction",
+        "artifacts",
+        "reportedChecks"
+      ],
+      "additionalProperties": false
+    },
+    "Checkpoint": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "author": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "human",
+                "agent",
+                "remote",
+                "supervisor"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "source": {
+              "enum": [
+                "local",
+                "mcp",
+                "cli",
+                "board",
+                "phone",
+                "slack",
+                "voice",
+                "engine"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "source"
+          ],
+          "additionalProperties": false
+        },
+        "provenance": {
+          "enum": [
+            "continuous",
+            "checkpoint_complete",
+            "checkpoint_incomplete",
+            "takeover",
+            "frozen",
+            "participant"
+          ]
+        },
+        "brief": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "progress": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "nextAction": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "path"
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "commit"
+                  },
+                  "sha": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 40
+                  }
+                },
+                "required": [
+                  "kind",
+                  "sha"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "pr"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "reportedChecks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "observed": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "todo",
+                "queued",
+                "claimed",
+                "running",
+                "quiet",
+                "blocked",
+                "parked",
+                "suspended",
+                "reconnecting",
+                "unresponsive",
+                "orphaned",
+                "handing_over",
+                "handed_over",
+                "in_review",
+                "done",
+                "failed"
+              ]
+            },
+            "tests": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "none"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "tests"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "version",
+        "at",
+        "author",
+        "provenance",
+        "brief",
+        "decisions",
+        "progress",
+        "nextAction",
+        "artifacts",
+        "reportedChecks",
+        "observed"
       ],
       "additionalProperties": false
     },
@@ -3357,7 +3671,8 @@
             "getLimits",
             "setLimits",
             "getClaims",
-            "listMessages"
+            "listMessages",
+            "saveCheckpoint"
           ]
         },
         "params": {
@@ -3754,6 +4069,46 @@
     },
     "GetTaskResult": {
       "$ref": "#/$defs/TaskDetail"
+    },
+    "SaveCheckpointParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "expectedVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "data": {
+          "$ref": "#/$defs/CheckpointData"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 8
+        }
+      },
+      "required": [
+        "id",
+        "expectedVersion",
+        "data",
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "SaveCheckpointResult": {
+      "type": "object",
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Checkpoint"
+        }
+      },
+      "required": [
+        "checkpoint"
+      ],
+      "additionalProperties": false
     },
     "SubscribeParams": {
       "type": "object",

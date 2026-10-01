@@ -91,6 +91,7 @@ push      {push:'event', sub, event}
 | `getLimits` | — | `Limits` | — |
 | `setLimits` | `SetLimitsParams {maxParallel?, perAi?}` | `Limits` | `VALIDATION` |
 | `getClaims` | `GetClaimsParams {repo}` | `GetClaimsResult {repo, claims:[Claim]}` | — |
+| `saveCheckpoint` | `SaveCheckpointParams {id, expectedVersion, data, requestId}` | `SaveCheckpointResult {checkpoint}` | authenticated task scope, fresh check inside the task queue |
 
 Unknown method → `UNKNOWN_METHOD`. Params failing their schema → `VALIDATION` with the failing path in `message`.
 
@@ -129,6 +130,10 @@ Unknown method → `UNKNOWN_METHOD`. Params failing their schema → `VALIDATION
 ```
 
 `TaskDetail` = `TaskView` + `{text, spec, finalPrompt, worktree, baseBranch, sessionId, aiDetail:{id, version, model, reason, capabilities}, handover:{version, markdown, provenance, syncedAgeMs}|null, evidence:{tests, testCommand, testTail, diffStat, commits, summary, costUsd, durationMs}|null, pr, limitResetsInMs, openApprovals:[…], openAsk, audit:[AuditEntry], messages:[Message] (last 200)}`.
+
+`TaskDetail.checkpoint` is an optional `Checkpoint|null`: `{schemaVersion:1, version, at, author:{kind,id,source}, provenance, brief, decisions, progress, nextAction, artifacts, reportedChecks, observed:{state,tests}}`. A packet is bounded, sanitized context, never a permission, folder, reviewer decision or completion grant. `saveCheckpoint` accepts only the six data fields; provenance and observed state are supervisor stamped. Brief/progress≤4000, nextAction≤2000, decisions/reportedChecks≤20×500, artifacts≤32, total≤64KiB. Artifact paths are confined repo-relative non-private files; commits must have been observed in this task and PRs must match its recorded PR. Credential-shaped data, complete private keys, capabilities, URL credentials/query/fragment and outside absolute paths are removed before storage/event publication. Participant checks remain reported; they do not become observed test results or review approvals.
+
+The task store fsyncs each new packet before emitting its handover event. Init, assistant progress, completion, pause/stop/takeover, shutdown and restart recovery retain checkpoints. A version mismatch is `CONFLICT`; requestId replay binds the current authenticated principal and exact payload in the normal action-cache window. Queued writes and responses recheck scope/revocation. The markdown handover remains a generated compatibility projection. Fresh-session retry consumes this packet as untrusted context and clears old plan approval; the current permission ceiling remains. Local packets are durable on this device; shared device transfer is a separate authenticated hub feature, not implied by this API.
 
 - `lastSeq` = seq of the task's latest event. `getTask` then `subscribe(id, {fromSeq: lastSeq + 1})` is gapless.
 - `finalPrompt` is the prompt actually sent (plan §6: role/goal with the user's words quoted, context, constraints, coordination preamble, definition of done). The composer's "Show prompt" edits the spec, not this field.
