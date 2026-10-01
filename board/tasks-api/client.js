@@ -216,6 +216,7 @@ export class TasksClient extends EventEmitter {
     }
   }
   getTask(id) { return this.call('getTask', { id }); }
+  saveCheckpoint(id, expectedVersion, data, { requestId = newRequestId() } = {}) { return this.call('saveCheckpoint', { id, expectedVersion, data, requestId }); }
   listMessages(id, { afterSeq } = {}) { return this.call('listMessages', afterSeq == null ? { id } : { id, afterSeq }); }
   detectAIs() { return this.call('detectAIs'); }
   getLimits() { return this.call('getLimits'); }

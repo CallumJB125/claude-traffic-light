@@ -3,23 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { CodexBackend } from '../../runner/backends/codex.js';
-import { tmpDir, rm, makeRepo, startEngine, waitFor } from './helpers.js';
-
-const fixture = fileURLToPath(new URL('../../runner/test/fixtures/fake-codex.js', import.meta.url));
-const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
-async function setup(scenario) {
-  const dir = tmpDir('pxct-'); const repo = makeRepo(dir);
-  const scenarioFile = path.join(dir, 'scenario.json'); fs.writeFileSync(scenarioFile, JSON.stringify(scenario));
-  const log = path.join(dir, 'codex.log'); const bin = path.join(dir, 'codex');
-  fs.writeFileSync(bin, `#!/bin/sh\nexport PLEXIFORM_FAKE_CODEX_SCENARIO=${quote(scenarioFile)}\nexport PLEXIFORM_FAKE_CODEX_LOG=${quote(log)}\nexec ${quote(process.execPath)} ${quote(fixture)} "$@"\n`, { mode: 0o755 });
-  class FakeCodex extends CodexBackend { static async detect() { return { id: 'codex', installed: true, version: '0.159.2', signedIn: true, bin }; } }
-  class ForbiddenClaude { static async detect() { throw new Error('Claude was invoked'); } }
-  const h = await startEngine({ dir, engineOpts: { backends: { codex: FakeCodex, claude: ForbiddenClaude }, enabledAis: ['codex'], defaultAi: 'codex' } });
-  return { ...h, repo, log: () => { try { return fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse); } catch { return []; } }, task: (id) => h.eng.tasks.get(id),
-    async cleanup() { await h.close(); rm(dir); } };
-}
+import { waitFor } from './helpers.js';
+import { startCodexFixture as setup } from './codex-helpers.js';
 
 test('Codex default: real socket creates a worktree, observes edits/evidence, and rejects unsupported caps and approvals', async () => {
   const h = await setup({ write: true, text: 'Created a fixture edit' });

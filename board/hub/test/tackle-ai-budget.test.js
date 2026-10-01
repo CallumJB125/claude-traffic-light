@@ -31,6 +31,27 @@ test('explicit Codex dispatch reaches only a ready Codex device, persists backen
   const run = h.hub.run(claim.run_id); assert.equal(run.backend, 'codex_cli'); assert.equal(run.ai, 'codex'); assert.equal(run.budget_cents, null);
   const detail = await h.api(alice, 'GET', `/api/cards/${card.id}`);
   assert.equal(detail.body.card.run.ai_label, 'Codex');
+  assert.equal(detail.body.run.cost_usd, null); assert.equal(detail.body.run.cost_source, 'unavailable');
+  // Historical/fabricated numbers must not turn missing Codex telemetry
+  // into a measured/free claim, and agent comments name the actual AI.
+  h.db.run('UPDATE runs SET cost_cents = 123 WHERE id = ?', run.id);
+  await runner.out({ ...runMsg({ ...run, run_id: run.id }), kind: 'comment.create', text: 'A Codex comment' });
+  const after = await h.api(alice, 'GET', `/api/cards/${card.id}`);
+  assert.equal(after.body.run.cost_usd, null); assert.equal(after.body.run.cost_source, 'unavailable');
+  assert.equal(after.body.comments[0].author_name, "Alice's Codex");
+});
+
+test('legacy dollar projections distinguish unavailable telemetry from an observed zero', async (t) => {
+  const { h, alice, runner } = await fixture(t);
+  const run = await h.startRun(alice, runner, { budget_usd: 5 });
+  h.db.run('UPDATE runs SET cost_cents = 0 WHERE id = ?', run.run_id);
+  const detail = () => h.api(alice, 'GET', `/api/cards/${run.card_id}`);
+  assert.equal((await detail()).body.run.cost_usd, null);
+  await runner.out({ ...runMsg(run), kind: 'facts', items: [{ kind: 'cost', cost_usd: 0 }] });
+  assert.equal((await detail()).body.run.cost_usd, 0);
+  assert.equal((await detail()).body.run.cost_source, 'provider_reported');
+  await runner.out({ ...runMsg(run), kind: 'facts', items: [{ kind: 'cost', cost_usd: 1.25 }] });
+  assert.equal((await detail()).body.run.cost_usd, 1.25);
 });
 
 test('old runners cannot steal Codex dispatch by guessing a claim; readiness changes re-offer it', async (t) => {

@@ -18,5 +18,7 @@
 .client-person { margin: 16px 0; padding-top: 16px; border-top: 1px solid var(--line); }
 .client-error { color: var(--danger-text); margin: 16px 0; }
 .client-link { color: var(--text); }
+.client-deliverable { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 6px; }
+.client-approval { margin-top: 18px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
 .client-form fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 @media (max-width: 600px) { .client-page { padding: 20px 14px 60px; } .client-section { padding: 16px; } }

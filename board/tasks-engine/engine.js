@@ -13,6 +13,7 @@ import { EventEmitter } from 'node:events';
 import { taskFace, AI_LABEL } from '../tasks-api/face.js';
 import { validate } from '../tasks-api/validate.js';
 import { MessageStore, cleanBody, messageId } from '../tasks-api/mesh.js';
+import { buildPacket, cleanPacketData, packetMarkdown, PacketError } from './checkpoint.js';
 import {
   TASKS_PROTOCOL_VERSION, RING_EVENTS, REQUEST_CACHE_MS, ACT_CACHE_MS, REMOTE_SOURCES, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
   AIS, CAPABILITIES, LOCAL_SOURCES,
@@ -255,6 +256,7 @@ export class TasksEngine extends EventEmitter {
       text: task.spec.text, spec: task.spec, finalPrompt: this.#finalPrompt(task), worktree: task.worktree, baseBranch: task.baseBranch, sessionId: task.sessionId,
       aiDetail: { id: task.ai.id, version: ai?.version ?? null, model: task.ai.model, reason: task.ai.reason, capabilities: ai?.capabilities ?? Object.fromEntries(CAPABILITIES.map((k) => [k, false])) },
       handover: task.handover ? { version: task.handover.version, markdown: task.handover.markdown, provenance: task.handover.provenance, syncedAgeMs: max0(now - task.handover.at) } : null,
+      checkpoint: task.checkpoint ? structuredClone(task.checkpoint) : null,
       evidence: task.evidence, pr: task.pr, limitResetsInMs: task.limitResetAt != null ? max0(task.limitResetAt - now) : null,
       openApprovals: task.openApprovals.map((a) => ({ approvalId: a.approvalId, tool: a.tool, inputSummary: a.inputSummary, requestedAgeMs: max0(now - a.at) })),
       openAsk: task.openAsk ? { askId: task.openAsk.askId, kind: task.openAsk.kind, text: task.openAsk.text, options: task.openAsk.options, choices: task.openAsk.choices, askedAgeMs: max0(now - task.openAsk.at) } : null,
@@ -337,16 +339,65 @@ export class TasksEngine extends EventEmitter {
     chunks.forEach((c, i) => this.#emit(task, 'transcript', { role, text: c, turn: task.turn, ...(i < chunks.length - 1 ? { partial: true } : {}) }));
   }
 
-  #writeHandover(task, provenance) {
-    const v = (task.handover?.version ?? 0) + 1;
-    const lines = [`# Handover v${v}: ${task.title}`, ''];
-    lines.push('## Where', task.workInPlace ? '- Working in place in the task folder.' : `- Branch \`${task.branch}\` in the task's worktree.`, '');
-    if (task.lastAssistant) lines.push('## Last update from the agent', task.lastAssistant, '');
-    if (task.touched.length) lines.push('## Files changed', ...task.touched.slice(0, 50).map((p) => `- ${p}`), '');
-    const markdown = clip(lines.join('\n'), 60000);
-    task.handover = { version: v, markdown, provenance, at: this.now() };
-    this.#emit(task, 'handover', { version: v, provenance, markdown });
+  #packetContext(task, commits = []) {
+    return { root: task.worktreeCreated || !task.repo ? task.worktree : task.repo.root, commits, prUrl: task.pr?.url ?? null };
+  }
+
+  #packetObserved(task) {
+    return { state: task.state, tests: task.evidence?.tests ?? task.tests ?? null };
+  }
+
+  #commitPacket(task, data, ctx, author, provenance) {
+    const version = (task.checkpoint?.version ?? task.handover?.version ?? 0) + 1;
+    const packet = buildPacket(data, ctx, { version, at: this.now(), author, provenance, observed: this.#packetObserved(task) });
+    const markdown = packetMarkdown(packet, task.title);
+    task.checkpoint = packet;
+    task.checkpointAssistant = task.lastAssistant;
+    task.handover = { version, markdown, provenance: provenance === 'participant' ? 'continuous' : provenance, at: packet.at };
+    // The packet survives before a subscriber can observe the new version.
     this.#save(task);
+    this.#emit(task, 'handover', { version, provenance: task.handover.provenance, markdown });
+    this.#save(task);
+    return structuredClone(packet);
+  }
+
+  #writeHandover(task, provenance) {
+    const prior = task.checkpoint;
+    const commits = (prior?.artifacts ?? []).filter((a) => a.kind === 'commit').map((a) => a.sha);
+    const ctx = this.#packetContext(task, commits);
+    const empty = { brief: '', decisions: [], progress: '', nextAction: '', artifacts: [], reportedChecks: [] };
+    const artifacts = [...(prior?.artifacts ?? []), ...task.touched.map((p) => ({ kind: 'path', path: p }))];
+    const permitted = [];
+    for (const a of artifacts) {
+      try {
+        const clean = cleanPacketData({ ...empty, artifacts: [a] }, ctx).artifacts[0];
+        if (!permitted.some((p) => JSON.stringify(p) === JSON.stringify(clean))) permitted.push(clean);
+      } catch { /* private or no longer confined: never export it */ }
+      if (permitted.length >= 32) break;
+    }
+    const progress = task.lastAssistant !== task.checkpointAssistant ? task.lastAssistant : prior?.progress;
+    const data = {
+      brief: prior?.brief ?? clip(task.spec.text, 4000), decisions: prior?.decisions ?? [],
+      progress: clip(progress ?? '', 4000), nextAction: prior?.nextAction ?? 'Check the current files and evidence, then continue the task under its current permissions.',
+      artifacts: permitted, reportedChecks: prior?.reportedChecks ?? [],
+    };
+    let restoredProgress = false;
+    for (;;) {
+      try { this.#commitPacket(task, data, ctx, { kind: 'supervisor', id: 'engine', source: 'engine' }, provenance); break; }
+      catch (e) {
+        if (!(e instanceof PacketError) || e.code !== 'PAYLOAD_TOO_LARGE') throw e;
+        // Long escaped paths or a new assistant summary must not crash the
+        // supervisor. Keep the participant's core context before new facts.
+        if (data.artifacts.length) data.artifacts.pop();
+        else if (!restoredProgress) { data.progress = prior?.progress ?? ''; restoredProgress = true; }
+        else if (data.progress) data.progress = data.progress.slice(0, Math.floor(data.progress.length / 2));
+        else if (data.brief) data.brief = data.brief.slice(0, Math.floor(data.brief.length / 2));
+        else if (data.reportedChecks.length) data.reportedChecks.pop();
+        else if (data.decisions.length) data.decisions.pop();
+        else if (data.nextAction) data.nextAction = data.nextAction.slice(0, Math.floor(data.nextAction.length / 2));
+        else throw e;
+      }
+    }
   }
 
   #withLock(task, fn) {
@@ -380,6 +431,7 @@ export class TasksEngine extends EventEmitter {
       if ((SLOT.has(task.state) || task.state === 'suspended' || task.state === 'unresponsive') && !noProcessByDesign) {
         this.#expireApprovals(task);
         this.#audit(task, 'supervisor', 'orphaned', 'the engine restarted; the run could not be re-adopted');
+        this.#writeHandover(task, 'checkpoint_incomplete');
         this.#setState(task, 'orphaned');
       } else if (task.state === 'parked' && task.resumeAtReset && task.limitResetAt != null) {
         this.#armReset(task);
@@ -802,6 +854,7 @@ export class TasksEngine extends EventEmitter {
       if (!live()) return;
       if (typeof e.session_id === 'string' && UUID_RE.test(e.session_id)) task.sessionId = e.session_id;
       this.#activity(task, run);
+      this.#writeHandover(task, 'continuous');
     });
     b.on('assistant', ({ text }) => {
       if (!live()) return;
@@ -809,6 +862,7 @@ export class TasksEngine extends EventEmitter {
       task.lastAssistant = clip(String(text ?? ''), 4000);
       this.#transcript(task, 'assistant', text);
       this.#activity(task, run);
+      this.#writeHandover(task, 'continuous');
     });
     b.on('tool_start', ({ id, name, input }) => {
       if (!live()) return;
@@ -1047,10 +1101,7 @@ export class TasksEngine extends EventEmitter {
   #failTask(task, kind, reason) {
     this.#expireApprovals(task);
     if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
-    if (task.handover) {
-      task.handover.provenance = 'frozen';
-      this.#emit(task, 'handover', { version: task.handover.version, provenance: 'frozen', markdown: task.handover.markdown });
-    }
+    this.#writeHandover(task, 'frozen');
     this.#setState(task, 'failed', { failKind: kind, failReason: reason });
     this.#schedule();
   }
@@ -1395,8 +1446,13 @@ export class TasksEngine extends EventEmitter {
         if (task.cost.budgetUsd != null && task.cost.usd >= task.cost.budgetUsd) throw new ApiError('BUDGET_EXCEEDED', "this task's budget is used up");
         const fresh = !!payload.fresh || !task.sessionStarted;
         if (fresh) {
+          // A new session consumes context, never an earlier plan approval.
+          task.planApproved = false;
           task.sessionId = crypto.randomUUID();
           task.sessionStarted = false;
+          // Upgrade older saved attempts through the same sanitizer before
+          // any legacy markdown can become context for a new provider session.
+          if (!task.checkpoint) this.#writeHandover(task, 'checkpoint_incomplete');
           const seed = task.handover ? `\n\nAn earlier attempt left this handover:\n${untrusted('handover from an earlier attempt', task.handover.markdown, task.nonce)}` : '';
           this.#requeue(task, { resume: false, prompt: this.#withPending(task, `${this.#finalPrompt(task)}${seed}`) });
         } else {
@@ -1460,6 +1516,38 @@ export class TasksEngine extends EventEmitter {
     const t = this.tasks.get(id);
     if (!t) throw new ApiError('NOT_FOUND', 'no such task');
     return this.#detail(t);
+  }
+
+  async saveCheckpoint({ id, expectedVersion, data, requestId }, ctx = {}) {
+    this.#gc();
+    this.#access(id, ctx);
+    const p = this.principal(ctx);
+    const key = `checkpoint:${p.kind === 'relay' ? p.id : 'full'}:${requestId}`;
+    const hash = crypto.createHash('sha256').update(JSON.stringify({ id, expectedVersion, data })).digest('hex');
+    const cached = this.actCache.get(key);
+    if (cached) { if (cached.hash !== hash) throw new ApiError('CONFLICT', 'requestId reused with different checkpoint'); return cached.pending; }
+    const task = this.tasks.get(id);
+    const pending = this.#withLock(task, async () => {
+      this.#access(id, ctx);
+      if ((task.checkpoint?.version ?? task.handover?.version ?? 0) !== expectedVersion) throw new ApiError('CONFLICT', 'Checkpoint changed. Reload it before saving.');
+      let commits = [];
+      if (task.repo && task.worktreeCreated) commits = await this.git(task.worktree, ['log', '--format=%H', '-n', '20', `${task.baseSha}..HEAD`]).then((s) => s.trim().split('\n').filter(Boolean), () => []);
+      this.#access(id, ctx);
+      if ((task.checkpoint?.version ?? task.handover?.version ?? 0) !== expectedVersion) throw new ApiError('CONFLICT', 'Checkpoint changed. Reload it before saving.');
+      const actor = this.principal(ctx);
+      const parent = actor.kind === 'relay' && actor.source === 'mcp' ? [...this.tasks.values()].find((t) => t.sessionId === actor.parentSessionId) : null;
+      const author = actor.kind === 'full' ? { kind: 'human', id: 'local-owner', source: 'local' }
+        : parent ? { kind: 'agent', id: parent.id, source: 'mcp' } : { kind: 'remote', id: actor.userId, source: actor.source };
+      let packet;
+      try { packet = this.#commitPacket(task, data, this.#packetContext(task, commits), author, 'participant'); }
+      catch (e) { if (e instanceof PacketError) throw new ApiError(e.code, e.message); throw e; }
+      this.#audit(task, actor.kind === 'full' ? 'user' : parent ? 'agent' : 'remote', 'checkpoint_saved', `version ${packet.version}`);
+      this.#save(task);
+      return { checkpoint: packet };
+    });
+    this.actCache.set(key, { pending, hash, at: this.now() });
+    pending.catch(() => this.actCache.delete(key));
+    return pending;
   }
 
   detectAIs(_p, ctx = {}) {
@@ -1553,6 +1641,7 @@ export class TasksEngine extends EventEmitter {
           if (!this.#isLive(task, run)) return;
           await this.#stopRun(task, run);
           this.#audit(task, 'supervisor', 'orphaned', 'the engine shut down');
+          this.#writeHandover(task, 'checkpoint_incomplete');
           this.#setState(task, 'orphaned');
         });
       }

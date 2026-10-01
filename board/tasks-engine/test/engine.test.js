@@ -96,10 +96,13 @@ test('pause → parked{user} with a handover; resume continues the same session 
 }, async (m) => {
   const { id } = await m.client.createTask(m.spec);
   await waitFor(async () => (await stateOf(m.client, id)) === 'running', { label: 'running' });
+  const previousVersion = (await m.client.getTask(id)).handover?.version ?? 0;
   const p = await m.client.act(id, 'pause', {});
   assert.equal(p.task.state, 'parked');
   assert.equal(p.task.parkReason, 'user');
-  assert.match(p.task.reason, /^paused by you · handover v1$/);
+  const paused = await m.client.getTask(id);
+  assert.equal(paused.handover.version, previousVersion + 1, 'pause writes a new durable checkpoint after continuous progress');
+  assert.equal(p.task.reason, `paused by you · handover v${paused.handover.version}`);
   assert.ok(m.events.some((e) => e.taskId === id && e.type === 'state' && e.state === 'handing_over'));
   const sid = (await m.client.getTask(id)).sessionId;
   const r = await m.client.act(id, 'resume', { when: 'now' });

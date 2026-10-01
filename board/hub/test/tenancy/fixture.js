@@ -118,6 +118,11 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   db.insert('client_grants', { guest_id: B.clientGuest, project_id: B.clientProject, scopes: JSON.stringify(['status.read']) });
   B.clientItem = randomUUID();
   db.insert('client_items', { id: B.clientItem, project_id: B.clientProject, card_id: B.card, title: `${MARK} published`, status: 'todo', published_by: B.owner, published_at: now, updated_at: now });
+  B.clientArtifact = randomUUID();
+  db.insert('client_artifact_versions', { id: B.clientArtifact, item_id: B.clientItem, version_number: 1, name: `${MARK}.txt`, mime: 'text/plain', byte_length: 1, sha256: 'a'.repeat(64), created_by: B.owner, created_at: now, request_id: 'beta-client-artifact' });
+  B.clientApproval = randomUUID();
+  db.insert('client_approval_requests', { id: B.clientApproval, item_id: B.clientItem, artifact_version_id: B.clientArtifact, content_hash: 'a'.repeat(64), requested_by: B.owner, requested_at: now, request_id: 'beta-client-approval' });
+  db.insert('client_approval_recipients', { approval_id: B.clientApproval, guest_id: B.clientGuest });
   const clientInvite = await as(users.ub, 'POST', `/api/teams/${B.team}/client-invites`, { email: 'pending-client@beta.test', grants: [{ project_id: B.clientProject, scopes: ['status.read'] }] });
   if (clientInvite.status !== 200) throw new Error(`client invite: ${clientInvite.text}`);
   B.clientInvite = clientInvite.body.invite.id;
@@ -148,6 +153,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM client_grants WHERE guest_id IN (SELECT id FROM client_guests WHERE workspace_id = ?)', B.team),
       q('SELECT * FROM client_invites WHERE workspace_id = ?', B.team),
       q('SELECT * FROM client_items WHERE project_id = ?', B.clientProject),
+      q('SELECT * FROM client_artifact_versions WHERE item_id = ?', B.clientItem),
+      q('SELECT * FROM client_approval_requests WHERE item_id = ?', B.clientItem),
+      q('SELECT * FROM client_approval_recipients WHERE approval_id = ?', B.clientApproval),
+      q('SELECT * FROM client_approval_decisions WHERE approval_id = ?', B.clientApproval),
     ].join('\n');
   }
 

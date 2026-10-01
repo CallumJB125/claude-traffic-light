@@ -18,6 +18,19 @@ const view = (over = {}) => ({
   repo: { root: '/Users/me/Dev/acme', name: 'acme' }, branch: 'buddy/x', workInPlace: false, cost: { usd: 0.5, budgetUsd: null }, stateAgeMs: 5000, createdAgeMs: 60000, lastSeq: 4, hub: null, live: null, ...over,
 });
 
+test('checkpoint requests cannot supply authority or oversized arrays; renderer projection omits authenticated author ids', () => {
+  const data = { brief: 'Brief', decisions: ['Decision'], progress: 'Progress', nextAction: 'Next', artifacts: [{ kind: 'path', path: 'src/app.js' }], reportedChecks: ['Participant report'] };
+  const req = { id: 't1', expectedVersion: 4, data };
+  assert.deepEqual(G.validateCheckpoint(req), { ok: true, ...req });
+  for (const k of ['author', 'cwd', 'approved', 'permissions']) assert.equal(G.validateCheckpoint({ ...req, [k]: true }).code, 'VALIDATION');
+  assert.equal(G.validateCheckpoint({ ...req, data: { ...data, planApproved: true } }).code, 'VALIDATION');
+  assert.equal(G.validateCheckpoint({ ...req, data: { ...data, decisions: Array(21).fill('x') } }).code, 'VALIDATION');
+  assert.equal(G.validateCheckpoint({ ...req, data: { ...data, artifacts: [{ kind: 'command', command: 'git push' }] } }).code, 'VALIDATION');
+  const p = G.sanitizeCheckpoint({ schemaVersion: 1, version: 5, at: 1000, author: { kind: 'remote', id: 'private-id', source: 'phone' }, provenance: 'participant', ...data, observed: { state: 'parked', tests: null }, secret: 'not-shown' });
+  assert.deepEqual(p.author, { kind: 'remote', source: 'phone' });
+  assert.equal(p.observed.tests, null); assert.ok(!JSON.stringify(p).includes('private-id') && !('secret' in p));
+});
+
 test('sanitizeTask keeps the face and drops anything not whitelisted (extra fields, unknown actions, odd tones)', () => {
   const t = G.sanitizeTask({ ...view({ actions: ['stop', 'rm -rf', 'message'], tone: '<script>' }), token: 'btk_secret', env: { A: 'b' } }, { now: 1_000_000, homeDir: '/Users/me' });
   assert.deepEqual(t.actions, ['stop', 'message']);
@@ -74,7 +87,7 @@ test('detail: messages, approvals and choices are sanitised and bounded', () => 
 });
 
 test('events: only the shown types cross, error text is replaced by its code, text is bounded', () => {
-  assert.equal(G.sanitizeEvent({ type: 'handover', seq: 1 }), null);
+  assert.deepEqual(G.sanitizeEvent({ type: 'handover', seq: 1, markdown: 'private context' }), { type: 'refresh', seq: 1 });
   assert.equal(G.sanitizeEvent({ type: 'bogus' }), null);
   assert.equal(G.sanitizeEvent(null), null);
   assert.deepEqual(G.sanitizeEvent({ type: 'error', seq: 3, code: 'DISK_FULL', message: 'ENOSPC /private/path', fatal: false }), { type: 'error', seq: 3, code: 'DISK_FULL' });

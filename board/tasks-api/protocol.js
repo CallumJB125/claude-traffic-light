@@ -24,7 +24,7 @@ export const TOKEN_NAME = 'tasks.token';
 
 export const METHODS = Object.freeze([
   'hello', 'createTask', 'listTasks', 'getTask', 'subscribe', 'unsubscribe', 'act',
-  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages',
+  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint',
 ]);
 
 export const ACTIONS = Object.freeze([

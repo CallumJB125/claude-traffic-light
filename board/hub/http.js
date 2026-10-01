@@ -19,6 +19,7 @@ import { clientIp, failBucketKey, ipKey, limitOrThrow } from './ratelimit.js';
 import { redact } from './log.js';
 import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
+import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -237,6 +238,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
   const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
+  let clientUploads = 0; // reading, decoding or waiting for the board queue
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
   const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
@@ -253,7 +255,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
-    if (r.pattern === '/api/client-items/:item_id') return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
+    if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
+    if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/permission-requests/')) {
       const p = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
       const c = p && hub.card(p.card_id);
@@ -268,10 +271,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, maxBody: bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -330,6 +333,18 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('GET', '/api/client/workspaces/:workspace_id/projects', ({ ident, params }) => clients.projects(ident.user, params.workspace_id), { auth: 'user', replay: false });
     route('GET', '/api/client/projects/:project_id', ({ ident, params }) => clients.project(ident.user, params.project_id), { auth: 'user', replay: false });
     route('GET', '/api/account/client-export', ({ ident }) => clients.export(ident.user), { auth: 'user', replay: false });
+    const artifacts = hub.clientArtifacts;
+    route('POST', '/api/client-items/:item_id/artifacts', ({ member, params, body, ip, ident }) => artifacts.upload(member, params.item_id, body, { ip, cred: ident.cred }), { replay: false, maxBody: CLIENT_UPLOAD_BODY_MAX });
+    route('POST', '/api/client-items/:item_id/approvals', ({ member, params, body, ip, ident }) => artifacts.request(member, params.item_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('DELETE', '/api/client-approval-requests/:approval_id', ({ member, params, ip, ident }) => artifacts.withdraw(member, params.approval_id, { ip, cred: ident.cred }), { replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts', ({ ident, params }) => artifacts.list(ident.user, params.item_id, ident.cred), { auth: 'user', replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts/:version_id', ({ ident, params }) => artifacts.get(ident.user, params.item_id, params.version_id, ident.cred), { auth: 'user', replay: false });
+    route('GET', '/api/client/items/:item_id/artifacts/:version_id/content', ({ ident, params, res }) => {
+      const file = artifacts.content(ident.user, params.item_id, params.version_id, ident.cred);
+      sendRaw(res, 200, file.mime, file.bytes, { 'content-disposition': file.disposition });
+    }, { auth: 'user', replay: false });
+    route('GET', '/api/client/approvals/:approval_id', ({ ident, params }) => artifacts.approval(ident.user, params.approval_id, ident.cred), { auth: 'user', replay: false });
+    route('POST', '/api/client/approvals/:approval_id/decision', ({ ident, params, body, ip }) => artifacts.decide(ident.user, params.approval_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
@@ -690,6 +705,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
       }
     }
+    let clientUploadSlot = false;
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         // The invite page's "Download" button (accounts): the configured app download.
@@ -739,6 +755,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } else if (r.auth === 'member') {
         member = await authMember(req, pick);
       }
+      if (r.pattern === '/api/client-items/:item_id/artifacts') {
+        hub.clientArtifacts.staff(member, params.item_id, ident.cred, true);
+        if (clientUploads >= 4) throw new HubError('RATE_LIMITED', 'deliverable uploads are busy; try again shortly', { retry_after_s: 1 });
+        clientUploads++; clientUploadSlot = true;
+      }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
       const paidAction = DISPATCH_ACTIONS.has(params.action);
@@ -775,6 +796,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
       hub.log.error('http handler failed', { path: url.pathname, err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
+    } finally {
+      if (clientUploadSlot) clientUploads--;
     }
   }
 }

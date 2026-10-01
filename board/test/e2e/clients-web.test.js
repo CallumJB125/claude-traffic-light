@@ -46,6 +46,8 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await A.click('form[data-form="publish"] button[type="submit"]');
     await A.waitForSelector('.client-item:has-text("Homepage delivery")');
     await A.fill('form[data-form="invite"] input[name="email"]', 'client@client-e2e.test');
+    await A.check('form[data-form="invite"] input[value="artifacts.read"]');
+    await A.check('form[data-form="invite"] input[value="approvals.decide"]');
     await A.click('form[data-form="invite"] button[type="submit"]');
     await A.waitForSelector('[aria-label="Client invitation link"]');
     const link = await A.inputValue('[aria-label="Client invitation link"]');
@@ -65,6 +67,29 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     assert.equal(guest.teams.length, 0, 'guest has no automatic personal or staff team');
     assert.deepEqual(guest.client_workspaces.map((w) => w.id), [workspace]);
     assert.equal(guestRequests.some((p) => p.startsWith('/api/boards/')), false, 'client UI never reads the developer board');
+    // Staff uploads real bytes; the assigned client downloads that exact
+    // version and decides it. A replacement needs a new approval.
+    await A.setInputFiles('form[data-form="artifact"] input[name="file"]', { name: 'homepage.txt', mimeType: 'text/plain', buffer: Buffer.from('Homepage version one') });
+    await A.click('form[data-form="artifact"] button[type="submit"]');
+    await A.waitForSelector('text=Deliverable · Version 1');
+    await B.click('[data-action="refresh"]'); await B.waitForSelector('a:has-text("Download homepage.txt")');
+    const contentUrl = await B.getAttribute('a[data-artifact]', 'href');
+    const downloaded = B.waitForEvent('download'); await B.click('a[data-artifact]');
+    assert.equal(fs.readFileSync(await (await downloaded).path(), 'utf8'), 'Homepage version one');
+    assert.equal((await fetch(hub.url + contentUrl)).status, 401, 'forwarded download cannot bypass authentication');
+    await A.check('form[data-form="approval"] input[name="guest_id"]'); await A.click('form[data-form="approval"] button[type="submit"]');
+    await A.waitForSelector('text=Approval for version 1: Waiting for a decision');
+    await B.click('[data-action="refresh"]'); await B.click('button:has-text("Approve version 1")');
+    await B.waitForSelector('text=Approval for version 1: Approved');
+    await A.setInputFiles('form[data-form="artifact"] input[name="file"]', { name: 'homepage.txt', mimeType: 'text/plain', buffer: Buffer.from('Homepage version two') });
+    await A.click('form[data-form="artifact"] button[type="submit"]'); await A.waitForSelector('text=Deliverable · Version 2');
+    await B.click('[data-action="refresh"]'); await B.waitForSelector('text=Approval for version 1: Replaced by a newer version');
+    assert.equal(await B.locator('button:has-text("Approve version 2")').count(), 0);
+    await A.check('form[data-form="approval"] input[name="guest_id"]'); await A.click('form[data-form="approval"] button[type="submit"]');
+    await A.waitForSelector('text=Approval for version 2: Waiting for a decision');
+    await B.click('[data-action="refresh"]'); await B.fill('form[data-form="decision"] textarea[name="comment"]', 'Please adjust the heading <script>text only</script>.');
+    await B.click('button:has-text("Request changes")'); await B.waitForSelector('text=Approval for version 2: Changes requested');
+    await B.waitForSelector('text=Please adjust the heading <script>text only</script>.');
     // An invitation arriving after the generic account read still wins over
     // automatic setup and requires consent; the actual setup transaction sees it.
     const C = await page();
@@ -75,12 +100,15 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await C.goto('/signin'); await signin(C, hub, 'pending@client-e2e.test');
     await accountReady;
     await A.fill('form[data-form="invite"] input[name="email"]', 'pending@client-e2e.test');
+    await A.uncheck('form[data-form="invite"] input[value="artifacts.read"]');
+    await A.uncheck('form[data-form="invite"] input[value="approvals.decide"]');
     await A.click('form[data-form="invite"] button[type="submit"]');
     await A.waitForSelector('.client-person:has-text("pending@client-e2e.test")');
     releaseAccount();
     await C.waitForSelector('h2:has-text("Your invitations")');
     assert.equal((await C.evaluate(() => fetch('/api/account').then((r) => r.json()))).teams.length, 0);
     await C.click('button[data-action="accept"]'); await C.waitForSelector('.client-item:has-text("Homepage delivery")');
+    assert.equal(await C.locator('a[data-artifact]').count(), 0, 'status-only guest cannot see artifact metadata');
     // A staff update is explicitly shared; clients fetch the safe projection.
     await A.fill('form[data-form="publish"] input[name="title"]', 'Homepage delivery');
     await A.fill('form[data-form="publish"] textarea[name="summary"]', 'Delivery completed.');
@@ -93,6 +121,7 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await A.waitForSelector('.client-person:has-text("client@client-e2e.test"):has-text("Access revoked")');
     await B.click('[data-action="refresh"]'); await B.waitForSelector('text=No client projects are shared with you yet.');
     assert.equal(await B.locator('.client-item').count(), 0);
+    assert.equal(await B.evaluate((url) => fetch(url).then((r) => r.status), contentUrl), 404, 'revoked guest cannot reuse the download link');
     await C.click('[data-action="signout"]'); await C.waitForURL('**/signin');
     assert.equal(await C.evaluate(() => fetch('/api/account').then((r) => r.status)), 401);
     assert.deepEqual(errors, [], 'real UI round trip has no browser errors');

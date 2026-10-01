@@ -15,7 +15,7 @@ import { relayLookup } from './relay-tokens.js';
 const PARAMS_DEF = {
   hello: 'HelloParams', createTask: 'CreateTaskParams', listTasks: 'ListTasksParams', getTask: 'GetTaskParams',
   subscribe: 'SubscribeParams', unsubscribe: 'UnsubscribeParams', act: 'ActParams', setLimits: 'SetLimitsParams',
-  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams',
+  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams', saveCheckpoint: 'SaveCheckpointParams',
 };
 export const MAX_SOCKET_PATH = 103;     // AF_UNIX sun_path is 104 bytes on macOS
 const MAX_CONNECTIONS = 32;
