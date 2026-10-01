@@ -931,16 +931,12 @@ ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0,
 // window's fragment; this process never reads the hub token or calls the hub.
 const BudgetNotice = require('./src/budget-notice.js');
 const budgetNotices = BudgetNotice.createNotices();
-const budgetNotified = new Set();
 const BUDGET_TRAY_ITEMS = 3;
 const budgetChanged = () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); };
 function handleBudgetEvent(ev) {
   const r = budgetNotices.handle(ev);
   if (!r.changed) return;
-  if (r.added && !budgetNotified.has(r.notice.runId)) {
-    budgetNotified.add(r.notice.runId);
-    notifyBudget(r.notice);
-  }
+  if (r.notify) notifyBudget(r.notice);
   budgetChanged();
 }
 function notifyBudget(n) {
@@ -948,7 +944,7 @@ function notifyBudget(n) {
   if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
   const note = new Notification({ title: 'Run reached its budget', body: BudgetNotice.text(n), silent: true });
   liveNotifications.add(note);
-  note.on('click', () => { liveNotifications.delete(note); openBudgetNotice(n.runId); });
+  note.on('click', () => { liveNotifications.delete(note); openBudgetNotice(n.runId).then((r) => { if (!r || !r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); });
   note.on('close', () => liveNotifications.delete(note));
   note.show();
 }
@@ -2604,7 +2600,7 @@ function createTray() {
     }, { type: 'separator' }];
   };
   const budgetItems = () => {
-    const shown = budgetNotices.list().slice(0, BUDGET_TRAY_ITEMS).map((n) => ({ label: `${BudgetNotice.text(n).replace(/ \(\$.*$/, '')}…`, click: () => { openBudgetNotice(n.runId).then((r) => { if (!r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); } }));
+    const shown = budgetNotices.list().slice(0, BUDGET_TRAY_ITEMS).map((n) => ({ label: `${BudgetNotice.text(n).replace(/ \(\$.*$/, '')}…`, click: () => { openBudgetNotice(n.runId).then((r) => { if (!r || !r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); } }));
     return shown.length ? [...shown, { type: 'separator' }] : [];
   };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
