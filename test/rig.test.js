@@ -489,7 +489,7 @@ test('minions: the app’s agentKinds filter decides which agents get chips', ()
 
 // ── Click-through: what index.html's hit test relies on ──────────────────
 test('hit test: the elements index.html probes for are there and clickable', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8') + fs.readFileSync(path.join(ROOT, 'widget.js'), 'utf8');
   // #mic is pointer-events: none (a hold on it is a hold on the widget), so it isn't listed.
   assert.match(html, /el\.closest\('#gear, #help, #bubble, #away, #update, \.minion'\)/, 'index.html hit test changed — update this test');
   // rig parts go through rig.solidAt, which skips parts at opacity 0 (its

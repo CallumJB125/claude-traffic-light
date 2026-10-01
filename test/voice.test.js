@@ -421,7 +421,7 @@ test('the packaged app carries the usage strings, the mic entitlement and the he
 });
 
 test('the widget shows a mic badge while listening and moves the mouth while talking', () => {
-  const html = read('index.html');
+  const html = read('index.html') + read('widget.js');
   assert.match(html, /id="mic"/);
   assert.match(html, /body\.listening #mic \{ display: grid/);
   assert.match(html, /rig\.talking\(st\.state === 'talking'\)/);

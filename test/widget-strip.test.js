@@ -72,3 +72,12 @@ test('resizing with the update row showing resizes the widget and keeps the row 
   assert.deepEqual(none.strip, W.NONE);
   assert.equal(none.bounds.width, 80);
 });
+
+test('the widget is only told its bubble has room when the window was not clamped', () => {
+  const bubble = { kind: 'bubble', px: 300 };
+  assert.equal(W.shouldAck(bubble, 300, null, 300), true);
+  assert.equal(W.shouldAck(bubble, 301, null, 300), false, 'asked more than the cap: may be clipped');
+  assert.equal(W.shouldAck(bubble, 120, 120, 300), false, 'already acked');
+  assert.equal(W.shouldAck({ kind: 'away', px: 64 }, 120, null, 300), false);
+  assert.equal(W.shouldAck(W.NONE, 120, null, 300), false);
+});

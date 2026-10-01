@@ -33,6 +33,10 @@ function stripBounds(current, strip = NONE, next = {}, workArea = null) {
 // Whether `next` asks for something other than what is applied.
 const sameStrip = (strip, next) => (strip.kind || null) === (next.kind || null) && strip.px === (next.kind ? Math.round(next.px || 0) : 0) && (strip.minWidth || 0) === (next.minWidth || 0);
 
+// Whether the widget may be told its bubble has its room. Past the cap the
+// window was clamped, so the bubble may be clipped: don't vouch for it.
+const shouldAck = (strip, asked, acked, maxPx) => !!strip && strip.kind === 'bubble' && asked <= maxPx && acked !== asked;
+
 // Whether roam, glide, the garden and resizing must wait. The bubble and the
 // recap change the window's width or hang a lot under Claude, so moving or
 // resizing the grown rect would carry them along wrongly; the quiet update
@@ -51,4 +55,4 @@ function resizeBase(current, strip = NONE, factor, limits, workArea = null) {
   return stripBounds(next, NONE, { kind: strip.kind, px: strip.px, minWidth: strip.minWidth }, workArea);
 }
 
-module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase };
+module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase, shouldAck };
