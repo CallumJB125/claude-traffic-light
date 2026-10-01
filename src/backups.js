@@ -132,8 +132,30 @@ function create({
     return null;
   };
 
-  // `keep` hands back the verified bytes, so a restore writes exactly what was checked.
+  // Snapshots never change once renamed into place, so a full verification is
+  // remembered per snapshot and re-done only when a stat (manifest, files
+  // folder, or any listed file: ns mtime and size) differs. A restore never
+  // uses it: it needs the verified bytes anyway.
+  const verified = new Map();
+  const statKey = (id) => {
+    try {
+      const at = (p) => { const st = fs.lstatSync(p, { bigint: true }); return `${st.mtimeNs}:${st.size}`; };
+      const dir = path.join(backupsDir, id);
+      const m = readManifest(id);
+      return [at(path.join(dir, 'manifest.json')), at(path.join(dir, 'files')), ...m.files.map((f) => at(path.join(dir, 'files', f.name)))].join('|');
+    } catch { return null; }
+  };
   function inspect(id, keep = false) {
+    if (keep) return inspectFully(id, true);
+    const key = isSnapshotId(id) ? statKey(id) : null;
+    const hit = key && verified.get(id);
+    if (hit && hit.key === key) return hit.result;
+    const result = inspectFully(id, false);
+    if (key) verified.set(id, { key, result }); else verified.delete(id);
+    return result;
+  }
+  // `keep` hands back the verified bytes, so a restore writes exactly what was checked.
+  function inspectFully(id, keep) {
     let m;
     try { m = readManifest(id); } catch (err) { return { ok: false, problems: [`the backup's index is damaged (${err.message})`], manifest: null }; }
     const problems = [];
@@ -248,7 +270,7 @@ function create({
     all.filter((s) => s.good).slice(0, cfg.keepNewest).forEach((s) => keep.add(s.id));
     for (const s of all) if (s.reason === 'before-restore' && s.good && t - s.at < cfg.keepBeforeRestoreMs) keep.add(s.id);
     const removed = [];
-    const drop = (s) => { fs.rmSync(path.join(backupsDir, s.id), { recursive: true, force: true }); removed.push(s.id); };
+    const drop = (s) => { fs.rmSync(path.join(backupsDir, s.id), { recursive: true, force: true }); verified.delete(s.id); removed.push(s.id); };
     const left = all.filter((s) => {
       if (!keep.has(s.id) && t - s.at > cfg.maxAgeMs) { drop(s); return false; }
       return true;

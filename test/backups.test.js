@@ -709,3 +709,51 @@ test('7: the keep-newest floor counts only snapshots whose hashes check out, and
   g.setConfig({ n: 2 }); c.snapshot('save');
   assert.ok(!c.list().some((s) => s.id === pinned.id), 'a before-restore snapshot older than 7 days by its id is pruned whatever its manifest claims');
 });
+
+// ── verification cache ──
+function countingFs(backupsDir) {
+  const counter = { reads: 0 };
+  const spy = { ...fs, readFileSync: (p, ...a) => { if (String(p).startsWith(path.join(backupsDir, '2')) && String(p).includes(`${path.sep}files${path.sep}`)) counter.reads++; return fs.readFileSync(p, ...a); } };
+  return { spy, counter };
+}
+
+test('cache (a): a second prune does not re-read the snapshot files', () => {
+  const f = fixture();
+  const { spy, counter } = countingFs(f.backupsDir);
+  const b = f.make({ fs: spy });
+  b.snapshot('save');
+  f.tick(1000); f.setConfig({ n: 1 }); b.snapshot('save');
+  b.prune();
+  counter.reads = 0;
+  b.prune();
+  b.prune();
+  assert.equal(counter.reads, 0);
+  assert.equal(b.list().length, 2);
+  assert.equal(counter.reads, 0, 'the list shown to the user uses the cache too');
+});
+
+test('cache (b): a snapshot file changed after it was cached is caught on the next prune', () => {
+  const f = fixture();
+  const b = f.make({ keepNewest: 1 });
+  const first = b.snapshot('save');
+  f.tick(1000); f.setConfig({ n: 1 }); b.snapshot('save');
+  b.prune();
+  const p = path.join(snapDir(f, first.id), 'files', 'config.json');
+  const t = fs.readFileSync(p, 'utf8');
+  fs.writeFileSync(p, t.replace(/[0-9a-z]/, 'Z'));
+  assert.equal(b.list().find((s) => s.id === first.id).damaged, true, 'the list sees it');
+  const good = b.list().filter((s) => !s.damaged).length;
+  assert.equal(good, 1);
+});
+
+test('cache (c): a restore verifies for real even with a warm cache', () => {
+  const f = fixture({ rules: [{ id: 'old' }] });
+  const { spy, counter } = countingFs(f.backupsDir);
+  const b = f.make({ fs: spy });
+  const s = b.snapshot('save');
+  b.prune(); b.list();
+  counter.reads = 0;
+  f.setConfig({ rules: [{ id: 'new' }] });
+  assert.equal(b.restore(s.id).error, undefined);
+  assert.ok(counter.reads >= 4, `restore read ${counter.reads} snapshot files`);
+});
