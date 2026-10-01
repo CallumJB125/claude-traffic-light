@@ -318,6 +318,9 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // ── this Mac as a runner, per team ──────────────────────────────────────
 
   const deviceFile = (origin, teamId) => path.join(DEVICES_DIR, `${fileKey(origin)}-${teamId}.bin`);
+  // Runner events (a run that reached its budget) go to main's subscribers only, already validated.
+  const runnerListeners = new Set();
+  const emitRunnerEvent = (ev) => { for (const cb of [...runnerListeners]) { try { cb(ev); } catch { /* a subscriber's error is its own */ } } };
   function makeDevice(ws, { onStatus }) {
     const key = `${fileKey(ws.hub)}-${ws.teamId}`;
     fs.mkdirSync(DEVICES_DIR, { recursive: true, mode: 0o700 });
@@ -331,6 +334,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       dataDir: path.join(userData, 'runner', key),
       log: (...a) => log('[runner]', ...a),
       onStatus,
+      onEvent: emitRunnerEvent,
     });
   }
   // A hub's sealed runner tokens, except those of the teams in `keep`.
@@ -743,6 +747,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     openInvite: (link) => flow.openInvite(link),
     /** App start: runners the member left on come back without opening the window. */
     resumeDevices: () => flow.resumeDevices(),
+    /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
+    onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged: (sessions) => flow.sessionsChanged(sessions),
     async stop() {

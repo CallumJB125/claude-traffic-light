@@ -75,6 +75,26 @@ function presenceSessions(sessions = [], { summaries = false } = {}) {
   });
 }
 
+const EVENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const CARD_KEY = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
+const money = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1_000_000 ? v : null);
+
+/**
+ * The only runner event the app forwards: the giver's run stopped at its budget. A runner message
+ * `{type:'runner.event', event:'run.budget_reached', run_id, card_id, card_key?, spent_usd, budget_usd}`
+ * becomes a small validated object, anything else is dropped: nothing else from the runner reaches
+ * the rest of the app, and no text from it is ever shown (the card's title is read from the hub).
+ */
+function runnerEventFrom(m) {
+  if (!m || m.type !== 'runner.event' || m.event !== 'run.budget_reached') return null;
+  const spent = money(m.spent_usd);
+  const budget = money(m.budget_usd);
+  if (typeof m.run_id !== 'string' || !EVENT_ID.test(m.run_id) || typeof m.card_id !== 'string' || !EVENT_ID.test(m.card_id) || spent === null || budget === null) return null;
+  const out = { type: 'run.budget_reached', run_id: m.run_id, card_id: m.card_id, spent_usd: spent, budget_usd: budget };
+  if (typeof m.card_key === 'string' && m.card_key.length <= 32 && CARD_KEY.test(m.card_key)) out.card_key = m.card_key;
+  return out;
+}
+
 /** The token rides this URL: https or wss, or cleartext only to this machine (the runner refuses anything else too). */
 function hubUrlOk(url) {
   let u;
@@ -104,7 +124,7 @@ function ensurePrivateDir(dir, { uid = process.getuid?.() } = {}) {
   }
 }
 
-function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
+function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, onEvent = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
   // account: accounts.js client for the team's hub (origin, enrol(), unenrol()).
   let creds = null; // {hub, team_id, enrollment_id, runner_token, name}: on this Mac ⇔ enrolled and on
   try { if (fs.existsSync(credsFile)) creds = JSON.parse(unseal(fs.readFileSync(credsFile))); } catch (e) { log('runner enrolment unreadable; treated as off', e.message); creds = null; }
@@ -185,6 +205,9 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
         parked = n(m.parked);
         parkedPending = n(m.parked_pending);
         emit();
+      } else if (m.type === 'runner.event') {
+        const ev = runnerEventFrom(m);
+        if (ev) { try { onEvent({ ...ev, team_id: teamId }); } catch { /* a listener's error never reaches the runner loop */ } }
       } else if (m.type === 'runner.fatal') { c.fatal = true; setRunner('failed', scrubTokens(m.message ?? 'The runner stopped.').slice(0, 200)); }
     });
     c.once('exit', (code) => onExit(c, code));
@@ -346,4 +369,4 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
   };
 }
 
-module.exports = { createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, scrubTokens, ensurePrivateDir, hubUrlOk, NO_RUNNER };
+module.exports = { runnerEventFrom, createDeviceController, defaultDeviceName, presenceSessions, runnerTokenFrom, scrubTokens, ensurePrivateDir, hubUrlOk, NO_RUNNER };

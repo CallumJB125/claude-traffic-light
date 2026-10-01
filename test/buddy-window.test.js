@@ -947,6 +947,7 @@ function deviceHarness(over = {}) {
   const statuses = [];
   const pending = [];
   const logs = [];
+  const events = [];
   let t = 0;
   let n = 0;
   const account = over.account ?? {
@@ -960,11 +961,11 @@ function deviceHarness(over = {}) {
     unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
     fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.args = args; c.opts = opts; c.sent = []; c.postMessage = (m) => c.sent.push(m); children.push(c); return c; },
     runnerEntry: '/app/board/runner/app-entry.js', entryExists: () => over.entryExists ?? true, dataDir: path.join(dir, 'runner', teamId),
-    onStatus: (s) => statuses.push(s), schedule: (fn) => pending.push(fn), now: () => t, stopGraceMs: 1000, log: (...a) => logs.push(a.map(String).join(' ')),
+    onStatus: (s) => statuses.push(s), onEvent: (e) => { if (over.onEventThrows) throw new Error('subscriber bug'); events.push(e); }, schedule: (fn) => pending.push(fn), now: () => t, stopGraceMs: 1000, log: (...a) => logs.push(a.map(String).join(' ')),
   });
   const credsFile = (teamId = 'team-1') => path.join(dir, `device-${teamId}.bin`);
   const unsealed = (teamId) => JSON.parse(Buffer.from(fs.readFileSync(credsFile(teamId), 'utf8').slice(7), 'base64').toString());
-  return { dir, calls, children, statuses, pending, logs, make, credsFile, unsealed, tick: (ms) => { t += ms; } };
+  return { dir, calls, children, statuses, pending, logs, events, make, credsFile, unsealed, tick: (ms) => { t += ms; } };
 }
 
 test('device name reads like a person made it', () => {
@@ -1955,4 +1956,44 @@ test('hub probes reuse one in-memory partition, emptied before each probe', () =
   const body = src.slice(src.indexOf('async function probeHub('));
   const cleared = body.indexOf('session.fromPartition(partition).clearStorageData()');
   assert.ok(cleared > 0 && cleared < body.indexOf('net.request('), 'cleared before the request');
+});
+
+test('runner events: only a validated run.budget_reached is forwarded (with the team); everything else from the runner is dropped', async () => {
+  const { runnerEventFrom } = require('../buddy-window/device');
+  const h = deviceHarness();
+  const d = h.make('team-9');
+  await d.enable({ name: 'Mac' });
+  const c = h.children[0];
+  const ok = { type: 'runner.event', event: 'run.budget_reached', run_id: 'run_1-a', card_id: 'c-123', card_key: 'PLX-123', spent_usd: 5.01, budget_usd: 5 };
+  c.emit('message', ok);
+  assert.deepEqual(h.events, [{ type: 'run.budget_reached', run_id: 'run_1-a', card_id: 'c-123', card_key: 'PLX-123', spent_usd: 5.01, budget_usd: 5, team_id: 'team-9' }]);
+  c.emit('message', { ...ok, extra: 'x', title: 'Rewrite the thing', message: 'hello' });
+  assert.deepEqual(Object.keys(h.events[1]).sort(), ['budget_usd', 'card_id', 'card_key', 'run_id', 'spent_usd', 'team_id', 'type'], 'no field outside the list crosses');
+  const bad = [
+    { ...ok, event: 'run.finished' }, { ...ok, type: 'runner.status' }, { ...ok, run_id: '' }, { ...ok, run_id: 'a'.repeat(65) }, { ...ok, run_id: 'a b' },
+    { ...ok, card_id: 7 }, { ...ok, card_id: 'x/../y' }, { ...ok, spent_usd: -1 }, { ...ok, spent_usd: Infinity }, { ...ok, spent_usd: '5' }, { ...ok, budget_usd: NaN },
+    { ...ok, budget_usd: 1e9 }, null, 'run.budget_reached', { type: 'runner.event' },
+  ];
+  for (const m of bad) { const before = h.events.length; c.emit('message', m); assert.equal(h.events.length, before, JSON.stringify(m)); }
+  // A bad or hostile card key is left out of the event rather than shown.
+  for (const key of ['PLX 123', 'plx-<b>', `PLX-${'1'.repeat(40)}`, 'PLX-1\nMORE', 'javascript:alert(1)', 7]) {
+    c.emit('message', { ...ok, card_key: key });
+    assert.equal('card_key' in h.events.at(-1), false, String(key));
+  }
+  assert.equal(runnerEventFrom({ ...ok, card_key: 'PLX-9' }).card_key, 'PLX-9');
+});
+
+test('runner events: a subscriber that throws never reaches the runner loop', async () => {
+  const h = deviceHarness({ onEventThrows: true });
+  const d = h.make();
+  await d.enable({ name: 'Mac' });
+  const c = h.children[0];
+  assert.doesNotThrow(() => c.emit('message', { type: 'runner.event', event: 'run.budget_reached', run_id: 'r1', card_id: 'c1', spent_usd: 1, budget_usd: 1 }));
+});
+
+test('runner events: the window object exposes onRunnerEvent(cb) → unsubscribe, fed by every team device', () => {
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  assert.match(idx, /const runnerListeners = new Set\(\);/);
+  assert.match(idx, /onEvent: emitRunnerEvent,/);
+  assert.match(idx, /onRunnerEvent\(cb\) \{ if \(typeof cb !== 'function'\) return \(\) => \{\}; runnerListeners\.add\(cb\); return \(\) => runnerListeners\.delete\(cb\); \},/);
 });

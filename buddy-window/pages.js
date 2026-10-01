@@ -73,7 +73,8 @@ function hubPageUrl(base, page, { org = null, fragment = null } = {}) {
 
 // A fragment never leaves the browser (the server never sees it), so the desktop can hand a hub page
 // a small payload without any bridge into the sandboxed view. Only the one named key, base64url.
-const FRAGMENT_RE = /^plexiform-feedback=[A-Za-z0-9_-]{1,32768}$/;
+// plexiform-feedback: a saved report (large); plexiform-budget: a card id for the budget notice (tiny).
+const FRAGMENT_RE = /^(?:plexiform-feedback=[A-Za-z0-9_-]{1,32768}|plexiform-budget=[A-Za-z0-9_-]{1,512})$/;
 const fragmentOk = (f) => typeof f === 'string' && FRAGMENT_RE.test(f);
 
 const orgOfUrl = (url) => { try { return new URL(url).searchParams.get('org'); } catch { return null; } };

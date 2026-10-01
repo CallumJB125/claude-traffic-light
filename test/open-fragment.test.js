@@ -13,6 +13,10 @@ const payload = Buffer.from(JSON.stringify({ v: 1, kind: 'bug', title: 'It broke
 test('fragmentOk: only plexiform-feedback=<base64url, 1..32768>', () => {
   assert.equal(fragmentOk(`plexiform-feedback=${payload}`), true);
   assert.equal(fragmentOk(`plexiform-feedback=${'A'.repeat(32768)}`), true);
+  const budget = Buffer.from(JSON.stringify({ v: 1, card_id: 'c-123' })).toString('base64url');
+  assert.equal(fragmentOk(`plexiform-budget=${budget}`), true, 'the budget notice key');
+  assert.equal(fragmentOk(`plexiform-budget=${'A'.repeat(512)}`), true);
+  for (const bad of [`plexiform-budget=${'A'.repeat(513)}`, 'plexiform-budget=', 'plexiform-budget=a+b', 'plexiform-budgets=abc', 'plexiform-feedback=abc&plexiform-budget=abc']) assert.equal(fragmentOk(bad), false, bad);
   for (const bad of [
     '', 'plexiform-feedback=', `plexiform-feedback=${'A'.repeat(32769)}`, `#plexiform-feedback=${payload}`,
     'plexiform-feedback=a+b', 'plexiform-feedback=a/b', 'plexiform-feedback=a=b', 'plexiform-feedback=a b', 'plexiform-feedback=a\nb',
