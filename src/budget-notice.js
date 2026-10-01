@@ -18,6 +18,7 @@ const CONTRACT = Object.freeze({
 });
 
 const MAX_NOTICES = 10;
+const MAX_REMEMBERED = 100;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
 const MAX_USD = 1000000;
@@ -44,28 +45,41 @@ function fragment(n) {
   return `${CONTRACT.fragmentKey}=${Buffer.from(JSON.stringify({ v: CONTRACT.fragmentVersion, card_id: n.cardId })).toString('base64url')}`;
 }
 
-// → { handle(ev), dismiss(runId), get(runId), list() }; list() is newest first.
+// → { handle(ev), dismiss(runId), get(runId), list(), notifiedSize() }; list() is newest first.
+// `notified` (one notification per stop) and `dismissed` (a re-emitted stop
+// must not bring a dismissed row back) both end on run.resumed/run.ended.
 function createNotices() {
   const byRun = new Map();
+  const notified = new Set();
+  const dismissed = new Set();
+  const remember = (set, id) => { set.add(id); if (set.size > MAX_REMEMBERED) set.delete(set.values().next().value); };
   return {
-    // → { changed, added, notice } (notice only when added)
+    // → { changed, added, notify, notice } (notice only when added)
     handle(ev) {
       const c = classify(ev);
-      if (!c) return { changed: false, added: false };
-      if (c.clear) return { changed: byRun.delete(c.clear), added: false };
+      if (!c) return { changed: false, added: false, notify: false };
+      if (c.clear) {
+        notified.delete(c.clear);
+        dismissed.delete(c.clear);
+        return { changed: byRun.delete(c.clear), added: false, notify: false };
+      }
+      if (dismissed.has(c.notice.runId)) return { changed: false, added: false, notify: false };
       const prev = byRun.get(c.notice.runId);
       if (prev) {
         const changed = prev.spent !== c.notice.spent || prev.budget !== c.notice.budget || prev.cardKey !== c.notice.cardKey;
         byRun.set(c.notice.runId, c.notice);
-        return { changed, added: false };
+        return { changed, added: false, notify: false };
       }
       byRun.set(c.notice.runId, c.notice);
       if (byRun.size > MAX_NOTICES) byRun.delete(byRun.keys().next().value);
-      return { changed: true, added: true, notice: c.notice };
+      const notify = !notified.has(c.notice.runId);
+      if (notify) remember(notified, c.notice.runId);
+      return { changed: true, added: true, notify, notice: c.notice };
     },
-    dismiss: (runId) => byRun.delete(runId),
+    dismiss(runId) { remember(dismissed, runId); return byRun.delete(runId); },
     get: (runId) => byRun.get(runId) || null,
     list: () => [...byRun.values()].reverse(),
+    notifiedSize: () => notified.size,
   };
 }
 
