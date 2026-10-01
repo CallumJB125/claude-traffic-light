@@ -8,7 +8,8 @@
 //             its owner moves it into this window.
 //   local   — an app file rendered in its own view with its own preload
 //             (the plug-in point for Tasks and settings pages); `screen`
-//             picks the account page's screen (account.html).
+//             picks the account page's screen (account.html), `file` +
+//             `preload` (in the app root) name a page of their own.
 //   soon    — named in the plan but not built yet; says so honestly.
 'use strict';
 
@@ -34,6 +35,7 @@ const PAGES = [
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },
   { id: 'lights', title: 'Lights', icon: 'lights', kind: 'window', window: 'lights', group: 'you' },
   { id: 'settings', title: 'Settings', icon: 'gear', kind: 'window', window: 'settings', group: 'you' },
+  { id: 'updates', title: 'About & Updates', icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
 ];
 
 const GROUPS = [

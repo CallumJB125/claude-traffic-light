@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>About &amp; Updates</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  main { max-width: 560px; margin: 0 auto; padding: var(--space-6) var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); }
+  h1 { font-size: var(--text-xl); margin: 0; font-weight: 600; }
+  h2 { font-size: var(--text-xs); margin: 0 0 var(--space-2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+  .muted { color: var(--muted); font-size: var(--text-sm); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+  .row { display: flex; align-items: center; gap: var(--space-3); justify-content: space-between; flex-wrap: wrap; }
+  .version { font-size: var(--text-lg); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line-input); border-radius: var(--radius); overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 4px var(--space-3); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button { background: var(--panel-2); border: 1px solid var(--line-input); color: inherit; font: inherit; padding: 5px var(--space-3); border-radius: var(--radius); cursor: pointer; transition: border-color var(--t), background var(--t); white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  .buttons button { white-space: normal; text-align: left; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.link { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; }
+  .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .msg { border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--panel-2); border-left: 3px solid var(--line-strong); }
+  .msg.error { border-left-color: var(--danger); }
+  .msg.notice { border-left-color: var(--amber); }
+  .msg .detail { color: var(--muted); font-size: var(--text-xs); margin-top: 2px; word-break: break-word; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: var(--radius-pill); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width var(--t); }
+  .bar.indeterminate > i { width: 35%; }
+  .notes { color: var(--text); }
+  .notes p { margin: 0 0 var(--space-1); }
+  .notes ul { margin: 0 0 var(--space-1); padding-left: 18px; }
+  .notes b { font-weight: 600; }
+  label.toggle { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+  <main>
+    <div>
+      <h1 id="name"></h1>
+      <div class="version" id="current"></div>
+    </div>
+    <section class="card" id="status-card" aria-live="polite">
+      <div class="row">
+        <div>
+          <div id="headline" class="version"></div>
+          <div class="muted" id="last-checked"></div>
+        </div>
+        <div class="buttons" id="buttons"></div>
+      </div>
+      <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" hidden><i></i></div>
+      <div id="size" class="muted" hidden></div>
+      <div class="msg" id="message" hidden><div id="message-text"></div><div class="detail" id="message-detail" hidden></div></div>
+      <div class="msg error" id="failure" hidden role="alert"></div>
+      <div class="msg notice" id="confirm" hidden role="alert">
+        <div id="confirm-text"></div>
+        <div class="buttons" id="confirm-buttons" style="margin-top: var(--space-2)"></div>
+      </div>
+    </section>
+    <section class="card" id="notes-card" hidden>
+      <h2>What's new</h2>
+      <div class="notes" id="notes"></div>
+    </section>
+    <section class="card" id="settings-card">
+      <div class="row">
+        <div><b>Update channel</b><div class="muted">Beta gets new features sooner, but may be less stable.</div></div>
+        <div class="seg" id="channels" role="group" aria-label="Update channel"></div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="auto-download" /> <span>Download updates automatically (you'll still choose when to install)</span></label>
+      <div id="revert-row" class="row" hidden><span class="muted" id="revert-explain"></span><button id="revert"></button></div>
+    </section>
+  </main>
+  <script src="brand.js"></script>
+  <script src="src/update-view.js"></script>
+  <script src="updates.js"></script>
+</body>
+</html>

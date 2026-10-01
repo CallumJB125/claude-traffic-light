@@ -33,6 +33,7 @@
     "files": [
       "main.js",
       "src/**/*",
+      "!src/update-stub.js",
       "board/shared/secret-patterns.mjs",
       "preload.js",
       "index.html",
@@ -56,6 +57,9 @@
       "help.js",
       "help.html",
       "help-preload.js",
+      "updates.html",
+      "updates.js",
+      "updates-preload.js",
       "cameos.js",
       "setup.js",
       "hostapp.js",
