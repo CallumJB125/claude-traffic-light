@@ -47,6 +47,7 @@ export function loadConfig(env = process.env) {
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    signup: env.BOARD_SIGNUP || null,
     googleClientId: env.BOARD_GOOGLE_CLIENT_ID || null,
     googleClientSecret: env.BOARD_GOOGLE_CLIENT_SECRET || null,
     githubClientId: env.BOARD_GITHUB_CLIENT_ID || null,
@@ -78,6 +79,8 @@ export function loadConfig(env = process.env) {
     sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
     sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
     sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
+    // Who may sign up is the operator's business: never in a log line or a dump of the config.
+    signupAllow: hidden(env.BOARD_SIGNUP_ALLOW || null),
   });
   delete env.BOARD_SES_SECRET_ACCESS_KEY;
   delete env.BOARD_SES_SESSION_TOKEN;
@@ -165,6 +168,41 @@ function validateMail(cfg) {
 
 export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
 
+export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
+const SIGNUP_ALLOW_MAX_CHARS = 8192;
+const SIGNUP_ALLOW_MAX_ENTRIES = 256;
+const DOMAIN_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * BOARD_SIGNUP / BOARD_SIGNUP_ALLOW (D104) → {mode, domains, emails}. Entries
+ * take the stored-address normalisation (NFKC, trimmed, lower-cased); a
+ * domain matches only itself, never a sub-domain or a longer name. Fixed
+ * texts only: the list is never repeated.
+ */
+export function signupPolicy(cfg) {
+  const mode = cfg.signup ?? 'allowlist';
+  if (!SIGNUP_MODES.includes(mode)) throw new Error('BOARD_SIGNUP takes open or allowlist');
+  const raw = cfg.signupAllow ?? '';
+  if (typeof raw !== 'string') throw new Error('BOARD_SIGNUP_ALLOW must be a comma list');
+  const entries = raw.split(',').map((e) => e.normalize('NFKC').trim().toLowerCase()).filter(Boolean);
+  if (raw.length > SIGNUP_ALLOW_MAX_CHARS || entries.length > SIGNUP_ALLOW_MAX_ENTRIES) throw new Error(`BOARD_SIGNUP_ALLOW is too long (at most ${SIGNUP_ALLOW_MAX_CHARS} characters and ${SIGNUP_ALLOW_MAX_ENTRIES} entries)`);
+  const domains = new Set();
+  const emails = new Set();
+  for (const e of entries) {
+    const m = /^(domain|email):(.*)$/.exec(e);
+    if (!m) throw new Error('BOARD_SIGNUP_ALLOW entries are domain:<domain> or email:<address>, comma-separated');
+    const v = m[2].trim();
+    if (m[1] === 'domain') {
+      if (!DOMAIN_NAME.test(v)) throw new Error('BOARD_SIGNUP_ALLOW has a domain: entry that is not a domain name');
+      domains.add(v);
+    } else {
+      if (!isMailAddress(v)) throw new Error('BOARD_SIGNUP_ALLOW has an email: entry that is not an address');
+      emails.add(v);
+    }
+  }
+  return { mode, domains, emails };
+}
+
 /** The OAuth providers this hub can sign in with: both the client id and its secret are set (D76). */
 export function oauthProviders(cfg) {
   return SIGNIN_METHODS.filter((p) => cfg[`${p}ClientId`] && cfg[`${p}ClientSecret`]);
@@ -193,6 +231,7 @@ function validateAccounts(cfg) {
   const methods = cfg.signinMethods ?? [];
   const bad = methods.filter((m) => !SIGNIN_METHODS.includes(m));
   if (bad.length) throw new Error(`BOARD_SIGNIN_METHODS takes ${SIGNIN_METHODS.join(', ')} (got ${bad.join(', ')})`);
+  signupPolicy(cfg);
   if (cfg.consoleMailer && (exposed || !loop)) throw new Error('BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed');
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');

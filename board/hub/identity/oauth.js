@@ -319,6 +319,8 @@ export class OAuth {
       linked = !!user;
     }
     if (!user) {
+      // D104: GitHub's verified primary address, or one Google is authoritative for; never a weaker one.
+      this.accounts.requireSignup(who.email, { eligible: who.provider === 'github' || who.authoritative });
       // The address is the new account's primary unless someone holds it: an
       // authoritative newcomer takes it from a weaker holder; a weaker newcomer gets none.
       const holder = this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', who.email);
@@ -359,13 +361,18 @@ export class OAuth {
     const known = this.identity(who.provider, who.subject)?.verified_at || (who.authoritative && this.userByEmail(who.email));
     if (!known) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
     let out;
-    this.hub.txn(() => {
-      const user = this.resolveUser(who, { ip });
-      const d = this.accounts.issueDevice(user.id, device, { ip, method: who.provider, subjectRef: this.subjectRef(who.provider, who.subject) });
-      // The flow now belongs to the account: erasure finds it (M4).
-      this.db.run('UPDATE oauth_flows SET user_id = ?, cred_id = ? WHERE id = ?', user.id, d.id, f.id);
-      out = { user: publicUser(this.accounts.liveUser(user.id)), teams: this.accounts.teams(user.id), device_token: d.token, device_id: d.id };
-    });
+    try {
+      this.hub.txn(() => {
+        const user = this.resolveUser(who, { ip });
+        const d = this.accounts.issueDevice(user.id, device, { ip, method: who.provider, subjectRef: this.subjectRef(who.provider, who.subject) });
+        // The flow now belongs to the account: erasure finds it (M4).
+        this.db.run('UPDATE oauth_flows SET user_id = ?, cred_id = ? WHERE id = ?', user.id, d.id, f.id);
+        out = { user: publicUser(this.accounts.liveUser(user.id)), teams: this.accounts.teams(user.id), device_token: d.token, device_id: d.id };
+      });
+    } catch (e) {
+      if (e.code === 'SIGNUP_CLOSED') this.accounts.audit('auth.signup.refused', { target: f.id, detail: { method: who.provider, subject_ref: this.subjectRef(who.provider, who.subject) }, ip });
+      throw e;
+    }
     return out;
   }
 

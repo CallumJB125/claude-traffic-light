@@ -26,6 +26,16 @@ Without a mailer:
 
 An exposed hub (a `BOARD_PUBLIC_URL` off loopback, or a tunnel probe) must be https, behind cloudflared with `BOARD_TRUST_CF_IP=1`, and have at least one sign-in method (a configured Google or GitHub client, `BOARD_SIGNIN_METHODS`, or a mailer); it never uses the console mailer.
 
+### Sign-up control (D104)
+
+Who may make a **new** account. `BOARD_SIGNUP=allowlist` (the default in accounts mode) or `open` (any verified address, as before D104). With `allowlist`, a new account is made only for a verified address that `BOARD_SIGNUP_ALLOW` lists (a comma list of `domain:<domain>` and `email:<address>`, folded like stored addresses: NFKC, trimmed, lower case; a `domain:` entry matches that exact domain only, never a sub-domain or a longer name, so `domain:example.com` does not admit `a@evilexample.com`, `a@example.com.evil.com` or `a@sub.example.com`), or that holds a pending invite still good to accept (the invite is the allowlist for its address), or that an admin or `BOARD_BOOTSTRAP` gave a member row not yet linked to an account. An empty list is invite-only (one warning at start-up). Existing accounts sign in on every path as before. The address that counts is the one the sign-in proved: an email code's, GitHub's verified primary, or a Google address Google is authoritative for (D83; a non-authoritative Google address never qualifies, not even with an invite).
+
+- **Email code start** for a new address that may not sign up: the same `200 {flow_id, expires_in}`, no mail, a dud flow (as for a silenced start), and it spends no mail budget and is never a mail failure.
+- **Verify** re-checks when it would make the account (the list or the invite may have changed since the start): `403 SIGNUP_CLOSED`, the account is not made and the flow is spent.
+- **Google / GitHub** for a new user who may not sign up: `403 SIGNUP_CLOSED`, no account, identity or token.
+
+`SIGNUP_CLOSED`'s message is always "Sign-up is invite-only right now. Ask a team owner for an invite.": it names the mode, never the list. The list is never in an answer, a log line or the database. Audit: `auth.signup.refused` (`method`; `email_ref` or `subject_ref`, keyed hashes).
+
 ## Credentials
 
 There are two, and only two, credentials.
@@ -101,7 +111,7 @@ The mail holds a 6-digit code, valid for 10 minutes and one use, with "Never sha
 
 For `client:'web'` the response also sets `__Host-buddy_flow` (10 min). That cookie binds the magic link to this browser.
 
-Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `404 METHOD_DISABLED` (no mailer on this hub), `429 RATE_LIMITED`.
+Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `404 METHOD_DISABLED` (no mailer on this hub), `429 RATE_LIMITED`. A new address that may not sign up (D104) gets the ordinary `200`, and no mail.
 
 ### `POST /api/auth/email/verify`
 
@@ -281,6 +291,7 @@ Errors:
 | `400 INVALID_TOKEN` | any flow problem (unknown, used, expired, another network, wrong `state` or verifier, a `redirect_uri` or `provider` in the body that differs), an id_token that fails a check, a step-up by another identity or device. One generic answer |
 | `401 UNAUTHENTICATED` | a step-up start without a valid Bearer |
 | `403 EMAIL_UNVERIFIED` | the Google account's address isn't verified, or the GitHub account has no primary verified address |
+| `403 SIGNUP_CLOSED` | a new user this hub's sign-up control does not admit (D104); no account is made |
 | `404 METHOD_DISABLED` | that provider isn't configured on this hub |
 | `429 RATE_LIMITED` | see Rate limits (starts, open flows, exchanges, failure budget) |
 | `502 PROVIDER_ERROR` | the provider refused the code (reused, expired, or the verifier didn't match at the provider) |
@@ -484,6 +495,7 @@ The app's runner process gets `{"type": "runner.config", "hub_url": "https://…
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (names no address) |
+| `SIGNUP_CLOSED` | 403 | a new account the hub's sign-up control does not admit (D104): Google, GitHub, or an email code whose address stopped qualifying after the start; the fixed invite-only text, never the list |
 | `QUOTA_EXCEEDED` | 403 | a plan limit, or the runner enrolment caps (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
 | `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66), or an OAuth route for a provider this hub hasn't configured |
