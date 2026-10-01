@@ -330,13 +330,13 @@ test('F5: ctx.boards() lists this team\'s boards (id, title; by title; at most 1
     const ctx = reg.ctxFor(conn.id);
     const other = addOrg(h);
     const own = h.db.get('SELECT id, name FROM boards WHERE id = ?', h.ids.board);
-    for (const name of ['beta', 'Alpha']) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix, settings) VALUES (?, ?, ?, 'XB', '{\"default_budget_usd\":5}')", randomUUID(), h.ids.org, name);
+    for (const [i, name] of ['beta', 'Alpha'].entries()) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix, settings) VALUES (?, ?, ?, ?, '{\"default_budget_usd\":5}')", randomUUID(), h.ids.org, name, `XB${i}`);
     const boards = ctx.boards();
     assert.ok(boards.every((b) => Object.keys(b).join() === 'id,title'));
     assert.ok(!boards.some((b) => b.id === other.board), 'never another team\'s board');
     assert.deepEqual(boards.map((b) => b.title), h.db.all('SELECT name FROM boards WHERE org_id = ? ORDER BY name, id', h.ids.org).map((b) => b.name));
     assert.ok(boards.some((b) => b.id === own.id && b.title === own.name));
-    for (let i = 0; i < 120; i += 1) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, ?, 'XC')", randomUUID(), h.ids.org, `z-${String(i).padStart(3, '0')}`);
+    for (let i = 0; i < 120; i += 1) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, ?, ?)", randomUUID(), h.ids.org, `z-${String(i).padStart(3, '0')}`, `XC${i}`);
     assert.equal(ctx.boards().length, 100);
     // A card: its face only.
     const { result } = await createIn(ctx, h.ids.board, { request_id: 'f5-1', title: 'Face only', body: 'private goal', acceptance: 'private acceptance', labels: ['secret-label'] });

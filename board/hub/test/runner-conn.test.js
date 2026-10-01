@@ -35,7 +35,12 @@ test('a hung GitHub evidence check does not hold up the heartbeats and outbox fr
 });
 
 test('GitHub fetches abort after the timeout instead of hanging', async () => {
-  const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason)); });
+  const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => {
+    // A real pending network request keeps Node alive. Mirror that handle,
+    // since AbortSignal.timeout deliberately uses an unreferenced timer.
+    const handle = setInterval(() => {}, 1000);
+    signal.addEventListener('abort', () => { clearInterval(handle); reject(signal.reason); }, { once: true });
+  });
   const gh = createGitHub({ fetchImpl, timeoutMs: 50 });
   const t0 = Date.now();
   await assert.rejects(gh.getPull('github.com/acme/app', 1), /TimeoutError|aborted|timeout/i);

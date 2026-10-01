@@ -36,7 +36,7 @@ test('D-7: aiOf — omitted = claude; a bad value is no AI at all', () => {
 
 const AIS = [
   { id: 'claude', label: 'Claude Code', installed: true, version: '2.1.0', signedIn: 'unknown', capabilities: { budget: 'native' }, bin: '/Users/someone/.local/bin/claude' },
-  { id: 'codex', label: 'Codex', installed: true, version: '0.1.0', signedIn: true, capabilities: { budget: 'none' }, bin: '/opt/homebrew/bin/codex' },
+  { id: 'codex', label: 'Codex', installed: true, startable: false, version: '0.1.0', signedIn: true, capabilities: { budget: 'none' }, bin: '/opt/homebrew/bin/codex' },
 ];
 
 async function withRunner(scenario, fn, { repoPolicy } = {}) {

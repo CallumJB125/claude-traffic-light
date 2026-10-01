@@ -39,7 +39,7 @@ function spawnApp(root, { env = {} } = {}) {
 
 const config = (hub, root, over = {}) => ({
   type: 'runner.config', hub_url: hub.url.replace('ws://', 'http://').replace('/ws/runner', ''), device_id: 'dev-app',
-  device_token: TOKEN, cf_client_id: CF_ID, cf_client_secret: CF_SECRET, data_dir: path.join(root, 'app-data'), ...over,
+  device_token: TOKEN, cf_client_id: CF_ID, cf_client_secret: CF_SECRET, data_dir: path.join(root, 'app-data'), ai_ids: ['claude'], ...over,
 });
 
 function assertNoSecrets(text) {
@@ -119,6 +119,9 @@ test('app mode: a bad runner.config is fatal with a non-zero exit (and never ech
     for (const [over, re] of [
       [{ device_token: '' }, /device_token/],
       [{ data_dir: 'relative/dir' }, /data_dir/],
+      [{ ai_ids: ['codex', 'arbitrary'] }, /ai_ids/],
+      [{ ai_ids: ['codex', 'codex'] }, /ai_ids/],
+      [{ ai_ids: 'claude' }, /ai_ids/],
       [{ hub_url: 'ftp://x' }, /hub_url/],
       [{ hub_url: 'http://hub.example.com' }, /hub_url must be https: or wss:/],
       [{ hub_url: 'ws://10.0.0.5:8080/ws/runner' }, /hub_url must be https: or wss:/],

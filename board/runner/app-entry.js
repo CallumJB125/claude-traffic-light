@@ -46,6 +46,7 @@ export function configError(m) {
     if ((m.cf_client_id != null || m.cf_client_secret != null) && !(str(m.cf_client_id) && str(m.cf_client_secret))) return 'cf_client_id and cf_client_secret go together';
   }
   if (!str(m.data_dir) || !path.isAbsolute(m.data_dir)) return 'data_dir must be an absolute path';
+  if (m.ai_ids != null && (!Array.isArray(m.ai_ids) || !m.ai_ids.length || m.ai_ids.length > 2 || new Set(m.ai_ids).size !== m.ai_ids.length || m.ai_ids.some((id) => !['codex', 'claude'].includes(id)))) return 'ai_ids must name enabled providers';
   return null;
 }
 
@@ -86,7 +87,7 @@ async function start(m) {
     };
   try {
     ensurePrivateDir(m.data_dir);
-    sup = new Supervisor({ home: m.data_dir, device, log });
+    sup = new Supervisor({ home: m.data_dir, device, log, enabledAis: m.ai_ids ?? ['codex'] });
     presence = new PresenceReporter(sup);
     sup.on('connected', () => status('connected'));
     sup.on('runner_event', (ev) => post(ev));

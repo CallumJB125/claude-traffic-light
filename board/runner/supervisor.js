@@ -231,9 +231,10 @@ export class Supervisor extends EventEmitter {
       if (this.env.BOARD_AI_DETECT === '0') return null;
       const out = [];
       for (const [id, B] of Object.entries(BACKENDS)) {
+        if (this.opts.enabledAis && !this.opts.enabledAis.includes(id)) continue;
         const d = await B.detect({ env: this.env, ...(id === 'claude' && this.claudeBin ? { which: () => ({ bin: this.claudeBin }) } : {}) });
         const { label, capabilities } = B.describe();
-        out.push({ id, label, installed: d.installed, version: d.version, signedIn: d.signedIn, capabilities, bin: d.bin });
+        out.push({ id, label, installed: d.installed, version: d.version, signedIn: d.signedIn, capabilities, bin: d.bin, startable: B.describe().startable && d.startable !== false });
       }
       return out;
     } catch (e) {
@@ -248,9 +249,10 @@ export class Supervisor extends EventEmitter {
 
   /** Claude stays as before (the configured bin); another AI needs a startable backend that is installed and not signed out. */
   canRun(id) {
+    if (this.opts.enabledAis && !this.opts.enabledAis.includes(id)) return false;
     if (id === 'claude') return true;
     if (!id || !BACKENDS[id]?.describe().startable) return false;
-    return !!this.ais?.some((a) => a.id === id && a.installed && a.signedIn !== false);
+    return !!this.ais?.some((a) => a.id === id && a.installed && a.startable !== false && a.signedIn !== false);
   }
 
   #sendHello() {
