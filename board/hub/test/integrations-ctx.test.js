@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { branchName } from '../../shared/fence.js';
 import { cardView } from '../views.js';
 import fake from '../integrations/fake/index.js';
@@ -212,6 +212,42 @@ test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is 
     assert.deepEqual(view().pr_link_status, { state: 'draft', checks: 'none', review: null });
     reg.revokeConnection(conn.id, h.ids.alice);
     assert.equal(view().pr_link_status, null);
+  } finally { await h.close(); }
+});
+
+test('linkStatus head_sha: 40 lowercase hex round-trips through linkStatusFor, anything else is dropped, cardView never shows it', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-24', fence: 1 });
+    const sha = (s) => createHash('sha1').update(s).digest('hex');
+    const [head1, head2] = [sha('head-1'), sha('head-2')];
+    const set = (st) => ctx.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-9', st));
+    assert.equal(ctx.linkStatusFor(r.cardId, 'pr'), null);
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-9'));
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9' });
+    await set({ state: 'open', head_sha: head1 });
+    await set({ checks: 'pending' });
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9', state: 'open', checks: 'pending', head_sha: head1 }, 'a partial keeps the stored head');
+    // A synchronize moves the head; a bad head is dropped without touching the stored one.
+    await set({ head_sha: head2 });
+    for (const bad of [head1.toUpperCase(), head1.slice(1), `${head1}0`, ` ${head1.slice(1)}`, `g${head1.slice(1)}`, 42, null, { sha: head1 }, [head1]]) {
+      await set({ checks: 'passing', head_sha: bad });
+      await assert.rejects(set({ head_sha: bad }), (e) => e.code === 'VALIDATION', JSON.stringify(bad));
+    }
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9', state: 'open', checks: 'passing', head_sha: head2 });
+    // The card face and its broadcast never carry it.
+    const view = cardView(h.hub, h.hub.card(r.cardId), h.ids.alice);
+    assert.deepEqual(view.pr_link_status, { state: 'open', checks: 'passing', review: null });
+    assert.ok(!JSON.stringify(view).includes(head2));
+    // Scoped like linkedByCard: another connection, another org's card, another kind read null.
+    const second = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: 'fake-workspace-2', secrets: {} });
+    assert.equal(reg.ctxFor(second.id).linkStatusFor(r.cardId, 'pr'), null);
+    assert.equal(ctx.linkStatusFor(r.cardId, 'issue'), null);
+    const o = addOrg(h);
+    const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-12', fence: 1 });
+    // (A row naming it cannot even be written: migration 017.)
+    assert.equal(ctx.linkStatusFor(theirs.cardId, 'pr'), null);
   } finally { await h.close(); }
 });
 

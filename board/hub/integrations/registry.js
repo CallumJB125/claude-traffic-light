@@ -81,6 +81,15 @@ function prOfUrl(url) {
   const repo = normalizeRemoteUrl(u.slice(0, at));
   return repo ? { number, repo } : null;
 }
+const HEAD_SHA = /^[0-9a-f]{40}$/;
+// A link's stored status: the card-face keys (cleanLinkStatus) plus the PR
+// head_sha, which only the connector reads back (to drop a check suite for
+// an older head); cardView never shows it.
+function cleanStatus(v) {
+  const out = cleanLinkStatus(v);
+  if (isPlainObject(v) && typeof v.head_sha === 'string' && HEAD_SHA.test(v.head_sha)) out.head_sha = v.head_sha;
+  return out;
+}
 const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
@@ -427,6 +436,14 @@ export function createIntegrations({
       ? db.get('SELECT external_id FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind))?.external_id ?? null
       : null);
 
+    // The newest link of `kind` this connection has on a card of its org, with
+    // its stored status: {external_id, state?, checks?, review?, head_sha?} | null.
+    function linkStatusFor(cardId, kind) {
+      if (!cardInOrg(cardId)) return null;
+      const l = db.get('SELECT external_id, status FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind));
+      return l ? { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) } : null;
+    }
+
     /**
      * The card's newest hub_verified PR evidence (what the merge poll acts
      * on): {number, repo, url} | null. The number is the one the hub checked;
@@ -519,9 +536,9 @@ export function createIntegrations({
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
       if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
-      const next = cleanLinkStatus(patch);
+      const next = cleanStatus(patch);
       if (!Object.keys(next).length) throw new HubError('VALIDATION', 'no valid status field');
-      const merged = JSON.stringify({ ...cleanLinkStatus(safeJson(link.status, null)), ...next });
+      const merged = JSON.stringify({ ...cleanStatus(safeJson(link.status, null)), ...next });
       if (Buffer.byteLength(merged) > LINK_STATUS_MAX) throw new HubError('VALIDATION', 'status over 512 bytes');
       db.run('UPDATE external_links SET status = ? WHERE connection_id = ? AND kind = ? AND external_id = ?', merged, c.id, String(kind), String(externalId));
       hub.later(() => hub.broadcastCard(cardId));
@@ -642,6 +659,7 @@ export function createIntegrations({
       cardForBranch,
       verifiedPr,
       linkedByCard,
+      linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
