@@ -173,7 +173,11 @@ function runSequence(seed) {
   }
   function touch(m) {
     m.lastBeat = clock.now;
-    fs.utimesSync(m.transcript, clock.now / 1000, clock.now / 1000);
+    // Node 22 truncates the float-seconds argument to the microsecond, so a
+    // plain clock.now / 1000 can land just under clock.now; findTranscript then
+    // sees a transcript older than joinedAt and skips it. +1 µs rounds up.
+    const secs = (clock.now + 0.001) / 1000;
+    fs.utimesSync(m.transcript, secs, secs);
   }
 
   function teamEvent() {
