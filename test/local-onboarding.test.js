@@ -77,3 +77,13 @@ test('signed-out Team and Integrations copy: plain, names the hub from the brand
   assert.match(acct, /el\('ul', \{ class: 'acct-connectors', 'aria-label'/);
   assert.ok(!/\.innerHTML\s*=|style=/.test(acct));
 });
+
+test('open(id) starts the account flows the way the sidebar switcher does: tray, Settings and the widget can open the sign-in screen', () => {
+  const idx = read(dir, 'index.js');
+  assert.match(idx, /const FLOW_IDS = \['signin', 'join', 'create-team'\];/);
+  assert.match(idx, /const goTo = \(id\) => \(FLOW_IDS\.includes\(id\) \? flow\.startFlow\(id\) : select\(id\)\);/);
+  assert.match(idx, /if \(pageId\) goTo\(pageId\);/, 'an open window routes the id');
+  assert.match(idx, /else goTo\(pageId \?\? selected\);/, 'a fresh window routes the id too');
+  assert.doesNotMatch(idx, /if \(pageId\) select\(pageId\);/, 'the old route that ignored the flow ids is gone');
+  assert.match(idx, /if \(FLOW_IDS\.includes\(id\)\) flow\.startFlow\(id\); else switchWorkspace\(id\);/, 'the sidebar switcher keeps its behaviour');
+});

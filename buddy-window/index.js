@@ -655,9 +655,14 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     select('board');
   }
 
+  // The three account flows are not pages: open('signin') (tray, Settings, the widget) must start
+  // the flow the same way the sidebar's workspace switcher does, not just show the window.
+  const FLOW_IDS = ['signin', 'join', 'create-team'];
+  const goTo = (id) => (FLOW_IDS.includes(id) ? flow.startFlow(id) : select(id));
+
   ipcMain.on('buddy:workspace', (e, id) => {
     if (!fromSidebar(e) || typeof id !== 'string') return;
-    if (['signin', 'join', 'create-team'].includes(id)) flow.startFlow(id); else switchWorkspace(id);
+    if (FLOW_IDS.includes(id)) flow.startFlow(id); else switchWorkspace(id);
   });
   ipcMain.on('buddy:signout', onSignOut);
   ipcMain.on('buddy:select', onSelect);
@@ -677,7 +682,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
-      if (pageId) select(pageId);
+      if (pageId) goTo(pageId);
       return;
     }
     win = new BaseWindow({
@@ -704,7 +709,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       onClosed();
     });
     layout();
-    if (!pageId && selected.startsWith('flow:')) showScreen(selected.slice(5)); else select(pageId ?? selected);
+    if (!pageId && selected.startsWith('flow:')) showScreen(selected.slice(5)); else goTo(pageId ?? selected);
     // Keep each signed-in hub's team list current (added to a team elsewhere).
     for (const h of store.hubs()) if (signedIn(h)) flow.refreshAccount(h).catch(() => {});
   }
