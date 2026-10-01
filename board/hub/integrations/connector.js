@@ -211,6 +211,9 @@ export function defineConnector(spec) {
     }
     if (cn.kind === 'token' || cn.manifestForm !== undefined) errs.push('connect.prepare is for an oauth/app_install connector with authorizeUrl (not token, not manifestForm)');
   }
+  if (cn?.handshake !== undefined && (typeof cn.handshake !== 'function' || typeof cn.prepare !== 'function' || typeof spec.ackBody !== 'function')) {
+    errs.push('connect.handshake is a function, for a connector that declares connect.prepare and ackBody');
+  }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');

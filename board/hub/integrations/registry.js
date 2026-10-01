@@ -57,6 +57,11 @@ const LINK_STATUS_MAX = 512;
 const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
 const ACK_MAX = 4096;
+// A pending id's only answer (D97): Slack's challenge, nothing that could carry markup.
+const HANDSHAKE_ACK = /^[\x20-\x7e]{1,256}$/;
+// Keys the HMAC an id with no answering pending row runs over the body, as a
+// real verify() would (amendment 4): fresh per process, never used to check anything.
+const DUMMY_HMAC_KEY = randomBytes(32);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Pending connections (D97).
 const PENDING_TTL_MS = 3_600_000;
@@ -818,9 +823,10 @@ export function createIntegrations({
   }
 
   /**
-   * The HTTP layer asks this before reading a body: unknown or inactive → 404
-   * unread. A pending id (D97) is unknown here and in webhook(); slice B3 adds
-   * its one exception, a verified url_verification handshake.
+   * The HTTP layer asks this before reading a body: true only for a live
+   * connection. Any other id (unknown, inactive, revoked, pending) is read
+   * under the same caps and gets webhook()'s one 404, so its failures are
+   * counted per client address, not per id (D97, amendment 4).
    */
   function webhookTarget(connectionId) {
     const c = row(connectionId);
@@ -835,7 +841,7 @@ export function createIntegrations({
   async function webhook(connectionId, { headers, rawBody }) {
     const c = row(connectionId);
     const conn = c && connectors.get(c.provider);
-    if (!c || c.status !== 'active' || !conn?.handleWebhook) return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'not found' } } };
+    if (!c || c.status !== 'active' || !conn?.handleWebhook) return pendingWebhook(connectionId, { headers, rawBody });
     if (rawBody.length > MAX_BODY) return { status: 413, body: { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too large' } } };
     // A key problem is the hub's, not the caller's: 500, and no failure spent.
     let secrets;
@@ -858,6 +864,40 @@ export function createIntegrations({
     // Only a delivery that took a fresh lease vets its sender: anyone holding
     // a captured signed request can replay it as a duplicate.
     return { ...out, verified: !out.body?.duplicate && !out.body?.in_progress };
+  }
+
+  const webhookNotFound = () => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'not found' } } });
+
+  /**
+   * Any id that is not a live connection (D97, slice B3). A ready pending row
+   * of a handshake connector answers exactly one delivery, its verified
+   * handshake, with ackBody's short string; nothing else is done for it (no
+   * lease, rate token, audit, log or promotion). Everything else, and every
+   * error, is the unknown-connection 404. Every path takes the same pending
+   * lookup and an HMAC over the body, so the work done doesn't tell an
+   * unknown id from a pending one either.
+   */
+  function pendingWebhook(id, { headers, rawBody }) {
+    const p = livePending(id);
+    const conn = p && p.match !== '{}' && rawBody.length <= MAX_BODY ? connectors.get(p.provider) : null;
+    let secrets = null;
+    if (conn?.connect.handshake) {
+      try { secrets = pendingSecretsOf(p.id); } catch { secrets = null; }
+    }
+    if (!secrets || !Object.keys(secrets).length) {
+      createHmac('sha256', DUMMY_HMAC_KEY).update(rawBody).digest();
+      return webhookNotFound();
+    }
+    try {
+      if (conn.verify({ headers, rawBody, secrets, now: Date.now() })?.ok !== true) return webhookNotFound();
+      const payload = conn.parseBody ? conn.parseBody({ rawBody, headers }) : JSON.parse(rawBody.toString('utf8'));
+      if (!isBareObject(payload) || POISON_KEYS.some((k) => Object.hasOwn(payload, k))) return webhookNotFound();
+      if (conn.connect.handshake({ payload, headers }) !== true) return webhookNotFound();
+      const ack = conn.ackBody({ payload, headers });
+      return typeof ack === 'string' && HANDSHAKE_ACK.test(ack) ? { status: 200, raw: ack, type: 'text/plain; charset=utf-8' } : webhookNotFound();
+    } catch {
+      return webhookNotFound();
+    }
   }
 
   async function verifiedWebhook(c, conn, { headers, rawBody, v }) {

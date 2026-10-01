@@ -540,8 +540,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const hook = integrations && req.method === 'POST' ? /^\/integrations\/([0-9a-f-]{36})\/webhook$/.exec(url.pathname) : null;
     if (hook) {
       try {
-        // Unknown or inactive → 404 before a byte of the body is read.
-        if (!integrations.webhookTarget(hook[1])) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
+        // Any other id (unknown, inactive, revoked, pending) is read under the
+        // same caps and answered by webhook(): one 404 for all of them (D97).
+        const live = integrations.webhookTarget(hook[1]);
         // Nothing here refuses a delivery for other senders' failures: a
         // provider's shared egress IPs also carry anyone's forged posts. Failures
         // (per connection + client IP) only turn a later failure's 401 into a
@@ -550,9 +551,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         const raw = clientIp(req, config);
         const ip = failBucketKey(raw);
         const failKey = `${hook[1]}|${ip}`;
+        // Not a connection: the sender picks the id, so its failures share
+        // one bucket per address (no bucket per id, and no id answers apart).
+        const failBucket = live ? failKey : `-|${ip}`;
         const vetKey = `${hook[1]}|${vetBucketKey(ip)}`;
         const count = (m, k) => m.get(k) ?? 0;
-        const vetted = integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono();
+        const vetted = live && (integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono());
         // An unread (or half-read) body is not drained at the sender's pace:
         // the socket goes once the answer had a moment to reach the sender.
         const cut = () => res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
@@ -560,9 +564,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           cut();
           return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } }, { 'retry-after': '1' });
         }
+        const refusable = live ? 401 : 404;
         const failed = (status, body) => {
-          const t = hub.limiter.take('webhook_fail_ip', failKey);
-          if (t.ok || status !== 401) return sendJson(res, status, body);
+          const t = hub.limiter.take('webhook_fail_ip', failBucket);
+          if (t.ok || status !== refusable) return sendJson(res, status, body);
           const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
           return sendJson(res, 429, { error: { code: 'RATE_LIMITED', message: 'too many failed deliveries', retry_after_s: s } }, { 'retry-after': String(s) });
         };
@@ -585,7 +590,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           verifiedPairs.set(vetKey, hub.mono() + readLimits.verifiedMs);
           if (verifiedPairs.size > readLimits.verifiedMax) verifiedPairs.delete(verifiedPairs.keys().next().value);
         }
-        if (out.status === 401) return failed(out.status, out.body);
+        if (out.status === 401 || (!live && out.status === 404)) return failed(out.status, out.body);
         if (typeof out.raw === 'string') return sendRaw(res, out.status, out.type, out.raw, out.headers);
         return sendJson(res, out.status, out.body, out.headers);
       } catch (e) {
