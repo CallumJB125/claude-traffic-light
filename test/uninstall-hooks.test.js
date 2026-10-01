@@ -88,3 +88,17 @@ test('uninstall-hooks: the plain-Node entry the .deb prerm runs works against HO
   assertClean(home, geminiText);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+// L3 (code review): one uninstall entry, run by main.js before anything else starts.
+test('uninstall: main.js --uninstall-hooks runs hooks/uninstall-hooks.js main() before Electron loads', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const at = main.indexOf("process.argv.includes('--uninstall-hooks')");
+  assert.ok(at > 0 && at < main.indexOf("require('electron')"), 'handled before electron is required');
+  assert.match(main.slice(at, at + 300), /require\('\.\/hooks\/uninstall-hooks\.js'\)\.main\(/);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-uninst-main-'));
+  const lines = [];
+  const results = require('../hooks/uninstall-hooks.js').main({ home, mcp: McpInstall, log: (l) => lines.push(l) });
+  assert.equal(lines.length, results.length);
+  assert.ok(lines.every((l) => l.startsWith('[uninstall-hooks] ')));
+  fs.rmSync(home, { recursive: true, force: true });
+});

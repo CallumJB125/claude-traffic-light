@@ -29,14 +29,29 @@ function choose({ packaged, platform, env = {}, execPath, resourcesPath, appDir,
   return { execPath, hooksDir: path.join(resourcesPath, 'hooks'), mcpAppPath: appPath, stableDir: null, copyFrom: null };
 }
 
-// Copies hooks/ and adapters/ into stableDir, writes the MCP stub, and removes
-// the copies older versions left behind.
-function materialize({ stableDir, copyFrom }, fsImpl = fs) {
-  for (const dir of ['hooks', 'adapters']) {
-    fsImpl.rmSync(path.join(stableDir, dir), { recursive: true, force: true });
-    fsImpl.cpSync(path.join(copyFrom, dir), path.join(stableDir, dir), { recursive: true });
-  }
-  fsImpl.writeFileSync(path.join(stableDir, 'mcp-server.js'), MCP_STUB);
+const OK = '.ok';
+
+// Makes stableDir hold hooks/, adapters/ and the MCP stub. A finished copy
+// carries .ok and is left alone, so a second launch never touches the files
+// the running app's hooks are using; otherwise it is built in a temp folder
+// and renamed into place, so nobody sees half a copy. → whether it copied.
+function materialize({ stableDir, copyFrom }, fsImpl = fs, pid = process.pid) {
+  const stamp = path.basename(stableDir);
+  try { if (fsImpl.readFileSync(path.join(stableDir, OK), 'utf8') === stamp) return false; } catch { /* not there yet */ }
+  const tmp = `${stableDir}.tmp-${pid}`;
+  fsImpl.rmSync(tmp, { recursive: true, force: true });
+  for (const dir of ['hooks', 'adapters']) fsImpl.cpSync(path.join(copyFrom, dir), path.join(tmp, dir), { recursive: true });
+  fsImpl.writeFileSync(path.join(tmp, 'mcp-server.js'), MCP_STUB);
+  fsImpl.writeFileSync(path.join(tmp, OK), stamp);
+  fsImpl.rmSync(stableDir, { recursive: true, force: true });
+  fsImpl.renameSync(tmp, stableDir);
+  return true;
+}
+
+// The copies other versions left behind (and unfinished temp copies). Only
+// the instance holding the single-instance lock calls this.
+function prune({ stableDir }, fsImpl = fs) {
+  if (!stableDir) return;
   const root = path.dirname(stableDir);
   for (const name of fsImpl.readdirSync(root)) {
     if (name.startsWith(STABLE_PREFIX) && path.join(root, name) !== stableDir) fsImpl.rmSync(path.join(root, name), { recursive: true, force: true });
@@ -57,4 +72,9 @@ function resolve(opts, fsImpl = fs, log = console.warn) {
   }
 }
 
-module.exports = { choose, materialize, resolve, MCP_STUB, STABLE_PREFIX };
+// resolve() for the running Electron app.
+function forApp(app, rootDir, { platform = process.platform, env = process.env, execPath = process.execPath, resourcesPath = process.resourcesPath, appDir = path.join(__dirname, '..') } = {}) {
+  return resolve({ packaged: app.isPackaged, platform, env, execPath, resourcesPath, appDir, appPath: app.getAppPath(), rootDir, version: app.getVersion() });
+}
+
+module.exports = { choose, materialize, prune, resolve, forApp, MCP_STUB, STABLE_PREFIX };

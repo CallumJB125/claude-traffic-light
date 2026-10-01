@@ -92,13 +92,8 @@ async function run(deps) {
 
     deps.createWindow();
     const win = deps.getWindow();
-    const loaded = await new Promise((resolve) => {
-      if (!win) return resolve(false);
-      const t = setTimeout(() => resolve(false), 20000);
-      const done = () => { clearTimeout(t); resolve(true); };
-      if (!win.webContents.isLoading()) done(); else win.webContents.once('did-finish-load', done);
-    });
-    step('window-loaded', loaded);
+    const loaded = win ? await windowLoaded(win.webContents) : false;
+    step('window-loaded', loaded, loaded ? undefined : win?.webContents.getURL());
 
     report.ok = Object.values(report.steps).every((s) => s.ok);
   } catch (err) {
@@ -109,4 +104,21 @@ async function run(deps) {
   app.exit(report.ok ? 0 : 1);
 }
 
-module.exports = { run, reportPathFrom, unsafeReason, firstHookCommand };
+// The widget page itself finished loading. Before loadFile starts, a window
+// is "not loading" with an empty URL, so that alone proves nothing.
+function windowLoaded(wc, { timeoutMs = 20000, page = 'index.html' } = {}) {
+  const isPage = () => { try { const u = new URL(wc.getURL()); return u.protocol === 'file:' && u.pathname.endsWith(`/${page}`); } catch { return false; } };
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { wc.removeListener('did-finish-load', check); resolve(false); }, timeoutMs);
+    function check() {
+      if (wc.isLoading() || !isPage()) return;
+      clearTimeout(t);
+      wc.removeListener('did-finish-load', check);
+      resolve(true);
+    }
+    wc.on('did-finish-load', check);
+    check();
+  });
+}
+
+module.exports = { run, reportPathFrom, unsafeReason, firstHookCommand, windowLoaded };

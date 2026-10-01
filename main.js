@@ -1,6 +1,14 @@
 // Windows hook commands in argv form run the exe with --buddy-hook: the hook
 // script runs here and the process exits before any of the app starts.
 if (process.argv.includes('--buddy-hook')) require('./src/buddy-hook-runner.js').run(process.argv);
+// `--uninstall-hooks`: the Windows uninstaller runs this to take Buddy's
+// entries out of the agents' configs before the binary goes, then exits
+// before any window, lock or data folder is touched (the .deb's prerm runs
+// the same code through hooks/uninstall-hooks.js).
+if (process.argv.includes('--uninstall-hooks')) {
+  require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
+  process.exit(0);
+}
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
@@ -36,14 +44,6 @@ const {
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
   runningTerminal, bounceOwnDock,
 } = Terminal;
-
-// `--uninstall-hooks`: the Windows uninstaller runs this to take Buddy's
-// entries out of the agents' configs before the binary goes, then exits
-// before any window, lock or data folder is touched.
-if (process.argv.includes('--uninstall-hooks')) {
-  for (const r of require('./adapters/uninstall-all.js').run({ home: os.homedir(), mcp: McpInstall })) console.log(`[uninstall-hooks] ${r.id}: ${r.error || (r.changed ? 'removed' : 'nothing to remove')}`);
-  process.exit(0);
-}
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
 // own home folder, a 24x clock, every plant is weed, a long deal, then quit.
@@ -274,7 +274,8 @@ function flushStats() {
 // Inside the packaged .app, hooks/ is bundled as an extraResource; in dev it's
 // the checked-out hooks/ dir next to main.js. A Linux AppImage copies it out
 // to a path that survives a relaunch (src/hook-paths.js).
-const HOOK_PATHS = require('./src/hook-paths.js').resolve({ packaged: app.isPackaged, platform: process.platform, env: process.env, execPath: process.execPath, resourcesPath: process.resourcesPath, appDir: __dirname, appPath: app.getAppPath(), rootDir: ROOT_DIR, version: app.getVersion() });
+const HookPaths = require('./src/hook-paths.js');
+const HOOK_PATHS = HookPaths.forApp(app, ROOT_DIR);
 const HOOKS_DIR = HOOK_PATHS.hooksDir;
 const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 // Hooks run the app's own binary as Node (ELECTRON_RUN_AS_NODE), so a machine
@@ -283,8 +284,9 @@ const EMIT_SCRIPT = path.join(HOOKS_DIR, 'emit.js');
 const HOOK_RUNTIME = Adapters.Runtime.make({ execPath: HOOK_PATHS.execPath, hooksDir: HOOKS_DIR, dataDir: ROOT_DIR });
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 // Linux panels are often dark and don't recolour template images, so it gets its own colour icon.
-const TRAY_ICON = IS_WIN ? 'tray-win.png' : process.platform === 'linux' ? 'tray-linux.png' : 'trayTemplate.png';
+const TRAY_ICON = IS_WIN ? 'tray-win.png' : IS_LINUX ? 'tray-linux.png' : 'trayTemplate.png';
 require('./src/spellcheck.js').keepOffline({ app, getDefaultSession: () => require('electron').session.defaultSession });
 require('./src/desktop-shell.js').setup({ app, Menu });
 
@@ -1550,7 +1552,7 @@ function updateTrayMode() {
 function applyWidgetVisibility() {
   if (!win) return;
   // Linux with no tray: the widget is the only way back in, so it stays.
-  if (loadConfig().showWidget || (process.platform === 'linux' && !tray)) win.showInactive(); else win.hide();
+  if (loadConfig().showWidget || (IS_LINUX && !tray)) win.showInactive(); else win.hide();
 }
 
 // ── Garden on the real screen (Desktop-Goose style) ────────────────────────
@@ -2160,7 +2162,7 @@ function createTray() {
 // since GNOME shows no tray at all and that menu is the only way to Quit.
 let trayMenu = null;
 ipcMain.handle('widget-menu', () => {
-  if (process.platform === 'linux' && trayMenu && win && !win.isDestroyed()) { trayMenu.popup({ window: win }); return; }
+  if (IS_LINUX && trayMenu && win && !win.isDestroyed()) { trayMenu.popup({ window: win }); return; }
   createLightsWindow();
 });
 
@@ -3296,6 +3298,8 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock.hide();
   // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
   const smokeReport = Smoke.reportPathFrom(process.argv);
+  // An AppImage's copies for older versions go only once this is the one running instance.
+  if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.

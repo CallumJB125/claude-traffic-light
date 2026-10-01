@@ -37,3 +37,14 @@ test('login item: Linux writes and removes an XDG autostart entry that runs $APP
 test('login item: Exec quoting escapes what the Desktop Entry spec reserves', () => {
   assert.equal(LoginItem.execQuote('/a "b" $c `d` \\e 100%'), '"/a \\"b\\" \\$c \\`d\\` \\\\e 100%%"');
 });
+
+// M5 (code review): an autostart folder it can't write to must not throw into the tray menu or startup.
+test('login item (Linux): a failed write or remove returns false and logs, never throws', () => {
+  const logs = [];
+  const broken = { existsSync: () => false, rmSync: () => { throw Object.assign(new Error('EROFS'), { code: 'EROFS' }); }, mkdirSync: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); }, writeFileSync: () => {} };
+  const li = LoginItem.create({ app: null, platform: 'linux', env: {}, home: '/home/u', execPath: '/opt/p', fsImpl: broken, log: (m) => logs.push(m) });
+  assert.equal(li.set(true), false);
+  assert.equal(li.set(false), false);
+  assert.equal(logs.length, 2);
+  assert.match(logs[0], /could not write .*autostart/);
+});

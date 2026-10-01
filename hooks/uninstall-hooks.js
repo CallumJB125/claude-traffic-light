@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Plain-Node entry to adapters/uninstall-all.js, for places the app's GUI
-// can't start: the .deb's prerm runs it per user as
+// can't start (main.js --uninstall-hooks runs main() too): the .deb's prerm runs it per user as
 //   ELECTRON_RUN_AS_NODE=1 <app binary> <resources>/hooks/uninstall-hooks.js
 // mcp-install.js is inside app.asar when packaged (Electron's Node reads it)
 // and next to this folder in a checkout.
@@ -15,7 +15,13 @@ function loadMcp() {
   return null;
 }
 
-if (require.main === module) {
-  const results = UninstallAll.run({ home: os.homedir(), mcp: loadMcp() });
-  for (const r of results) console.log(`[uninstall-hooks] ${r.id}: ${r.error ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
+// Shared with main.js --uninstall-hooks (the Windows uninstaller).
+function main({ home = os.homedir(), mcp = loadMcp(), log = console.log } = {}) {
+  const results = UninstallAll.run({ home, mcp });
+  for (const r of results) log(`[uninstall-hooks] ${r.id}: ${r.error ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
+  return results;
 }
+
+if (require.main === module) main();
+
+module.exports = { main, loadMcp };
