@@ -1,6 +1,6 @@
 // startTasksEngine: the local "Hand it off" Tasks engine behind
-// TASKS-CONTRACT.md. Not wired into the desktop yet; see README.md for how
-// the next slice starts it (a utilityProcess, like the hub supervisor).
+// TASKS-CONTRACT.md. The desktop starts utility-entry.js lazily in a
+// utilityProcess; the UI uses the same private socket client as the CLI.
 import path from 'node:path';
 import { BACKENDS } from '../runner/backends/index.js';
 import { ensurePrivateDir, makeLogger } from '../runner/util.js';

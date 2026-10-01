@@ -71,7 +71,7 @@
       return box;
     }
     if (!snap.tasks.length) {
-      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going in the background, even if you quit Plexiform.'));
+      box.append(el('h2', null, 'No tasks yet'), el('p', null, 'Hand something off and it keeps going when you close this window. Quitting Plexiform stops active runs; their history and work are saved for retry.'));
       const b = btn('New task', 'primary', openComposer);
       box.append(b, el('p', null, ''), (() => { const p = el('p'); p.append('Shortcut: ', Object.assign(el('kbd'), { textContent: '⌥⌘T' })); return p; })());
       return box;
@@ -386,7 +386,10 @@
     fact('Branch', t.branch ? `${t.branch}${t.baseBranch ? ` (from ${t.baseBranch})` : ''}` : t.workInPlace ? 'Working directly in your folder' : null);
     fact('Worktree', t.worktree);
     fact('Runs', { background: 'In the background', tmux: 'In tmux', tab: 'In a terminal tab' }[t.surface]);
-    fact('Permissions', `${{ plan: 'Plan only', ask: 'Asks before risky things', 'auto-edits': 'Edits files freely', auto: 'Automatic', bypass: 'Bypass (no checks)' }[t.permissionLevel] || t.permissionLevel}${t.planFirst ? ' · plan reviewed first' : ''}`);
+    const permission = t.ai.id === 'codex'
+      ? (t.permissionLevel === 'plan' ? 'Workspace read only' : 'Edits files and runs commands in the worktree; command network blocked')
+      : ({ plan: 'Plan only', ask: 'Asks before risky things', 'auto-edits': 'Edits files freely', auto: 'Automatic', bypass: 'Bypass (no checks)' }[t.permissionLevel] || t.permissionLevel);
+    fact('Permissions', `${permission}${t.planFirst ? ' · plan review required' : ''}`);
     fact('Started from', { local: 'This Mac', cli: 'The buddy command', mcp: 'Another AI session spun it off', board: 'A teammate', phone: 'Your phone', slack: 'Slack', voice: 'Voice' }[t.source] || null);
     if (t.hub) fact('Board card', t.hub.cardKey);
     fact('Cost', live.cost.usd ? `$${live.cost.usd.toFixed(2)}${live.cost.budgetUsd != null ? ` of $${live.cost.budgetUsd.toFixed(2)} budget` : ''}` : null);
@@ -467,22 +470,24 @@
       for (const r of comp.recent) { const c = el('button', 'chip', r.label); c.type = 'button'; c.setAttribute('aria-pressed', String(comp.folder?.handle === r.handle)); c.addEventListener('click', () => { comp.folder = r; comp.error = ''; renderComposer(true); }); chips.append(c); }
       where.append(chips);
     }
-    where.append(el('div', 'sub', 'The task works on its own copy (a git worktree), so your files stay untouched until you review and merge.'));
+    where.append(el('div', 'sub', 'Git repositories use a separate worktree for review. A folder without git is edited in place.'));
 
     const aiF = el('div', 'field');
     const aiL = el('label', null, 'Which AI?'); aiL.htmlFor = 'c-ai';
     const sel = el('select'); sel.id = 'c-ai';
     const add = (v, label, disabled) => { const o = el('option', null, label); o.value = v; o.disabled = !!disabled; sel.append(o); };
     add('auto', 'Choose for me');
-    for (const a of comp.ais) add(a.id, `${a.label}${!a.installed ? ' (not installed)' : a.loggedIn === false ? ' (logged out)' : ''}`, !a.installed || a.loggedIn === false);
+    for (const a of comp.ais) add(a.id, `${a.label}${!a.installed ? ' (not installed)' : a.loggedIn === false ? ' (logged out)' : !a.capabilities.background ? ' (update required)' : ''}`, !a.installed || a.loggedIn === false || !a.capabilities.background);
     if (!comp.ais.some((a) => a.id === comp.ai)) comp.ai = 'auto';
     sel.value = comp.ai;
-    sel.addEventListener('change', () => { comp.ai = sel.value; });
-    aiF.append(aiL, sel, el('div', 'sub', 'Choosing for you picks an AI that is installed, logged in and not at its limit, and tells you why.'));
+    sel.addEventListener('change', () => { comp.ai = sel.value; renderComposer(true); });
+    const provider = comp.ais.find((a) => a.id === comp.ai) || comp.ais.find((a) => a.installed && a.capabilities.background);
+    const codex = provider?.id === 'codex';
+    aiF.append(aiL, sel, el('div', 'sub', codex ? 'Codex uses your existing login. Usage is billed under that account; this CLI provides no native spend cap.' : 'Choosing for you picks an available AI and tells you why.'));
 
     const surf = el('div', 'field radios');
     surf.append(el('span', 'lbl', 'Where does it run?'));
-    for (const [v, label] of [['background', 'In the background (recommended): keeps going if you quit the app'], ['tab', 'In a terminal tab, so you can watch and type'], ['tmux', 'In tmux']]) {
+    for (const [v, label] of [['background', 'In the background: keeps going when you close this window']]) {
       const l = el('label'); const r = el('input'); r.type = 'radio'; r.name = 'c-surface'; r.value = v; r.checked = comp.surface === v;
       r.addEventListener('change', () => { comp.surface = v; });
       l.append(r, ` ${label}`); surf.append(l);
@@ -491,12 +496,16 @@
     const permF = el('div', 'field');
     const permL = el('label', null, 'How much may it do without asking?'); permL.htmlFor = 'c-perm';
     const perm = el('select'); perm.id = 'c-perm';
-    for (const [v, label] of [['plan', 'Plan only: it writes a plan and changes nothing'], ['ask', 'Ask me before anything risky'], ['auto-edits', 'Edit files freely, ask for the rest']]) { const o = el('option', null, label); o.value = v; perm.append(o); }
+    const levels = codex
+      ? [['plan', 'Plan only: workspace files are read only'], ['auto-edits', 'Edit files and run commands in this worktree']]
+      : [['plan', 'Plan only: it writes a plan and changes nothing'], ['ask', 'Ask me before anything risky'], ['auto-edits', 'Edit files freely, ask for the rest']];
+    if (!levels.some(([v]) => v === comp.perm)) comp.perm = 'auto-edits';
+    for (const [v, label] of levels) { const o = el('option', null, label); o.value = v; perm.append(o); }
     perm.value = comp.perm;
     perm.addEventListener('change', () => { comp.perm = perm.value; });
     const pf = el('label'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = comp.planFirst; cb.addEventListener('change', () => { comp.planFirst = cb.checked; });
     pf.append(cb, ' Show me its plan first and wait for my go-ahead');
-    permF.append(permL, perm, el('div', 'sub'), pf);
+    permF.append(permL, perm, el('div', 'sub', codex ? 'Network access is blocked for commands. Codex runs without interactive command approvals in this sandbox. Plan review only widens a task that already has edit permission; a plan-only task stays read only.' : ''), pf);
 
     const foot = el('div', 'foot');
     const go = btn('Start task', 'primary'); go.type = 'submit'; go.id = 'c-go'; go.disabled = !connected() || comp.busy;

@@ -43,6 +43,7 @@ export function fakeBackends(dir, scenario, { claudeInstalled = true } = {}) {
     }
   }
   class FakeCodex extends CodexBackend {
+    static describe() { return { ...super.describe(), startable: false }; }
     static async detect() { return { id: 'codex', installed: true, version: '0.1.0', signedIn: true, bin: '/bin/false' }; }
   }
   FakeClaude.bin = bin;

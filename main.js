@@ -1612,15 +1612,24 @@ function createWaitingWindow() {
 // Dev runs point at the mock supervisor through an env var, never in a package.
 let tasksWin = null;
 let tasksSvc = null;
+let tasksProcess = null;
 const tasksPages = () => [tasksWin?.webContents, buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
 const tasksSenderOk = (e) => !!e.sender && tasksPages().includes(e.sender) && e.senderFrame === e.sender.mainFrame;
 const TASKS_SEEN_FILE = path.join(ROOT_DIR, 'tasks-seen.json');
 function getTasks() {
   if (tasksSvc) return tasksSvc;
   const dev = IS_DEV_RUN && !app.isPackaged;
+  const fixtureHome = dev && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_HOME;
+  const dataDir = fixtureHome || path.join(app.getPath('userData'), 'tasks');
+  if (!fixtureHome) {
+    tasksProcess = require('./src/tasks-process.js').createTasksSupervisor({
+      fork: require('electron').utilityProcess.fork,
+      entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
+    });
+  }
   tasksSvc = require('./src/tasks-service.js').createTasksService({
-    // Unset = the helper's own default (~/.board). A dev run never touches it: it gets the mock's folder or an absent one.
-    boardHome: dev ? (process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_HOME || path.join(os.tmpdir(), 'plexiform-tasks-absent')) : undefined,
+    boardHome: dataDir,
+    ensureSupervisor: () => tasksProcess?.ensure(),
     homeDir: os.homedir(),
     copy: (text) => clipboard.writeText(text),
     onChange: (snap) => { for (const wc of tasksPages()) wc.send('tasks:changed', snap); },
@@ -2769,7 +2778,7 @@ function createTray() {
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...budgetItems(),
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) }, whileSoon: { tasks: createTasksWindow } }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from), tasks: createTasksWindow } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -4482,10 +4491,11 @@ app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
 app.on('before-quit', (e) => {
-  if (hubStopped || !buddyWin) return;
+  if (hubStopped || (!buddyWin && !tasksProcess)) return;
   e.preventDefault();
   hubStopped = true;
-  buddyWin.stop().finally(() => app.quit());
+  tasksSvc?.stop();
+  Promise.allSettled([buddyWin?.stop(), tasksProcess?.stop({ final: true })]).finally(() => app.quit());
 });
 
 app.on('activate', () => { if (!lightsWin && !settingsWin) win?.showInactive(); });

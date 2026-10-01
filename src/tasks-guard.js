@@ -215,6 +215,7 @@ function createGuard({ P, taskFace }) {
     return (Array.isArray(list) ? list : []).filter((a) => P.AIS.includes(a?.id)).map((a) => ({
       id: a.id, label: TV.AI_NAME[a.id], installed: a.installed === true, loggedIn: typeof a.loggedIn === 'boolean' ? a.loggedIn : null,
       health: pick(a.health, ['ok', 'warn', 'missing'], 'warn'), note: str(Array.isArray(a.notes) ? a.notes[0] : '', 200),
+      capabilities: { background: a.capabilities?.background === true, permissionRouting: a.capabilities?.permissionRouting === true, costReport: a.capabilities?.costReport === true },
     }));
   }
 

@@ -140,8 +140,8 @@ test.describe('no supervisor', () => {
     try {
       h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: absent } });
       const page = await openTasks(h.app);
-      await expect(page.locator('#main h2')).toHaveText("Tasks run in the background helper, which isn't running yet.", { timeout: 15000 });
-      await expect(page.locator('#main')).toContainText('connects by itself');
+      await expect(page.locator('#main h2')).toHaveText('The Tasks background helper is unavailable.', { timeout: 15000 });
+      await expect(page.locator('#main')).toContainText('reconnects automatically');
       await expect(page.getByRole('button', { name: 'Try again now' })).toBeVisible();
       await expect(page.locator('#list-empty')).toHaveText('');
       await page.mouse.move(0, 0);

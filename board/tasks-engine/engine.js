@@ -145,26 +145,28 @@ export class TasksEngine extends EventEmitter {
   async #detect() {
     const out = [];
     for (const [id, B] of Object.entries(this.backends)) {
+      if (this.opts.enabledAis && !this.opts.enabledAis.includes(id)) continue;
       let d;
       try { d = await B.detect({ env: this.env }); } catch { d = { installed: false, version: null, signedIn: 'unknown', bin: null }; }
       const desc = B.describe();
+      const startable = desc.startable && d.startable !== false;
       const c = desc.capabilities;
       const capabilities = {
-        background: desc.startable && c.structuredEvents, resume: c.resume, hooks: c.permissions === 'hooks',
-        mcp: desc.startable && c.permissions === 'hooks', permissionRouting: c.permissions === 'hooks', modelSelect: c.model,
+        background: startable && c.structuredEvents, resume: c.resume, hooks: c.permissions === 'hooks',
+        mcp: startable && c.permissions === 'hooks', permissionRouting: c.permissions === 'hooks', modelSelect: c.model,
         costReport: c.budget !== 'none', sandbox: c.permissions !== 'none',
       };
       const notes = [];
       if (!d.installed) notes.push('Not installed.');
-      else if (!desc.startable) notes.push('Not available in Plexiform yet.');
+      else if (!startable) notes.push(d.reason === 'unsupported_version' ? 'Update Codex to version 0.159 or later.' : 'Not available in Plexiform yet.');
       if (d.installed && d.signedIn === 'unknown') notes.push("Plexiform can't confirm you're signed in.");
       if (d.installed && d.signedIn === false) notes.push('Signed out.');
-      const health = !d.installed ? 'missing' : desc.startable && d.signedIn !== false && d.version ? 'ok' : 'warn';
+      const health = !d.installed ? 'missing' : startable && d.signedIn !== false && d.version ? 'ok' : 'warn';
       out.push({
         id, installed: !!d.installed, bin: d.bin ?? null, version: d.version ?? null,
         loggedIn: d.signedIn === true ? true : d.signedIn === false ? false : null, models: [],
         capabilities: Object.fromEntries(CAPABILITIES.map((k) => [k, !!capabilities[k]])), notes, health,
-        startable: desc.startable, label: desc.label,
+        startable, label: desc.label,
       });
     }
     this.ais = out;
@@ -178,7 +180,8 @@ export class TasksEngine extends EventEmitter {
     let a;
     let reason = null;
     if (want === 'auto') {
-      a = AIS.map((id) => this.#aiInfo(id)).find((x) => this.#usable(x));
+      a = this.opts.defaultAi ? this.#aiInfo(this.opts.defaultAi) : AIS.map((id) => this.#aiInfo(id)).find((x) => this.#usable(x));
+      if (!this.#usable(a)) a = null;
       if (!a) throw new ApiError('AI_UNAVAILABLE', 'no AI that can run tasks is installed', { ai: 'auto' });
       reason = `Auto: ${AI_LABEL[a.id]} is installed and can run in the background`;
     } else {
@@ -442,6 +445,7 @@ export class TasksEngine extends EventEmitter {
     if (spec.baseBranch != null && !REF_RE.test(spec.baseBranch)) throw new ApiError('VALIDATION', 'baseBranch is not a branch name');
     if (spec.budgetUsd != null && !(spec.budgetUsd > 0)) throw new ApiError('VALIDATION', 'budgetUsd must be more than 0');
     const ai = this.#chooseAi(spec.ai ?? 'auto', level);
+    if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
 
     if (!path.isAbsolute(spec.cwd)) throw new ApiError('VALIDATION', 'cwd must be an absolute path');
     let cwd;
@@ -652,7 +656,9 @@ export class TasksEngine extends EventEmitter {
   #runFiles(task) {
     const runDir = path.join(this.dataDir, 'run', task.id);
     const socketPath = path.join(runDir, 'ipc.sock');
-    if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw Object.assign(new Error('socket path too long'), { code: 'SOCKET_PATH_TOO_LONG' });
+    // Codex exec has no hooks/MCP channel: don't manufacture an unused
+    // per-run socket or hook credential (and its shorter OS path limit).
+    if (task.ai.id !== 'codex' && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) throw Object.assign(new Error('socket path too long'), { code: 'SOCKET_PATH_TOO_LONG' });
     return { runDir, socketPath };
   }
 
@@ -663,6 +669,7 @@ export class TasksEngine extends EventEmitter {
     const cacheDir = this.#cacheDir(task);
     ensureDir(cacheDir);
     ensureDir(path.join(cacheDir, 'tmp'));
+    if (task.ai.id === 'codex') return;
     const protectedWrite = task.workInPlace
       ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
     const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
@@ -690,9 +697,10 @@ export class TasksEngine extends EventEmitter {
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
     this.#writeRunFiles(task, runDir, socketPath, token);
-    run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
+    if (task.ai.id !== 'codex') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     this.runs.set(task.id, run);
     const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
+    if (task.ai.id === 'codex' && this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
     // Package-manager caches live in a per-task dir, never the user's global caches.
     const cacheDir = this.#cacheDir(task);
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
@@ -706,6 +714,8 @@ export class TasksEngine extends EventEmitter {
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
+      dataDir: dataReal, cacheDir, gitDir: task.gitDir,
+      commonGitDir: task.repo ? await this.git(task.repo.root, ['rev-parse', '--git-common-dir']).then((s) => fs.realpathSync(path.resolve(task.repo.root, s.trim())), () => null) : null,
     });
     run.backend = backend;
     this.#attach(task, run);
@@ -713,7 +723,7 @@ export class TasksEngine extends EventEmitter {
       backend.start(prompt ?? (resume ? this.#withPending(task, 'You were resumed. Continue where you left off.') : this.#withPending(task, this.#finalPrompt(task))));
     } catch (e) {
       this.runs.delete(task.id);
-      await run.ipc.close();
+      await run.ipc?.close();
       throw e;
     }
     task.sessionStarted = true;
@@ -831,6 +841,10 @@ export class TasksEngine extends EventEmitter {
       }
       if (r.subtype === 'success') {
         if (task.planFirst && !task.planApproved) return this.#planAsk(task, run, r);
+        if (task.ai.id === 'codex' && this.messages.pending(task.id).length) {
+          await this.#endRun(task, run);
+          return this.#requeue(task, { resume: true, prompt: this.#withPending(task, 'Continue with the pending messages from the user.') });
+        }
         return this.#complete(task, run, r);
       }
       await this.#endRun(task, run);
@@ -1131,6 +1145,7 @@ export class TasksEngine extends EventEmitter {
     const { runDir, socketPath } = this.#runFiles(task);
     const token = crypto.randomBytes(24).toString('base64url');
     this.#writeRunFiles(task, runDir, socketPath, token);
+    if (task.ai.id === 'codex') return { runDir, socketPath };
     const ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, null) });
     const entry = { ipc, runDir, socketPath };
     this.idleIpc.set(task.id, entry);
@@ -1258,6 +1273,19 @@ export class TasksEngine extends EventEmitter {
         if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
         const { runDir, socketPath } = await this.#ensureIdleIpc(task);
         this.#setState(task, 'handed_over');
+        if (task.ai.id === 'codex') {
+          const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
+          if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
+          env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
+          const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,
+            dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), gitDir: task.gitDir,
+            commonGitDir: task.repo ? await this.git(task.repo.root, ['rev-parse', '--git-common-dir']).then((s) => fs.realpathSync(path.resolve(task.repo.root, s.trim())), () => null) : null,
+            permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model };
+          writeFileAtomic(path.join(runDir, 'codex-instructions.md'), this.#brief(task));
+          return { takeover: { argv: [info.bin, ...new this.backends.codex(options).argv()], cwd: task.worktree,
+            env: { TMPDIR: env.TMPDIR, ...(env.CODEX_HOME ? { CODEX_HOME: env.CODEX_HOME } : {}) }, mode: payload.mode ?? 'print', sessionId: task.sessionId, resumed: task.sessionStarted,
+            note: 'Continues this Codex task with the same sandbox in your terminal. Type the next instruction, then press Ctrl-D to run it. Exit the command before handing it back.' } };
+        }
         const mode = MODE_OF[task.permissionLevel];
         return {
           takeover: {
@@ -1276,7 +1304,7 @@ export class TasksEngine extends EventEmitter {
       }
       case 'handback': {
         const lines = commandLines();
-        if (!lines || lines.some((l) => l.includes(task.sessionId) && /--(resume|session-id)/.test(l))) {
+        if (!lines || lines.some((l) => l.includes(task.sessionId) && /--(resume|session-id)|\b(?:exec\s+)?resume\b/.test(l))) {
           throw new ApiError('SESSION_BUSY', 'the session is still open in your terminal; exit it first');
         }
         await this.#closeIdleIpc(task);

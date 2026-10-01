@@ -36,16 +36,21 @@ confinement to the worktree). Keep `dataDir` short: `run/<taskId>/ipc.sock`
 must fit in 103 bytes. A too-long path fails the task with a fixed reason; a
 too-long `runner.sock` path refuses to start (`SOCKET_PATH_TOO_LONG`).
 
-## Starting it from the desktop (next slice)
+## Starting it from the desktop
 
-Not wired yet. The plan mirrors the embedded hub (`buddy-window/hub-process.js`):
+Opening the sidebar Tasks page or Tasks window lazily starts
+`board/tasks-engine/utility-entry.js` under `src/tasks-process.js`. The helper
+uses the private `<userData>/tasks` folder and detects only Codex by default;
+opening the page does not invoke Claude. The backend registry still supports
+explicit provider integrations. The service reads its private token and
+connects through the real socket. Packaged builds never use the mock service.
 
-1. Add a small entry, e.g. `board/tasks-engine/utility-entry.js`, that runs
+1. The small entry `board/tasks-engine/utility-entry.js` runs
    `startTasksEngine({ dataDir, log })` and reports
    `{type:'tasks.listening', socket, epoch}` over `process.parentPort`; on
    `SIGTERM` it calls `close()` (live runs get the stop recipe and become
    `orphaned`, resumable with `retry`).
-2. In `main.js`, start it with `utilityProcess.fork(entry, [], { serviceName, env })`
+2. `main.js` starts it with `utilityProcess.fork(entry, [], { serviceName, env })`
    through an injected `fork`, the same way `hub-process.js` is supervised
    (restart window, bounded restarts, readiness = the `tasks.listening` message).
    Pass an env built for it (`HOME`, `PATH`, `LANG`, `TMPDIR`): the CLI env
@@ -53,8 +58,8 @@ Not wired yet. The plan mirrors the embedded hub (`buddy-window/hub-process.js`)
 3. `dataDir`: a short private dir of its own in the user data folder, e.g.
    `<userData>/tasks`. The API is on `tasks.sock` there (TASKS-CONTRACT §3),
    separate from the runner's control socket.
-4. Add `board/tasks-engine/**` to the package `files` and tag the fork line
-   with a `privacy-flow` slug documented in `PRIVACY.md`.
+4. `board/tasks-engine/**` and `board/tasks-api/**` ship in package `files`;
+   the fork and Codex invocation are documented in `PRIVACY.md`.
 5. The UI connects with `tasks-api/client.js` (`connect({ socketPath, tokenPath })`).
 
 Pre-release battle test (manual, not in CI): from inside a real sandboxed
@@ -65,7 +70,10 @@ grants no `allowUnixSockets`; the real sandbox is the proof.
 A restart of the engine changes `epoch`; clients get `reset {reason:'epoch'}`
 and refetch. Background runs can't be re-adopted (their stdio pipes died with
 the old process): a CLI that is still alive is killed (pid + lstart checked)
-and its task becomes `orphaned`; nothing restarts on its own.
+and its task becomes `orphaned`; nothing restarts on its own. Closing a Tasks
+window leaves the helper running. Quitting the app gracefully stops active
+runs, which can be retried after restarting; a utilityProcess does not outlive
+Electron. The UI states this explicitly.
 
 ## What E1 implements
 
@@ -73,8 +81,16 @@ and its task becomes `orphaned`; nothing restarts on its own.
   for a usage-limit pause with a known reset time), `approve`/`deny` (remote
   start and permission prompts), `answer` (plan-first), `message`,
   `takeover`/`handback`, `discard`, `retry`. `actions` lists only these.
-- AIs: Claude through `runner/backends/claude.js`; Codex is detected but not
-  startable (`AI_UNAVAILABLE`, "not available in Plexiform yet").
+- AIs: Codex exec (CLI 0.159+) through `runner/backends/codex.js`, using its
+  existing login, JSON events and session resume. Other registered providers
+  retain their explicit integrations. Codex's workspace sandbox blocks command
+  network access, Unix sockets and private auth/engine files, ignores config
+  and rules, and makes trusted instruction files and git config/hooks read only.
+  Plan approval resumes the real session under the permitted editable profile;
+  a child capped to `plan` stays read only, even after its plan is approved.
+  Codex has no native spend cap, interactive approvals or hooks; asking for
+  those capabilities fails before spawn. User messages sent mid-turn are
+  queued for the next turn, rather than claiming live steering.
 - Trust (§3, §9.2): `tasks.token` is the UI/CLI's; relays get scoped `btr_`
   tokens (`relay-tokens.js addRelayToken`) that bind their source and verified sender
   (`userId`), or require their parent session (`parentSessionId` for MCP), and can't

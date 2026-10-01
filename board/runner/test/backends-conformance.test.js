@@ -1,6 +1,7 @@
 // Adapter conformance (runner-adapters-contract.md §1-5): the same checks run
 // over every registered backend. Detection runs against fake CLIs in a temp
-// PATH with a temp HOME; startable backends run against the fake claude CLI.
+// PATH with a temp HOME. Hook-based backends use the fake Claude protocol;
+// codex-backend.test.js checks Codex exec's separate one-turn JSON protocol.
 // No real AI CLI is ever spawned.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +42,7 @@ test('registry: every backend has a stable id, a label, honest capabilities and 
   assert.deepEqual(describeAll().map((d) => d.id), IDS);
   assert.equal(BACKENDS.claude.describe().capabilities.budget, 'native');
   assert.equal(BACKENDS.claude.describe().startable, true);
-  assert.equal(BACKENDS.codex.describe().startable, false, 'codex exec spawn is E2');
+  assert.equal(BACKENDS.codex.describe().startable, true);
 });
 
 for (const id of IDS) {
@@ -146,7 +147,7 @@ function spawnBackend(B, dir, scenario, extra = {}) {
   return { backend, events, runDir };
 }
 
-for (const id of IDS.filter((x) => BACKENDS[x].describe().startable)) {
+for (const id of IDS.filter((x) => BACKENDS[x].describe().startable && BACKENDS[x].describe().capabilities.permissions === 'hooks')) {
   test(`[${id}] lifecycle: argv is an array without the task text, env is allowlisted, events are normalised, budget is native`, async () => {
     const dir = tmpDir('bcf-');
     try {

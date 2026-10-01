@@ -29,7 +29,7 @@ async function loadApi() {
 
 // code → how the empty state explains itself
 const OFFLINE = Object.freeze({
-  SUPERVISOR_UNREACHABLE: { title: "Tasks run in the background helper, which isn't running yet.", hint: 'Plexiform starts it for you once the tasks engine is installed. This page connects by itself as soon as it is up.' },
+  SUPERVISOR_UNREACHABLE: { title: 'The Tasks background helper is unavailable.', hint: 'Plexiform starts it when you open Tasks and reconnects automatically. Try again if it is taking too long.' },
   UNAUTHENTICATED: { title: "The background helper didn't accept this app's key.", hint: 'Restart the helper, then try again.' },
   FORBIDDEN: { title: "The helper's key file is not private to you.", hint: 'Make tasks.token readable by you only, then try again.' },
   PROTOCOL_UNSUPPORTED: { title: 'This app and the background helper are different versions.', hint: 'Update Plexiform and restart the helper.' },
@@ -48,6 +48,7 @@ function createTasksService(opts) {
   let guard = null;
   let client = null;
   let started = false;
+  let connecting = false;
   let stopped = false;
   let attempt = 0;
   let retryTimer = null;
@@ -177,7 +178,10 @@ function createTasksService(opts) {
     setConn('connecting');
     let c;
     try {
+      await opts.ensureSupervisor?.();
+      if (stopped) return;
       c = await api.client.connect({ env: { ...process.env, BOARD_HOME: opts.boardHome }, client: { name: 'plexiform-tasks', version: '1' } });
+      if (stopped) { c.close(); return; }
     } catch (e) {
       throw Object.assign(new Error('connect'), { code: codeOf(e) });
     }
@@ -213,13 +217,14 @@ function createTasksService(opts) {
   }
 
   async function run() {
-    if (stopped || client) return;
+    if (stopped || client || connecting) return;
+    connecting = true;
     try { await connectOnce(); } catch (e) {
       client = null;
       setConn('offline', OFFLINE[e.code] ? e.code : (api ? 'SUPERVISOR_UNREACHABLE' : 'INTERNAL'));
       log('tasks: offline', e.code);
       schedule();
-    }
+    } finally { connecting = false; }
   }
 
   function start() {

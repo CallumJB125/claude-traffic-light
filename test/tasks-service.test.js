@@ -200,7 +200,7 @@ test('no supervisor: an offline snapshot with the plain empty-state words, retri
   s.start();
   const snap = await until(() => { const x = s.snapshot(); return x.conn.status === 'offline' && x; });
   assert.equal(snap.conn.code, 'SUPERVISOR_UNREACHABLE');
-  assert.match(snap.conn.title, /Tasks run in the background helper, which isn't running yet/);
+  assert.match(snap.conn.title, /Tasks background helper is unavailable/);
   assert.deepEqual(snap.tasks, []);
   assert.equal((await s.act({ id: 'x', action: 'pause' })).code, 'SUPERVISOR_UNREACHABLE');
   s.stop();
@@ -229,4 +229,14 @@ test('a build that cannot load the tasks client says so in words instead of wait
   assert.equal(snap.conn.code, 'INTERNAL');
   assert.match(snap.conn.title, /could not start/);
   s.stop();
+});
+
+test('retry while the real helper starts shares one startup/connect; a stopped page never connects late', async () => {
+  let release; let starts = 0;
+  const gate = new Promise((r) => { release = r; });
+  const s = createTasksService({ boardHome: dir, ensureSupervisor: () => { starts++; return gate; } });
+  s.start(); await until(() => starts === 1);
+  s.retryNow(); s.retryNow(); assert.equal(starts, 1);
+  s.stop(); release(); await new Promise((r) => setTimeout(r, 30));
+  assert.notEqual(s.snapshot().conn.status, 'connected');
 });
