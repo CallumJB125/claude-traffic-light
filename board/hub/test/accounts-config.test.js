@@ -189,7 +189,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -204,17 +204,17 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
   old.close();
 
   // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
-  // 017 needs 008's tables, so that DB stops at 016.
+  // 017 needs 008's tables, so that DB skips it (018 and 019 don't).
   const skipped = new DatabaseSync(':memory:');
   migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version !== 17) });
-  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 16/);
+  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 19/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
   const from017 = [...all.find((m) => m.version === 17).sql.matchAll(/CREATE TRIGGER (xteam_\w+)/g)].map((x) => x[1]);
   assert.deepEqual(triggers(skipped), want.filter((t) => !from017.includes(t)));
@@ -261,5 +261,43 @@ test('017: a connection cannot link, audit or record a card of another team', ()
     'request moved to a B card': "UPDATE integration_requests SET card_id = 'cb'",
   };
   for (const [name, sql] of Object.entries(moves)) assert.throws(() => db.exec(sql), /cross-team reference/, name);
+  db.close();
+});
+
+test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers and archive keep their CHECKs and cross-team triggers', () => {
+  const all = loadMigrations();
+  const NOW = '2026-09-30T10:00:00.000Z';
+  const at17 = new DatabaseSync(':memory:');
+  migrate(at17, { migrations: all.filter((m) => m.version <= 17) });
+  at17.exec(`
+    INSERT INTO orgs (id, name, created_at) VALUES ('oa','A','${NOW}'), ('ob','B','${NOW}');
+    INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}'), ('mb','ob',2,'b','b@x.io','B','owner','${NOW}');
+    INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('ba','oa','A','AAA'), ('bb','ob','B','BBB');
+    INSERT INTO cards (id, board_id, key, title, labels, created_by, created_at, updated_at) VALUES ('ca','ba','AAA-1','a','["bug"]','ma','${NOW}','${NOW}');
+  `);
+  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19]);
+  assert.deepEqual({ ...at17.prepare('SELECT labels, cover, archived_at, archived_by FROM cards').get() }, { labels: '["bug"]', cover: null, archived_at: null, archived_by: null }, 'existing cards untouched');
+  assert.deepEqual(at17.prepare('PRAGMA foreign_key_check').all(), []);
+  const fresh = new DatabaseSync(':memory:');
+  migrate(fresh, { migrations: all });
+  const shape = (db) => db.prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE name LIKE '%label%' OR name LIKE '%archived%' ORDER BY name").all().map((r) => ({ ...r }));
+  assert.deepEqual(shape(at17), shape(fresh));
+  fresh.close();
+
+  const db = at17;
+  const bad = {
+    'label created by another team\'s member': `INSERT INTO board_labels (id, board_id, name, color, created_by, created_at, updated_at) VALUES ('l1','ba','x','red','mb','${NOW}','${NOW}')`,
+    'colour outside the palette': `INSERT INTO board_labels (id, board_id, name, color, created_by, created_at, updated_at) VALUES ('l2','ba','x','magenta','ma','${NOW}','${NOW}')`,
+    'empty name': `INSERT INTO board_labels (id, board_id, name, color, created_by, created_at, updated_at) VALUES ('l3','ba','','red','ma','${NOW}','${NOW}')`,
+    'cover outside the palette': "UPDATE cards SET cover = 'magenta' WHERE id = 'ca'",
+    'archived by another team\'s member': "UPDATE cards SET archived_at = '2026', archived_by = 'mb' WHERE id = 'ca'",
+    'a new card archived by another team\'s member': `INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at, archived_by) VALUES ('cx','ba','AAA-9','x','ma','${NOW}','${NOW}','mb')`,
+  };
+  for (const [name, sql] of Object.entries(bad)) assert.throws(() => db.exec(sql), /cross-team reference|CHECK constraint/, name);
+  db.exec(`INSERT INTO board_labels (id, board_id, name, color, created_by, created_at, updated_at) VALUES ('l4','ba','Bug','red','ma','${NOW}','${NOW}')`);
+  assert.throws(() => db.exec(`INSERT INTO board_labels (id, board_id, name, color, created_by, created_at, updated_at) VALUES ('l5','ba','BUG','blue','ma','${NOW}','${NOW}')`), /UNIQUE/, 'names are unique ignoring case');
+  assert.throws(() => db.exec("UPDATE board_labels SET created_by = 'mb'"), /cross-team reference/);
+  assert.throws(() => db.exec("UPDATE board_labels SET board_id = 'bb'"), /cross-team reference/);
+  db.exec("UPDATE cards SET cover = 'teal', archived_at = '2026-09-30T10:00:00.000Z', archived_by = 'ma' WHERE id = 'ca'");
   db.close();
 });

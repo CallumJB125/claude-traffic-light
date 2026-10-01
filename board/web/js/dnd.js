@@ -82,7 +82,7 @@ export function idsToDrag(sel, id) {
 
 export function selectionBar(sel, getView) {
   const views = [...sel].map(getView).filter(Boolean);
-  const movable = views.filter(isHumanOwned).length;
+  const movable = views.filter((v) => isHumanOwned(v) && !v.archived).length;
   return {
     count: views.length,
     movable,

@@ -73,6 +73,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.card = cb.body.card.id;
   A.card = ca.body.card.id;
   await as(users.ub, 'POST', `/api/cards/${B.card}/comments`, { request_id: randomUUID(), body: `${MARK} comment` });
+  B.label = `${MARK}-label`;
+  const lb = await as(users.ub, 'POST', `/api/boards/${B.board}/labels`, { request_id: randomUUID(), name: B.label, color: 'red' });
+  if (lb.status !== 200) throw new Error(`label create: ${lb.text}`);
 
   // B: a runner device, a run on its card, an open permission request and an ask.
   B.device = randomUUID();
@@ -116,6 +119,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM connections WHERE org_id = ?', B.team),
       q('SELECT * FROM connection_secrets WHERE connection_id = ?', B.connection),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
+      q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
     ].join('\n');
   }
 
@@ -146,6 +150,8 @@ export const INVARIANTS = {
   runner_repos: `SELECT rr.device_id FROM runner_repos rr JOIN devices d ON d.id = rr.device_id JOIN members m ON m.id = d.member_id JOIN repos r ON r.id = rr.repo_id WHERE r.org_id != m.org_id`,
   journal: `SELECT j.seq FROM journal j JOIN cards c ON c.id = j.card_id WHERE j.board_id IS NOT c.board_id`,
   invites: `SELECT i.id FROM invites i JOIN members c ON c.id = i.created_by LEFT JOIN members m ON m.id = i.member_id WHERE c.org_id != i.org_id OR m.org_id != i.org_id`,
+  board_labels: `SELECT l.id FROM board_labels l JOIN boards b ON b.id = l.board_id JOIN members m ON m.id = l.created_by WHERE m.org_id != b.org_id`,
+  card_archiver: `SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN members m ON m.id = c.archived_by WHERE m.org_id != b.org_id`,
   runner_enrollments: `SELECT e.id FROM runner_enrollments e JOIN members m ON m.id = e.member_id JOIN devices d ON d.id = e.device_id JOIN members dm ON dm.id = d.member_id
     WHERE m.org_id != e.org_id OR dm.org_id != e.org_id OR m.user_id != e.user_id`,
 };

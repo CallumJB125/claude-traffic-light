@@ -517,6 +517,63 @@ body.is-card-dragging .board { scroll-snap-type: none; }
 .card-foot { font-size: var(--text-xs); color: var(--faint); }
 .card-labels { display: flex; flex-wrap: wrap; gap: 4px; }
 .label { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: 10.5px; }
+/* Label colours and covers (D91, D93): ten tokens, each a tint and an ink
+   that keep AA (4.5:1) in both themes through light-dark(light, dark).
+   Classes only, never inline styles (CSP style-src 'self'). */
+:root {
+  --lc-grey-bg: light-dark(#ebe9ef, #34313a); --lc-grey-ink: light-dark(#4a4654, #d6d2dc);
+  --lc-red-bg: light-dark(#fde2df, #4b2220); --lc-red-ink: light-dark(#9b1c13, #ffb3aa);
+  --lc-orange-bg: light-dark(#fde6d4, #4a2c18); --lc-orange-ink: light-dark(#8a3d06, #ffc08f);
+  --lc-yellow-bg: light-dark(#fbf0c4, #423a17); --lc-yellow-ink: light-dark(#6b5300, #f3dc7a);
+  --lc-green-bg: light-dark(#dcf3e2, #1f3b28); --lc-green-ink: light-dark(#1d6233, #9fdcb0);
+  --lc-teal-bg: light-dark(#d6f1ef, #183a38); --lc-teal-ink: light-dark(#0d5f5a, #8fdad3);
+  --lc-blue-bg: light-dark(#dde8fb, #1e2e4a); --lc-blue-ink: light-dark(#1d4fa0, #a9c4f5);
+  --lc-purple-bg: light-dark(#ebe2fb, #31254a); --lc-purple-ink: light-dark(#5b2ea6, #cdb6f7);
+  --lc-pink-bg: light-dark(#fbe0ee, #45213a); --lc-pink-ink: light-dark(#94235e, #f6aed3);
+  --lc-brown-bg: light-dark(#efe4da, #3a2d23); --lc-brown-ink: light-dark(#6b4426, #dcbfa6);
+}
+.label-c-grey, .cover-swatch-grey { --lc-bg: var(--lc-grey-bg); --lc-ink: var(--lc-grey-ink); }
+.cover-grey, .ldot-grey { --cover: var(--lc-grey-ink); }
+.label-c-red, .cover-swatch-red { --lc-bg: var(--lc-red-bg); --lc-ink: var(--lc-red-ink); }
+.cover-red, .ldot-red { --cover: var(--lc-red-ink); }
+.label-c-orange, .cover-swatch-orange { --lc-bg: var(--lc-orange-bg); --lc-ink: var(--lc-orange-ink); }
+.cover-orange, .ldot-orange { --cover: var(--lc-orange-ink); }
+.label-c-yellow, .cover-swatch-yellow { --lc-bg: var(--lc-yellow-bg); --lc-ink: var(--lc-yellow-ink); }
+.cover-yellow, .ldot-yellow { --cover: var(--lc-yellow-ink); }
+.label-c-green, .cover-swatch-green { --lc-bg: var(--lc-green-bg); --lc-ink: var(--lc-green-ink); }
+.cover-green, .ldot-green { --cover: var(--lc-green-ink); }
+.label-c-teal, .cover-swatch-teal { --lc-bg: var(--lc-teal-bg); --lc-ink: var(--lc-teal-ink); }
+.cover-teal, .ldot-teal { --cover: var(--lc-teal-ink); }
+.label-c-blue, .cover-swatch-blue { --lc-bg: var(--lc-blue-bg); --lc-ink: var(--lc-blue-ink); }
+.cover-blue, .ldot-blue { --cover: var(--lc-blue-ink); }
+.label-c-purple, .cover-swatch-purple { --lc-bg: var(--lc-purple-bg); --lc-ink: var(--lc-purple-ink); }
+.cover-purple, .ldot-purple { --cover: var(--lc-purple-ink); }
+.label-c-pink, .cover-swatch-pink { --lc-bg: var(--lc-pink-bg); --lc-ink: var(--lc-pink-ink); }
+.cover-pink, .ldot-pink { --cover: var(--lc-pink-ink); }
+.label-c-brown, .cover-swatch-brown { --lc-bg: var(--lc-brown-bg); --lc-ink: var(--lc-brown-ink); }
+.cover-brown, .ldot-brown { --cover: var(--lc-brown-ink); }
+.label[class*="label-c-"] { background: var(--lc-bg); color: var(--lc-ink); border-color: color-mix(in oklab, var(--lc-ink) 30%, transparent); font-weight: 500; }
+/* Policy labels change how runs behave: a fixed outline, never a user colour. */
+.label.is-policy { background: transparent; border-style: dashed; border-color: var(--line-input); color: var(--text); }
+.card.has-cover { padding-top: 14px; }
+.card.has-cover::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0; background: var(--cover); }
+.ldot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cover); flex: none; }
+.cover-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.cover-opt { width: 28px; height: 20px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--lc-ink); cursor: pointer; }
+.cover-opt.cover-none { width: auto; padding: 0 8px; background: var(--panel-2); color: var(--muted); font-size: var(--text-xs); }
+.cover-opt[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cover-opt:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* Archived (D94): read-only and visually muted until restored. */
+.card.is-archived { opacity: 0.72; border-style: dashed; box-shadow: none; }
+.card.is-archived:focus-within { opacity: 1; }
+.cardtable tr.is-archived { opacity: 0.72; }
+.label.archived-badge { border-style: dashed; color: var(--text); }
+.archived-note { font-size: var(--text-sm); color: var(--muted); }
+.labels-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.labels-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.labels-row > .label { min-width: 72px; }
+.labels-rename, .labels-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
+.labels-new { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 /* proof / handover / cost: one quiet row of chips, tone on the icon and border only */
 .card-chips { display: flex; flex-wrap: wrap; gap: 4px 5px; }
 .cchip {

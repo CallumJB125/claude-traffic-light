@@ -35,6 +35,7 @@ export function verifyRun(hub, device, msg) {
   if (tok.fence !== row.fence || msg.fence !== row.fence) throw new HubError('FENCED', `fence ${msg.fence} is not current (${row.fence})`);
   if (run.ended_at) throw new HubError('RUN_ENDED', 'run has ended');
   if (row.active_run_id !== run.id) throw new HubError('FENCED', 'run is no longer the active run');
+  if (row.archived_at) throw new HubError('CONFLICT', 'this card is archived', { reason: 'ARCHIVED' });
   return { run, row };
 }
 
@@ -76,7 +77,7 @@ const METHODS = {
 
   board_list_cards(hub, { run, row }, params) {
     const args = [row.board_id, row.repo_id];
-    let sql = 'SELECT * FROM cards WHERE board_id = ? AND repo_id = ?';
+    let sql = 'SELECT * FROM cards WHERE board_id = ? AND repo_id = ? AND archived_at IS NULL';
     if (params.column != null) { sql += ' AND column_name = ?'; args.push(String(params.column)); }
     if (params.mine === true) { sql += ' AND id IN (SELECT card_id FROM runs WHERE on_behalf_of = ?)'; args.push(run.on_behalf_of); }
     return { cards: hub.db.all(`${sql} ORDER BY created_at LIMIT 200`, ...args).map((c) => brief(hub, c)) };

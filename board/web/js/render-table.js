@@ -5,6 +5,7 @@ import { icon } from './icons.js';
 import { pill, avatarStack } from './render-board.js';
 import { TABLE_COLUMNS, tableRows, summary } from './table.js';
 import { fmtUsd, formatAge } from './view.js';
+import { labelClass, labelColor } from './labels.js';
 
 function headerCell(col, sort) {
   const active = sort.by === col.id;
@@ -17,16 +18,19 @@ function headerCell(col, sort) {
 
 function row(r, model) {
   const selected = model.openCardId === r.id;
-  return h('tr', { key: r.id, class: selected ? 'is-open' : null, 'data-tone': r.tone, 'data-card-id': r.id },
+  const v = r.entry.view;
+  const cls = [selected ? 'is-open' : null, v.archived ? 'is-archived' : null].filter(Boolean).join(' ') || null;
+  return h('tr', { key: r.id, class: cls, 'data-tone': r.tone, 'data-card-id': r.id },
     h('td', { class: 'tcol-key num' }, r.key),
     h('th', { scope: 'row', class: 'tcol-title' },
       h('button', { type: 'button', class: 'card-open', 'data-action': 'open', 'data-card': r.id }, r.title),
+      v.archived ? h('span', { class: 'label archived-badge' }, 'Archived') : null,
       r.pr?.url ? h('a', { class: 'row-pr num', href: r.pr.url, target: '_blank', rel: 'noopener noreferrer', title: `PR ${r.pr.state}` }, `#${r.pr.number}`) : null),
     h('td', { class: 'tcol-status' }, pill(r.entry.face)),
     h('td', { class: 'tcol-column' }, r.column_label),
     h('td', { class: 'tcol-people' }, avatarStack(r.people) ?? h('span', { class: 'muted' }, '—')),
     h('td', { class: 'tcol-repo num' }, r.repo ?? h('span', { class: 'muted' }, '—')),
-    h('td', { class: 'tcol-labels' }, r.labels.length ? r.labels.map((l) => h('span', { key: l, class: 'label' }, l)) : null),
+    h('td', { class: 'tcol-labels' }, r.labels.length ? r.labels.map((l, i) => h('span', { key: l, class: labelClass(l, labelColor(l, i, v, model.labelColors)) }, l)) : null),
     h('td', { class: 'tcol-cost is-num num' }, r.cost == null ? h('span', { class: 'muted' }, '—')
       : [fmtUsd(r.cost), r.cap != null ? h('span', { class: 'muted' }, ` / ${fmtUsd(r.cap)}`) : null]),
     h('td', { class: 'tcol-age is-num num' }, r.age_ms == null ? '—' : formatAge(r.age_ms)));

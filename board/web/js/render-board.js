@@ -9,6 +9,7 @@ import { selectionBar } from './dnd.js';
 import { filterBar } from './render-filters.js';
 import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
+import { labelColor, labelClass, coverClass, canArchive, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
@@ -124,6 +125,15 @@ function chipRow(chips) {
   }));
 }
 
+/** A card's labels as chips coloured from the board's registry (CSS classes only). */
+export function labelChips(view, model, labels = view.labels ?? []) {
+  if (!labels.length) return null;
+  return h('div', { class: 'card-labels' }, labels.map((l) => {
+    const i = (view.labels ?? []).indexOf(l);
+    return h('span', { class: labelClass(l, labelColor(l, i, view, model.labelColors)) }, l);
+  }));
+}
+
 export function card({ view, face, elapsed_ms = 0 }, model) {
   const members = model.members;
   const assignees = (view.assignee_ids ?? []).map((id) => members.get(id));
@@ -135,17 +145,20 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   const sponsor = human ? (view.target ? face.sponsor : null) : face.sponsor;
   const selected = model.openCardId === view.id;
   // An integration's card (via:<provider>, D42) shows as a badge, like agent-suggested.
-  const via = (view.labels ?? []).find((l) => /^via:[a-z0-9-]{2,32}$/.test(l))?.slice(4) ?? null;
-  const labels = (view.labels ?? []).filter((l) => !/^via:[a-z0-9-]{2,32}$/.test(l));
+  const via = (view.labels ?? []).find((l) => VIA_LABEL.test(l))?.slice(4) ?? null;
+  const labels = (view.labels ?? []).filter((l) => !VIA_LABEL.test(l));
+  const archived = !!view.archived;
   const picked = model.selection?.has(view.id);
   const dragging = model.drag?.mode === 'pointer' && model.drag.ids.includes(view.id);
   const chips = cardChips(view, face, { elapsed_ms });
   const pending = view.pending === true;
-  const draggable = human && !model.readOnly && !pending;
+  const draggable = human && !model.readOnly && !pending && !archived;
+  // The cover is decoration: left off while the board's states are stale.
+  const cover = model.conn?.status === 'lost' ? '' : coverClass(view.cover);
 
   return h('article', {
     key: view.id,
-    class: `card${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
+    class: `card${cover}${archived ? ' is-archived' : ''}${pending ? ' is-pending' : ''}${selected ? ' is-open' : ''}${human ? ' is-human' : ''}${picked ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${model.kbd?.ids.includes(view.id) ? ' is-lifted' : ''}`,
     'data-tone': face.tone,
     'data-state': face.state,
     'data-card-id': view.id,
@@ -157,6 +170,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     picked ? h('span', { class: 'sel-mark', 'aria-hidden': 'true' }, icon('check', 'icon-xs')) : null,
     picked ? h('span', { class: 'sr-only' }, 'Selected') : null,
     h('span', { class: 'card-key num' }, view.key),
+    archived ? h('span', { class: 'label archived-badge', title: view.archived.by_name ? `Archived by ${view.archived.by_name}` : 'Archived' }, 'Archived') : null,
     view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
     via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must give it to Claude` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
@@ -170,10 +184,18 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     req ? h('span', { class: 'card-req num' }, req) : null) : null,
   face.overlap_chip ? h('button', { type: 'button', class: 'chip chip-overlap', 'data-action': 'open', 'data-card': view.id, 'data-section': 'overlaps' },
     icon('warn', 'icon-xs'), stripGlyph(face.overlap_chip)) : null,
-  labels.length ? h('div', { class: 'card-labels' }, labels.map((l) => h('span', { class: 'label' }, l))) : null,
+  labelChips(view, model, labels),
   chipRow(chips),
-  model.readOnly || pending ? null : cardActions(face, view, model.busy),
-  human && !pending && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+  archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions(face, view, model.busy),
+  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+}
+
+// An archived card is read-only (D94): its one action is Restore.
+function archivedFoot(view, model) {
+  if (model.readOnly) return null;
+  const busy = model.busy?.has(`${view.id}:restore`);
+  return h('div', { class: 'card-actions' },
+    h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'restore', 'data-card': view.id, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Restore'));
 }
 
 export function column(id, entries, model) {
@@ -323,7 +345,7 @@ function viewSwitch(model) {
 /** `body` replaces the columns for the other views (table, dashboard, …). */
 export function boardScreen(model, body = null) {
   const cols = groupColumns(model.visible ?? model.entries);
-  const lamps = boardLamps(model.me?.member?.id, model.entries, model.conn.status === 'lost');
+  const lamps = boardLamps(model.me?.member?.id, model.entries.filter((e) => !e.view.archived), model.conn.status === 'lost');
   return h('div', { class: 'app', 'data-conn': model.conn.status },
     topBar(model, lamps),
     connectionBanner(model.conn),
@@ -343,12 +365,23 @@ export function selectionActions(model) {
   return h('div', { class: 'selbar', role: 'region', 'aria-label': 'Selected cards' },
     h('span', { class: 'selbar-count num' }, bar.text),
     bar.skipped ? h('span', { class: 'selbar-note' }, `${bar.skipped} run-driven won't move`) : null,
+    model.readOnly ? null : selectionArchive(sel, model),
     bar.movable ? h('label', { class: 'selbar-move' },
       h('span', { class: 'sr-only' }, 'Move selected cards to'),
       h('select', { class: 'input input-sm', 'data-change': 'bulk-move' },
         h('option', { value: '' }, 'Move to…'),
         COLUMNS.map((c) => h('option', { key: c, value: c }, COLUMN_LABEL[c])))) : null,
     h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'clear-selection' }, 'Clear'));
+}
+
+function selectionArchive(sel, model) {
+  const views = [...sel].map((id) => model.entries.find((e) => e.view.id === id)?.view).filter(Boolean);
+  const archivable = views.filter(canArchive).length;
+  const archived = views.filter((v) => v.archived).length;
+  return [
+    archivable ? h('button', { key: 'arch', type: 'button', class: 'btn btn-sm', 'data-action': 'bulk-archive' }, `Archive ${archivable}`) : null,
+    archived ? h('button', { key: 'rest', type: 'button', class: 'btn btn-sm', 'data-action': 'bulk-restore' }, `Restore ${archived}`) : null,
+  ];
 }
 
 export function loadingScreen(text = 'Loading the board…') {

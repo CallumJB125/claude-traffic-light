@@ -4,7 +4,8 @@
 import { h } from './h.js';
 import { icon } from './icons.js';
 import { renderMarkdown, inline } from './markdown.js';
-import { pill, budgetBar, cardActions, avatar } from './render-board.js';
+import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board.js';
+import { LABEL_COLORS, canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
@@ -166,7 +167,7 @@ function tabPanel(tab, detail, model, elapsed) {
         h('p', { class: 'comment-body' }, c.body),
         c.for_agent ? h('p', { class: 'comment-seen' }, c.delivered_age_ms != null ? `Seen by Claude ${ago(add(c.delivered_age_ms, elapsed))}` : 'Not seen by Claude yet') : null)))
         : h('p', { class: 'muted' }, 'No comments yet.'),
-      h('form', { class: 'composer', 'data-form': 'comment', 'data-card': d.card.id },
+      d.card.archived ? null : h('form', { class: 'composer', 'data-form': 'comment', 'data-card': d.card.id },
         h('label', { class: 'sr-only', for: 'comment-body' }, 'Comment'),
         h('textarea', { id: 'comment-body', name: 'body', class: 'input', rows: 3, required: true, placeholder: 'Write a comment…' }),
         h('div', { class: 'composer-row' },
@@ -229,6 +230,29 @@ function overlapsBlock(overlaps, elapsed) {
     h('p', { class: 'muted small' }, 'Overlaps never block. Talk to each other, or let one card finish first.'));
 }
 
+// A colour strip on the card face (D93): one of the label tokens, or none.
+export function coverPicker(view, model) {
+  const busy = model.busy?.has(`${view.id}:cover`);
+  const opt = (token, label) => h('button', {
+    key: token ?? 'none', type: 'button', class: `cover-opt${token ? ` cover-swatch-${token}` : ' cover-none'}`,
+    'data-action': 'set-cover', 'data-card': view.id, 'data-cover': token ?? '', 'aria-pressed': (view.cover ?? null) === token ? 'true' : 'false',
+    'aria-label': label, title: label, disabled: busy || null,
+  }, token ? null : 'None');
+  return h('section', { class: 'dsec' },
+    h('h3', { class: 'dsec-title', id: 'cover-title' }, 'Cover'),
+    h('div', { class: 'cover-picker', role: 'group', 'aria-labelledby': 'cover-title' },
+      opt(null, 'No cover'), LABEL_COLORS.map((c) => opt(c, `Cover ${c}`))));
+}
+
+function archiveButton(view, model) {
+  if (model.readOnly) return null;
+  if (view.archived) {
+    return h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'restore', 'data-card': view.id, disabled: model.busy?.has(`${view.id}:restore`) || null }, 'Restore');
+  }
+  if (!canArchive(view)) return null;
+  return h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'archive', 'data-card': view.id, disabled: model.busy?.has(`${view.id}:archive`) || null }, 'Archive');
+}
+
 const HAND_OVER_FROM = new Set(['running', 'quiet', 'blocked']);
 // On the card these open the drawer; inside it the requests are already on screen.
 const OPENS_DRAWER = new Set(['watch', 'allow', 'deny', 'answer', 'approve_plan', 'resolve_conflict', 'continue']);
@@ -246,7 +270,8 @@ export function drawer(model) {
     body.push(h('div', { class: 'drawer-loading', role: 'status' }, det.error ? det.error : 'Loading card…'));
   } else {
     const rb = repoBranch(view);
-    const human = isHumanOwned(view);
+    const archived = !!view.archived;
+    const human = isHumanOwned(view) && !archived;
     const extra = [];
     if (!model.readOnly && HAND_OVER_FROM.has(view.run_state)) extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'hand_over', 'data-card': view.id }, icon('swap', 'icon-lead'), 'Hand over…'));
     if (!model.readOnly && view.run_state === 'in_review') extra.push(h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'approve_done', 'data-card': view.id }, icon('check', 'icon-lead'), 'Mark done'));
@@ -255,6 +280,7 @@ export function drawer(model) {
         h('select', { class: 'input input-sm', 'data-change': 'move', 'data-card': view.id },
           COLUMNS.map((c) => h('option', { value: c, selected: (view.column ?? 'todo') === c }, COLUMN_LABEL[c])))));
     }
+    extra.push(archiveButton(view, model));
     const hypothesis = det.data?.handover?.doc?.sections?.hypothesis;
     const asks = det.data?.asks ?? [];
     const prs = det.data?.permission_requests ?? [];
@@ -264,7 +290,8 @@ export function drawer(model) {
       h('div', { class: 'drawer-status' },
         pill(face, { size: 'lg' }),
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
-        model.readOnly ? null : h('div', { class: 'drawer-actions' }, cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
+        archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
+        model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
       whoBlock(view, face, model),
       (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
         h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),
@@ -275,6 +302,7 @@ export function drawer(model) {
         det.data?.handover?.ages?.narrative_ms != null ? h('p', { class: 'muted small' }, `Narrative synced ${ago(add(det.data.handover.ages.narrative_ms, elapsed))}`) : null) : null,
       face.budget ? h('section', { class: 'dsec' }, h('h3', { class: 'dsec-title' }, 'Budget'), budgetBar(face.budget),
         view.run ? h('p', { class: 'muted small' }, `Spent on ${face.sponsor ? face.sponsor.replace(/^Runs on [^·]+· /, '') : 'the owner\'s account'}. Soft by one API call.`) : null) : null,
+      model.readOnly || archived ? null : coverPicker(view, model),
       evidenceBlock(view, det),
       overlapsBlock(det.data?.overlaps ?? view.overlaps, elapsed),
       det.data ? h('section', { class: 'dsec dsec-tabs' },
@@ -291,7 +319,7 @@ export function drawer(model) {
             view.budget?.cap_usd != null && !face.budget ? h('span', { class: 'num muted' }, fmtUsd(view.budget.cap_usd)) : null),
           h('button', { type: 'button', class: 'btn btn-ghost btn-icon', 'data-action': 'close-drawer', 'aria-label': 'Close card' }, icon('close'))),
         h('h2', { class: 'drawer-title', id: 'drawer-title' }, view.title),
-        view.labels?.length ? h('div', { class: 'card-labels' }, view.labels.map((l) => h('span', { class: 'label' }, l))) : null,
+        labelChips(view, model),
         body));
   }
   return h('dialog', { class: 'drawer', 'data-dialog': 'drawer', 'aria-label': 'Card' },
