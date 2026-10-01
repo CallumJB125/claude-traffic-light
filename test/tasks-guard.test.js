@@ -98,17 +98,41 @@ test('validateAct: an action the face does not offer, an unknown one, a bad id o
   assert.deepEqual(G.validateAct({ id: 't1', action: 'pause' }, t), { ok: true, id: 't1', action: 'pause', payload: {} });
 });
 
-test('validateAct: destructive actions need an explicit confirmed flag from the page', () => {
-  const t = G.sanitizeTask(view({ actions: ['stop', 'takeover', 'discard', 'merge', 'openPr'], confirm: ['discard'] }));
-  for (const a of ['stop', 'takeover', 'discard', 'merge', 'openPr']) assert.equal(G.validateAct({ id: 't1', action: a }, t).code, 'CONFIRM_REQUIRED', a);
-  assert.equal(G.validateAct({ id: 't1', action: 'stop', confirmed: 'yes' }, t).code, 'CONFIRM_REQUIRED', 'only true counts');
-  assert.deepEqual(G.validateAct({ id: 't1', action: 'discard', confirmed: true }, t).payload, { confirm: true });
-  assert.deepEqual(G.validateAct({ id: 't1', action: 'takeover', confirmed: true, payload: { mode: 'tab' } }, t).payload, { mode: 'print', confirm: true }, 'the page cannot pick a mode that opens a terminal');
+const ids = (extra = {}) => ({ approvals: new Map([['a1', { tool: 'Bash' }], ['st', { tool: 'StartTask' }]]), asks: new Set(['k']), ...extra });
+
+test('validateAct: the lighter destructive actions need the page’s confirmed flag (stop, merge)', () => {
+  const t = G.sanitizeTask(view({ actions: ['stop', 'merge'], confirm: [] }));
+  for (const a of ['stop', 'merge']) assert.equal(G.validateAct({ id: 't1', action: a }, t, ids()).code, 'CONFIRM_REQUIRED', a);
+  assert.equal(G.validateAct({ id: 't1', action: 'stop', confirmed: 'yes' }, t, ids()).code, 'CONFIRM_REQUIRED', 'only true counts');
+  assert.equal(G.validateAct({ id: 't1', action: 'stop', confirmed: true }, t, ids()).ok, true);
+});
+
+test('validateAct: discard, openPr, takeover, approve-for-task and a StartTask accept are main-confirmed; the page’s confirmed:true never bypasses', () => {
+  const t = G.sanitizeTask(view({ state: 'blocked', actions: ['takeover', 'discard', 'openPr', 'approve', 'deny'], confirm: ['discard', 'takeover'] }));
+  const need = (req) => G.validateAct({ id: 't1', confirmed: true, ...req }, t, ids());
+  for (const req of [{ action: 'discard' }, { action: 'openPr' }, { action: 'takeover' }, { action: 'approve', payload: { approvalId: 'a1', scope: 'task' } }, { action: 'approve', payload: { approvalId: 'st' } }]) {
+    const r = need(req);
+    assert.deepEqual([r.ok, r.code, r.native], [false, 'CONFIRM_REQUIRED', true], JSON.stringify(req));
+  }
+  assert.equal(need({ action: 'approve', payload: { approvalId: 'a1', scope: 'once' } }).ok, true, 'an ordinary one-off approval needs no dialog');
+  assert.equal(need({ action: 'deny', payload: { approvalId: 'st' } }).ok, true, 'denying is never risky');
+  const ok = (req) => G.validateAct({ id: 't1', ...req }, t, ids({ nativeConfirmed: true }));
+  assert.deepEqual(ok({ action: 'discard' }).payload, { confirm: true });
+  assert.deepEqual(ok({ action: 'takeover', payload: { mode: 'tab' } }).payload, { mode: 'print', confirm: true }, 'the page cannot pick a mode that opens a terminal');
+  assert.deepEqual(ok({ action: 'approve', payload: { approvalId: 'st', scope: 'task' } }).payload, { approvalId: 'st', scope: 'once' }, 'a StartTask accept is always once');
+});
+
+test('validateAct: an approval or ask id main did not relay is refused', () => {
+  const t = G.sanitizeTask(view({ state: 'blocked', actions: ['approve', 'deny', 'answer'] }));
+  assert.equal(G.validateAct({ id: 't1', action: 'approve', payload: { approvalId: 'forged' } }, t, ids()).code, 'NOT_FOUND');
+  assert.equal(G.validateAct({ id: 't1', action: 'deny', payload: { approvalId: 'forged' } }, t, ids()).code, 'NOT_FOUND');
+  assert.equal(G.validateAct({ id: 't1', action: 'answer', payload: { askId: 'forged', answer: 'x' } }, t, ids()).code, 'NOT_FOUND');
+  assert.equal(G.validateAct({ id: 't1', action: 'approve', payload: { approvalId: 'a1' } }, t, {}).code, 'NOT_FOUND', 'nothing relayed, nothing answerable');
 });
 
 test('validateAct: payloads are rebuilt from known keys with the protocol limits', () => {
   const t = G.sanitizeTask(view({ state: 'blocked', actions: ['message', 'approve', 'deny', 'answer', 'switchAi', 'resume', 'retry'] }));
-  const ok = (action, payload) => G.validateAct({ id: 't1', action, payload }, t);
+  const ok = (action, payload) => G.validateAct({ id: 't1', action, payload }, t, ids());
   assert.deepEqual(ok('message', { body: '  hello ', extra: 1 }).payload, { body: 'hello' });
   assert.equal(ok('message', { body: '   ' }).code, 'VALIDATION');
   assert.equal(ok('message', { body: 'x'.repeat(8193) }).code, 'VALIDATION');
@@ -116,8 +140,6 @@ test('validateAct: payloads are rebuilt from known keys with the protocol limits
   assert.equal(ok('message', { body: 'é'.repeat(4097) }).code, 'VALIDATION', 'bytes, not characters');
   assert.equal(ok('message', undefined).code, 'VALIDATION');
   assert.deepEqual(ok('approve', { approvalId: 'a1', scope: 'forever' }).payload, { approvalId: 'a1', scope: 'once' });
-  assert.deepEqual(ok('approve', { approvalId: 'a1', scope: 'task' }).payload, { approvalId: 'a1', scope: 'task' });
-  assert.equal(ok('approve', {}).code, 'VALIDATION');
   assert.deepEqual(ok('deny', { approvalId: 'a1', message: 'ignored' }).payload, { approvalId: 'a1' });
   assert.deepEqual(ok('answer', { askId: 'k', answer: ' yes ' }).payload, { askId: 'k', answer: 'yes' });
   assert.equal(ok('answer', { askId: 'k', answer: '' }).code, 'VALIDATION');
@@ -140,18 +162,45 @@ test('validateCreate: the folder comes from main, the words are bounded, default
 test('every action the contract names is either handled or deliberately refused by validateAct', () => {
   for (const a of P.ACTIONS) {
     const t = G.sanitizeTask(view({ actions: [a], confirm: [] }));
-    const r = G.validateAct({ id: 't1', action: a, confirmed: true, payload: { body: 'b', approvalId: 'a', askId: 'k', answer: 'y', ai: 'codex' } }, t);
+    const r = G.validateAct({ id: 't1', action: a, confirmed: true, payload: { body: 'b', approvalId: 'a1', askId: 'k', answer: 'y', ai: 'codex' } }, t, ids({ nativeConfirmed: true }));
     assert.equal(r.ok, true, `${a} should be accepted with a good payload: ${r.code}`);
   }
 });
 
-test('takeoverCommand quotes for a shell and masks env values on screen only', () => {
-  const t = { argv: ['claude', '--resume', 's 1', "it's"], cwd: '/Users/me/my repo', env: { BOARD_RUN_TOKEN: 'sekret', 'bad name': 'x' } };
-  const shown = takeoverCommand(t, { mask: true });
-  assert.ok(!shown.includes('sekret'));
-  assert.equal(shown, "cd '/Users/me/my repo' && BOARD_RUN_TOKEN=… claude --resume 's 1' 'it'\\''s'");
-  assert.ok(takeoverCommand(t).includes("BOARD_RUN_TOKEN='sekret'"));
-  assert.ok(!takeoverCommand(t).includes('bad name'));
+test('choices relayed with an ask carry a payload rebuilt through the allow-list', () => {
+  const d = G.sanitizeDetail({ ...view({ state: 'parked' }), text: '', openAsk: { askId: 'k', kind: 'limit', text: 't', options: null, askedAgeMs: 0, choices: [
+    { id: 'a', label: 'Wait', action: 'resume', payload: { when: 'reset', evil: 1 } }, { id: 'b', label: 'Switch', action: 'switchAi', payload: { ai: 'skynet' } }, { id: 'c', label: 'Discard', action: 'discard', payload: { rm: 1 } },
+  ] }, messages: [], openApprovals: [] });
+  assert.deepEqual(d.openAsk.choices.map((c) => [c.action, c.payload]), [['resume', { when: 'reset' }], ['discard', { confirm: true }]], 'bad switchAi dropped, extras stripped');
+});
+
+test('tilde only replaces a whole home directory prefix', () => {
+  const { tilde } = require('../src/tasks-guard.js');
+  assert.equal(tilde('/Users/me', '/Users/me'), '~');
+  assert.equal(tilde('/Users/me/dev', '/Users/me'), '~/dev');
+  assert.equal(tilde('/Users/mel/dev', '/Users/me'), '/Users/mel/dev');
+});
+
+test('takeoverCommand: no secret-looking env var, an absolute binary, quoted for a shell; the screen masks the rest', () => {
+  const fake = ['btk', 'run', 'abcdef0123456789abcdef'].join('_');
+  const t = { argv: ['claude', '--resume', 's 1', "it's"], cwd: '/Users/me/my repo', env: { BOARD_RUN_TOKEN: fake, MY_API_KEY: 'k', DB_PASSWORD: 'p', CLIENT_SECRET: 's', BUDDY_TASK_ID: 'tsk1', 'bad name': 'x' } };
+  const resolve = (n) => `/opt/homebrew/bin/${n}`;
+  const copy = takeoverCommand(t, { resolve });
+  assert.ok(!copy.includes('BOARD_RUN_TOKEN') && !copy.includes(fake) && !/KEY|PASSWORD|SECRET/.test(copy), copy);
+  assert.equal(copy, "cd '/Users/me/my repo' && BUDDY_TASK_ID='tsk1' /opt/homebrew/bin/claude --resume 's 1' 'it'\\''s'");
+  assert.equal(takeoverCommand(t, { resolve, mask: true }), "cd '/Users/me/my repo' && BUDDY_TASK_ID=… /opt/homebrew/bin/claude --resume 's 1' 'it'\\''s'");
+  assert.equal(takeoverCommand({ argv: ['/usr/bin/codex', 'resume'] }, { resolve: () => 'NOPE' }).split(' ')[0], 'NOPE', 'resolve is the only thing that rewrites argv[0]');
+});
+
+test('resolveBin finds an executable on PATH, leaves an absolute path alone, and falls back to the name', () => {
+  const { resolveBin } = require('../src/tasks-guard.js');
+  const fs = require('node:fs'); const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-'));
+  fs.writeFileSync(path.join(dir, 'fakeai'), '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(resolveBin('fakeai', { PATH: dir }), path.join(dir, 'fakeai'));
+  assert.equal(resolveBin('/abs/bin/x', { PATH: dir }), '/abs/bin/x');
+  assert.equal(resolveBin('definitely-not-here-xyz', { PATH: dir }), 'definitely-not-here-xyz');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('sanitizeAis keeps known AIs only', () => {

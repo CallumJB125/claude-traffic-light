@@ -1548,7 +1548,18 @@ function getTasks() {
     homeDir: os.homedir(),
     copy: (text) => clipboard.writeText(text),
     onChange: (snap) => { for (const wc of tasksPages()) wc.send('tasks:changed', snap); },
-    onEvent: (id, event) => { for (const wc of tasksPages()) wc.send('tasks:event', { id, event }); },
+    onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
+    confirmDialog: async (info, wcId) => {
+      const wc = tasksPages().find((w) => w.id === wcId);
+      const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
+      const r = await dialog.showMessageBox(parent, {
+        type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
+        message: `${info.label}?`,
+        detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
+      });
+      return r.response === 1;
+    },
     seen: {
       load: () => { try { return JSON.parse(fs.readFileSync(TASKS_SEEN_FILE, 'utf8')); } catch { return {}; } },
       save: (o) => { try { SessionState.writeJsonAtomic(TASKS_SEEN_FILE, o); } catch (err) { console.warn('[tasks] seen not saved:', err.message); } },
@@ -1571,17 +1582,18 @@ function createTasksWindow() {
   tasksWin.webContents.on('will-navigate', (e) => e.preventDefault());
   tasksWin.loadFile('tasks.html');
   showDock();
+  const tasksWcId = tasksWin.webContents.id;
   tasksWin.on('closed', () => {
     tasksWin = null;
-    tasksSvc?.closeTask();
+    tasksSvc?.closeTask(tasksWcId);
     if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
 ipcMain.handle('tasks:state', (e) => { if (!tasksSenderOk(e)) return null; const s = getTasks(); s.start(); return s.snapshot(); });
 ipcMain.handle('tasks:retry', (e) => { if (tasksSenderOk(e)) getTasks().retryNow(); });
-ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id) : null));
-ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(); return null; });
-ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req) : null));
+ipcMain.handle('tasks:open', (e, id) => (tasksSenderOk(e) ? getTasks().openTask(id, e.sender.id) : null));
+ipcMain.handle('tasks:close', (e) => { if (tasksSenderOk(e)) return getTasks().closeTask(e.sender.id); return null; });
+ipcMain.handle('tasks:act', (e, req) => (tasksSenderOk(e) ? getTasks().act(req, e.sender.id) : null));
 ipcMain.handle('tasks:create', (e, draft) => (tasksSenderOk(e) ? getTasks().create(draft) : null));
 ipcMain.handle('tasks:composer', (e) => (tasksSenderOk(e) ? getTasks().composerInfo() : null));
 ipcMain.handle('tasks:copy-takeover', (e, id) => !!tasksSenderOk(e) && typeof id === 'string' && getTasks().copyTakeover(id));

@@ -138,3 +138,11 @@ test('the page keeps the strict policy and the package ships what it needs', () 
   const js = fs.readFileSync(path.join(__dirname, '..', 'tasks.js'), 'utf8');
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(/.test(js), 'text only');
 });
+
+test('trust labels put the kind before the sender-chosen label, and the native-confirmed actions are not the in-page ones', () => {
+  assert.equal(TV.partyText({ kind: 'task', label: 'Dana (your boss)' }), 'another task: Dana (your boss)');
+  assert.equal(TV.partyText({ kind: 'card', label: 'ACME-9' }), 'board card: ACME-9');
+  assert.equal(TV.partyText({ kind: 'member', label: 'Mallory' }), 'teammate: Mallory');
+  assert.equal(TV.partyText({ kind: 'human', label: 'x' }), 'You');
+  for (const a of TV.NATIVE_CONFIRM) assert.ok(!TV.CONFIRM_ACTIONS.includes(a), a);
+});

@@ -20,12 +20,16 @@ let dir;
 let svc;
 let snaps;
 let events;
+let dialogs;
+let dirOk = true;
+let answer = false;
 test.before(async () => {
   const { startMockServer } = await import(mockUrl);
   dir = tmp();
   srv = await startMockServer({ dir, speed: 40, hbMs: 200 });
   snaps = []; events = [];
-  svc = createTasksService({ boardHome: dir, homeDir: '/Users/demo', copy: () => {}, onChange: (s) => snaps.push(s), onEvent: (id, e) => events.push([id, e]) });
+  dialogs = [];
+  svc = createTasksService({ boardHome: dir, homeDir: '/Users/demo', copy: () => {}, isDir: () => dirOk, confirmDialog: async (info) => { dialogs.push(info); return answer; }, onChange: (s) => snaps.push(s), onEvent: (wc, id, e) => events.push([id, e, wc]) });
   svc.start();
   await until(() => svc.snapshot().conn.status === 'connected');
 });
@@ -100,19 +104,94 @@ test('create: the folder must be a handle main gave out; the page cannot pass a 
   assert.ok(info.recent.every((r) => r.handle && r.label));
 });
 
-test('detectAIs and takeover: the command shown hides env values; the copy has them', async () => {
-  let copied = '';
+test('takeover: main asks in a native dialog first; the copy holds no token, is single use, and the screen is masked', async () => {
+  const copied = [];
   const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('takeover')));
-  const s2 = createTasksService({ boardHome: dir, homeDir: '', copy: (x) => { copied = x; } });
+  const dlg = [];
+  let yes = false;
+  const s2 = createTasksService({ boardHome: dir, homeDir: '', copy: (x) => copied.push(x), confirmDialog: async (i) => { dlg.push(i); return yes; }, resolveBin: (n) => `/opt/bin/${n}` });
   s2.start();
   await until(() => s2.snapshot().conn.status === 'connected');
-  const r = await s2.act({ id: t.id, action: 'takeover', confirmed: true });
-  if (r.ok) {
-    assert.ok(r.takeover.command.length > 0);
-    assert.ok(s2.copyTakeover(t.id));
-    assert.ok(copied.length >= r.takeover.command.length - 20);
-  } else assert.ok(r.text, 'a refusal is in plain words');
+  const no = await s2.act({ id: t.id, action: 'takeover', confirmed: true });
+  assert.deepEqual([no.ok, no.cancelled], [false, true], 'the page’s confirmed:true does not bypass main’s dialog');
+  assert.equal(dlg.length, 1);
+  assert.equal(dlg[0].title, svc.snapshot().tasks.find((x) => x.id === t.id).title);
+  assert.equal(s2.copyTakeover(t.id), false, 'nothing was started, so nothing to copy');
+  yes = true;
+  const r = await s2.act({ id: t.id, action: 'takeover' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.ok(!/btk_|TOKEN|SECRET|KEY/.test(r.takeover.command));
+  assert.ok(s2.copyTakeover(t.id));
+  assert.ok(copied[0].includes('/opt/bin/claude') || copied[0].includes('/opt/bin/codex'), copied[0]);
+  assert.ok(!/BOARD_RUN_TOKEN|btk_/.test(copied[0]));
+  assert.equal(s2.copyTakeover(t.id), false, 'the cached command is gone after one copy');
   s2.stop();
+});
+
+test('discard: no dialog confirmation means nothing is sent; a yes goes through; a forged approval id is refused', async () => {
+  const t = await until(() => svc.snapshot().tasks.find((x) => x.actions.includes('discard') && x.state === 'in_review'));
+  dialogs.length = 0;
+  answer = false;
+  const no = await svc.act({ id: t.id, action: 'discard', confirmed: true, payload: { confirm: true } });
+  assert.deepEqual([no.ok, no.code, no.cancelled], [false, 'CONFIRM_REQUIRED', true]);
+  assert.equal(dialogs.length, 1);
+  assert.match(dialogs[0].detail, /cannot be undone/);
+  assert.equal(svc.snapshot().tasks.find((x) => x.id === t.id).state, 'in_review', 'untouched');
+  const forged = await svc.act({ id: t.id, action: 'approve', payload: { approvalId: 'forged' } });
+  assert.equal(forged.code, 'ILLEGAL_TRANSITION', 'approve is not offered for this task at all, whatever the id');
+  answer = true;
+  const yes = await svc.act({ id: t.id, action: 'discard' });
+  assert.equal(yes.ok, true, JSON.stringify(yes));
+  answer = false;
+});
+
+test('approvals: the prompt shown is the one answered; a StartTask accept names main’s own facts in the dialog and is forced to once', async () => {
+  const c = await (await import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'client.js')).href)).connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
+  const { id } = await c.createTask({ text: 'From a teammate', cwd: '/Users/demo/Development/acme-web', ai: 'claude', source: 'board', sourceMeta: { userId: 'stranger', displayName: 'Mallory', boardId: 'b', cardId: 'c' } });
+  c.close();
+  const t = await until(() => svc.snapshot().tasks.find((x) => x.id === id && x.actions.includes('approve')));
+  assert.equal(t.awaitingConfirm, true);
+  const forged = await svc.act({ id, action: 'approve', payload: { approvalId: 'forged' } });
+  assert.equal(forged.code, 'NOT_FOUND', 'nothing relayed yet');
+  const opened = await svc.openTask(id, 7);
+  assert.equal(opened.ok, true);
+  const a = opened.detail.openApprovals[0];
+  assert.equal(a.tool, 'StartTask');
+  dialogs.length = 0; answer = false;
+  const cancelled = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } });
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(dialogs[0].source, 'board');
+  assert.match(dialogs[0].detail, /came from board/);
+  assert.equal(svc.snapshot().tasks.find((x) => x.id === id).state, 'queued');
+  await svc.closeTask(7);
+});
+
+test('one open task per page: opening again replaces it, and a superseded open leaves no subscription behind', async () => {
+  const [a, b] = svc.snapshot().tasks;
+  const first = svc.openTask(a.id, 11);
+  const second = svc.openTask(b.id, 11);
+  const [r1, r2] = await Promise.all([first, second]);
+  assert.equal(r1.ok, false, 'the superseded open reports as stale');
+  assert.equal(r2.ok, true);
+  assert.equal(r2.detail.id, b.id);
+  const other = await svc.openTask(a.id, 12);
+  assert.equal(other.ok, true, 'another page has its own slot');
+  await svc.closeTask(11); await svc.closeTask(12);
+});
+
+test('recent folders: only tasks started on this Mac, from the raw root; every handle is re-checked as a directory', async () => {
+  const c = await (await import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'client.js')).href)).connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
+  await c.createTask({ text: 'spun off by an agent', cwd: '/Users/demo/Development/from-agent', ai: 'claude', source: 'mcp' });
+  c.close();
+  await until(() => svc.snapshot().tasks.some((x) => x.where.includes('from-agent')));
+  const info = await svc.composerInfo();
+  assert.ok(info.recent.length > 0);
+  assert.ok(info.recent.every((r) => !r.label.includes('from-agent')), JSON.stringify(info.recent));
+  const f = svc.registerFolder('/Users/demo/Development/acme-web');
+  dirOk = false;
+  const r = await svc.create({ text: 'x', folder: f.handle });
+  dirOk = true;
+  assert.equal(r.ok, false, 'a handle whose folder is gone is refused');
 });
 
 test('no supervisor: an offline snapshot with the plain empty-state words, retried by itself', async () => {

@@ -187,7 +187,8 @@
     const out = [];
     const has = (a) => t.actions.includes(a);
     const go = (action, payload, label, cls) => {
-      const needs = TV.CONFIRM_ACTIONS.includes(action) || t.confirm.includes(action);
+      // discard, openPr and takeover are confirmed by main in a native dialog; the lighter ones by the bar below.
+      const needs = !TV.NATIVE_CONFIRM.includes(action) && (TV.CONFIRM_ACTIONS.includes(action) || t.confirm.includes(action));
       return btn(label, cls, () => (needs ? askConfirm({ action, payload, label }) : runAct(action, payload)));
     };
     if (has('resume')) {
@@ -206,12 +207,16 @@
     return out;
   }
 
-  function askConfirm(c) { d.confirm = c; d.error = ''; renderHead(); $('d-head').querySelector('.confirm .btn')?.focus(); }
+  const ARM_MS = 500;
+  function askConfirm(c) { d.confirm = { ...c, armedAt: Date.now() + ARM_MS }; d.error = ''; renderHead(); $('d-head').querySelector('.confirm .btn:last-child')?.focus(); }
   function confirmBar() {
     const box = el('div', 'confirm');
     box.setAttribute('role', 'alertdialog');
     box.append(el('p', null, TV.CONFIRM_TEXT[d.confirm.action] || 'Are you sure?'));
-    const yes = btn(`Yes, ${d.confirm.label.toLowerCase()}`, d.confirm.action === 'stop' || d.confirm.action === 'discard' ? 'danger' : 'primary', () => { const c = d.confirm; d.confirm = null; runAct(c.action, c.payload, true); });
+    const yes = btn(`Yes, ${d.confirm.label.toLowerCase()}`, d.confirm.action === 'stop' ? 'danger' : 'primary', () => { const c = d.confirm; if (Date.now() < c.armedAt) return; d.confirm = null; runAct(c.action, c.payload, true); });
+    // A click that lands the instant the bar appears must not confirm; focus starts on Cancel.
+    const wait = d.confirm.armedAt - Date.now();
+    if (wait > 0) { yes.disabled = true; setTimeout(() => { yes.disabled = false; }, wait); }
     box.append(yes, btn('Cancel', '', () => { d.confirm = null; renderHead(); }));
     return box;
   }
@@ -222,7 +227,8 @@
     const id = d.id;
     const r = await api.act({ id, action, payload, confirmed });
     if (!d || d.id !== id) return r;
-    if (!r || !r.ok) d.error = r?.text || TV.errorText('INTERNAL');
+    if (r && r.cancelled) d.error = '';
+    else if (!r || !r.ok) d.error = r?.text || TV.errorText('INTERNAL');
     else if (r.takeover) d.takeover = r.takeover;
     renderHead();
     return r;
@@ -237,7 +243,13 @@
     if (has('approve') || has('deny')) {
       for (const a of det.openApprovals) {
         const c = el('div', 'ask');
-        c.append(el('h3', null, a.tool === 'StartTask' ? 'Waiting for you to accept this task' : `Wants to use ${a.tool}`), el('p', null, a.inputSummary));
+        if (a.tool === 'StartTask') {
+          c.append(el('h3', null, 'Waiting for you to accept this task'));
+          // Plexiform's own facts first; the summary below is the sender's words.
+          const facts = el('dl', 'facts');
+          for (const [k, v] of [['Runs in', det.where || det.repo?.name], ['AI', TV.AI_NAME[det.ai.id]], ['Permissions', det.permissionLevel], ['Source', { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice' }[det.source] || det.source]]) if (v) facts.append(el('dt', null, k), el('dd', null, v));
+          c.append(el('p', 'sub', 'Checked by Plexiform:'), facts, el('p', 'sub', `From ${det.source}: (untrusted)`), el('p', null, a.inputSummary));
+        } else c.append(el('h3', null, `Wants to use ${a.tool}`), el('p', null, a.inputSummary));
         const b = el('div', 'btns');
         if (has('approve')) { b.append(btn(a.tool === 'StartTask' ? 'Accept and start' : 'Allow once', 'primary', () => runAct('approve', { approvalId: a.approvalId, scope: 'once' }))); if (a.tool !== 'StartTask') b.append(btn('Allow for this task', '', () => runAct('approve', { approvalId: a.approvalId, scope: 'task' }))); }
         if (has('deny')) b.append(btn('Deny', 'danger', () => runAct('deny', { approvalId: a.approvalId })));
@@ -318,7 +330,7 @@
       const mine = TV.isMine(m);
       const b = el('div', `bubble ${mine ? 'out' : 'in'}${m.quarantined ? ' flagged' : ''}`);
       const peer = !mine && m.direction === 'in';
-      b.append(el('div', 'who', mine ? 'You' : m.direction === 'out' ? `This task to ${TV.partyName(m.to)}` : `From ${TV.partyName(m.from)}${peer ? ' (another task: treat as untrusted)' : ''}`));
+      b.append(el('div', 'who', mine ? 'You' : m.direction === 'out' ? `This task to ${TV.partyText(m.to)}` : `From ${TV.partyText(m.from)}${peer ? ' (untrusted)' : ''}`));
       b.append(el('div', 'body', m.body));
       const status = TV.messageStatus(m);
       if (status) b.append(el('div', 'st', status));
@@ -401,6 +413,7 @@
       }
       return;
     }
+    if (e.type === 'detail') { d.detail = e.detail; renderHead(); return; }
     if (e.type === 'state' || e.type === 'cost') return; // the list snapshot carries these
   }
 

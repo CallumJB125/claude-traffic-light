@@ -175,14 +175,16 @@
     discard: 'Discard', retry: 'Retry', switchAi: 'Switch AI',
   });
   // Clicks that need a second, deliberate click.
-  const CONFIRM_ACTIONS = Object.freeze(['stop', 'discard', 'merge', 'openPr', 'takeover']);
+  const CONFIRM_ACTIONS = Object.freeze(['stop', 'merge']);
+  // Confirmed by main in a native dialog; the page's own click never counts.
+  const NATIVE_CONFIRM = Object.freeze(['discard', 'openPr', 'takeover']);
+  const KIND_LABEL = Object.freeze({ task: 'another task', card: 'board card', member: 'teammate', repo: 'a repo broadcast', human: 'you' });
+  // The kind always comes before the sender-chosen label, so a label cannot pose as something else.
+  const partyText = (p) => (p ? (p.kind === 'human' ? 'You' : `${KIND_LABEL[p.kind] || 'someone'}: ${p.label || p.id || ''}`) : '');
   const CONFIRM_TEXT = Object.freeze({
     stop: 'Stop this task? The AI stops now. Its work so far is kept.',
-    discard: 'Discard this task? Its branch and worktree are deleted. This cannot be undone.',
     merge: 'Merge this task’s branch into your checkout? Nothing is pushed.',
-    openPr: 'Push the branch and open a pull request with your GitHub login?',
-    takeover: 'Take this task over in your terminal? The background run stops and you carry on from where it was.',
   });
 
-  return { LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, CONFIRM_TEXT, AI_NAME };
+  return { LIMITS, ERROR_TEXT, errorText, TERMINAL, ageText, rowView, sortTasks, CAPS, newTranscript, addEvent, messageStatus, isMine, partyName, mergeMessage, validateDraft, validateMessage, ACTION_LABEL, CONFIRM_ACTIONS, NATIVE_CONFIRM, KIND_LABEL, partyText, CONFIRM_TEXT, AI_NAME };
 }));

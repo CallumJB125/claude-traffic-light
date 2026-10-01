@@ -5,6 +5,8 @@
 // `P` is board/tasks-api/protocol.js (ESM, so main imports it and passes it in).
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const TV = require('./tasks-view.js');
 
 const STATES = ['todo', 'queued', 'claimed', 'running', 'quiet', 'blocked', 'parked', 'suspended', 'reconnecting', 'unresponsive', 'orphaned', 'handing_over', 'handed_over', 'in_review', 'done', 'failed'];
@@ -17,7 +19,7 @@ const strOrNull = (v, max = 500) => (typeof v === 'string' ? v.slice(0, max) : n
 const int = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
 const intOrNull = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
 const pick = (v, list, dflt = null) => (list.includes(v) ? v : dflt);
-const tilde = (p, homeDir) => (homeDir && p.startsWith(homeDir) ? `~${p.slice(homeDir.length)}` : p);
+const tilde = (p, homeDir) => (homeDir && (p === homeDir || p.startsWith(homeDir + path.sep)) ? `~${p.slice(homeDir.length)}` : p);
 
 function createGuard({ P, taskFace }) {
   const actions = (a) => (Array.isArray(a) ? a.filter((x) => P.ACTIONS.includes(x)) : []);
@@ -94,7 +96,7 @@ function createGuard({ P, taskFace }) {
         askId: str(d.openAsk.askId, 128), kind: str(d.openAsk.kind, 20), text: str(d.openAsk.text, 4000),
         options: Array.isArray(d.openAsk.options) ? d.openAsk.options.slice(0, 20).map((o) => str(o, 300)) : null,
         choices: Array.isArray(d.openAsk.choices)
-          ? d.openAsk.choices.slice(0, 6).map((c) => ({ id: str(c.id, 60), label: str(c.label, 120), action: pick(c.action, P.ACTIONS), payload: c.payload && typeof c.payload === 'object' ? c.payload : {} })).filter((c) => c.action)
+          ? d.openAsk.choices.slice(0, 6).map((c) => ({ id: str(c.id, 60), label: str(c.label, 120), action: pick(c.action, P.ACTIONS), payload: pick(c.action, P.ACTIONS) ? actPayload(c.action, c.payload, false) : null })).filter((c) => c.action && c.payload)
           : null,
       } : null,
       limitResetsAtMs: Number.isFinite(d.limitResetsInMs) ? now + d.limitResetsInMs : null,
@@ -114,6 +116,7 @@ function createGuard({ P, taskFace }) {
       case 'error': return { type: 'error', seq, code: P.ERRORS.includes(e.code) ? e.code : 'INTERNAL' };
       case 'cost': return { type: 'cost', seq, usd: Number.isFinite(e.usd) ? e.usd : 0, budgetUsd: Number.isFinite(e.budgetUsd) ? e.budgetUsd : null };
       case 'state': return { type: 'state', seq, patch: sanitizeTask({ ...e, id: str(e.taskId, 128), title: '', createdAgeMs: 0, stateAgeMs: 0 }, { now }) };
+      case 'approval': case 'ask': return { type: 'refresh', seq };
       case 'diff': return { type: 'diff', seq, files: (Array.isArray(e.files) ? e.files : []).slice(0, 200).map((f) => ({ path: str(f.path, 300), status: str(f.status, 12), added: int(f.added), removed: int(f.removed) })) };
       default: return null;
     }
@@ -147,7 +150,7 @@ function createGuard({ P, taskFace }) {
     switch (action) {
       case 'pause': case 'stop': return {};
       case 'resume': return { when: pick(o.when, ['now', 'reset'], 'now') };
-      case 'takeover': return { mode: 'print', ...(confirmed ? { confirm: true } : {}) };
+      case 'takeover': return { mode: 'print', ...(confirmed ? { confirm: true } : {}) }; // `confirmed` here is main's own native confirmation
       case 'handback': return text(o.note, TV.LIMITS.note) ? { note: o.note.trim() } : {};
       case 'message': return typeof o.body === 'string' && o.body.trim() && bytes(o.body.trim()) <= TV.LIMITS.message ? { body: o.body.trim() } : null;
       case 'approve': return text(o.approvalId, 128) ? { approvalId: o.approvalId, scope: pick(o.scope, ['once', 'task'], 'once') } : null;
@@ -162,16 +165,35 @@ function createGuard({ P, taskFace }) {
     }
   }
 
-  /** req = {id, action, payload?, confirmed?}; task = main's cached row for req.id (its `actions` are what the supervisor accepts now). */
-  function validateAct(req, task) {
+  // Actions whose confirmation main owns (a native dialog); the page's `confirmed` never counts for them.
+  const NATIVE_ACTIONS = ['discard', 'openPr', 'takeover'];
+
+  /**
+   * req = {id, action, payload?, confirmed?}; task = main's cached row for req.id (its `actions` are what the
+   * supervisor accepts now). ctx = {approvals: Map(approvalId → {tool}), asks: Set(askId), nativeConfirmed}
+   * from main: ids main did not relay are refused, and native-confirmed actions need nativeConfirmed.
+   * A refusal with `native: true` means "ask the person in a native dialog, then call again".
+   */
+  function validateAct(req, task, ctx = {}) {
     if (!req || typeof req !== 'object') return fail('VALIDATION');
     if (typeof req.id !== 'string' || !req.id || req.id.length > 128) return fail('VALIDATION');
     if (!P.ACTIONS.includes(req.action)) return fail('VALIDATION');
     if (!task || task.id !== req.id) return fail('NOT_FOUND');
     if (!task.actions.includes(req.action)) return fail('ILLEGAL_TRANSITION');
     const confirmed = req.confirmed === true;
-    if ((TV.CONFIRM_ACTIONS.includes(req.action) || task.confirm.includes(req.action)) && !confirmed) return fail('CONFIRM_REQUIRED');
-    const payload = actPayload(req.action, req.payload, confirmed);
+    const native = ctx.nativeConfirmed === true;
+    const raw = req.payload && typeof req.payload === 'object' ? req.payload : {};
+    let startTask = false;
+    if (req.action === 'approve' || req.action === 'deny') {
+      const a = ctx.approvals?.get(raw.approvalId);
+      if (!a) return fail('NOT_FOUND');
+      startTask = a.tool === 'StartTask';
+    }
+    if (req.action === 'answer' && !ctx.asks?.has(raw.askId)) return fail('NOT_FOUND');
+    const needsNative = NATIVE_ACTIONS.includes(req.action) || (req.action === 'approve' && (startTask || raw.scope === 'task'));
+    if (needsNative && !native) return { ...fail('CONFIRM_REQUIRED'), native: true };
+    if (!needsNative && (TV.CONFIRM_ACTIONS.includes(req.action) || task.confirm.includes(req.action)) && !confirmed) return fail('CONFIRM_REQUIRED');
+    const payload = actPayload(req.action, startTask ? { ...raw, scope: 'once' } : req.payload, native);
     if (!payload) return fail('VALIDATION');
     return { ok: true, id: req.id, action: req.action, payload };
   }
@@ -196,16 +218,29 @@ function createGuard({ P, taskFace }) {
     }));
   }
 
-  return { sanitizeTask, sanitizeDetail, sanitizeEvent, sanitizeMessage, sanitizeAis, applyState, withLease, validateAct, validateCreate };
+  return { sanitizeTask, sanitizeDetail, sanitizeEvent, sanitizeMessage, sanitizeAis, applyState, withLease, validateAct, validateCreate, actPayload };
 }
 
-// `cd '<cwd>' && NAME=… argv…`, quoted for a POSIX shell. `mask` hides env values (what the screen shows);
-// the copy keeps them because the hooks need them to keep reporting.
-function takeoverCommand(t, { mask = false } = {}) {
+const SECRET_ENV = /(TOKEN|SECRET|KEY|PASSWORD)/i;
+const EXTRA_BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+function resolveBin(name, env = process.env) {
+  if (typeof name !== 'string' || !name || path.isAbsolute(name)) return name;
+  const dirs = [...String(env.PATH || '').split(path.delimiter), ...(env.HOME ? [path.join(env.HOME, '.local', 'bin')] : []), ...EXTRA_BIN_DIRS].filter(Boolean);
+  for (const d of dirs) {
+    const p = path.join(d, name);
+    try { fs.accessSync(p, fs.constants.X_OK); if (fs.statSync(p).isFile()) return p; } catch { /* not here */ }
+  }
+  return name;
+}
+
+// `cd '<cwd>' && NAME=… /abs/bin argv…`, quoted for a POSIX shell. No secret-looking env var is ever included
+// (the hook shim falls back to <run_dir>/hook.token and board-mcp reads its token from mcp.json), and the binary
+// is its absolute path. `mask` hides the remaining env values on screen.
+function takeoverCommand(t, { mask = false, resolve = resolveBin } = {}) {
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-  const env = Object.entries(t.env || {}).filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k)).map(([k, v]) => `${k}=${mask ? '…' : q(v)}`);
-  const argv = (Array.isArray(t.argv) ? t.argv : []).map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : q(a)));
+  const env = Object.entries(t.env || {}).filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k) && !SECRET_ENV.test(k)).map(([k, v]) => `${k}=${mask ? '…' : q(v)}`);
+  const argv = (Array.isArray(t.argv) ? t.argv : []).map((a, i) => (i === 0 ? resolve(a) : a)).map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : q(a)));
   return `${t.cwd ? `cd ${q(t.cwd)} && ` : ''}${[...env, ...argv].join(' ')}`;
 }
 
-module.exports = { createGuard, takeoverCommand, LIVE_STATES, STATES };
+module.exports = { createGuard, takeoverCommand, resolveBin, tilde, NATIVE_ACTIONS: ['discard', 'openPr', 'takeover'], LIVE_STATES, STATES };
