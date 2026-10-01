@@ -12,6 +12,22 @@
     <h1>Changelog</h1>
     <p class="lede">What changed, newest first. The beta moves fast, so this is written in plain words rather than version numbers.</p>
     <div class="log">
+      <!-- DRAFT for release 1: confirm the date at the tag; keep the email-code line only once the mail service is deployed;
+           add the right-click menu, Usage pop-out and Send feedback lines only if they merge before the tag. -->
+      <article id="release-1">
+        <time datetime="2026-10">October 2026</time>
+        <h2>The first beta build</h2>
+        <ul>
+          <li><strong>A new name.</strong> The app is now called {{brand.name}}. The first time it starts it copies your settings and data from the old app and points Claude Code's hooks at the new one. It keeps <code>.pre-plexiform</code> backups of what it changes, and it leaves the old app installed unless you remove it.</li>
+          <li><strong>Team and Integrations before you sign in.</strong> You can see what they do first.</li>
+          <li><strong>Sign in, then a team.</strong> Sign in with Google or GitHub, or with an email code, then create or join a team. Teams have roles and invites by link or code.</li>
+          <li><strong>GitHub, end to end.</strong> Connecting GitHub now completes, with an option to use an organisation-owned GitHub app.</li>
+          <li><strong>Backups and restore.</strong> Your local settings can be backed up and restored from Settings, Backups.</li>
+          <li><strong>Updates in the app.</strong> {{brand.name}} can check for a newer version and install it.</li>
+          <li><strong>Detached sessions.</strong> A fix for detached sessions swapping terminal tabs when you jump to them.</li>
+          <li><strong>Known limits.</strong> Slack and Sentry are not in this build. The beta is unsigned, so macOS may ask you to use the keychain; choose Always Allow. Email codes work only for verified addresses for now, and the Windows and Linux builds have not been tried on real machines yet.</li>
+        </ul>
+      </article>
       <article id="2026-09-30">
         <time datetime="2026-09-30">30 September 2026</time>
         <h2>The Usage tab, and a new name</h2>
