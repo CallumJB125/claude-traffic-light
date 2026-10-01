@@ -197,7 +197,7 @@ test('e2e M4: reconnecting makes a second app and a second connection, not a CON
 const unmerged = { merged: false, merged_by: null, merged_at: null, merge_commit_sha: null, state: 'closed' };
 const kinds = (h, conn) => h.db.all('SELECT kind, external_id FROM external_links WHERE connection_id = ? ORDER BY created_at, rowid', conn.id).map((l) => `${l.kind}:${l.external_id}`);
 
-test('e2e N1: #12 closed unmerged, then #13 opened, verified and merged: #13 takes the card\'s PR slot and moves the card', async () => {
+test('e2e N1: #12 closed unmerged, then #13 opened, verified and merged: #13 takes the card\'s PR slot only once verified, and moves the card', async () => {
   const { h, conn, send, verify, column } = await setup();
   try {
     await send('pull_request', raw('pull_request.opened.json'));
@@ -205,9 +205,11 @@ test('e2e N1: #12 closed unmerged, then #13 opened, verified and merged: #13 tak
     assert.equal((await send('pull_request', variant('pull_request.closed.json', unmerged))).status, 200);
     h.db.run("UPDATE cards SET run_state = 'in_review', column_name = 'in_review' WHERE key = ?", KEY);
     assert.equal((await send('pull_request', decoy('pull_request.opened.json', 13, 'main'))).status, 200);
-    assert.deepEqual(kinds(h, conn), ['pr_superseded:2100000012', 'pr:2100000013']);
+    // #12 is still the card's verified PR: the slot takes only it.
+    assert.deepEqual(kinds(h, conn), ['pr:2100000012']);
     verify('https://github.com/acme/app/pull/13');
     assert.equal((await send('pull_request', decoy('pull_request.closed.json', 13, 'main'))).status, 200);
+    assert.deepEqual(kinds(h, conn), ['pr_superseded:2100000012', 'pr:2100000013']);
     assert.equal(column(), 'done');
   } finally { await h.close(); }
 });
@@ -249,8 +251,10 @@ test('e2e N3: with bare #12 evidence, PR #12 in a repo alias (a mirror) never mo
     assert.equal((await send('pull_request', onMirror(fixture('pull_request.opened.json')))).status, 200);
     assert.equal((await send('pull_request', onMirror(fixture('pull_request.closed.json')))).status, 200);
     assert.equal(column(), 'in_review');
-    const a = reg.audit(conn.id).find((x) => x.action === 'system.pr_merged');
-    assert.deepEqual([a.decision, a.error], ['failed', 'not_the_verified_pr'], 'the event names the mirror, and bare #12 is the card\'s own repo');
+    // Bare #12 is the card's own repo: the mirror's #12 never gets the slot,
+    // so no merge event is raised for it, let alone applied.
+    assert.deepEqual(kinds(h, conn), []);
+    assert.ok(!reg.audit(conn.id).some((x) => x.action === 'system.pr_merged' && x.decision !== 'failed'));
   } finally { await h.close(); }
 });
 
