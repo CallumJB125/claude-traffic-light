@@ -21,6 +21,10 @@ import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// The prepare body carries an admin's pasted configuration token (D97): its
+// D8 replay entry is this, never the first answer.
+const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
@@ -210,15 +214,17 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     if (r.pattern.startsWith('/api/devices/')) return hub.member(hub.device(params.id)?.member_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/members/')) return hub.member(params.id)?.org_id ?? null;
-    if (r.pattern.startsWith('/api/integrations/:id')) return hub.db.get('SELECT org_id FROM connections WHERE id = ?', params.id)?.org_id ?? null;
+    // A provider names no resource; a pending id (D97) is its team's, like a connection id.
+    if (r.pattern === '/api/integrations/:target/prepare') return UUID_RE.test(params.target) ? integrations?.orgOf(params.target) ?? null : undefined;
+    if (r.pattern.startsWith('/api/integrations/:id')) return integrations?.orgOf(params.id) ?? null;
     return undefined;
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay });
   };
 
   route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
@@ -337,6 +343,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
     route('GET', '/api/integrations', ({ member }) => ({
       available: integrations.connectors(), connections: integrations.list(member.org_id).map((c) => forMember(member, c)), vault: hub.vault.available,
+      ...(hub.isAdmin(member) ? { pending: integrations.pendingList(member.org_id) } : {}),
     }));
     route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
       api.requireAdmin(member);
@@ -356,12 +363,37 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // OAuth / app install (D42): the callback needs this cookie back. A
     // browser tab has it already; the desktop app's connect window (its own
     // session) gets `bind` through the window name and sets it itself.
+    const setBind = (res, { name, value, path, secure, max_age_s }) => res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
     route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
       api.requireAdmin(member);
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
-      const { name, value, path, secure, max_age_s } = out.cookie;
-      res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
+      setBind(res, out.cookie);
       return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
+    });
+    // Pending connections (D97): a provider starts one, a pending id takes the pasted fields.
+    // body.input goes to the registry and nowhere else (no log, no cache, no error text).
+    route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res }) => {
+      api.requireAdmin(member);
+      const publicUrl = publicBase(req);
+      let out;
+      try {
+        out = UUID_RE.test(params.target)
+          ? await integrations.pendingPrepare({ member, id: params.target, input: body.input, publicUrl })
+          : await integrations.pendingCreate({ member, provider: params.target, input: body.input, publicUrl });
+      } catch (e) {
+        if (e instanceof HubError) throw e;
+        hub.log.error('integration prepare failed', { path: '/api/integrations/:target/prepare' });
+        throw new HubError('INTERNAL', 'internal error');
+      }
+      if (out.needs) return { pending: out.pending, needs: out.needs };
+      setBind(res, out.cookie);
+      return { pending: out.pending, url: out.url, bind: out.bind };
+    }, { replay: PREPARE_REPLAY });
+    route('POST', '/api/integrations/:id/authorize', ({ member, params, req, res }) => {
+      api.requireAdmin(member);
+      const out = integrations.pendingAuthorize({ member, id: params.id, publicUrl: publicBase(req) });
+      setBind(res, out.cookie);
+      return { url: out.url, bind: out.bind };
     });
     route('PATCH', '/api/integrations/:id', ({ member, params, body }) => {
       api.requireAdmin(member);
@@ -373,6 +405,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     });
     route('DELETE', '/api/integrations/:id', ({ member, params }) => {
       api.requireAdmin(member);
+      if (integrations.pendingDelete({ member, id: params.id })) return { ok: true };
       own(member, params.id);
       integrations.revokeConnection(params.id, member.id);
       return { ok: true };
@@ -576,7 +609,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         out = errorBody(e);
       }
       if (out === undefined) return undefined;
-      if (rid) hub.cacheResponse(actor, rid, status, out);
+      if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out);
       return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));

@@ -123,6 +123,8 @@ import { isIP } from 'node:net'; // privacy-flow: hub-server
 const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
 const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
+const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const PREPARE_INPUTS_MAX = 8;
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // The only state-machine events an integration may raise as the system (D42):
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
@@ -171,6 +173,15 @@ export function defineConnector(spec) {
       if (typeof cn.formHost !== 'string' || !spec.hosts?.includes?.(cn.formHost)) errs.push('connect.formHost (the host the manifest form posts to) must be one of hosts');
     } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
   }
+  if (cn && (cn.prepare !== undefined || cn.prepareInputs !== undefined)) {
+    const keys = cn.prepareInputs;
+    if (typeof cn.prepare !== 'function') errs.push('connect.prepare is a function, declared together with connect.prepareInputs');
+    if (!Array.isArray(keys) || !keys.length || keys.length > PREPARE_INPUTS_MAX || new Set(keys).size !== keys.length
+      || keys.some((k) => typeof k !== 'string' || !PREPARE_KEY_RE.test(k) || ['constructor', 'prototype'].includes(k))) {
+      errs.push(`connect.prepareInputs lists 1–${PREPARE_INPUTS_MAX} distinct input names (^[a-z][a-z0-9_]{0,39}$)`);
+    }
+    if (cn.kind === 'token' || cn.manifestForm !== undefined) errs.push('connect.prepare is for an oauth/app_install connector with authorizeUrl (not token, not manifestForm)');
+  }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
@@ -188,5 +199,7 @@ export function defineConnector(spec) {
     else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
   }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
+  // The registry filters pasted input by prepareInputs: a connector can't widen it later.
+  const connect = Array.isArray(cn?.prepareInputs) ? Object.freeze({ ...cn, prepareInputs: Object.freeze([...cn.prepareInputs]) }) : spec.connect;
+  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
 }
