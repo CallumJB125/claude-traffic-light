@@ -190,7 +190,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     onStatus,
   });
 
-  const isHubPage = (id) => pageById(id)?.kind === 'hub';
+  // A page with a localScreen is the account page's explainer while the local board is active, not a hub page.
+  const isHubPage = (id) => { const p = pageById(id); return p?.kind === 'hub' && !(p.localScreen && !getTeamHub()); };
 
   function onStatus(s) {
     hubStatus = s;
@@ -301,7 +302,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   // Draws the account page for a screen the flow picked; the flow owns which.
   function showScreen(screen) {
-    const page = PAGES.find((p) => p.screen === screen);
+    const page = PAGES.find((p) => p.screen === screen || p.localScreen === screen);
     selected = page ? page.id : `flow:${screen}`;
     if (!win) return;
     pushState();
@@ -596,6 +597,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const page = pageById(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
+    if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
     selected = id;

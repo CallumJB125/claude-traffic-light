@@ -54,6 +54,15 @@ const input = (attrs) => el('input', { class: 'input', spellcheck: 'false', ...a
 const link = (text, onclick) => el('button', { type: 'button', class: 'acct-link', onclick }, text);
 const heading = (title, sub) => [el('h1', {}, title), sub ? el('p', { class: 'acct-sub' }, sub) : null];
 const notice = (text) => (text ? el('p', { class: 'acct-notice', role: 'status' }, text) : null);
+// Sign-in for someone with no account: the same Google/GitHub sign-in the email screen offers, and the join page.
+function signedOutActions() {
+  const providers = [['google', 'Continue with Google'], ['github', 'Continue with GitHub']].map(([p, text]) => {
+    const b = el('button', { type: 'button', class: `btn btn-provider btn-${p}` }, text);
+    b.addEventListener('click', async () => { b.disabled = true; const r = await api.signInWith(p); if (!r?.ok) { b.disabled = false; flash(r?.error ?? 'Something went wrong. Try again.', true); } });
+    return b;
+  });
+  return el('div', { class: 'acct-providers' }, providers, el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Join with an invite link'));
+}
 const hostTag = (host) => el('span', { class: 'acct-hosttag' }, host);
 
 function roleSelect(value, { name = 'role', allowOwner = false, label = 'Role' } = {}) {
@@ -233,7 +242,27 @@ const SCREENS = {
     ];
   },
 
+  integrations(s) {
+    return [
+      heading('Integrations', `Connect the tools your team already uses. Integrations live on your team hub (${s.brand.defaultHost}), so you need a team first.`),
+      el('ul', { class: 'acct-connectors', 'aria-label': 'Tools you can connect' }, s.connectors.map((c) => el('li', { class: `acct-connector acct-connector-${c.status}` },
+        el('h2', {}, c.name),
+        el('p', { class: 'acct-hint' }, c.value),
+        el('p', { class: 'acct-connector-status' }, c.statusText)))),
+      s.signedInHubs.length
+        ? el('p', { class: 'acct-hint' }, 'You’re signed in. Pick a team in the switcher at the top of the sidebar, then open Integrations again.')
+        : [el('p', { class: 'acct-sub' }, 'Sign in to create a team or join one, then connect tools.'), signedOutActions()],
+    ];
+  },
+
   team(s) {
+    if (!s.team && !s.signedInHubs.length) {
+      return [
+        heading('Team', 'Sign in to create a team or join one: invite teammates, see their agents live.'),
+        el('p', { class: 'acct-hint' }, `Teams and integrations live on the team hub (${s.brand.defaultHost}). Your board on this Mac stays local until you do.`),
+        signedOutActions(),
+      ];
+    }
     if (!s.team) {
       return [
         heading('Team', s.hasTeams ? 'Pick a team in the switcher at the top of the sidebar to see its members.' : 'You’re not in a team yet. Create one, or join with an invite.'),
@@ -539,7 +568,7 @@ function expires(iso) {
   return days >= 1 ? `Expires in ${days} day${days === 1 ? '' : 's'}` : 'Expires today';
 }
 
-const WIDE = new Set(['team', 'account', 'thismac', 'invites']);
+const WIDE = new Set(['team', 'account', 'thismac', 'invites', 'integrations']);
 
 async function render() {
   if (tick) { clearInterval(tick); tick = null; }

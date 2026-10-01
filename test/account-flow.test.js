@@ -1802,3 +1802,16 @@ test('no copy promises to merge or link accounts: GitHub always makes its own ac
   const promise = [/\bmerg\w*\b[^.\n]{0,80}\baccounts?\b/i, /\baccounts?\b[^.\n]{0,80}\bmerg\w*/i, /\b(?:link|join|connect)s?\b[^.\n]{0,40}\b(?:to|with) (?:your|an|the) (?:existing |other )?account\b/i, /\bsame account\b/i];
   for (const [f, t] of texts) for (const re of promise) assert.ok(!re.test(t), `${f}: ${t.match(re)?.[0]}`);
 });
+
+test('signed-out pages: signInWith refuses an unknown provider and starts nothing; the Integrations screen lists the tools with honest status', async () => harness(async (h) => {
+  const r = await h.A.signInWith('twitter');
+  assert.deepEqual([r.ok, h.opened.length, h.flow.acct.screen], [false, 0, null]);
+  h.flow.show('integrations');
+  const st = await h.A.state();
+  assert.equal(st.screen, 'integrations');
+  assert.deepEqual(st.connectors.map((c) => [c.id, c.status]), [['github', 'available'], ['slack', 'soon'], ['sentry', 'soon'], ['linear', 'soon'], ['jira', 'soon'], ['google', 'soon']]);
+  assert.equal(st.brand.defaultHost, 'app.plexiform.dev');
+  assert.deepEqual(st.signedInHubs, []);
+  h.flow.show('team');
+  assert.deepEqual([(await h.A.state()).team, (await h.A.state()).signedInHubs], [null, []]);
+}));
