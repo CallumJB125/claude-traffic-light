@@ -230,15 +230,18 @@ const SCREENS = {
       return [heading('Create a team', 'Sign in to your team hub first. Your team lives there.'),
         el('div', { class: 'acct-actions' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => api.go('hub') }, 'Sign in'))];
     }
+    // Right after a first sign-in this is the whole choice: start a team, or join the one that invited you.
     return [
-      heading('Create a team', null),
-      el('p', { class: 'acct-sub' }, 'A team shares one board on ', hostTag(s.host), '. You can invite people next.'),
+      heading('Create or join a team', null),
+      el('p', { class: 'acct-sub' }, 'A team shares one board on ', hostTag(s.host), '. Start your own and invite people next.'),
       form({
         fields: field('Team name', input({ name: 'name', type: 'text', maxlength: '60', placeholder: 'e.g. Bondly', required: true, autofocus: true })),
         submit: 'Create team', busy: 'Creating…',
         fn: (v) => api.createTeam(v.name),
       }),
-      el('p', { class: 'acct-foot' }, 'Joining someone else’s team? ', link('Use your invite', () => api.go('join'))),
+      el('section', { class: 'acct-section' }, el('h2', {}, 'Joining a team?'),
+        el('p', { class: 'acct-hint' }, 'Paste the invite link you were sent, or type its 8-letter code.'),
+        el('div', { class: 'acct-actions acct-actions-left' }, el('button', { type: 'button', class: 'btn', onclick: () => api.go('join') }, 'Join with a code or link'))),
     ];
   },
 

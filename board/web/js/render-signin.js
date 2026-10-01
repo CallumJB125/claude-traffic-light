@@ -64,7 +64,7 @@ export function noTeamScreen({ invites = [], onboard = {} }) {
         err('create')),
       h('section', { class: 'signin-section', 'aria-labelledby': 'noteam-join' },
         h('h2', { id: 'noteam-join' }, 'Join with a code or invite link'),
-        h('p', { class: 'hint' }, 'Paste the link from your invite email, or type its 8-letter code.'),
+        h('p', { class: 'hint' }, 'Paste the invite link you were sent, or type its 8-letter code.'),
         h('form', { class: 'signin-row', 'data-form': 'join-team' },
           h('label', { class: 'sr-only', for: 'join-input' }, 'Invite link or code'),
           h('input', { id: 'join-input', name: 'invite', class: 'input', placeholder: 'ABCD-EFGH or the link', autocomplete: 'off', spellcheck: 'false', required: true }),
