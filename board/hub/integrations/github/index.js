@@ -100,7 +100,8 @@ function cardFor(ctx, f, mode) {
   // Evidence that names no repo is bound to the card's own repo, which only
   // the registry knows: it refuses the relink if f.url is another repo.
   const verified = !!v && v.number === f.number && (!v.repo || v.repo.toLowerCase() === String(f.repo).toLowerCase());
-  const ended = ['closed', 'merged'].includes(ctx.linkStatusFor(b.card, 'pr')?.state);
+  // A merged PR is final for its card: only the verified PR may replace it.
+  const ended = ctx.linkStatusFor(b.card, 'pr')?.state === 'closed';
   if (mode === 'verified') return verified ? { card: b.card, linked: false, relink: have } : null;
   return verified || ended ? { card: b.card, linked: false, relink: have } : null;
 }
@@ -113,14 +114,18 @@ const SLOT_ANSWERS = new Set(['CONFLICT', 'NOT_FOUND', 'VALIDATION']);
 async function linkAndStatus(ctx, f, status, mode = null) {
   const hit = cardFor(ctx, f, mode);
   if (!hit) return null;
+  // Only the slot call's own refusal is an answer: a failure after it (the
+  // status write) must throw, or a relinked merge would be marked done unapplied.
+  let slotted = hit.linked;
   try {
     await ctx.act(hit.linked ? 'pr.status' : 'pr.link', { external_ref: f.pr_id, detail: { pr: f.number } }, async (s) => {
       if (hit.relink) s.relink(hit.card, 'pr', hit.relink, f.pr_id, f.url);
       else if (!hit.linked) s.link(hit.card, 'pr', f.pr_id, f.url);
+      slotted = true;
       s.linkStatus(hit.card, 'pr', f.pr_id, status);
     });
   } catch (e) {
-    if (!hit.linked && (e?.code === 'CONFLICT' || (hit.relink && SLOT_ANSWERS.has(e?.code)))) return null;
+    if (!slotted && (e?.code === 'CONFLICT' || (hit.relink && SLOT_ANSWERS.has(e?.code)))) return null;
     throw e;
   }
   return hit;
@@ -166,7 +171,12 @@ export async function apply(ctx, facts) {
           // describes the old head, and must not mark the new one passing.
           const card = typeof ctx.linkStatusFor === 'function' ? ctx.linked('pr', pr.pr_id) : null;
           const head = card ? ctx.linkStatusFor(card, 'pr')?.head_sha : null;
-          if (head && head !== f.head_sha) continue;
+          if (head && head !== f.head_sha) {
+            // Older or newer head, it can't tell (a synchronize may have been
+            // lost): never leave a passing it can't confirm on the card.
+            if (f.checks !== 'success') await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: 'pending' });
+            continue;
+          }
           await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
         }
         break;

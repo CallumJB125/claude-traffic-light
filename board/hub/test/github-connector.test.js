@@ -435,3 +435,23 @@ test('N3: every system event names the PR\'s repo, so bare #N evidence is checke
   await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed', merged: true }), repository: nameless });
   assert.equal(events.length, 2, 'a delivery with no repo name raises nothing');
 });
+
+test('L3: a failing suite for a head the connector did not see never leaves passing on the card', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  await run(ctx, 'check_suite', suite('success'));
+  assert.equal(ctx.linkStatusFor('card-12', 'pr').checks, 'passing');
+  // The synchronize to the new head was lost; its suite fails.
+  await run(ctx, 'check_suite', suite('failure', 'c'.repeat(40)));
+  assert.equal(ctx.linkStatusFor('card-12', 'pr').checks, 'pending');
+});
+
+test('L1: a merged PR is final for its card; only the verified PR could replace it', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed', merged: true, merged_by: { login: 'tonde' } }), repository: repo });
+  ctx.calls.length = 0;
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' }), repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null);
+  assert.ok(!ctx.calls.some((c) => c[0] === 'relink'));
+});
