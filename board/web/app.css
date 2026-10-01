@@ -5,6 +5,9 @@
    the widget's rhythm: a lamp that is green by both hub and browser breathes,
    amber holds, red blinks three times and holds. */
 
+/* Author styles must preserve the native hidden state of invite and sign-in controls. */
+[hidden] { display: none !important; }
+
 :root {
   color-scheme: dark;
 
