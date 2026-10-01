@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { branchName } from '../../shared/fence.js';
 import { cardView } from '../views.js';
 import fake from '../integrations/fake/index.js';
@@ -215,6 +215,42 @@ test('cardView: pr_link_status is the newest pr link\'s status (additive; pr is 
   } finally { await h.close(); }
 });
 
+test('linkStatus head_sha: 40 lowercase hex round-trips through linkStatusFor, anything else is dropped, cardView never shows it', async () => {
+  const { h, reg, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const r = addRun(h, { key: 'BDL-24', fence: 1 });
+    const sha = (s) => createHash('sha1').update(s).digest('hex');
+    const [head1, head2] = [sha('head-1'), sha('head-2')];
+    const set = (st) => ctx.act('card.create', {}, async (s) => s.linkStatus(r.cardId, 'pr', 'PR-9', st));
+    assert.equal(ctx.linkStatusFor(r.cardId, 'pr'), null);
+    await ctx.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-9'));
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9' });
+    await set({ state: 'open', head_sha: head1 });
+    await set({ checks: 'pending' });
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9', state: 'open', checks: 'pending', head_sha: head1 }, 'a partial keeps the stored head');
+    // A synchronize moves the head; a bad head is dropped without touching the stored one.
+    await set({ head_sha: head2 });
+    for (const bad of [head1.toUpperCase(), head1.slice(1), `${head1}0`, ` ${head1.slice(1)}`, `g${head1.slice(1)}`, 42, null, { sha: head1 }, [head1]]) {
+      await set({ checks: 'passing', head_sha: bad });
+      await assert.rejects(set({ head_sha: bad }), (e) => e.code === 'VALIDATION', JSON.stringify(bad));
+    }
+    assert.deepEqual(ctx.linkStatusFor(r.cardId, 'pr'), { external_id: 'PR-9', state: 'open', checks: 'passing', head_sha: head2 });
+    // The card face and its broadcast never carry it.
+    const view = cardView(h.hub, h.hub.card(r.cardId), h.ids.alice);
+    assert.deepEqual(view.pr_link_status, { state: 'open', checks: 'passing', review: null });
+    assert.ok(!JSON.stringify(view).includes(head2));
+    // Scoped like linkedByCard: another connection, another org's card, another kind read null.
+    const second = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'fake', external_id: 'fake-workspace-2', secrets: {} });
+    assert.equal(reg.ctxFor(second.id).linkStatusFor(r.cardId, 'pr'), null);
+    assert.equal(ctx.linkStatusFor(r.cardId, 'issue'), null);
+    const o = addOrg(h);
+    const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-12', fence: 1 });
+    // (A row naming it cannot even be written: migration 017.)
+    assert.equal(ctx.linkStatusFor(theirs.cardId, 'pr'), null);
+  } finally { await h.close(); }
+});
+
 // ── PR events are bound to the hub-verified PR ──────────────────────────────
 
 // What board_attach_evidence leaves once the hub checked the PR with GitHub.
@@ -315,7 +351,9 @@ test('L4: once the card has a verified PR, s.link(…, \'pr\', …) accepts only
     const { conn, ctx, cardId } = await inReview(h, reg, 'BDL-66');
     addEvidence(h, cardId, '#10');
     const link = (id, url) => ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', id, url));
-    for (const [id, url] of [['gh-11', 'https://github.com/acme/app/pull/11'], ['gh-12', undefined], ['#11', undefined], ['gh-10', 'https://github.com/acme/app/pull/10x']]) {
+    // The PR is named by its url (number and the card's repo); the id is never read.
+    for (const [id, url] of [['gh-11', 'https://github.com/acme/app/pull/11'], ['gh-12', undefined], ['#11', undefined], ['gh-10', 'https://github.com/acme/app/pull/10x'],
+      ['#10', undefined], ['10', undefined], ['gh-10', 'https://github.com/acme/app-mirror/pull/10'], ['gh-10', 'http://github.com/acme/app/pull/10'], ['gh-10', 'https://github.com/acme/app/pull/10?x=1']]) {
       await assert.rejects(link(id, url), (e) => e.code === 'CONFLICT', `${id} ${url}`);
     }
     assert.equal(reg.audit(conn.id)[0].error, 'conflict');
@@ -327,6 +365,42 @@ test('L4: once the card has a verified PR, s.link(…, \'pr\', …) accepts only
     const free = await inReview(h, reg, 'BDL-67');
     await ctx.act('link.pr', {}, async (s) => s.link(free.cardId, 'pr', 'gh-99'));
     assert.equal(ctx.linkedByCard(free.cardId, 'pr'), 'gh-99');
+  } finally { await h.close(); }
+});
+
+test('system.event: evidence with no repo binds to the card\'s own repo, never an alias (a mirror\'s #12 does not move the card)', async () => {
+  const { h, reg } = await setup();
+  try {
+    // An alias that is another GitHub repo: anyone who can open a PR there gets a #12.
+    h.db.run('UPDATE repos SET aliases = ? WHERE id = ?', JSON.stringify(['github.com/acme/app-mirror']), h.ids.repo);
+    const { ctx, cardId, branch, column } = await inReview(h, reg, 'BDL-65');
+    assert.equal(ctx.cardForBranch('acme/app-mirror', branch).card_id, cardId, 'the mirror maps to the card');
+    // The mirror's PR took the slot before the hub verified anything.
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-mirror-12'));
+    addEvidence(h, cardId, '#12');
+    const ev = (repo) => ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-mirror-12', pr: 12, repo, by: 'mallory' });
+    for (const repo of ['acme/app-mirror', 'github.com/acme/app-mirror', 'evil/app', null]) {
+      assert.deepEqual(await ev(repo), { done: false, reason: 'not_the_verified_pr' }, String(repo));
+    }
+    assert.equal(column(), 'in_review');
+    assert.deepEqual(ctx.verifiedPr(cardId), { number: 12, repo: 'acme/app', url: 'https://github.com/acme/app/pull/12' }, 'the card\'s repo row, never the alias');
+    assert.equal((await ev('Acme/App')).done, true, 'the card\'s own repo #12 is the verified PR');
+    assert.equal(column(), 'done');
+
+    // Evidence that names the repo binds the same way.
+    const named = await inReview(h, reg, 'BDL-66');
+    await named.ctx.act('link.pr', {}, async (s) => s.link(named.cardId, 'pr', 'gh-13'));
+    addEvidence(h, named.cardId, 'https://github.com/acme/app/pull/13');
+    assert.equal((await named.ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app-mirror' })).reason, 'not_the_verified_pr');
+    assert.equal((await named.ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app' })).done, true);
+
+    // A card with no repo (so never in a run state either): a bare '#12' binds to nothing.
+    const t = h.hub.iso();
+    const bare = randomUUID();
+    h.db.run("INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at) VALUES (?, ?, 'BDL-67', 'T', ?, ?, ?)", bare, h.ids.board, h.ids.alice, t, t);
+    addEvidence(h, bare, '#12');
+    await ctx.act('link.pr', {}, async (s) => s.link(bare, 'pr', 'gh-bare-12'));
+    assert.deepEqual(await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-bare-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'no_verified_pr' });
   } finally { await h.close(); }
 });
 
@@ -387,6 +461,117 @@ test('link: at most one live pr link per card per connection (same id is a no-op
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-10', fence: 1 });
     assert.throws(() => h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso()), /cross-team reference/);
     assert.equal(ctx.linkedByCard(theirs.cardId, 'pr'), null);
+  } finally { await h.close(); }
+});
+
+// ── relink: the one-PR-per-card slot moves to the verified PR, or off an ended one ──
+
+const prUrl = (n, repo = 'acme/app') => `https://github.com/${repo}/pull/${n}`;
+const kindsOf = (h, conn, cardId) => h.db.all('SELECT kind, external_id FROM external_links WHERE connection_id = ? AND card_id = ? ORDER BY rowid', conn.id, cardId).map((l) => `${l.kind}:${l.external_id}`);
+
+test('relink: #12 closed unmerged, then the verified #13 takes the slot and its merge moves the card (plain link stays CONFLICT)', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { conn, ctx, cardId, column } = await inReview(h, reg, 'BDL-70');
+    addEvidence(h, cardId, prUrl(12));
+    await ctx.act('link.pr', {}, async (s) => { s.link(cardId, 'pr', 'gh-12', prUrl(12)); s.linkStatus(cardId, 'pr', 'gh-12', { state: 'closed' }); });
+    // A closed link does not free plain link(): relink is the only path.
+    await assert.rejects(ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-13', prUrl(13))), (e) => e.code === 'CONFLICT');
+    addEvidence(h, cardId, prUrl(13));
+    await ctx.act('link.pr', {}, async (s) => s.relink(cardId, 'pr', 'gh-12', 'gh-13', prUrl(13)));
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-13');
+    assert.equal(ctx.linked('pr', 'gh-12'), null, 'the old PR no longer finds the card');
+    assert.deepEqual(kindsOf(h, conn, cardId), ['pr_superseded:gh-12', 'pr:gh-13'], 'the old row is kept, superseded');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-12', pr: 12, repo: 'acme/app' })).reason, 'not linked');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app' })).done, true);
+    assert.equal(column(), 'done');
+  } finally { await h.close(); }
+});
+
+test('relink: before the hub verifies a PR, only a link closed unmerged frees the slot (merged is final); after, only the verified PR takes it, ended or not', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { ctx, cardId } = await inReview(h, reg, 'BDL-71');
+    const relink = (from, to, url) => ctx.act('link.pr', {}, async (s) => s.relink(cardId, 'pr', from, to, url));
+    const status = (id, st) => ctx.act('link.pr', {}, async (s) => s.linkStatus(cardId, 'pr', id, st));
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-12'));
+    // No verified PR yet: only a link closed unmerged frees the slot. Merged is
+    // final: someone with push access opening another PR from the board branch
+    // must not take the done card's slot.
+    for (const st of [null, 'open', 'draft', 'merged']) {
+      if (st) await status('gh-12', { state: st });
+      await assert.rejects(relink('gh-12', 'gh-13', prUrl(13)), (e) => e.code === 'CONFLICT', String(st));
+    }
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-12');
+    await status('gh-12', { state: 'closed' });
+    await relink('gh-12', 'gh-13');
+    await status('gh-13', { state: 'closed' });
+    await relink('gh-13', 'gh-12', prUrl(12));
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-12', 'a PR relinked away can come back');
+    await status('gh-12', { state: 'open' });
+    addEvidence(h, cardId, '#20');
+    // No state yet, then open, draft: a non-verified PR (no url, a url naming another number or a mirror) is refused.
+    for (const st of [null, 'open', 'draft']) {
+      if (st) await status('gh-12', { state: st });
+      for (const url of [undefined, prUrl(13), prUrl(20, 'acme/app-mirror'), 'http://github.com/acme/app/pull/20', `${prUrl(20)}?x=1`, 'gh-20']) {
+        await assert.rejects(relink('gh-12', 'gh-13', url), (e) => e.code === 'CONFLICT', `${st} ${url}`);
+      }
+    }
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-12');
+    // Once the card has a verified PR, an ended link frees the slot only for it (as s.link).
+    await status('gh-12', { state: 'closed' });
+    for (const url of [undefined, prUrl(14), prUrl(20, 'acme/app-mirror'), 'http://github.com/acme/app/pull/20', `${prUrl(20)}?x=1`, 'gh-20']) {
+      await assert.rejects(relink('gh-12', 'gh-14', url), (e) => e.code === 'CONFLICT', String(url));
+    }
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-12');
+    await relink('gh-12', 'gh-20', prUrl(20));
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-20');
+    assert.deepEqual(ctx.verifiedPr(cardId), { number: 20, repo: 'acme/app', url: prUrl(20) });
+  } finally { await h.close(); }
+});
+
+test('relink: the verified #13 displaces an open squatter #12', async () => {
+  const { h, reg } = await setup();
+  try {
+    const { ctx, cardId, column } = await inReview(h, reg, 'BDL-72');
+    await ctx.act('link.pr', {}, async (s) => { s.link(cardId, 'pr', 'gh-12'); s.linkStatus(cardId, 'pr', 'gh-12', { state: 'open', checks: 'passing' }); });
+    addEvidence(h, cardId, '#13');
+    await assert.rejects(ctx.act('link.pr', {}, async (s) => s.relink(cardId, 'pr', 'gh-12', 'gh-13', prUrl(13, 'acme/app-mirror'))), (e) => e.code === 'CONFLICT', 'a bare #13 is the card\'s repo, not a mirror');
+    await ctx.act('link.pr', {}, async (s) => s.relink(cardId, 'pr', 'gh-12', 'gh-13', prUrl(13)));
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-13');
+    assert.equal(cardView(h.hub, h.hub.card(cardId), h.ids.alice).pr_link_status, null, 'the squatter\'s status left the card face');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app' })).done, true);
+    assert.equal(column(), 'done');
+  } finally { await h.close(); }
+});
+
+test('relink: another org\'s card, another connection\'s link, a stale old id, a PR on another card, a non-pr kind are refused; the same swap again is a no-op', async () => {
+  const { h, reg, conn: other } = await setup();
+  try {
+    const { conn, ctx, cardId } = await inReview(h, reg, 'BDL-73');
+    const second = await inReview(h, reg, 'BDL-74');
+    await ctx.act('link.pr', {}, async (s) => { s.link(cardId, 'pr', 'gh-12'); s.link(second.cardId, 'pr', 'gh-30'); });
+    addEvidence(h, cardId, '#13');
+    const relink = (c, card, from, to, url = prUrl(13), kind = 'pr') => reg.ctxFor(c.id).act(c === conn ? 'link.pr' : 'card.create', {}, async (s) => s.relink(card, kind, from, to, url));
+    const o = addOrg(h);
+    const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-11', fence: 1 });
+    // (A row naming it cannot even be written: migration 017.)
+    addEvidence(h, theirs.cardId, '#13');
+    await assert.rejects(relink(conn, theirs.cardId, 'gh-x', 'gh-13'), (e) => e.code === 'NOT_FOUND');
+    await assert.rejects(relink(other, cardId, 'gh-12', 'gh-13'), (e) => e.code === 'NOT_FOUND', 'another connection has no link there');
+    await assert.rejects(relink(conn, cardId, 'gh-11', 'gh-13'), (e) => e.code === 'CONFLICT', 'not the card\'s current link');
+    await assert.rejects(relink(conn, cardId, 'gh-12', 'gh-30'), (e) => e.code === 'CONFLICT', 'that PR is another card\'s');
+    await assert.rejects(relink(conn, cardId, 'gh-12', 'gh-13', prUrl(13), 'issue'), (e) => e.code === 'VALIDATION');
+    assert.deepEqual(kindsOf(h, conn, cardId), ['pr:gh-12']);
+    await relink(conn, cardId, 'gh-12', 'gh-13');
+    await relink(conn, cardId, 'gh-12', 'gh-13');
+    await relink(conn, cardId, 'gh-13', 'gh-13');
+    assert.deepEqual(kindsOf(h, conn, cardId), ['pr_superseded:gh-12', 'pr:gh-13']);
+    // Only inside act(): there is no ctx.relink and a stashed scope is dead.
+    assert.equal(ctx.relink, undefined);
+    let kept;
+    await ctx.act('link.pr', {}, async (s) => { kept = s; });
+    assert.throws(() => kept.relink(cardId, 'pr', 'gh-13', 'gh-12'), /scope has ended/);
   } finally { await h.close(); }
 });
 

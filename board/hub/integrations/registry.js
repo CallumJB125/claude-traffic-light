@@ -68,6 +68,30 @@ function canonRepo(repo) {
   if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
   return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
 }
+// Only a link closed without merging frees the card's PR slot for relink(). A
+// merged one is final: otherwise anyone with push access could open another PR
+// from the board branch after the merge and take the done card's status. A
+// closed one can be reopened, and if it is the card's verified PR, relink()
+// takes the slot back for it.
+const PR_ENDED = new Set(['closed']);
+// {number, repo: canonical} from an https '<repo>/pull/<n>' URL, else null.
+function prOfUrl(url) {
+  const u = typeof url === 'string' ? url.trim() : '';
+  const at = u.lastIndexOf('/pull/');
+  const number = prNumberOf(u);
+  if (!/^https:\/\//i.test(u) || at === -1 || number == null) return null;
+  const repo = normalizeRemoteUrl(u.slice(0, at));
+  return repo ? { number, repo } : null;
+}
+const HEAD_SHA = /^[0-9a-f]{40}$/;
+// A link's stored status: the card-face keys (cleanLinkStatus) plus the PR
+// head_sha, which only the connector reads back (to drop a check suite for
+// an older head); cardView never shows it.
+function cleanStatus(v) {
+  const out = cleanLinkStatus(v);
+  if (isPlainObject(v) && typeof v.head_sha === 'string' && HEAD_SHA.test(v.head_sha)) out.head_sha = v.head_sha;
+  return out;
+}
 const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
@@ -414,6 +438,14 @@ export function createIntegrations({
       ? db.get('SELECT external_id FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind))?.external_id ?? null
       : null);
 
+    // The newest link of `kind` this connection has on a card of its org, with
+    // its stored status: {external_id, state?, checks?, review?, head_sha?} | null.
+    function linkStatusFor(cardId, kind) {
+      if (!cardInOrg(cardId)) return null;
+      const l = db.get('SELECT external_id, status FROM external_links WHERE connection_id = ? AND card_id = ? AND kind = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', c.id, cardId, String(kind));
+      return l ? { external_id: l.external_id, ...cleanStatus(safeJson(l.status, null)) } : null;
+    }
+
     /**
      * The card's newest hub_verified PR evidence (what the merge poll acts
      * on): {number, repo, url} | null. The number is the one the hub checked;
@@ -430,6 +462,27 @@ export function createIntegrations({
       return { number, repo: shortRepo(canon), url: `https://${canon}/pull/${number}` };
     }
 
+    // Why PR `prN` in `repo` is not the card's verified PR, or null when it is.
+    function notVerified(cardId, prN, repo) {
+      const v = verifiedPr(cardId);
+      if (!v) return 'no_verified_pr';
+      if (prN !== v.number) return 'not_the_verified_pr';
+      // v.repo is the card's own repo row, never one of its aliases (an alias
+      // may be another GitHub repo, a mirror where anyone can open a PR #12).
+      const want = canonRepo(v.repo);
+      if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
+      return null;
+    }
+
+    // Once the hub verified the card's PR, its pr slot takes only that PR,
+    // named by `url` (number and repo; the external id is never read, it
+    // could be anything): the one rule for link() and relink().
+    const slotTakes = (cardId, url) => {
+      if (!verifiedPr(cardId)) return true;
+      const pr = prOfUrl(url);
+      return !!pr && !notVerified(cardId, pr.number, pr.repo);
+    };
+
     function link(cardId, kind, externalId, url = null) {
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       // One PR per card per connection: a second one (a decoy from the same
@@ -437,14 +490,46 @@ export function createIntegrations({
       if (String(kind) === 'pr') {
         const have = linkedByCard(cardId, 'pr');
         if (have === String(externalId)) return;
-        // Once the hub verified the card's PR, no other PR takes the slot (the
-        // number comes from the PR url, else the id; no number is a refusal).
-        const v = verifiedPr(cardId);
-        if (v && (prNumberOf(url) ?? prNumberOf(externalId)) !== v.number) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
+        if (!slotTakes(cardId, url)) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
         if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
       }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         cardId, c.id, String(kind), String(externalId), url == null ? null : String(url).slice(0, 500), now());
+    }
+
+    /**
+     * Swap the card's one pr link from `oldExternalId` to `newExternalId`:
+     * once the card has a verified PR, only to it (slotTakes); before that,
+     * only off a link whose state is one of PR_ENDED. The old row stays, as
+     * kind 'pr_superseded', with its status.
+     */
+    function relink(cardId, kind, oldExternalId, newExternalId, url = null) {
+      if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      if (String(kind) !== 'pr') throw new HubError('VALIDATION', 'only a pr link is relinked');
+      const from = String(oldExternalId);
+      const to = String(newExternalId);
+      const changed = hub.txn(() => {
+        const have = linkedByCard(cardId, 'pr');
+        if (have === to) return false;
+        if (have == null) throw new HubError('NOT_FOUND', 'this integration has no PR linked on that card');
+        if (have !== from) throw new HubError('CONFLICT', 'the card\'s PR link is not that one');
+        if (db.get("SELECT 1 AS x FROM external_links WHERE connection_id = ? AND kind = 'pr' AND external_id = ?", c.id, to)) {
+          throw new HubError('CONFLICT', 'that PR is linked to another card');
+        }
+        const old = db.get("SELECT status FROM external_links WHERE connection_id = ? AND kind = 'pr' AND external_id = ? AND card_id = ?", c.id, from, cardId);
+        if (verifiedPr(cardId)) {
+          if (!slotTakes(cardId, url)) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
+        } else if (!PR_ENDED.has(cleanLinkStatus(safeJson(old.status, null)).state)) {
+          throw new HubError('CONFLICT', 'the linked PR has not ended and the card has no verified PR');
+        }
+        // One superseded row per external id: a PR relinked away twice keeps its latest.
+        db.run("DELETE FROM external_links WHERE connection_id = ? AND kind = 'pr_superseded' AND external_id = ?", c.id, from);
+        db.run("UPDATE external_links SET kind = 'pr_superseded' WHERE connection_id = ? AND kind = 'pr' AND external_id = ? AND card_id = ?", c.id, from, cardId);
+        db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, 'pr', ?, ?, ?)",
+          cardId, c.id, to, url == null ? null : String(url).slice(0, 500), now());
+        return true;
+      });
+      if (changed) hub.later(() => hub.broadcastCard(cardId));
     }
 
     // Partial updates merge: a PR event knows the state, a check suite the
@@ -453,9 +538,9 @@ export function createIntegrations({
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
       if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
-      const next = cleanLinkStatus(patch);
+      const next = cleanStatus(patch);
       if (!Object.keys(next).length) throw new HubError('VALIDATION', 'no valid status field');
-      const merged = JSON.stringify({ ...cleanLinkStatus(safeJson(link.status, null)), ...next });
+      const merged = JSON.stringify({ ...cleanStatus(safeJson(link.status, null)), ...next });
       if (Buffer.byteLength(merged) > LINK_STATUS_MAX) throw new HubError('VALIDATION', 'status over 512 bytes');
       db.run('UPDATE external_links SET status = ? WHERE connection_id = ? AND kind = ? AND external_id = ?', merged, c.id, String(kind), String(externalId));
       hub.later(() => hub.broadcastCard(cardId));
@@ -474,7 +559,7 @@ export function createIntegrations({
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
-     * ({actAs, link, linkStatus}) and every handle actAs returns work only while run()
+     * ({actAs, link, relink, linkStatus}) and every handle actAs returns work only while run()
      * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
@@ -496,7 +581,9 @@ export function createIntegrations({
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), linkStatus: guard(linkStatus) };
+      const scope = {
+        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+      };
       let decision = 'failed';
       let error = 'handler_failed';
       try {
@@ -543,16 +630,7 @@ export function createIntegrations({
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
       // the card's review.
-      const refusal = () => {
-        const v = verifiedPr(card.id);
-        if (!v) return 'no_verified_pr';
-        if (prN !== v.number) return 'not_the_verified_pr';
-        if (v.repo) {
-          const want = canonRepo(v.repo);
-          if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
-        }
-        return null;
-      };
+      const refusal = () => notVerified(card.id, prN, repo);
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
@@ -583,6 +661,7 @@ export function createIntegrations({
       cardForBranch,
       verifiedPr,
       linkedByCard,
+      linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
