@@ -202,8 +202,8 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
   const skipped = new DatabaseSync(':memory:');
-  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8) });
-  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 13/);
+  migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version <= 13) });
+  assert.throws(() => migrate(skipped, { migrations: all.filter((m) => m.version <= 13) }), /008_integrations rebuilds tables and cannot be applied after version 13/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
   assert.deepEqual(triggers(skipped), want);
   skipped.close();
