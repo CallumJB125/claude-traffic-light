@@ -4,19 +4,24 @@
 // main passes the actions in and adds the widget-only items around it.
 // `popOuts`: page ids whose menu entry opens a small pop-out instead of the
 // page (Usage); the sidebar still opens the page itself.
+// `whileSoon`: page id → opener, used only while the registry still marks the
+// page 'soon' (Tasks has its own window before its sidebar entry is wired).
 'use strict';
 
 const ACCELERATORS = Object.freeze({ lights: 'CmdOrCtrl+L', settings: 'CmdOrCtrl+,' });
 
 // Where "Something's off / Idea…" slots in once a feedback window exists.
 // `feedback`: an item ({label, click}) or null.
-function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl+B', feedback = null, popOuts = {} }) {
+function appItems({ pages, groups, open, openLabel, openAccelerator = 'CmdOrCtrl+B', feedback = null, popOuts = {}, whileSoon = {} }) {
   const out = [{ label: openLabel, accelerator: openAccelerator, click: () => open() }, { type: 'separator' }];
   for (const g of groups) {
     const ps = pages.filter((p) => p.group === g.id);
     if (!ps.length) continue;
     for (const p of ps) {
-      if (p.kind === 'soon') { out.push({ label: `Open ${p.title}… (soon)`, enabled: false }); continue; }
+      if (p.kind === 'soon') {
+        out.push(whileSoon[p.id] ? { label: `Open ${p.title}…`, click: () => whileSoon[p.id]() } : { label: `Open ${p.title}… (soon)`, enabled: false });
+        continue;
+      }
       const item = { label: `Open ${p.title}…`, click: () => (popOuts[p.id] || (() => open(p.id)))() };
       if (ACCELERATORS[p.id]) item.accelerator = ACCELERATORS[p.id];
       out.push(item);
