@@ -27,6 +27,7 @@ import { cardView, leaseView, labelDef } from './views.js';
 import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
+import { TaskOwnership } from './ownership.js';
 
 const TICK_EVERY_MS = 5_000;          // lease.tick heartbeat when nothing changed
 const REQUEST_CACHE_MS = 10 * 60_000; // D8
@@ -76,6 +77,7 @@ export class Hub extends EventEmitter {
       },
     });
     this.presence = new Presence(this);   // D37b, memory only
+    this.ownership = new TaskOwnership(this);
   }
 
   // ── clocks ────────────────────────────────────────────────────────────────
@@ -448,6 +450,7 @@ export class Hub extends EventEmitter {
         this.db.run("UPDATE asks SET state = 'cancelled' WHERE run_id = ? AND state = 'open' AND ? != 'parked'", runId, e.reason);
         this.db.run("UPDATE permission_requests SET state = ? WHERE run_id = ? AND state = 'open'", e.reason === 'parked' ? 'parked' : 'cancelled', runId);
         this.live.delete(runId);
+        this.ownership.live.delete(runId);
         this.scheduleOverlap(row.repo_id, 0);
         break;
       }
@@ -543,6 +546,7 @@ export class Hub extends EventEmitter {
       branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), started_at: this.iso(),
       seeded_from_handover: seed.handover_version ?? null,
     });
+    this.ownership.register(this.run(id), row, { known: true });
     this.db.run("UPDATE dispatches SET state = 'claimed', run_id = ? WHERE request_id = ?", id, d.request_id);
     this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id, ai: aiOfDispatch(d), budget_cents: this.run(id).budget_cents } });
     this.db.run('UPDATE cards SET active_run_id = ? WHERE id = ?', id, row.id);
@@ -824,6 +828,7 @@ export class Hub extends EventEmitter {
     if (!lm) { lm = { hb_mono: null, child_alive: null, tool: null, activity_mono: null, wake_mono: null, runner_wake_mono: null }; this.live.set(runId, lm); }
     lm.hb_mono = rx;
     lm.child_alive = rhb.child_alive === true;
+    lm.read_only = rhb.read_only === true;
     const t = rhb.tool_in_flight;
     lm.tool = t ? { name: t.name, summary: t.summary ?? null, bash_timeout_ms: t.bash_timeout_ms ?? null, since_mono: rx - (t.age_ms ?? 0) } : null;
     if (Number.isFinite(rhb.last_activity_age_ms)) {

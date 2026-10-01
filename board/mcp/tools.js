@@ -183,17 +183,17 @@ Before calling: the acceptance criteria are met, your work is pushed, evidence i
     title: 'Declare plan',
     input: z.object({
       summary: text(1000, 'summary').describe('What you intend to change, in a sentence or two.'),
-      paths: z.array(repoPath).min(1).max(200).describe('Repo-relative files or globs you expect to edit, e.g. ["src/api/**", "package.json"].'),
+      paths: z.array(repoPath).max(200).describe('Repo-relative files or globs you expect to edit, e.g. ["src/api/**", "package.json"]. Empty releases your path intent.'),
       areas: z.array(z.string().trim().min(1).max(100)).max(20).optional().describe('Optional feature areas, e.g. ["auth", "billing"].'),
     }).strict(),
-    description: `Tell the board which files you intend to change, right after reading the card and before editing. Returns {overlaps}: other live runs in this repo touching the same or adjacent files. If there are overlaps, avoid them, coordinate with a comment, or ask a human. Declare again if your plan changes materially.`,
+    description: `Tell the board which files you intend to change, right after reading the card and before editing. Returns overlaps and advisory ownership intents. Live editing ownership requires recorded edit authorization and a current child heartbeat; planned or expired intent is not a filesystem lock or permission. If paths overlap, coordinate with a task message or ask a human. Declare again if your plan changes materially; empty paths release intent.`,
   },
 
   board_check_overlap: {
     title: 'Check overlaps',
     input: z.object({}).strict(),
     annotations: RO,
-    description: 'List other live runs in this repository whose planned or touched files overlap yours (card key, whose agent, overlapping/adjacent, paths). Check before a large edit or before pushing.',
+    description: 'List overlaps and bounded advisory path ownership for this exact team repository. Editing, planned and awaiting-review states are distinct; expired or idle records do not grant execution or a global filesystem lock. Check before a large edit or before pushing.',
   },
 
   board_recall: {

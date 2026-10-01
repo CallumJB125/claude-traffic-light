@@ -268,6 +268,7 @@ export class Run {
     return {
       run_id: this.run_id, card_id: this.card_id, fence: this.fence,
       child_alive: !!this.backend?.alive(),
+      read_only: this.readOnly === true,
       tool_in_flight: t ? { name: t.name, summary: t.summary, age_ms: Math.round(now - t.mono), ...(t.bash_timeout_ms ? { bash_timeout_ms: t.bash_timeout_ms } : {}) } : null,
       last_activity_age_ms: this.lastActivityMono == null ? null : Math.round(now - this.lastActivityMono),
       cost_usd: this.costUsd,
@@ -963,8 +964,14 @@ export class Run {
   // Paths, reasons and owner names in overlap results come from other runs
   // and members: data, enveloped like card text.
   #wrapOverlaps(r) {
+    const ownership = (p) => p && ({ ...p,
+      ...(p.author ? { author: { ...p.author, name: this.#wrap(`ownership:${p.card_id} participant`, p.author.name) } } : {}),
+      paths: (p.paths ?? []).map((s) => this.#wrap(`ownership:${p.card_id} reported path`, s)) });
     return {
       ...r,
+      ...(r.ownership ? { ownership: ownership(r.ownership) } : {}),
+      ...(r.ownership_intents ? { ownership_intents: r.ownership_intents.map(ownership) } : {}),
+      ...(r.ownership_overlaps ? { ownership_overlaps: r.ownership_overlaps.map(ownership) } : {}),
       overlaps: (r?.overlaps ?? []).map((o) => {
         const w = (what, s) => (typeof s === 'string' ? this.#wrap(`overlap:${o.other_key ?? 'card'} ${what}`, s) : s);
         return {
@@ -1047,7 +1054,10 @@ export class Run {
       }
       case 'board_declare_plan': {
         const paths = (args.paths ?? []).map((p) => filterPath(String(p), this.worktree)).filter((p) => p && p !== '.');
-        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths, ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
+        const current = await this.sup.rpc(this, 'board_check_overlap', {});
+        return this.#wrapOverlaps(await this.sup.rpc(this, 'board_declare_plan', { summary: this.#text(args.summary, 1000), paths,
+          ...(current.ownership?.generation ? { ownership_generation: current.ownership.generation } : {}),
+          ...(args.areas ? { areas: args.areas.map((a) => this.#text(a, 100)) } : {}) }));
       }
       case 'board_check_overlap': return this.#wrapOverlaps(await this.sup.rpc(this, 'board_check_overlap', {}));
       case 'board_recall': {

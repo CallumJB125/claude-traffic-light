@@ -405,6 +405,7 @@ export class RunnerConn {
     const res = hub.apply(row.id, { type: 'hb', fence: r.fence }, { device: hub.device(this.device_id) });
     if (!res.ok && res.error.code === 'FENCED') return no('FENCED');
     const after = hub.card(row.id);
+    if (res.ok) hub.ownership.heartbeat(run, after, this, r, rx);
     return { run_id: run.id, fence: after.fence, current: true, state: after.run_state };
   }
 

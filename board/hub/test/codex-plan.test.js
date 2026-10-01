@@ -19,7 +19,7 @@ test('only declared Codex plan creates one reserved explicit human permission; t
   assert.equal(declared.ok, true); const id = declared.result.plan_permission_request_id;
   const pr = h.db.get('SELECT * FROM permission_requests WHERE id = ?', id);
   assert.equal(pr.tool, CODEX_PLAN_PERMISSION); assert.match(pr.input_summary, /Fix the scoped API/); assert.match(pr.input_summary, /src\/a.js/);
-  assert.equal((await runner.rpc(run, 'board_declare_plan', { paths: ['src/b.js'] })).result.plan_permission_request_id, id);
+  assert.equal((await runner.rpc(run, 'board_declare_plan', { paths: ['src/b.js'], ownership_generation: declared.result.ownership.generation })).result.plan_permission_request_id, id);
   assert.equal(h.db.get('SELECT count(*) AS n FROM permission_requests WHERE run_id = ?', run.run_id).n, 1);
   const ask = await runner.rpc(run, 'board_ask_human', { kind: 'question', text: 'Should I continue?' });
   assert.equal((await h.action(alice, run.card_id, 'answer', { ask_id: ask.result.ask_id, answer: 'YES APPROVED' })).status, 200);

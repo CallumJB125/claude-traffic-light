@@ -209,7 +209,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 40]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 40]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -224,7 +224,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 40]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 40]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
@@ -295,7 +295,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
     INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('ba','oa','A','AAA'), ('bb','ob','B','BBB');
     INSERT INTO cards (id, board_id, key, title, labels, created_by, created_at, updated_at) VALUES ('ca','ba','AAA-1','a','["bug"]','ma','${NOW}','${NOW}');
   `);
-  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 40]);
+  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 40]);
   assert.deepEqual({ ...at17.prepare('SELECT labels, cover, archived_at, archived_by FROM cards').get() }, { labels: '["bug"]', cover: null, archived_at: null, archived_by: null }, 'existing cards untouched');
   assert.deepEqual(at17.prepare('PRAGMA foreign_key_check').all(), []);
   const fresh = new DatabaseSync(':memory:');
@@ -324,7 +324,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
 
 test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S2b/S2c); a later 020/021 still applies after it', () => {
   const all = loadMigrations();
-  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 40], '020, 021, 024, 027, 030, 038, 039 are reserved, not shipped here');
+  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 40], '020, 021, 024, 027, 030, 039 are reserved, not shipped here');
   const NOW = '2026-09-30T10:00:00.000Z';
   const db = new DatabaseSync(':memory:');
   migrate(db, { migrations: all.filter((m) => m.version <= 19) });
@@ -333,7 +333,7 @@ test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}'), ('mb','ob',2,'b','b@x.io','B','owner','${NOW}');
     INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at, settings) VALUES ('ka','oa','slack','T1','ma','${NOW}','{"pinned":{"app_id":"A1"}}');
   `);
-  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 40]);
+  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 40]);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   const pend = (id, org = 'oa', member = 'ma') => db.prepare("INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, 'slack', ?, ?, ?)").run(id, org, member, NOW, '2026-09-30T11:00:00.000Z');
   assert.throws(() => pend('p0', 'oa', 'mb'), /cross-team reference/);
