@@ -453,3 +453,29 @@ test('app: an accounts hub refuses a placeholder BOARD_ENC_KEY / BOARD_ENC_KEY_P
     }
   }
 });
+
+test('BOARD_SECRET and BOARD_SIGNUP_ALLOW leave process.env once read and never show in a dump of the config; a plain env object is left alone', async () => {
+  const { inspect } = await import('node:util');
+  const secret = randomBytes(48).toString('base64');
+  const allow = `domain:${randomBytes(4).toString('hex')}.test`;
+  const keep = { ...process.env };
+  try {
+    Object.assign(process.env, { BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_SIGNUP_ALLOW: allow, BOARD_ACCOUNTS_DEV: '1' });
+    const cfg = loadConfig(process.env);
+    assert.equal(process.env.BOARD_SECRET, undefined);
+    assert.equal(process.env.BOARD_SIGNUP_ALLOW, undefined);
+    assert.equal(cfg.secret, secret);
+    assert.equal(cfg.signupAllow, allow);
+    const dumps = [JSON.stringify(cfg), inspect(cfg), JSON.stringify({ ...cfg }), Object.keys(cfg).join(',')].join('\n');
+    assert.ok(!dumps.includes(secret) && !dumps.includes(allow), 'not in a dump');
+    assert.ok(!Object.keys(cfg).includes('secret') && !Object.keys(cfg).includes('signupAllow'));
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
+    Object.assign(process.env, keep);
+  }
+  // Pure for any other env object: it reads from it and deletes nothing from it.
+  const env = { BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_SIGNUP_ALLOW: allow, BOARD_ACCOUNTS_DEV: '1' };
+  assert.equal(loadConfig(env).secret, secret);
+  assert.equal(env.BOARD_SECRET, secret);
+  assert.equal(env.BOARD_SIGNUP_ALLOW, allow);
+});

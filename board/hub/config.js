@@ -35,7 +35,6 @@ export function loadConfig(env = process.env) {
     auth,
     accessTeam: env.BOARD_ACCESS_TEAM || null,
     accessAud: env.BOARD_ACCESS_AUD || null,
-    secret: env.BOARD_SECRET || null,
     publicUrl: env.BOARD_PUBLIC_URL || null,
     trustCfIp: flag(env.BOARD_TRUST_CF_IP),
     resendApiKey: env.BOARD_RESEND_API_KEY || null,
@@ -79,9 +78,15 @@ export function loadConfig(env = process.env) {
     sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
     sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
     sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
+    secret: hidden(env.BOARD_SECRET || null),
     // Who may sign up is the operator's business: never in a log line or a dump of the config.
     signupAllow: hidden(env.BOARD_SIGNUP_ALLOW || null),
   });
+  // Only from the real environment (nothing started later inherits them); a test's env object stays as given.
+  if (env === process.env) {
+    delete env.BOARD_SECRET;
+    delete env.BOARD_SIGNUP_ALLOW;
+  }
   delete env.BOARD_SES_SECRET_ACCESS_KEY;
   delete env.BOARD_SES_SESSION_TOKEN;
   delete env.BOARD_LOCAL_SECRET;
