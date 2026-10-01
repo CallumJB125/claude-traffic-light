@@ -54,6 +54,7 @@ const ROUTES = {
   nativeMessages: ['GET', '/api/cards/:card/messages'],
   nativeSendMessage: ['POST', '/api/cards/:card/messages'],
   captureRoutes: ['GET', '/api/work-capture/routes'],
+  myDay: ['GET', '/api/my-day'],
   captureWork: ['POST', '/api/boards/:board/work-capture'],
 };
 
@@ -393,6 +394,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     },
     getTeam: (team) => call('team', { params: { team } }),
     captureRoutes: () => call('captureRoutes'),
+    myDay: () => call('myDay'),
     captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.

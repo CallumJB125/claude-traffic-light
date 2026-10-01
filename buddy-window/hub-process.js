@@ -205,6 +205,15 @@ function createHubSupervisor(opts) {
 
   return {
     mode,
+    launchCurrent: current => !disposed && state === 'ready' && info === current,
+    async myDay() {
+      if (mode !== 'local' || disposed) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}` };
+      const result = await fetchImpl(`${current.url}/api/my-day`, { headers, signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return result.ok && info === current && !disposed ? { ok: true, ...value } : { ok: false };
+    },
     // Main-only automatic work reports use this launch's real local cookie.
     // The destination is the embedded personal board, never a renderer URL.
     async captureWork(body) {

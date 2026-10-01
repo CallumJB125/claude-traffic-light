@@ -27,6 +27,7 @@ const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
 const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
 const { createWorkCapture } = require('../src/work-capture');
+const { createMyDayBroker } = require('../src/my-day-broker');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -227,6 +228,43 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     },
   });
 
+  const myDayBroker = createMyDayBroker({
+    async sources() {
+      const sources = store.hubs().map(origin => {
+        const marker = vault(origin).load(), userId = marker?.user?.id;
+        const knownUser = typeof userId === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(userId);
+        const current = () => store.hubs().includes(origin) && vault(origin).load() === marker && userOf(origin)?.id === userId;
+        return { name: hostOf(origin), userId, current, read: () => marker && knownUser ? clientFor(origin).myDay() : Promise.resolve({ ok: false }),
+          async open(row, fresh) {
+            // Team is looked up from the current server-verified membership, not a renderer argument.
+            const target = store.list().find(w => w.kind === 'team' && w.hub === origin && w.teamId === row.team_id);
+            if (!target || !fresh()) return false;
+            switchWorkspace(target.id, { show: false }); selected = 'board'; flow.leftAccountPages();
+            await showHubPage(pageById('board'));
+            if (!fresh() || !hubView || hubInfo?.origin !== origin || hubInfo.org !== target.teamId) return false;
+            const url = new URL(hubPageUrl(origin, pageById('board'), { org: target.teamId }));
+            url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
+            await hubView.webContents.loadURL(url.href); // privacy-flow: team-hub-account
+            pushState(); return fresh();
+          } };
+      });
+      const launch = await supervisor.ensure().catch(() => null);
+      const localCurrent = () => !launch || supervisor.launchCurrent(launch);
+      sources.unshift({ name: 'My board (this Mac)', current: localCurrent, read: () => launch ? supervisor.myDay() : Promise.resolve({ ok: false }),
+        async open(row, fresh) {
+          if (!fresh()) return false;
+          switchWorkspace('local', { show: false }); selected = 'board'; flow.leftAccountPages();
+          await showHubPage(pageById('board'));
+          if (!fresh() || !hubView || hubInfo?.team || hubInfo?.url !== launch.url) return false;
+          const url = new URL(hubPageUrl(launch.url, pageById('board')));
+          url.searchParams.set('board', row.board_id); url.hash = `card=${encodeURIComponent(row.card?.id ?? row.card_id)}`;
+          await hubView.webContents.loadURL(url.href); // privacy-flow: local-board-hub
+          pushState(); return fresh();
+        } });
+      return sources;
+    },
+  });
+
   // A page with a localScreen is the account page's explainer while the local board is active, not a hub page.
   const isHubPage = (id) => { const p = pageById(id); return p?.kind === 'hub' && !(p.localScreen && !getTeamHub()); };
 
@@ -276,6 +314,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   }
 
   function pushState() {
+    const myDayPage = localViews.get('myday')?.webContents;
+    if (myDayPage && !myDayPage.isDestroyed()) myDayPage.send('myday:changed');
     if (!sidebar || sidebar.webContents.isDestroyed()) return;
     const team = getTeamHub();
     sidebar.webContents.send('buddy:state', {
@@ -827,6 +867,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   return {
     open,
+    myDay: () => myDayBroker.snapshot(),
+    openMyDayCard: handle => myDayBroker.open(handle),
     // Account client stays in main. The broker checks the sealed grant's
     // owner on every request and never sends this object to a renderer.
     nativeBoardContext(workspaceId) {
