@@ -94,6 +94,7 @@
     translocated: { text: (n) => `Move ${n} to Applications, then open it again.`, tone: 'error', retry: false },
     'not-writable': { text: (n) => `${n} can't replace itself in this folder. Move it to Applications or check permissions.`, tone: 'error', retry: false },
     'disk-full': { text: () => 'Not enough disk space to download the update.', tone: 'error', retry: true },
+    portable: { text: () => `A new version is available. Download the latest portable copy from ${Brand.urls.download}, quit Plexiform, and replace this executable.`, tone: 'info', retry: false },
     server: { text: () => 'The update server had a problem. Try again in a moment.', tone: 'error', retry: true, showDetail: true },
     unknown: { text: () => 'Something went wrong while updating.', tone: 'error', retry: true, showDetail: true },
     'install-stalled': { text: (n) => `The update didn't finish installing. Try again, or restart ${n}.`, tone: 'error', retry: true },

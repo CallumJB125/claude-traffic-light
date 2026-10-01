@@ -3,3 +3,13 @@
 *.sh text eol=lf
 *.nsh text eol=lf
 build/linux/* text eol=lf
+# Source readers and generated-document comparisons need the same bytes on
+# Windows. Intentional fixture line endings remain byte-exact below.
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+test/fixtures/** -text

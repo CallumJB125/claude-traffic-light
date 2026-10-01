@@ -66,6 +66,18 @@ test('build fails without the key, or with a key that is not the one this repo s
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('portable download never replaces the NSIS file in the signed legacy update manifest or feed', () => {
+  const dir = dist();
+  const portable = 'Plexiform-1.2.0-win-x64-portable.exe';
+  fs.writeFileSync(path.join(dir, portable), 'Synthetic portable download');
+  const m = Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0', windows: true });
+  assert.equal(m.files.some(f => f.name === portable), false);
+  assert.equal(V.pickFile(m, { platform: 'win32', arch: 'x64', kind: 'nsis' }).name, 'Plexiform-1.2.0-win-x64.exe');
+  assert.ok(Sign.releaseNames(fs.readdirSync(dir), true).includes(portable), 'the manual artifact remains in release checksums/uploads');
+  assert.ok(!Sign.releaseNames(fs.readdirSync(dir), false).includes(portable), 'publication still refuses all Windows artifacts unless enabled');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('beta: beta*.yml feed files, signed with the beta key only, opened only on the beta channel', () => {
   const dir = dist('1.2.0-beta.4', { feed: 'beta' });
   assert.throws(() => run(['build', dir, '--channel', 'beta', '--version', '1.2.0-beta.4'], { PLEXIFORM_UPDATE_SIGNING_KEY: env.PLEXIFORM_UPDATE_SIGNING_KEY }), /PLEXIFORM_UPDATE_SIGNING_KEY_BETA is not set/);

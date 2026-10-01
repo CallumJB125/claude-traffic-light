@@ -30,6 +30,15 @@ test('hook paths: an AppImage points at $APPIMAGE and a per-version copy in the 
   assert.equal(r.copyFrom, '/x/resources');
 });
 
+test('Windows portable hook/MCP paths survive extraction cleanup by running the original launcher and stable scripts', () => {
+  const launcher = 'C:\\Downloads\\Plexiform-1.2.3-win-x64-portable.exe';
+  const r = HookPaths.choose({ ...base, packaged: true, platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: launcher } });
+  assert.equal(r.execPath, launcher);
+  assert.equal(r.hooksDir, path.join(base.rootDir, 'hooks-1.2.3', 'hooks'));
+  assert.equal(r.mcpAppPath, r.stableDir);
+  assert.equal(r.copyFrom, base.resourcesPath);
+});
+
 test('hook paths: a dev run is plain node against the checkout', () => {
   const r = HookPaths.choose({ ...base, packaged: false, platform: 'linux', env: { APPIMAGE: '/a' } });
   assert.equal(r.execPath, null);
