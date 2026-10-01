@@ -281,6 +281,45 @@ test('L4: team actions name the rendered team and are refused once the active te
   }
 }));
 
+test('invite: a replayed request says the invite was already made and leaves it under Pending invites with Resend; no generic error, no silent retry', async () => harness(async (h) => {
+  await h.signInAs('owner@example.com');
+  await h.A.createTeam('Bondly');
+  const ws = h.store.active();
+  const nodeCrypto = require('node:crypto');
+  const realUUID = nodeCrypto.randomUUID;
+  // A retry of the same request (one request_id twice) is what the hub's replay cache answers.
+  nodeCrypto.randomUUID = () => '00000000-0000-4000-8000-0000000000aa';
+  let first;
+  let again;
+  const posts = () => h.requests.filter((u) => /\/invites$/.test(u.pathname)).length;
+  let before;
+  try {
+    first = await h.A.invite(ws.id, 'sam@example.com', 'member');
+    before = posts();
+    again = await h.A.invite(ws.id, 'sam@example.com', 'member');
+  } finally {
+    nodeCrypto.randomUUID = realUUID;
+  }
+  assert.equal(first.ok, true);
+  assert.deepEqual(again, { ok: true, replayed: true, notice: 'This invite was already made. Resend it to get a new link.' });
+  assert.equal(posts(), before + 1, 'asked once, never retried');
+  const s = await h.A.state();
+  assert.deepEqual(s.invites.map((i) => i.email), ['sam@example.com'], 'listed with its Resend button');
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.match(page, /onclick: \(\) => act\(api\.resendInvite\(team, i\.id\)\) \}, 'Resend'/);
+}));
+
+test('wording: the desktop says a code was asked for, never that it was sent (the hub cannot know it arrived)', () => {
+  for (const f of ['account.js', 'account-flow.js', 'accounts.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', f), 'utf8');
+    assert.ok(!/[Ww]e sent|code we sent/.test(src), f);
+  }
+  const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
+  assert.match(page, /'We’ve asked for a code to be sent to ', el\('strong', \{\}, s\.email \?\? 'your email'\)/);
+  assert.match(page, /`We’ve asked for a code to be sent to \$\{a\.email\}\. Enter it to delete your account/);
+  assert.match(page, /`We’ve asked for a code to be sent to \$\{d\.email \?\? 'your email'\}\. Enter it to confirm/);
+});
+
 // ── M2 + M3: signing out undoes everything ─────────────────────────────────
 
 async function runnerOn(h, name = 'Bondly') {
@@ -381,7 +420,7 @@ test('M2: switch account (wrong-account invite) stops the runner and deletes its
   const s = await h.A.state();
   const r = await h.A.accept(s.invite.id);
   assert.equal(r.wrongAccount, true);
-  assert.equal(r.error, 'This invite is for c…@example.com. Switch account?');
+  assert.equal(r.error, 'This invite was sent to a different email address. Switch account?');
   assert.equal((await h.A.switchAccount()).ok, true);
   assert.equal(child.killed, 1);
   assert.equal(fs.existsSync(h.deviceFile(ws)), false);
@@ -487,7 +526,9 @@ test('P3: the top-level error codes read as plain sentences', () => {
   const say = (status, error) => humanError(status, { error }, 'hub.example.com');
   assert.equal(say(403, { code: 'QUOTA_EXCEEDED', resource: 'members', limit: 25 }), 'This team has reached its limit.');
   assert.equal(say(403, { code: 'EMAIL_UNVERIFIED' }), 'Verify your email first.');
-  assert.equal(say(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }), 'This invite is for c…@example.com.');
+  assert.equal(say(403, { code: 'WRONG_ACCOUNT' }), 'This invite was sent to a different email address.');
+  assert.equal(say(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }), 'This invite was sent to a different email address.', 'no address, even if a hub sends one');
+  assert.equal(say(409, { code: 'CONFLICT', reason: 'REPLAYED' }), 'This invite was already made. Resend it to get a new link.');
   assert.equal(say(409, { code: 'ALREADY_MEMBER', team: { id: 't', name: 'T' } }), 'They’re already in this team.');
   assert.equal(say(409, { code: 'CONFLICT', reason: 'LAST_OWNER' }), 'A team needs at least one owner. Make someone else an owner first.');
   assert.equal(say(409, { code: 'CONFLICT', invite_id: 'inv_1' }), 'There’s already an invite waiting for that address. Resend it instead.');
@@ -1579,7 +1620,7 @@ test('delete team: Send a new code replaces the flow; the old code no longer con
   await h.A.teamDeleteStart(ws.id, 'bondly');
   const old = h.hub.lastCode('me@example.com');
   const re = await h.A.teamDeleteResend(ws.id);
-  assert.deepEqual(re, { ok: true, notice: 'We sent a new code to me@example.com.' });
+  assert.deepEqual(re, { ok: true, notice: 'We’ve asked for a new code to be sent to me@example.com.' });
   const fresh = h.hub.lastCode('me@example.com');
   if (old !== fresh) assert.equal((await h.A.teamDeleteCode(ws.id, old)).ok, false, 'the old flow isn’t the one verified');
   assert.equal((await h.A.teamDeleteCode(ws.id, fresh)).ok, true);

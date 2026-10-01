@@ -137,6 +137,7 @@ export function invitePanel(model) {
       h('select', { id: 'invite-role', name: 'role', class: 'input' }, INVITE_ROLES.map(([v, label]) => h('option', { key: v, value: v }, label))),
       h('button', { type: 'submit', class: 'btn btn-primary', disabled: inv.busy || null }, 'Create invite')),
     inv.error ? h('p', { class: 'form-error', role: 'alert' }, inv.error) : null,
+    inv.resend ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'resend-invite', disabled: inv.busy || null }, 'Resend') : null,
     made ? h('div', { class: 'team-invite-made', role: 'status' },
       h('p', null, made.mailed ? `We emailed ${made.email} the link and the code.` : `Nothing was emailed: send ${made.email} the link or the code yourself.`, ' They show only this once.'),
       h('div', { class: 'signin-row' },

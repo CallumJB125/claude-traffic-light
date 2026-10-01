@@ -26,6 +26,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // /start answer a signed state, bind and the org it was given: their D8 replay
 // entry is this, never the first answer.
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
+// An invite's answer is its link and code, shown once: the replay entry never holds them.
+const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
@@ -230,8 +232,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay });
   };
 
-  // `mail` appears only on a hub that can send mail; it says when a send last failed, never to whom or why.
-  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth, ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt } } : {}) }), { auth: 'none' });
+  // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
+  // sends are failing in a row (email is then off in /api/auth/methods), never to whom or why.
+  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth, ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt, failing: hub.accounts.mailFailing() } } : {}) }), { auth: 'none' });
   // Registered only in dev mode (design §9.5): elsewhere it is "no such route".
   if (config.auth === 'dev') route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (!isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
@@ -279,9 +282,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // signed-in user whose verified email is the invite's.
     const inv = hub.invites;
     route('GET', '/api/teams/:team_id/invites', ({ member }) => inv.list(member));
-    route('POST', '/api/teams/:team_id/invites', ({ member, body, ip, req }) => inv.create(member, body, { ip, req }));
+    route('POST', '/api/teams/:team_id/invites', ({ member, body, ip, req }) => inv.create(member, body, { ip, req }), { replay: INVITE_REPLAY });
     route('DELETE', '/api/teams/:team_id/invites/:invite_id', ({ member, params, ip }) => inv.revoke(member, params.invite_id, { ip }));
-    route('POST', '/api/teams/:team_id/invites/:invite_id/resend', ({ member, params, ip, req }) => inv.resend(member, params.invite_id, { ip, req }));
+    route('POST', '/api/teams/:team_id/invites/:invite_id/resend', ({ member, params, ip, req }) => inv.resend(member, params.invite_id, { ip, req }), { replay: INVITE_REPLAY });
     route('POST', '/api/invites/preview', ({ body, ip }) => inv.preview(body, { ip }), { auth: 'none' });
     route('POST', '/api/invites/accept', ({ ident, body, ip }) => inv.accept(ident, body, { ip }), { auth: 'user' });
     route('POST', '/api/account/invites/:invite_id/accept', ({ ident, params, ip }) => inv.accept(ident, { invite_id: params.invite_id }, { ip }), { auth: 'user' });

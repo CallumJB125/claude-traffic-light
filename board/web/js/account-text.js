@@ -9,6 +9,7 @@ export const SEND_FAILED = 'We couldn’t send the email. Try again in a minute.
 export const EMAIL_OFF = `Email sign-in is off on this board. Sign in with the ${BRAND.name} app instead.`;
 export const INVITE_INVALID = 'This invite is not valid: it may have expired, been used or been withdrawn. Ask for a new one.';
 export const WRONG_ACCOUNT = 'This invite was sent to a different email address. Sign in with that address to join.';
+export const INVITE_REPLAYED = 'This invite was already made. Resend it to get a new link.';
 export const NO_REACH = 'Can’t reach the board. Check your connection and try again.';
 
 export const INVITE_TOKEN_RE = /^inv_[A-Za-z0-9_-]{43}$/;
@@ -55,7 +56,10 @@ export function accountErrorText(err, step) {
       return 'Check what you typed and try again.';
     case 'WRONG_ACCOUNT': return WRONG_ACCOUNT;
     case 'ALREADY_MEMBER': return step === 'invite' && !extra.team ? 'They’re already in this team.' : `You’re already in ${extra.team?.name ? String(extra.team.name).slice(0, 60) : 'this team'}.`;
-    case 'CONFLICT': return extra.invite_id ? 'There’s already an invite waiting for that address.' : 'That clashes with something that changed. Reload and try again.';
+    case 'CONFLICT':
+      // The hub replays a repeated invite request without its link or code (shown once): only a resend makes new ones.
+      if (step === 'invite' && extra.reason === 'REPLAYED') return INVITE_REPLAYED;
+      return extra.invite_id ? 'There’s already an invite waiting for that address.' : 'That clashes with something that changed. Reload and try again.';
     case 'QUOTA_EXCEEDED':
       if (extra.resource === 'teams') return 'You already own as many teams as your plan allows.';
       if (extra.resource === 'members') return 'This team is full.';

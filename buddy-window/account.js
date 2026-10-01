@@ -219,7 +219,8 @@ const SCREENS = {
     const resend = link('Send a new code', async () => { const r = await api.resend(); flash(r.ok ? r.notice : r.error, !r.ok); });
     return [
       heading('Check your email', null),
-      el('p', { class: 'acct-sub' }, 'Enter the 6-digit code we sent to ', el('strong', {}, s.email ?? 'your email'), '. It expires in 10 minutes.'),
+      // "Asked for", not "sent": the hub answers before it mails, so it can't know the mail went.
+      el('p', { class: 'acct-sub' }, 'We’ve asked for a code to be sent to ', el('strong', {}, s.email ?? 'your email'), '. Enter the 6 digits. It expires in 10 minutes.'),
       f,
       el('p', { class: 'acct-foot' }, resend, el('span', { class: 'acct-dot', 'aria-hidden': 'true' }, '·'), link('Use a different email', () => api.go('email'))),
     ];
@@ -398,12 +399,12 @@ const SCREENS = {
         }));
       } else if (s.deleting === a.host) {
         card.append(
-          el('p', { class: 'acct-hint' }, `We sent a code to ${a.email}. Enter it to delete your account on ${a.host}. You’ll leave every team there. This can’t be undone.`),
+          el('p', { class: 'acct-hint' }, `We’ve asked for a code to be sent to ${a.email}. Enter it to delete your account on ${a.host}. You’ll leave every team there. This can’t be undone.`),
           form({
             fields: input({ name: 'code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '12', placeholder: '123456', class: 'input input-code', 'aria-label': '6-digit code', autofocus: true }),
             submit: 'Delete my account', busy: 'Deleting…', fn: (v) => api.deleteConfirm(v.code),
             extra: el('p', { class: 'acct-foot' },
-              link('Send a new code', async () => { const r = await api.deleteStart(a.host); flash(r.ok ? `We sent a new code to ${a.email}.` : r.error, !r.ok); }),
+              link('Send a new code', async () => { const r = await api.deleteStart(a.host); flash(r.ok ? `We’ve asked for a new code to be sent to ${a.email}.` : r.error, !r.ok); }),
               el('span', { class: 'acct-dot', 'aria-hidden': 'true' }, '·'),
               link('Cancel', async () => { await api.cancelDelete(); render(); })),
           }));
@@ -474,7 +475,7 @@ function teamDelete(s) {
         el('span', { class: 'acct-dot', 'aria-hidden': 'true' }, '·'),
         cancelLink()),
     });
-    return [el('p', { class: 'acct-hint' }, `We sent a code to ${d.email ?? 'your email'}. Enter it to confirm it’s you before deleting ${s.team.name}.`), f];
+    return [el('p', { class: 'acct-hint' }, `We’ve asked for a code to be sent to ${d.email ?? 'your email'}. Enter it to confirm it’s you before deleting ${s.team.name}.`), f];
   }
   return deleteCheck(d, {
     host: s.host, intro: `To delete ${s.team.name}, confirm it’s you first.`, warn, submit: 'Delete team',

@@ -84,14 +84,14 @@ test('invite → mail with a fragment link → preview (3 fields, no address) �
   }
 });
 
-test('email binding: a valid token for another address → WRONG_ACCOUNT with the masked address; an unverified match is refused too', async () => {
+test('email binding: a valid token for another address → WRONG_ACCOUNT naming no address; an unverified match is refused too', async () => {
   const fx = await setup();
   try {
     const r = await fx.invite(fx.users.ua, 'carol@example.com');
     const t = tokenOf(r.body.link);
     const w = await fx.accept(fx.users.n, { t });
-    assert.deepEqual([w.status, w.body.error.code, w.body.error.email_masked], [403, 'WRONG_ACCOUNT', 'c•••@example.com']);
-    assert.ok(!w.text.includes('carol@'));
+    assert.deepEqual([w.status, w.body.error.code, w.body.error.email_masked], [403, 'WRONG_ACCOUNT', undefined]);
+    assert.ok(!w.text.includes('carol@') && !w.text.includes('c•••'));
     const carol = await fx.newUser('carol@example.com');
     fx.h.db.run('UPDATE users SET primary_email_verified_at = NULL WHERE id = ?', carol.id);
     fx.h.db.run('UPDATE identities SET email_verified = 0 WHERE user_id = ?', carol.id);

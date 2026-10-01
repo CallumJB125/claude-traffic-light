@@ -2,7 +2,7 @@
 // gate and the "join with a code or link" parser.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountErrorText, parseJoin, resendWaitS, waitFor, SEND_FAILED, INVITE_INVALID, WRONG_ACCOUNT } from '../js/account-text.js';
+import { accountErrorText, parseJoin, resendWaitS, waitFor, SEND_FAILED, INVITE_INVALID, INVITE_REPLAYED, WRONG_ACCOUNT } from '../js/account-text.js';
 
 const ORIGIN = 'https://board.example.com';
 const TOKEN = `inv_${'b'.repeat(43)}`;
@@ -24,6 +24,7 @@ test('every code gets a short plain sentence; nothing from the hub message leaks
     [{ status: 400, code: 'INVALID_TOKEN', extra: leak }, 'invite', new RegExp(`^${INVITE_INVALID}$`)],
     [{ status: 403, code: 'WRONG_ACCOUNT', extra: { email_masked: 'c•••@example.com' } }, 'invite', new RegExp(`^${WRONG_ACCOUNT}$`)],
     [{ status: 409, code: 'ALREADY_MEMBER', extra: { team: { id: 't', name: 'Acme' } } }, 'invite', /You’re already in Acme\./],
+    [{ status: 409, code: 'CONFLICT', extra: { reason: 'REPLAYED', ...leak } }, 'invite', /^This invite was already made\. Resend it to get a new link\.$/],
     [{ status: 403, code: 'QUOTA_EXCEEDED', extra: { resource: 'teams', limit: 10 } }, 'team', /as many teams/],
     [{ status: 403, code: 'QUOTA_EXCEEDED', extra: { resource: 'members', limit: 25 } }, 'invite', /team is full/],
     [{ status: 429, code: 'RATE_LIMITED', extra: { retry_after_s: 90 } }, 'team', /Wait 2 minutes/],
@@ -32,7 +33,7 @@ test('every code gets a short plain sentence; nothing from the hub message leaks
   for (const [err, step, want] of cases) {
     const t = accountErrorText(err, step);
     assert.match(t, want, `${err.code}/${step}`);
-    assert.doesNotMatch(t, /resend|smtp|jo@example|internal|c•••/i, `${err.code}/${step} leaks: ${t}`);
+    assert.doesNotMatch(t.replace(INVITE_REPLAYED, ''), /resend|smtp|jo@example|internal|c•••/i, `${err.code}/${step} leaks: ${t}`);
   }
 });
 

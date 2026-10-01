@@ -71,6 +71,10 @@ function routePath(name, params = {}) {
 const INVITE_GONE = 'This invite link isn’t valid any more. Ask for a new one.';
 const INVITE_CODE_GONE = 'That code didn’t work. Check it, or ask for a new invite.';
 const SLUG_MISMATCH = 'That doesn’t match the team’s name. Type it exactly as shown.';
+// Like the web: never the invite's address, masked or not.
+const WRONG_ACCOUNT_TEXT = 'This invite was sent to a different email address.';
+// The hub replays a repeated invite request without the link or code it showed once.
+const INVITE_REPLAYED = 'This invite was already made. Resend it to get a new link.';
 const CODE_TEXT = {
   LAST_OWNER: 'A team needs at least one owner. Make someone else an owner first.',
   FORBIDDEN: 'You don’t have permission to do that in this team.',
@@ -82,6 +86,7 @@ const CODE_TEXT = {
 // CONFLICT says what clashed in its extra fields.
 function conflictText(e) {
   if (e?.reason === 'LAST_OWNER') return CODE_TEXT.LAST_OWNER;
+  if (e?.reason === 'REPLAYED') return INVITE_REPLAYED;
   if (e?.invite_id) return 'There’s already an invite waiting for that address. Resend it instead.';
   return null;
 }
@@ -120,7 +125,7 @@ function humanError(status, json, host) {
   const code = e?.code;
   if (code === 'RATE_LIMITED' || status === 429) return waitText(e?.retry_after_s);
   if (code === 'INVALID_TOKEN') return codeText(e?.attempts_left);
-  if (code === 'WRONG_ACCOUNT') return `This invite is for ${typeof e?.email_masked === 'string' ? e.email_masked.slice(0, 120) : 'another email'}.`;
+  if (code === 'WRONG_ACCOUNT') return WRONG_ACCOUNT_TEXT;
   if (code === 'CONFLICT' && conflictText(e)) return conflictText(e);
   if (code && CODE_TEXT[code]) return CODE_TEXT[code];
   if (status === 403) return CODE_TEXT.FORBIDDEN;
@@ -139,10 +144,7 @@ function inviteOutcome(r, { gone = INVITE_GONE } = {}) {
   if (r.ok) return r;
   const d = r.detail ?? {};
   const sub = d.reason ?? r.code;
-  if (r.status === 403 && (sub === 'WRONG_ACCOUNT' || typeof d.email_masked === 'string')) {
-    const masked = typeof d.email_masked === 'string' ? d.email_masked.slice(0, 120) : 'another email';
-    return { ok: false, wrongAccount: true, error: `This invite is for ${masked}. Switch account?` };
-  }
+  if (r.status === 403 && sub === 'WRONG_ACCOUNT') return { ok: false, wrongAccount: true, error: `${WRONG_ACCOUNT_TEXT} Switch account?` };
   if (r.status === 409 && (sub === 'ALREADY_MEMBER' || d.team?.id)) {
     const team = { id: String(d.team?.id ?? ''), name: String(d.team?.name ?? '').slice(0, 60) };
     return { ok: false, alreadyMember: true, team, error: `You’re already in ${team.name || 'this team'}.` };
@@ -427,7 +429,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (!EMAIL_RE.test(e)) return { ok: false, error: 'Enter their email address.' };
       if (!ROLES.includes(role) || role === 'owner') return { ok: false, error: 'Pick a role.' };
       const r = await call('invite', { params: { team }, body: { email: e, role, request_id: crypto.randomUUID() } });
-      return r.ok ? { ...r, link: linkOk(r.link) ? r.link : null, code: codeOk(r.code) } : r;
+      if (!r.ok) return r.code === 'CONFLICT' && r.detail?.reason === 'REPLAYED' ? { ok: false, replayed: true, error: INVITE_REPLAYED } : r;
+      return { ...r, link: linkOk(r.link) ? r.link : null, code: codeOk(r.code) };
     },
     revokeInvite: (team, invite) => call('revokeInvite', { params: { team, invite }, body: {} }),
     /** A new link and code and a fresh 7 days; the old ones die. */

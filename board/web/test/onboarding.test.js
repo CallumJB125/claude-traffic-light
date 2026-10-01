@@ -7,7 +7,7 @@ import { textOf, byAttr, byClass } from '../js/h.js';
 import { signinScreen, noTeamScreen } from '../js/render-signin.js';
 import { invitePanel, teamScreen } from '../js/render-team.js';
 import { topBar } from '../js/render-board.js';
-import { EMAIL_OFF } from '../js/account-text.js';
+import { EMAIL_OFF, INVITE_REPLAYED } from '../js/account-text.js';
 import { model } from './fixtures.js';
 
 test('signed out: email sign-in when the hub mails; the app pointer when it does not', () => {
@@ -49,6 +49,15 @@ test('invite panel: owners and admins in accounts mode only; the link and code s
   assert.match(textOf(made), /Nothing was emailed: send sam@example.com the link or the code yourself\./);
   assert.match(textOf(made), /BCDF-GHJK/);
   assert.equal(byAttr(made, 'data-action', 'copy-invite').length, 2);
+  assert.equal(byAttr(made, 'data-action', 'resend-invite').length, 0);
+  // A replayed request (REPLAYED): the invite exists, its link was shown once already; offer Resend.
+  const replayed = invitePanel({ ...base, invite: { error: INVITE_REPLAYED, resend: { email: 'sam@example.com' } } });
+  assert.equal(INVITE_REPLAYED, 'This invite was already made. Resend it to get a new link.');
+  assert.match(textOf(replayed), /This invite was already made\. Resend it to get a new link\./);
+  const b = byAttr(replayed, 'data-action', 'resend-invite');
+  assert.equal(b.length, 1);
+  assert.equal(textOf(b[0]), 'Resend');
+  assert.equal(byAttr(invitePanel({ ...base, invite: { error: 'This team is full.' } }), 'data-action', 'resend-invite').length, 0, 'only when there is something to resend');
   const t = teamScreen(model([], { view: 'team', presence: { members: [], loaded: true, stale: false }, ...base, me: { member: { id: 'm-alice', role: 'admin' }, org: { id: 't1' } } }));
   assert.equal(byClass(t, 'team-invite').length, 1, 'the Team view carries it');
 });

@@ -518,7 +518,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const email = c?.pendingEmail();
       if (!email) return { ok: false, error: 'Start again: enter your email.' };
       const r = await c.startEmail(email, deviceInfo());
-      return r.ok ? { ok: true, notice: `We sent a new code to ${email}.` } : r;
+      return r.ok ? { ok: true, notice: `We’ve asked for a new code to be sent to ${email}.` } : r;
     },
     async createTeam(name) {
       const origin = acct.hub;
@@ -534,6 +534,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const ws = renderedTeam(wsId);
       if (!ws) return TEAM_CHANGED;
       const r = await clientFor(ws.hub).invite(ws.teamId, email, role);
+      // Already made: the page re-renders and it waits under Pending invites, with Resend.
+      if (r.replayed) return { ok: true, replayed: true, notice: r.error };
       if (!r.ok) return r;
       return inviteMade(ws, r, 'Invite created. Share the link or the code.');
     },
@@ -603,7 +605,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       st.flowId = r.flowId;
       st.email = r.email;
       st.confirmed = null;
-      return { ok: true, notice: `We sent a new code to ${r.email ?? 'your email'}.` };
+      return { ok: true, notice: `We’ve asked for a new code to be sent to ${r.email ?? 'your email'}.` };
     },
     async teamDeleteCode(wsId, code) {
       const { ws, st } = teamStepFor(wsId);

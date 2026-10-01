@@ -42,6 +42,7 @@ test('web, accounts mode: email code → create a team → its board → invite;
     await A.goto('/');
     await A.click('a[href="/signin"]');
     const code = await signInByCode(A, hub, 'owner@e2e.test');
+    assert.equal(await A.textContent('#signin-lead'), 'We’ve asked for a 6-digit code to be sent to owner@e2e.test. It works for 10 minutes.');
     await A.fill('#code', code === '000000' ? '000001' : '000000');
     await A.click('#code-form button[type="submit"]');
     await A.waitForSelector('#signin-error:not([hidden])');

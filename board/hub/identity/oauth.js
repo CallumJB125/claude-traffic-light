@@ -386,11 +386,13 @@ export class OAuth {
     return { stepup_until: until };
   }
 
-  /** The reaper (M4): flows a day past expiry go, unless a step-up window is still open. At most once a minute. */
+  /** The reaper (M4): flows a day past expiry go, unless a step-up window is still open; email code flows (duds too) a day past expiry. At most once a minute. */
   sweep() {
     const now = this.hub.mono();
     if (now - this.sweptAt < SWEEP_EVERY_MS) return;
     this.sweptAt = now;
     this.db.run('DELETE FROM oauth_flows WHERE expires_at < ? AND (stepup_until IS NULL OR stepup_until < ?)', this.accounts.at(-KEEP_FLOWS_MS), this.accounts.now());
+    // A day past a 10-minute expiry is past the 24 h of wrong codes seedFailures re-reads.
+    this.db.run('DELETE FROM login_flows WHERE expires_at < ?', this.accounts.at(-KEEP_FLOWS_MS));
   }
 }

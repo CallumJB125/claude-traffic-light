@@ -17,13 +17,14 @@ test('health: a failed background send sets mail.last_error_at; no address, no d
   try {
     const before = await h.call('GET', '/api/health');
     assert.equal(before.status, 200);
-    assert.deepEqual(before.body.mail, { last_error_at: null });
+    assert.deepEqual(before.body.mail, { last_error_at: null, failing: false });
     const r = await start(h, 'someone@example.com');
     assert.equal(r.status, 200, 'the answer is the same whether or not the send fails');
     const after = await until(async () => { const x = await h.call('GET', '/api/health'); return x.body.mail.last_error_at ? x : null; });
     assert.ok(after, 'the failure shows up');
     assert.match(after.body.mail.last_error_at, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
-    assert.deepEqual(Object.keys(after.body.mail), ['last_error_at']);
+    assert.deepEqual(Object.keys(after.body.mail).sort(), ['failing', 'last_error_at']);
+    assert.equal(after.body.mail.failing, false, 'one failure is not "failing"');
     assert.ok(!JSON.stringify(after.body).includes('someone@example.com') && !JSON.stringify(after.body).includes('AccessDenied'));
     fail = false;
     const t = after.body.mail.last_error_at;
@@ -50,5 +51,54 @@ test('health: no mailer, no mail key; a hub that is not in accounts mode has non
     const x = await h.call('GET', '/api/health');
     assert.equal(x.status, 200);
     assert.equal('mail' in x.body, false);
+  } finally { await h.close(); }
+});
+
+test('methods: five background sends failing in a row turn email off until one succeeds; any addresses; mid-flow verify and new starts still work', async () => {
+  let fail = false;
+  let calls = 0;
+  const out = outboxMailer();
+  const mailer = { kind: 'ses', async send(m) { calls++; if (fail) throw new Error('SES answered 403'); return out.send(m); } };
+  const h = await startAccounts({ mailer });
+  const methods = async () => (await h.call('GET', '/api/auth/methods')).body;
+  const health = async () => (await h.call('GET', '/api/health')).body.mail;
+  const sendsDone = (n) => until(() => calls >= n).then(() => new Promise((r) => setImmediate(r)));
+  try {
+    const mid = await start(h, 'mid@example.com');
+    await sendsDone(1);
+    const code = /code: (\d{6})/.exec(out.last('mid@example.com').text)[1];
+    assert.deepEqual(await methods(), { google: false, github: false, email: true });
+
+    fail = true;
+    for (let i = 0; i < 4; i++) await start(h, `f${i}@example.com`);
+    await sendsDone(5);
+    assert.equal((await methods()).email, true, 'four in a row: still on');
+    assert.equal((await health()).failing, false);
+    await start(h, 'f4@example.com');
+    await sendsDone(6);
+    assert.deepEqual(await methods(), { google: false, github: false, email: false }, 'five in a row, over five addresses: off, no new field');
+    const hm = await health();
+    assert.equal(hm.failing, true);
+    assert.deepEqual(Object.keys(hm).sort(), ['failing', 'last_error_at'], 'a boolean, no count');
+
+    const v = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: mid.body.flow_id, code, device_name: 'Test Mac', platform: 'darwin-arm64' } });
+    assert.equal(v.status, 200, 'someone mid-flow still signs in');
+    fail = false;
+    const again = await start(h, 'new@example.com');
+    assert.equal(again.status, 200, 'a new start while failing may still try');
+    await sendsDone(7);
+    assert.equal((await methods()).email, true, 'one success turns it back on');
+    assert.equal((await health()).failing, false);
+  } finally { await h.close(); }
+});
+
+test('methods: the failing count is per hub, never per address (one address failing five times turns it off too)', async () => {
+  let calls = 0;
+  const mailer = { kind: 'ses', async send() { calls++; throw new Error('boom'); } };
+  const h = await startAccounts({ mailer });
+  try {
+    for (let i = 0; i < 5; i++) await assert.rejects(h.hub.accounts.mailer.send({ to: 'same@example.com', subject: 's', text: 't' }));
+    assert.equal((await h.call('GET', '/api/auth/methods')).body.email, false);
+    assert.equal(calls, 5);
   } finally { await h.close(); }
 });

@@ -14,7 +14,7 @@ import { ipKey, limitOrThrow } from '../ratelimit.js';
 import { emailOnlyIdentity } from '../views.js';
 import { can, canInviteAs, INVITABLE_ROLES } from '../permissions.js';
 import { BRAND } from '../../shared/brand.js';
-import { canonEmail, ipPrefix, mailName, maskEmail, normalizeEmail } from './accounts.js';
+import { canonEmail, ipPrefix, mailName, normalizeEmail } from './accounts.js';
 
 export { mailName };
 import { publicTeam, quotaFor } from './teams.js';
@@ -209,7 +209,7 @@ export class Invites {
   /**
    * POST /api/invites/accept {t} | {invite_id} | {code} (Bearer or cookie).
    * With the token: a bad, used, expired or withdrawn one → INVALID_TOKEN; a
-   * valid one for another address → WRONG_ACCOUNT {email_masked}. Without it
+   * valid one for another address → WRONG_ACCOUNT (no address, not even masked). Without it
    * (invite_id from pending_invites, or the short code from the mail) only
    * invites addressed to one of the caller's verified emails exist at all, so
    * anything else is INVALID_TOKEN. The address is matched at accept time.
@@ -247,7 +247,7 @@ export class Invites {
     if (!this.usable(inv)) throw invalid();
     if (!emails.includes(inv.email)) {
       this.audit('invite.accept.wrong_account', { user: user.id, org: inv.org_id, target: inv.id, ip });
-      throw new HubError('WRONG_ACCOUNT', `this invite is for ${maskEmail(inv.email)}: sign in with that address to accept it`, { email_masked: maskEmail(inv.email) });
+      throw new HubError('WRONG_ACCOUNT', 'this invite is for another address: sign in with that address to accept it');
     }
     const org = this.teams.org(inv.org_id);
     if (this.db.get('SELECT 1 AS x FROM members WHERE org_id = ? AND user_id = ? AND removed_at IS NULL', org.id, user.id)) {
@@ -312,7 +312,8 @@ export class Invites {
         AND o.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = i.org_id AND x.user_id = ? AND x.removed_at IS NULL)
       ORDER BY i.created_at, i.id`, ...emails, this.now(), user.id);
-    return rows.map((r) => ({ id: r.id, team_name: r.team_name, inviter_first_name: firstName(r.by_name), role: r.role, expires_at: r.expires_at }));
+    // usable(): also not one whose inviter may no longer invite as that role (L4), which accept would refuse.
+    return rows.filter((r) => this.usable(r)).map((r) => ({ id: r.id, team_name: r.team_name, inviter_first_name: firstName(r.by_name), role: r.role, expires_at: r.expires_at }));
   }
 }
 
