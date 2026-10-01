@@ -59,10 +59,14 @@ export class TeamCommunication {
     if (!AI_IDS.includes(provider)) throw new HubError('FORBIDDEN', 'run provider is unavailable');
     return { row, member: m, run, connection, provider, actor_key: `run:${run.id}:${run.fence}` };
   }
-  human(member, cardId, cred, write = false) {
+  human(member, cardId, cred, write = false, options = {}) {
     if (this.hub.config.auth === 'accounts' && !cred) throw new HubError('UNAUTHENTICATED', 'staff credential required');
     const m = this.staff(member, cred, write);
-    return { row: this.card(cardId, m), member: m, run: null, connection: null, provider: null, actor_key: `member:${m.id}` };
+    const row = this.card(cardId, m), boardIds = options.boardIds;
+    if (boardIds != null && (!Array.isArray(boardIds) || boardIds.length < 1 || boardIds.length > 32
+      || boardIds.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(id)))) throw new HubError('VALIDATION', 'choose 1–32 boards');
+    if (boardIds && !boardIds.includes(row.board_id)) throw missing();
+    return { row, member: m, run: null, connection: null, provider: null, actor_key: `member:${m.id}`, boardIds };
   }
   author(record) {
     return { kind: record.author_run_id ? 'run' : 'member', member_id: record.author_member_id, account_id: record.author_user_id,
@@ -134,16 +138,16 @@ export class TeamCommunication {
   }
   runnerReadPacket(ctx, params) { return this.readPacket(this.runner(ctx), params); }
   runnerWritePacket(ctx, body) { return this.writePacket(this.runner(ctx), body); }
-  staffReadPacket(member, cardId, params, cred = null) {
-    const initial = this.human(member, cardId, cred);
-    return this.hub.withBoard(initial.row.board_id, () => this.readPacket(this.human(member, cardId, cred), params));
+  staffReadPacket(member, cardId, params, cred = null, options = {}) {
+    const initial = this.human(member, cardId, cred, false, options);
+    return this.hub.withBoard(initial.row.board_id, () => this.readPacket(this.human(member, cardId, cred, false, options), params));
   }
-  staffWritePacket(member, cardId, body, cred = null) {
+  staffWritePacket(member, cardId, body, cred = null, options = {}) {
     only(body, ['request_id', 'expected_version', 'expected_fence', 'data'], ['expected_fence']);
     if (!integer(body.expected_fence)) throw new HubError('VALIDATION', 'choose the current task fence');
-    const initial = this.human(member, cardId, cred, true), { expected_fence, ...data } = body;
+    const initial = this.human(member, cardId, cred, true, options), { expected_fence, ...data } = body;
     return this.hub.withBoard(initial.row.board_id, () => {
-      const scope = this.human(member, cardId, cred, true);
+      const scope = this.human(member, cardId, cred, true, options);
       if (scope.row.fence !== expected_fence) throw new HubError('FENCED', 'task ownership changed; reload before saving');
       return this.writePacket(scope, data);
     });
@@ -153,6 +157,7 @@ export class TeamCommunication {
     const run = this.hub.run(runId), member = run && this.hub.activeMember(run.on_behalf_of);
     if (!run || !member || !can(member, 'card.write') || member.org_id !== scope.member.org_id) throw missing();
     const row = this.card(run.card_id, member), device = this.hub.device(run.device_id);
+    if (scope.boardIds && !scope.boardIds.includes(row.board_id)) throw missing();
     if (!device || device.revoked_at || device.member_id !== member.id || run.ended_at || row.active_run_id !== run.id
       || row.fence !== run.fence || row.repo_id !== run.repo_id || run.repo_id !== scope.row.repo_id) throw missing();
     if (this.hub.config.auth === 'accounts') {
@@ -165,6 +170,7 @@ export class TeamCommunication {
   visibleMessage(scope, message) {
     const source = this.hub.card(message.card_id), board = source && this.hub.board(source.board_id);
     return !!source && !!board && board.org_id === scope.member.org_id && !source.archived_at && !board.archived_at
+      && (!scope.boardIds || scope.boardIds.includes(source.board_id))
       && source.repo_id === message.repo_id && message.repo_id === scope.row.repo_id
       && !!this.db.get('SELECT 1 x FROM board_repos WHERE board_id = ? AND repo_id = ?', source.board_id, source.repo_id);
   }
@@ -172,13 +178,18 @@ export class TeamCommunication {
     return { id: message.id, thread_id: message.thread_id, card_id: message.card_id, card_key: this.hub.card(message.card_id)?.key,
       repo_id: message.repo_id, fence: message.fence, kind: message.kind, body: message.body, reply_to: message.reply_to, depth: message.depth,
       at: message.created_at, author: this.author(message), for_agent: false, auto_resume: false, grants_execution: false,
-      deliveries: this.db.all('SELECT * FROM task_message_recipients WHERE message_id = ?', message.id).map((r) => {
+      deliveries: this.db.all('SELECT * FROM task_message_recipients WHERE message_id = ?', message.id).filter((r) => {
+        if (!scope.boardIds) return true;
+        const run = this.hub.run(r.run_id), card = run && this.hub.card(run.card_id);
+        return card && scope.boardIds.includes(card.board_id);
+      }).map((r) => {
         const run = this.hub.run(r.run_id);
         let current = false; try { const now = this.recipient(scope, r.run_id); current = now.run.fence === r.fence && now.run.device_id === r.device_id; } catch { /* stale delivery remains history */ }
         const receipt = this.db.get('SELECT * FROM task_message_receipts WHERE message_id = ? AND recipient_run_id = ? AND recipient_fence = ? ORDER BY acknowledged_at IS NOT NULL DESC, received_at IS NOT NULL DESC, rowid DESC LIMIT 1', message.id, r.run_id, r.fence);
         const connection = this.hub.runners.get(r.device_id);
         return { recipient_run_id: r.run_id, recipient_card_id: run?.card_id ?? null, fence: r.fence,
-          recipient_member_id: run?.on_behalf_of ?? null, provider: run ? aiOfDispatch(run) : null,
+          recipient_member_id: run?.on_behalf_of ?? null, recipient_name: run ? text(this.hub.memberName(run.on_behalf_of), 200) : null,
+          provider: run ? aiOfDispatch(run) : null,
           current_recipient: current, state: receipt?.acknowledged_at ? 'acknowledged' : !current ? 'superseded' : receipt?.received_at ? 'received' : 'pending',
           received_at: receipt?.received_at ?? null, acknowledged_at: receipt?.acknowledged_at ?? null,
           receipt_connection_current: !!receipt && !!connection && !runnerConnectionProblem(this.hub, connection) && receipt.connection_generation === connection.generation,
@@ -197,9 +208,9 @@ export class TeamCommunication {
       || body.reply_to != null && (typeof body.reply_to !== 'string' || !UUID.test(body.reply_to))) throw new HubError('VALIDATION', 'invalid message thread');
     const fingerprint = digest({ card: scope.row.id, repo: scope.row.repo_id, fence: scope.row.fence, kind: body.kind, body: message,
       recipients, thread: body.thread_id ?? null, reply_to: body.reply_to ?? null });
+    const targets = recipients.map((id) => this.recipient(scope, id));
     const prior = this.db.get('SELECT * FROM task_messages WHERE actor_key = ? AND request_id = ?', scope.actor_key, request);
     if (prior) { if (prior.request_hash !== fingerprint) throw new HubError('CONFLICT', 'request id belongs to another message'); return { message: this.messageProjection(scope, prior) }; }
-    const targets = recipients.map((id) => this.recipient(scope, id));
     if (scope.run && targets.some((r) => r.run.id === scope.run.id)) throw new HubError('VALIDATION', 'send a task message to another run');
     let reply = null, thread = null;
     if (body.reply_to) {
@@ -305,22 +316,42 @@ export class TeamCommunication {
     const scope = this.runner(ctx);
     return this.hub.txn(() => ({ receipts: body.receipts.map((r) => this.acknowledge(scope, r, false)) }));
   }
-  staffListMessages(member, cardId, cred = null) {
-    const initial = this.human(member, cardId, cred);
+  staffPeers(scope) {
+    if (!scope.row.repo_id) return [];
+    const boardFilter = scope.boardIds ? `AND c.board_id IN (${scope.boardIds.map(() => '?').join(',')})` : '';
+    const candidates = this.db.all(`SELECT r.id FROM runs r JOIN cards c ON c.id = r.card_id JOIN boards b ON b.id = c.board_id
+      WHERE r.repo_id = ? AND b.org_id = ? AND r.ended_at IS NULL AND c.active_run_id = r.id AND c.fence = r.fence
+        AND c.archived_at IS NULL AND b.archived_at IS NULL
+        AND EXISTS (SELECT 1 FROM board_repos linked WHERE linked.board_id = c.board_id AND linked.repo_id = r.repo_id)
+        ${boardFilter} ORDER BY r.started_at DESC, r.id LIMIT 40`,
+    scope.row.repo_id, scope.member.org_id, ...(scope.boardIds ?? []));
+    return candidates.flatMap(({ id }) => {
+      try { const p = this.recipient(scope, id); return [{ run_id: id, card_id: p.row.id, card_key: p.row.key, title: text(p.row.title, 200),
+        member_id: p.member.id, name: text(p.member.display_name, 200), provider: p.provider, identity_source: 'hub_run' }]; } catch { return []; }
+    }).slice(0, 20);
+  }
+  staffListMessages(member, cardId, cred = null, options = {}) {
+    const initial = this.human(member, cardId, cred, false, options);
     return this.hub.withBoard(initial.row.board_id, () => {
-      const scope = this.human(member, cardId, cred);
+      const scope = this.human(member, cardId, cred, false, options);
+      const boardFilter = scope.boardIds ? `AND source.board_id IN (${scope.boardIds.map(() => '?').join(',')})` : '';
       const messages = this.db.all(`SELECT DISTINCT m.* FROM task_messages m LEFT JOIN task_message_recipients r ON r.message_id = m.id
-        LEFT JOIN runs recipient ON recipient.id = r.run_id WHERE m.card_id = ? OR recipient.card_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT 51`, cardId, cardId)
+        LEFT JOIN runs recipient ON recipient.id = r.run_id JOIN cards source ON source.id = m.card_id JOIN boards b ON b.id = source.board_id
+        WHERE (m.card_id = ? OR recipient.card_id = ?) AND m.repo_id = ? AND source.repo_id = m.repo_id AND b.org_id = ?
+          AND source.archived_at IS NULL AND b.archived_at IS NULL ${boardFilter}
+          AND EXISTS (SELECT 1 FROM board_repos linked WHERE linked.board_id = source.board_id AND linked.repo_id = m.repo_id)
+        ORDER BY m.created_at DESC, m.rowid DESC LIMIT 51`, cardId, cardId, scope.row.repo_id, scope.member.org_id, ...(scope.boardIds ?? []))
         .filter((m) => this.visibleMessage(scope, m));
-      return { messages: messages.slice(0, 50).map((m) => this.messageProjection(scope, m)), truncated: messages.length > 50, auto_resume: false };
+      return { messages: messages.slice(0, 50).map((m) => this.messageProjection(scope, m)), truncated: messages.length > 50,
+        peers: this.staffPeers(scope), auto_resume: false };
     });
   }
-  staffSendMessage(member, cardId, body, cred = null) {
+  staffSendMessage(member, cardId, body, cred = null, options = {}) {
     only(body, ['request_id', 'expected_fence', 'kind', 'body', 'recipient_run_ids', 'thread_id', 'reply_to'], ['expected_fence']);
     if (!integer(body.expected_fence)) throw new HubError('VALIDATION', 'choose the current task fence');
-    const initial = this.human(member, cardId, cred, true), { expected_fence, ...params } = body;
+    const initial = this.human(member, cardId, cred, true, options), { expected_fence, ...params } = body;
     return this.hub.withBoard(initial.row.board_id, () => {
-      const scope = this.human(member, cardId, cred, true);
+      const scope = this.human(member, cardId, cred, true, options);
       if (scope.row.fence !== expected_fence) throw new HubError('FENCED', 'task ownership changed; reload before sending');
       return this.sendMessage(scope, params);
     });

@@ -49,6 +49,10 @@ const ROUTES = {
   nativeCreate: ['POST', '/api/boards/:board/cards'],
   nativePatch: ['PATCH', '/api/cards/:card'],
   nativeComment: ['POST', '/api/cards/:card/comments'],
+  nativeReadPacket: ['GET', '/api/cards/:card/packet'],
+  nativeWritePacket: ['POST', '/api/cards/:card/packet'],
+  nativeMessages: ['GET', '/api/cards/:card/messages'],
+  nativeSendMessage: ['POST', '/api/cards/:card/messages'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -225,6 +229,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
+    if (name.startsWith('native') && params?.boardIds) {
+      const narrowed = new URL(url);
+      for (const id of params.boardIds) narrowed.searchParams.append('board_id', id);
+      url = narrowed.href;
+    }
     const headers = { Accept: 'application/json' };
     const s = token ? { token } : auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
@@ -384,8 +393,12 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.
     nativeBoard(operation, params, body) {
-      const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment' }[operation];
+      const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment',
+        readPacket: 'nativeReadPacket', writePacket: 'nativeWritePacket', messages: 'nativeMessages', sendMessage: 'nativeSendMessage' }[operation];
       if (!name || !ID_RE.test(String(params?.team ?? ''))) return Promise.resolve({ ok: false, error: 'Invalid board operation.' });
+      if (['readPacket', 'writePacket', 'messages', 'sendMessage'].includes(operation)
+        && (!Array.isArray(params.boardIds) || params.boardIds.length < 1 || params.boardIds.length > 32
+          || params.boardIds.some((id) => typeof id !== 'string' || !ID_RE.test(id)))) return Promise.resolve({ ok: false, error: 'Choose the permitted boards.' });
       return call(name, { params, body });
     },
     renameTeam(team, name) {

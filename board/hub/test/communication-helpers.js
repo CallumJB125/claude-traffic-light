@@ -4,8 +4,8 @@ import { tenancy } from './tenancy/fixture.js';
 import { FakeRunner, until, runMsg, runHb } from './helpers.js';
 
 // Real accounts, enrollments and authenticated WS; protocol clients only.
-export async function communicationRig(t) {
-  const f = await tenancy(), clients = [];
+export async function communicationRig(t, options = {}) {
+  const f = await tenancy(options), clients = [];
   t.after(async () => { clients.forEach((c) => c.terminate()); await f.h.close(); });
   async function participant(user, team = f.A, { board = team.board, title = 'Communication task' } = {}) {
     const enrollment = await f.as(user, 'POST', `/api/teams/${team.team}/enrol`, {}); assert.equal(enrollment.status, 200, enrollment.text);

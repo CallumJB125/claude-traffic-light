@@ -229,6 +229,9 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 export function createHttpHandler({ hub, api, config, integrations = null }) {
   const workflows = new Workflows(hub);
   const communication = new TeamCommunication(hub);
+  // This query can only narrow current staff access. Desktop grants derive it
+  // privately in main; remote grants additionally require their own guard.
+  const communicationOptions = (query) => query.has('board_id') ? { boardIds: Object.freeze(query.getAll('board_id')) } : {};
   // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
   const publicBase = (req) => {
     if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
@@ -422,10 +425,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
-  route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred));
-  route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred), { replay: false });
-  route('GET', '/api/cards/:card_id/messages', ({ member, params, ident }) => communication.staffListMessages(member, params.card_id, ident?.cred), { limit: 'communication_read_member' });
-  route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred), { replay: false });
+  route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred, communicationOptions(query)));
+  route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident, query }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
+  route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
+  route('POST', '/api/cards/:card_id/messages', ({ member, params, body, ident, query }) => communication.staffSendMessage(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);

@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { createBroker } = require('../native-board/broker');
 const { request, readGrant } = require('../native-board/client');
 const { callTool } = require('../native-board/tools');
+const { validate, listTools } = require('../native-board/tools');
 const Install = require('../native-board/install');
 
 function fixture(t) {
@@ -229,4 +230,85 @@ test('real accounts hub enforces selected boards, role changes, version conflict
   assert.ok((await request(file, 'plexiform_get_card', { card_id })).ok);
   await h.call('POST', '/api/auth/signout', { token: saved.token, body: {} });
   assert.equal((await request(file, 'plexiform_get_card', { card_id })).code, 'UNAUTHENTICATED');
+});
+
+test('communication tool schemas reject nested authority and invalid bounded inputs before any request', () => {
+  const data = { brief: 'Brief', decisions: [], progress: '', nextAction: 'Review', artifacts: [], reportedChecks: [] };
+  const packet = { card_id: 'card', request_id: crypto.randomUUID(), expected_version: 0, expected_fence: 1, data };
+  assert.doesNotThrow(() => validate('plexiform_write_packet', packet));
+  for (const bad of [
+    { ...packet, provider: 'codex' }, { ...packet, expected_fence: -1 }, { ...packet, request_id: 'not-a-uuid' },
+    { ...packet, data: { ...data, permission: 'allow' } }, { ...packet, data: { ...data, decisions: [42] } },
+    { ...packet, data: { ...data, decisions: Array(21).fill('x') } },
+    { ...packet, data: { ...data, artifacts: [{ kind: 'path', path: 'src/a.js', approved: true }] } },
+    { ...packet, data: { ...data, artifacts: [{ kind: 'command', path: 'run this' }] } },
+  ]) assert.throws(() => validate('plexiform_write_packet', bad));
+  const message = { card_id: 'card', request_id: crypto.randomUUID(), expected_fence: 1, kind: 'handoff', body: 'Review', recipient_run_ids: [crypto.randomUUID()] };
+  assert.doesNotThrow(() => validate('plexiform_send_message', message));
+  for (const bad of [{ ...message, for_agent: true }, { ...message, kind: 'approve' }, { ...message, recipient_run_ids: [] },
+    { ...message, recipient_run_ids: Array(5).fill(crypto.randomUUID()) }, { ...message, receipt_token: 'private' }]) assert.throws(() => validate('plexiform_send_message', bad));
+  assert.ok(!listTools('read').some((t) => ['plexiform_write_packet', 'plexiform_send_message'].includes(t.name)));
+  assert.ok(!listTools('collaborate').some((t) => /_(?:ack|approve|dispatch)(?:_|$)/.test(t.name)));
+});
+
+test('native communication performs actual account packet/message round trips without widening selected boards or provenance', async (t) => {
+  const { communicationRig, taskMessage } = await import('../board/hub/test/communication-helpers.js');
+  const { createAccountClient } = require('../buddy-window/accounts');
+  const x = await communicationRig(t), f = fixture(t), { sender: a, recipient: b, A } = x;
+  const second = await x.as(x.users.ua, 'POST', '/api/boards', { request_id: crypto.randomUUID(), name: 'Unselected project' });
+  assert.equal(second.status, 200, second.text);
+  const board = second.body.board.id;
+  x.h.db.run('INSERT INTO board_repos (board_id, repo_id) VALUES (?, ?)', board, A.repo);
+  const hidden = await x.participant(x.users.s, A, { board, title: 'Unselected peer title' });
+  const outward = await a.client.rpc(a.run, 'board_send_message', taskMessage(b, { recipient_run_ids: [b.run.run_id, hidden.run.run_id] }));
+  assert.equal(outward.ok, true);
+  assert.equal((await hidden.client.rpc(hidden.run, 'board_send_message', taskMessage(a, { body: 'Unselected source text' }))).ok, true);
+  // More than one history page of newer ungranted sources must neither hide
+  // the permitted older message nor change its truncation/count projection.
+  for (let n = 0; n < 51; n++) {
+    const incoming = await x.as(x.users.ua, 'POST', `/api/cards/${hidden.run.card_id}/messages`, {
+      ...taskMessage(a, { body: 'Unselected source text' }), expected_fence: hidden.run.fence,
+    });
+    assert.equal(incoming.status, 200, incoming.text);
+  }
+  const user = x.users.amember;
+  const client = createAccountClient({ origin: x.h.base, store: { load: () => ({ hub: x.h.base, token: user.token, user: { id: user.id } }) } });
+  const broker = createBroker({ ...f.opts, dir: path.join(f.root, 'communication'), resolveWorkspace: () => ({ userId: user.id, workspace: { teamId: A.team }, client }) });
+  t.after(() => broker.stop()); await broker.start();
+  const grant = { target: 'codex', workspaceId: 'communication-workspace', boardIds: [A.board], mode: 'collaborate' };
+  await broker.connect(grant);
+  const file = broker.grantPath('codex'), card_id = a.run.card_id;
+  const data = { brief: 'Resume this task', decisions: ['Keep the route'], progress: 'Ready', nextAction: 'Review', artifacts: [{ kind: 'path', path: 'src/app.js' }], reportedChecks: ['Reported check'] };
+  const packetRequest = { card_id, request_id: crypto.randomUUID(), expected_version: 0, expected_fence: a.run.fence, data };
+  const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+  const mcp = new Client({ name: 'native-communication-acceptance', version: '1' }); t.after(() => mcp.close());
+  await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(__dirname, '..', 'native-board', 'server.js')], env: { PLEXIFORM_BOARD_GRANT: file }, stderr: 'pipe' }));
+  const saved = JSON.parse((await mcp.callTool({ name: 'plexiform_write_packet', arguments: packetRequest })).content[0].text);
+  assert.equal(saved.ok, true, JSON.stringify(saved)); assert.equal(saved.packet.version, 1);
+  assert.equal(saved.packet.author.provider, null); assert.equal(saved.packet.author.run_id, null);
+  assert.equal((await request(file, 'plexiform_write_packet', packetRequest)).packet.id, saved.packet.id);
+  assert.equal((await request(file, 'plexiform_read_packet', { card_id })).packet.data.brief, data.brief);
+  assert.equal((await request(file, 'plexiform_write_packet', { ...packetRequest, request_id: crypto.randomUUID() })).code, 'VERSION_CONFLICT');
+  const history = await request(file, 'plexiform_list_messages', { card_id }); assert.equal(history.ok, true);
+  assert.ok(history.peers.some((p) => p.run_id === b.run.run_id));
+  assert.ok(!JSON.stringify(history).includes(hidden.run.run_id));
+  assert.ok(!JSON.stringify(history).includes('Unselected source text'));
+  assert.ok(!JSON.stringify(history).includes('Unselected peer title'));
+  assert.equal(history.messages.find((m) => m.id === outward.result.message.id).deliveries.length, 1);
+  assert.equal(history.truncated, false);
+  assert.ok(!JSON.stringify(history).includes('bmr1.'));
+  const message = { card_id, ...taskMessage(hidden), expected_fence: a.run.fence };
+  const before = x.h.db.get('SELECT COUNT(*) n FROM task_messages').n;
+  assert.equal((await request(file, 'plexiform_send_message', message)).code, 'NOT_FOUND');
+  assert.equal(x.h.db.get('SELECT COUNT(*) n FROM task_messages').n, before);
+  await broker.connect({ ...grant, boardIds: [A.board, board] });
+  const sent = await request(file, 'plexiform_send_message', message); assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(sent.message.author.provider, null); assert.equal(sent.message.for_agent, false); assert.equal(sent.message.auto_resume, false);
+  await broker.connect(grant);
+  assert.equal((await request(file, 'plexiform_send_message', message)).code, 'NOT_FOUND', 'narrowed grant also constrains durable retry');
+  assert.equal((await request(file, 'plexiform_read_packet', { card_id: hidden.run.card_id })).code, 'NOT_FOUND');
+  assert.ok((await x.as(user, 'GET', `/api/cards/${card_id}/messages`)).body.messages.some((m) => m.body === 'Unselected source text'), 'ordinary staff history retains wider authorized context');
+  await broker.connect({ ...grant, mode: 'read' });
+  assert.equal((await request(file, 'plexiform_send_message', { ...message, recipient_run_ids: [b.run.run_id] })).code, 'FORBIDDEN');
 });

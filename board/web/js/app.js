@@ -930,26 +930,77 @@ async function labelCall(fn) {
   }
 }
 
+let drawerSession = 0;
+let detailRefresh = 0;
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
-  const tab = section === 'handover' || section === 'comments' ? section : (state.detail?.cardId === cardId ? state.detail.tab : 'activity');
-  state.detail = { cardId, data: state.detail?.cardId === cardId ? state.detail.data : null, rx: state.detail?.rx ?? null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
+  const same = state.detail?.cardId === cardId;
+  const tab = ['handover', 'comments', 'packet', 'messages'].includes(section) ? section : (same ? state.detail.tab : 'activity');
+  state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
   update();
   await refreshDetail(cardId);
 }
 
-async function refreshDetail(cardId) {
+async function refreshDetail(cardId, { communication = false } = {}) {
   if (!cardId || state.detail?.cardId !== cardId) return;
+  const generation = boardGeneration, intent = state.detail.intent, request = ++detailRefresh;
+  const current = () => generation === boardGeneration && state.detail?.cardId === cardId && state.detail.intent === intent && request === detailRefresh;
   try {
     const data = await api.card(cardId);
-    if (state.detail?.cardId !== cardId) return;
+    if (!current()) return;
     state.detail = { ...state.detail, data, rx: perf(), error: null };
+    if (['packet', 'messages'].includes(state.detail.tab) && !data.card.archived
+      && (communication || !state.detail.packetLoaded || perf() - (state.detail.communicationRx ?? 0) >= 5000)) {
+      const [packet, messages] = await Promise.allSettled([api.packet(cardId), api.messages(cardId)]);
+      if (!current()) return;
+      state.detail = { ...state.detail, packetLoaded: true, messagesLoaded: true, communicationRx: perf(),
+        packet: packet.status === 'fulfilled' ? packet.value.packet : null,
+        packetError: packet.status === 'rejected' ? errorText(packet.reason) : null,
+        messages: messages.status === 'fulfilled' ? messages.value : null,
+        messagesError: messages.status === 'rejected' ? errorText(messages.reason) : null };
+    }
   } catch (err) {
-    if (state.detail?.cardId !== cardId) return;
+    if (!current()) return;
     state.detail = { ...state.detail, error: errorText(err) };
   }
   update();
+}
+
+function communicationDraft(form, kind) {
+  const fd = new FormData(form), previous = kind === 'task-packet' ? state.detail?.packetDraft : state.detail?.messageDraft;
+  if (kind === 'task-packet') return { ...Object.fromEntries(['brief', 'decisions', 'progress', 'nextAction', 'paths', 'reportedChecks'].map((k) => [k, String(fd.get(k) ?? '')])),
+    expected_version: Number(fd.get('expected_version')), expected_fence: Number(fd.get('expected_fence')),
+    evidence: previous?.evidence ?? (state.detail?.packet?.data?.artifacts ?? []).filter((a) => a.kind === 'evidence'), request_id: crypto.randomUUID() };
+  return { recipient: String(fd.get('recipient') ?? ''), kind: String(fd.get('kind') ?? 'coordination'), body: String(fd.get('body') ?? ''),
+    expected_fence: previous?.expected_fence ?? state.detail?.data?.card.fence, request_id: crypto.randomUUID() };
+}
+
+async function submitCommunication(form, kind) {
+  const detail = state.detail, cardId = form.dataset.card, generation = boardGeneration;
+  if (!detail || detail.cardId !== cardId || boardReadOnly()) return;
+  const packet = kind === 'task-packet', key = packet ? 'packetDraft' : 'messageDraft', errorKey = packet ? 'packetSaveError' : 'messageSaveError';
+  const draft = detail[key] ?? communicationDraft(form, kind), intent = detail.intent;
+  state.detail = { ...detail, [key]: draft, [errorKey]: null };
+  const current = () => generation === boardGeneration && state.detail?.intent === intent && state.detail.cardId === cardId;
+  const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
+  await withBusy(`${packet ? 'packet' : 'message'}:${cardId}`, async () => {
+    try {
+      const body = { request_id: draft.request_id, expected_fence: draft.expected_fence };
+      const result = packet ? await api.writePacket(cardId, { ...body, expected_version: draft.expected_version,
+        data: { brief: draft.brief, decisions: lines(draft.decisions), progress: draft.progress, nextAction: draft.nextAction,
+          artifacts: [...draft.evidence, ...lines(draft.paths).map((path) => ({ kind: 'path', path }))], reportedChecks: lines(draft.reportedChecks) } })
+        : await api.sendMessage(cardId, { ...body, kind: draft.kind, body: draft.body, recipient_run_ids: [draft.recipient] });
+      if (!current()) return;
+      if (state.detail[key]?.request_id === draft.request_id) state.detail = { ...state.detail, [key]: null, [errorKey]: null };
+      if (packet) state.detail = { ...state.detail, packet: result.packet };
+      toast(packet ? 'Task context saved.' : 'Task message sent.');
+      await refreshDetail(cardId, { communication: true });
+    } catch (err) {
+      if (current()) state.detail = { ...state.detail, [errorKey]: errorText(err) };
+      throw err;
+    }
+  });
 }
 
 let detailTimer = null;
@@ -1193,6 +1244,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if (kind === 'task-packet' || kind === 'task-message') return submitCommunication(form, kind);
   if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
@@ -1660,7 +1712,9 @@ function onClick(e) {
       });
       return;
     }
-    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); } return;
+    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
+    case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
     case 'new-card': openNewCard(); return;
@@ -1763,6 +1817,12 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  const form = e.target.closest?.('[data-form="task-packet"], [data-form="task-message"]');
+  if (form && state.detail?.cardId === form.dataset.card) {
+    const packet = form.dataset.form === 'task-packet';
+    state.detail = { ...state.detail, [packet ? 'packetDraft' : 'messageDraft']: communicationDraft(form, form.dataset.form),
+      [packet ? 'packetSaveError' : 'messageSaveError']: null };
+  }
   const el = e.target.closest?.('[data-input]');
   if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
   if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') {
