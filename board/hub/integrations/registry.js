@@ -57,6 +57,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+// parseBody's result: a literal-like object only (a Promise, Map or class
+// instance is refused, so a forgotten `async` can't slip through).
+const isBareObject = (v) => isPlainObject(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+const POISON_KEYS = ['__proto__', 'constructor', 'prototype'];
 // An https URL on one of `hosts`, no port or credentials; else null.
 function urlOn(u, hosts) {
   let url;
@@ -755,12 +759,19 @@ export function createIntegrations({
   }
 
   async function verifiedWebhook(c, conn, { headers, rawBody, v }) {
-    let payload;
-    try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
     // The connector's key alone may rest on an unsigned delivery header: the
     // hash of the signed body is a second key, so a captured request replayed
-    // under a new delivery id is still a duplicate.
+    // under a new delivery id is still a duplicate. Taken before parseBody,
+    // which then can't change it.
     const keys = [`${c.id}:${String(v.dedupe_key).slice(0, 200)}`, `${c.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
+    let payload;
+    if (conn.parseBody) {
+      // Connector code sees only a body whose signature verify() checked.
+      try { payload = conn.parseBody({ rawBody, headers }); } catch { payload = undefined; }
+      if (!isBareObject(payload) || POISON_KEYS.some((k) => Object.hasOwn(payload, k))) return { status: 400, body: { error: { code: 'VALIDATION', message: 'body could not be read' } } };
+    } else {
+      try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
+    }
     const lease = reserve(c.provider, keys);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
     // Never 200: the first attempt may still fail and release the delivery,

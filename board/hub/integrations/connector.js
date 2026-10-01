@@ -33,6 +33,14 @@
 //   // and return a dedupe key (delivery id) for replay protection.
 //   verify({ headers, rawBody, secrets, now }) → { ok: true, dedupe_key } | { ok: false, reason },
 //   async handleWebhook({ headers, payload, ctx }) → void,
+//   // Optional: turn the raw body into `payload` (default: JSON.parse). Called
+//   // only after verify() passed over those bytes, synchronously, on a body
+//   // ≤ 1 MiB. A throw, or anything but a plain object (an array, a Promise,
+//   // a class instance) or an object with an own top-level `__proto__`,
+//   // `constructor` or `prototype` key, is a 400 VALIDATION with a fixed
+//   // message. Dedupe keys never depend on it. (Slack: form-encoded bodies
+//   // whose `payload=` field is JSON.)
+//   parseBody({ rawBody, headers }) → { … },
 //   // Optional, default false: answer 200 once the delivery is verified and
 //   // leased, then run handleWebhook (same lease, timeout and ctx). For a
 //   // provider that needs an answer within seconds (Slack: 3 s). A failure then
@@ -127,6 +135,7 @@ export function defineConnector(spec) {
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
+  if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
