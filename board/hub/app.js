@@ -31,6 +31,7 @@ import { OAuth } from './identity/oauth.js';
 import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { oauthProviders } from './config.js';
+import { RemoteAuthority } from './remote/authority.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -61,6 +62,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  hub.remoteAuthority = hub.accounts ? new RemoteAuthority(hub) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,
   // say so, and how an operator erases.

@@ -17,6 +17,7 @@ import { limitOrThrow } from './ratelimit.js';
 import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
 import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
 import { insertCardRecord } from './card-record.js';
+import { remoteScope, remoteMutation } from './remote/context.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -106,7 +107,11 @@ export class Api {
     return current;
   }
 
-  currentWriter(member, cred = null) {
+  currentWriter(member, cred = null, remote = null) {
+    if (remote != null) {
+      if (this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'remote authority cannot replace an integration actor');
+      remoteScope(remote, member, true);
+    }
     const current = this.currentMember(member, cred);
     if (!this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this board');
     return current;
@@ -129,11 +134,16 @@ export class Api {
     if (this.hub.board(boardId)?.archived_at) throw new HubError('CONFLICT', 'this board is archived: restore it first', { reason: 'BOARD_ARCHIVED' });
   }
 
-  withWritableBoard(boardId, fn, { member = null, cred = null } = {}) {
+  withWritableBoard(boardId, fn, { member = null, cred = null, remote = null } = {}) {
     return this.hub.withBoard(boardId, () => {
-      const current = member ? this.currentWriter(member, cred) : null;
+      const current = member ? this.currentWriter(member, cred, remote) : null;
       if (current) this.boardFor(current, boardId);
       this.writableBoard(boardId);
+      if (remote != null) {
+        const scope = remoteScope(remote, member, true);
+        if (!scope.boardIds.includes(boardId)) throw new HubError('NOT_FOUND', 'selected board unavailable');
+        return this.hub.txn(() => remoteMutation(remote, member, () => fn(current)));
+      }
       return fn(current);
     });
   }
@@ -258,8 +268,8 @@ export class Api {
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
-  async createCard(member, boardId, body, { cred = null } = {}) {
-    member = this.currentWriter(member, cred);
+  async createCard(member, boardId, body, { cred = null, remote = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     this.boardFor(member, boardId);
     const title = str(body.title, 200, 'title', { required: true });
     const text = str(body.body, 20_000, 'body') ?? '';
@@ -314,11 +324,11 @@ export class Api {
       // The same request naming another board is not a replay of this one.
       if (prior && this.hub.card(prior).board_id !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
       return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
-    }, { member, cred });
+    }, { member, cred, remote });
   }
 
-  async patchCard(member, cardId, body, { cred = null } = {}) {
-    member = this.currentWriter(member, cred);
+  async patchCard(member, cardId, body, { cred = null, remote = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     return this.withWritableBoard(row0.board_id, (current) => {
       member = current;
@@ -371,7 +381,7 @@ export class Api {
         this.hub.later(() => this.hub.broadcastCard(cardId));
       });
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
-    }, { member, cred });
+    }, { member, cred, remote });
   }
 
   // External integration/client feedback/workflow context never enters the permanent
@@ -763,8 +773,8 @@ export class Api {
     return id;
   }
 
-  async comment(member, cardId, body, { cred = null } = {}) {
-    member = this.currentWriter(member, cred);
+  async comment(member, cardId, body, { cred = null, remote = null } = {}) {
+    member = this.currentWriter(member, cred, remote);
     const row0 = this.cardFor(member, cardId);
     const text = str(body.body, 10_000, 'body', { required: true });
     return this.withWritableBoard(row0.board_id, (current) => {
@@ -780,7 +790,7 @@ export class Api {
       if (body.for_agent === true) this.hub.deliverComments(cardId);
       const c = this.db.get('SELECT * FROM comments WHERE id = ?', id);
       return { comment: { id, author_name: member.display_name, source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to, created_age_ms: 0 } };
-    }, { member, cred });
+    }, { member, cred, remote });
   }
 
   // ── devices, repos, members ───────────────────────────────────────────────

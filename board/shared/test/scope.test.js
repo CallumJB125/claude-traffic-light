@@ -120,6 +120,7 @@ test('assertNoForeignBytes: exit (f) — non-repo session and out-of-repo paths 
 test('assertNoForeignBytes: exit (j) — no credential pattern in any hub-bound byte', () => {
   const scope = { repo_id: 'r' };
   const samples = {
+    integration_token: 'pfi_' + 'R'.repeat(43),
     message_receipt: `bmr1.00000000-0000-4000-8000-000000000001.${'A'.repeat(42)}-`,
     anthropic_key: 'sk-ant-oat01-AbCdEfGhIjKlMnOp',
     openai_key: 'sk-proj-abcdefghijklmnopqrstuvwx',
@@ -138,6 +139,14 @@ test('assertNoForeignBytes: exit (j) — no credential pattern in any hub-bound 
     assert.throws(() => serializeOutbound({ repo_id: 'r', deep: [{ text: `x ${s} y` }] }, scope), new RegExp(kind), kind);
   }
   assert.doesNotThrow(() => serializeOutbound({ repo_id: 'r', text: 'sk-ant is a prefix; skills; task-antique; PASSWORD_MIN_LEN = 8' }, scope));
+});
+
+test('all remote capability shapes redact from ordinary data and fail unredacted outbound bytes', () => {
+  for (const prefix of ['pfi_', 'pfm_', 'pfr_', 'pfc_', 'pfcode_']) {
+    const token = prefix + 'S'.repeat(43);
+    assert.equal(redact(`reported ${token}`, null), 'reported <redacted:integration_token>');
+    assert.throws(() => assertNoForeignBytes({ body: token }, { repo_id: 'r' }), /credential pattern integration_token/);
+  }
 });
 
 test('message receipt credentials redact in ordinary free text and fail outbound serialization without redaction', () => {
