@@ -44,6 +44,9 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
   await expect(hatch.locator('#stage svg.rig')).toBeVisible();
   await expect.poll(() => hatch.evaluate(() => document.querySelector('#stage svg.rig')?.className.baseVal), { timeout: 10000 }).toContain('body-u-otter');
 
+  // wait for the preview to settle on the chosen colour (the page re-previews a moment after a change), so Save keeps the last one
+  await expect.poll(() => hatch.evaluate(() => (window.BuddyCharacters.get('u-otter')?.sprite.body || '').includes('#4f9be0')), { timeout: 10000 }).toBe(true);
+  await hatch.waitForTimeout(400);
   await hatch.click('#save');
   await expect(hatch.locator('#status')).toContainText('Saved as Otter', { timeout: 10000 });
   expect(fs.existsSync(path.join(charDir('u-otter'), 'character.json'))).toBe(true);
