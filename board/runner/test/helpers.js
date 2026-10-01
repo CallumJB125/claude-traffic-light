@@ -206,6 +206,7 @@ export async function startRunner({ hub, home, repo, scenario, clock, policyExtr
     interruptWaitMs: 500, stopGraceMs: 800, limitBackoffMs: 50, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30,
     keepRunFiles: true,   // tests read fake.log after the run ends
     buddyHome: null,      // never write Buddy launch records into the real home
+    detectAis: async () => null,   // never probe the real claude/codex
     ...opts,
   });
   await sup.start();

@@ -54,7 +54,6 @@ export const DENY_READ = Object.freeze([
 export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn']);
 
 export const DEFAULT_MAX_TURNS = 200;
-export const DEFAULT_BUDGET_USD = 5;
 
 // No secret is ever in the CLI env (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
 // Bash sees the CLI's env. ANTHROPIC_API_KEY reaches the CLI through apiKeyHelper
@@ -194,7 +193,8 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
     '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed, ...extraDisallowed,
     '--permission-mode', PERMISSION_MODES.has(permissionMode) ? permissionMode : 'acceptEdits',
     '--permission-prompt-tool', 'mcp__board__approval',
-    '--max-budget-usd', String(budgetUsd ?? DEFAULT_BUDGET_USD),
+    // No budget = no flag: a "No budget" run never stops on cost (D-4).
+    ...(Number.isFinite(budgetUsd) && budgetUsd > 0 ? ['--max-budget-usd', String(budgetUsd)] : []),
     '--max-turns', String(maxTurns ?? DEFAULT_MAX_TURNS),
     '--append-system-prompt', systemPrompt ?? '',
   ];

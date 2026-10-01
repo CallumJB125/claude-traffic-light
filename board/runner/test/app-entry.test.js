@@ -23,7 +23,7 @@ const CF_SECRET = 'cfsecret-APPSECRET-0123456789abcdef';
 function spawnApp(root, { env = {} } = {}) {
   const child = spawn(process.execPath, ['--import', PRELOAD, ENTRY], {
     // BOARD_HOME points somewhere the app-mode runner must never touch; BOARD_DEBUG logs everything.
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: '/tmp', BOARD_HOME: path.join(root, 'cli-home'), BOARD_DEBUG: '1', ...env },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: '/tmp', BOARD_HOME: path.join(root, 'cli-home'), BOARD_DEBUG: '1', BOARD_AI_DETECT: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   const app = { child, stdout: '', stderr: '', messages: [], exit: null };

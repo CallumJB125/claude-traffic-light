@@ -40,7 +40,7 @@ export async function until(fn, { timeout = 20000, every = 50, what = 'condition
 }
 
 const baseEnv = (extra) => ({
-  PATH: process.env.PATH, LANG: 'en_US.UTF-8', BOARD_TEST_TIME_SCALE: String(SCALE), ...extra,
+  PATH: process.env.PATH, LANG: 'en_US.UTF-8', BOARD_AI_DETECT: '0', BOARD_TEST_TIME_SCALE: String(SCALE), ...extra,
 });
 
 // ── hub ────────────────────────────────────────────────────────────────────

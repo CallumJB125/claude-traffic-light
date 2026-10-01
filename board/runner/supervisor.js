@@ -15,6 +15,7 @@ import { initHome, readDevice, readPolicy, readLedger, writeLedger, writePolicy,
 import { Outbox } from './outbox.js';
 import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
+import { BACKENDS } from './backends/index.js';
 import { startIpcServer } from './ipc.js';
 import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, buddyHomeOf, recordBuddyLaunch, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
 import { createWorktree, sessionOf, snapshot as gitSnapshot, git } from './git.js';
@@ -31,8 +32,21 @@ function err(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-// The card's budget, capped by this machine's policy budget_per_run (policy.json is authoritative).
-const minDefined = (...xs) => { const v = xs.filter((x) => Number.isFinite(x) && x > 0); return v.length ? Math.min(...v) : undefined; };
+/**
+ * The run's spend cap: the card's budget, capped by this machine's policy
+ * budget_per_run (policy.json is authoritative). Neither = no cap (no flag).
+ * scope says whose cap binds: 'card' (the giver's) or 'device' (this machine's).
+ */
+export function runBudget(cardUsd, localUsd) {
+  const ok = (x) => Number.isFinite(x) && x > 0;
+  if (ok(cardUsd) && ok(localUsd)) return localUsd < cardUsd ? { usd: localUsd, scope: 'device' } : { usd: cardUsd, scope: 'card' };
+  if (ok(cardUsd)) return { usd: cardUsd, scope: 'card' };
+  if (ok(localUsd)) return { usd: localUsd, scope: 'device' };
+  return { usd: undefined, scope: null };
+}
+
+// The AI an offer asks for (D-7); omitted = Claude.
+export const aiOf = (offer) => (typeof offer?.ai === 'string' && /^[a-z]{1,32}$/.test(offer.ai) ? offer.ai : offer?.ai == null ? 'claude' : null);
 
 export function findOnPath(bin, envPath = process.env.PATH ?? '') {
   if (bin.includes('/')) return bin;
@@ -102,6 +116,7 @@ export class Supervisor extends EventEmitter {
   async start() {
     if (TIME_SCALE !== 1) this.log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
     await this.recoverOrphans();
+    this.ais = await this.#detectAis();
     if (this.opts.controlSocket !== false) await this.#startControl();
     if (this.opts.powerMonitor) this.attachPowerMonitor(this.opts.powerMonitor);
     this.connect();
@@ -191,11 +206,43 @@ export class Supervisor extends EventEmitter {
     return this.sendRaw(serializeOutbound(frame, DEVICE_SCOPE));
   }
 
+  // The AIs this machine can run (runner-adapters-contract §2): ids, labels,
+  // versions, booleans and capability words only; never a path. null when
+  // detection is off (BOARD_AI_DETECT=0) or failed: the frames then omit `ai`.
+  async #detectAis() {
+    try {
+      if (this.opts.detectAis) return await this.opts.detectAis();
+      if (this.env.BOARD_AI_DETECT === '0') return null;
+      const out = [];
+      for (const [id, B] of Object.entries(BACKENDS)) {
+        const d = await B.detect({ env: this.env, ...(id === 'claude' && this.claudeBin ? { which: () => ({ bin: this.claudeBin }) } : {}) });
+        const { label, capabilities } = B.describe();
+        out.push({ id, label, installed: d.installed, version: d.version, signedIn: d.signedIn, capabilities, bin: d.bin });
+      }
+      return out;
+    } catch (e) {
+      this.log.warn('AI detection failed', { err: e.message });
+      return null;
+    }
+  }
+
+  #aiFrame() {
+    return this.ais ? { ai: this.ais.map(({ id, label, installed, version, signedIn, capabilities }) => ({ id, label, installed, version, signedIn, capabilities })) } : {};
+  }
+
+  /** Claude stays as before (the configured bin); another AI needs a startable backend that is installed and not signed out. */
+  canRun(id) {
+    if (id === 'claude') return true;
+    if (!id || !BACKENDS[id]?.describe().startable) return false;
+    return !!this.ais?.some((a) => a.id === id && a.installed && a.signedIn !== false);
+  }
+
   #sendHello() {
     this.#sendDevice({
       type: 'hello', protocol: PROTOCOL_VERSION, device_id: this.enrolled ? '' : this.device.device_id, runner_version: RUNNER_VERSION,
       outbox_head_seq: this.outbox.head, outbox_id: this.outbox.id, outbox_acked_seq: this.outbox.acked,
       ...(this.formFactor ? { form_factor: this.formFactor } : {}),
+      ...this.#aiFrame(),
       runs: [...this.runs.values()].map((r) => ({ run_id: r.run_id, card_id: r.card_id, fence: r.fence, local_state: r.ending ? 'ending' : r.localState })),
     });
   }
@@ -252,7 +299,7 @@ export class Supervisor extends EventEmitter {
     // one heartbeat: only those never move a card (D3).
     const now = this.clock.mono();
     for (const e of this.outbox.pendingAfter(m.last_seq_acked)) this.sendRaw(Outbox.frame(e, e.offline || e.at == null || now - e.at > HB_MS));
-    this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist) });
+    this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist), ...this.#aiFrame() });
     this.connected = true;
     this.sendHbNow();
     for (const s of this.salvageQueue.splice(0)) this.sendRaw(s);
@@ -422,6 +469,11 @@ export class Supervisor extends EventEmitter {
   }
 
   async #handleOffer(offer) {
+    // An AI this machine can't run: ignore, never decline (a decline cancels the dispatch for every device, D-7).
+    if (!this.canRun(aiOf(offer))) {
+      this.log.info('offer for an AI this machine cannot run; ignored', { card_id: offer.card_id });
+      return;
+    }
     this.policy = readPolicy(this.l);
     // Default deny: a repo that doesn't scope produces zero bytes (exit f).
     const scope = await this.#scopeForRepo(offer.repo_id);
@@ -526,10 +578,13 @@ export class Supervisor extends EventEmitter {
     const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
     const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
     const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path) });
-    const Backend = this.opts.Backend ?? ClaudeBackend;
+    const ai = aiOf(run.offer) ?? 'claude';
+    const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
+    const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
+    run.budgetScope = budget.scope;
     const backend = new Backend({
-      bin: this.claudeBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
-      budgetUsd: minDefined(run.offer.budget_usd, repo.budget_per_run), maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
+      bin: ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
+      budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
       log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
     });
     run.attach(backend);
@@ -660,7 +715,7 @@ export class Supervisor extends EventEmitter {
               p.repos[m.repo_id] = { ...(p.repos[m.repo_id] ?? {}), opt_in: m.opt_in !== false, ...(m.local_path ? { local_path: m.local_path } : {}) };
               writePolicy(this.l, p);
               this.policy = p;
-              if (this.connected) this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist) });
+              if (this.connected) this.#sendDevice({ type: 'advertise', repos: advertisable(this.policy, this.allowlist), ...this.#aiFrame() });
               return reply({ ok: true });
             }
             case 'confirm_offer': { const p = this.confirms.get(m.request_id); if (p) p.resolve(!!m.accept); return reply({ ok: !!p }); }

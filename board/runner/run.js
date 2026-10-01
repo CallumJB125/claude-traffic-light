@@ -313,8 +313,11 @@ export class Run {
       if (this.gateOpen && this.pending.length) this.#flushIdle();
       return;
     }
-    if (r.subtype === 'error_max_budget_usd') return this.fail('budget', 'budget cap reached (--max-budget-usd)');
-    if (r.subtype === 'error_max_turns') return this.fail('budget', 'max turns reached');
+    if (r.terminal_reason === 'budget' || r.subtype === 'error_max_budget_usd') {
+      return this.fail('budget', 'budget cap reached (--max-budget-usd)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
+    }
+    // A turn limit is not a budget: it must never read "Budget reached" (D-5).
+    if (r.subtype === 'error_max_turns') return this.fail('error', 'max_turns');
     if (this.expectInterrupt) {
       this.expectInterrupt = false;
       if (this.gateOpen && this.pending.length) this.#flushIdle();
