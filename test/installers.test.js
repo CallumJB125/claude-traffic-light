@@ -341,6 +341,16 @@ test('release-promote.yml: the release environment, both keys only there, signed
   assert.match(jobs.promote, /if: env\.WINDOWS_RELEASE != 'true'\n[\s\S]*?grep -E -- '-win-\|\^\(latest\|beta\|alpha\)\\\.yml\$'[\s\S]*?exit 1/, 'L2: a draft holding Windows files is refused unless Windows ships');
 });
 
+test('promotion input validation accepts an omitted rollback list and rejects malformed values', () => {
+  const { spawnSync } = require('node:child_process');
+  const line = readText('.github/workflows/release-promote.yml').split('\n').find((s) => s.includes('printf') && s.includes('"$ROLLBACK_FROM"'));
+  assert.ok(line);
+  for (const [value, valid] of [['', true], ['1.0.1', true], ['1.0.1, 1.0.2-beta.3', true], ['garbage', false], ['1.0.1; echo unsafe', false], ['1.0.1,', false]]) {
+    const r = spawnSync('bash', ['-c', line.trim()], { env: { ...process.env, ROLLBACK_FROM: value }, encoding: 'utf8' });
+    assert.equal(r.status === 0, valid, JSON.stringify(value));
+  }
+});
+
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.
 test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
   for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml']) {
