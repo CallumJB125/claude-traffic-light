@@ -1,15 +1,22 @@
 // What a phone may approve at all. Everything not listed here is desk-only:
-//   - Read / Grep / Glob, unless they touch credential paths
+//   - Read / Grep / Glob, unless they touch credential paths or secrets files
 //   - Edit / Write (MultiEdit, NotebookEdit) inside the session's directory,
-//     not credential paths and not files that later run code
+//     not credential paths, secrets files or files that later run code
 //   - Bash (and other agents' shell tools) only when every simple command
-//     starts with an allow-listed, read-only program, nothing is expanded or
-//     redirected, and no shell/interpreter/eval appears anywhere
-// Commands that run repo-controlled code — package scripts, test runners,
-// compilers with plugins, git commit/push (hooks) — are desk-only. A repo can
-// opt in to remote test commands (trustTestCommands); commit/push never are.
+//     starts with an allow-listed, read-only program, nothing is expanded,
+//     substituted or redirected (globs only in a last, non-hidden path
+//     segment; no brace or ~user expansion), no secrets file is named, and no
+//     shell/interpreter/eval appears anywhere
+// Commands that run repo-controlled code — package scripts (`npm test`,
+// `npm run <script>`), test runners, compilers with plugins, git commit/push
+// (hooks) — are desk-only. A repo can opt in to remote test commands
+// (trustTestCommands), still without options that name another program;
+// commit/push never are.
+// Paths are checked as written: this module is pure (it also runs in the
+// phone PWA). Where a filesystem exists the caller can pass `realpath` (e.g.
+// fs.realpathSync) and paths are also checked after resolving symlinks.
 // The deny-list (denylist.js) still runs first, as defence in depth.
-import { tokenize, commands, SHELLS, INTERPRETERS } from './shell.js';
+import { tokenize, commands, SHELLS, INTERPRETERS, GLOB, TILDE, BRACE } from './shell.js';
 import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList } from './denylist.js';
 
 const READ_TOOLS = /^(Read|Grep|Glob|LS|NotebookRead)$/;
@@ -21,6 +28,15 @@ const subcommands = (...subs) => {
   return (args) => (set.has(args[0]) ? null : `only ${subs.join('/')} are allowed remotely`);
 };
 const noArgs = (re, why) => (args) => (args.some((a) => re.test(a)) ? why : null);
+// Options before `--` only: after it they belong to the script.
+const noOptions = (re, why) => (args) => {
+  const end = args.indexOf('--');
+  return (end < 0 ? args : args.slice(0, end)).some((a) => re.test(a)) ? why : null;
+};
+const both = (...checks) => (args) => checks.reduce((why, check) => why ?? check(args), null);
+
+// Files whose contents are secrets, beyond the credential directories.
+export const SECRET_FILES = /(^|[/=:])\.env(rc)?(\.[^/]*)?$|(^|\/)(\.git-credentials|\.pgpass|id_(rsa|dsa|ecdsa|ed25519))$|\.(pem|key|p12|pfx|jks|keystore)$/i;
 
 // git: read-only subcommands only, no global options (-c/-C/--git-dir, so no
 // core.pager / core.sshCommand / alias overrides), and no option that writes
@@ -36,7 +52,11 @@ function gitArgs(args) {
 
 export const DEFAULT_BASH_ALLOW = {
   ls: null, cat: null, head: null, tail: null, wc: null, pwd: null, echo: null, grep: null, egrep: null, fgrep: null,
-  diff: null, sort: null, uniq: null, which: null, date: null, tree: null, file: null,
+  diff: null, which: null, date: null,
+  sort: noArgs(/^-[a-zA-Z]*o|^--(output|compress-program)(=|$)/, 'sort -o writes a file'),
+  uniq: (args) => (args.filter((a) => !a.startsWith('-')).length > 1 ? 'uniq writes its second file' : null),
+  tree: noArgs(/^-[a-zA-Z]*[oR]|^--(fromfile|output)/, 'tree -o writes a file'),
+  file: noArgs(/^-[a-zA-Z]*C|^--compile/, 'file -C writes a file'),
   stat: null, du: null, df: null, jq: null, basename: null, dirname: null, realpath: null,
   rg: noArgs(/^--pre(-glob)?(=|$)/, 'rg --pre runs a program'),
   find: noArgs(/^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/, 'find -exec / -delete'),
@@ -47,20 +67,54 @@ export const DEFAULT_BASH_ALLOW = {
 // Runs repo-controlled code (package.json scripts, test/config files,
 // compiler plugins). Only for repos that opted in (trustTestCommands).
 const PKG_SUBS = ['test', 't', 'run', 'run-script', 'lint', 'build', 'typecheck'];
+// Options that point a trusted runner at a program or config outside the repo.
+const PKG_PROGRAM_OPTS = noOptions(/^-C$|^--(script-shell|node-options|userconfig|globalconfig|prefix|dir|cwd|shell|preload|require|import)(=|$)/, 'option that runs another program or project');
 export const TEST_COMMAND_ALLOW = {
-  npm: subcommands(...PKG_SUBS), pnpm: subcommands(...PKG_SUBS), yarn: subcommands(...PKG_SUBS), bun: subcommands('test', 'run'),
-  tsc: null, jest: null, vitest: null, pytest: null,
-  go: subcommands('test', 'build', 'vet'),
-  cargo: subcommands('test', 'build', 'check'),
+  npm: both(subcommands(...PKG_SUBS), PKG_PROGRAM_OPTS), pnpm: both(subcommands(...PKG_SUBS), PKG_PROGRAM_OPTS),
+  yarn: both(subcommands(...PKG_SUBS), PKG_PROGRAM_OPTS), bun: both(subcommands('test', 'run'), PKG_PROGRAM_OPTS),
+  tsc: null, jest: null, vitest: null,
+  pytest: (args) => (args.some((a, k) => (a === '-p' && !/^no:/.test(args[k + 1] ?? '')) || (/^-p./.test(a) && !/^-pno:/.test(a))) ? 'pytest -p loads a plugin' : null),
+  go: both(subcommands('test', 'build', 'vet'), noArgs(/^--?(exec|toolexec|vettool)(=|$)/, 'go option runs a program')),
+  cargo: both(subcommands('test', 'build', 'check'), noArgs(/^--config(=|$)|^-Z/, 'cargo option can run a program')),
 };
 
 const FORBIDDEN_HAZARDS = ['expansion', 'substitution', 'process-substitution', 'redirect', 'subshell', 'group', 'background', 'escape', 'unterminated-quote'];
 // Redirections that only discard or merge output are fine.
 const HARMLESS_REDIRECTS = /(^|\s)(2>&1|[12]?>\s?\/dev\/null)(?=\s|$)/g;
 
-function bashReason(command, allow) {
+// Expansions the allow-list can't see through: a glob reaching hidden files or
+// another directory level, ~user, brace expansion.
+function expansionReason(e) {
+  if (e.x & BRACE && /\{[^}]*(,|\.\.)[^}]*\}/.test(e.word)) return 'brace expansion is desk-only';
+  if (e.x & TILDE && !/^~(\/|$)/.test(e.word)) return `${e.word.split('/')[0]} expansion is desk-only`;
+  if (e.x & GLOB) {
+    const segs = e.word.split('/');
+    for (let k = 0; k < segs.length; k++) {
+      if (!/[*?[]/.test(segs[k])) continue;
+      if (/^[.?[]/.test(segs[k]) || segs[k].includes('**')) return 'a glob that can match hidden files is desk-only';
+      if (k < segs.length - 1) return 'a glob in a directory name is desk-only';
+    }
+  }
+  return null;
+}
+
+// `p` after symlinks, when the caller supplied a realpath; null if unknown.
+function resolvedPath(p, cwd, realpath) {
+  if (typeof realpath !== 'function' || typeof p !== 'string' || !p) return null;
+  const base = typeof cwd === 'string' && cwd.startsWith('/') ? cwd.replace(/\/+$/, '') : null;
+  const abs = p.startsWith('/') ? p : base ? `${base}/${p}` : null;
+  if (!abs) return null;
+  try { return realpath(abs); } catch { /* not there yet: resolve its directory */ }
+  const k = abs.lastIndexOf('/');
+  try { return `${realpath(abs.slice(0, k) || '/').replace(/\/+$/, '')}/${abs.slice(k + 1)}`; } catch { return null; }
+}
+
+const isSecret = (p) => CREDENTIAL_PATHS.test(p) || SECRET_FILES.test(p);
+
+function bashReason(command, allow, cwd, realpath) {
   if (typeof command !== 'string' || !command.trim()) return 'no command';
   if (command.length > MAX_COMMAND_CHARS) return 'command too long to review remotely';
+  if (/\p{Cf}/u.test(command)) return 'invisible or bidi control characters are desk-only';
   const { tokens, hazards } = tokenize(command.replace(HARMLESS_REDIRECTS, ' '));
   const bad = FORBIDDEN_HAZARDS.find((h) => hazards.has(h));
   if (bad) return `shell ${bad} is desk-only`;
@@ -75,6 +129,13 @@ function bashReason(command, allow) {
     const check = allow[c.cmd];
     const why = typeof check === 'function' ? check(c.args) : null;
     if (why) return why;
+    for (const e of c.expanded) { const r = expansionReason(e); if (r) return r; }
+    for (const a of c.args) {
+      if (SECRET_FILES.test(a)) return 'names a secrets file (.env, keys)';
+      if (a.startsWith('-') || a.startsWith('~')) continue;
+      const real = resolvedPath(a, cwd, realpath);
+      if (real && isSecret(real)) return 'a symlink to credentials or secrets';
+    }
   }
   return null;
 }
@@ -90,21 +151,29 @@ function inside(dir, p) {
 }
 
 // null = remotely approvable; otherwise why it is desk-only.
-export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFAULT_BASH_ALLOW, trustTestCommands = false } = {}) {
+export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFAULT_BASH_ALLOW, trustTestCommands = false, realpath = null } = {}) {
   const name = String(toolName ?? '');
   const input = toolInput ?? {};
   if (READ_TOOLS.test(name)) {
     const p = [input.file_path, input.path, input.pattern, input.notebook_path].filter((x) => typeof x === 'string');
-    return p.some((x) => CREDENTIAL_PATHS.test(x)) ? 'reads credentials' : null;
+    if (p.some(isSecret)) return 'reads credentials';
+    const real = [input.file_path, input.path, input.notebook_path].map((x) => resolvedPath(x, cwd, realpath)).filter(Boolean);
+    return real.some(isSecret) ? 'reads credentials through a symlink' : null;
   }
   if (EDIT_TOOLS.test(name)) {
     const p = pathOf(input);
     if (!p) return 'no file path';
-    if (CREDENTIAL_PATHS.test(p) || RUNS_CODE_LATER.test(p)) return 'protected path';
+    if (isSecret(p) || RUNS_CODE_LATER.test(p)) return 'protected path';
     if (!inside(cwd, p)) return 'outside the session directory';
+    const real = resolvedPath(p, cwd, realpath);
+    if (real) {
+      if (isSecret(real) || RUNS_CODE_LATER.test(real)) return 'protected path (through a symlink)';
+      const realCwd = resolvedPath(cwd, null, realpath);
+      if (realCwd && !inside(realCwd, real)) return 'outside the session directory (through a symlink)';
+    }
     return null;
   }
-  if (SHELL_TOOLS.test(name)) return bashReason(input.command, trustTestCommands ? { ...bashAllow, ...TEST_COMMAND_ALLOW } : bashAllow);
+  if (SHELL_TOOLS.test(name)) return bashReason(input.command, trustTestCommands ? { ...bashAllow, ...TEST_COMMAND_ALLOW } : bashAllow, cwd, realpath);
   return `${name || 'this tool'} is desk-only`;
 }
 

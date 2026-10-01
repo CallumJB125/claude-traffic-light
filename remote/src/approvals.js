@@ -48,6 +48,8 @@ export class RemoteApprovals {
     bashAllow = DEFAULT_BASH_ALLOW,
     // Per repo, off by default: may a phone approve test/build commands here?
     trustTestCommands = () => false,
+    // Where the desktop has a filesystem (fs.realpathSync): path checks also see through symlinks.
+    realpath = null,
     repoLabels = (p) => p.repoLabels || [],
     audit = () => {},
     auditHead = { head: GENESIS_HASH, seq: 0 },
@@ -57,7 +59,7 @@ export class RemoteApprovals {
     maxTtlMs = MAX_DECISION_TTL_MS,
     skewMs = CLOCK_SKEW_MS,
   }) {
-    Object.assign(this, { identity, registry, pending, authorize, bashAllow, trustTestCommands, repoLabels, audit, clock, maxTtlMs, skewMs, unverifiedAuditPerMinute });
+    Object.assign(this, { identity, registry, pending, authorize, bashAllow, trustTestCommands, realpath, repoLabels, audit, clock, maxTtlMs, skewMs, unverifiedAuditPerMinute });
     this.rules = compileRules(rules);
     this.replay = replay || new ReplayCache({ clock });
     this.chain = { seq: auditHead.seq ?? 0, head: auditHead.head ?? GENESIS_HASH };
@@ -68,7 +70,7 @@ export class RemoteApprovals {
   async #verdict(p) {
     let trust = false;
     try { trust = (await this.trustTestCommands(p)) === true; } catch { trust = false; }
-    return remoteVerdict(this.rules, { toolName: p.toolName, toolInput: p.toolInput, repoLabels: await this.repoLabels(p), cwd: p.cwd }, { bashAllow: this.bashAllow, trustTestCommands: trust });
+    return remoteVerdict(this.rules, { toolName: p.toolName, toolInput: p.toolInput, repoLabels: await this.repoLabels(p), cwd: p.cwd }, { bashAllow: this.bashAllow, trustTestCommands: trust, realpath: this.realpath });
   }
 
   // Hash-chained: each event carries seq, prevHash and hash =

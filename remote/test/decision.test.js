@@ -370,7 +370,7 @@ test('a phone rejects notices for another desktop or past their expiry', async (
 
 test('not on the remote allow-list → approve at your desk, with the reason', async () => {
   const { desk, paired } = await setup();
-  const req = desk.pending.add(bashRequest({ toolInput: { command: 'npx some-evil-pkg' } }));
+  const req = desk.pending.add(bashRequest({ toolInput: { command: 'make deploy' } }));
   const notice = await noticeFor(desk, paired, req);
   assert.equal(notice.deskOnly.ruleId, 'not-on-remote-allow-list');
   const res = await sendDecision(desk.hub, { paired, notice, decision: 'allow', now: desk.clock() });
