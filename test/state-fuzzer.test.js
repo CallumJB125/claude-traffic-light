@@ -169,7 +169,7 @@ function runSequence(seed) {
     const dir = path.join(teamsDir, teamName);
     fs.mkdirSync(dir, { recursive: true });
     const leader = { agentId: 'team-lead@t', name: 'team-lead', agentType: 'team-lead', tmuxPaneId: 'leader', joinedAt: clock.now - 1 };
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: lead.id, members: [leader, ...members.map(({ lastBeat, transcript, head, activeSince, firstBeatAt, ...m }) => m)] }));
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: lead.id, members: [leader, ...members.map(({ lastBeat, transcript, head, activeSince, resolved, lastTry, ...m }) => m)] }));
   }
   function touch(m) {
     m.lastBeat = clock.now;
@@ -177,10 +177,7 @@ function runSequence(seed) {
     // plain clock.now / 1000 can land just under clock.now; findTranscript then
     // sees a transcript older than joinedAt and skips it. +1 µs rounds up.
     const secs = (clock.now + 0.001) / 1000;
-    if (!fs.existsSync(m.transcript)) {
-      fs.writeFileSync(m.transcript, m.head);
-      m.firstBeatAt = clock.now;
-    }
+    if (!fs.existsSync(m.transcript)) fs.writeFileSync(m.transcript, m.head);
     fs.utimesSync(m.transcript, secs, secs);
   }
 
@@ -256,9 +253,22 @@ function runSequence(seed) {
   function sync() {
     main.syncAgents();
     lastSync = clock.now;
-    // A transcript first written after the join is only found on the watcher's
-    // next minute-spaced retry, until then the member is still timed from joinedAt.
-    for (const m of members) beatAtSync.set(m.agentId, m.firstBeatAt !== undefined && clock.now - m.firstBeatAt < Agents.RESOLVE_RETRY_MS + OMC_POLL_MS ? m.joinedAt : m.lastBeat);
+    // Model of the watcher's path resolution: a member's transcript is found on
+    // a sync that tries (the first sync that sees it, then every minute, or
+    // every NULL_BEAT_RETRY_MS once it is quiet past IDLE_AFTER_MS from join).
+    // Until found the member is timed from joinedAt; once found, from its beat.
+    // A sync that sees isActive:false drops the resolution.
+    for (const m of members) {
+      if (m.isActive === false) { m.resolved = false; m.lastTry = undefined; }
+      else if (!m.resolved) {
+        const every = clock.now - m.joinedAt > Agents.IDLE_AFTER_MS ? Agents.NULL_BEAT_RETRY_MS : Agents.RESOLVE_RETRY_MS;
+        if (m.lastTry === undefined || clock.now - m.lastTry >= every) {
+          m.lastTry = clock.now;
+          m.resolved = fs.existsSync(m.transcript);
+        }
+      }
+      beatAtSync.set(m.agentId, m.resolved ? m.lastBeat : m.joinedAt);
+    }
   }
 
   function observe() {

@@ -74,10 +74,11 @@ function teamFixture(members) {
     fs.utimesSync(file, (NOW - ageMs) / 1000, (NOW - ageMs) / 1000);
   };
   const scan = (opts = {}) => A.scanAgents({ sessionId: LEAD, cwd: TEAM_CWD }, { teamsDir, projectsDir, now: NOW, transcripts: new Map(), ...opts });
-  return { transcript, scan, proj };
+  const config = (ms) => fs.writeFileSync(path.join(teamsDir, teamName, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: LEAD, members: ms }));
+  return { transcript, scan, proj, config };
 }
 
-test('teams: an active member whose transcript went quiet is waiting; fresh or missing is working', () => {
+test('teams: an active member whose transcript went quiet is waiting; fresh or just-joined-missing is working', () => {
   const f = teamFixture([
     member('fresh', { isActive: true }),
     member('idle', { isActive: true }),
@@ -125,6 +126,31 @@ test('teams: no transcript since join counts quiet from joinedAt, so it turns wa
   assert.equal(by['never-wrote-old'].heartbeat, null);
   assert.equal(by.normal.status, 'working');
   assert.equal(by.normal.heartbeat, new Date(NOW - 10000).toISOString());
+});
+
+test('teams: a waiting null-beat member finds a transcript written later within one short retry', () => {
+  const f = teamFixture([member('slow', { isActive: true, joinedAt: NOW - 10 * 60 * 1000 })]);
+  const transcripts = new Map();
+  assert.equal(f.scan({ transcripts }).agents[0].status, 'waiting');
+  f.transcript('slow', -20000);
+  assert.equal(f.scan({ transcripts, now: NOW + 1000 }).agents[0].status, 'waiting', 'not rescanned inside the short retry');
+  const a = f.scan({ transcripts, now: NOW + A.NULL_BEAT_RETRY_MS + 1 }).agents[0];
+  assert.equal(a.status, 'working');
+  assert.equal(a.heartbeat, new Date(NOW + 20000).toISOString());
+});
+
+test('teams: a member with no joinedAt that leaves and rejoins gets a fresh first-seen', () => {
+  const m = member('nojoin', { isActive: true, joinedAt: undefined });
+  const f = teamFixture([m]);
+  const transcripts = new Map();
+  f.scan({ transcripts });
+  assert.equal(f.scan({ transcripts, now: NOW + A.IDLE_AFTER_MS + 1 }).agents[0].status, 'waiting');
+  f.config([{ ...m, isActive: false }]);
+  assert.equal(f.scan({ transcripts, now: NOW + A.IDLE_AFTER_MS + 2 }).agents[0].status, 'done');
+  f.config([m]);
+  assert.equal(f.scan({ transcripts, now: NOW + A.IDLE_AFTER_MS + 3 }).agents[0].status, 'working');
+  f.config([{ ...m, tmuxPaneId: '%new' }]);
+  assert.equal(f.scan({ transcripts, now: NOW + 2 * A.IDLE_AFTER_MS }).agents[0].status, 'working', 'a new pane is a new member');
 });
 
 test('teams: a member with no joinedAt and no transcript is timed from when it was first seen', () => {
