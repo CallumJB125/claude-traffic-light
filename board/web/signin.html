@@ -24,6 +24,10 @@
         <input id="code" name="code" class="input num" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
         <button type="submit" class="btn btn-primary">Sign in</button>
       </form>
+      <p id="code-foot" class="signin-foot" hidden>
+        <button id="resend" type="button" class="btn btn-sm btn-ghost">Send a new code</button>
+        <button id="other-email" type="button" class="btn btn-sm btn-ghost">Use a different email</button>
+      </p>
       <div id="confirm" hidden>
         <p id="confirm-text"></p>
         <button id="confirm-yes" type="button" class="btn btn-primary">Sign in</button>
