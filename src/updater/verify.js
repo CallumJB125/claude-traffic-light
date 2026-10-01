@@ -1,15 +1,22 @@
 // The trust check for every update: pure functions over bytes, no I/O.
 //
 // A release publishes release.json and release.json.sig (Ed25519 over the
-// exact bytes of release.json, base64). The private key exists only as a
-// GitHub Actions secret; the public key ships in the app
-// (build/update-key.pub.pem). A download is installed only if:
-//   - the signature verifies with a shipped key
-//   - product and channel match this install
-//   - the version is newer, unless the manifest is a signed rollback or the
-//     person explicitly asked to revert to exactly that version
-//   - issuedAt is not older than the last manifest this channel accepted
-//     (stops a replay of an old signed manifest, rollback ones included)
+// exact bytes of release.json, base64). Each channel has its own key: the
+// private halves exist only as secrets of the GitHub `release` environment;
+// the public halves ship in the app (build/update-key.pub.pem for stable,
+// build/update-key-beta.pub.pem for beta). A download is installed only if:
+//   - the signature verifies with a key of the channel this install follows,
+//     and the manifest says that same channel (a beta key never opens a
+//     stable manifest, and the reverse)
+//   - product matches
+//   - the version is newer, unless the manifest is a signed rollback that
+//     names this version in rollbackFrom, or the person explicitly asked to
+//     revert to exactly that version
+//   - issuedAt is not older than the floor: the last manifest this channel
+//     accepted, or this build's own build time, whichever is later (stops a
+//     replay of an old signed manifest, also on a fresh install)
+//   - issuedAt is not more than a day in the future, and a rollback has not
+//     passed its expiresAt
 //   - the file's size and sha512 equal the signed entry
 // scripts/release-sign.js writes the same format; its tests round-trip here.
 const crypto = require('crypto');
@@ -25,6 +32,11 @@ const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const SHA512_B64 = /^[A-Za-z0-9+/]{86}==$/;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_NOTES = 20000;
+const MAX_ROLLBACK_FROM = 50;
+const DAY_MS = 24 * 3600000;
+// How far ahead of this machine's clock a manifest may say it was issued.
+const MAX_CLOCK_SKEW_MS = DAY_MS;
+const isDate = (s) => typeof s === 'string' && Number.isFinite(Date.parse(s));
 
 class UpdateError extends Error {
   constructor(code, detail) {
@@ -70,6 +82,17 @@ function loadKeys(pems) {
   return keys;
 }
 
+// { stable: [pem], beta: [pem] } → { stable: [KeyObject], beta: [KeyObject] }.
+// A channel with no key opens nothing (fails closed).
+function loadKeyring(pemsByChannel) {
+  const ring = {};
+  for (const ch of CHANNELS) {
+    const pems = pemsByChannel?.[ch] || [];
+    ring[ch] = pems.length ? loadKeys(pems) : [];
+  }
+  return ring;
+}
+
 function verifySignature(bytes, sigB64, keys) {
   const sig = Buffer.from(String(sigB64 || '').trim(), 'base64');
   if (sig.length !== 64) return false;
@@ -82,8 +105,14 @@ function validateManifest(m) {
   if (typeof m.product !== 'string') bad('no product');
   if (!CHANNELS.includes(m.channel)) bad('unknown channel');
   if (!parseVersion(m.version)) bad('bad version');
-  if (typeof m.issuedAt !== 'string' || !Number.isFinite(Date.parse(m.issuedAt))) bad('bad issuedAt');
+  if (!isDate(m.issuedAt)) bad('bad issuedAt');
+  if (!isDate(m.expiresAt) || Date.parse(m.expiresAt) <= Date.parse(m.issuedAt)) bad('bad expiresAt');
   if (typeof m.rollback !== 'boolean') bad('bad rollback flag');
+  if (m.rollback) {
+    const from = m.rollbackFrom;
+    if (!Array.isArray(from) || !from.length || from.length > MAX_ROLLBACK_FROM) bad('a rollback must name the versions it rolls back from');
+    for (const v of from) if (!parseVersion(v) || compareVersions(v, m.version) <= 0) bad(`bad rollbackFrom version ${JSON.stringify(v)}`);
+  } else if (m.rollbackFrom !== undefined) bad('rollbackFrom on a manifest that is not a rollback');
   if (m.notes != null && (typeof m.notes !== 'string' || m.notes.length > MAX_NOTES)) bad('bad notes');
   if (!Array.isArray(m.files) || !m.files.length) bad('no files');
   const names = new Set();
@@ -102,39 +131,59 @@ function validateManifest(m) {
 }
 
 /**
- * Signature, then shape, then product. Returns the parsed manifest.
- * bytes: Buffer of release.json exactly as served; sig: the .sig text.
+ * Signature (with the channel's own keys only), then shape, then product and
+ * channel. Returns the parsed manifest.
+ * bytes: Buffer of release.json exactly as served; sig: the .sig text;
+ * keyring: loadKeyring(); channel: the channel this install follows.
  */
-function openManifest(bytes, sig, keys, { product = PRODUCT } = {}) {
+function openManifest(bytes, sig, keyring, { channel, product = PRODUCT } = {}) {
+  if (!CHANNELS.includes(channel)) throw new Error(`openManifest: channel must be one of ${CHANNELS.join(', ')}`);
   if (!Buffer.isBuffer(bytes) || bytes.length > MAX_MANIFEST_BYTES) fail('verify', 'release.json is missing or too large');
-  if (!verifySignature(bytes, sig, keys)) fail('signature', 'release.json is not signed by Plexiform');
+  if (!verifySignature(bytes, sig, keyring?.[channel] || [])) fail('signature', `release.json is not signed with Plexiform's ${channel} key`);
   let m;
   try { m = JSON.parse(bytes.toString('utf8')); } catch { fail('verify', 'release.json is not JSON'); }
   validateManifest(m);
   if (m.product !== product) fail('verify', `release.json is for ${m.product}, not ${product}`);
+  if (m.channel !== channel) fail('verify', `release.json is for the ${m.channel} channel, not ${channel}`);
   return m;
 }
 
+const later = (a, b) => (!a ? b || null : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
+
 /**
  * Whether this signed manifest may be offered to this install.
- * → { update: false } when it is the running version, else { update: true, rollback }.
- * Throws UpdateError('downgrade' | 'verify') when it must be refused.
+ * → { update: false, expired } when it is the running version, else
+ *   { update: true, rollback, expired }. expired: past expiresAt, so the feed
+ *   may be frozen on an old release (the caller says so; it is not a refusal).
+ * Throws UpdateError('downgrade' | 'verify' | 'expired') when it must be refused.
+ *   lastIssuedAt: the newest issuedAt this channel accepted (null: none yet)
+ *   builtAt: when this build was made (build/release-floor.json; null in dev)
  *   revertTo: the version the person explicitly asked to go back to (skips the
- *   downgrade and replay rules for exactly that version and nothing else)
+ *   downgrade, replay and expiry rules for exactly that version and nothing else)
  */
-function decide(m, { channel, currentVersion, lastIssuedAt = null, revertTo = null }) {
+function decide(m, { channel, currentVersion, lastIssuedAt = null, builtAt = null, revertTo = null, now = Date.now() }) {
   if (m.channel !== channel) fail('verify', `release.json is for the ${m.channel} channel, not ${channel}`);
+  const issued = Date.parse(m.issuedAt);
+  if (issued > now + MAX_CLOCK_SKEW_MS) fail('verify', `release.json says it was issued ${m.issuedAt}, in the future (check this computer's clock)`);
   if (revertTo) {
     if (m.version !== revertTo) fail('verify', `asked to revert to ${revertTo}, the server offered ${m.version}`);
-    return { update: true, rollback: true };
+    return { update: true, rollback: true, expired: false };
   }
-  if (lastIssuedAt && Date.parse(m.issuedAt) < Date.parse(lastIssuedAt)) {
-    fail('verify', `release.json was issued ${m.issuedAt}, before one already seen (${lastIssuedAt}): an old release replayed`);
+  const floor = later(lastIssuedAt, builtAt);
+  if (floor && issued < Date.parse(floor)) {
+    fail('verify', `release.json was issued ${m.issuedAt}, before ${floor === lastIssuedAt ? 'one already seen' : 'this version was built'} (${floor}): an old release replayed`);
   }
+  const expired = now > Date.parse(m.expiresAt);
   const cmp = compareVersions(m.version, currentVersion);
-  if (cmp === 0) return { update: false };
-  if (cmp < 0 && !m.rollback) fail('downgrade', `the server offers ${m.version}, older than ${currentVersion}, and it is not a signed rollback`);
-  return { update: true, rollback: cmp < 0 };
+  if (cmp === 0) return { update: false, expired };
+  if (cmp < 0) {
+    if (!m.rollback) fail('downgrade', `the server offers ${m.version}, older than ${currentVersion}, and it is not a signed rollback`);
+    if (!m.rollbackFrom.includes(currentVersion)) fail('downgrade', `the rollback to ${m.version} is for ${m.rollbackFrom.join(', ')}, not ${currentVersion}`);
+    // A rollback signed at or before this build was made cannot be meant for it.
+    if (builtAt && issued <= Date.parse(builtAt)) fail('verify', `the rollback to ${m.version} was issued ${m.issuedAt}, before this version was built (${builtAt})`);
+    if (expired) fail('expired', `the rollback to ${m.version} expired ${m.expiresAt}`);
+  }
+  return { update: true, rollback: cmp < 0, expired };
 }
 
 // The installer for this machine, or null.
@@ -158,13 +207,19 @@ function checkFile(entry, { size, sha512 }) {
  * before downloadUpdate(). Every file it would fetch must be in the manifest
  * with the same sha512 (and size when it gives one), and the versions agree.
  */
-function checkUpdateInfo(info, m) {
+function checkUpdateInfo(info, m, { base = null } = {}) {
   if (!info || typeof info !== 'object') fail('verify', 'no update info');
   if (info.version !== m.version) fail('verify', `the feed offers ${info.version}, the signed release is ${m.version}`);
+  // NSIS web-installer packages are fetched from their own URLs and not in the manifest.
+  if (info.packages != null) fail('verify', 'the feed names installer packages, which the signed release does not cover');
   const files = Array.isArray(info.files) ? info.files : [];
   if (!files.length) fail('verify', 'the feed names no files');
+  const origin = base ? new URL(base).origin : null;
+  const sameOrigin = (u) => { try { return new URL(u, base).origin === origin; } catch { return false; } };
+  if (origin && info.path != null && !sameOrigin(String(info.path))) fail('verify', 'the feed points at another server');
   const byName = new Map(m.files.map((f) => [f.name, f]));
   for (const f of files) {
+    if (origin && !sameOrigin(String(f?.url || ''))) fail('verify', 'the feed points at another server');
     const name = String(f?.url || '').split(/[?#]/)[0].split('/').pop();
     let decoded = name;
     try { decoded = decodeURIComponent(name); } catch { /* keep as is */ }
@@ -178,6 +233,6 @@ function checkUpdateInfo(info, m) {
 }
 
 module.exports = {
-  PRODUCT, CHANNELS, KINDS, PLATFORMS, ARCHES, UpdateError,
-  parseVersion, compareVersions, loadKeys, verifySignature, validateManifest, openManifest, decide, pickFile, sha512Base64, checkFile, checkUpdateInfo,
+  PRODUCT, CHANNELS, KINDS, PLATFORMS, ARCHES, UpdateError, DAY_MS,
+  parseVersion, compareVersions, loadKeys, loadKeyring, verifySignature, validateManifest, openManifest, decide, pickFile, sha512Base64, checkFile, checkUpdateInfo,
 };

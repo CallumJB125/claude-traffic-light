@@ -7,6 +7,10 @@
 // discarded and fetched once more from zero (a corrupt partial), a fresh one
 // that fails is refused. Only a verified file is renamed to <dest>.
 //
+// A response that sends nothing for stallMs is dropped (the partial stays for
+// the next try). Folders are created 0700: the file waits there, verified,
+// until it is installed.
+//
 // fetch is WHATWG fetch: Electron's net.fetch in the app, Node's in tests.
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +19,12 @@ const { UpdateError, checkFile } = require('./verify.js');
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return -1; } };
+
+// mkdir -p, owner-only; an existing folder is narrowed to 0700 too.
+function privateDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+}
 
 async function hashFile(file) {
   const h = crypto.createHash('sha512');
@@ -35,7 +45,7 @@ async function isVerified(file, entry) {
   return (await hashFile(file)) === entry.sha512;
 }
 
-async function attempt({ fetch, url, entry, partial, onProgress }) {
+async function attempt({ fetch, url, entry, partial, onProgress, stallMs }) {
   const metaPath = `${partial}.json`;
   let meta = readJson(metaPath);
   let have = sizeOf(partial);
@@ -54,47 +64,63 @@ async function attempt({ fetch, url, entry, partial, onProgress }) {
       headers.Range = `bytes=${have}-`;
       if (meta.etag) headers['If-Range'] = meta.etag;
     }
+    const ac = new AbortController();
+    const stalled = () => new UpdateError('offline', `The download stalled (nothing for ${Math.round(stallMs / 1000)} s).`);
+    let stallTimer = null;
+    const arm = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => ac.abort(), stallMs);
+      stallTimer.unref?.();
+    };
+    arm();
     let res;
     try {
-      res = await fetch(url, { headers, cache: 'no-store', redirect: 'follow' }); // privacy-flow: auto-update
+      res = await fetch(url, { headers, cache: 'no-store', redirect: 'follow', signal: ac.signal }); // privacy-flow: auto-update
     } catch (err) {
-      throw netError(err);
+      clearTimeout(stallTimer);
+      throw ac.signal.aborted ? stalled() : netError(err);
     }
-    if (res.status === 416) {
-      fs.rmSync(partial, { force: true });
-      throw Object.assign(new UpdateError('verify', 'The server refused to resume; starting over.'), { restart: true });
-    }
-    if (res.status !== 200 && res.status !== 206) throw new UpdateError('server', `The download server answered ${res.status}.`);
-    let start = 0;
-    if (res.status === 206) {
-      const m = /^bytes (\d+)-/.exec(res.headers.get('content-range') || '');
-      if (!m || Number(m[1]) !== have) throw Object.assign(new UpdateError('server', 'The server resumed at the wrong place.'), { restart: true });
-      start = have;
-    }
-    meta.etag = res.headers.get('etag') || null;
-    fs.mkdirSync(path.dirname(partial), { recursive: true });
-    fs.writeFileSync(metaPath, JSON.stringify(meta));
-    if (start > 0) {
-      for await (const chunk of fs.createReadStream(partial, { end: start - 1 })) hash.update(chunk);
-    }
-    const fh = await fs.promises.open(partial, start > 0 ? 'a' : 'w');
-    let got = start;
     try {
-      onProgress?.({ transferred: got, total: entry.size });
-      for await (const chunk of res.body) {
-        got += chunk.length;
-        if (got > entry.size) throw new UpdateError('verify', `${entry.name} is larger than the signed release says.`);
-        const buf = Buffer.from(chunk);
-        hash.update(buf);
-        await fh.write(buf);
-        onProgress?.({ transferred: got, total: entry.size });
+      if (res.status === 416) {
+        fs.rmSync(partial, { force: true });
+        throw Object.assign(new UpdateError('verify', 'The server refused to resume; starting over.'), { restart: true });
       }
-    } catch (err) {
-      throw fsError(err) || netError(err);
+      if (res.status !== 200 && res.status !== 206) throw new UpdateError('server', `The download server answered ${res.status}.`);
+      let start = 0;
+      if (res.status === 206) {
+        const m = /^bytes (\d+)-/.exec(res.headers.get('content-range') || '');
+        if (!m || Number(m[1]) !== have) throw Object.assign(new UpdateError('server', 'The server resumed at the wrong place.'), { restart: true });
+        start = have;
+      }
+      meta.etag = res.headers.get('etag') || null;
+      privateDir(path.dirname(partial));
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+      if (start > 0) {
+        for await (const chunk of fs.createReadStream(partial, { end: start - 1 })) hash.update(chunk);
+      }
+      const fh = await fs.promises.open(partial, start > 0 ? 'a' : 'w');
+      let got = start;
+      try {
+        onProgress?.({ transferred: got, total: entry.size });
+        for await (const chunk of res.body) {
+          arm();
+          got += chunk.length;
+          if (got > entry.size) throw new UpdateError('verify', `${entry.name} is larger than the signed release says.`);
+          const buf = Buffer.from(chunk);
+          hash.update(buf);
+          await fh.write(buf);
+          onProgress?.({ transferred: got, total: entry.size });
+        }
+      } catch (err) {
+        if (ac.signal.aborted && !(err instanceof UpdateError)) throw stalled();
+        throw fsError(err) || netError(err);
+      } finally {
+        await fh.close();
+      }
+      have = got;
     } finally {
-      await fh.close();
+      clearTimeout(stallTimer);
     }
-    have = got;
   }
   try {
     checkFile(entry, { size: have, sha512: hash.digest('base64') });
@@ -108,24 +134,25 @@ async function attempt({ fetch, url, entry, partial, onProgress }) {
 
 /**
  * → dest, once it holds exactly entry's bytes.
- * opts: { fetch, url, entry: {name, size, sha512}, dir (for the partial), dest, onProgress }
+ * opts: { fetch, url, entry: {name, size, sha512}, dir (for the partial), dest, onProgress, stallMs }
  */
-async function download({ fetch, url, entry, dir, dest, onProgress }) {
+async function download({ fetch, url, entry, dir, dest, onProgress, stallMs = 60000, privateDest = true }) {
   if (await isVerified(dest, entry)) return dest;
   const partial = path.join(dir, `${entry.name}.part`);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    privateDir(dir);
   } catch (err) {
     throw fsError(err) || err;
   }
   try {
-    await attempt({ fetch, url, entry, partial, onProgress });
+    await attempt({ fetch, url, entry, partial, onProgress, stallMs });
   } catch (err) {
     if (!err.restart) throw err;
-    await attempt({ fetch, url, entry, partial, onProgress });
+    await attempt({ fetch, url, entry, partial, onProgress, stallMs });
   }
   try {
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (privateDest) privateDir(path.dirname(dest));
+    else fs.mkdirSync(path.dirname(dest), { recursive: true });
     try {
       fs.renameSync(partial, dest);
     } catch (err) {
@@ -158,4 +185,4 @@ function cleanPartials(dir, { keepName = null, maxAgeMs = 3 * 24 * 3600000, now 
   }
 }
 
-module.exports = { download, cleanPartials, hashFile };
+module.exports = { download, cleanPartials, hashFile, isVerified, privateDir };

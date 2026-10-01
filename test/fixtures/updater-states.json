@@ -1,11 +1,11 @@
 {
-  "_comment": "Every UpdaterState variant, for the updater UI (src/updater/service.js getState). test/updater-service.test.js checks each has exactly the service's fields.",
+  "_comment": "Every UpdaterState variant, for the updater UI (src/updater/service.js getState). autoDownload is off unless the person turned it on. test/updater-service.test.js checks each has exactly the service's fields.",
   "states": {
     "idle-never-checked": {
       "status": "idle",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": null,
       "available": null,
       "progress": null,
@@ -20,7 +20,7 @@
       "status": "idle",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -35,7 +35,7 @@
       "status": "idle",
       "currentVersion": "1.2.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -50,7 +50,7 @@
       "status": "checking",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -105,7 +105,7 @@
       "status": "downloading",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -129,7 +129,7 @@
       "status": "ready",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -149,7 +149,7 @@
       "status": "ready",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -169,7 +169,7 @@
       "status": "ready",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -189,7 +189,7 @@
       "status": "ready",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -209,7 +209,7 @@
       "status": "ready",
       "currentVersion": "1.2.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.1.0",
@@ -229,7 +229,7 @@
       "status": "installing",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -272,7 +272,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -290,7 +290,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -308,7 +308,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -331,7 +331,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -349,7 +349,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -372,7 +372,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -395,7 +395,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": {
         "version": "1.2.0",
@@ -418,7 +418,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -436,7 +436,7 @@
       "status": "error",
       "currentVersion": "1.1.0",
       "channel": "stable",
-      "autoDownload": true,
+      "autoDownload": false,
       "lastCheckedAt": "2026-10-01T08:00:00.000Z",
       "available": null,
       "progress": null,
@@ -449,6 +449,62 @@
       "requiredByHub": null,
       "busyReason": null,
       "installKind": "swap"
+    },
+    "idle-auto-download-on": {
+      "status": "idle",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": true,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": null,
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "ready-install-stalled": {
+      "status": "ready",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": {
+        "version": "1.2.0",
+        "notes": "Plexiform 1.2.0\n\n- Faster startup\n- Fixes the tray icon on Linux",
+        "size": 104857600,
+        "publishedAt": "2026-10-01T06:00:00.000Z"
+      },
+      "progress": null,
+      "error": {
+        "code": "install-stalled",
+        "detail": "The update did not start. Try again, or quit Plexiform and open it again."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
+    },
+    "error-expired": {
+      "status": "error",
+      "currentVersion": "1.1.0",
+      "channel": "stable",
+      "autoDownload": false,
+      "lastCheckedAt": "2026-10-01T08:00:00.000Z",
+      "available": null,
+      "progress": null,
+      "error": {
+        "code": "expired",
+        "detail": "Couldn't confirm Plexiform is up to date since 2026-09-01: the update server keeps offering a release that has expired."
+      },
+      "canRevert": false,
+      "previousVersion": null,
+      "requiredByHub": null,
+      "busyReason": null,
+      "installKind": "restart"
     }
   }
 }

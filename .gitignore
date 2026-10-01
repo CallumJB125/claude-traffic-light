@@ -10,3 +10,4 @@ test-results/
 native/bin/
 native/voice/build/
 board/node_modules
+build/release-floor.json

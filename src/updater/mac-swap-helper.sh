@@ -5,15 +5,18 @@
 #   mac-swap-helper.sh PID CURRENT NEW PREVIOUS_DIR UPDATES_DIR OLD_VERSION [TIMEOUT] [LAUNCH]
 #
 # 1. wait for PID (the old app) to exit
-# 2. move CURRENT to PREVIOUS_DIR/<name>.app (kept for "Revert"), NEW into CURRENT
+# 2. move CURRENT to PREVIOUS_DIR/<name>.app, NEW into CURRENT
 # 3. launch it with --updated-from=OLD_VERSION
-# 4. the new app writes UPDATES_DIR/launched-ok once it is up; if that has not
-#    appeared within TIMEOUT seconds (90), stop it, put the old bundle back and
-#    launch that with --update-failed
+# 4. the new app writes UPDATES_DIR/launched-ok once it is up; then the old
+#    bundle, the zip and swap-pending.json go. If launched-ok has not appeared
+#    within TIMEOUT seconds (90), stop it, put the old bundle back and launch
+#    that with --update-failed (it reads and removes swap-pending.json)
 # LAUNCH is "open" (LaunchServices), or "direct" to run the executable itself (tests).
 set -u
 PID="$1"; CURRENT="$2"; NEW="$3"; PREV_DIR="$4"; UPD="$5"; OLD_VERSION="$6"
 TIMEOUT="${7:-90}"; LAUNCH="${8:-open}"
+case "$PID" in ''|*[!0-9]*) exit 64 ;; esac
+case "$TIMEOUT" in ''|*[!0-9]*) exit 64 ;; esac
 NAME=$(basename "$CURRENT")
 PREV="$PREV_DIR/$NAME"
 MARKER="$UPD/launched-ok"
@@ -59,13 +62,18 @@ launch "$CURRENT" "--updated-from=$OLD_VERSION"
 
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
-  if [ -f "$MARKER" ]; then log "swap ok: the new version is up"; exit 0; fi
+  if [ -f "$MARKER" ]; then
+    log "swap ok: the new version is up"
+    rm -rf "$PREV" "$UPD/downloads" "$UPD/swap-pending.json"
+    exit 0
+  fi
   sleep 1
   waited=$((waited + 1))
 done
 
 log "no launched-ok after $TIMEOUT s; rolling back"
-if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE")" 2>/dev/null; fi
+NEWPID=$(cat "$PIDFILE" 2>/dev/null || true)
+case "$NEWPID" in ''|*[!0-9]*) ;; *) kill "$NEWPID" 2>/dev/null ;; esac
 sleep 1
 FAILED="$UPD/failed"
 rm -rf "$FAILED"
