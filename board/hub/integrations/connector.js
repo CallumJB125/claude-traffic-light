@@ -48,6 +48,10 @@
 //   // code) and the lease released, so a manual redelivery runs it. A hub
 //   // crash mid-handler loses the event until such a manual redelivery.
 //   ackEarly: false,
+//   // …or per delivery: ackEarly({ payload, headers }) → boolean, called
+//   // synchronously after verify() and parseBody; only `true` is early, a
+//   // throw (or anything else) answers late (Slack: early for commands and
+//   // interactions, late for retried events).
 //   // Optional, only with ackEarly: the early answer's body (default
 //   // {"ok":true,"accepted":true}). undefined → an empty 200; a string →
 //   // text/plain; a plain object → JSON; over 4 KiB, unserialisable, any other
@@ -141,7 +145,7 @@ export function defineConnector(spec) {
     } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
-  if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
+  if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
   if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {

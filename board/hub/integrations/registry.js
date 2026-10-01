@@ -788,7 +788,8 @@ export function createIntegrations({
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
     // Before the handler starts, so it can't see what the handler did to payload.
-    const ack = conn.ackEarly ? earlyAck(conn, payload, headers) : null;
+    const early = conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
+    const ack = early ? earlyAck(conn, payload, headers) : null;
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
@@ -798,7 +799,7 @@ export function createIntegrations({
       try {
         await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
-        if (conn.ackEarly) deadLetter(c, e);
+        if (early) deadLetter(c, e);
         if (e?.code === 'TIMEOUT') {
           // The handler may still be running: the lease stays (a retry answers
           // in_progress) and the row settles when it really ends, or the lease
@@ -826,13 +827,19 @@ export function createIntegrations({
       setHealth(c.id, true);
       return { status: 200, body: { ok: true } };
     };
-    if (!conn.ackEarly) return settle();
+    if (!early) return settle();
     // Acknowledged before the handler runs (a provider that needs an answer
     // within seconds); the hub waits for it on shutdown like a board queue.
     const bg = settle().catch((e) => warn('integration webhook settle failed', c, e));
     hub.inflight.add(bg);
     bg.finally(() => hub.inflight.delete(bg));
     return { status: 200, ...ack };
+  }
+
+  // Only a plain `true` is early: a throw or a Promise answers late, which
+  // keeps the provider's retry.
+  function askEarly(conn, payload, headers) {
+    try { return conn.ackEarly({ payload, headers }) === true; } catch { return false; }
   }
 
   // The early answer: the default JSON, or the connector's ackBody as an

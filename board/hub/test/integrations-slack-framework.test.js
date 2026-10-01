@@ -184,3 +184,53 @@ test('F2: without ackBody the early ack is unchanged; ackBody needs ackEarly', a
   assert.throws(() => probe('f2d', { ackBody: () => undefined }), /ackBody is a function, for a connector that declares ackEarly/);
   assert.throws(() => probe('f2e', { ackEarly: true, ackBody: 'ok' }), /ackBody/);
 });
+
+// ── F2b ackEarly per delivery ─────────────────────────────────────────────
+
+test('F2b: ackEarly as a function decides per verified, parsed delivery; a throw or a non-true result answers late', async () => {
+  const { h } = await setup();
+  try {
+    const asked = [];
+    let gate = null;
+    const conn = connect(h, 'f2b2', {
+      parseBody: parseForm,
+      ackEarly: ({ payload }) => {
+        asked.push(payload.kind);
+        if (payload.kind === 'boom') throw new Error('nope');
+        if (payload.kind === 'promise') return Promise.resolve(true);
+        return payload.kind === 'command';
+      },
+      ackBody: () => undefined,
+      handleWebhook: async ({ payload }) => {
+        if (payload.kind === 'command') await new Promise((resolve, reject) => { gate = { resolve, reject }; });
+        if (payload.fail) throw new Error('handler said no');
+      },
+    });
+    // Early: answered (empty) while the handler is still waiting.
+    const first = await Promise.race([send(h, conn, formOf({ kind: 'command', n: '1' })), tick(2000).then(() => null)]);
+    assert.ok(first, 'answered before the handler finished');
+    assert.equal(await first.text(), '');
+    await tick();
+    gate.resolve();
+    await h.hub.idle();
+    // Late: the handler's own answer, and a failure is a 500 for the provider's retry (not dead-lettered).
+    for (const kind of ['event', 'boom', 'promise']) {
+      const res = await send(h, conn, formOf({ kind }));
+      assert.deepEqual(await res.json(), { ok: true }, kind);
+    }
+    assert.equal((await send(h, conn, formOf({ kind: 'event', fail: '1' }))).status, 500);
+    // An early failure is audited (no provider retry follows).
+    const early = send(h, conn, formOf({ kind: 'command', fail: '1' }));
+    assert.equal((await early).status, 200);
+    await tick();
+    gate.resolve();
+    await h.hub.idle();
+    const dead = h.db.all("SELECT decision, error FROM integration_audit WHERE connection_id = ? AND action = 'webhook'", conn.id).map((r) => ({ ...r }));
+    assert.deepEqual(dead, [{ decision: 'failed', error: 'handler_failed' }], 'only the early failure');
+    // Never asked about a forged delivery.
+    const n = asked.length;
+    assert.equal((await fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', body: formOf({ kind: 'command' }) })).status, 401);
+    assert.equal(asked.length, n);
+  } finally { await h.close(); }
+  assert.throws(() => probe('f2b3', { ackEarly: 'sometimes' }), /ackEarly is a boolean or a function/);
+});
