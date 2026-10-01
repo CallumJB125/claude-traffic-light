@@ -51,6 +51,8 @@ export function loadConfig(env = process.env) {
     googleClientSecret: env.BOARD_GOOGLE_CLIENT_SECRET || null,
     githubClientId: env.BOARD_GITHUB_CLIENT_ID || null,
     githubClientSecret: env.BOARD_GITHUB_CLIENT_SECRET || null,
+    googleWebClientId: env.BOARD_GOOGLE_WEB_CLIENT_ID || null,
+    githubWebClientId: env.BOARD_GITHUB_WEB_CLIENT_ID || null,
     accountsDev: flag(env.BOARD_ACCOUNTS_DEV),
     authFailBudget: int(env.BOARD_AUTH_FAIL_BUDGET, 20),
     mailDailyCap: int(env.BOARD_MAIL_DAILY_CAP, 2000),
@@ -75,6 +77,8 @@ export function loadConfig(env = process.env) {
   // Non-enumerable, so JSON.stringify, util.inspect and spreads of the config never carry them.
   const hidden = (value) => ({ value, enumerable: false, writable: false, configurable: false });
   Object.defineProperties(cfg, {
+    googleWebClientSecret: hidden(env.BOARD_GOOGLE_WEB_CLIENT_SECRET || null),
+    githubWebClientSecret: hidden(env.BOARD_GITHUB_WEB_CLIENT_SECRET || null),
     sesAccessKeyId: hidden(env.BOARD_SES_ACCESS_KEY_ID || null),
     sesSecretAccessKey: hidden(env.BOARD_SES_SECRET_ACCESS_KEY || null),
     sesSessionToken: hidden(env.BOARD_SES_SESSION_TOKEN || null),
@@ -93,6 +97,8 @@ export function loadConfig(env = process.env) {
   delete env.BOARD_RESEND_API_KEY;
   delete env.BOARD_GOOGLE_CLIENT_SECRET;
   delete env.BOARD_GITHUB_CLIENT_SECRET;
+  delete env.BOARD_GOOGLE_WEB_CLIENT_SECRET;
+  delete env.BOARD_GITHUB_WEB_CLIENT_SECRET;
   validateConfig(cfg);
   return cfg;
 }
@@ -181,6 +187,7 @@ const SECRET_VARS = Object.freeze([
   ['BOARD_SES_ACCESS_KEY_ID', 'sesAccessKeyId'], ['BOARD_SES_SECRET_ACCESS_KEY', 'sesSecretAccessKey'], ['BOARD_SES_SESSION_TOKEN', 'sesSessionToken'],
   ['BOARD_RESEND_API_KEY', 'resendApiKey'], ['BOARD_GOOGLE_CLIENT_SECRET', 'googleClientSecret'], ['BOARD_GITHUB_CLIENT_SECRET', 'githubClientSecret'],
   ['BOARD_GITHUB_TOKEN', 'githubToken'],
+  ['BOARD_GOOGLE_WEB_CLIENT_SECRET', 'googleWebClientSecret'], ['BOARD_GITHUB_WEB_CLIENT_SECRET', 'githubWebClientSecret'],
 ]);
 
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
@@ -223,6 +230,11 @@ export function oauthProviders(cfg) {
   return SIGNIN_METHODS.filter((p) => cfg[`${p}ClientId`] && cfg[`${p}ClientSecret`]);
 }
 
+/** Browser sign-in has separate credentials and a fixed configured callback origin. */
+export function webOauthProviders(cfg) {
+  return cfg.publicUrl ? SIGNIN_METHODS.filter((p) => cfg[`${p}WebClientId`] && cfg[`${p}WebClientSecret`]) : [];
+}
+
 // BOARD_AUTH=accounts (D51, D66): the hub runs its own sign-in. Exposed, it
 // must be https behind cloudflared (per-IP limits key on CF-Connecting-IP,
 // trusted only from a loopback peer) with at least one sign-in method; the
@@ -240,6 +252,11 @@ function validateAccounts(cfg) {
   if (cfg.publicUrl) {
     try { url = new URL(cfg.publicUrl); } catch { throw new Error(`BOARD_PUBLIC_URL is not a URL: ${cfg.publicUrl}`); }
     if (EXAMPLE_DOMAIN.test(url.hostname)) throw new Error('BOARD_PUBLIC_URL still names an example host: set the address people reach this hub at');
+  }
+  for (const provider of SIGNIN_METHODS) {
+    const id = cfg[`${provider}WebClientId`]; const secret = cfg[`${provider}WebClientSecret`];
+    if (!!id !== !!secret) throw new Error(`BOARD_${provider.toUpperCase()}_WEB_CLIENT_ID and _SECRET must both be set`);
+    if (id && (!url || url.username || url.password || url.pathname !== '/' || url.search || url.hash)) throw new Error('browser OAuth needs an origin-only BOARD_PUBLIC_URL without credentials, path, query or fragment');
   }
   const exposed = isExposed(cfg);
   if (!url && !(loop && cfg.accountsDev)) throw new Error('BOARD_AUTH=accounts needs BOARD_PUBLIC_URL (only a loopback bind with BOARD_ACCOUNTS_DEV=1 may do without)');
@@ -259,7 +276,7 @@ function validateAccounts(cfg) {
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');
     if (!cfg.trustCfIp) throw new Error('an exposed BOARD_AUTH=accounts hub needs BOARD_TRUST_CF_IP=1 (cloudflared on loopback), so per-IP limits see the client');
-    if (!mailProvider(cfg) && !methods.length && !oauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
+    if (!mailProvider(cfg) && !methods.length && !oauthProviders(cfg).length && !webOauthProviders(cfg).length) throw new Error('an exposed BOARD_AUTH=accounts hub needs a sign-in method: BOARD_GOOGLE_CLIENT_ID/_SECRET, BOARD_GITHUB_CLIENT_ID/_SECRET, BOARD_GOOGLE_WEB_CLIENT_ID/_SECRET, BOARD_GITHUB_WEB_CLIENT_ID/_SECRET, BOARD_SIGNIN_METHODS (google, github) or a mailer (BOARD_RESEND_API_KEY + BOARD_MAIL_FROM, or BOARD_MAIL_PROVIDER=ses with BOARD_SES_*)');
   }
   if (cfg.devSeed || cfg.bootstrap?.includes(',')) throw new Error('BOARD_AUTH=accounts takes BOARD_BOOTSTRAP=<email> only, and no BOARD_DEV_SEED');
   if (cfg.authFailBudget != null && (!Number.isInteger(cfg.authFailBudget) || cfg.authFailBudget < 1 || cfg.authFailBudget > 100)) throw new Error('BOARD_AUTH_FAIL_BUDGET must be an integer from 1 to 100');

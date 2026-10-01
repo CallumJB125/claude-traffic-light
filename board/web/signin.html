@@ -3,10 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="dark light">
   <title>Sign in · Plexiform</title>
   <link rel="icon" href="/web/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/web/app.css">
+  <link rel="stylesheet" href="/web/signin.css">
   <script type="module" src="/web/js/signin.js"></script>
 </head>
 <body>
@@ -14,6 +16,10 @@
     <main class="signin" aria-labelledby="signin-title">
       <h1 id="signin-title">Sign in to Plexiform</h1>
       <p id="signin-lead">We'll email you a 6-digit code. No password.</p>
+      <div id="oauth-options" class="signin-form oauth-options" hidden>
+        <button id="google-signin" type="button" class="google-signin" hidden><img src="/web/google-signin.png" width="180" height="40" alt="Sign in with Google"></button>
+        <button id="github-signin" type="button" class="btn btn-primary" hidden>Continue with GitHub</button>
+      </div>
       <form id="email-form" class="signin-form">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" class="input" autocomplete="email" required>

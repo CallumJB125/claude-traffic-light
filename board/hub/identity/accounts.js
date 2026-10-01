@@ -9,7 +9,7 @@ import { isIP } from 'node:net'; // privacy-flow: hub-server
 import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { FailureBudget, ipKey, limitOrThrow, netKey, v6groups } from '../ratelimit.js';
-import { oauthProviders, signupPolicy } from '../config.js';
+import { oauthProviders, webOauthProviders, signupPolicy } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
@@ -229,7 +229,8 @@ export class Accounts {
   methods({ ip }) {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
     const m = oauthProviders(this.hub.config);
-    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer && !this.mailFailing() };
+    const w = webOauthProviders(this.hub.config);
+    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer && !this.mailFailing(), web: { google: w.includes('google'), github: w.includes('github') } };
   }
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
@@ -508,12 +509,12 @@ export class Accounts {
 
   // ── credentials ───────────────────────────────────────────────────────────
 
-  createSession(userId, { ip, ua }) {
+  createSession(userId, { ip, ua, method = 'email' }) {
     const value = b64url(randomBytes(32));
     const id = randomUUID();
     const now = this.now();
     this.db.insert('sessions', {
-      id, id_hash: sha256hex(value), user_id: userId, auth_method: 'email', created_at: now, auth_at: now, last_seen_at: now, rotated_at: now,
+      id, id_hash: sha256hex(value), user_id: userId, auth_method: method, created_at: now, auth_at: now, last_seen_at: now, rotated_at: now,
       idle_expires_at: this.at(SESSION_IDLE_MS), abs_expires_at: this.at(SESSION_ABS_MS), session_epoch: this.epoch(),
       user_agent: typeof ua === 'string' ? ua.slice(0, 200) : null, ip_prefix: ipPrefix(ip),
     });
@@ -709,6 +710,7 @@ export class Accounts {
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
+      this.db.run('DELETE FROM oauth_web_flows WHERE user_id = ?', user.id);
       this.db.run(`UPDATE runner_enrollments SET revoked_at = COALESCE(revoked_at, ?), revoked_reason = COALESCE(revoked_reason, 'account_deleted'), token_hash = NULL,
         name = 'Deleted device', last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       // Invites to them: pending ones are withdrawn, then every invite they

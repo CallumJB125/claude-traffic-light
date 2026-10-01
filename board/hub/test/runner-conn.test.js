@@ -34,7 +34,10 @@ test('a hung GitHub evidence check does not hold up the heartbeats and outbox fr
   } finally { await h.destroy(); }
 });
 
-test('GitHub fetches abort after the timeout instead of hanging', async () => {
+test('GitHub fetches abort after the timeout instead of hanging', async (t) => {
+  // AbortSignal.timeout is unref'd; keep this real deadline probe alive.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   const fetchImpl = (url, { signal }) => new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason)); });
   const gh = createGitHub({ fetchImpl, timeoutMs: 50 });
   const t0 = Date.now();

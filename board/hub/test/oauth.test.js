@@ -45,7 +45,7 @@ test('methods: a provider is on only with both its client id and secret; unconfi
   const c = fakeClients();
   const r = await rig({ clients: { googleClientId: c.googleClientId, googleClientSecret: c.googleClientSecret, githubClientId: c.githubClientId, githubClientSecret: null } });
   try {
-    assert.deepEqual((await r.h.call('GET', '/api/auth/methods')).body, { google: true, github: false, email: false });
+    assert.deepEqual((await r.h.call('GET', '/api/auth/methods')).body, { google: true, github: false, email: false, web: { google: false, github: false } });
     const off = await r.start('github', { verifier: verifierOf() });
     assert.equal(off.status, 404);
     assert.equal(off.body.error.code, 'METHOD_DISABLED');

@@ -36,6 +36,8 @@ export const REQUEST_LIMITS = Object.freeze({
 // Card bodies (create, patch, actions, comments, permission answers) keep 1 MiB; every other API body is capped at smallBodyMax.
 const bigBodyRoute = (pattern) => pattern === '/api/boards/:board_id/cards' || pattern.startsWith('/api/cards/') || pattern.startsWith('/api/permission-requests/');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const requestBinding = (route, params, body) => createHash('sha256').update(JSON.stringify({ method: route.method, route: route.pattern, params, body }, (_key, value) =>
+  value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)).digest('hex');
 // The prepare body carries an admin's pasted configuration token (D97), and a
 // /start answer a signed state, bind and the org it was given: their D8 replay
 // entry is this, never the first answer.
@@ -267,10 +269,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null } = {}) => {
+  // Serialize cache-eligible requests sharing an actor and request ID until
+  // their response is cached, including collisions across different routes.
+  const requestsInFlight = new Map();
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, maxBody: bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -294,6 +299,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Google / GitHub through the desktop app's loopback listener (D76–D78).
     route('POST', '/api/auth/oauth/start', ({ body, ip, ident }) => hub.oauth.start(body, { ip, ident }), { auth: 'optional' });
     route('POST', '/api/auth/oauth/exchange', ({ body, ip, ident }) => hub.oauth.exchange(body, { ip, ident }), { auth: 'optional' });
+    const browserOrigin = (req) => { if (!strictOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin browser sign-in'); };
+    route('POST', '/api/auth/oauth/web/start', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.start(ctx.body, ctx); }, { auth: 'none' });
+    for (const provider of ['google', 'github']) route('GET', `/api/auth/oauth/web/${provider}/callback`, ({ query, ...ctx }) => hub.oauthWeb.callback(provider, query, ctx), { auth: 'none' });
+    route('POST', '/api/auth/oauth/web/result', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.result(ctx.body, ctx); }, { auth: 'optional', replay: false });
     route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
     route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
@@ -341,20 +350,20 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }));
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
-  route('POST', '/api/boards/:board_id/labels', ({ member, params, body }) => api.createLabel(member, params.board_id, body));
-  route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body }) => api.patchLabel(member, params.board_id, params.name, body));
-  route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }));
+  route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body, ident }) => api.patchLabel(member, params.board_id, params.name, body, { cred: ident?.cred ?? null }), { writeScope: 'label' });
+  route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query, ident }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }, { cred: ident?.cred ?? null }), { writeScope: 'labelManage' });
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
-  route('POST', '/api/boards/:board_id/cards', ({ member, params, body }) => api.createCard(member, params.board_id, body));
+  route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
-  route('PATCH', '/api/cards/:card_id', ({ member, params, body }) => api.patchCard(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body }) => api.action(member, params.card_id, params.action, body));
-  route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/comments', ({ member, params, body }) => api.comment(member, params.card_id, body));
+  route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
+  route('POST', '/api/cards/:card_id/archive', ({ member, params, body, ident }) => api.archive(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
+  route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
+  route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);
     if (query.get('format') === 'md') {
@@ -365,7 +374,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return h;
   });
   route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id')));
-  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body }) => api.answerPermission(member, params.id, body));
+  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body, ident }) => api.answerPermission(member, params.id, body, { cred: ident?.cred ?? null }), { writeScope: 'permission' });
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
   // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
   if (config.auth !== 'accounts') route('POST', '/api/devices', ({ member, body }) => api.createDevice(member, body));
@@ -715,30 +724,71 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         member = await authMember(req, pick);
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
-      const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      // Bind retries to the effective operation, whether strip came from
+      // JSON or the existing query option. Equivalent forms remain a retry.
+      if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
+      const refreshWrite = () => {
+        if (ident && r.mutating && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+        if (member && r.auth === 'member' && r.mutating) member = api.currentMember(member, ident?.cred ?? null);
+        if (r.writeScope === 'archive') member = api.collaborationScope(member, { cardId: params.card_id, allowArchived: true }, ident?.cred ?? null);
+        if (['board', 'label', 'labelManage'].includes(r.writeScope)) {
+          member = api.collaborationScope(member, { boardId: params.board_id }, ident?.cred ?? null);
+          if (r.writeScope === 'labelManage' || (r.writeScope === 'label' && typeof body.name === 'string' && body.name.trim() !== params.name)) api.requireLabel(member, 'label.manage');
+        }
+        if (r.collaboration || r.writeScope === 'card') member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
+        if (r.writeScope === 'card') api.requireActionRepo(api.cardFor(member, params.card_id), params.action);
+        if (r.collaboration && body.repo_id != null) {
+          const boardId = params.board_id ?? api.cardFor(member, params.card_id).board_id;
+          if (!hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', boardId, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+        }
+        if (r.writeScope === 'permission') {
+          const pr = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
+          if (!pr) throw new HubError('NOT_FOUND', 'permission request not found');
+          member = api.collaborationScope(member, { cardId: pr.card_id }, ident?.cred ?? null);
+        }
+      };
+      refreshWrite();
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
-      const rid = actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
-      if (rid) {
-        const hit = hub.cachedResponse(actor, rid);
-        if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
-      }
-      if (actor && r.mutating) {
-        limitOrThrow(hub, 'mutate_member', actor);
-        if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', actor);
-      }
-      if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
-      let status = 200;
-      let out;
-      try {
-        out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
-      } catch (e) {
-        if (!(e instanceof HubError)) throw e;
-        status = httpStatus(e.code);
-        out = errorBody(e);
-      }
-      if (out === undefined) return undefined;
-      if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out);
-      return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
+      // This stable release retains its existing dispatch request-ID/cache
+      // behavior; it does not ship the later provider/budget contract.
+      const rid = r.replay !== false && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      const binding = rid && (r.collaboration || r.writeScope) ? requestBinding(r, params, body) : null;
+      const runRequest = async () => {
+        refreshWrite();
+        if (rid) {
+          const hit = hub.cachedResponse(actor, rid);
+          if (hit) {
+            if ((binding != null || hit.binding != null) && binding !== hit.binding) throw new HubError('CONFLICT', 'request_id reused for a different request');
+            return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
+          }
+        }
+        if (actor && r.mutating) {
+          limitOrThrow(hub, 'mutate_member', actor);
+          if (DISPATCH_ACTIONS.has(params.action)) limitOrThrow(hub, 'dispatch_member', actor);
+        }
+        if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
+        let status = 200;
+        let out;
+        try {
+          out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
+        } catch (e) {
+          if (!(e instanceof HubError)) throw e;
+          status = httpStatus(e.code);
+          out = errorBody(e);
+        }
+        if (out === undefined) return undefined;
+        if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
+        return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
+      };
+      if (!rid) return await runRequest();
+      const key = `${actor}|${rid}`;
+      const previous = requestsInFlight.get(key) ?? Promise.resolve();
+      const pending = previous.then(runRequest, runRequest);
+      requestsInFlight.set(key, pending);
+      const clear = () => { if (requestsInFlight.get(key) === pending) requestsInFlight.delete(key); };
+      pending.then(clear, clear);
+      return await pending;
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
       hub.log.error('http handler failed', { path: url.pathname, err: e });
