@@ -29,5 +29,10 @@ contextBridge.exposeInMainWorld('settingsApi', {
   health: () => ipcRenderer.invoke('health-report'),
   healthFix: (id) => ipcRenderer.invoke('health-fix', id),
   copyDiagnostics: () => ipcRenderer.invoke('health-copy-diagnostics'),
+  backupsList: () => ipcRenderer.invoke('backups-list'),
+  backupsNow: () => ipcRenderer.invoke('backups-now'),
+  backupsDiff: (id) => ipcRenderer.invoke('backups-diff', id),
+  backupsRestore: (id, pick) => ipcRenderer.invoke('backups-restore', id, pick),
+  backupsOpenFolder: () => ipcRenderer.invoke('backups-open-folder'),
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
 });

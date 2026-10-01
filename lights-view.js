@@ -559,7 +559,7 @@
       if (!armed) {
         x.classList.add('armed');
         x.textContent = 'remove?';
-        x.title = 'Click again to remove';
+        x.title = 'Click again to remove this photo. A backup of your faces is kept first (Preferences → Backups).';
         armed = setTimeout(() => { armed = null; x.classList.remove('armed'); x.innerHTML = X_ICON; x.title = label; }, 2500);
         return;
       }
@@ -876,9 +876,11 @@
   });
 
   // ── Save / revert / presets ────────────────────────────────────────────
+  // Set when a template, preset or import replaced the rules wholesale, so main keeps a backup first.
+  let replaceWhy = null;
   async function save() {
     if (!dirty) return;
-    try { config = await window.lightsApi.saveConfig({ rules, template: templateId, ...prefsToSave() }); stagedPrefs = null; } catch (err) {
+    try { config = await window.lightsApi.saveConfig({ rules, template: templateId, ...(replaceWhy && { __backupReason: replaceWhy }), ...prefsToSave() }); stagedPrefs = null; replaceWhy = null; } catch (err) {
       // stay dirty: nothing was stored, and the edits are still only here
       flash(`Save failed — ${err.message}`);
       return;
@@ -893,7 +895,7 @@
   // Any other saveConfig rejection (toggles) still gets a visible message.
   window.addEventListener('unhandledrejection', (e) => { flash(e.reason?.message || 'Something went wrong'); });
   $('save-btn').addEventListener('click', save);
-  $('revert-btn').addEventListener('click', () => { rules = config.rules.map(R.normalizeRule); setDirty(false); templateId = config.template || null; stagedPrefs = null; if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
+  $('revert-btn').addEventListener('click', () => { replaceWhy = null; rules = config.rules.map(R.normalizeRule); setDirty(false); templateId = config.template || null; stagedPrefs = null; if (!selected()) selectedId = rules[0]?.id || null; renderList(); renderEditor(); renderStage(); });
   window.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
   window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
@@ -949,6 +951,7 @@
   }
 
   function applyRules(next, tpl) {
+    replaceWhy = tpl ? 'template' : 'preset';
     rules = next.map(R.normalizeRule);
     selectedId = rules[0]?.id || null;
     applying = true;
@@ -1195,6 +1198,7 @@
     const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
     const parts = [s.rules != null && n(s.rules, 'rule'), s.presets != null && n(s.presets, 'preset'), s.cameos && n(s.cameos, 'face'), s.settings.length && 'agent settings'].filter(Boolean);
     $('setup-summary').innerHTML = `<b>${escape(parts.join(', ') || 'Nothing usable in that file')}</b>`
+      + '<br>Replace deletes your current rules, presets and faces that are not in this file. A backup is kept first (Preferences → Backups).'
       + (s.old ? '<br>From an older version — updated as it loads.' : '')
       + (s.dropped ? `<br>${n(s.dropped, 'face')} skipped (not a valid photo).` : '')
       + (s.commands.length ? `<br>Clicks in this setup run:${s.commands.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');

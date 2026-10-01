@@ -161,3 +161,28 @@ test('lights: every tab, sounds, export, a photo cameo', async () => {
   expect(await lights.evaluate(() => window.__errs)).toEqual([]);
   expect(violations).toEqual([]);
 });
+
+test('settings: Preferences, Health and Backups run under the policy', async () => {
+  await lights.evaluate(() => window.lightsApi.openPreferences());
+  const settings = await windowByFile(h.app, 'settings.html');
+  await settings.waitForLoadState('load');
+  await watch(settings, 'settings');
+  await settings.locator('#health').scrollIntoViewIfNeeded();
+  await expect(settings.locator('#health-summary')).not.toHaveText('', { timeout: 10000 });
+  await settings.locator('#backups > summary').click();
+  await settings.locator('#backups-now').click();
+  await expect(settings.locator('#backups-status')).not.toHaveText('', { timeout: 5000 });
+  await settings.locator('#health-recheck').click();
+  await settings.waitForTimeout(500);
+  // enforced here too: an inline handler never runs
+  await settings.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); });
+  await settings.waitForTimeout(200);
+  expect(await settings.evaluate(() => window.__x)).toBeUndefined();
+  const seen = await settings.evaluate(() => window.__csp);
+  expect(seen.some((s) => s.startsWith('script-src'))).toBe(true);
+  await settings.evaluate(() => { window.__csp.length = 0; });
+  violations.length = 0;
+  await settings.locator('#backups > summary').click();
+  await collect(settings, 'settings');
+  expect(violations).toEqual([]);
+});

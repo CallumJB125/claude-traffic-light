@@ -30,6 +30,8 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
+  // Backups go outside the data dir, so they get a temp home too.
+  const backups = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-bk-'));
   // Spend (F1) reads transcripts from here instead of ~/.claude/projects, so
   // a real runaway on this machine can't leak into a baseline.
   const projects = path.join(home, 'projects');
@@ -56,6 +58,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
       CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
+      CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups,
       ...env,
     },
   });
@@ -63,8 +66,9 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
     try { await app.close(); } catch { /* already gone */ }
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(backups, { recursive: true, force: true });
   };
-  return { app, home, port, remotePort, projects, cleanup };
+  return { app, home, port, remotePort, projects, backups, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.
