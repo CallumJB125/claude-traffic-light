@@ -412,3 +412,28 @@ test('signup_via takes only allowlist, invite, member_row, open (or NULL)', asyn
     for (const v of ['allowlist', 'invite', 'member_row', 'open', null]) r.h.db.run('UPDATE users SET signup_via = ? WHERE primary_email = ?', v, 'v@allowed.test');
   } finally { await r.h.close(); }
 });
+
+test('email start: a real code goes out exactly when verify would accept it (an email identity or an authoritative primary is an account; a GitHub primary is not)', async () => {
+  const r = await rig({ signup: 'open', allow: '' });
+  try {
+    assert.equal((await r.emailSignIn('byident@nope.test')).v.status, 200);
+    assert.equal((await r.oauth('google', { sub: 'g-auth', email: 'bygoogle@nope.test', name: 'G', hd: 'nope.test' })).status, 200);
+    assert.equal((await r.oauth('github', { id: 951, login: 'o951', email: 'bygithub@nope.test' })).status, 200);
+    assert.equal(r.userBy('bygithub@nope.test').primary_email_via, 'github');
+    r.setPolicy('allowlist', '');
+    const shapes = new Set();
+    for (const [email, account] of [['byident@nope.test', true], ['bygoogle@nope.test', true], ['bygithub@nope.test', false], ['nobody@nope.test', false]]) {
+      assert.equal(r.h.hub.accounts.hasAccount(email), account, email);
+      const { s, v, mailed } = await r.emailSignIn(email);
+      assert.equal(s.status, 200, email);
+      shapes.add(JSON.stringify(Object.keys(s.body).sort()));
+      const dud = r.h.db.get('SELECT code_hash FROM login_flows WHERE id = ?', s.body.flow_id).code_hash.startsWith('dud:');
+      assert.equal(mailed, account, `${email}: mailed`);
+      assert.equal(dud, !account, `${email}: dud`);
+      // What verify does with the code (or a guess, for a dud) matches what start did.
+      assert.equal(v.status, account ? 200 : 400, `${email}: ${v.text}`);
+      if (!account) assert.equal(v.body.error.code, 'INVALID_TOKEN');
+    }
+    assert.equal(shapes.size, 1, 'one answer shape');
+  } finally { await r.h.close(); }
+});

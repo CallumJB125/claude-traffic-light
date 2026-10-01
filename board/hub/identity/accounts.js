@@ -58,6 +58,8 @@ export const canonEmail = (v) => String(v).normalize('NFKC').trim().toLowerCase(
 export const AUTHORITATIVE_VIA = Object.freeze([null, 'email', 'google']);
 export const authoritativeVia = (u) => AUTHORITATIVE_VIA.includes(u?.primary_email_via ?? null);
 
+const isAccount = ({ byIdentity, user }) => !!byIdentity || (!!user && authoritativeVia(user));
+
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
   const e = canonEmail(v);
@@ -144,11 +146,19 @@ export class Accounts {
     for (const f of rows) this.failures.seed(this.budgetKey(f), f.attempts, this.hub.mono() - (this.hub.ageOf(f.created_at) ?? 0));
   }
 
-  /** Has this address an account (a verified email identity or a live user)? */
-  hasAccount(email) {
-    return !!(this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
-      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email));
+  /** The live user an email code for this address signs in: by its email identity, else by primary address (userForEmail). */
+  emailAccount(email) {
+    const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
+    return { byIdentity, user: byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email) };
   }
+
+  /**
+   * Would a verified code for this address sign in an existing account (an
+   * email identity, or a primary address an authoritative path set)? The
+   * same test userForEmail makes, so a start never mails a real code that
+   * verify would refuse as a sign-up, nor a dud where verify would sign in.
+   */
+  hasAccount(email) { return isAccount(this.emailAccount(email)); }
 
   /**
    * May a NEW account be made for this verified address (D104), and on what
@@ -436,9 +446,10 @@ export class Accounts {
   // Sign-up = sign-in: the verified address finds its user, or makes one.
   userForEmail(email, { ip }) {
     const now = this.now();
-    const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
-    let user = byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
-    const signupVia = !user || (!byIdentity && !authoritativeVia(user)) ? this.requireSignup(email) : null;
+    const found = this.emailAccount(email);
+    const signupVia = isAccount(found) ? null : this.requireSignup(email);
+    const { byIdentity } = found;
+    let { user } = found;
     // An address a GitHub (or non-authoritative Google) sign-in put there is
     // not proof that its holder owns the mailbox: the code just proved it, so
     // the address moves to a new account, never into that one (D83).
