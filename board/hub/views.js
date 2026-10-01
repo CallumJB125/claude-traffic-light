@@ -132,12 +132,14 @@ export function cardView(hub, row, viewerId) {
   const ht = json(row.handover_target, null);
   const budgetCap = row.budget_cents;
   const stateAge = hub.ageOf(row.state_since);
+  const clientFeedback = hub.clientFeedback?.cardProvenance(row.id);
   return {
     id: row.id, board_id: row.board_id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
     label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
     cover: row.cover ?? null,
     archived: row.archived_at ? { at_age_ms: Math.round(hub.ageOf(row.archived_at)), by_name: hub.memberName(row.archived_by) } : null,
     agent_suggested: !!row.created_by_run_id, parent_card_id: row.parent_card_id ?? null,
+    ...(clientFeedback ? { client_feedback: clientFeedback } : {}),
     run_state: row.run_state ?? 'todo',
     blocked_kind: row.blocked_kind, fail_kind: row.fail_kind, fail_reason: row.fail_reason, resume_to: row.resume_to, fence: row.fence,
     repo: repo ? { id: repo.id, short_name: repo.short_name } : null, base_ref: row.base_ref, branch: runRow?.branch ?? null,

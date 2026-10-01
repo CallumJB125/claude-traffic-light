@@ -45,9 +45,14 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await A.selectOption('form[data-form="publish"] select[name="status"]', 'review');
     await A.click('form[data-form="publish"] button[type="submit"]');
     await A.waitForSelector('.client-item:has-text("Homepage delivery")');
+    const originalCard = await A.inputValue('form[data-form="publish"] select[name="card_id"]');
+    const originalItem = await A.getAttribute('.client-item:has-text("Homepage delivery")', 'data-item');
+    await A.click('button[data-action="intake-enable"]');
+    await A.waitForSelector('text=New feedback creates a To do triage task.');
     await A.fill('form[data-form="invite"] input[name="email"]', 'client@client-e2e.test');
     await A.check('form[data-form="invite"] input[value="artifacts.read"]');
     await A.check('form[data-form="invite"] input[value="approvals.decide"]');
+    await A.check('form[data-form="invite"] input[value="feedback.create"]');
     await A.click('form[data-form="invite"] button[type="submit"]');
     await A.waitForSelector('[aria-label="Client invitation link"]');
     const link = await A.inputValue('[aria-label="Client invitation link"]');
@@ -90,6 +95,28 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await B.click('[data-action="refresh"]'); await B.fill('form[data-form="decision"] textarea[name="comment"]', 'Please adjust the heading <script>text only</script>.');
     await B.click('button:has-text("Request changes")'); await B.waitForSelector('text=Approval for version 2: Changes requested');
     await B.waitForSelector('text=Please adjust the heading <script>text only</script>.');
+    // Client feedback creates a real task through the explicitly enabled
+    // staff intake. Source and delegate remain clear in the actual drawer.
+    const original = `.client-item[data-item="${originalItem}"]`;
+    await B.fill(`${original} form[data-form="feedback"] textarea[name="message"]`, 'CLIENT FEEDBACK: please adjust the homepage colour <script>text only</script>.');
+    await B.click(`${original} form[data-form="feedback"] button[type="submit"]`);
+    await B.waitForSelector('text=Received for team triage through staff-authorized intake.');
+    await A.click('[data-action="refresh"]'); await A.waitForSelector('a:has-text("Open triage task")');
+    const taskHref = await A.getAttribute('a:has-text("Open triage task")', 'href'), taskId = decodeURIComponent(taskHref.split('#card=')[1]);
+    await A.click('a:has-text("Open triage task")');
+    await A.waitForSelector('[aria-label="Client feedback source"]:has-text("Feedback from client")');
+    await A.waitForSelector('[aria-label="Client feedback source"]:has-text("Intake authorized by staff")');
+    await A.goto(`/clients?workspace=${workspace}`); await A.waitForSelector('form[data-form="publish"]');
+    await A.selectOption('form[data-form="publish"] select[name="card_id"]', taskId);
+    await A.fill('form[data-form="publish"] input[name="title"]', 'Homepage feedback follow-up');
+    await A.fill('form[data-form="publish"] textarea[name="summary"]', 'Your requested colour is ready.');
+    await A.selectOption('form[data-form="publish"] select[name="status"]', 'done');
+    await A.click('form[data-form="publish"] button[type="submit"]'); await A.waitForSelector('.client-item:has-text("Homepage feedback follow-up")');
+    await B.click('[data-action="refresh"]'); await B.waitForSelector(`${original} [data-feedback]:has-text("Team update: Complete · Homepage feedback follow-up")`);
+    await B.click(`${original} [data-feedback] details summary`); await B.waitForSelector(`${original} [data-feedback] details:has-text("Your requested colour is ready.")`);
+    await A.click('button[data-action="intake-disable"]'); await A.waitForSelector('text=New client feedback tasks are disabled.');
+    await B.click('[data-action="refresh"]'); await B.waitForSelector('text=Your team has paused new feedback for this project.');
+    assert.equal(await B.locator('form[data-form="feedback"]').count(), 0);
     // An invitation arriving after the generic account read still wins over
     // automatic setup and requires consent; the actual setup transaction sees it.
     const C = await page();
@@ -102,6 +129,7 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     await A.fill('form[data-form="invite"] input[name="email"]', 'pending@client-e2e.test');
     await A.uncheck('form[data-form="invite"] input[value="artifacts.read"]');
     await A.uncheck('form[data-form="invite"] input[value="approvals.decide"]');
+    await A.uncheck('form[data-form="invite"] input[value="feedback.create"]');
     await A.click('form[data-form="invite"] button[type="submit"]');
     await A.waitForSelector('.client-person:has-text("pending@client-e2e.test")');
     releaseAccount();
@@ -109,7 +137,9 @@ test('client web: isolated workspace, staff publication, explicit invite sign-in
     assert.equal((await C.evaluate(() => fetch('/api/account').then((r) => r.json()))).teams.length, 0);
     await C.click('button[data-action="accept"]'); await C.waitForSelector('.client-item:has-text("Homepage delivery")');
     assert.equal(await C.locator('a[data-artifact]').count(), 0, 'status-only guest cannot see artifact metadata');
+    assert.equal(await C.locator('text=CLIENT FEEDBACK:').count(), 0, 'another guest cannot see client messages');
     // A staff update is explicitly shared; clients fetch the safe projection.
+    await A.selectOption('form[data-form="publish"] select[name="card_id"]', originalCard);
     await A.fill('form[data-form="publish"] input[name="title"]', 'Homepage delivery');
     await A.fill('form[data-form="publish"] textarea[name="summary"]', 'Delivery completed.');
     await A.selectOption('form[data-form="publish"] select[name="status"]', 'done');

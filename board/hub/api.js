@@ -16,6 +16,7 @@ import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
 import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
 import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
+import { insertCardRecord } from './card-record.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -245,14 +246,10 @@ export class Api {
       this.hub.txn(() => {
         prior = once && this.db.get('SELECT card_id FROM integration_requests WHERE connection_id = ? AND request_id = ?', once.connection_id, once.request_id)?.card_id;
         if (prior) return;
-        const b = this.hub.board(boardId);
-        this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
-        this.db.insert('cards', {
-          id, board_id: boardId, key: `${board.key_prefix}-${b.next_key}`, title, body: text, acceptance, repo_id: body.repo_id ?? null,
+        insertCardRecord(this.hub, boardId, member.id, {
+          title, body: text, acceptance, repo_id: body.repo_id ?? null,
           base_ref: baseRef, labels: JSON.stringify(labels), budget_cents: body.budget_usd != null ? Math.round(body.budget_usd * 100) : null, cover,
-          created_by: member.id, created_at: now, updated_at: now, state_since: now,
-        });
-        for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
+        }, { id, now, assignees });
         if (once) this.db.insert('integration_requests', { ...once, card_id: id, created_at: now });
         const c = this.hub.card(id);
         // An integration's card text and external identifiers (the act()
@@ -334,11 +331,11 @@ export class Api {
     });
   }
 
-  // An integration created it (an integration_requests row or an integration
-  // card.create): its text and labels only ever reach the journal hashed (D41).
+  // External integration/client feedback text never enters the permanent
+  // journal in the clear, including when staff later edit its card (D41).
   externalCard(cardId) {
     return !!this.db.get(
-      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
+      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND (actor_kind = 'integration' OR json_extract(payload, '$.client_feedback_id') IS NOT NULL) LIMIT 1",
       cardId, cardId);
   }
 

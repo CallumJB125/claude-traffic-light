@@ -43,7 +43,7 @@ function feedText(ev) {
 }
 
 function feedItem(ev, elapsed) {
-  const label = FEED_LABEL[ev.kind] ?? String(ev.kind).replace(/[_.]/g, ' ');
+  const label = ev.data?.client_feedback_id ? 'Client feedback' : FEED_LABEL[ev.kind] ?? String(ev.kind).replace(/[_.]/g, ' ');
   const text = feedText(ev);
   return h('li', { key: ev.id, class: 'feed-item', 'data-tone': FEED_TONE[ev.kind] ?? null },
     h('span', { class: 'feed-mark', 'aria-hidden': 'true' }),
@@ -293,6 +293,7 @@ export function drawer(model) {
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
       whoBlock(view, face, model),
+      view.client_feedback ? h('section', { class: 'dsec', 'aria-label': 'Client feedback source' }, h('h3', { class: 'dsec-title' }, 'Client feedback'), h('p', {}, `Feedback from ${view.client_feedback.source_name}`), h('p', {}, `Intake authorized by ${view.client_feedback.intake_name}`), h('p', { class: 'muted small' }, 'Feedback intake creates a task for human triage.')) : null,
       (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
         h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),
         h('ul', { class: 'asks' }, prs.map((p) => permissionBlock(p, model)), asks.map((a) => askBlock(a, model)))) : null,

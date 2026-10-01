@@ -104,7 +104,8 @@ test('only published safe status fields reach the permitted project; ordinary AP
     assert.equal(p.status, 200, p.text);
     const i = await invite('guest@example.test'), guest = await h.signIn('guest@example.test'); await accept(guest, i);
     const status = await as(guest, 'GET', `/api/client/projects/${project.id}`);
-    assert.deepEqual(Object.keys(status.body.items[0]).sort(), ['id', 'status', 'summary', 'title', 'updated_at']);
+    assert.deepEqual(Object.keys(status.body.items[0]).sort(), ['history', 'id', 'status', 'summary', 'title', 'updated_at']);
+    assert.deepEqual(Object.keys(status.body.items[0].history[0]).sort(), ['created_at', 'id', 'status', 'summary', 'title']);
     assert.equal(status.text.includes('Internal secret'), false); assert.equal(status.text.includes('Private repository'), false);
     assert.equal((await as(guest, 'GET', `/api/client/projects/${p.body.project.id}`)).status, 404);
     const paths = [['GET', `/api/boards/${project.board_id}`], ['GET', `/api/cards/${card.body.card.id}`], ['GET', `/api/teams/${workspace}`], ['POST', `/api/boards/${project.board_id}/cards`], ['POST', `/api/teams/${workspace}/client-invites`], ['GET', `/api/boards/${project.board_id}/journal`], ['GET', '/api/integrations']];

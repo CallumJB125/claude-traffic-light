@@ -197,7 +197,8 @@ export class Clients {
     const p = this.db.get('SELECT * FROM client_projects WHERE id = ?', projectId); if (!p) throw missing();
     const allowed = this.projects(user, p.workspace_id).projects.find((x) => x.id === p.id && x.scopes.includes('status.read')); if (!allowed) throw missing();
     const items = this.db.all('SELECT id, title, summary, status, updated_at FROM client_items WHERE project_id = ? AND unpublished_at IS NULL ORDER BY published_at, id', p.id);
-    return { project: { id: p.id, name: p.name }, items: this.hub.clientArtifacts?.decorate(user, items) ?? items };
+    const artifacts = this.hub.clientArtifacts?.decorate(user, items) ?? items;
+    return { project: { id: p.id, name: p.name }, items: this.hub.clientFeedback?.decorate(user, artifacts) ?? artifacts };
   }
   setGuest(member, id, body, { ip }) {
     this.staff(member); only(body, ['request_id', 'grants']);
@@ -232,6 +233,7 @@ export class Clients {
       const old = this.db.get('SELECT * FROM client_items WHERE card_id = ?', card.id); const id = old?.id ?? randomUUID(), at = this.now();
       if (old) this.db.run('UPDATE client_items SET title = ?, summary = ?, status = ?, updated_at = ?, unpublished_at = NULL, published_by = ? WHERE id = ?', title, summary, status, at, member.id, id);
       else this.db.insert('client_items', { id, project_id: p.id, card_id: card.id, title, summary, status, published_by: member.id, published_at: at, updated_at: at });
+      this.hub.clientFeedback?.recordUpdate({ id, title, summary, status });
       this.audit('client.item.publish', { member, target: id, ip });
       return { item: { id, title, summary, status, updated_at: at } };
     }));

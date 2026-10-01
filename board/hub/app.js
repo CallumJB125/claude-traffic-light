@@ -26,6 +26,7 @@ import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
 import { Clients } from './identity/clients.js';
 import { ClientArtifacts } from './identity/client-artifacts.js';
+import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
 import { Enrolments } from './identity/enrolments.js';
 import { oauthProviders } from './config.js';
@@ -55,6 +56,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
   hub.clients = hub.accounts ? new Clients(hub) : null;
   hub.clientArtifacts = hub.clients ? new ClientArtifacts(hub) : null;
+  hub.clientFeedback = hub.clients ? new ClientFeedback(hub) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)

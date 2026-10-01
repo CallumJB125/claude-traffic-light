@@ -345,6 +345,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }, { auth: 'user', replay: false });
     route('GET', '/api/client/approvals/:approval_id', ({ ident, params }) => artifacts.approval(ident.user, params.approval_id, ident.cred), { auth: 'user', replay: false });
     route('POST', '/api/client/approvals/:approval_id/decision', ({ ident, params, body, ip }) => artifacts.decide(ident.user, params.approval_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
+    const feedback = hub.clientFeedback;
+    route('GET', '/api/boards/:board_id/client-feedback-intake', ({ member, params, ident }) => feedback.config(member, params.board_id, ident.cred), { replay: false });
+    route('PATCH', '/api/boards/:board_id/client-feedback-intake', ({ member, params, body, ip, ident }) => feedback.configure(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('GET', '/api/client/items/:item_id/feedback', ({ ident, params }) => feedback.list(ident.user, params.item_id, ident.cred), { auth: 'user', replay: false });
+    route('POST', '/api/client/items/:item_id/feedback', ({ ident, params, body, ip }) => feedback.create(ident.user, params.item_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));

@@ -4,7 +4,7 @@ import { clientCall } from './client-api.js';
 const root = document.getElementById('clients');
 const scopes = { 'status.read': 'Project status', 'artifacts.read': 'Shared deliverables', 'feedback.create': 'Send feedback', 'approvals.decide': 'Decide assigned approvals' };
 const statuses = { todo: 'Planned', in_progress: 'In progress', review: 'Ready for review', done: 'Complete' };
-const state = { account: null, workspaces: [], workspace: null, projects: [], project: null, items: [], manage: null, cards: [], boards: [], projectArchived: false, error: null, busy: false, link: null };
+const state = { account: null, workspaces: [], workspace: null, projects: [], project: null, items: [], manage: null, cards: [], boards: [], intake: null, projectArchived: false, error: null, busy: false, link: null };
 let generation = 0;
 const eid = encodeURIComponent;
 const selectedWorkspace = new URL(location.href).searchParams.get('workspace');
@@ -31,11 +31,23 @@ function draw() {
     w ? section(w.name,
       state.projects.length ? select('Project', 'project', state.projects, state.project?.id) : h('p', {}, 'No projects are available.'),
       state.project ? h('div', { class: 'client-status', 'aria-label': 'Published project updates' }, state.items.length ? state.items.map((i) => h('article', { class: 'client-item', key: i.id, 'data-item': i.id }, h('span', { class: 'client-badge' }, statuses[i.status]), h('h3', {}, i.title), i.summary ? h('p', {}, i.summary) : null,
-        artifactView(i, admin), admin && !state.projectArchived ? btn('Stop sharing', 'unpublish', { 'data-item': i.id }) : null)) : h('p', {}, 'Your team has not shared any updates for this project yet.')) : null,
+        artifactView(i, admin), historyView(i.history), feedbackView(i), admin && !state.projectArchived ? btn('Stop sharing', 'unpublish', { 'data-item': i.id }) : null)) : h('p', {}, 'Your team has not shared any updates for this project yet.')) : null,
       btn('Refresh updates', 'refresh')) : null,
     admin ? staffView() : null,
     state.account?.teams?.some((t) => ['owner', 'admin'].includes(t.role)) ? section('New client workspace', h('p', { class: 'client-lead' }, 'Creates a separate team and its first project. Invite staff through its Team board and clients through this page.'), form('workspace', field('Client workspace name', 'name', { required: true, maxlength: 60 }), submit('Create client workspace'))) : null,
   ));
+}
+
+function historyView(history) {
+  return history?.length ? h('details', { class: 'client-history' }, h('summary', {}, 'Delivery history'), h('ol', {}, history.map((u) => h('li', { key: u.id }, h('p', {}, `${statuses[u.status]} · ${u.title}`), u.summary ? h('p', {}, u.summary) : null)))) : null;
+}
+function feedbackView(item) {
+  const staff = state.workspace?.mode === 'staff';
+  return h('div', { class: 'client-feedback' },
+    (item.feedback ?? []).map((f) => h('section', { key: f.id, 'data-feedback': f.id, class: 'client-approval' }, h('h4', {}, staff ? `Feedback from ${f.source_name}` : 'Your feedback'), h('p', {}, f.message), h('p', { class: 'client-lead' }, staff ? `Intake authorized by ${f.intake.name}` : 'Received for team triage through staff-authorized intake.'),
+      f.task ? h('a', { class: 'client-link', href: `/?org=${eid(f.task.workspace_id)}&board=${eid(f.task.board_id)}#card=${eid(f.task.card_id)}` }, `Open triage task ${f.task.key}`) : null,
+      f.update ? [h('p', {}, `Team update: ${statuses[f.update.status]} · ${f.update.title}`), f.update.summary ? h('p', {}, f.update.summary) : null, historyView(f.update.history)] : null)),
+    !staff && item.feedback_available ? h('form', { 'data-form': 'feedback', 'data-item': item.id, class: 'client-form' }, h('label', {}, 'Your feedback', h('textarea', { name: 'message', class: 'input', required: true, maxlength: 4000 })), h('p', { class: 'client-lead' }, 'Sends your feedback to the team for triage.'), submit('Send feedback')) : !staff && item.feedback ? h('p', { class: 'client-lead' }, 'Your team has paused new feedback for this project.') : null);
 }
 
 function artifactView(item, admin) {
@@ -54,6 +66,7 @@ function artifactView(item, admin) {
 function staffView() {
   const m = state.manage, p = m.projects.find((p) => p.id === state.project?.id);
   return [
+    p ? section('Client feedback intake', h('p', {}, state.intake?.enabled ? `Intake authorized by ${state.intake.delegate.name}. ${state.intake.active ? 'New feedback creates a To do triage task.' : 'Intake is paused because its delegate or project cannot write.'}` : 'New client feedback tasks are disabled.'), h('p', { class: 'client-lead' }, 'Enabling authorizes intake through your own staff membership. It pauses if you lose write access; no replacement actor is chosen.'), state.projectArchived ? null : state.intake?.enabled ? [btn('Pause feedback intake', 'intake-disable'), !state.intake.active ? btn('Enable intake through me', 'intake-enable') : null] : btn('Enable intake through me', 'intake-enable')) : null,
     section('Share a project update', p ? [h('a', { href: `/?org=${eid(m.workspace.id)}&board=${eid(p.board_id)}`, class: 'client-link' }, 'Open this project’s Team board'), state.projectArchived ? h('p', {}, 'This project is archived. Shared updates remain readable.') : state.cards.length ? form('publish',
       select('Internal task', 'card_id', state.cards.map((c) => ({ id: c.id, name: `${c.key} · ${c.title}` }))),
       field('Client title', 'title', { required: true, maxlength: 200 }), h('label', {}, 'Client summary', h('textarea', { name: 'summary', class: 'input', maxlength: 2000 })),
@@ -84,13 +97,14 @@ async function load() {
     const cards = boardData?.cards ?? [];
     const projectArchived = !!boardData?.board?.archived_at;
     const boards = manage ? (await clientCall('GET', `/api/teams/${eid(w.id)}/boards`)).boards : [];
+    const intake = board ? (await clientCall('GET', `/api/boards/${eid(board)}/client-feedback-intake`)).intake : null;
     if (current !== generation) return;
-    Object.assign(state, { account, workspaces, workspace: w, projects: list.projects, project: p, items: status.items, manage, cards, boards, projectArchived });
+    Object.assign(state, { account, workspaces, workspace: w, projects: list.projects, project: p, items: status.items, manage, cards, boards, intake, projectArchived });
     workspaceId = w?.id; projectId = p?.id;
     if (w) history.replaceState(null, '', `/clients?workspace=${eid(w.id)}`);
   } catch (e) {
     if (current !== generation) return;
-    Object.assign(state, { workspace: null, projects: [], project: null, items: [], manage: null, cards: [], boards: [], projectArchived: false, workspaces: [] });
+    Object.assign(state, { workspace: null, projects: [], project: null, items: [], manage: null, cards: [], boards: [], intake: null, projectArchived: false, workspaces: [] });
     if (e.status === 401) state.account = null;
     state.error = e.message;
   }
@@ -113,6 +127,7 @@ root.addEventListener('click', (e) => {
   const w = state.workspace?.id;
   act(async () => {
     if (action === 'refresh') return;
+    if (action === 'intake-enable' || action === 'intake-disable') { const p = state.manage.projects.find((p) => p.id === state.project.id); await clientCall('PATCH', `/api/boards/${eid(p.board_id)}/client-feedback-intake`, { enabled: action === 'intake-enable' }, csrf); return; }
     if (action === 'signout') {
       await clientCall('POST', '/api/auth/signout', {}, csrf);
       // The desktop's existing 401 backstop clears its sealed credential and
@@ -152,6 +167,7 @@ root.addEventListener('submit', (e) => {
     }
     if (kind === 'approval') { await clientCall('POST', `/api/client-items/${eid(item.id)}/approvals`, { request_id, artifact_version_id: item.artifact.id, guest_ids: data.getAll('guest_id') }, csrf); return; }
     if (kind === 'decision') { await clientCall('POST', `/api/client/approvals/${eid(approval.id)}/decision`, { request_id, artifact_version_id: approval.artifact_version_id, sha256: approval.sha256, decision, comment: value.comment }, csrf); return; }
+    if (kind === 'feedback') { await clientCall('POST', `/api/client/items/${eid(item.id)}/feedback`, { request_id, message: value.message }, csrf); return; }
     if (kind === 'grants') await clientCall('PATCH', `/api/teams/${eid(w)}/client-guests/${eid(guest.id)}`, { grants: data.getAll('project_id').map((id) => ({ project_id: id, scopes: ['status.read', ...data.getAll(`scope:${id}`)] })), request_id }, csrf);
   });
 });
