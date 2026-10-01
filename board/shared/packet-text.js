@@ -12,6 +12,7 @@ export function cleanPacketText(value, max, root = null) {
   s = s.replace(/\bfile:\/\/[^\s"'`<>]+|(?<![\w])(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>),;\]}]+/g, '<path>');
   s = s.replace(/\b(?:btk|btr|bdt|brt|inv|clinv)_[A-Za-z0-9_-]{43}\b/g, '<redacted:task_token>');
   s = s.replace(/\bbrt1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<redacted:run_token>');
+  s = s.replace(/\bbmr1\.[A-Za-z0-9-]+\.[A-Za-z0-9_-]+/g, '<redacted:message_receipt>');
   s = s.replace(/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|<redacted:private_key>)[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<redacted:private_key>');
   s = s.replace(/(?<![\w.:/-])\/(?!\/)[^\s"'`<>),;\]}]+/g, '<path>');
   return s.slice(0, max);

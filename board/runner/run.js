@@ -986,6 +986,25 @@ export class Run {
     }
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
     switch (name) {
+      case 'board_send_message':
+        return this.#wrapMessages(await this.sup.rpc(this, name, { ...args, body: this.#text(args.body, 4000) }));
+      case 'board_list_messages': {
+        const result = await this.sup.rpc(this, name, args);
+        const receipts = (result.inbox ?? []).map((m) => ({ receipt_id: m.delivery.receipt_id, receipt_token: m.delivery.receipt_token }));
+        if (receipts.length) {
+          // Host receipt is recorded only after the response reaches this
+          // live supervisor. The server rechecks current socket/run/fence.
+          const accepted = await this.sup.rpc(this, 'runner_messages_received', { receipts });
+          for (const m of result.inbox) {
+            const receipt = accepted.receipts?.find((r) => r.message_id === m.id);
+            if (!receipt || !['received', 'acknowledged'].includes(receipt.state)) throw err('INTERNAL', 'host receipt was not confirmed');
+            m.delivery.state = receipt.state;
+          }
+        }
+        return this.#wrapMessages(result);
+      }
+      case 'board_ack_message':
+        return this.sup.rpc(this, name, args);
       case 'board_read_packet':
         return this.#wrapPacket(await this.sup.rpc(this, name, args));
       case 'board_write_packet': {
@@ -1061,6 +1080,14 @@ export class Run {
         decisions: p.data.decisions.map((s) => w('decision', s)), reportedChecks: p.data.reportedChecks.map((s) => w('reported check', s)),
         artifacts: p.data.artifacts.map((a) => a.kind === 'path' ? { ...a, path: w('reported path', a.path) } : a) },
       evidence: p.evidence.map((e) => ({ ...e, summary: w('evidence summary', e.summary), ref: w('evidence ref', e.ref) })) } };
+  }
+
+  #wrapMessages(result) {
+    const wrap = (m) => ({ ...m, body: this.#wrap(`message:${m.id} reported body`, m.body),
+      author: { ...m.author, name: this.#wrap(`message:${m.id} author`, m.author.name) } });
+    return { ...result, ...(result.message ? { message: wrap(result.message) } : {}),
+      ...(result.inbox ? { inbox: result.inbox.map(wrap) } : {}), ...(result.history ? { history: result.history.map(wrap) } : {}),
+      ...(result.peers ? { peers: result.peers.map((p) => ({ ...p, name: this.#wrap(`peer:${p.run_id} owner`, p.name), title: this.#wrap(`peer:${p.run_id} task`, p.title) })) } : {}) };
   }
 
   async #outboxTool(name, args) {

@@ -72,6 +72,10 @@ function currentPlanApprover(hub, run, row, memberId) {
 }
 
 const METHODS = {
+  board_send_message(hub, ctx, params) { return new TeamCommunication(hub).runnerSendMessage(ctx, params); },
+  board_list_messages(hub, ctx, params) { return new TeamCommunication(hub).runnerListMessages(ctx, params); },
+  board_ack_message(hub, ctx, params) { return new TeamCommunication(hub).runnerAckMessage(ctx, params); },
+  runner_messages_received(hub, ctx, params) { return new TeamCommunication(hub).runnerReceivedMessages(ctx, params); },
   board_read_packet(hub, ctx, params) { return new TeamCommunication(hub).runnerReadPacket(ctx, params); },
   board_write_packet(hub, ctx, params) { return new TeamCommunication(hub).runnerWritePacket(ctx, params); },
   board_get_card(hub, { run, row }, params) {
@@ -334,6 +338,10 @@ export const METHOD_SCOPES = Object.freeze({
   board_create_card: 'card:create_child',
   board_add_lesson: 'lesson:suggest',
   runner_plan_status: 'card:read',
+  board_send_message: 'message:write',
+  board_list_messages: 'message:read',
+  board_ack_message: 'message:read',
+  runner_messages_received: 'message:read',
   board_read_packet: 'card:read',
   board_write_packet: 'card:write',
 });

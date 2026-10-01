@@ -13,6 +13,8 @@ export const JOURNAL_KINDS = Object.freeze([
   'permission.answer',  // {permission_request_id, decision, scope}
   'permission.cancel',  // {permission_request_id}
   'packet.version',      // {packet_id, version, content_hmac}; participant context, no grant
+  'message.create',      // {message_id, thread_id, comment_id, kind, for_agent:false, content_hmac}
+  'message.receipt',     // {message_id, receipt_id, state, source}; current host/agent reports, never work completion
   'handover.version',   // {version, written_by, provenance}
   'evidence.create',    // {evidence_id, kind, ref, verification, result}
   'plan.declare',       // {paths}

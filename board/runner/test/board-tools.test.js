@@ -42,6 +42,22 @@ test('shared packet narrative, author names, reported paths and evidence return 
   });
 });
 
+test('message reads report host receipt only after the response, wrap participant text and leave agent acknowledgement explicit', async () => {
+  await withRun('APP-94', async (run, hub) => {
+    const message = { id: 'message-1', body: EVIL[0], author: { name: EVIL[1] }, delivery: { receipt_id: '00000000-0000-4000-8000-000000000001', receipt_token: 'fixture-receipt', state: 'pending' } };
+    hub.rpcReply = (f) => ({ ok: true, result: f.method === 'board_list_messages' ? { inbox: [message], history: [], peers: [{ run_id: 'peer-1', name: EVIL[2], title: EVIL[0] }] } : { receipts: [{ message_id: message.id, state: 'received' }] } });
+    const r = await run.tool('board_list_messages');
+    assert.deepEqual(hub.of('rpc').map((f) => f.method), ['board_list_messages', 'runner_messages_received']);
+    assert.equal(r.inbox[0].delivery.state, 'received'); assert.equal(r.inbox[0].delivery.receipt_token, 'fixture-receipt');
+    for (const s of [r.inbox[0].body, r.inbox[0].author.name, r.peers[0].name, r.peers[0].title]) { assert.ok(s.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(s), 1); }
+    assert.deepEqual(hub.of('rpc')[1].params, { receipts: [{ receipt_id: message.delivery.receipt_id, receipt_token: message.delivery.receipt_token }] });
+    assert.equal(hub.of('rpc').filter((f) => f.method === 'board_ack_message').length, 0);
+    hub.rpcReply = (f) => f.method === 'runner_messages_received' ? { ok: false, error: { code: 'FENCED', message: 'old connection' } }
+      : { ok: true, result: { inbox: [message], history: [], peers: [] } };
+    await assert.rejects(run.tool('board_list_messages'), (e) => e.code === 'FENCED');
+  });
+});
+
 test('board_get_card: a card an integration created says so in its envelope source', async () => {
   await withRun('APP-91', async (run, hub) => {
     hub.rpcReply = (f) => (f.method === 'board_get_card' ? { ok: true, result: {

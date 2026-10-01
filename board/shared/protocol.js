@@ -85,9 +85,10 @@ export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
   'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status', 'board_read_packet', 'board_write_packet',
+  'board_send_message', 'board_list_messages', 'board_ack_message', 'runner_messages_received',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
-export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status']);
+export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status', 'runner_messages_received']);
 // Only the server may create this permission request after a declared plan.
 export const CODEX_PLAN_PERMISSION = 'Authorize Codex edits for this run';
 
@@ -96,6 +97,7 @@ export const MCP_TOOLS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_update_status', 'board_append_progress', 'board_write_handover',
   'board_ask_human', 'board_comment', 'board_attach_evidence', 'board_complete', 'board_release',
   'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson', 'board_read_packet', 'board_write_packet',
+  'board_send_message', 'board_list_messages', 'board_ack_message',
 ]);
 
 // Least-privilege scope of each board-mcp tool (CONTRACT §7.3). Every tool is
@@ -108,11 +110,16 @@ export const TOOL_SCOPES = Object.freeze({
   'card:create_child': "create a todo child card of this run's card on the same board and repo; never dispatched, assigned or budgeted",
   'lesson:suggest': "append a lesson suggestion for this run's repo in the board's org; never read back to agents",
   'permission:ask': "ask this card's approvers for a tool permission; cannot grant one",
+  'message:read': "read this run's exact fenced task inbox and same-team/repository active peer identities; acknowledge only its current server connection's issued delivery",
+  'message:write': "post a bounded message on this run's own card to exact active same-team/repository recipient runs; never trigger dispatch or resume",
 });
 export const MCP_TOOL_SCOPES = Object.freeze({
   board_get_card: 'card:read',
   board_read_packet: 'card:read',
   board_write_packet: 'card:write',
+  board_send_message: 'message:write',
+  board_list_messages: 'message:read',
+  board_ack_message: 'message:read',
   board_list_cards: 'repo:read',
   board_update_status: 'card:write',
   board_append_progress: 'card:write',
