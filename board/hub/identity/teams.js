@@ -155,7 +155,7 @@ export class Teams {
     const o = this.org(member.org_id);
     if (body.confirm_slug !== o.slug) throw new HubError('VALIDATION', 'confirm_slug must be the team slug');
     // Like deleting the account: a fresh email code first (M4), of its own purpose (L-H).
-    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team', cred);
+    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team', cred, o.id);
     return this.deleteTeam(o, { member, ip, step });
   }
 

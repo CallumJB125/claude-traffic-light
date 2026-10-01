@@ -46,7 +46,11 @@ export function ipPrefix(ip) {
  * The one form an address is compared and stored in (L7): trimmed, lower-cased
  * by JS (full Unicode), never by SQLite's ASCII-only lower().
  */
-export const canonEmail = (v) => String(v).trim().toLowerCase();
+export const canonEmail = (v) => String(v).normalize('NFKC').trim().toLowerCase();
+
+/** Who proved a primary address so that an address match may link to it (D83): an email code, an authoritative Google account, or (NULL) the pre-OAuth paths. */
+export const AUTHORITATIVE_VIA = Object.freeze([null, 'email', 'google']);
+export const authoritativeVia = (u) => AUTHORITATIVE_VIA.includes(u?.primary_email_via ?? null);
 
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
@@ -355,8 +359,15 @@ export class Accounts {
     const now = this.now();
     const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
     let user = byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
+    // An address a GitHub (or non-authoritative Google) sign-in put there is
+    // not proof that its holder owns the mailbox: the code just proved it, so
+    // the address moves to a new account, never into that one (D83).
+    if (user && !byIdentity && !authoritativeVia(user)) {
+      this.releasePrimary(user, { ip });
+      user = null;
+    }
     if (!user) {
-      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, avatar_url: null, created_at: now, deleted_at: null };
+      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null };
       this.db.insert('users', user);
       this.audit('user.create', { user: user.id, detail: { method: 'email' }, ip });
     } else if (!user.primary_email_verified_at && user.primary_email === email) {
@@ -366,6 +377,12 @@ export class Accounts {
     if (byIdentity) this.db.run("UPDATE identities SET last_used_at = ? WHERE provider = 'email' AND subject = ?", now, email);
     else this.db.insert('identities', { id: randomUUID(), user_id: user.id, provider: 'email', subject: email, email, email_verified: 1, created_at: now, last_used_at: now, verified_at: now });
     return user;
+  }
+
+  /** A non-authoritative primary address yields to someone who proved the mailbox (D83). */
+  releasePrimary(user, { ip }) {
+    this.db.run('UPDATE users SET primary_email = NULL, primary_email_verified_at = NULL, primary_email_via = NULL WHERE id = ?', user.id);
+    this.audit('user.email_released', { user: user.id, detail: { via: user.primary_email_via }, ip });
   }
 
   // Member rows an admin added with this address before accounts (Access
@@ -527,11 +544,11 @@ export class Accounts {
    * needs: a flow of that purpose this user started and verified in the last
    * 5 minutes, not used yet; or (D78) an OAuth re-authentication of this user
    * from this same device token whose 5-minute window is open (`flow_id` names
-   * it, or is left out). An OAuth 'delete' step-up also confirms a team
-   * deletion. → the flow, or STEP_UP_REQUIRED.
+   * it, or is left out). For a team (`teamId`) the OAuth step-up must name
+   * that team (L6); for the account it must name none. → the flow, or STEP_UP_REQUIRED.
    */
-  requireStepUp(userId, flowId, purpose = 'delete', cred = null) {
-    const o = this.oauthStepUp(userId, flowId, purpose, cred);
+  requireStepUp(userId, flowId, purpose = 'delete', cred = null, teamId = null) {
+    const o = this.oauthStepUp(userId, flowId, purpose, cred, teamId);
     if (o) return o;
     const f = typeof flowId === 'string' ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     const age = f?.verified_at ? this.hub.ageOf(f.verified_at) : null;
@@ -541,14 +558,16 @@ export class Accounts {
     return f;
   }
 
-  oauthStepUp(userId, flowId, purpose, cred) {
+  oauthStepUp(userId, flowId, purpose, cred, teamId = null) {
     if (cred?.kind !== 'device') return null;
     const purposes = purpose === 'delete_team' ? ['delete', 'delete_team'] : ['delete'];
+    const team = purpose === 'delete_team' ? teamId : null;
     const now = this.now();
     const rows = typeof flowId === 'string'
       ? [this.db.get('SELECT * FROM oauth_flows WHERE id = ?', flowId)]
       : this.db.all('SELECT * FROM oauth_flows WHERE user_id = ? AND stepup_until > ? AND consumed_at IS NULL ORDER BY stepup_until DESC', userId, now);
-    const f = rows.find((r) => r && r.user_id === userId && r.cred_id === cred.id && purposes.includes(r.purpose) && !r.consumed_at && r.stepup_until && r.stepup_until > now);
+    const f = rows.find((r) => r && r.user_id === userId && r.cred_id === cred.id && purposes.includes(r.purpose) && (r.team_id ?? null) === team
+      && !r.consumed_at && r.stepup_until && r.stepup_until > now);
     return f ? { ...f, oauth: true } : null;
   }
 

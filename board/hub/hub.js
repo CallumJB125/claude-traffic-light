@@ -826,6 +826,7 @@ export class Hub extends EventEmitter {
     this.limiter.sweep();
     this.recheckBrowsers();
     this.enrolments?.recheck();
+    this.oauth?.sweep();
     this.presence.sweep();
     await this.idle();
   }

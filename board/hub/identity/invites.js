@@ -77,8 +77,11 @@ export class Invites {
   // ignored here (L8). OAuth providers add their own rule when they land.
   verifiedEmails(user) {
     const set = new Set();
-    if (user.primary_email && user.primary_email_verified_at) set.add(canonEmail(user.primary_email));
-    // Email identities, and addresses Google / GitHub verified at a sign-in (never migration 009's admin-typed GitHub ids).
+    // D83: a non-authoritative Google address never accepts an invite; a GitHub
+    // primary+verified one may (the invite is the admin's deliberate grant to it).
+    if (user.primary_email && user.primary_email_verified_at && user.primary_email_via !== 'google_weak') set.add(canonEmail(user.primary_email));
+    // Email identities, and addresses Google (authoritative only: email_verified = 1) / GitHub verified at a
+    // sign-in (never migration 009's admin-typed GitHub ids).
     for (const r of this.db.all("SELECT email FROM identities WHERE user_id = ? AND provider IN ('email','google','github') AND email_verified = 1 AND verified_at IS NOT NULL AND email IS NOT NULL", user.id)) set.add(canonEmail(r.email));
     return [...set];
   }

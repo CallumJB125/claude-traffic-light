@@ -31,6 +31,7 @@ export function fakeProviders({ clock, clients }) {
     jwksDown: false,
     tokenStatus: null,              // force the token endpoint to answer this status
     gate: null,                     // a promise the token endpoint waits on (concurrency tests)
+    bigBody: false,                 // GitHub /user answers more than 64 KB
     signJwt(claims, { privateKey = key.privateKey, keyId = kid, alg = 'RS256' } = {}) {
       const head = b64url(JSON.stringify({ alg, kid: keyId, typ: 'JWT' }));
       const body = b64url(JSON.stringify(claims));
@@ -38,7 +39,7 @@ export function fakeProviders({ clock, clients }) {
     },
     /**
      * The user consents at the provider: → {code, state} as the loopback
-     * listener would receive them. who: {sub|id, email, name, login, emails}.
+     * listener would receive them. who: {sub|id, email, name, login, emails, hd}.
      * over: {claims} (Google id_token overrides), {sign} (signJwt options).
      */
     authorize(url, who, over = {}) {
@@ -50,7 +51,7 @@ export function fakeProviders({ clock, clients }) {
     },
     fetch: async (url, init = {}) => {
       const headers = Object.fromEntries(Object.entries(init.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
-      p.requests.push({ url: String(url), method: init.method ?? 'GET', body: init.body ?? null, headers });
+      p.requests.push({ url: String(url), method: init.method ?? 'GET', body: init.body ?? null, headers, redirect: init.redirect });
       const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
       if (url === GOOGLE.jwks) return p.jwksDown ? json(503, {}) : json(200, { keys: [jwk] });
       if (url === GOOGLE.token || url === GITHUB.token) {
@@ -68,7 +69,7 @@ export function fakeProviders({ clock, clients }) {
           const t = Math.floor(clock.wall() / 1000);
           const claims = {
             iss: 'https://accounts.google.com', aud: clients.googleClientId, sub: c.who.sub, email: c.who.email, email_verified: true,
-            name: c.who.name ?? null, iat: t, exp: t + 3600, nonce: c.nonce, ...(c.over.claims ?? {}),
+            name: c.who.name ?? null, iat: t, exp: t + 3600, nonce: c.nonce, ...(c.who.hd ? { hd: c.who.hd } : {}), ...(c.over.claims ?? {}),
           };
           const access = `${['ya29', 'x'].join('.')}${rnd(30)}`;
           const idToken = p.signJwt(claims, c.over.sign);
@@ -83,7 +84,7 @@ export function fakeProviders({ clock, clients }) {
       if (url === GITHUB.user || url === GITHUB.emails) {
         const who = tokens.get(String(headers.authorization ?? '').replace(/^Bearer /, ''));
         if (!who) return json(401, { message: 'Bad credentials' });
-        if (url === GITHUB.user) return json(200, { id: who.id, login: who.login, name: who.name ?? null });
+        if (url === GITHUB.user) return json(200, { id: who.id, login: who.login, name: p.bigBody ? 'x'.repeat(70 * 1024) : who.name ?? null });
         return json(200, who.emails ?? [{ email: who.email, primary: true, verified: true, visibility: 'private' }]);
       }
       return json(404, {});
