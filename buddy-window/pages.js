@@ -94,13 +94,15 @@ function parseConnectName(name) {
   return PROVIDER_RE.test(provider) && BIND_RE.test(bind) ? { provider, bind } : null;
 }
 
-/** A provider's authorize page: https on a public name, never loopback, private or an IP literal we can't vet. */
+/** A provider's authorize page: https on a public name, never loopback, private, a private-use suffix or any IP literal. */
 function connectUrlOk(url) {
   let u;
   try { u = new URL(url); } catch { return false; }
   if (u.protocol !== 'https:' || u.username || u.password) return false;
   const h = u.hostname.toLowerCase();
-  return !(h.startsWith('[') || h === 'localhost' || h.endsWith('.localhost') || !h.includes('.') || isPrivateHost(h));
+  // `localhost.` is loopback too, so a trailing dot is refused before the suffix checks.
+  if (h.startsWith('[') || h.endsWith('.') || !h.includes('.') || /^[\d.]+$/.test(h) || isPrivateHost(h)) return false;
+  return !/(^|\.)(localhost|local|internal|home\.arpa)$/.test(h);
 }
 
 /**
@@ -129,7 +131,8 @@ function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, si
   if (!signedIn) return { ok: false, reason: 'signed-out' };
   let page;
   try { page = new URL(pageUrl); } catch { return { ok: false, reason: 'opener' }; }
-  if (page.origin !== hubOrigin || page.searchParams.get('view') !== 'integrations') return { ok: false, reason: 'opener' };
+  // The Integrations view lives at / (hubPageUrl): any other path on the hub (a callback or static page) is not it.
+  if (page.origin !== hubOrigin || page.pathname !== '/' || page.searchParams.getAll('view').join() !== 'integrations') return { ok: false, reason: 'opener' };
   if (referrer) { try { if (new URL(referrer).origin !== hubOrigin) return { ok: false, reason: 'opener' }; } catch { return { ok: false, reason: 'opener' }; } }
   if (!(gestureAt > 0 && now - gestureAt >= 0 && now - gestureAt <= GESTURE_MS)) return { ok: false, reason: 'gesture' };
   if (!connectUrlOk(url)) return { ok: false, reason: 'url' };
@@ -143,7 +146,11 @@ function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, si
  * one on /integrations/. Both HttpOnly, SameSite=Lax, 10 minutes.
  */
 function bindCookie(hubOrigin, provider, bind, nowMs = Date.now()) {
-  const secure = new URL(hubOrigin).protocol === 'https:';
+  // Checked again here, not only in parseConnectName: this is the one place a cookie is minted.
+  let o = null;
+  try { o = new URL(hubOrigin); } catch { /* refused below */ }
+  if (!o || !/^https?:$/.test(o.protocol) || o.origin !== hubOrigin || typeof provider !== 'string' || typeof bind !== 'string' || !PROVIDER_RE.test(provider) || !BIND_RE.test(bind)) throw new Error('bad bind cookie');
+  const secure = o.protocol === 'https:';
   const name = secure ? `__Host-board_int_${provider}` : `board_int_${provider}`;
   const cookiePath = secure ? '/' : '/integrations/';
   return { url: `${hubOrigin}${cookiePath}`, name, value: bind, path: cookiePath, secure, httpOnly: true, sameSite: 'lax', expirationDate: Math.floor(nowMs / 1000) + BIND_COOKIE_S };
@@ -163,6 +170,11 @@ function isConnectCallback(url, hubOrigin) {
   } catch { return false; }
 }
 
+/** May the connect window go here? A public https page (the provider's hops) or the hub's own callback, nothing else. */
+function connectNavOk(url, hubOrigin) {
+  return connectUrlOk(url) || isConnectCallback(url, hubOrigin);
+}
+
 /** Which sidebar entry does a hub URL correspond to (for in-page view switches)? */
 function pageForHubUrl(url) {
   let v = null;
@@ -171,4 +183,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

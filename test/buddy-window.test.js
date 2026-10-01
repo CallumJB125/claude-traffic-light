@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -90,11 +90,43 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   no({ pageUrl: `${hub}/?org=t1` }, 'opener');
   no({ pageUrl: `${hub}/?view=table` }, 'opener');
   no({ referrer: 'https://evil.example.com/x' }, 'opener');
+  for (const pageUrl of [`${hub}/integrations/github/callback?view=integrations`, `${hub}/docs/x?view=integrations`, `${hub}/api/x?view=integrations`, `${hub}:444/?view=integrations`, `http://app.plexiform.dev/?view=integrations`, 'about:blank', 'not a url', undefined, `${hub}/?view=integrations&view=table`]) no({ pageUrl }, 'opener');
   no({ referrer: 'http://app.plexiform.dev/' }, 'opener');
   no({ signedIn: false }, 'signed-out');
   no({ frameName: 'buddy-connect' }, 'name');
   for (const url of ['http://github.com/login', 'https://127.0.0.1/x', 'https://10.1.2.3/', 'https://192.168.0.5/', 'https://169.254.169.254/latest', 'https://[::1]/', 'https://localhost/', 'https://intranet/']) no({ url }, 'url');
   assert.equal(connectUrlOk('https://slack.com/oauth/v2/authorize'), true);
+  // localhost. resolves to loopback; a trailing dot, an IP literal or a private-use suffix names nothing a provider uses.
+  for (const url of ['https://localhost./', 'https://foo.localhost./x', 'https://github.com./login', 'https://8.8.8.8/', 'https://0x7f000001/', 'https://printer.local/', 'https://metadata.google.internal/', 'https://router.home.arpa/', 'https://user:pw@github.com/', 'data:text/html,x', 'file:///etc/passwd', 'javascript:alert(1)']) assert.equal(connectUrlOk(url), false, url);
+});
+
+test('connect window navigation: public https provider pages and the hub callback only; popups are refused', () => {
+  const hub = 'https://app.plexiform.dev';
+  for (const u of ['https://github.com/login', 'https://github.com/sessions/two-factor', 'https://slack.com/oauth/v2/authorize', `${hub}/integrations/github/callback?code=x&state=y`]) assert.equal(connectNavOk(u, hub), true, u);
+  for (const u of ['http://github.com/login', 'https://192.168.1.1/', 'https://localhost./', 'https://127.0.0.1:8080/', 'file:///etc/passwd', 'data:text/html,x', 'javascript:alert(1)', 'mailto:a@b.co', 'x-github-desktop://open', 'not a url', 'http://app.plexiform.dev/integrations/github/callback']) assert.equal(connectNavOk(u, hub), false, u);
+  const local = 'http://127.0.0.1:4100';
+  assert.equal(connectNavOk(`${local}/integrations/github/callback?code=x`, local), true, 'the local hub’s own callback');
+  assert.equal(connectNavOk(`${local}/`, local), false, 'nothing else on the local hub');
+  assert.equal(connectNavOk('http://127.0.0.1:4101/integrations/github/callback', local), false, 'exact origin, port included');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(fn, /const guard = \(e, u\) => \{ if \(!connectNavOk\(u, w\.hubOrigin\)\) e\.preventDefault\(\); \};/);
+  assert.match(fn, /wc\.on\('will-navigate', guard\);/);
+  assert.match(fn, /wc\.on\('will-redirect', guard\);/);
+  assert.match(fn, /wc\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\);/);
+  assert.ok(!/openExternal/.test(fn), 'the provider page can’t open the system browser either');
+});
+
+test('connect window: one at a time; a second open while one is open (or still opening) is refused, never stacked or swapped', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  const refuse = fn.indexOf("if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }");
+  const pending = fn.indexOf('if (connectOpening) return;');
+  assert.ok(refuse > 0 && pending > 0, 'both guards present');
+  assert.ok(Math.max(refuse, pending) < fn.indexOf('bindCookie('), 'refused before any cookie is set');
+  assert.ok(!/connectWin\.close\(\)/.test(fn), 'an open window is never closed to make room (its closed handler would remove the new bind cookie)');
+  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie;\n\s+try \{\n/);
+  assert.match(fn, /await ses\.cookies\.set\(cookie\); \/\/ privacy-flow: integration-connect\n\s+\} finally \{ connectOpening = false; \}/);
 });
 
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
@@ -104,6 +136,14 @@ test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /
   assert.equal('domain' in https, false);
   const dev = bindCookie('http://127.0.0.1:4100', 'slack', 'b2', now);
   assert.deepEqual(dev, { url: 'http://127.0.0.1:4100/integrations/', name: 'board_int_slack', value: 'b2', path: '/integrations/', secure: false, httpOnly: true, sameSite: 'lax', expirationDate: now / 1000 + 600 });
+});
+
+test('bind cookie fails closed: only an exact http(s) hub origin, a valid provider and bind', () => {
+  for (const [origin, provider, bind] of [
+    ['https://app.plexiform.dev/', 'github', 'b'], ['https://app.plexiform.dev/x', 'github', 'b'], ['https://u:p@app.plexiform.dev', 'github', 'b'],
+    ['file:///tmp', 'github', 'b'], ['not a url', 'github', 'b'], [undefined, 'github', 'b'],
+    ['https://app.plexiform.dev', 'git;hub', 'b'], ['https://app.plexiform.dev', 'GitHub', 'b'], ['https://app.plexiform.dev', 'github', 'b;Domain=evil.com'], ['https://app.plexiform.dev', 'github', ''], ['https://app.plexiform.dev', 'github', 'b'.repeat(65)], ['https://app.plexiform.dev', undefined, 'b'], ['https://app.plexiform.dev', 'github', undefined],
+  ]) assert.throws(() => bindCookie(origin, provider, bind), /bind cookie/, JSON.stringify([origin, provider, bind]));
 });
 
 test('user agent: the hub view appends Plexiform/<version> once, never replacing the browser’s', () => {
@@ -124,6 +164,53 @@ test('connect window wiring: gesture-tracked, guarded, cookie set before the loa
   assert.ok(!/preload|installBearer|bearerHeaders/.test(fn), 'no preload, no bearer on the connect partition');
   assert.match(fn, /first page must be the authorize host/);
   assert.match(fn, /sandbox: true/);
+});
+
+test('connect window guardrails pinned: hub-view opener only, neutral name, own partition with no bearer, callback close, host title, fail-closed', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  const hubView = src.slice(src.indexOf('function makeHubView('), src.indexOf('async function openConnect'));
+  // Only the hub view's window.open handler can start one, and only for the current, signed-in account hub.
+  assert.equal(src.split('openConnect(').length - 1, 2, 'declared once, called once');
+  assert.equal(src.split('connectDecision(').length - 1, 1);
+  assert.ok(hubView.includes('openConnect(url, h, c)') && hubView.includes('connectDecision('));
+  assert.match(hubView, /signedIn: !!h\.bearer && signedIn\(h\.origin\) && hubInfo\?\.origin === h\.origin/);
+  assert.match(hubView, /pageUrl: wc\.getURL\(\)/, 'the opener is judged by the hub view’s own main-frame URL');
+  assert.match(hubView, /wc\.on\('will-frame-navigate', \(e\) => \{ if \(!e\.isMainFrame && decide\(e\.url\) !== 'allow'\) e\.preventDefault\(\); \}\);/, 'frames stay on the hub origin');
+  assert.match(hubView, /gestureAt = 0;\n\s+if \(c\.ok\)/, 'one gesture, one try');
+  // The page's own window (named with the bind) is never created: the handler always denies, and ours has no name.
+  const handler = hubView.slice(hubView.indexOf('wc.setWindowOpenHandler('), hubView.indexOf('const guard'));
+  assert.ok(!/action: 'allow'|overrideBrowserWindowOptions/.test(handler));
+  assert.match(handler, /return \{ action: 'deny' \};\n\s+\}\);/);
+  const ctor = fn.slice(fn.indexOf('new BrowserWindow('), fn.indexOf('w.hubOrigin = h.origin'));
+  assert.ok(ctor.length > 0 && !/frameName|bind|name:/.test(ctor), 'nothing names the connect window');
+  assert.equal(fn.replace(/\/\/.*$/gm, '').match(/\bbind\b/g).length, 2, 'the bind reaches only bindCookie');
+  assert.match(fn, /w\.loadURL\(url\)/);
+  // Its own partition: never the hub's (which carries the bearer header), and cleared on sign-out.
+  assert.match(fn, /session\.fromPartition\(integrationPartitionFor\(h\.origin\)\)/);
+  assert.ok(!/h\.partition|teamPartition|webRequest/.test(fn));
+  for (const o of ['https://app.plexiform.dev', 'https://buddy.example.com', 'http://127.0.0.1:4100']) {
+    assert.notEqual(integrationPartitionFor(o), teamPartition(o));
+    assert.ok(integrationPartitionFor(o).startsWith('persist:integration-auth-') && teamPartition(o).startsWith('persist:board-'));
+  }
+  assert.match(src, /function installBearer\(origin\) \{\n\s+const partition = teamPartition\(origin\);/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account-flow.js'), 'utf8'), /const parts = \[partitionFor\(origin\), integrationPartitionFor\(origin\)\];/);
+  // The first page must be the authorize host; the callback page closes the window shortly after it loads.
+  assert.match(fn, /if \(host !== authorizeHost\) \{ log\('connect window closed: first page not the authorize host'\); wc\.stop\(\); w\.close\(\); \}/);
+  assert.match(fn, /wc\.on\('did-finish-load', \(\) => \{\n\s+if \(closing \|\| !isConnectCallback\(wc\.getURL\(\), w\.hubOrigin\)\) return;/);
+  assert.match(fn, /setTimeout\(\(\) => \{\n\s+if \(!w\.isDestroyed\(\)\) w\.close\(\);[\s\S]*?\}, 1500\);/);
+  // The title shows the host on screen; the page can't replace it.
+  assert.match(fn, /w\.on\('page-title-updated', \(e\) => e\.preventDefault\(\)\);/);
+  assert.match(fn, /w\.setTitle\(`\$\{BRAND\.CONNECT_TITLE\} · \$\{new URL\(u\)\.host\}`\)/);
+  // Fail closed on anything malformed.
+  const hub = 'https://app.plexiform.dev';
+  const ok = { url: 'https://github.com/login/oauth/authorize', frameName: 'plexiform-connect|github|b', pageUrl: `${hub}/?view=integrations`, hubOrigin: hub, signedIn: true, gestureAt: 1, now: 2 };
+  assert.equal(connectDecision(ok).ok, true);
+  for (const over of [{ url: undefined }, { url: '::' }, { frameName: undefined }, { frameName: 42 }, { pageUrl: undefined }, { hubOrigin: undefined }, { referrer: '::' }, { gestureAt: NaN }, { now: NaN }, { gestureAt: 5 }]) {
+    assert.equal(connectDecision({ ...ok, ...over }).ok, false, JSON.stringify(over));
+  }
+  assert.equal(connectNavOk(undefined, hub), false);
+  assert.equal(isConnectCallback(`${hub}/integrations/github/callback`, undefined), false);
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────
