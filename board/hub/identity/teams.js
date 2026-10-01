@@ -21,7 +21,7 @@ const RESERVED_SLUGS = new Set([
 
 // Free-plan limits (design §9.3): pro = ×10, self_hosted = none.
 export const TEAM_CREATE_INVITE_ONLY_TEXT = 'Only team owners invited by the hub administrator can create teams while sign-up is invite-only';
-export const FREE_QUOTAS = Object.freeze({ members: 25, boards: 10, teams: 10, pending_invites: 100, labels: 50 });
+export const FREE_QUOTAS = Object.freeze({ members: 25, boards: 10, teams: 10, pending_invites: 100, labels: 50, cards: 5000, comments: 50_000 });
 export function quotaFor(plan, resource) {
   if (plan === 'self_hosted') return Infinity;
   return FREE_QUOTAS[resource] * (plan === 'pro' ? 10 : 1);

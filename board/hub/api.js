@@ -17,6 +17,7 @@ import { limitOrThrow } from './ratelimit.js';
 import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
 import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
 import { insertCardRecord } from './card-record.js';
+import { requireRows } from './quotas.js';
 import { remoteScope, remoteMutation } from './remote/context.js';
 
 const ACTION_EVENTS = {
@@ -762,6 +763,7 @@ export class Api {
 
   // ── comments ──────────────────────────────────────────────────────────────
   insertComment(member, cardId, { body, for_agent = false, reply_to = null }) {
+    requireRows(this.hub, this.hub.board(this.hub.card(cardId).board_id).org_id, 'comments');
     const id = randomUUID();
     const replyTo = reply_to && this.db.get('SELECT 1 AS x FROM comments WHERE id = ? AND card_id = ?', reply_to, cardId) ? reply_to : null;
     // Text an integration wrote (inside its actVia scope) is outside text:
