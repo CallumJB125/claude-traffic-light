@@ -354,10 +354,10 @@ test('link: at most one live pr link per card per connection (same id is a no-op
     await ctx2.act('card.create', {}, async (s) => s.link(r.cardId, 'pr', 'PR-11'));
     assert.equal(ctx2.linkedByCard(r.cardId, 'pr'), 'PR-11');
     assert.equal(ctx.linkedByCard(r.cardId, 'pr'), 'PR-10');
-    // Another org's card reads null even if a row names it.
+    // Another org's card reads null; a row naming it cannot be written (migration 017).
     const o = addOrg(h);
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-10', fence: 1 });
-    h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso());
+    assert.throws(() => h.db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, created_at) VALUES (?, ?, 'pr', 'PR-X', ?)", theirs.cardId, conn.id, h.hub.iso()), /cross-team reference/);
     assert.equal(ctx.linkedByCard(theirs.cardId, 'pr'), null);
   } finally { await h.close(); }
 });

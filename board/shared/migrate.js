@@ -68,13 +68,22 @@ export function migrate(db, { migrations = loadMigrations(), wal = false, now = 
   db.exec('PRAGMA foreign_keys = ON');
   if (wal) db.exec('PRAGMA journal_mode = WAL');
   currentVersion(db);
-  const have = new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
+  const have = new Map(db.prepare('SELECT version, name FROM schema_migrations').all().map((r) => [r.version, r.name]));
+  // A version recorded under another name is a different migration (a branch's
+  // reserved number reused on main): skipping the shipped one would leave its
+  // tables missing and fail later, so stop before applying anything.
+  for (const m of migrations) {
+    if (have.has(m.version) && have.get(m.version) !== m.name) {
+      const v = String(m.version).padStart(3, '0');
+      throw new Error(`migration ${v} was applied as ${v}_${have.get(m.version)} but this hub ships ${v}_${m.name}; this database came from another branch and cannot be migrated in place`);
+    }
+  }
   const applied = [];
   for (const m of migrations) {
     if (have.has(m.version)) continue;
     const dir = directives(m.sql);
     const fkOff = dir.has('foreign_keys=off');
-    const newest = Math.max(0, ...have);
+    const newest = Math.max(0, ...have.keys());
     if (dir.has('rebuilds') && newest > m.version) {
       throw new Error(`migration ${String(m.version).padStart(3, '0')}_${m.name} rebuilds tables and cannot be applied after version ${newest}; apply migrations in order`);
     }
