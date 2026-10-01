@@ -19,6 +19,7 @@ export const ERRORS = Object.freeze({
   QUOTA_EXCEEDED: 403,      // accounts: a free-plan limit (extra: resource, limit; D62)
   EMAIL_UNVERIFIED: 403,    // accounts: team create / invite needs a verified email
   WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (names no address; D64)
+  SIGNUP_CLOSED: 403,       // accounts: a new account this hub's sign-up control does not allow (names the mode only; D104)
   NOT_FOUND: 404,
   METHOD_DISABLED: 404,     // accounts: that sign-in method is not configured on this hub (D66)
   ILLEGAL_TRANSITION: 409,
@@ -30,6 +31,7 @@ export const ERRORS = Object.freeze({
   CLAIM_LOST: 409,
   ONE_OPEN_ASK: 409,
   RUN_ENDED: 410,
+  TIMEOUT: 408,             // a request body not received in time (D105; the webhook ingress's 408 too)
   PAYLOAD_TOO_LARGE: 413,
   EVIDENCE_MISSING: 422,
   NO_REPO: 422,

@@ -21,6 +21,20 @@ import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
+// Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
+// The body deadline runs from when the API starts reading and ends before the
+// server's own request timeout, so a slow body gets the hub's 408 and a cut socket.
+// Keep-alive outlasts cloudflared's idle origin pool (90 s): the proxy, the only
+// client on loopback, always drops an idle connection before the hub does, so
+// it never sends a request down a socket the hub is closing (a 502). Node runs
+// the headers/request timeouts only while a request is in progress, never on
+// an idle connection, so they stay short.
+export const REQUEST_LIMITS = Object.freeze({
+  requestTimeoutMs: 30_000, headersTimeoutMs: 15_000, keepAliveTimeoutMs: 120_000, checkIntervalMs: 1_000,
+  bodyDeadlineMs: 20_000, smallBodyMax: 64 * 1024,
+});
+// Card bodies (create, patch, actions, comments, permission answers) keep 1 MiB; every other API body is capped at smallBodyMax.
+const bigBodyRoute = (pattern) => pattern === '/api/boards/:board_id/cards' || pattern.startsWith('/api/cards/') || pattern.startsWith('/api/permission-requests/');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The prepare body carries an admin's pasted configuration token (D97), and a
 // /start answer a signed state, bind and the org it was given: their D8 replay
@@ -84,8 +98,33 @@ const vetBucketKey = (key) => {
   return v6 ? `${v6[1]}::/48` : key;
 };
 
+// A body still on the wire when the answer goes out: the answer says
+// Connection: close, so a proxy that pools origin connections (cloudflared)
+// never sends another request down a socket that is about to be cut.
+function closeIfUnread(res) {
+  const req = res.req;
+  if (req && !req.complete && (req.headers['transfer-encoding'] != null || Number(req.headers['content-length'] ?? 0) > 0)) res.shouldKeepAlive = false;
+}
+
+// An answer given before the body was read (refused, too large, too slow) is
+// not followed by draining the rest at the sender's pace: the socket goes a
+// moment later. Node would close a Connection: close socket the moment the
+// answer is out, which resets a sender still writing its body before it
+// reads the answer (cloudflared then shows a 502): our side is ended, the
+// rest drained for that moment, then cut.
+const CURRENT = Symbol('current request');
+function cutIfUnread(req, res) {
+  const sock = req.socket;
+  res.once('finish', () => {
+    if (req.complete || !sock) return;
+    if (!res.shouldKeepAlive) sock.removeListener('finish', sock.destroy);
+    setTimeout(() => { if (!res.shouldKeepAlive || (!req.complete && sock[CURRENT] === req)) sock.destroy(); }, 1000).unref();
+  });
+}
+
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
+  closeIfUnread(res);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers });
   res.end(data);
 }
@@ -93,6 +132,7 @@ function sendJson(res, status, body, headers = {}) {
 // A connector's early webhook ack (text or pre-serialised JSON, ≤ 4 KiB):
 // never rendered as a page, never framed.
 function sendRaw(res, status, type, data, headers = {}) {
+  closeIfUnread(res);
   res.writeHead(status, {
     'content-type': type, 'content-length': String(Buffer.byteLength(data)), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'", [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers,
@@ -122,7 +162,7 @@ export function sameOrigin(req, publicUrl) {
 }
 
 // → {body} | {error: 413 | 408 | 'aborted'}; never waits past deadlineMs.
-function readRaw(req, deadlineMs) {
+function readRaw(req, deadlineMs, max = MAX_BODY) {
   return new Promise((resolve) => {
     const chunks = [];
     let n = 0;
@@ -137,7 +177,7 @@ function readRaw(req, deadlineMs) {
     req.on('data', (c) => {
       if (settled) return;
       n += c.length;
-      if (n > MAX_BODY) finish({ error: 413 });
+      if (n > max) finish({ error: 413 });
       else chunks.push(c);
     });
     req.on('end', () => finish({ body: Buffer.concat(chunks) }));
@@ -146,17 +186,17 @@ function readRaw(req, deadlineMs) {
   });
 }
 
-async function readBody(req) {
-  const chunks = [];
-  let n = 0;
-  for await (const c of req) {
-    n += c.length;
-    if (n > MAX_BODY) throw new HubError('PAYLOAD_TOO_LARGE', 'body over 1 MiB');
-    chunks.push(c);
-  }
-  if (!n) return {};
+const sizeText = (max) => (max >= MAX_BODY ? `${max / MAX_BODY} MiB` : `${max / 1024} KiB`);
+
+async function readBody(req, { max, deadlineMs }) {
+  if (Number(req.headers['content-length']) > max) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
+  const got = await readRaw(req, deadlineMs, max);
+  if (got.error === 413) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
+  if (got.error === 408) throw new HubError('TIMEOUT', 'body not received in time');
+  if (got.error) throw new HubError('VALIDATION', 'body not received');
+  if (!got.body.length) return {};
   try {
-    const v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const v = JSON.parse(got.body.toString('utf8'));
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
     return v;
   } catch {
@@ -196,6 +236,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return hosts.length ? `${CSP}; form-action 'self' ${hosts.map((x) => `https://${x}`).join(' ')}` : CSP;
   };
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
+  const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
   const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
@@ -229,7 +270,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, maxBody: bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -499,6 +540,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   return handle;
 
   async function handle(req, res) {
+    // Pipelined behind a request that was answered with Connection: close.
+    if (req.socket?.writableEnded) return req.socket.destroy();
+    if (req.socket) req.socket[CURRENT] = req;
     const url = new URL(req.url, 'http://hub');
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('content-security-policy', "frame-ancestors 'none'");
@@ -572,9 +616,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         const vetKey = `${hook[1]}|${vetBucketKey(ip)}`;
         const count = (m, k) => m.get(k) ?? 0;
         const vetted = live && (integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono());
-        // An unread (or half-read) body is not drained at the sender's pace:
-        // the socket goes once the answer had a moment to reach the sender.
-        const cut = () => res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
+        const cut = () => cutIfUnread(req, res);
         if (count(reading.pair, failKey) >= readLimits.perPair || count(reading.ip, ip) >= readLimits.perIp || (!vetted && count(reading.conn, connKey) >= (live ? readLimits.perConn : readLimits.perUnknown))) {
           cut();
           return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } }, { 'retry-after': '1' });
@@ -636,6 +678,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);
       }
+      cutIfUnread(req, res);
       let match = null;
       for (const r of routes) {
         if (r.method !== req.method) continue;
@@ -650,7 +693,6 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (!sameOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin request');
         if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) throw new HubError('VALIDATION', 'Content-Type must be application/json');
       }
-      const body = r.mutating ? await readBody(req) : {};
       const pick = { resourceOrg: resourceOrg(r, params), requestedOrg: req.headers['board-org'] || url.searchParams.get('org') || null };
       if (config.auth === 'accounts') pick.requestedOrg = requestedTeam(req, url.searchParams);
       let ident = null;
@@ -671,6 +713,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } else if (r.auth === 'member') {
         member = await authMember(req, pick);
       }
+      // Only now, so nobody unauthenticated can make the hub hold a body (D105).
+      const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
       const rid = actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       if (rid) {

@@ -11,14 +11,19 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:
 import { readFileSync, statSync, realpathSync, existsSync } from 'node:fs';
 import { dirname, basename, join, sep } from 'node:path';
 import { HubError } from './db.js';
+import { PLACEHOLDER } from './config.js';
 
 const KEY_BYTES = 32;
 const TAG_BYTES = 16;
 
 // Hex (64 chars) or canonical base64 (43 chars + '='): Buffer.from(…, 'base64')
 // silently skips junk, so anything else is refused rather than half-decoded.
-function decodeKey(text) {
+function decodeKey(text, { name = 'BOARD_ENC_KEY', refusePlaceholder = false } = {}) {
   const t = String(text ?? '').trim();
+  // Checked before decoding: an example word can still decode to 32 bytes.
+  if (refusePlaceholder && PLACEHOLDER.test(t)) {
+    throw new Error(`${name} still ${name.endsWith('_FILE') ? 'holds' : 'has'} an example placeholder: set a real key (openssl rand -base64 32)`);
+  }
   let buf = null;
   if (/^[0-9a-f]{64}$/i.test(t)) buf = Buffer.from(t, 'hex');
   else if (/^[A-Za-z0-9+/]{43}=$/.test(t)) buf = Buffer.from(t, 'base64');
@@ -44,12 +49,12 @@ function real(p) {
  * parentPort (hub.setVaultKey), never from env. A key read from env is
  * removed from it, so nothing started later can see it.
  */
-export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!process.parentPort } = {}) {
+export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!process.parentPort, refusePlaceholder = false } = {}) {
   if ((env.BOARD_ENC_KEY || env.BOARD_ENC_KEY_FILE) && hasParentPort) {
     throw new Error('BOARD_ENC_KEY(_FILE) is refused under the desktop app: the key comes over parentPort');
   }
   if (env.BOARD_ENC_KEY) {
-    const key = decodeKey(env.BOARD_ENC_KEY);
+    const key = decodeKey(env.BOARD_ENC_KEY, { refusePlaceholder });
     delete env.BOARD_ENC_KEY;
     return key;
   }
@@ -63,7 +68,7 @@ export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!p
     }
     const mode = statSync(file).mode & 0o077;
     if (mode) throw new Error('BOARD_ENC_KEY_FILE must not be readable by group or others (chmod 600)');
-    return decodeKey(readFileSync(file, 'utf8'));
+    return decodeKey(readFileSync(file, 'utf8'), { name: 'BOARD_ENC_KEY_FILE', refusePlaceholder });
   }
   return null;
 }
@@ -73,10 +78,10 @@ export function loadKey({ env = process.env, dataDir = null, hasParentPort = !!p
  * sealed with it (their key_id), which are then sealed again with the current
  * key; nothing is ever sealed with it. Same rules as BOARD_ENC_KEY.
  */
-export function loadPreviousKey({ env = process.env, hasParentPort = !!process.parentPort } = {}) {
+export function loadPreviousKey({ env = process.env, hasParentPort = !!process.parentPort, refusePlaceholder = false } = {}) {
   if (!env.BOARD_ENC_KEY_PREVIOUS) return null;
   if (hasParentPort) throw new Error('BOARD_ENC_KEY_PREVIOUS is refused under the desktop app: the key comes over parentPort');
-  const key = decodeKey(env.BOARD_ENC_KEY_PREVIOUS);
+  const key = decodeKey(env.BOARD_ENC_KEY_PREVIOUS, { name: 'BOARD_ENC_KEY_PREVIOUS', refusePlaceholder });
   delete env.BOARD_ENC_KEY_PREVIOUS;
   return key;
 }

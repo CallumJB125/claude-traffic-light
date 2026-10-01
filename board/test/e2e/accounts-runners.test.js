@@ -88,7 +88,7 @@ test('two enrolled runners in one team, one card each: each goes green on its ow
   const port = await freePort();
   const hub = await startHub({
     dataDir, port,
-    env: { BOARD_AUTH: 'accounts', BOARD_DEV_SEED: '', BOARD_DEV_LOGIN_SECRET: '', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1', BOARD_BOOTSTRAP: 'owner@e2e.test' },
+    env: { BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_DEV_SEED: '', BOARD_DEV_LOGIN_SECRET: '', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1', BOARD_BOOTSTRAP: 'owner@e2e.test' },
   });
   const runners = [];
   try {

@@ -75,6 +75,8 @@ const SLUG_MISMATCH = 'That doesn’t match the team’s name. Type it exactly a
 const WRONG_ACCOUNT_TEXT = 'This invite was sent to a different email address.';
 // The hub replays a repeated invite request without the link or code it showed once.
 const INVITE_REPLAYED = 'This invite was already made. Resend it to get a new link.';
+// The hub's sign-up control (D104) refuses a new account: the mode, never who is allowed.
+const SIGNUP_CLOSED_TEXT = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
 const CODE_TEXT = {
   LAST_OWNER: 'A team needs at least one owner. Make someone else an owner first.',
   FORBIDDEN: 'You don’t have permission to do that in this team.',
@@ -82,6 +84,7 @@ const CODE_TEXT = {
   QUOTA_EXCEEDED: 'This team has reached its limit.',
   EMAIL_UNVERIFIED: 'Verify your email first.',
   ALREADY_MEMBER: 'They’re already in this team.',
+  SIGNUP_CLOSED: SIGNUP_CLOSED_TEXT,
 };
 // CONFLICT says what clashed in its extra fields.
 function conflictText(e) {
@@ -159,6 +162,7 @@ function oauthOutcome(r, provider, host) {
   if (r.ok) return r;
   const who = PROVIDER_LABEL[provider] ?? 'That';
   if (r.code === 'INVALID_TOKEN') return { ...r, error: 'That sign-in didn’t work. Try again.' };
+  if (r.code === 'SIGNUP_CLOSED') return { ...r, error: SIGNUP_CLOSED_TEXT };
   if (r.code === 'EMAIL_UNVERIFIED') return { ...r, error: `${who} hasn’t verified that email address. Verify it with ${who}, or use an email code instead.` };
   if (r.code === 'PROVIDER_ERROR' || r.code === 'PROVIDER_UNAVAILABLE') return { ...r, error: `${who} didn’t answer. Try again in a minute.` };
   if (r.code === 'METHOD_DISABLED') return { ...r, error: `${who} sign-in is turned off on ${host}.` };

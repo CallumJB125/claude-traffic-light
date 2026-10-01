@@ -14,7 +14,7 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
 const MIN = 60_000;
 const DAY = 86_400_000;
 // CF-Connecting-IP is trusted (and proxy headers accepted) only on an exposed hub (L-A).
-const EXPOSED = Object.freeze({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false });
+const EXPOSED = Object.freeze({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false });
 
 test('desktop sign-up = sign-in: code mail names the device, token is shown once and stored only hashed', async () => {
   const h = await startAccounts();
@@ -687,7 +687,7 @@ test('L5: every response forbids framing; HSTS once the public URL is https', as
   } finally {
     await h.close();
   }
-  const s = await startAccounts({ config: { publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
+  const s = await startAccounts({ config: { publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
   try {
     assert.equal((await fetch(`${s.base}/api/health`)).headers.get('strict-transport-security'), 'max-age=31536000');
   } finally {

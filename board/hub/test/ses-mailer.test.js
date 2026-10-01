@@ -399,7 +399,7 @@ test('config: SES validation fails with fixed texts that never repeat a value', 
 });
 
 test('config: SES counts as a mailer for an exposed hub; the console mailer is still refused there', () => {
-  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: [], accountsDev: false, ...over });
+  const exposed = (over = {}) => sesBase({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: [], accountsDev: false, ...over });
   assert.doesNotThrow(() => validateConfig(exposed()), 'SES alone is a sign-in method');
   assert.equal(createMailer(exposed(), { fetchImpl: async () => new Response('{}') }).kind, 'ses');
   assert.throws(() => validateConfig(exposed({ mailProvider: null, sesRegion: null, sesAccessKeyId: null, sesSecretAccessKey: null })), /needs a sign-in method/);
@@ -411,7 +411,7 @@ test('configured SES: createApp builds it from config, /api/auth/methods says em
   const c = creds();
   const calls = [];
   const fetchImpl = async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ MessageId: 'm-1' }), { status: 200 }); };
-  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
+  const cfg = testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true, signup: 'open', mailProvider: 'ses', sesRegion: 'me-south-1', sesAccessKeyId: c.accessKeyId, sesSecretAccessKey: c.secretAccessKey, mailFrom: FROM });
   const clock = fakeClock();
   const app = createApp(cfg, { clock, log: silentLogger, github: fakeGitHub(), timers: false, fetchImpl });
   seedDev(app.hub);

@@ -205,12 +205,12 @@ test('L-A: a loopback try-out accounts hub refuses proxy headers and a foreign H
     assert.equal(await get({}), 200);
     assert.equal(await get({ 'x-forwarded-for': '203.0.113.9' }), 403);
     assert.equal(await get({ 'cf-connecting-ip': '203.0.113.9' }), 403);
-    assert.equal(await get({ host: 'buddy.example.com' }), 403);
+    assert.equal(await get({ host: 'buddy.acme.test' }), 403);
     assert.equal(await h.upgradeStatus({ 'x-forwarded-for': '203.0.113.9' }), 403);
   } finally {
     await h.close();
   }
-  const exposed = await startAccounts({ config: { publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
+  const exposed = await startAccounts({ config: { publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
   try {
     assert.equal((await exposed.call('GET', '/api/health', { headers: { 'cf-connecting-ip': '203.0.113.9' } })).status, 200, 'an exposed hub sits behind the tunnel');
   } finally {

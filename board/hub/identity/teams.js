@@ -20,6 +20,7 @@ const RESERVED_SLUGS = new Set([
 ]);
 
 // Free-plan limits (design §9.3): pro = ×10, self_hosted = none.
+export const TEAM_CREATE_INVITE_ONLY_TEXT = 'Only team owners invited by the hub administrator can create teams while sign-up is invite-only';
 export const FREE_QUOTAS = Object.freeze({ members: 25, boards: 10, teams: 10, pending_invites: 100, labels: 50 });
 export function quotaFor(plan, resource) {
   if (plan === 'self_hosted') return Infinity;
@@ -87,6 +88,7 @@ export class Teams {
   create(ident, body, { ip }) {
     const user = ident.user;
     if (!user.primary_email_verified_at || !user.primary_email) throw new HubError('EMAIL_UNVERIFIED', 'verify your email address before creating a team');
+    if (this.hub.accounts && !this.hub.accounts.mayCreateTeam(user)) throw new HubError('FORBIDDEN', TEAM_CREATE_INVITE_ONLY_TEXT);
     const name = teamName(body.name);
     let slug = null;
     if (body.slug != null) {

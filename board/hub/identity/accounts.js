@@ -9,7 +9,7 @@ import { isIP } from 'node:net'; // privacy-flow: hub-server
 import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { FailureBudget, ipKey, limitOrThrow, netKey, v6groups } from '../ratelimit.js';
-import { oauthProviders } from '../config.js';
+import { oauthProviders, signupPolicy } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
@@ -27,6 +27,8 @@ const TOUCH_MS = 60_000;
 const LIVE_FLOWS_PER_EMAIL = 3;
 // A silenced start's row (no mail) holds this instead of a code HMAC, so no code ever matches it.
 const DUD = 'dud:';
+// The one refusal a sign-up gets (D104): it names the mode, never the list.
+export const SIGNUP_CLOSED_TEXT = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
 // Background sends failing this many times in a row: /api/auth/methods stops offering email until one succeeds.
 export const MAIL_FAILING_AFTER = 5;
 // Step-ups: deleting the account, deleting a team (L-H). One can't be spent on the other.
@@ -55,6 +57,8 @@ export const canonEmail = (v) => String(v).normalize('NFKC').trim().toLowerCase(
 /** Who proved a primary address so that an address match may link to it (D83): an email code, an authoritative Google account, or (NULL) the pre-OAuth paths. */
 export const AUTHORITATIVE_VIA = Object.freeze([null, 'email', 'google']);
 export const authoritativeVia = (u) => AUTHORITATIVE_VIA.includes(u?.primary_email_via ?? null);
+
+const isAccount = ({ byIdentity, user }) => !!byIdentity || (!!user && authoritativeVia(user));
 
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
@@ -119,6 +123,10 @@ export class Accounts {
     this.kCsrf = key('csrf');
     this.kRef = key('audit-email');
     this.canonicaliseStored();
+    this.signup = signupPolicy(hub.config);
+    if (this.signup.mode === 'allowlist' && !this.signup.domains.size && !this.signup.emails.size) {
+      hub.log.warn('sign-up is invite-only: BOARD_SIGNUP=allowlist with an empty BOARD_SIGNUP_ALLOW');
+    }
     // Wrong codes per address, every network together (H2).
     this.failures = new FailureBudget({ now: () => hub.mono(), budget: hub.config.authFailBudget ?? 20 });
     this.seedFailures();
@@ -138,10 +146,54 @@ export class Accounts {
     for (const f of rows) this.failures.seed(this.budgetKey(f), f.attempts, this.hub.mono() - (this.hub.ageOf(f.created_at) ?? 0));
   }
 
-  /** Has this address an account (a verified email identity or a live user)? */
-  hasAccount(email) {
-    return !!(this.db.get("SELECT 1 AS x FROM identities WHERE provider = 'email' AND subject = ?", email)
-      ?? this.db.get('SELECT 1 AS x FROM users WHERE primary_email = ? AND deleted_at IS NULL', email));
+  /** The live user an email code for this address signs in: by its email identity, else by primary address (userForEmail). */
+  emailAccount(email) {
+    const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
+    return { byIdentity, user: byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email) };
+  }
+
+  /**
+   * Would a verified code for this address sign in an existing account (an
+   * email identity, or a primary address an authoritative path set)? The
+   * same test userForEmail makes, so a start never mails a real code that
+   * verify would refuse as a sign-up, nor a dud where verify would sign in.
+   */
+  hasAccount(email) { return isAccount(this.emailAccount(email)); }
+
+  /**
+   * May a NEW account be made for this verified address (D104), and on what
+   * grounds (users.signup_via)? Open mode: always ('open'). Allowlist: the
+   * exact address or its exact domain is listed ('allowlist'), or an unlinked
+   * live member row an admin or BOARD_BOOTSTRAP made for it ('member_row'),
+   * or a usable pending invite to it ('invite'); else null. `eligible` false
+   * (a Google address Google is not authoritative for) never qualifies.
+   * `domains` false (GitHub: its verified primary may be a mailbox the user
+   * lost years ago) skips the domain: entries.
+   */
+  signupVia(email, { eligible = true, domains = true } = {}) {
+    const p = this.signup;
+    if (p.mode === 'open') return 'open';
+    if (!eligible) return null;
+    if (p.emails.has(email) || (domains && p.domains.has(email.slice(email.lastIndexOf('@') + 1)))) return 'allowlist';
+    const row = this.db.all(`SELECT m.email FROM members m JOIN orgs o ON o.id = m.org_id
+      WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
+    if (row) return 'member_row';
+    const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
+    return invites.some((inv) => this.hub.invites?.usable(inv)) ? 'invite' : null;
+  }
+
+  signupAllowed(email, opts) { return this.signupVia(email, opts) != null; }
+
+  /** → the new account's signup_via, or SIGNUP_CLOSED. */
+  requireSignup(email, opts) {
+    const via = this.signupVia(email, opts);
+    if (!via) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    return via;
+  }
+
+  /** Allowlist mode: an account only an invite let in joins teams but never creates one (so never invites further). */
+  mayCreateTeam(user) {
+    return this.signup.mode !== 'allowlist' || user.signup_via !== 'invite';
   }
 
   now() { return this.hub.iso(); }
@@ -243,24 +295,25 @@ export class Accounts {
     // Silenced: the same answer and cookie, no mail, and a dud row no code matches, so a verify
     // counts down and the flow dies like a real one (a fixed "5 tries left" would say this
     // address asked recently). A dud never kills the flows the address already has.
+    // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
-      ? 'email_rate' : !this.mailBudget(email) ? 'mail_cap' : null;
-    if (quiet) {
-      this.hub.txn(() => {
-        this.db.insert('login_flows', { ...row, code_hash: `${DUD}${randomBytes(32).toString('hex')}` });
-        this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: quiet }, ip });
-      });
-      return out;
-    }
+      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email) && !this.signupAllowed(email) ? 'signup_closed' : !this.mailBudget(email) ? 'mail_cap' : null;
+    // A dud does the same work as a real start (a code and its HMAC, the same
+    // statements), so the time a refusal takes doesn't tell it apart; its
+    // update matches no row (it kills none of the address's flows) and its
+    // stored hash carries the dud prefix, so no code ever matches it.
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const hash = this.codeHash(flowId, code);
     this.hub.txn(() => {
       // At most three live flows per address: older ones die (duds don't count).
       this.db.run(`UPDATE login_flows SET dead_at = ? WHERE id IN (
         SELECT id FROM login_flows WHERE email = ? AND purpose = ? AND dead_at IS NULL AND consumed_at IS NULL AND expires_at > ? AND code_hash NOT LIKE '${DUD}%'
-        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, LIVE_FLOWS_PER_EMAIL - 1);
-      this.db.insert('login_flows', { ...row, code_hash: this.codeHash(flowId, code) });
-      this.audit('auth.code.sent', { user: userId, target: flowId, detail: { email_ref: this.emailRef(email), client, purpose }, ip });
+        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, quiet ? 1_000_000_000 : LIVE_FLOWS_PER_EMAIL - 1);
+      this.db.insert('login_flows', { ...row, code_hash: quiet ? `${DUD}${hash}` : hash });
+      if (quiet) this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: quiet }, ip });
+      else this.audit('auth.code.sent', { user: userId, target: flowId, detail: { email_ref: this.emailRef(email), client, purpose }, ip });
     });
+    if (quiet) return out;
     const link = client === 'web' && purpose === 'signin' ? this.linkOrigin(req) : null;
     const mail = codeMail({ purpose, client, code, deviceName, platform, link: link && `${link}/auth/email#f=${flowId}&c=${code}` });
     this.mailer.send({ to: email, ...mail, idempotencyKey: flowId })
@@ -323,21 +376,32 @@ export class Accounts {
     if (!this.hasAccount(f.email)) limitOrThrow(this.hub, 'signup_ip', ipKey(ip));
     let out;
     let cookie = null;
-    this.hub.txn(() => {
-      if (!this.db.run('UPDATE login_flows SET verified_at = ?, consumed_at = ? WHERE id = ? AND consumed_at IS NULL', now, now, f.id).changes) throw invalid();
-      const user = this.userForEmail(f.email, { ip });
-      this.linkMembers(user.id, f.email);
-      const base = { user: publicUser(user), teams: this.teams(user.id) };
-      if (device) {
-        const d = this.issueDevice(user.id, device, { ip, method: 'email' });
-        out = { ...base, device_token: d.token, device_id: d.id };
-      } else {
-        const s = this.createSession(user.id, { ip, ua: req?.headers?.['user-agent'] });
-        cookie = sessionCookie(s.value, SESSION_ABS_MS / 1000);
-        this.audit('auth.signin', { user: user.id, target: s.id, detail: { method: 'email', client: 'web' }, ip });
-        out = { ...base, csrf_token: this.csrfFor(s.id) };
+    try {
+      this.hub.txn(() => {
+        if (!this.db.run('UPDATE login_flows SET verified_at = ?, consumed_at = ? WHERE id = ? AND consumed_at IS NULL', now, now, f.id).changes) throw invalid();
+        const user = this.userForEmail(f.email, { ip });
+        this.linkMembers(user.id, f.email);
+        const base = { user: publicUser(user), teams: this.teams(user.id) };
+        if (device) {
+          const d = this.issueDevice(user.id, device, { ip, method: 'email' });
+          out = { ...base, device_token: d.token, device_id: d.id };
+        } else {
+          const s = this.createSession(user.id, { ip, ua: req?.headers?.['user-agent'] });
+          cookie = sessionCookie(s.value, SESSION_ABS_MS / 1000);
+          this.audit('auth.signin', { user: user.id, target: s.id, detail: { method: 'email', client: 'web' }, ip });
+          out = { ...base, csrf_token: this.csrfFor(s.id) };
+        }
+      });
+    } catch (e) {
+      // Re-checked where the account is made (the list or the invite may have changed since the start): the flow is spent.
+      if (e.code === 'SIGNUP_CLOSED') {
+        this.hub.txn(() => {
+          this.db.run('UPDATE login_flows SET dead_at = ? WHERE id = ? AND consumed_at IS NULL', now, f.id);
+          this.audit('auth.signup.refused', { target: f.id, detail: { method: 'email', email_ref: this.emailRef(f.email) }, ip });
+        });
       }
-    });
+      throw e;
+    }
     if (cookie) {
       appendCookie(res, cookie);
       appendCookie(res, `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
@@ -382,8 +446,10 @@ export class Accounts {
   // Sign-up = sign-in: the verified address finds its user, or makes one.
   userForEmail(email, { ip }) {
     const now = this.now();
-    const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
-    let user = byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
+    const found = this.emailAccount(email);
+    const signupVia = isAccount(found) ? null : this.requireSignup(email);
+    const { byIdentity } = found;
+    let { user } = found;
     // An address a GitHub (or non-authoritative Google) sign-in put there is
     // not proof that its holder owns the mailbox: the code just proved it, so
     // the address moves to a new account, never into that one (D83).
@@ -392,7 +458,7 @@ export class Accounts {
       user = null;
     }
     if (!user) {
-      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null };
+      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null, signup_via: signupVia };
       this.db.insert('users', user);
       this.audit('user.create', { user: user.id, detail: { method: 'email' }, ip });
     } else if (!user.primary_email_verified_at && user.primary_email === email) {

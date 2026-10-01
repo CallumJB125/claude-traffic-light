@@ -11,6 +11,8 @@ export const INVITE_INVALID = 'This invite is not valid: it may have expired, be
 export const WRONG_ACCOUNT = 'This invite was sent to a different email address. Sign in with that address to join.';
 export const INVITE_REPLAYED = 'This invite was already made. Resend it to get a new link.';
 export const NO_REACH = 'Can’t reach the board. Check your connection and try again.';
+// The hub's sign-up control (D104) refuses a new account: the mode, never who is allowed.
+export const SIGNUP_CLOSED = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
 
 export const INVITE_TOKEN_RE = /^inv_[A-Za-z0-9_-]{43}$/;
 const INVITE_CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-?[BCDFGHJKLMNPQRSTVWXZ]{4}$/;
@@ -55,6 +57,7 @@ export function accountErrorText(err, step) {
       if (step === 'invite') return 'Enter their email address.';
       return 'Check what you typed and try again.';
     case 'WRONG_ACCOUNT': return WRONG_ACCOUNT;
+    case 'SIGNUP_CLOSED': return SIGNUP_CLOSED;
     case 'ALREADY_MEMBER': return step === 'invite' && !extra.team ? 'They’re already in this team.' : `You’re already in ${extra.team?.name ? String(extra.team.name).slice(0, 60) : 'this team'}.`;
     case 'CONFLICT':
       // The hub replays a repeated invite request without its link or code (shown once): only a resend makes new ones.

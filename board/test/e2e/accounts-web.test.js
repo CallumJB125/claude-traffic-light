@@ -34,7 +34,7 @@ test('web, accounts mode: email code → create a team → its board → invite;
   const dataDir = path.join(root, 'hub');
   fs.mkdirSync(dataDir);
   const port = await freePort();
-  const hub = await startHub({ dataDir, port, env: { BOARD_AUTH: 'accounts', BOARD_DEV_SEED: '', BOARD_DEV_LOGIN_SECRET: '', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1' } });
+  const hub = await startHub({ dataDir, port, env: { BOARD_AUTH: 'accounts', BOARD_SIGNUP: 'open', BOARD_DEV_SEED: '', BOARD_DEV_LOGIN_SECRET: '', BOARD_ACCOUNTS_DEV: '1', BOARD_CONSOLE_MAILER: '1' } });
   let browser;
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });

@@ -1919,3 +1919,10 @@ test('first sign-in with no team: the screen is the whole choice, create or join
   assert.equal((await h.A.go('join')).ok, true);
   assert.equal(h.flow.acct.screen, 'join');
 }));
+
+test('sign-up control (D104): SIGNUP_CLOSED reads as the one fixed sentence on the OAuth and email-code paths, never the hub message', () => {
+  const { oauthOutcome, humanError } = require('../buddy-window/accounts');
+  const text = 'Sign-up is invite-only right now. Ask a team owner for an invite.';
+  for (const p of ['google', 'github']) assert.equal(oauthOutcome({ ok: false, status: 403, code: 'SIGNUP_CLOSED', error: 'hub words' }, p, 'h').error, text);
+  assert.equal(humanError(403, { error: { code: 'SIGNUP_CLOSED', message: 'hub words' } }, 'h'), text);
+});
