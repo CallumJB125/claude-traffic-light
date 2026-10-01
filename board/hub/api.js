@@ -4,13 +4,17 @@
 
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
-import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
+import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
+import { LABEL_COLORS } from '../shared/protocol.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
 import { newDeviceToken, sha256hex } from './auth.js';
-import { cardView, cardDetail, boardSnapshot, publicLogin, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
+import { cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY, LOCAL_ONLY, emailOnlyIdentity } from './views.js';
 import { feedEvent, isFeedKind } from './hub.js';
+import { can } from './permissions.js';
+import { limitOrThrow } from './ratelimit.js';
+import { quotaFor } from './identity/teams.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -23,6 +27,34 @@ const str = (v, max, name, { required = false } = {}) => {
   if (typeof v !== 'string' || v.length > max) throw new HubError('VALIDATION', `${name} must be a string ≤ ${max}`);
   return v;
 };
+
+// Card labels (D96): at most 20, each 1–50 characters once trimmed.
+const MAX_CARD_LABELS = 20;
+function cardLabels(v) {
+  if (!Array.isArray(v) || v.length > MAX_CARD_LABELS || v.some((l) => typeof l !== 'string' || !l.trim() || l.trim().length > 50)) {
+    throw new HubError('VALIDATION', `labels must be at most ${MAX_CARD_LABELS} strings of 1–50 characters`);
+  }
+  return v.map((l) => l.trim());
+}
+
+const COLORS = new Set(LABEL_COLORS);
+function colorToken(v, name, { nullable = false } = {}) {
+  if (v == null && nullable) return null;
+  if (!COLORS.has(v)) throw new HubError('VALIDATION', `${name} must be one of ${LABEL_COLORS.join(', ')}`);
+  return v;
+}
+
+function labelName(v) {
+  if (typeof v !== 'string' || !v.trim() || v.trim().length > 50) throw new HubError('VALIDATION', 'name must be 1–50 characters');
+  if (isReservedLabel(v)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
+  return v.trim();
+}
+
+// A rename or strip rewrites every card holding the label in one transaction;
+// past this many it is refused before anything is written (D91).
+export const LABEL_REWRITE_MAX = 2000;
+
+const archivedError = () => new HubError('CONFLICT', 'this card is archived: restore it first', { reason: 'ARCHIVED' });
 
 export class Api {
   constructor(hub) {
@@ -65,9 +97,9 @@ export class Api {
     return { member: publicMember(member), org, boards };
   }
 
-  snapshot(member, boardId) {
+  snapshot(member, boardId, { includeArchived = false } = {}) {
     this.boardFor(member, boardId);
-    return boardSnapshot(this.hub, boardId, member.id);
+    return boardSnapshot(this.hub, boardId, member.id, { includeArchived });
   }
 
   detail(member, cardId) {
@@ -95,7 +127,7 @@ export class Api {
     const snap = this.snapshot(member, boardId);
     return {
       alerts: alertsFor(member.id, snap.cards),
-      notifications: this.hub.notifications.filter((n) => n.board_id === boardId && n.to.includes(member.id)).slice(-50),
+      notifications: this.hub.notifications.filter((n) => n.board_id === boardId && n.to.includes(member.id) && !this.hub.card(n.card_id)?.archived_at).slice(-50),
     };
   }
 
@@ -131,8 +163,8 @@ export class Api {
     const text = str(body.body, 20_000, 'body') ?? '';
     const acceptance = str(body.acceptance, 10_000, 'acceptance');
     const baseRef = str(body.base_ref, 200, 'base_ref');
-    const labels = body.labels ?? [];
-    if (!Array.isArray(labels) || labels.some((l) => typeof l !== 'string' || l.length > 50)) throw new HubError('VALIDATION', 'labels must be strings');
+    const labels = cardLabels(body.labels ?? []);
+    const cover = colorToken(body.cover, 'cover', { nullable: true });
     if (body.repo_id != null && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', boardId, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
     if (body.budget_usd != null && !(typeof body.budget_usd === 'number' && body.budget_usd >= 0)) throw new HubError('VALIDATION', 'budget_usd must be ≥ 0');
     const assignees = body.assignees ?? [];
@@ -154,7 +186,7 @@ export class Api {
         this.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', boardId);
         this.db.insert('cards', {
           id, board_id: boardId, key: `${board.key_prefix}-${b.next_key}`, title, body: text, acceptance, repo_id: body.repo_id ?? null,
-          base_ref: baseRef, labels: JSON.stringify(labels), budget_cents: body.budget_usd != null ? Math.round(body.budget_usd * 100) : null,
+          base_ref: baseRef, labels: JSON.stringify(labels), budget_cents: body.budget_usd != null ? Math.round(body.budget_usd * 100) : null, cover,
           created_by: member.id, created_at: now, updated_at: now, state_since: now,
         });
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
@@ -166,7 +198,7 @@ export class Api {
         // (hub.refHash: a plain hash of a short title is guessable) and its
         // labels only as via:<provider> (D41); the text lives in `cards`,
         // where replay and the Dashboard read it.
-        const common = { key: c.key, repo_id: c.repo_id, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)] };
+        const common = { key: c.key, repo_id: c.repo_id, budget_cents: c.budget_cents, column_name: c.column_name, cover: c.cover, assignees: [...new Set(assignees)] };
         const payload = via?.member_id === member.id
           ? {
             ...common, title_hmac: this.hub.refHash(title), body_hmac: this.hub.refHash(text), acceptance_hmac: this.hub.refHash(acceptance), connection_id: via.connection_id,
@@ -189,16 +221,15 @@ export class Api {
     const row0 = this.cardFor(member, cardId);
     return this.hub.withBoard(row0.board_id, () => {
       const row = this.hub.card(cardId);
+      if (row.archived_at) throw archivedError();
       if (!Number.isSafeInteger(body.version) || body.version !== row.version) throw new HubError('VERSION_CONFLICT', 'card changed since you loaded it', { version: row.version });
       const set = {};
       if ('title' in body) set.title = str(body.title, 200, 'title', { required: true });
       if ('body' in body) set.body = str(body.body, 20_000, 'body') ?? '';
       if ('acceptance' in body) set.acceptance = str(body.acceptance, 10_000, 'acceptance');
       if ('base_ref' in body) set.base_ref = str(body.base_ref, 200, 'base_ref');
-      if ('labels' in body) {
-        if (!Array.isArray(body.labels) || body.labels.some((l) => typeof l !== 'string')) throw new HubError('VALIDATION', 'labels must be strings');
-        set.labels = JSON.stringify(body.labels);
-      }
+      if ('labels' in body) set.labels = JSON.stringify(cardLabels(body.labels));
+      if ('cover' in body) set.cover = colorToken(body.cover, 'cover', { nullable: true });
       if ('repo_id' in body && body.repo_id !== row.repo_id) {
         if (row.run_state != null) throw new HubError('CONFLICT', 'repo cannot change while a run state exists');
         if (body.repo_id != null && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
@@ -216,9 +247,7 @@ export class Api {
       // A card an integration created holds external text; a person's edit
       // must not journal it in the clear either (D41), so those fields go in
       // as keyed hashes under *_hmac names (replay never reads them as text).
-      const external = !!this.db.get(
-        "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
-        cardId, cardId);
+      const external = this.externalCard(cardId);
       this.hub.txn(() => {
         const fields = {};
         for (const k of Object.keys(set)) {
@@ -240,6 +269,181 @@ export class Api {
       });
       return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
     });
+  }
+
+  // An integration created it (an integration_requests row or an integration
+  // card.create): its text and labels only ever reach the journal hashed (D41).
+  externalCard(cardId) {
+    return !!this.db.get(
+      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND actor_kind = 'integration' LIMIT 1",
+      cardId, cardId);
+  }
+
+  // ── archive (D94) ─────────────────────────────────────────────────────────
+  // Only a card with no live run: no run yet, or done / failed. Idempotent.
+  async archive(member, cardId, body) {
+    this.requireWrite(member);
+    const row0 = this.cardFor(member, cardId);
+    return this.hub.withBoard(row0.board_id, () => {
+      const row = this.hub.card(cardId);
+      if (!row.archived_at) {
+        if (row.run_state != null && row.run_state !== 'done' && row.run_state !== 'failed') {
+          throw new HubError('CONFLICT', 'stop, cancel or finish the run before archiving', { reason: 'RUN_ACTIVE' });
+        }
+        const now = this.hub.iso();
+        this.hub.txn(() => {
+          this.db.run('UPDATE cards SET archived_at = ?, archived_by = ?, version = version + 1, updated_at = ? WHERE id = ?', now, member.id, now, cardId);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.archive', payload: { request_id: body.request_id ?? null, archived_at: now, archived_by: member.id } });
+          this.hub.later(() => this.hub.broadcastRemove(row.board_id, cardId));
+        });
+      }
+      return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    });
+  }
+
+  async restore(member, cardId, body) {
+    this.requireWrite(member);
+    const row0 = this.cardFor(member, cardId);
+    return this.hub.withBoard(row0.board_id, () => {
+      const row = this.hub.card(cardId);
+      if (row.archived_at) {
+        this.hub.txn(() => {
+          this.db.run('UPDATE cards SET archived_at = NULL, archived_by = NULL, version = version + 1, updated_at = ? WHERE id = ?', this.hub.iso(), cardId);
+          this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: member.id, kind: 'card.restore', payload: { request_id: body.request_id ?? null } });
+          this.hub.later(() => this.hub.broadcastCard(cardId));
+        });
+      }
+      return { card: cardView(this.hub, this.hub.card(cardId), member.id) };
+    });
+  }
+
+  // ── label registry (D91) ──────────────────────────────────────────────────
+  listLabels(member, boardId) {
+    this.boardFor(member, boardId);
+    return { labels: this.hub.labelRegistry(boardId) };
+  }
+
+  labelByName(boardId, name) {
+    return this.db.get('SELECT * FROM board_labels WHERE board_id = ? AND name = ? COLLATE NOCASE', boardId, String(name).trim());
+  }
+
+  requireLabel(member, action) {
+    if (!can(member, action)) throw new HubError('FORBIDDEN', action === 'label.manage' ? 'only admins can rename or delete labels' : 'viewers cannot change labels');
+  }
+
+  // POST: create, or recolour the entry of that name (its spelling stays: renaming is an admin's).
+  async createLabel(member, boardId, body) {
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    const name = labelName(body.name);
+    const color = colorToken(body.color, 'color');
+    const description = 'description' in body ? str(body.description, 200, 'description') : undefined;
+    return this.hub.withBoard(boardId, () => {
+      const old = this.labelByName(boardId, name);
+      if (old) return { label: this.updateLabelLocked(member, boardId, old, { color, description }, body.request_id).label };
+      const plan = this.db.get('SELECT o.plan FROM orgs o JOIN boards b ON b.org_id = o.id WHERE b.id = ?', boardId).plan;
+      const limit = quotaFor(plan, 'labels');
+      if (this.db.get('SELECT COUNT(*) AS n FROM board_labels WHERE board_id = ?', boardId).n >= limit) {
+        throw new HubError('QUOTA_EXCEEDED', `this team's plan allows at most ${limit} labels per board`, { resource: 'labels', limit });
+      }
+      const id = randomUUID();
+      const now = this.hub.iso();
+      this.hub.txn(() => {
+        this.db.insert('board_labels', { id, board_id: boardId, name, color, description: description ?? null, created_by: member.id, created_at: now, updated_at: now });
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'label.create', payload: { label_id: id, name, color, request_id: body.request_id ?? null } });
+        this.hub.later(() => this.hub.broadcastLabels(boardId));
+      });
+      return { label: labelDef(this.db.get('SELECT * FROM board_labels WHERE id = ?', id)) };
+    });
+  }
+
+  async patchLabel(member, boardId, name, body) {
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.write');
+    if (isReservedLabel(name)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
+    const patch = {
+      name: 'name' in body ? labelName(body.name) : undefined,
+      color: 'color' in body ? colorToken(body.color, 'color') : undefined,
+      description: 'description' in body ? str(body.description, 200, 'description') : undefined,
+    };
+    return this.hub.withBoard(boardId, () => {
+      const old = this.labelByName(boardId, name);
+      if (!old) throw new HubError('NOT_FOUND', 'label not found');
+      return this.updateLabelLocked(member, boardId, old, patch, body.request_id);
+    });
+  }
+
+  updateLabelLocked(member, boardId, old, { name, color, description }, requestId) {
+    const fields = {};
+    if (name !== undefined && name !== old.name) fields.name = [old.name, name];
+    if (color !== undefined && color !== old.color) fields.color = [old.color, color];
+    const describe = description !== undefined && description !== (old.description ?? null);
+    if (!fields.name && !fields.color && !describe) return { label: labelDef(old), cards_updated: 0 };
+    let hits = [];
+    if (fields.name) {
+      this.requireLabel(member, 'label.manage');
+      const clash = this.labelByName(boardId, name);
+      if (clash && clash.id !== old.id) throw new HubError('CONFLICT', 'a label with that name exists');
+      hits = this.labelRewrite(boardId, old.name, name);
+      limitOrThrow(this.hub, 'label_rewrite_board', boardId);
+    }
+    this.hub.txn(() => {
+      this.db.run('UPDATE board_labels SET name = ?, color = ?, description = ?, updated_at = ? WHERE id = ?',
+        name ?? old.name, color ?? old.color, description !== undefined ? description : old.description, this.hub.iso(), old.id);
+      // The description is free text and the journal can never erase it: only that it changed.
+      this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'label.update', payload: { label_id: old.id, fields, ...(describe ? { description_changed: true } : {}), request_id: requestId ?? null } });
+      this.applyRewrite(member, boardId, hits, { cause: 'label.rename', label_id: old.id, request_id: requestId ?? null });
+      this.hub.later(() => this.hub.broadcastLabels(boardId));
+    });
+    return { label: labelDef(this.db.get('SELECT * FROM board_labels WHERE id = ?', old.id)), cards_updated: hits.length };
+  }
+
+  async deleteLabel(member, boardId, name, body) {
+    this.boardFor(member, boardId);
+    this.requireLabel(member, 'label.manage');
+    if (isReservedLabel(name)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
+    const strip = body.strip === true;
+    return this.hub.withBoard(boardId, () => {
+      const old = this.labelByName(boardId, name);
+      if (!old) throw new HubError('NOT_FOUND', 'label not found');
+      const hits = strip ? this.labelRewrite(boardId, old.name, null) : [];
+      if (strip) limitOrThrow(this.hub, 'label_rewrite_board', boardId);
+      this.hub.txn(() => {
+        this.db.run('DELETE FROM board_labels WHERE id = ?', old.id);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'label.delete', payload: { label_id: old.id, name: old.name, strip, request_id: body.request_id ?? null } });
+        this.applyRewrite(member, boardId, hits, { cause: 'label.delete', label_id: old.id, request_id: body.request_id ?? null });
+        this.hub.later(() => this.hub.broadcastLabels(boardId));
+      });
+      return { ok: true, cards_updated: hits.length };
+    });
+  }
+
+  // Every card on the board (archived ones too) holding `from`, ignoring case,
+  // with its labels after the rewrite (`to` null = removed). Refused before
+  // anything is written when it would touch more than LABEL_REWRITE_MAX cards.
+  labelRewrite(boardId, from, to) {
+    const key = from.toLowerCase();
+    const hits = [];
+    for (const c of this.db.all("SELECT id, labels FROM cards WHERE board_id = ? AND labels != '[]'", boardId)) {
+      const labels = json(c.labels, []);
+      if (!labels.some((l) => typeof l === 'string' && l.toLowerCase() === key)) continue;
+      const after = [...new Set(labels.flatMap((l) => (typeof l === 'string' && l.toLowerCase() === key ? (to == null ? [] : [to]) : [l])))];
+      hits.push({ id: c.id, before: c.labels, after: JSON.stringify(after) });
+    }
+    if (hits.length > LABEL_REWRITE_MAX) throw new HubError('CONFLICT', `this label is on more than ${LABEL_REWRITE_MAX} cards`, { reason: 'TOO_MANY_CARDS', cards: hits.length });
+    return hits;
+  }
+
+  // One card.update per card, with a version bump, so replay and open
+  // editors (VERSION_CONFLICT) see an ordinary edit. Inside the caller's txn.
+  applyRewrite(member, boardId, hits, { cause, label_id, request_id }) {
+    const now = this.hub.iso();
+    for (const h of hits) {
+      const fields = this.externalCard(h.id) ? { labels_hmac: [this.hub.refHash(h.before), this.hub.refHash(h.after)] } : { labels: [h.before, h.after] };
+      this.db.run('UPDATE cards SET labels = ?, version = version + 1, updated_at = ? WHERE id = ?', h.after, now, h.id);
+      this.hub.journal({ board_id: boardId, card_id: h.id, actor_kind: 'member', actor_id: member.id, kind: 'card.update', payload: { fields, cause, label_id, request_id } });
+      this.hub.later(() => this.hub.broadcastCard(h.id));
+    }
   }
 
   // ── actions → step() ──────────────────────────────────────────────────────
@@ -269,6 +473,7 @@ export class Api {
 
   actionLocked(member, cardId, action, type, body) {
     const row = this.hub.card(cardId);
+    if (row.archived_at) throw archivedError();
     const rel = this.relations(row);
     const me = member.id;
     const admin = this.hub.isAdmin(member);
@@ -367,6 +572,7 @@ export class Api {
       }
       if (!json(pr.approvers, []).includes(member.id)) throw new HubError('FORBIDDEN', 'not an approver of this request');
       const cardId = pr.card_id;
+      if (this.hub.card(cardId).archived_at) throw archivedError();
       const ctx = {
         can_answer: true,
         open_asks_remaining: this.hub.openAsks(cardId).length + this.hub.openPermissions(cardId).filter((p) => p.id !== prId).length,
@@ -408,6 +614,7 @@ export class Api {
     if (!this.hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot comment');
     const text = str(body.body, 10_000, 'body', { required: true });
     return this.hub.withBoard(row0.board_id, () => {
+      if (this.hub.card(cardId).archived_at) throw archivedError();
       let id;
       this.hub.txn(() => {
         id = this.insertComment(member, cardId, { body: text, for_agent: body.for_agent === true, reply_to: body.reply_to });

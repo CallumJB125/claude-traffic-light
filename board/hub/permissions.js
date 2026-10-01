@@ -27,6 +27,8 @@ export const MATRIX = Object.freeze({
   'dispatch': WRITERS,           // Give to Claude (own or another member's runner)
   'run.control': WRITERS,        // stop / cancel / retry / take over / hand over / answer / approve
   'device.enrol': WRITERS,       // be a dispatch target / enrol a runner
+  'label.write': WRITERS,        // board label registry: create, recolour, describe (D91)
+  'label.manage': ADMINS,        // … rename and delete: both rewrite cards across the board
   'board.create': ADMINS,
   'repo.manage': ADMINS,
   'team.settings': ADMINS,       // rename

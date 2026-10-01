@@ -31,6 +31,10 @@ export const LIVE = new Set(['running', 'quiet', 'blocked']);
 export const PLAN_APPROVAL_LABEL = 'plan-approval';
 // Labels that restrict what runs may do on a card; a child an agent creates inherits them (D31).
 export const POLICY_LABELS = Object.freeze(['never_auto', PLAN_APPROVAL_LABEL]);
+// Labels nobody may colour, rename or delete in the board registry (D91): a
+// policy label changes run policy and via:<provider> marks an integration's card.
+export const isReservedLabel = (name) => typeof name === 'string'
+  && (/^via:/i.test(name.trim()) || POLICY_LABELS.includes(name.trim().toLowerCase()));
 export const BLOCKED_KINDS = Object.freeze(['permission', 'question', 'clarify', 'decision', 'plan', 'conflict', 'loop']);
 export const FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'stopped', 'released']);
 // What a runner may report through run_failed; stopped/released have their own events.

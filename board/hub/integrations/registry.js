@@ -570,7 +570,10 @@ export function createIntegrations({
         external_ref: auditRef(meta?.external_ref),
         detail: auditJson(meta?.detail) ?? '{}', undo: auditJson(meta?.undo),
       };
-      const audit = (decision) => { const id = randomUUID(); db.insert('integration_audit', { id, ...base, decision, at: now() }); return id; };
+      const audit = (decision, error = null) => { const id = randomUUID(); db.insert('integration_audit', { id, ...base, decision, error, at: now() }); return id; };
+      // An archived card is read-only until a person restores it (D94): never applied, and never auto-restored.
+      const skippedArchived = () => ({ done: false, decision: 'skipped', reason: 'archived' });
+      if (base.card_id && hub.card(base.card_id)?.archived_at) { audit('skipped', 'archived'); return skippedArchived(); }
       if (mode === 'off') { audit('skipped'); return { done: false, decision: 'skipped' }; }
       if (mode === 'ask') { audit('asked'); return { done: false, decision: 'asked' }; }
       const auditId = audit('attempted');
@@ -598,6 +601,11 @@ export function createIntegrations({
         error = null;
         return { done: true, decision: 'auto', result: out };
       } catch (e) {
+        if (e instanceof HubError && e.extra?.reason === 'ARCHIVED') {
+          decision = 'skipped';
+          error = 'archived';
+          return skippedArchived();
+        }
         error = errCode(e);
         throw e;
       } finally {
@@ -630,6 +638,7 @@ export function createIntegrations({
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
       // the card's review.
+      if (card.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
       const refusal = () => notVerified(card.id, prN, repo);
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
@@ -641,6 +650,7 @@ export function createIntegrations({
         // Evidence may have changed while this waited on the board queue.
         const late = refusal();
         if (late) { audit('failed', late); return { done: false, reason: late }; }
+        if (hub.card(card.id).archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
         const r = hub.apply(card.id, { type, pr: prN, by: byLogin }, { actor: c.id });
         if (!r.ok) return { done: false, reason: r.error.code };
         audit('auto');

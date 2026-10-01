@@ -274,7 +274,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
-  route('GET', '/api/boards/:board_id', ({ member, params }) => api.snapshot(member, params.board_id));
+  route('GET', '/api/boards/:board_id', ({ member, params, query }) => api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
+  route('POST', '/api/boards/:board_id/labels', ({ member, params, body }) => api.createLabel(member, params.board_id, body));
+  route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body }) => api.patchLabel(member, params.board_id, params.name, body));
+  route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }));
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body }) => api.createCard(member, params.board_id, body));
@@ -283,6 +287,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
   route('PATCH', '/api/cards/:card_id', ({ member, params, body }) => api.patchCard(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body }) => api.action(member, params.card_id, params.action, body));
+  route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
+  route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body }) => api.comment(member, params.card_id, body));
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);

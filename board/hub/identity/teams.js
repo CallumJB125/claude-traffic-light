@@ -20,7 +20,7 @@ const RESERVED_SLUGS = new Set([
 ]);
 
 // Free-plan limits (design §9.3): pro = ×10, self_hosted = none.
-export const FREE_QUOTAS = Object.freeze({ members: 25, boards: 10, teams: 10, pending_invites: 100 });
+export const FREE_QUOTAS = Object.freeze({ members: 25, boards: 10, teams: 10, pending_invites: 100, labels: 50 });
 export function quotaFor(plan, resource) {
   if (plan === 'self_hosted') return Infinity;
   return FREE_QUOTAS[resource] * (plan === 'pro' ? 10 : 1);
@@ -176,6 +176,7 @@ export class Teams {
       this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'team_deleted', token_hash = NULL WHERE org_id = ? AND revoked_at IS NULL", now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.hub.revokeDeletedTeamConnections(now);
+      this.hub.dropDeletedTeamLabels();
       this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });
       this.hub.later(() => {
         for (const d of devices) {

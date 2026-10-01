@@ -21,6 +21,8 @@ const EXPECTED = {
   'dispatch': [1, 1, 1, 0],
   'run.control': [1, 1, 1, 0],
   'device.enrol': [1, 1, 1, 0],
+  'label.write': [1, 1, 1, 0],
+  'label.manage': [1, 1, 0, 0],
   'board.create': [1, 1, 0, 0],
   'repo.manage': [1, 1, 0, 0],
   'team.settings': [1, 1, 0, 0],

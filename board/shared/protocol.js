@@ -177,6 +177,10 @@ function presenceItemError(s) {
 
 // ── shapes ─────────────────────────────────────────────────────────────────
 // 'T' required, 'T?' optional (may be null). T ∈ string|int|number|bool|object|array|any.
+// The colour tokens of label registry entries and card covers (D91, D93):
+// the web maps each to a CSS class, never an inline style (CSP).
+export const LABEL_COLORS = Object.freeze(['grey', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown']);
+
 const run3 = { run_id: 'string', card_id: 'string', fence: 'int' };
 
 export const SHAPES = Object.freeze({
@@ -194,6 +198,7 @@ export const SHAPES = Object.freeze({
     snapshot: { board_id: 'string', board: 'object', cards: 'array', members: 'array' },
     'card.upsert': { board_id: 'string', card: 'object' },
     'card.remove': { board_id: 'string', card_id: 'string' },
+    'board.labels': { board_id: 'string', labels: 'array' },
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
     'event.append': { card_id: 'string', event: 'object' },
     'team.presence': { members: 'array' },

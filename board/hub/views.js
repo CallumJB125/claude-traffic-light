@@ -109,6 +109,7 @@ export function cardView(hub, row, viewerId) {
   const approvers = [...new Set(perms.flatMap((p) => json(p.approvers, [])))];
   const d = hub.pendingDispatch(row.id);
   const labels = hub.labels(row);
+  const colors = hub.labelColors(row.board_id);
   let target = null;
   if (d && (row.run_state === 'queued' || row.run_state == null)) {
     const tid = hub.dispatchTarget(d);
@@ -123,6 +124,9 @@ export function cardView(hub, row, viewerId) {
   const stateAge = hub.ageOf(row.state_since);
   return {
     id: row.id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
+    label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
+    cover: row.cover ?? null,
+    archived: row.archived_at ? { at_age_ms: Math.round(hub.ageOf(row.archived_at)), by_name: hub.memberName(row.archived_by) } : null,
     agent_suggested: !!row.created_by_run_id, parent_card_id: row.parent_card_id ?? null,
     run_state: row.run_state ?? 'todo',
     blocked_kind: row.blocked_kind, fail_kind: row.fail_kind, fail_reason: row.fail_reason, resume_to: row.resume_to, fence: row.fence,
@@ -150,17 +154,20 @@ export function cardView(hub, row, viewerId) {
   };
 }
 
-export function boardSnapshot(hub, boardId, viewerId) {
+// Archived cards (D94) are left out unless asked for (the web's "Show archived").
+export function boardSnapshot(hub, boardId, viewerId, { includeArchived = false } = {}) {
   const board = hub.board(boardId);
-  const cards = hub.db.all('SELECT * FROM cards WHERE board_id = ? ORDER BY created_at, key', boardId);
+  const cards = hub.db.all(`SELECT * FROM cards WHERE board_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'} ORDER BY created_at, key`, boardId);
   const members = hub.db.all('SELECT * FROM members WHERE org_id = ? AND removed_at IS NULL ORDER BY display_name', board.org_id);
   return {
     board_id: boardId,
-    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, settings: json(board.settings, {}) },
+    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
     cards: cards.map((c) => cardView(hub, c, viewerId)),
     members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: publicLogin(m), avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
   };
 }
+
+export const labelDef = (r) => ({ id: r.id, name: r.name, color: r.color, description: r.description ?? null });
 
 export function cardDetail(hub, row, viewerId, feedEventOf) {
   const view = cardView(hub, row, viewerId);

@@ -22,7 +22,7 @@ import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
-import { cardView, leaseView } from './views.js';
+import { cardView, leaseView, labelDef } from './views.js';
 import { DEFAULT_LIMITS, RateLimiter } from './ratelimit.js';
 import { isAdmin, canWrite } from './permissions.js';
 import { Presence } from './presence.js';
@@ -239,6 +239,9 @@ export class Hub extends EventEmitter {
   dispatchTarget(d) { return d ? d.target_member_id ?? d.dispatched_by : null; }
   assignees(cardId) { return this.db.all('SELECT member_id FROM card_assignees WHERE card_id = ?', cardId).map((r) => r.member_id); }
   labels(row) { return json(row.labels, []); }
+  labelRegistry(boardId) { return this.db.all('SELECT * FROM board_labels WHERE board_id = ? ORDER BY name COLLATE NOCASE', boardId).map(labelDef); }
+  // lower-case name → colour token: card labels match the registry ignoring case (D91).
+  labelColors(boardId) { return new Map(this.db.all('SELECT name, color FROM board_labels WHERE board_id = ?', boardId).map((r) => [r.name.toLowerCase(), r.color])); }
   boardSettings(boardId) { return json(this.board(boardId)?.settings, {}); }
   openAsks(cardId) { return this.db.all("SELECT * FROM asks WHERE card_id = ? AND state = 'open'", cardId); }
   openPermissions(cardId) { return this.db.all("SELECT * FROM permission_requests WHERE card_id = ? AND state = 'open' ORDER BY created_at", cardId); }
@@ -249,6 +252,10 @@ export class Hub extends EventEmitter {
   revokeDeletedTeamConnections(now) {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+  }
+  // … and its label registry goes at once (member-written names; nothing reads it again). Cards wait for the P5 purge.
+  dropDeletedTeamLabels() {
+    this.db.run('DELETE FROM board_labels WHERE board_id IN (SELECT b.id FROM boards b JOIN orgs o ON o.id = b.org_id WHERE o.deleted_at IS NOT NULL)');
   }
 
   /**
@@ -688,7 +695,7 @@ export class Hub extends EventEmitter {
   offerFrame(cardId) {
     const row = this.card(cardId);
     const d = this.pendingDispatch(cardId);
-    if (!row || !d || row.run_state !== 'queued') return null;
+    if (!row || !d || row.run_state !== 'queued' || row.archived_at) return null;
     const settings = this.boardSettings(row.board_id);
     const seed = json(d.seed, {});
     const labels = this.labels(row);
@@ -732,7 +739,7 @@ export class Hub extends EventEmitter {
     const conn = this.runners.get(deviceId);
     if (!conn) return;
     const rows = this.db.all(`SELECT c.id FROM cards c JOIN dispatches d ON d.card_id = c.id AND d.state = 'pending'
-      WHERE c.run_state = 'queued' AND COALESCE(d.target_member_id, d.dispatched_by) = ?`, conn.member_id);
+      WHERE c.run_state = 'queued' AND c.archived_at IS NULL AND COALESCE(d.target_member_id, d.dispatched_by) = ?`, conn.member_id);
     for (const { id } of rows) this.sendOffers(id, deviceId);
   }
 
@@ -846,7 +853,7 @@ export class Hub extends EventEmitter {
 
   /** One reaper pass (the 1 s interval calls this; tests call it with a fake clock). */
   async tick() {
-    const rows = this.db.all("SELECT id, board_id FROM cards WHERE run_state IS NOT NULL AND run_state NOT IN ('done','failed','in_review','handed_over','parked')");
+    const rows = this.db.all("SELECT id, board_id FROM cards WHERE run_state IS NOT NULL AND run_state NOT IN ('done','failed','in_review','handed_over','parked') AND archived_at IS NULL");
     const byBoard = new Map();
     for (const r of rows) {
       if (!byBoard.has(r.board_id)) byBoard.set(r.board_id, []);
@@ -922,13 +929,23 @@ export class Hub extends EventEmitter {
   }
 
   // ── browser broadcasts ────────────────────────────────────────────────────
+  // An archived card is not on anyone's board (D94): its changes are not sent.
   broadcastCard(cardId) {
     const row = this.card(cardId);
-    if (!row) return;
+    if (!row || row.archived_at) return;
     for (const b of this.browsers) {
       if (b.boardId !== row.board_id) continue;
       b.send({ type: 'card.upsert', board_id: row.board_id, card: cardView(this, row, b.member.id) });
     }
+  }
+
+  broadcastRemove(boardId, cardId) {
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'card.remove', board_id: boardId, card_id: cardId });
+  }
+
+  broadcastLabels(boardId) {
+    const labels = this.labelRegistry(boardId);
+    for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'board.labels', board_id: boardId, labels });
   }
 
   broadcastEvent(cardId, eventId) {
@@ -1091,7 +1108,7 @@ export class Hub extends EventEmitter {
   }
 
   async #pollMerges() {
-    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review'");
+    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review' AND archived_at IS NULL");
     for (const row of rows) {
       const ev = this.db.get("SELECT * FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", row.id);
       const number = prNumberOf(ev?.ref);
