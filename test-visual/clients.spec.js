@@ -38,7 +38,7 @@ test('OAuth client without a mailer accepts and reads status in the scoped authe
     // the actual production view rather than adding a window just for tests.
     const pane = (match, js) => app.evaluate(async ({ webContents }, [url, code]) => {
       const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(url));
-      return wc ? { found: true, value: await wc.executeJavaScript(code) } : { found: false };
+      return wc ? { found: true, value: await wc.executeJavaScript(code) } : { found: false, urls: webContents.getAllWebContents().map((w) => w.getURL()), status: global.__clientTestBuddy.status(), loads: global.__clientTestLoads };
     }, [match, js]);
     await expect.poll(() => pane('account.html?screen=clients', '!![...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects")'), { timeout: 15000 }).toEqual({ found: true, value: true });
     await pane('account.html?screen=clients', '[...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects").click()');

@@ -5,6 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hubKey } = require('../buddy-window/workspaces');
 const { createBuddyWindow } = require('../buddy-window');
+global.__clientTestLoads = [];
+app.on('web-contents-created', (_e, wc) => {
+  wc.on('did-fail-load', (_e, code, description, url) => global.__clientTestLoads.push({ code, description, url }));
+});
 app.whenReady().then(async () => {
   global.__clientTestInit = { stage: 'sealing' };
   const origin = process.env.PLEXIFORM_CLIENT_TEST_HUB;
