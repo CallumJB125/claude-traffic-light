@@ -75,6 +75,12 @@ const ALLOW_ANYWHERE = [/claudebuddy:\/\//g, /CLAUDE_BUDDY_[A-Z_]+/g];
 // Kept on purpose, per file.
 const ALLOW = {
   'src/rename-migration.js': [/^.*$/g], // the old identity, to migrate from
+  // Byte-preserved imported catalogue provenance and an external product's
+  // original description; neither identifies the Plexiform application.
+  'build/plugin-catalog/catalog.json': [
+    /"generator":"claude-buddy-catalog\/0\.1"/g,
+    /"description":"Onboard a Code-with-Claude Makers Cardputer with one \/maker-setup command — clones the build-with-claude repo, flashes UIFlow firmware, and installs the Claude Buddy app bundle\."/g,
+  ],
   'src/scrub.js': [/'Claude Buddy\.app'|'Claude Buddy'|'claude-buddy'/g], // logs from old installs scrub the same
   'src/leftover-shim.js': [/# claude-buddy router/g], // markers old installs wrote into ~/.zshrc
   'setup.js': [/'claude-buddy-setup'/g], // the setup file format's tag, carried by exported files

@@ -35,7 +35,7 @@ const SOURCES = [
     files: ['~/.gemini/settings.json', '~/.gemini/GEMINI.md'], merge: 'structured', runsCode: true },
   { id: 'cursor-rules', area: 'ai', label: 'Cursor rules', platforms: ['darwin', 'linux', 'win32'],
     dirs: ['~/.cursor/rules'], files: ['~/.cursor/mcp.json'], merge: 'copy' },
-  { id: 'buddy', area: 'ai', label: 'Claude Buddy rules and presets', platforms: ['darwin', 'linux', 'win32'],
+  { id: 'buddy', area: 'ai', label: 'Plexiform rules and presets', platforms: ['darwin', 'linux', 'win32'],
     dirs: ['~/.claude-traffic-light/rules', '~/.claude-traffic-light/presets', '~/.claude-traffic-light/characters'], merge: 'copy' },
 
   // ── Terminal ──
