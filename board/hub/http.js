@@ -278,9 +278,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
 
   const routes = [];
-  // Serialize matching collaboration retries until their response is cached.
-  // The board queue alone cannot deduplicate two concurrent cache misses.
-  const collaborationRequests = new Map();
+  // Serialize cache-eligible requests sharing an actor and request ID until
+  // their response is cached, including collisions across different routes.
+  const requestsInFlight = new Map();
   const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
@@ -827,12 +827,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };
-      if (!r.collaboration || !rid) return await runRequest();
+      if (!rid) return await runRequest();
       const key = `${actor}|${rid}`;
-      const previous = collaborationRequests.get(key) ?? Promise.resolve();
+      const previous = requestsInFlight.get(key) ?? Promise.resolve();
       const pending = previous.then(runRequest, runRequest);
-      collaborationRequests.set(key, pending);
-      const clear = () => { if (collaborationRequests.get(key) === pending) collaborationRequests.delete(key); };
+      requestsInFlight.set(key, pending);
+      const clear = () => { if (requestsInFlight.get(key) === pending) requestsInFlight.delete(key); };
       pending.then(clear, clear);
       return await pending;
     } catch (e) {
