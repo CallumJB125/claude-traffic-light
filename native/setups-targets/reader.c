@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #if defined(__APPLE__)
+#include <membership.h>
+#include <sys/acl.h>
 #include <sys/mount.h>
 #include <time.h>
 #endif
@@ -20,6 +22,7 @@ const char *pf_result_name(PFResult r) {
 #define PF_COMPONENT_BYTES 256u
 #define PF_TARGET_DEPTH 8u
 #define PF_READ_NS UINT64_C(1000000000)
+#define PF_ACL_BYTES 32768u
 #ifdef PF_READER_TEST_HOOKS
 extern void pf_reader_test_barrier(unsigned stage);
 #define PF_BARRIER(stage) pf_reader_test_barrier(stage)
@@ -70,6 +73,58 @@ static int component(const char *name) {
   return n > 0 && n < PF_COMPONENT_BYTES && strcmp(name, ".") != 0 && strcmp(name, "..") != 0
     && strchr(name, '/') == NULL;
 }
+/* Inspect the opened object, never a separately resolved pathname. Dangerous
+ * ALLOW rights require this uid's explicit user principal; membership in a
+ * group cannot prove that the group contains no other users. DENY entries do
+ * not broaden access, and known read/search-only grants remain supported. */
+static PFResult acl_safe(int fd) {
+  const acl_permset_mask_t writes = ACL_WRITE_DATA | ACL_APPEND_DATA | ACL_DELETE | ACL_DELETE_CHILD
+    | ACL_WRITE_ATTRIBUTES | ACL_WRITE_EXTATTRIBUTES | ACL_WRITE_SECURITY | ACL_CHANGE_OWNER;
+  const acl_permset_mask_t known = writes | ACL_READ_DATA | ACL_EXECUTE | ACL_READ_ATTRIBUTES
+    | ACL_READ_EXTATTRIBUTES | ACL_READ_SECURITY | ACL_SYNCHRONIZE;
+  struct stat before, after;
+  if (fstat(fd, &before) != 0) return PF_IO;
+  errno = 0;
+  long supported = fpathconf(fd, _PC_EXTENDED_SECURITY_NP);
+  if (supported != 1) return supported == 0 || errno == EOPNOTSUPP ? PF_UNSUPPORTED : PF_IO;
+  errno = 0;
+  acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+  /* On Darwin a supported object with no FILESEC_ACL returns NULL/ENOENT.
+   * The descriptor is held and fstat'ed; this is ACL absence, not a missing
+   * pathname. Unsupported/query failures never take this branch. */
+  if (!acl && errno != ENOENT) return errno == EOPNOTSUPP ? PF_UNSUPPORTED : PF_IO;
+  PFResult result = PF_OK;
+  ssize_t bytes = acl ? acl_size(acl) : 0;
+  if (acl && (bytes < 0 || bytes > (ssize_t)PF_ACL_BYTES || acl_valid(acl) != 0)) result = PF_UNSAFE;
+  for (unsigned i = 0; acl && result == PF_OK; ++i) {
+    acl_entry_t entry;
+    errno = 0;
+    if (acl_get_entry(acl, i == 0 ? ACL_FIRST_ENTRY : ACL_NEXT_ENTRY, &entry) != 0) {
+      /* Darwin returns -1/EINVAL at the end of a validated ACL, including an
+       * empty ACL. No caller can mutate this private working-storage copy. */
+      if (errno != EINVAL) result = PF_IO;
+      break;
+    }
+    if (i >= ACL_MAX_ENTRIES) { result = PF_TOO_LARGE; break; }
+    acl_tag_t tag; acl_permset_mask_t mask;
+    if (acl_get_tag_type(entry, &tag) != 0 || acl_get_permset_mask_np(entry, &mask) != 0) { result = PF_IO; break; }
+    if ((tag != ACL_EXTENDED_ALLOW && tag != ACL_EXTENDED_DENY) || (mask & ~known)) { result = PF_UNSAFE; break; }
+    if (tag == ACL_EXTENDED_DENY || !(mask & writes)) continue;
+    void *qualifier = acl_get_qualifier(entry);
+    if (!qualifier) { result = PF_IO; break; }
+    id_t identity = 0; int type = -1;
+    int mapped = mbr_uuid_to_id(qualifier, &identity, &type);
+    if (acl_free(qualifier) != 0) result = PF_IO;
+    if (mapped != 0) result = PF_IO;
+    else if (type != ID_TYPE_UID || identity != getuid()) result = PF_UNSAFE;
+  }
+  if (acl && acl_free(acl) != 0) result = PF_IO;
+  if (result != PF_OK) return result;
+  if (fstat(fd, &after) != 0) return PF_IO;
+  PFStamp a = stamp_of(&before), b = stamp_of(&after);
+  if (!identity_equal(&a, &b) || a.ctime_seconds != b.ctime_seconds || a.ctime_nanoseconds != b.ctime_nanoseconds) return PF_CHANGED;
+  return PF_OK;
+}
 static PFResult directory(int parent, const char *name, int owned, PFNode *out) {
   struct stat st;
   if (!component(name)) return PF_INVALID;
@@ -77,6 +132,7 @@ static PFResult directory(int parent, const char *name, int owned, PFNode *out) 
   if (fd < 0) return open_error();
   if (fstat(fd, &st) != 0) { close(fd); return PF_IO; }
   if (!S_ISDIR(st.st_mode) || (owned && (st.st_uid != getuid() || (st.st_mode & 0022)))) { close(fd); return PF_UNSAFE; }
+  PFResult result = acl_safe(fd); if (result != PF_OK) { close(fd); return result; }
   out->fd = fd; strcpy(out->name, name); out->identity = stamp_of(&st);
   return PF_OK;
 }
@@ -85,10 +141,16 @@ static PFResult node_current(int parent, const PFNode *node) {
   if (fstat(node->fd, &held) != 0 || fstatat(parent, node->name, &link, AT_SYMLINK_NOFOLLOW) != 0) return PF_CHANGED;
   PFStamp a = stamp_of(&held), b = stamp_of(&link);
   if (!S_ISDIR(link.st_mode) || !identity_equal(&node->identity, &a) || !identity_equal(&a, &b)) return PF_CHANGED;
-  return PF_OK;
+  return acl_safe(node->fd);
 }
 static PFResult root_current(PFRoot *root) {
   if (!root || root->count < 2 || root->count > PF_READER_MAX_ANCESTORS) return PF_INVALID;
+  if (root->nodes[root->count-1].identity.uid != getuid()) return PF_UNSAFE;
+  struct stat held;
+  if (fstat(root->nodes[0].fd, &held) != 0) return PF_IO;
+  PFStamp first = stamp_of(&held);
+  if (!S_ISDIR(held.st_mode) || !identity_equal(&first, &root->nodes[0].identity)) return PF_CHANGED;
+  PFResult result = acl_safe(root->nodes[0].fd); if (result != PF_OK) return result;
   for (size_t i = 1; i < root->count; ++i) {
     PFResult r = node_current(root->nodes[i-1].fd, &root->nodes[i]); if (r != PF_OK) return r;
   }
@@ -112,6 +174,11 @@ PFResult pf_root_open(const char *canonical_profile, const PFStamp *expected, PF
   root->nodes[0].fd = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (root->nodes[0].fd < 0) { free(root); return PF_IO; }
   root->count = 1;
+  struct stat top;
+  if (fstat(root->nodes[0].fd, &top) != 0) { pf_root_close(root); return PF_IO; }
+  root->nodes[0].identity = stamp_of(&top);
+  PFResult first = acl_safe(root->nodes[0].fd);
+  if (!S_ISDIR(top.st_mode) || first != PF_OK) { pf_root_close(root); return first == PF_OK ? PF_UNSAFE : first; }
   char *save = NULL;
   for (char *part = strtok_r(copy, "/", &save); part; part = strtok_r(NULL, "/", &save)) {
     if (root->count >= PF_READER_MAX_ANCESTORS) { pf_root_close(root); return PF_TOO_LARGE; }
@@ -148,7 +215,8 @@ static PFResult target_current(PFRoot *root, PFTarget *target, const char *leaf)
   struct stat named, opened;
   if (fstatat(parent, leaf, &named, AT_SYMLINK_NOFOLLOW) != 0 || fstat(target->fd, &opened) != 0) return PF_CHANGED;
   PFStamp a = stamp_of(&named), b = stamp_of(&opened);
-  return S_ISREG(named.st_mode) && content_equal(&a, &b) && content_equal(&b, &target->stamp) ? PF_OK : PF_CHANGED;
+  if (!S_ISREG(named.st_mode) || !content_equal(&a, &b) || !content_equal(&b, &target->stamp)) return PF_CHANGED;
+  return acl_safe(target->fd);
 }
 static PFResult target_open(PFRoot *root, PFRecipe recipe, PFTarget *target, char *leaf) {
   memset(target, 0, sizeof(*target)); target->fd = -1;
@@ -176,6 +244,7 @@ static PFResult target_open(PFRoot *root, PFRecipe recipe, PFTarget *target, cha
   struct stat st;
   if (fstat(target->fd, &st) != 0) { target_close(target); return PF_IO; }
   if (!S_ISREG(st.st_mode) || st.st_uid != getuid() || st.st_nlink != 1 || (st.st_mode & 0022)) { target_close(target); return PF_UNSAFE; }
+  r = acl_safe(target->fd); if (r != PF_OK) { target_close(target); return r; }
   target->stamp = stamp_of(&st);
   if (target->stamp.device != root->nodes[root->count-1].identity.device) { target_close(target); return PF_UNSAFE; }
   if (target->stamp.size > PF_READER_MAX_BYTES) { target_close(target); return PF_TOO_LARGE; }

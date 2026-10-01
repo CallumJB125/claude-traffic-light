@@ -23,7 +23,9 @@ typedef struct {
 } PFStamp;
 typedef struct PFRoot PFRoot;
 /* canonical_profile must already be canonical, absolute and owned by this uid.
- * A supplied expected root identity binds a prior foreground capture. */
+ * A supplied expected root identity binds a prior foreground capture. Darwin
+ * extended ACLs are checked on every held descriptor: foreign/group dangerous
+ * ALLOW rights refuse; DENY-only and known read-only grants remain supported. */
 PFResult pf_root_open(const char *canonical_profile, const PFStamp *expected, PFRoot **out);
 PFResult pf_root_identity(PFRoot *root, PFStamp *out);
 void pf_root_close(PFRoot *root);
