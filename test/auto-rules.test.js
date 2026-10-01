@@ -225,3 +225,9 @@ test('N5: a gesture or click-rule "allow" answers only one allow-listed, unflagg
   assert.ok(E.gestureAllowTarget([req], []).why, 'no checked input for it');
   assert.equal(E.gestureAllowTarget([{ id: 'p', kind: 'plan' }], []).why, 'open it to answer');
 });
+
+test('danger judges a patch’s own paths against the session directory', () => {
+  const patch = '*** Begin Patch\n*** Update File: .git/hooks/pre-commit\n@@\n-echo a\n+echo b\n*** End Patch';
+  assert.ok(A.danger({ tool: 'apply_patch', toolInput: { input: patch }, cwd: '/w/app' }), 'a patch that writes a git hook is flagged');
+  assert.equal(enterOk('apply_patch', { input: patch }), false);
+});

@@ -241,7 +241,7 @@ function simpleCommand(command) {
 // Why an ACTUAL request must go to a person whatever the rules say, or null.
 function mustAsk(req, home) {
   const input = req?.toolInput && typeof req.toolInput === 'object' ? req.toolInput : {};
-  const deny = evaluateDenyList(DENY_LIST, { toolName: req?.tool, toolInput: input });
+  const deny = evaluateDenyList(DENY_LIST, { toolName: req?.tool, toolInput: input, cwd: typeof req?.cwd === 'string' ? req.cwd : null });
   if (deny.blocked) return deny.reason;
   if (SHELL_TOOLS.has(req?.tool)) {
     const words = simpleCommand(input.command);
@@ -291,7 +291,8 @@ function matchRule(rules, req, { home = os.homedir(), realpath = null } = {}) {
 function danger(req) {
   if (!req || typeof req.tool !== 'string') return null;
   const input = req.toolInput && typeof req.toolInput === 'object' ? req.toolInput : {};
-  const deny = evaluateDenyList(DENY_LIST, { toolName: req.tool, toolInput: input });
+  // cwd: patch paths (apply_patch, diff headers) are judged against the session directory.
+  const deny = evaluateDenyList(DENY_LIST, { toolName: req.tool, toolInput: input, cwd: typeof req.cwd === 'string' ? req.cwd : null });
   if (deny.blocked) return deny.ruleId === 'input-too-large' ? 'Too long to review here — check the terminal' : deny.reason;
   if (SHELL_TOOLS.has(req.tool) && typeof input.command === 'string') {
     const { cmds, hazards } = parseShell(input.command.slice(0, 8192));

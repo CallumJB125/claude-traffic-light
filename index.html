@@ -457,7 +457,7 @@
     const solidAt = (x, y) => {
       const el = document.elementFromPoint(x, y);
       if (!el) return false;
-      if (el.closest('#gear, #help, #bubble, #away, .minion')) return true;
+      if (el.closest('#gear, #help, #bubble, #away, #update, .minion')) return true;
       return rig.solidAt(x, y);
     };
     const hitTest = (x, y) => {

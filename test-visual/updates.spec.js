@@ -175,6 +175,26 @@ test('the row is solid to the mouse, so clicks land on it and not the window beh
   await expect.poll(bodyH).toBe(200);
 });
 
+// The strip under Claude: the waiting-input bubble first, then the recap,
+// then this row. While something waits, the row steps aside; once nothing
+// does, it is back and its buttons take clicks.
+test('a waiting input takes the strip; the update row comes back after it, solid and clickable', async () => {
+  const F = require('./inputs-fixtures');
+  await push(fresh('ready-restart'));
+  await expect.poll(bodyH).toBe(200 + 72);
+  F.hookSync(h, 'notification', { session_id: 'upd-ask', cwd: '/visual/app', notification_type: 'permission_prompt', title: 'Permission needed', message: 'Claude needs your permission to use Bash' });
+  await expect(widget.locator('#bubble .ib-item')).toHaveCount(1, { timeout: 10000 });
+  await expect(widget.locator('#update')).toBeHidden();
+  F.clearSessions(h);
+  await expect(widget.locator('#bubble .ib-item')).toHaveCount(0, { timeout: 10000 });
+  await expect(widget.locator('#update')).toBeVisible();
+  await expect.poll(bodyH).toBe(200 + 72);
+  const box = await widget.locator('#update-btn').boundingBox();
+  expect(await widget.evaluate(([px, py]) => solidAt(px, py), [box.x + box.width / 2, box.y + box.height / 2])).toBe(true);
+  await push(fresh('idle-up-to-date'));
+  await expect.poll(bodyH).toBe(200);
+});
+
 test('"Later" hides the row until the state changes', async () => {
   await push(fresh('ready-restart'));
   await expect.poll(bodyH).toBe(200 + 72);
