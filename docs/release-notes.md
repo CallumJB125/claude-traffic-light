@@ -9,10 +9,12 @@ Plexiform for Mac, Windows and Linux. This is the first beta build.
 - **Updates in the app.** The app can check for a newer version and install it.
 - **Jumping to a session running in a detached tmux session** no longer switches the terminal tab you are on. If the session's terminal can't be found, Plexiform tells you and shows the command to attach.
 
-<!-- Include below ONLY if merged and verified before the tag, otherwise delete:
-- The full-app right-click menu and the matching tray entries.
-- The Usage pop-out window.
-- A Send feedback button.
+<!-- DRAFT additions. Uncomment a line only when it is on main AND in the build being tagged; they are all on main now except where noted.
+- **Characters.** New characters to pick as your Body in Lights: a rubber duck, octopus, CRT monitor, blob, capybara and cactus, then an owl, penguin, fox, bee, axolotl and mushroom. [wave 3, on its own branch (egg, toaster, cloud, astronaut, sloth, T-rex, cyclops): add the line "…and an egg, toaster, cloud, astronaut, sloth, T-rex and cyclops" only once it is merged]
+- **Hatch a character.** In Lights, under Body, "+ Hatch" opens a small window: choose a shape, size, arms, accessory and colour (or "Surprise me"), watch it on the real character as you go, and save it. It is made on your computer from templates and kept in `~/.claude-traffic-light/characters`. Describing a character to an AI is not in this release.
+- **Right-click the widget** to open the Plexiform window. Shift- or Option-right-click still opens the full menu.
+- **A Usage pop-out** from the tray or widget menu: today's spend, this week's, and the busiest model.
+- **Send feedback.** A "Something's off / Idea" form in the app. It saves your note on your computer; you can attach diagnostics and a screenshot, and nothing is sent until you choose to send it. [70: please confirm the exact senders offered before this ships]
 -->
 
 **Known limits**
