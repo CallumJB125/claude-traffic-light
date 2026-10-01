@@ -69,6 +69,7 @@ const bubble = window.InputBubble.create(bubbleEl, {
   api: {
     answerInput: (id, optionId, more) => window.trafficLight.answerInput(id, optionId, more),
     openInput: (id) => window.trafficLight.openInput(id),
+    copyCommand: (id) => window.trafficLight.copyInputCommand(id),
     openAutoRule: (id) => window.trafficLight.openAutoRule({ inputId: id }),
     openWaiting: () => window.trafficLight.openWaiting(),
     nudgeRule: (key) => window.trafficLight.openAutoRule({ nudgeKey: key }),
@@ -214,7 +215,7 @@ function renderAway(recap) {
     text.textContent = `${x.folder || 'session'} · ${AWAY_WORDS[x.kind](x)}`;
     b.append(dot, text);
     b.addEventListener('mousedown', (e) => e.stopPropagation());
-    b.addEventListener('click', async (e) => { e.stopPropagation(); const r = await window.trafficLight.awayOpen(i); if (r && r.folder) showFeedback(`→ ${r.folder} · path copied`); });
+    b.addEventListener('click', async (e) => { e.stopPropagation(); const r = await window.trafficLight.awayOpen(i); if (!r) return; if (r.note) showFeedback(r.note); else if (r.opened === 'none-found') showFeedback('path copied'); else if (r.folder) showFeedback(`→ ${r.folder} · path copied`); });
     return b;
   });
   const extra = recap.items.length - shown;

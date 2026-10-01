@@ -13,6 +13,7 @@
     api: {
       answerInput: (id, optionId, more) => api.answerInput(id, optionId, more),
       openInput: (id) => api.openInput(id),
+      copyCommand: (id) => api.copyInputCommand(id),
       openAutoRule: (id) => api.openAutoRule({ inputId: id }),
       nudgeRule: (key) => api.openAutoRule({ nudgeKey: key }),
       nudgeMute: (key) => api.nudgeMute(key),

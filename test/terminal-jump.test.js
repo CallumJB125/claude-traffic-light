@@ -253,9 +253,12 @@ test('binary discovery includes Nix profiles', () => {
   }
 });
 
+// session id, window id, session group, grouped, session name
+const DISPLAY = '$2\t@3\t\t0\twork\n';
+const GROUPED = '$2\t@3\tg1\t1\twork\n';
 const TMUX_ENV = { TMUX: '/private/tmp/tmux-501/default,812,0', TMUX_PANE: '%5' };
 const tmuxAnswers = (clients = '/dev/ttys009\t$1\t100\n/dev/ttys003\t$0\t50\n') => (file, args) => {
-  if (args.includes('display-message')) return { ok: true, stdout: '$2\n' };
+  if (args.includes('display-message')) return { ok: true, stdout: DISPLAY };
   if (args.includes('list-clients')) return { ok: true, stdout: clients };
   return { ok: true, stdout: 'ok' };
 };
@@ -268,16 +271,16 @@ test('tmux: the one client on the session\'s own socket has its outer tab focuse
   assert.equal(r.adapter, 'tmux+iterm');
   const sock = ['-S', '/private/tmp/tmux-501/default'];
   assert.deepEqual(calls.map((c) => (c.file === Tmux.BINS[0] ? c.args.slice(2)[0] : c.file)), ['display-message', 'list-clients', '/usr/bin/osascript', 'select-window', 'select-pane']);
-  assert.deepEqual(calls[0].args, [...sock, 'display-message', '-p', '-t', '%5', '#{session_id}\t#{session_name}']);
-  assert.deepEqual(calls[3].args, [...sock, 'select-window', '-t', '%5']);
-  assert.deepEqual(calls[4].args, [...sock, 'select-pane', '-t', '%5']);
+  assert.deepEqual(calls[0].args, [...sock, 'display-message', '-p', '-t', '%5', '#{session_id}\t#{window_id}\t#{session_group}\t#{session_grouped}\t#{session_name}']);
+  assert.deepEqual(calls[3].args, [...sock, 'select-window', '-t', '$2:@3']);
+  assert.deepEqual(calls[4].args, [...sock, 'select-pane', '-t', '$2:@3.%5']);
   assert.deepEqual(calls[2].args, ['-e', ITerm.SCRIPT, '', '/dev/ttys009']);
 });
 
 const MUTATING = ['switch-client', 'select-window', 'select-pane', 'select-layout', 'new-window', 'attach-session', 'attach'];
 const tmuxMutations = (calls) => calls.filter((c) => c.file === Tmux.BINS[0] && c.args.some((a) => MUTATING.includes(a)));
 const osaCalls = (calls) => calls.filter((c) => c.file === '/usr/bin/osascript' || c.file === '/usr/bin/open');
-const namedAnswers = (clients) => (file, args) => (args.includes('display-message') ? { ok: true, stdout: '$2\twork\n' } : tmuxAnswers(clients)(file, args));
+const namedAnswers = (clients) => (file, args) => (args.includes('display-message') ? { ok: true, stdout: DISPLAY } : tmuxAnswers(clients)(file, args));
 
 for (const hostApp of ['iTerm2', 'Terminal', 'Ghostty', 'kitty', undefined]) {
   test(`tmux detached (no client on its session, another session has one): nothing is switched and no tab is touched (${hostApp || 'no host'})`, async () => {
@@ -292,6 +295,50 @@ for (const hostApp of ['iTerm2', 'Terminal', 'Ghostty', 'kitty', undefined]) {
   });
 }
 
+test('tmux detached: the default socket is omitted only when it is the real default', () => {
+  const uid = 501;
+  assert.equal(Tmux.attachCommand('work', '/private/tmp/tmux-501/default', {}, uid), 'tmux attach -t work');
+  assert.equal(Tmux.attachCommand('work', '/tmp/tmux-501/default', {}, uid), 'tmux attach -t work');
+  assert.equal(Tmux.attachCommand('work', '/var/t/tmux-501/default', { TMUX_TMPDIR: '/var/t/' }, uid), 'tmux attach -t work');
+  assert.equal(Tmux.attachCommand('work', '/home/me/proj/default', {}, uid), 'tmux -S /home/me/proj/default attach -t work');
+  assert.equal(Tmux.attachCommand('work', '/private/tmp/tmux-502/default', {}, uid), 'tmux -S /private/tmp/tmux-502/default attach -t work');
+  assert.equal(Tmux.attachCommand('work', '/var/t/tmux-501/default', {}, uid), 'tmux -S /var/t/tmux-501/default attach -t work');
+});
+
+test('tmux grouped: a client only on a sibling session leaves everything alone and says so', async () => {
+  const { calls, exec } = fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: GROUPED } : a.includes('list-clients') ? { ok: true, stdout: '/dev/ttys009\t$7\t100\tg1\n' } : { ok: true, stdout: 'ok' }));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.ok, false);
+  assert.equal(r.sibling, true);
+  assert.equal(r.detached, undefined);
+  assert.deepEqual(tmuxMutations(calls), []);
+  assert.deepEqual(osaCalls(calls), []);
+  assert.deepEqual(calls[1].args.slice(2), ['list-clients', '-F', '#{client_tty}\t#{session_id}\t#{client_activity}\t#{session_group}']);
+});
+
+test('tmux grouped: one client in the whole group, on the target session: selected with session-qualified targets', async () => {
+  const { calls, exec } = fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: GROUPED } : a.includes('list-clients') ? { ok: true, stdout: '/dev/ttys009\t$2\t100\tg1\n/dev/ttys004\t$9\t1\tother\n' } : { ok: true, stdout: 'ok' }));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.ok, true);
+  const sel = calls.filter((c) => c.file === Tmux.BINS[0] && /^select-/.test(c.args[2])).map((c) => c.args.slice(2));
+  assert.deepEqual(sel, [['select-window', '-t', '$2:@3'], ['select-pane', '-t', '$2:@3.%5']]);
+});
+
+test('tmux grouped: clients on the target and a sibling are two viewers, so nothing is selected', async () => {
+  const { calls, exec } = fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: GROUPED } : a.includes('list-clients') ? { ok: true, stdout: '/dev/ttys009\t$2\t100\tg1\n/dev/ttys010\t$7\t90\tg1\n' } : { ok: true, stdout: 'ok' }));
+  const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
+  assert.equal(r.ok, false);
+  assert.deepEqual(tmuxMutations(calls), []);
+  assert.deepEqual(osaCalls(calls), []);
+});
+
+test('tmux grouped and detached: no client anywhere in the group gives the detached note', async () => {
+  const { calls, exec } = fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: GROUPED } : a.includes('list-clients') ? { ok: true, stdout: '/dev/ttys004\t$9\t1\tother\n' } : { ok: true, stdout: 'ok' }));
+  const r = await Focus.focusSession(sess(TMUX_ENV), ctxOf({ exec }));
+  assert.equal(r.detached, true);
+  assert.deepEqual(tmuxMutations(calls), []);
+});
+
 test('tmux detached with no clients at all: nothing is selected, not even on the detached session', async () => {
   const { calls, exec } = fakeExec(namedAnswers(''));
   const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
@@ -303,8 +350,8 @@ test('tmux detached with no clients at all: nothing is selected, not even on the
 test('tmux detached: the attach command names the socket when it is not the default, and is dropped for an unsafe session name', async () => {
   const other = { TMUX: '/private/tmp/tmux-501/work-sock,812,0', TMUX_PANE: '%5' };
   const r = await Focus.focusSession(sess(other), ctxOf({ exec: fakeExec(namedAnswers('')).exec }));
-  assert.equal(r.command, 'tmux -S /private/tmp/tmux-501/work-sock attach -t work');
-  const bad = await Focus.focusSession(sess(TMUX_ENV), ctxOf({ exec: fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: '$2\t-x; rm -rf ~\n' } : tmuxAnswers('')(f, a))).exec }));
+  assert.equal(r.command, `tmux -S /private/tmp/tmux-501/work-sock attach -t work`);
+  const bad = await Focus.focusSession(sess(TMUX_ENV), ctxOf({ exec: fakeExec((f, a) => (a.includes('display-message') ? { ok: true, stdout: '$2\t@3\t\t0\t-x; rm -rf ~\n' } : tmuxAnswers('')(f, a))).exec }));
   assert.equal(bad.detached, true);
   assert.equal(bad.command, undefined);
 });
@@ -387,8 +434,8 @@ test('tmux: hostile panes, sockets, server pids and client ttys are refused', ()
   let seen = null;
   Tmux.canHandle(sess({ TMUX: '/tmp/t,1;2,0', TMUX_PANE: '%1' }), ctxOf({ tmuxServerOk: (sock, pid) => { seen = pid; return true; } }));
   assert.equal(seen, null, 'a malformed server pid is not passed on');
-  assert.deepEqual(Tmux.sessionClients('/dev/ttys1"; x\t$1\t9\n/dev/ttys2\t$1\t1\n/dev/ttys3\t$2\t5', '$1').map((c) => c.tty), ['/dev/ttys2']);
-  assert.deepEqual(Tmux.sessionClients('garbage', '$1'), []);
+  assert.deepEqual(Tmux.viewers('/dev/ttys1"; x\t$1\t9\n/dev/ttys2\t$1\t1\n/dev/ttys3\t$2\t5', '$1').map((c) => c.tty), ['/dev/ttys2']);
+  assert.deepEqual(Tmux.viewers('garbage', '$1'), []);
 });
 
 test('tmux: the socket must be a socket we own, in a private directory, with a live server we own', async () => {
@@ -418,7 +465,7 @@ test('tmux: the socket must be a socket we own, in a private directory, with a l
 
 test('tmux: no outer tab found still reports a miss', async () => {
   const s = sess({ TMUX: '/tmp/t,1,0', TMUX_PANE: '%1' }, { hostApp: 'Alacritty' });
-  const { exec } = fakeExec((file, args) => (args.includes('display-message') ? { ok: true, stdout: '$0' } : args.includes('list-clients') ? { ok: true, stdout: '/dev/ttys1\t$0\t1' } : { ok: true }));
+  const { exec } = fakeExec((file, args) => (args.includes('display-message') ? { ok: true, stdout: '$0\t@1\t\t0\tn' } : args.includes('list-clients') ? { ok: true, stdout: '/dev/ttys1\t$0\t1' } : { ok: true }));
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, false);
   assert.equal(r.selected, true);
@@ -460,7 +507,7 @@ test('every command any adapter runs is on the focus-only allow-list', async () 
   const calls = [];
   const exec = async (file, args) => {
     calls.push({ file, args });
-    if (args.includes('display-message')) return { ok: true, stdout: '$2' };
+    if (args.includes('display-message')) return { ok: true, stdout: DISPLAY };
     if (args.includes('list-clients')) return { ok: true, stdout: '/dev/ttys9\t$1\t1' };
     return { ok: true, stdout: 'no match' };
   };
@@ -605,6 +652,14 @@ test('a selected tmux pane in a terminal that cannot be focused says so and name
   assert.equal(log.activate.length, 0);
   const anon = jumperWith({ focusResult: { ok: false, adapter: 'tmux', selected: true } });
   assert.equal((await anon.jump({ host: HOST, terminal: { env: {} } }, 'x')).cant, 'Switched the tmux window in its terminal. Bring it forward to see it.');
+});
+
+test('a client only on a grouped sibling session is not called detached', async () => {
+  const { jump, log } = jumperWith({ focusResult: { ok: false, adapter: 'tmux', sibling: true } });
+  const r = await jump({ host: HOST, terminal: { env: { TMUX_PANE: '%1' } } }, 'x');
+  assert.equal(r.cant, "This session's windows are shown in another tmux session's tab.");
+  assert.equal(r.command, undefined);
+  assert.equal(log.activate.length, 0);
 });
 
 test('a detached tmux session gets the attach hint and command, and nothing is activated', async () => {

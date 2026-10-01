@@ -194,10 +194,11 @@ function showNote({ title, body, onClick }) {
 module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
   // ── Jump to the exact tab ─────────────────────────────────────────────────
   // The session file says where the session's tab is (hooks/terminal-id.js);
-  // src/focus/ has one adapter per terminal. Anything short of a hit (an old
-  // session with nothing recorded, a refused permission, a timeout) falls
-  // back to activating the app, as before; another machine's session gets
-  // neither (src/focus/jump.js).
+  // src/focus/ has one adapter per terminal. On macOS, anything short of a
+  // hit (nothing recorded, a refused permission, a timeout, a detached tmux
+  // session) switches and activates nothing and returns a note saying why;
+  // only a call with no session, or another host's session, still activates
+  // the app. Another machine's session gets neither (src/focus/jump.js).
   const explainedFile = () => path.join(getRootDir(), 'automation-explained.json');
   const explainer = Permission.createExplainer({
     load: () => JSON.parse(fs.readFileSync(explainedFile(), 'utf8')),

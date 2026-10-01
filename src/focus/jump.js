@@ -16,6 +16,7 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
   const NOTE_DETACHED = 'This session is running in tmux with no terminal window open.';
   const NOTE_UNKNOWN = "Can't tell which terminal window this session is in, so nothing was switched.";
   function cantJump(r, session) {
+    if (r && r.sibling) return { app: null, exact: false, cant: "This session's windows are shown in another tmux session's tab." };
     if (r && r.selected) {
       const app = session && session.hostApp;
       return { app: null, exact: false, cant: `Switched the tmux window in its terminal. Bring ${app || 'it'} forward to see it.` };

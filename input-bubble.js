@@ -405,10 +405,14 @@
       const err = errors.get(input.id);
       if (err) { const e = el('div', 'ib-err', err); e.setAttribute('role', 'alert'); body.appendChild(e); }
       if (err && commands.has(input.id)) {
-        const cmd = commands.get(input.id);
         const c = el('button', 'ib-opt tone-plain ib-copy', 'Copy command');
         c.type = 'button';
-        c.addEventListener('click', (ev) => { ev.stopPropagation(); try { navigator.clipboard.writeText(cmd); c.textContent = 'Copied'; } catch { c.textContent = 'Could not copy'; } });
+        c.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          let r;
+          try { r = await api.copyCommand(input.id); } catch { r = null; }
+          c.textContent = r && r.ok ? 'Copied' : "Couldn't copy: select the text";
+        });
         body.appendChild(c);
       }
       if (sending.has(input.id)) body.appendChild(el('div', 'ib-hint', 'Sending…'));
