@@ -36,9 +36,23 @@ export const SHELL_TOOLS = /^(Bash|BashOutput|shell|run_shell_command|exec_comma
 export const FILE_WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|write_file|edit_file|replace|apply_patch|str_replace_editor|create_file)$/i;
 
 // Paths whose contents are secrets or grant access.
-export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains|\.zsh_history|\.bash_history|\.history|fish_history)(\/|\b|$)/;
+export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains|\.zsh_history|\.bash_history|\.history|fish_history)(\/|\b|$)/i;
 // Files that run code later: writing one is as good as running it.
-export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$|\.gitconfig$|\.config\/|\.local\/bin\/|(GNU)?[Mm]akefile$|\.?[Jj]ustfile$|\.pre-commit-config\.ya?ml$|conftest\.py$|(jest|vitest|vite|playwright|babel|eslint)\.config\.[cm]?[jt]s$|\.eslintrc\.c?js$|\.babelrc\.js$)|(^~|^\/Users\/[^/]+|^\/home\/[^/]+|^\/root)\/bin\/|^\/(usr\/(local\/)?|opt\/homebrew\/)?s?bin\//;
+export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$|\.gitconfig$|\.config\/|\.local\/bin\/|(GNU)?[Mm]akefile$|\.?[Jj]ustfile$|\.pre-commit-config\.ya?ml$|conftest\.py$|(jest|vitest|vite|playwright|babel|eslint)\.config\.[cm]?[jt]s$|\.eslintrc\.c?js$|\.babelrc\.js$|\.npmrc$|\.yarnrc(\.ya?ml)?$|pyproject\.toml$|setup\.py$|tox\.ini$|\.cargo\/config(\.toml)?$|build\.rs$|\.devcontainer\/|\.idea\/(runConfigurations\/|workspace\.xml$)|\.vscode\/launch\.json$|\.gitattributes$|\.lintstagedrc[^/]*$|lefthook\.ya?ml$|CLAUDE\.md$|AGENTS\.md$)|(^~|^\/Users\/[^/]+|^\/home\/[^/]+|^\/root)\/bin\/|^\/(usr\/(local\/)?|opt\/homebrew\/)?s?bin\//i;
+
+// A path with // and . segments dropped and .. resolved, without a filesystem,
+// so 'dir/./sub' can't slip past a 'dir/sub' pattern.
+export function cleanPath(p) {
+  const abs = p.startsWith('/');
+  const out = [];
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else if (part !== '..' || !abs) out.push(part);
+  }
+  return ((abs ? '/' : '') + out.join('/')) || (abs ? '/' : '.');
+}
+const pathMatches = (re, p) => re.test(p) || re.test(cleanPath(p));
 
 // ── git ────────────────────────────────────────────────────────────────────
 // Config keys whose value is a program git runs (or a file of such keys).
@@ -350,10 +364,20 @@ function unicodeReason(c) {
   return c.words.some((w) => !w.startsWith('-') && w.normalize('NFKC').startsWith('-')) ? 'option written with look-alike characters' : null;
 }
 
+// A substitution, arithmetic or prompt expansion in an assigned value runs
+// code (arithmetic evaluates array subscripts, ${x@P} expands $(…) in x).
+const RUNS_ON_EXPANSION = /\$SUB|\$\[|\$\{[^}]*@P/;
+function assignmentReason(c) {
+  const values = c.env.map((e) => e.value);
+  if (/^(export|declare|typeset|readonly|local)$/.test(c.cmd)) for (const a of c.args) if (a.includes('=')) values.push(a.slice(a.indexOf('=') + 1));
+  if (values.some((v) => RUNS_ON_EXPANSION.test(v))) return 'an assigned value runs a command substitution or expansion';
+  return c.words.some((w) => /\$\{[^}]*@P/.test(w)) ? 'prompt expansion (${x@P}) runs substitutions' : null;
+}
+
 function writesCodeOrSecrets(c) {
-  const target = (p) => RUNS_CODE_LATER.test(p) || CREDENTIAL_PATHS.test(p);
+  const target = (p) => pathMatches(RUNS_CODE_LATER, p) || pathMatches(CREDENTIAL_PATHS, p);
   if (c.redirects.some((r) => r.op === '>' && target(r.target))) return 'writes a file that runs code later, or a secret';
-  if (/^(tee|cp|mv|ln|install|rsync)$/.test(c.cmd) && c.args.some((a) => RUNS_CODE_LATER.test(a))) return 'writes a file that runs code later, or a secret';
+  if (/^(tee|cp|mv|ln|install|rsync)$/.test(c.cmd) && c.args.some((a) => pathMatches(RUNS_CODE_LATER, a))) return 'writes a file that runs code later, or a secret';
   const sed = /^g?sed$/.test(c.cmd);
   if ((sed || c.cmd === 'perl') && c.args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a)) && c.args.some(target)) return 'edits a file that runs code later, or a secret, in place';
   if (sed && sedScripts(c.args).some((s) => sedScript(s).writes.some(target))) return 'writes a file that runs code later, or a secret';
@@ -381,6 +405,7 @@ const SHELL_CHECKS = [
   ['writes-code-or-secrets', writesCodeOrSecrets],
   ['git-runs-program', gitProgramReason],
   ['code-env', envReason],
+  ['assignment-expansion', assignmentReason],
   ['container-exec', containerReason],
   ['remote-exec', remoteReason],
   ['package-runner', packageRunnerReason],
@@ -419,8 +444,8 @@ export function gitForcePushViolation(text) {
 
 export const DEFAULT_RULES = [
   { id: 'shell', builtin: 'shell', tool: SHELL_TOOLS, reason: 'dangerous shell command' },
-  { id: 'credential-paths', input: CREDENTIAL_PATHS, reason: 'touches credentials or agent configuration' },
-  { id: 'runs-code-later', tool: FILE_WRITE_TOOLS, input: RUNS_CODE_LATER, reason: 'writes a file that later runs code' },
+  { id: 'credential-paths', input: CREDENTIAL_PATHS, paths: true, reason: 'touches credentials or agent configuration' },
+  { id: 'runs-code-later', tool: FILE_WRITE_TOOLS, input: RUNS_CODE_LATER, paths: true, reason: 'writes a file that later runs code' },
   { id: 'prod-repo', labels: ['prod', 'production'], reason: 'production repository' },
 ];
 
@@ -449,6 +474,19 @@ export function compileRules(rules = DEFAULT_RULES) {
   }));
 }
 
+// For file tools a `paths: true` rule looks at the path fields only (raw and
+// cleaned): a file's content isn't a path it touches. Tools without a path
+// field (apply_patch) and every other tool are scanned whole.
+const READ_FILE_TOOLS = /^(Read|Grep|Glob|LS|NotebookRead|read_file|read_many_files|list_directory|glob|search_file_content)$/i;
+function pathTexts(toolName, input, texts) {
+  let vals = null;
+  if ((FILE_WRITE_TOOLS.test(toolName) || READ_FILE_TOOLS.test(toolName)) && input && typeof input === 'object' && !Array.isArray(input)) {
+    const fields = ['file_path', 'notebook_path', 'path', 'glob', ...(/^glob$/i.test(toolName) ? ['pattern'] : [])];
+    vals = fields.map((f) => input[f]).filter((x) => typeof x === 'string');
+  }
+  return (vals?.length ? vals : texts).flatMap((t) => [t, cleanPath(t)]);
+}
+
 const desk = (ruleId, reason) => ({ blocked: true, ruleId, reason, message: DESK_MESSAGE });
 
 // → { blocked: true, ruleId, reason, message } or { blocked: false }
@@ -471,7 +509,7 @@ export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [
       }
       continue;
     }
-    if (r.input && !texts.some((t) => test(r.input, t))) continue;
+    if (r.input && !(r.paths ? pathTexts(String(toolName ?? ''), toolInput, texts) : texts).some((t) => test(r.input, t))) continue;
     if (!r.input && !r.labels && !r.tool) continue; // an empty rule matches nothing
     return desk(r.id, r.reason);
   }

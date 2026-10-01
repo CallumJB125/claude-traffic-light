@@ -4,7 +4,7 @@
 // allow-listed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compileRules, evaluateDenyList, remoteVerdict, allowListReason } from '../src/index.js';
+import { compileRules, evaluateDenyList, remoteVerdict, allowListReason, parseShell, tokenize } from '../src/index.js';
 
 const rules = compileRules();
 const deny = (command) => evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command } });
@@ -203,4 +203,79 @@ test("a shell tool's description is not executed, so it is not judged as a comma
   assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'ls', description: 'rm -rf / then ship 👨‍💻 and r​m' } }).blocked, false);
   assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'rm -rf /', description: 'list files' } }).blocked, true);
   assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'ls', extra: 'rm -rf /' } }).blocked, true, 'other fields are still judged');
+});
+
+// ── second review pass ──────────────────────────────────────────────────────
+const fileTool = (toolName, toolInput, cwd = '/w/app', opts = {}) => remoteVerdict(rules, { toolName, toolInput, cwd }, { home: '/Users/x', ...opts });
+
+test('protected paths are judged after normalising . // and .. (no realpath needed)', () => {
+  for (const p of ['/w/app/.git//hooks/pre-commit', '/w/app/./.github/workflows/x.yml', '/w/app/x/../.husky/pre-commit', '.git/./hooks/pre-push', 'x/../.git/config']) {
+    assert.equal(fileTool('Write', { file_path: p, content: 'x' }).blocked, true, p);
+    assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: p, content: 'x' } }).ruleId, 'runs-code-later', p);
+  }
+  for (const p of ['/Users/x/.ssh/./id_rsa', '/Users/x/./.aws//credentials', '/w/app/x/../.env']) assert.equal(fileTool('Read', { file_path: p }).blocked, true, p);
+  assert.equal(deny('echo x > .git//hooks/pre-commit').blocked, true);
+});
+
+test('redirects are dropped only after tokenising, so a newline cannot be merged away', () => {
+  for (const c of ['cat README.md\n2>/dev/null touch evil', 'ls\n>/dev/null mkdir x', 'cat a\n2>&1 touch b', 'ls > /dev/null\ntouch x']) assert.equal(remote(c).blocked, true, JSON.stringify(c));
+  for (const c of ['git diff 2>&1', 'ls 2>/dev/null', 'ls >/dev/null 2>&1', 'git log &>/dev/null', 'git status 1>&2']) assert.equal(remote(c).blocked, false, c);
+  for (const c of ['ls > 1', 'ls 2> err.txt', 'ls >& out', 'cat < /etc/passwd']) assert.equal(remote(c).blocked, true, c);
+});
+
+test('protected paths match case-insensitively', () => {
+  assert.equal(fileTool('Read', { file_path: '/Users/x/.SSH/id_rsa' }).blocked, true);
+  assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: '.Git/hooks/x', content: 'x' } }).ruleId, 'runs-code-later');
+  assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: '.GITHUB/workflows/x.yml', content: 'x' } }).ruleId, 'runs-code-later');
+});
+
+test('Grep over home, / or a parent of a credential directory is desk-only', () => {
+  for (const [input, cwd] of [[{ pattern: 'TOKEN', path: '/Users/x' }], [{ pattern: 'TOKEN', path: '/' }], [{ pattern: 'TOKEN', path: '/Users/x/.config' }], [{ pattern: 'TOKEN', path: '/Users/x/Library' }],
+    [{ pattern: 'TOKEN', path: '/Users/x/app/..' }], [{ pattern: 'TOKEN' }, '/Users/x'], [{ pattern: 'TOKEN', path: '..' }, '/Users/x/app'], [{ pattern: 'TOKEN', path: 'src', glob: '**/.env*' }], [{ pattern: 'TOKEN', glob: '.ssh/*' }]]) {
+    assert.equal(fileTool('Grep', input, cwd ?? '/Users/x/app').blocked, true, JSON.stringify([input, cwd]));
+  }
+  assert.equal(fileTool('Grep', { pattern: 'TOKEN', path: 'src', glob: '*.ts' }, '/Users/x/app').blocked, false);
+  assert.equal(fileTool('Grep', { pattern: 'TOKEN' }, '/Users/x/app').blocked, false);
+});
+
+test('an assignment whose value runs a substitution is a deny-list finding', () => {
+  for (const c of ['x="$(id)"', 'x=`id`', 'x="`id`"', 'x="$((y))"', 'x="${y@P}"', 'echo "${y@P}"', 'export x="$(id)"', 'x=$[y]', '"$(which rm)" -rf /tmp/x']) assert.equal(deny(c).blocked, true, c);
+  for (const c of ['x=1', 'x="a b"', 'echo "$HOME"', 'echo $((1+2))']) assert.equal(deny(c).blocked, false, c);
+});
+
+test('the depth fallback only applies when home is unknown', () => {
+  const e = (cwd, opts) => allowListReason({ toolName: 'Edit', toolInput: { file_path: 'src/a.ts' }, cwd }, opts);
+  for (const cwd of ['/workspaces/repo', '/srv/app', '/opt/app']) {
+    assert.equal(e(cwd, { home: '/Users/x' }), null, cwd);
+    assert.notEqual(e(cwd, {}), null, `${cwd} without home`);
+  }
+});
+
+test('file tools: protected-path rules look at path fields, not file content', () => {
+  for (const toolName of ['Write', 'Edit']) {
+    assert.equal(evaluateDenyList(rules, { toolName, toolInput: { file_path: 'docs/setup.md', content: 'copy your key to ~/.ssh/id_rsa and edit .git/hooks/pre-commit', new_string: '~/.aws/credentials' } }).blocked, false, toolName);
+  }
+  assert.equal(evaluateDenyList(rules, { toolName: 'apply_patch', toolInput: { input: '*** Update File: /Users/x/.ssh/config' } }).blocked, true, 'tools without a path field are scanned whole');
+  assert.equal(deny('cat docs/a.md ~/.ssh/id_rsa').blocked, true, 'Bash commands are scanned whole');
+});
+
+test('more files that run code later or steer agents', () => {
+  for (const p of ['.npmrc', '.yarnrc.yml', 'pyproject.toml', 'setup.py', 'tox.ini', '.cargo/config.toml', 'build.rs', '.devcontainer/devcontainer.json', '.idea/runConfigurations/x.xml',
+    '.idea/workspace.xml', '.vscode/launch.json', '.gitattributes', '.lintstagedrc.json', 'lefthook.yml', 'CLAUDE.md', 'sub/AGENTS.md']) {
+    assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: p, content: 'x' } }).blocked, true, p);
+  }
+  for (const p of ['src/index.ts', 'lib/build.ts', 'docs/setup.md', 'README.md']) assert.equal(fileTool('Edit', { file_path: p }).blocked, false, p);
+});
+
+test('the real checks stay fast on large pathological inputs', () => {
+  const units = ['a', "'", '"', ' ', '(', '$(', '`', ';', '|', '\n', '<<a\n', '#', '\\', '{', "a'", 'x=', '$((', 'sh -c '];
+  for (const unit of units) {
+    const c = unit.repeat(Math.ceil(65536 / unit.length));
+    for (const [name, fn] of [['parseShell', () => parseShell(c)], ['tokenize', () => tokenize(c)], ['evaluateDenyList', () => deny(c)], ['allowListReason', () => allowListReason({ toolName: 'Bash', toolInput: { command: c } })]]) {
+      const t = performance.now();
+      fn();
+      const ms = performance.now() - t;
+      assert.ok(ms < 500, `${name} on ${JSON.stringify(unit)} × 64 KB: ${ms.toFixed(0)} ms`);
+    }
+  }
 });

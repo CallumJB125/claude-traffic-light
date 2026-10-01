@@ -17,11 +17,14 @@
 // fs.realpathSync) and paths are also checked after resolving symlinks.
 // "Inside the session directory" means nothing when that directory is /, the
 // home directory or above it (the hook's cwd can be any of these): edits are
-// then desk-only. Pass `home` (os.homedir()); without it any cwd fewer than
-// three levels deep (/, /Users, /Users/x) is treated as home or above.
+// then desk-only, and so is a Grep over /, home or a folder holding
+// credentials. Pass `home` (os.homedir()); without it any directory fewer
+// than three levels deep (/, /Users, /Users/x) is treated as home or above.
+// Paths are judged raw and after dropping // and . and resolving .., so
+// '.git/./hooks' is still '.git/hooks'.
 // The deny-list (denylist.js) still runs first, as defence in depth.
 import { tokenize, commands, SHELLS, INTERPRETERS, GLOB, TILDE, BRACE } from './shell.js';
-import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList } from './denylist.js';
+import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList, cleanPath } from './denylist.js';
 
 const READ_TOOLS = /^(Read|Grep|Glob|LS|NotebookRead)$/;
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
@@ -82,9 +85,12 @@ export const TEST_COMMAND_ALLOW = {
   cargo: both(subcommands('test', 'build', 'check'), noArgs(/^--config(=|$)|^-Z/, 'cargo option can run a program')),
 };
 
-const FORBIDDEN_HAZARDS = ['expansion', 'substitution', 'process-substitution', 'redirect', 'subshell', 'group', 'background', 'escape', 'unterminated-quote', 'bidi', 'invisible'];
-// Redirections that only discard or merge output are fine.
-const HARMLESS_REDIRECTS = /(^|\s)(2>&1|[12]?>\s?\/dev\/null)(?=\s|$)/g;
+const FORBIDDEN_HAZARDS = ['expansion', 'substitution', 'process-substitution', 'subshell', 'group', 'background', 'escape', 'unterminated-quote', 'bidi', 'invisible'];
+// Redirections that only discard output or merge one stream into another.
+// Judged per parsed redirect, never by rewriting the text (that could move
+// a newline and with it a command boundary).
+const harmlessRedirect = (r) => r.op === '>' && (
+  (/^(>|>>|&>|&>>|>\|)$/.test(r.raw) && r.target === '/dev/null') || (r.raw === '>&' && /^([0-9]|-|\/dev\/null)$/.test(r.target)));
 
 // Expansions the allow-list can't see through: a glob reaching hidden files or
 // another directory level, ~user, brace expansion.
@@ -113,37 +119,46 @@ function resolvedPath(p, cwd, realpath) {
   try { return `${realpath(abs.slice(0, k) || '/').replace(/\/+$/, '')}/${abs.slice(k + 1)}`; } catch { return null; }
 }
 
-// Posix normalisation without a filesystem: // and . dropped, .. resolved.
-function normPath(p) {
-  const out = [];
-  for (const part of p.split('/')) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') out.pop(); else out.push(part);
-  }
-  return '/' + out.join('/');
-}
-
 // Is `dir` the root, the home directory or above it? A relative dir can't be placed, so it counts.
 function broadDir(dir, homes) {
   if (typeof dir !== 'string') return false;
   if (!dir.startsWith('/')) return true;
-  const c = normPath(dir);
+  const c = cleanPath(dir);
   if (c === '/') return true;
   for (const h of homes) if (c === h || h.startsWith(c + '/')) return true;
-  return c.split('/').filter(Boolean).length < 3;
+  return homes.length ? false : c.split('/').filter(Boolean).length < 3;
 }
 
+function homesOf(home, realpath) {
+  if (typeof home !== 'string' || !home.startsWith('/')) return [];
+  const homes = [cleanPath(home)];
+  const real = resolvedPath(homes[0], null, realpath);
+  if (real) homes.push(cleanPath(real));
+  return homes;
+}
+
+// The raw path, cleaned, and (for a relative path) cleaned against the session directory.
+function pathForms(p, dir) {
+  const out = [p, cleanPath(p)];
+  if (!p.startsWith('/') && typeof dir === 'string' && dir.startsWith('/')) out.push(cleanPath(`${dir}/${p}`));
+  return out;
+}
 const isSecret = (p) => CREDENTIAL_PATHS.test(p) || SECRET_FILES.test(p);
+const secretForms = (p, dir) => pathForms(p, dir).some(isSecret);
+const runsCodeForms = (p, dir) => pathForms(p, dir).some((x) => RUNS_CODE_LATER.test(x));
+// Folders that hold a credential path one level down (.config/gh, Library/Keychains, .docker/config.json).
+const CREDENTIAL_PARENT = /(^|\/)(\.config|Library|\.docker)$/i;
 
 function bashReason(command, allow, cwd, realpath) {
   if (typeof command !== 'string' || !command.trim()) return 'no command';
   if (command.length > MAX_COMMAND_CHARS) return 'command too long to review remotely';
-  const { tokens, hazards } = tokenize(command.replace(HARMLESS_REDIRECTS, ' '));
+  const { tokens, hazards } = tokenize(command);
   const bad = FORBIDDEN_HAZARDS.find((h) => hazards.has(h));
   if (bad) return `shell ${bad} is desk-only`;
   const cmds = commands(tokens);
   if (!cmds.length) return 'no command';
   for (const c of cmds) {
+    if (c.redirects.some((r) => !harmlessRedirect(r))) return 'shell redirect is desk-only';
     if (c.wrapped || c.words[0] !== c.cmd) return `${c.words[0]}: only plain commands, no wrappers or paths`;
     for (const w of c.words) {
       if (SHELLS.has(w) || INTERPRETERS.test(w) || /^(eval|exec|source|xargs)$/.test(w) || w === '-c') return `"${w}" is desk-only`;
@@ -154,7 +169,7 @@ function bashReason(command, allow, cwd, realpath) {
     if (why) return why;
     for (const e of c.expanded) { const r = expansionReason(e); if (r) return r; }
     for (const a of c.args) {
-      if (SECRET_FILES.test(a)) return 'names a secrets file (.env, keys)';
+      if (SECRET_FILES.test(a) || SECRET_FILES.test(cleanPath(a))) return 'names a secrets file (.env, keys)';
       if (a.startsWith('-') || a.startsWith('~')) continue;
       const real = resolvedPath(a, cwd, realpath);
       if (real && isSecret(real)) return 'a symlink to credentials or secrets';
@@ -177,29 +192,34 @@ function inside(dir, p) {
 export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFAULT_BASH_ALLOW, trustTestCommands = false, realpath = null, home = null } = {}) {
   const name = String(toolName ?? '');
   const input = toolInput ?? {};
+  const dir = typeof cwd === 'string' && cwd.startsWith('/') ? cleanPath(cwd) : cwd;
+  const homes = homesOf(home, realpath);
   if (READ_TOOLS.test(name)) {
-    const p = [input.file_path, input.path, input.pattern, input.notebook_path].filter((x) => typeof x === 'string');
-    if (p.some(isSecret)) return 'reads credentials';
-    const real = [input.file_path, input.path, input.notebook_path].map((x) => resolvedPath(x, cwd, realpath)).filter(Boolean);
+    const p = [input.file_path, input.path, input.pattern, input.notebook_path, input.glob].filter((x) => typeof x === 'string');
+    if (p.some((x) => secretForms(x, dir) || secretForms(x.replace(/[*?]+/g, ''), dir))) return 'reads credentials';
+    if (name === 'Grep') {
+      const where = typeof input.path === 'string' && input.path ? input.path : '.';
+      const abs = where.startsWith('~') ? (homes.length ? cleanPath(homes[0] + where.slice(1)) : null)
+        : where.startsWith('/') ? cleanPath(where) : typeof dir === 'string' && dir.startsWith('/') ? cleanPath(`${dir}/${where}`) : null;
+      if (!abs) { if (where.startsWith('~') || where.split('/').includes('..')) return 'searches outside the session directory'; }
+      else if (broadDir(abs, homes) || CREDENTIAL_PARENT.test(abs)) return 'searches /, home or a folder holding credentials';
+    }
+    const real = [input.file_path, input.path, input.notebook_path].map((x) => resolvedPath(x, dir, realpath)).filter(Boolean);
     return real.some(isSecret) ? 'reads credentials through a symlink' : null;
   }
   if (EDIT_TOOLS.test(name)) {
     const p = pathOf(input);
     if (!p) return 'no file path';
-    if (isSecret(p) || RUNS_CODE_LATER.test(p)) return 'protected path';
-    const dir = typeof cwd === 'string' && cwd.startsWith('/') ? normPath(cwd) : cwd;
+    if (secretForms(p, dir) || runsCodeForms(p, dir)) return 'protected path';
     if (!inside(dir, p)) return 'outside the session directory';
-    const homes = typeof home === 'string' && home.startsWith('/') ? [normPath(home)] : [];
-    const realHome = homes.length ? resolvedPath(homes[0], null, realpath) : null;
-    if (realHome) homes.push(normPath(realHome));
     if (broadDir(dir, homes)) return 'the session directory is / or the home directory';
     const realCwd = typeof dir === 'string' && dir.startsWith('/') ? resolvedPath(dir, null, realpath) : null;
     if (realCwd && broadDir(realCwd, homes)) return 'the session directory is / or the home directory (through a symlink)';
     const real = resolvedPath(p, dir, realpath);
     if (real) {
       if (isSecret(real) || RUNS_CODE_LATER.test(real)) return 'protected path (through a symlink)';
-      if (realCwd && !inside(normPath(realCwd), normPath(real))) return 'outside the session directory (through a symlink)';
-      if (broadDir(normPath(real).replace(/\/[^/]*$/, '') || '/', homes)) return 'writes straight into / or the home directory (through a symlink)';
+      if (realCwd && !inside(cleanPath(realCwd), cleanPath(real))) return 'outside the session directory (through a symlink)';
+      if (broadDir(cleanPath(real).replace(/\/[^/]*$/, '') || '/', homes)) return 'writes straight into / or the home directory (through a symlink)';
     }
     return null;
   }

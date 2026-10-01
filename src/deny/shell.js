@@ -188,8 +188,8 @@ export function tokenize(text) {
         if (d === '\\' && j + 1 < n) { v += text[++j]; hazards.add('escape'); }
         else if (d === '$') {
           hazards.add('expansion');
-          if (text[j + 1] === '(') { data.push([seg, j]); j = readSub(text, j + 2, ')'); seg = j + 1; } else v += d;
-        } else if (d === '`') { data.push([seg, j]); j = readSub(text, j + 1, '`'); seg = j + 1; }
+          if (text[j + 1] === '(') { data.push([seg, j]); j = readSub(text, j + 2, ')'); seg = j + 1; v += '$SUB'; } else v += d;
+        } else if (d === '`') { data.push([seg, j]); j = readSub(text, j + 1, '`'); seg = j + 1; v += '$SUB'; }
         else v += d;
       }
       data.push([seg, Math.min(j, n)]);
@@ -221,7 +221,7 @@ export function tokenize(text) {
     } else if (c === '&' || c === '|') {
       const two = text.slice(i, i + 2);
       if (SEP2.has(two)) { op(two === '|&' ? '|' : two); i += 2; }
-      else if (c === '&' && text[i + 1] === '>') { op('>'); hazards.add('redirect'); i += text[i + 2] === '>' ? 3 : 2; }
+      else if (c === '&' && text[i + 1] === '>') { const two2 = text[i + 2] === '>'; op('>', { raw: two2 ? '&>>' : '&>' }); hazards.add('redirect'); i += two2 ? 3 : 2; }
       else { op(c); if (c === '&') hazards.add('background'); i++; }
     } else if (c === '>' || c === '<') {
       // "2>" / "1>>": a leading fd number belongs to the operator.
@@ -237,7 +237,7 @@ export function tokenize(text) {
         op('<', { heredoc: h });
         awaitDelim = h;
       } else if (v === '<<<') op('<', { herestring: true });
-      else op(v.startsWith('<') ? '<' : '>');
+      else op(v.startsWith('<') ? '<' : '>', { raw: v });
       i = j;
     } else if (c === '(' && text[i + 1] === '(' && word === null) {
       // ((…)) arithmetic: a `<<` inside is a shift, not a here-doc.
@@ -336,7 +336,7 @@ export function commands(tokens) {
     if (tok.t === 'op') {
       if (pending) { cur.redirects.push({ ...pending, target: '' }); pending = null; }
       if (tok.v === '>' || tok.v === '<') {
-        pending = { op: tok.v };
+        pending = { op: tok.v, raw: tok.raw ?? tok.v };
         if (tok.heredoc) pending.heredoc = tok.heredoc;
         if (tok.herestring) pending.herestring = true;
         continue;
