@@ -177,18 +177,19 @@ test('T-PRESENCE: team presence stays in its team over WS and HTTP; a revoked de
   try {
     const { as, users, A, B, h } = fx;
     const sess = (repo, summary) => ({ session_id: `s-${rid().slice(0, 8)}`, agent: 'claude', repo_id: repo, state: 'working', since: '2026-09-30T10:00:00Z', summary });
-    async function runner(u, repo, summary) {
-      const dev = (await as(u, 'POST', '/api/devices', { request_id: rid(), name: 'laptop' })).body;
-      const r = new FakeRunner(h.base, dev);
+    // Runners enrol per team (accounts mode has no POST /api/devices, H1).
+    async function runner(u, T, summary) {
+      const e = (await as(u, 'POST', `/api/teams/${T.team}/enrol`, { request_id: rid(), device_name: 'laptop' })).body;
+      const r = new FakeRunner(h.base, { device_id: '', device_token: e.runner_token, team: T.team });
       await r.open();
-      await r.hello();
-      r.send({ type: 'presence', sessions: [sess(repo, summary)] });
-      await until(() => h.hub.presence.byDevice.has(dev.device_id));
-      return dev;
+      const w = await r.hello();
+      r.send({ type: 'presence', sessions: [sess(T.repo, summary)] });
+      await until(() => h.hub.presence.byDevice.has(w.device_id));
+      return { device_id: w.device_id };
     }
-    const devA = await runner(users.ua, A.repo, 'alpha work');
-    const devB = await runner(users.ub, B.repo, `${MARK} work`);
-    const devM = await runner(users.amember, A.repo, 'member work');
+    const devA = await runner(users.ua, A, 'alpha work');
+    const devB = await runner(users.ub, B, `${MARK} work`);
+    const devM = await runner(users.amember, A, 'member work');
 
     // WS (accounts-mode sockets: user + cred) and HTTP see only their own team.
     const wa = await h.browser({ token: users.ua.token });

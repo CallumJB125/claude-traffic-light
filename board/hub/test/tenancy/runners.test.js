@@ -11,6 +11,9 @@ import { dumpDb } from '../accounts-helpers.js';
 import { FakeRunner, settle, until } from '../helpers.js';
 import { createLogger } from '../../log.js';
 import { BAD_RUNNER_TOKEN, MAX_PER_USER, MAX_PER_USER_TEAM } from '../../identity/enrolments.js';
+import { newDeviceToken } from '../../auth.js';
+import { runAdmin } from '../../admin.js';
+import { openDb } from '../../db.js';
 
 const rid = () => randomUUID();
 
@@ -309,4 +312,51 @@ test('caps: 5 installs per person per team, 20 enrolments per person; restore cl
   } finally {
     await fx.h.close();
   }
+});
+
+test('H1: accounts mode refuses legacy runner device tokens (the same 4401 as an unknown runner token) and has no POST /api/devices; admin.js revoke-legacy-devices cleans up', async () => {
+  const fx = await tenancy();
+  const config = fx.h.app.config;
+  let legacyId;
+  let enrolledDevice;
+  try {
+    const { users, A, h } = fx;
+    const mint = await fx.as(users.amember, 'POST', '/api/devices', { request_id: rid(), name: 'legacy' }, { 'x-board-team': A.team });
+    assert.equal(mint.status, 404);
+    assert.equal(mint.body.error.code, 'NOT_FOUND');
+    // A device token minted before the cutover (Access era, or this branch before H1).
+    const token = newDeviceToken();
+    legacyId = rid();
+    h.db.insert('devices', { id: legacyId, member_id: A.member, name: 'old laptop', kind: 'runner', token_hash: createHash('sha256').update(token).digest('hex'), created_at: h.hub.iso() });
+    const legacy = new FakeRunner(h.base, { device_id: legacyId, device_token: token });
+    await legacy.open();
+    assert.deepEqual({ code: await legacy.closed(), reason: legacy.closeReason }, { code: 4401, reason: BAD_RUNNER_TOKEN });
+    const withTeam = new FakeRunner(h.base, { device_id: legacyId, device_token: token, team: A.team });
+    await withTeam.open();
+    assert.deepEqual({ code: await withTeam.closed(), reason: withTeam.closeReason }, { code: 4401, reason: BAD_RUNNER_TOKEN });
+    assert.deepEqual(await refused(fx, undefined, A.team), { code: 4401, reason: BAD_RUNNER_TOKEN }, 'a garbage Bearer');
+    assert.deepEqual(await refused(fx, users.amember.token, A.team), { code: 4401, reason: BAD_RUNNER_TOKEN }, 'the app device token is not a runner token');
+    // Listing and revoking legacy devices still work for cleanup.
+    assert.ok((await fx.as(users.amember, 'GET', '/api/devices', undefined, { 'x-board-team': A.team })).body.devices.some((d) => d.id === legacyId));
+    const e = await enrol(fx, users.amember, A.team);
+    enrolledDevice = fx.db.get('SELECT device_id FROM runner_enrollments WHERE id = ?', e.enrollment_id).device_id;
+  } finally {
+    await fx.h.close();
+  }
+  const out = [];
+  const err = [];
+  assert.equal(runAdmin(['revoke-legacy-devices'], { config, out: (x) => out.push(x), err: (x) => err.push(x) }), 0, err.join('\n'));
+  const res = JSON.parse(out[0]);
+  assert.equal(res.ok, true);
+  assert.ok(res.revoked >= 2, 'the fixture\'s B device and the legacy one');
+  assert.ok(res.enrolled_kept >= 2, 'enrolment devices are kept');
+  const db = openDb(config.dbPath);
+  try {
+    assert.ok(db.get('SELECT revoked_at FROM devices WHERE id = ?', legacyId).revoked_at);
+    assert.equal(db.get('SELECT revoked_at FROM devices WHERE id = ?', enrolledDevice).revoked_at, null);
+    assert.ok(db.get("SELECT 1 AS x FROM audit WHERE action = 'device.revoke_legacy'"));
+  } finally {
+    db.close();
+  }
+  assert.equal(runAdmin(['revoke-legacy-devices'], { config: { ...config, auth: 'dev' }, out: () => {}, err: () => {} }), 2, 'accounts mode only');
 });

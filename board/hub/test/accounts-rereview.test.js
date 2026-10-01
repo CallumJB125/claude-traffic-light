@@ -235,6 +235,7 @@ test('M-B: node hub/admin.js delete-user / delete-team erase without a step-up; 
     assert.equal(runAdmin(['delete-user', 'zed@example.com'], io), 1, 'already gone');
     assert.equal(runAdmin(['delete-team', 'no-such-team'], io), 1);
     assert.equal(runAdmin(['explode'], io), 2);
+    assert.equal(runAdmin(['revoke-legacy-devices', 'extra'], io), 2);
     assert.equal(runAdmin(['delete-user', 'x@y.z'], { ...io, config: { ...config, auth: 'dev' } }), 2);
     assert.equal(runAdmin(['delete-user', 'x@y.z'], { ...io, config: { ...config, dbPath: `${config.dbPath}.missing` } }), 2);
     assert.match(err.at(-1), /run this on the hub host/);

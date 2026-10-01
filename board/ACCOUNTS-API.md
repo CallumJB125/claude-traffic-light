@@ -467,7 +467,7 @@ An admin or owner, or the enrolment's own user. `{}` → `{ok:true}`; its socket
 
 `/ws/runner` with `Authorization: Bearer brt_…` and `Board-Team: <team_id>`, one socket per enrolled team:
 
-- An unknown token, no `Board-Team`, or a `Board-Team` that isn't the enrolment's team: close `4401`, all with the same reason (a token for team A never reveals anything about B).
+- An unknown token, no `Board-Team`, a `Board-Team` that isn't the enrolment's team, or any Bearer that isn't a runner token (an old device token, the app's own `bdt_`): close `4401`, all with the same reason (a token for team A never reveals anything about B). Accounts mode has no `POST /api/devices`; runners only enrol.
 - The install signed out or revoked, the account deleted, or a hub restore: close `4401`. Enrolment revoked (by the user, an admin or rotation), removed from the team, demoted to viewer, or the team deleted: close `4403`. These are re-checked on every reaper pass (≈ 1 s) as well as when they happen, so a live socket closes within a second; a runner that gets `4401`/`4403` does not reconnect.
 - `hello` may send `device_id: ""`; `welcome` names the runner device (`device_id`) and member (`member_id`). The socket is bound to its team for life: offers, allowlist and commands are that team's only, and frames that name another team's card, run or repo are refused.
 

@@ -10,7 +10,7 @@ import { validate, compatible, PROTOCOL_VERSION, WS_CLOSE } from '../shared/prot
 import { HubError, json } from './db.js';
 import { bearer, sha256hex } from './auth.js';
 import { handleRpc, relPath } from './rpc.js';
-import { isRunnerToken } from './identity/enrolments.js';
+import { BAD_RUNNER_TOKEN, isRunnerToken } from './identity/enrolments.js';
 import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
 
 const clip = (s, n) => {
@@ -21,9 +21,14 @@ const clip = (s, n) => {
 /** Upgrade auth: → {device, enrollmentId?} or {close: code, reason}. */
 export async function authenticateRunner(hub, req, { ip = null } = {}) {
   const token = bearer(req);
+  // Accounts (D80, H1): only a runner token enrolled in one team, named by
+  // Board-Team. Anything else (no token, a legacy device token) gets the
+  // same answer as an unknown runner token: no legacy lookup at all.
+  if (hub.config.auth === 'accounts') {
+    if (!hub.enrolments || !isRunnerToken(token)) return { close: WS_CLOSE.UNAUTHENTICATED, reason: BAD_RUNNER_TOKEN };
+    return hub.enrolments.authenticate(token, req.headers['board-team'], { ip });
+  }
   if (!token) return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'missing device token' };
-  // Accounts P4 (D80): a runner token enrolled in one team, named by Board-Team.
-  if (hub.enrolments && isRunnerToken(token)) return hub.enrolments.authenticate(token, req.headers['board-team'], { ip });
   const device = hub.db.get('SELECT * FROM devices WHERE token_hash = ?', sha256hex(token));
   if (!device) return { close: WS_CLOSE.UNAUTHENTICATED, reason: 'unknown device token' };
   if (device.revoked_at) return { close: WS_CLOSE.REVOKED, reason: 'device revoked' };

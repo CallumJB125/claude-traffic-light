@@ -40,7 +40,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | File | Role |
 |---|---|
 | `server.js` | Entry point: config, listen, SIGTERM/SIGINT → graceful shutdown |
-| `admin.js` | Operator erasure (accounts mode, on the hub host): `delete-user <email>`, `delete-team <slug>` without a step-up (ACCOUNTS-API.md `DELETE /api/account`) |
+| `admin.js` | Operator tools (accounts mode, on the hub host): `delete-user <email>`, `delete-team <slug>` without a step-up (ACCOUNTS-API.md `DELETE /api/account`); `revoke-legacy-devices` for the accounts cutover |
 | `app.js` | Wiring: DB → Hub → HTTP/WS → timers (reaper, merge poll, tunnel probe) → close |
 | `config.js` | Env → config, validation (dev auth only on loopback) |
 | `db.js` | `node:sqlite` wrapper (WAL, savepoint-nested `tx`, bind sanitising), `HubError` |
@@ -130,9 +130,10 @@ the +1000 fence bump, so a zombie runner holding a pre-restore fence is always F
 
 ## Deleting accounts and teams without a mailer
 
-Deleting an account or a team needs an email-code step-up, so a `BOARD_AUTH=accounts`
-hub with no mailer (and no OAuth sign-in method) logs a warning at start and the
-operator erases on the hub host, with the hub's environment:
+Deleting an account or a team needs a step-up: an email code (a mailer) or a
+Google/GitHub re-authentication (a configured provider). A `BOARD_AUTH=accounts` hub
+with neither logs a warning at start, and the operator erases on the hub host, with
+the hub's environment:
 
 ```sh
 node hub/admin.js delete-user <email>
@@ -141,8 +142,26 @@ node hub/admin.js delete-team <slug>
 
 The same transaction as `DELETE /api/account` / `DELETE /api/teams/:id`, without the
 step-up (audit `by: "operator"`). It opens the database directly: stop the hub
-first, or rely on its 5 s `busy_timeout`. The OAuth re-auth step-up (next phase)
-removes the need for it.
+first, or rely on its 5 s `busy_timeout`.
+
+## Cutover to `BOARD_AUTH=accounts`: runner credentials
+
+In accounts mode runners connect only with an enrolment's runner token (`brt_…`,
+`POST /api/teams/:id/enrol`, CONTRACT D79–D81). Device tokens minted the old way
+(`POST /api/devices` under Access or dev, or by `board-runner enroll`) are refused
+with `4401`, and accounts mode does not serve `POST /api/devices`. When switching a
+hub to accounts, after the first start on the new version (migrations applied),
+revoke the old runner devices so none is left live in the table:
+
+```sh
+node hub/admin.js revoke-legacy-devices
+# → {"ok":true,"revoked":N,"already_revoked":M,"enrolled_kept":K}
+```
+
+It sets `revoked_at` on every device whose token hash is not an enrolment's, writes an
+`audit` row (`device.revoke_legacy`, by the operator) and prints the counts. It runs
+only against a `BOARD_AUTH=accounts` configuration. Each person then enrols their
+install from the app (one enrolment per team).
 
 ## Additive routes (not in CONTRACT §5.2)
 
