@@ -3707,11 +3707,15 @@ if (!gotLock) {
 // src/rename-migration.js, after ready; each step runs once.
 function renameFollowUp() {
   const home = os.homedir();
-  const psArgs = process.platform === 'darwin' ? ['-axo', 'pid=,comm='] : ['-eo', 'pid=,args='];
+  // macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args.
+  const { execFileSync } = require('child_process');
+  const listProcesses = () => RenameMigration.parsePs(process.platform === 'darwin'
+    ? execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
+    : execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
   return RenameMigration.runFollowUp({
     userData: app.getPath('userData'),
     steps: {
-      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: () => RenameMigration.parsePs(require('child_process').execFileSync('ps', psArgs, { encoding: 'utf8' })) }); },
+      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses }); },
       // From a translocated copy the hooks would point at a temporary path: try again next launch.
       hooks: () => { if (!AUTO_INSTALL_HOOKS) return false; RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }); },
       login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },
