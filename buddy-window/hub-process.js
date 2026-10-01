@@ -66,13 +66,16 @@ function hubEnv({ mode, dataDir, port, devSecret, baseEnv = process.env }) {
 /**
  * createHubSupervisor({fork, hubEntry, dataDir, mode, isPackaged, onStatus, log})
  *   .ensure()  → Promise<{url, port, mode, localSecret?, devSecret?}> (starts lazily, once)
- *   .stop()    → Promise (SIGTERM, then kill after the grace)
+ *   .stop()    → Promise (hub.shutdown message; SIGTERM too off Windows; force-kill after the grace)
  *   .status()  → {state:'stopped'|'starting'|'ready'|'failed', error?, restarts}
  */
 function createHubSupervisor(opts) {
   const {
     fork, hubEntry, dataDir, isPackaged = false, onStatus = () => {}, log = () => {},
     now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms).unref?.(), fetchImpl = fetch, readyTimeoutMs = READY_TIMEOUT_MS, pickPort = freePort,
+    // Injected so tests drive the ready/grace timers without a real clock; the
+    // platform and pid-kill so Windows behaviour can be exercised anywhere.
+    timers = { setTimeout, clearTimeout }, platform = process.platform, killPid = process.kill.bind(process),
   } = opts;
   const mode = opts.mode === 'dev' ? 'dev' : 'local';
   if (mode === 'dev' && isPackaged) throw new Error('dev hub auth is never allowed in a packaged build');
@@ -132,8 +135,8 @@ function createHubSupervisor(opts) {
         result = { mode, port, url: `http://127.0.0.1:${port}`, devSecret };
       } else {
         let timer;
-        const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('board hub did not report its port in time')), readyTimeoutMs); timer.unref?.(); });
-        const m = await Promise.race([reported, timeout]).finally(() => clearTimeout(timer));
+        const timeout = new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error('board hub did not report its port in time')), readyTimeoutMs); timer.unref?.(); });
+        const m = await Promise.race([reported, timeout]).finally(() => timers.clearTimeout(timer));
         if (typeof m.local_secret !== 'string' || m.local_secret.length < 32) throw new Error('board hub reported no local secret (is BOARD_AUTH=local on this hub?)');
         result = { mode, port: m.port, url: `http://127.0.0.1:${m.port}`, localSecret: m.local_secret, hubEpoch: m.hub_epoch ?? null };
       }
@@ -183,10 +186,17 @@ function createHubSupervisor(opts) {
     ready = null;
     if (!c) { if (state !== 'stopped') set('stopped'); return; }
     await new Promise((resolve) => {
-      const t = setTimeout(() => { try { if (c.pid) process.kill(c.pid, 'SIGKILL'); } catch { /* gone */ } resolve(); }, graceMs);
-      c.once('exit', () => { clearTimeout(t); resolve(); });
-      // utilityProcess.kill() sends SIGTERM; the hub's handler closes the DB cleanly.
-      try { c.kill(); } catch { clearTimeout(t); resolve(); }
+      const t = timers.setTimeout(() => {
+        // Last resort. On Windows kill() is already a hard stop; elsewhere SIGTERM went first.
+        try { if (platform === 'win32') c.kill(); else if (c.pid) killPid(c.pid, 'SIGKILL'); } catch { /* gone */ }
+        resolve();
+      }, graceMs);
+      c.once('exit', () => { timers.clearTimeout(t); resolve(); });
+      // Windows kill() ends the process without running its handlers, so the hub
+      // is asked to close its DB itself first and is only killed after the grace.
+      try { c.postMessage?.({ type: 'hub.shutdown' }); } catch { /* port already closed */ }
+      // utilityProcess.kill() sends SIGTERM elsewhere; the hub's handler closes the DB cleanly.
+      if (platform !== 'win32') { try { c.kill(); } catch { timers.clearTimeout(t); resolve(); } }
     });
     if (child === c) child = null;
     info = null;
