@@ -105,18 +105,18 @@ async function run(deps) {
 }
 
 // The widget page itself finished loading. Before loadFile starts, a window
-// is "not loading" with an empty URL, so that alone proves nothing.
-function windowLoaded(wc, { timeoutMs = 20000, page = 'index.html' } = {}) {
+// is "not loading" with an empty URL, so that alone proves nothing: it is the
+// page's own did-finish-load, or an idle window already showing the page.
+function windowLoaded(wc, { timeoutMs = 20000, page = 'index.html', pollMs = 250 } = {}) {
   const isPage = () => { try { const u = new URL(wc.getURL()); return u.protocol === 'file:' && u.pathname.endsWith(`/${page}`); } catch { return false; } };
   return new Promise((resolve) => {
-    const t = setTimeout(() => { wc.removeListener('did-finish-load', check); resolve(false); }, timeoutMs);
-    function check() {
-      if (wc.isLoading() || !isPage()) return;
-      clearTimeout(t);
-      wc.removeListener('did-finish-load', check);
-      resolve(true);
-    }
-    wc.on('did-finish-load', check);
+    let poll = null;
+    const finish = (ok) => { clearTimeout(t); clearInterval(poll); wc.removeListener('did-finish-load', onLoad); resolve(ok); };
+    const t = setTimeout(() => finish(false), timeoutMs);
+    function onLoad() { if (isPage()) finish(true); }
+    const check = () => { if (!wc.isLoading() && isPage()) finish(true); };
+    wc.on('did-finish-load', onLoad);
+    poll = setInterval(check, pollMs);
     check();
   });
 }
