@@ -844,7 +844,11 @@
   $('face-modal').addEventListener('dragleave', (e) => { if (!$('face-modal').contains(e.relatedTarget)) $('face-pane').classList.remove('dragging'); });
   $('face-modal').addEventListener('drop', (e) => { e.preventDefault(); $('face-pane').classList.remove('dragging'); faceFromFile(e.dataTransfer.files[0]); });
   // hatched characters arrive after the first draw, and when one is saved or removed
-  window.addEventListener('user-characters', () => { try { renderEditor(); } catch { /* no rule selected yet */ } });
+  let ucTimer = null;
+  window.addEventListener('user-characters', () => {
+    clearTimeout(ucTimer);
+    ucTimer = setTimeout(() => { try { renderEditor(); } catch (e) { console.warn('lights: redraw after characters changed failed:', e && e.message); } }, 100);
+  });
   document.addEventListener('paste', (e) => {
     if (!faceOpen()) return;
     const item = Array.from(e.clipboardData?.items || []).find((i) => i.type.startsWith('image/'));

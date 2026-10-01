@@ -8,8 +8,12 @@
   if (!C || !api || typeof api.list !== 'function') return;
   const ID = /^u-[a-z][a-z0-9-]{1,31}$/;
   let known = new Set();
+  let latest = 0;
   function load() {
+    const mine = (latest += 1);
     return Promise.resolve(api.list()).then((list) => {
+      // two lists can be in flight (a change right after another); only the newest answer counts
+      if (mine !== latest) return;
       const now = new Set();
       for (const ch of Array.isArray(list) ? list : []) {
         if (!ch || typeof ch.id !== 'string' || !ID.test(ch.id)) continue;
