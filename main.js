@@ -2216,12 +2216,14 @@ function createTray() {
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
-  trayMenu = menu;
+  // Rebuilt in place (never by recreating the tray) when the update items change;
+  // trayMenu is also what the widget pops up on Linux, where there may be no tray.
+  const mine = tray;
+  trayMenu = buildMenu();
+  rebuildTrayMenu = () => { trayMenu = buildMenu(); if (mine && tray === mine) tray.setContextMenu(trayMenu); };
   if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
   tray.setToolTip('Claude Buddy');
-  tray.setContextMenu(buildMenu());
-  const mine = tray;
-  rebuildTrayMenu = () => { if (tray === mine) tray.setContextMenu(buildMenu()); };
+  tray.setContextMenu(trayMenu);
   updateTrayMode();
 }
 
