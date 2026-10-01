@@ -157,19 +157,26 @@ require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS
 // The folder is worked out, not asked for: asking Electron for it creates it.
 const RenameMigration = require('./src/rename-migration.js');
 const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && !app.commandLine.hasSwitch('user-data-dir');
-// macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args.
-const listOldProcesses = () => RenameMigration.parsePs(process.platform === 'darwin'
-  ? require('child_process').execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
-  : require('child_process').execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }));
+// macOS's comm is the full executable path; Linux's is cut to 15 characters, so its args; Windows has tasklist.
+const listOldProcesses = () => (process.platform === 'win32'
+  ? RenameMigration.parseTasklist(require('child_process').execFileSync('tasklist', ['/FO', 'CSV', '/NH', '/FI', `IMAGENAME eq ${RenameMigration.OLD.winExecutable}`], { encoding: 'utf8', windowsHide: true }))
+  : RenameMigration.parsePs(process.platform === 'darwin'
+    ? require('child_process').execFileSync('/bin/ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' })
+    : require('child_process').execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })));
+// process.kill on Windows is TerminateProcess; taskkill without /F asks the app to close.
+const killOld = process.platform === 'win32'
+  ? (pid) => require('child_process').execFileSync('taskkill', ['/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
+  : process.kill;
+const OLD_USER_DATA = path.join(app.getPath('appData'), RenameMigration.OLD.userDataName);
+const quitOldOpts = { platform: process.platform, home: os.homedir(), listProcesses: listOldProcesses, kill: killOld, oldUserData: OLD_USER_DATA };
 // The old app is asked to quit first, so its databases aren't copied mid-write; if it won't, the copy waits for the next launch.
-if (RENAME_MIGRATES) {
-  const copied = RenameMigration.copyUserData({
-    appData: app.getPath('appData'),
-    userData: path.join(app.getPath('appData'), app.getName()),
-    quitOld: () => RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses }).running.length === 0,
-  }).copied;
-  if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
-}
+const renameCopy = RENAME_MIGRATES ? RenameMigration.copyUserData({
+  appData: app.getPath('appData'),
+  userData: path.join(app.getPath('appData'), app.getName()),
+  quitOld: () => RenameMigration.quitOldInstance(quitOldOpts).running.length === 0,
+}) : null;
+const copied = !!renameCopy?.copied;
+if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
 
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
@@ -353,10 +360,11 @@ function areHooksInstalled() {
 function installHooks() {
   try { Adapters.get('claude').install(claudeHookOpts()); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
 }
-// Opened straight from Downloads, macOS runs a random read-only copy; hooks
-// pinned to it break at the next launch, so none are written (Health says why).
-const TRANSLOCATED = /\/AppTranslocation\//.test(process.execPath);
-const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !TRANSLOCATED;
+// Opened straight from Downloads, macOS runs a random read-only copy; run
+// from a mounted disk image, the app is gone once it is ejected. Hooks pinned
+// to either break, so none are written (Health says why).
+const EPHEMERAL = /\/AppTranslocation\/|^\/Volumes\//.test(process.execPath);
+const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
@@ -3460,7 +3468,7 @@ ipcMain.handle('health-fix', (_e, id) => {
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
-      if (!AUTO_INSTALL_HOOKS) error = TRANSLOCATED ? 'Buddy is running from a temporary copy; move it to Applications first' : 'dev runs never install hooks';
+      if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Buddy is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
     } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
@@ -3717,24 +3725,33 @@ if (!gotLock) {
   });
 }
 
+// While the old app is installed its Open at Login can start it again, and
+// the two would fight over the hooks: ask it to quit (without waiting for it),
+// and say why. Runs at start, 30 s later and on wake.
+function quitOldAppIfInstalled() {
+  if (!RenameMigration.oldAppInstalled({ platform: process.platform, home: os.homedir() })) return;
+  const { asked } = RenameMigration.quitOldInstance({ ...quitOldOpts, waitMs: 0 });
+  if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
+}
+
 // src/rename-migration.js, after ready; each step runs until it succeeds.
 function renameFollowUp() {
   const home = os.homedir();
-  // While the old app is installed its Open at Login can start it again, and
-  // the two would fight over the hooks: ask it to quit on every launch, and say why.
-  if (RenameMigration.oldAppInstalled({ platform: process.platform, home })) {
-    const { asked } = RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses });
-    if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
-  }
+  quitOldAppIfInstalled();
+  if (renameCopy?.retry && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings come across next launch`, body: `${RenameMigration.OLD.productName} was still running. Quit it, then open ${Brand.name} again.`, silent: true }).show();
+  if (renameCopy?.gaveUp && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings did not come across`, body: `${Brand.name} stopped trying after ${RenameMigration.MAX_TRIES} launches (${renameCopy.reason}). Your old settings are still in ${OLD_USER_DATA}.`, silent: true }).show();
   return RenameMigration.runFollowUp({
     userData: app.getPath('userData'),
     steps: {
-      // From a translocated copy the hooks would point at a temporary path: try again next launch.
-      hooks: () => { if (!AUTO_INSTALL_HOOKS) return false; RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }); },
-      login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },
-      // A translocated copy can't re-point the hooks, so the old app stays until it can.
-      'remove-old-app': () => !TRANSLOCATED && RenameMigration.offerRemoveOldApp({
-        platform: process.platform, home, name: Brand.name, stillUsedBy: RenameMigration.findOldReferences({ home }),
+      // From a translocated copy or a disk image the hooks would point at a temporary path, and any
+      // config that couldn't be rewritten still runs the old app: either way, try again next launch.
+      hooks: () => (AUTO_INSTALL_HOOKS ? RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }).every((r) => !r.error) : false),
+      login: () => {
+        if (RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }) && Notification.isSupported()) new Notification({ title: `${Brand.name} opens at login`, body: `As ${RenameMigration.OLD.productName} was set to. Turn it off from the tray menu if you'd rather it didn't.`, silent: true }).show();
+      },
+      // An ephemeral copy can't re-point the hooks, so the old app stays until it can.
+      'remove-old-app': () => !EPHEMERAL && RenameMigration.offerRemoveOldApp({
+        platform: process.platform, home, name: Brand.name, stillUsedBy: RenameMigration.findOldReferences({ home, runtime: HOOK_RUNTIME }),
         showDialog: (opts) => { app.focus({ steal: true }); return dialog.showMessageBox(opts); },
         trashItem: (p) => shell.trashItem(p),
       }),
@@ -3753,7 +3770,12 @@ app.whenReady().then(() => {
   // The rest of the rename migration, once, before the hook check below: a
   // running old copy is asked to quit and every agent config already points
   // here. Its last step (offer to bin the old app) waits on the person.
-  if (RENAME_MIGRATES && gotLock) renameFollowUp().catch((err) => console.warn('[rename]', err.message));
+  if (RENAME_MIGRATES && gotLock) {
+    renameFollowUp().catch((err) => console.warn('[rename]', err.message));
+    setTimeout(quitOldAppIfInstalled, 30 * 1000).unref();
+    powerMonitor.on('resume', quitOldAppIfInstalled);
+    powerMonitor.on('unlock-screen', quitOldAppIfInstalled);
+  }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();

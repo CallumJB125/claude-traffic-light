@@ -9,15 +9,22 @@
 // single-instance lock, the updater, the team window) and copies, never moves,
 // the old folder: the old app keeps working if the person goes back to it.
 //
+// Nothing the migration finds at the new folder is deleted: what is there is
+// renamed to Plexiform.pre-migration-<time> and kept.
+//
 // The rest waits for app ready and runs once (the pending list in
-// rename-migration.json, inside the new folder): point the agents' hooks and
-// the MCP entry at this app, move Open at Login across, and offer to put the
-// old app in the Bin. While the old app is still installed, a running copy
-// of it is asked to quit on every launch. Everything that
-// touches the machine is passed in, so tests run against a temp HOME with
-// stubbed processes, dialogs and Bin.
+// rename-migration.json, inside the new folder): point the old app's own
+// entries in the agents' configs and the MCP entry at this app (each file
+// copied to .pre-plexiform first), move Open at Login across, and offer to put
+// the old app in the Bin. While the old app is still installed, a running copy
+// of it is asked to quit on every launch. Everything that touches the machine
+// is passed in, so tests run against a temp HOME with stubbed processes,
+// dialogs and Bin, and planHooks lets the dry run show what would happen
+// without writing anything.
 const fs = require('fs');
 const path = require('path');
+const Runtime = require('../adapters/runtime.js');
+const HookPaths = require('./hook-paths.js');
 
 const OLD = Object.freeze({
   productName: 'Claude Buddy',
@@ -67,59 +74,125 @@ const migrated = (state) => !!state && state.status !== 'retry';
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+// Chromium's SingletonLock is a symlink to "<host>-<pid>". → the pid, or null.
+function lockPid(dir, fsImpl = fs) {
+  try {
+    const t = fsImpl.readlinkSync(path.join(dir, 'SingletonLock'));
+    const pid = Number(t.slice(t.lastIndexOf('-') + 1));
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch { return null; }
+}
+
 // What Electron itself may have put in the new folder before main.js copies:
 // app.getPath('userData') creates it empty (seen on Electron 44), and a
 // crash reporter adds Crashpad. A folder holding only these was never used.
 const FRESH = new Set(['Crashpad', '.DS_Store']);
 
+// Tries at the copy (the first launch and its retries) before it stops.
+const MAX_TRIES = 3;
+
 /**
- * → { copied, from, to, entries?, skipped?, reason? }. Copies into a temp
- * folder beside the new one and renames it into place, so a crash halfway
- * leaves no new folder and the next launch copies again. A new folder that
- * is fresh (see FRESH) is replaced; one this migration wrote, or one with
- * anything else in it, is left alone.
+ * What is at the new folder right now → { kind, … }:
+ *   absent | fresh (only FRESH names) | retry (a launch that couldn't copy ran on it)
+ *   | migrated (copied, or kept after the last try) | live (a running instance's lock)
+ *   | used (anything else) | unreadable
+ */
+function assessTarget(to, { fsImpl = fs, isAlive = alive } = {}) {
+  if (!fsImpl.existsSync(to)) return { kind: 'absent' };
+  const state = readState(to, fsImpl);
+  if (migrated(state)) return { kind: 'migrated', state };
+  const pid = lockPid(to, fsImpl);
+  if (pid && isAlive(pid)) return { kind: 'live', pid };
+  if (state) return { kind: 'retry', state };
+  let names;
+  try { names = fsImpl.readdirSync(to); } catch (err) { return { kind: 'unreadable', error: err.message }; }
+  const used = names.filter((n) => !FRESH.has(n));
+  return used.length ? { kind: 'used', used } : { kind: 'fresh', names };
+}
+
+// Why a folder in this state is not copied over (null: it may be).
+function whyNot(t, name) {
+  if (t.kind === 'migrated') return t.state.status === 'kept' ? `stopped trying after ${t.state.attempts} tries (${t.state.reason}); the folder is kept as it is` : 'already migrated';
+  if (t.kind === 'live') return `${name} is already running on it (pid ${t.pid})`;
+  if (t.kind === 'unreadable') return `the new folder can't be read (${t.error})`;
+  if (t.kind === 'used') return `the new folder is already in use (${t.used.slice(0, 5).join(', ')}${t.used.length > 5 ? ', …' : ''})`;
+  return null;
+}
+
+const stampOf = (d) => d.toISOString().replace(/[:.]/g, '-');
+
+// The cpSync filter's decision for one path under the old folder, shared
+// with the dry run: → null (the root) | { top, rel, take, why? }.
+function copyDecision(from, src, fsImpl = fs) {
+  const rel = path.relative(from, src);
+  if (!rel) return null;
+  const top = rel.split(path.sep)[0];
+  if (SKIP.has(top)) return { top, rel, take: false, why: 'left out by name' };
+  if (!copyable(src, fsImpl)) return { top, rel, take: false, why: 'unreadable, or a socket or FIFO' };
+  return { top, rel, take: true };
+}
+
+/**
+ * → { copied, from, to, entries?, skipped?, reason?, retry?, gaveUp?, keptAside? }.
+ * Copies into a temp folder beside the new one and renames it into place, so
+ * a crash halfway leaves no new folder and the next launch copies again.
+ * Nothing at the new folder is ever deleted: a fresh one (see FRESH) or one a
+ * launch that couldn't copy ran on ("retry") is renamed to
+ * <name>.pre-migration-<time> and kept (an empty one is removed). It is
+ * checked again right before that rename, as the copy can take seconds: one
+ * that another launch has since migrated, started running on (its
+ * SingletonLock names a live pid) or filled is left alone.
  *
  * When the copy can't happen this launch (the old app won't quit, or the
  * copy itself fails), the new folder gets a "retry" marker instead: this
- * launch runs on it, and the next one replaces it with a fresh copy.
+ * launch runs on it, and the next one tries again, up to MAX_TRIES in all;
+ * after that the folder is kept as it is and marked so.
  * Unreadable files, sockets and FIFOs are left out one by one (skipped).
  * quitOld() → whether the old app is gone; asked only when a copy is about
  * to happen, as its open databases must not be copied mid-write.
  */
-function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = fs, log = console.log, pid = process.pid, now = () => new Date(), quitOld = () => true }) {
+function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = fs, log = console.log, pid = process.pid, now = () => new Date(), quitOld = () => true, isAlive = alive }) {
   const from = path.join(appData, oldName);
   const to = userData;
+  const name = path.basename(to);
+  const assess = () => assessTarget(to, { fsImpl, isAlive });
   const skip = (reason) => { log(`[rename] not copying ${from} to ${to}: ${reason}`); return { copied: false, from, to, reason }; };
+  const first = assess();
+  const tries = first.kind === 'retry' ? Number(first.state.attempts) || 1 : 0;
   const retryLater = (reason) => {
+    // Only onto a folder that is still free to mark: not one another launch has since migrated or is running on.
+    const t = assess();
+    const not = whyNot(t, name);
+    if (not) return skip(not);
+    const attempts = tries + 1;
+    const gaveUp = attempts >= MAX_TRIES;
+    const state = gaveUp ? { status: 'kept', reason, attempts, at: now().toISOString(), pending: [] } : { status: 'retry', reason, attempts, at: now().toISOString() };
     try {
       fsImpl.mkdirSync(to, { recursive: true });
-      fsImpl.writeFileSync(path.join(to, STATE_FILE), JSON.stringify({ status: 'retry', reason, at: now().toISOString() }, null, 2), { mode: 0o600 });
-    } catch (err) { log(`[rename] could not mark ${to} for another try: ${err.message}`); }
+      fsImpl.writeFileSync(path.join(to, STATE_FILE), JSON.stringify(state, null, 2), { mode: 0o600 });
+    } catch (err) { log(`[rename] could not mark ${to}: ${err.message}`); }
+    if (gaveUp) {
+      log(`[rename] could not copy ${from} to ${to} (${reason}); stopped trying after ${attempts} tries, and ${to} is kept as it is`);
+      return { copied: false, from, to, reason, retry: false, gaveUp: true };
+    }
     log(`[rename] could not copy ${from} to ${to} (${reason}); trying again next launch`);
     return { copied: false, from, to, reason, retry: true };
   };
-  const state = fsImpl.existsSync(to) ? readState(to, fsImpl) : null;
-  if (migrated(state)) return skip('already migrated');
-  if (!state && fsImpl.existsSync(to)) {
-    let names = [];
-    try { names = fsImpl.readdirSync(to); } catch (err) { return skip(`the new folder can't be read (${err.message})`); }
-    const used = names.filter((n) => !FRESH.has(n));
-    if (used.length) return skip(`the new folder is already in use (${used.slice(0, 5).join(', ')}${used.length > 5 ? ', …' : ''})`);
-  }
+  const not = whyNot(first, name);
+  if (not) return skip(not);
   let stat = null;
   try { stat = fsImpl.lstatSync(from); } catch { /* no old install */ }
   if (!stat || !stat.isDirectory()) return skip('no old folder');
   if (!quitOld()) return retryLater('the old app is still running');
 
-  const prefix = `${path.basename(to)}.migrating-`;
+  const prefix = `${name}.migrating-`;
   try {
     for (const n of fsImpl.readdirSync(path.dirname(to))) {
-      if (n.startsWith(prefix) && !alive(parseInt(n.slice(prefix.length), 10))) fsImpl.rmSync(path.join(path.dirname(to), n), { recursive: true, force: true });
+      if (n.startsWith(prefix) && !isAlive(parseInt(n.slice(prefix.length), 10))) fsImpl.rmSync(path.join(path.dirname(to), n), { recursive: true, force: true });
     }
   } catch { /* nothing to tidy */ }
 
   const tmp = `${to}.migrating-${pid}`;
-  const aside = `${tmp}.fresh`;
   const entries = new Set();
   const skipped = new Set();
   fsImpl.rmSync(tmp, { recursive: true, force: true });
@@ -129,33 +202,52 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
       verbatimSymlinks: true,
       preserveTimestamps: true,
       filter: (src) => {
-        const rel = path.relative(from, src);
-        if (!rel) return true;
-        const top = rel.split(path.sep)[0];
-        if (SKIP.has(top)) { skipped.add(top); return false; }
-        if (!copyable(src, fsImpl)) { skipped.add(rel); return false; }
-        entries.add(top);
+        const d = copyDecision(from, src, fsImpl);
+        if (!d) return true;
+        if (!d.take) { skipped.add(SKIP.has(d.top) ? d.top : d.rel); return false; }
+        entries.add(d.top);
         return true;
       },
     });
     const state = { from, copiedAt: now().toISOString(), entries: [...entries].sort(), skipped: [...skipped].sort(), pending: STEPS.slice() };
     fsImpl.writeFileSync(path.join(tmp, STATE_FILE), JSON.stringify(state, null, 2), { mode: 0o600 });
-    // rename() onto a folder fails on Windows even when it is empty, so the
-    // fresh one goes aside first, and comes back if the copy can't take its place.
-    if (fsImpl.existsSync(to)) fsImpl.renameSync(to, aside);
-    try { fsImpl.renameSync(tmp, to); } catch (err) {
-      if (fsImpl.existsSync(aside) && !fsImpl.existsSync(to)) fsImpl.renameSync(aside, to);
-      throw err;
-    }
-    fsImpl.rmSync(aside, { recursive: true, force: true });
   } catch (err) {
     fsImpl.rmSync(tmp, { recursive: true, force: true });
-    // Another launch got there first: its copy stands.
-    if (migrated(readState(to, fsImpl))) return skip('already migrated');
     return retryLater(err.message);
   }
+
+  // Look again: the copy took time, and another launch may have taken the folder meanwhile.
+  const t = assess();
+  if (t.kind !== 'absent' && t.kind !== 'fresh' && t.kind !== 'retry') {
+    fsImpl.rmSync(tmp, { recursive: true, force: true });
+    return skip(whyNot(t, name));
+  }
+  // rename() onto a folder fails on Windows even when it is empty, so the
+  // existing one goes aside first, and comes back if the copy can't take its place.
+  let aside = null;
+  try {
+    if (t.kind !== 'absent') {
+      aside = `${to}.pre-migration-${stampOf(now())}`;
+      if (fsImpl.existsSync(aside)) aside = `${aside}-${pid}`;
+      fsImpl.renameSync(to, aside);
+    }
+    try { fsImpl.renameSync(tmp, to); } catch (err) {
+      if (aside && fsImpl.existsSync(aside) && !fsImpl.existsSync(to)) fsImpl.renameSync(aside, to);
+      aside = null;
+      throw err;
+    }
+  } catch (err) {
+    fsImpl.rmSync(tmp, { recursive: true, force: true });
+    return retryLater(err.message);
+  }
+  let keptAside = null;
+  if (aside) {
+    // Only an empty folder goes (rmdir refuses anything else); one with files in it is kept.
+    try { fsImpl.rmdirSync(aside); } catch { keptAside = aside; }
+    if (keptAside) log(`[rename] kept the folder ${name} used before the copy as ${keptAside}`);
+  }
   log(`[rename] copied ${from} to ${to} (${[...entries].sort().join(', ') || 'empty'}; left out: ${[...skipped].sort().join(', ') || 'nothing'}); the old folder is untouched`);
-  return { copied: true, from, to, entries: [...entries].sort(), skipped: [...skipped].sort() };
+  return { copied: true, from, to, entries: [...entries].sort(), skipped: [...skipped].sort(), ...(keptAside ? { keptAside } : {}) };
 }
 
 function readState(userData, fsImpl = fs) {
@@ -179,77 +271,254 @@ function parsePs(text) {
   return String(text || '').split('\n').map((l) => /^\s*(\d+)\s+(.+)$/.exec(l)).filter(Boolean).map((m) => ({ pid: Number(m[1]), command: m[2].trim() }));
 }
 
+// `tasklist /FO CSV /NH` output → [{ pid, command: image name }]
+function parseTasklist(text) {
+  return String(text || '').split(/\r?\n/).map((l) => /^"([^"]*)","(\d+)"/.exec(l)).filter(Boolean).map((m) => ({ pid: Number(m[2]), command: m[1] }));
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Whether a listed process is the old app's main process. macOS: only an
+// install in /Applications or ~/Applications, never a dev build elsewhere.
+// Linux: the .deb's binary, not Chromium's helpers (same binary, --type=).
+// Windows: the image name only (tasklist shows no paths).
+function oldProcessTest(platform, home) {
+  if (platform === 'darwin') {
+    const re = new RegExp(`^(?:/Applications|${escapeRe(path.posix.join(home || '/nonexistent', 'Applications'))})/Claude Buddy\\.app/Contents/MacOS/Claude Buddy$`);
+    return (p) => re.test(p.command);
+  }
+  if (platform === 'linux') return (p) => OLD.linuxExecutable.test(p.command) && !p.command.includes(' --type=');
+  if (platform === 'win32') return (p) => path.win32.basename(p.command).toLowerCase() === OLD.winExecutable.toLowerCase();
+  return () => false;
+}
+
+/**
+ * The old app's running main processes → { procs: [{ pid, command }], via }.
+ * via 'list' normally; when the list can't be had, 'lock': the old folder's
+ * SingletonLock naming a live pid counts as running (its pid is reported, and
+ * never signalled, as nothing says what it is).
+ */
+function findOldProcesses({ platform, home, listProcesses, self = process.pid, oldUserData = null, isAlive = alive, fsImpl = fs, log = console.log }) {
+  if (!['darwin', 'linux', 'win32'].includes(platform)) return { procs: [], via: 'list' };
+  const isOld = oldProcessTest(platform, home);
+  try {
+    return { procs: listProcesses().filter((p) => p.pid !== self && isOld(p)), via: 'list' };
+  } catch (err) {
+    log(`[rename] could not list processes: ${err.message}`);
+    const pid = oldUserData ? lockPid(oldUserData, fsImpl) : null;
+    if (pid && isAlive(pid)) {
+      log(`[rename] the old app's SingletonLock names pid ${pid}, which is running: taking it as the old app`);
+      return { procs: [{ pid, command: path.join(oldUserData, 'SingletonLock') }], via: 'lock' };
+    }
+    return { procs: [], via: 'lock' };
+  }
+}
+
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /**
  * Asks a running old copy to quit, so two widgets don't rewrite the same
  * hooks. SIGTERM, not an Apple Event: Electron quits cleanly on it, and it
- * needs no Automation permission prompt. Then waits (up to waitMs, blocking:
- * this runs once, before any window) for it to go, because on its way out it
- * frees the signal port and deletes the port file this app is about to write.
- * → { asked, running }: the pids asked, and those still running after the wait.
+ * needs no Automation permission prompt (Windows: main.js passes a kill that
+ * runs taskkill without /F). Then waits (up to waitMs, blocking: this runs
+ * before any window) for it to go, because on its way out it frees the
+ * signal port and deletes the port file this app is about to write.
+ * → { asked, running }: the pids asked, and the old app's pids still running
+ * after the wait (one that couldn't be asked counts).
  * listProcesses: () → [{ pid, command }] (the full executable path on macOS,
- * the command line on Linux).
+ * the command line on Linux, the image name on Windows).
  */
-function quitOldInstance({ platform, listProcesses, kill = process.kill, isAlive = alive, sleep = sleepSync, waitMs = 5000, self = process.pid, log = console.log }) {
-  const re = platform === 'darwin' ? OLD.macExecutable : platform === 'linux' ? OLD.linuxExecutable : null;
-  if (!re) return { asked: [], running: [] };
-  let procs = [];
-  try { procs = listProcesses(); } catch (err) { log(`[rename] could not list processes: ${err.message}`); return { asked: [], running: [] }; }
+function quitOldInstance({ platform, home, listProcesses, kill = process.kill, isAlive = alive, sleep = sleepSync, waitMs = 5000, self = process.pid, oldUserData = null, fsImpl = fs, log = console.log }) {
+  const { procs, via } = findOldProcesses({ platform, home, listProcesses, self, oldUserData, isAlive, fsImpl, log });
+  const pids = procs.map((p) => p.pid);
   const asked = [];
-  for (const p of procs) {
-    // Chromium's helpers run the same binary, with --type=
-    if (p.pid === self || !re.test(p.command) || (platform === 'linux' && p.command.includes(' --type='))) continue;
-    try { kill(p.pid, 'SIGTERM'); asked.push(p.pid); log(`[rename] asked the old app (pid ${p.pid}) to quit`); } catch (err) { log(`[rename] could not ask pid ${p.pid} to quit: ${err.message}`); }
+  if (via === 'list') {
+    for (const pid of pids) {
+      try { kill(pid, 'SIGTERM'); asked.push(pid); log(`[rename] asked the old app (pid ${pid}) to quit`); } catch (err) { log(`[rename] could not ask pid ${pid} to quit: ${err.message}`); }
+    }
+    for (let waited = 0; asked.some(isAlive) && waited < waitMs; waited += 100) sleep(100);
   }
-  for (let waited = 0; asked.some(isAlive) && waited < waitMs; waited += 100) sleep(100);
-  const still = asked.filter(isAlive);
+  const still = pids.filter(isAlive);
   if (still.length) log(`[rename] the old app (pid ${still.join(', ')}) is still running`);
   return { asked, running: still };
 }
 
-/**
- * Points every agent config whose Buddy entries run the old installed app at
- * this app, through each adapter's own install (it strips Buddy's entries and
- * adds the current ones; foreign entries and other keys stay), and the MCP
- * entry if it is Buddy's and names the old app. Entries that run something
- * else, such as a dev checkout, are left alone. Claude Code's settings get
- * their one-time .buddy-backup first. → [{ id, file, changed, error? }]
- */
-function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters = require('../adapters/index.js'), holdsOurs = require('../adapters/uninstall-all.js').holdsOurs, commandsIn = require('../adapters/uninstall-all.js').commandsIn, mcp = require('../mcp-install.js'), fsImpl = fs, log = console.log }) {
-  const Runtime = adapters.Runtime;
-  const results = [];
-  // macOS/Linux argv hooks run the wrapper, whose path never changes: what it execs says whose they are.
+// Whether a hook command (or one part of the MCP entry) runs the old
+// installed app: its path; the hook wrapper while the wrapper still execs the
+// old app; or, for a Linux AppImage, a hooks copy of another version in the
+// data folder (the old $APPIMAGE's, which the running app prunes).
+function oldTest(runtime, wrapperText) {
+  const P = Runtime.pathFor(runtime);
   const wrapper = Runtime.wrapperPath(runtime);
-  let wrapperOld = false;
-  try { wrapperOld = OLD.appPath.test(fsImpl.readFileSync(wrapper, 'utf8')); } catch { /* no wrapper */ }
-  const runsOld = (c) => OLD.appPath.test(c) || (wrapperOld && c.includes(wrapper));
+  const wrapperOld = typeof wrapperText === 'string' && OLD.appPath.test(wrapperText);
+  const stableRoot = P.join(runtime.dataDir, HookPaths.STABLE_PREFIX);
+  const own = runtime.hooksDir + P.sep;
+  return (c) => {
+    const s = String(c || '');
+    return OLD.appPath.test(s) || (wrapperOld && s.includes(wrapper)) || (s.includes(stableRoot) && !s.includes(own));
+  };
+}
+
+// Every hook command in a JSON config's hooks block, with the event it is under.
+function hookEntries(hooks) {
+  const { commandsIn } = require('../adapters/uninstall-all.js');
+  return Object.entries(hooks && typeof hooks === 'object' ? hooks : {}).flatMap(([where, v]) => commandsIn(v).map((command) => ({ where, command })));
+}
+
+function leftAloneReason(adapter, command, current) {
+  if (adapter.isOurs(command)) {
+    return current.has(command) ? 'already runs this app' : 'runs a Plexiform script name from somewhere other than the old app (a dev checkout, or a script of your own)';
+  }
+  return OLD.appPath.test(command) ? 'not Plexiform\'s own entry, but it names the old app: it stops working if the old app goes' : 'not Plexiform\'s';
+}
+
+/**
+ * One agent config's text → what the rename makes of it, writing nothing:
+ * { after (the new text, or null for no change), removed, added, leftAlone }
+ * (each [{ where, command, reason? }]). Only Plexiform's own entries that run
+ * the old app go; the current set is added once in their place. Everything
+ * else stays, including a script of the person's own that shares a name with
+ * Plexiform's and a dev checkout's entries. Throws on an unparsable file.
+ * The real run and the dry run both use this, so the plan is what happens.
+ */
+function rewriteConfigText(adapter, text, { runtime, askFromWidget = false, home, isOld }) {
+  if (adapter.id === 'codex') return rewriteCodexText(adapter, text, runtime, isOld);
+  const data = Runtime.parseJsonConfig(text, adapter.configPath(home));
+  const opts = { askFromWidget, home };
+  const current = new Set(hookEntries(adapter.apply({}, runtime, opts).hooks).map((e) => e.command));
+  const strip = (c) => adapter.isOurs(c) && (isOld(c) || current.has(c));
+  const entries = hookEntries(data.hooks);
+  const removed = entries.filter((e) => adapter.isOurs(e.command) && isOld(e.command));
+  const leftAlone = entries.filter((e) => !strip(e.command)).map((e) => ({ ...e, reason: leftAloneReason(adapter, e.command, current) }));
+  if (!removed.length) return { after: null, removed: [], added: [], leftAlone };
+  const next = adapter.apply(data, runtime, { ...opts, strip });
+  const had = new Set(entries.map((e) => `${e.where}\n${e.command}`));
+  const added = hookEntries(next.hooks).filter((e) => current.has(e.command) && !had.has(`${e.where}\n${e.command}`));
+  const after = JSON.stringify(next, null, 2);
+  return { after: after === text ? null : after, removed, added, leftAlone, data, next };
+}
+
+// Codex runs exactly one notify command: replaced only when it is ours and runs the old app.
+function rewriteCodexText(adapter, text, runtime, isOld) {
+  const none = { after: null, removed: [], added: [], leftAlone: [] };
+  const lines = String(text).split('\n');
+  const at = adapter.topNotify(lines);
+  if (at < 0) return none;
+  const entry = { where: 'notify', command: lines[at].trim() };
+  if (!adapter.isOurs(lines[at])) return { ...none, leftAlone: [{ ...entry, reason: 'not Plexiform\'s (Codex runs one notify command)' }] };
+  const line = adapter.notifyLine(runtime);
+  if (!isOld(lines[at])) return { ...none, leftAlone: [{ ...entry, reason: entry.command === line ? 'already runs this app' : 'Plexiform\'s notify, but not the old app\'s (a dev checkout?)' }] };
+  lines[at] = line;
+  return { after: lines.join('\n'), removed: [entry], added: [{ where: 'notify', command: line }], leftAlone: [] };
+}
+
+/**
+ * What the hook re-point would do, writing nothing → { wrapper, configs, mcp, isOld }:
+ *   wrapper: { file, before, after } when bin/buddy-hook would be rewritten
+ *   configs: [{ id, label, file, before, after, removed, added, leftAlone, error? }] for each config present
+ *   mcp: { file, before, after } | { file, leftAlone } | { file, error } | null
+ */
+function planHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js'), fsImpl = fs }) {
+  const wrapperFile = Runtime.wrapperPath(runtime);
+  let wrapperText = null;
+  try { wrapperText = fsImpl.readFileSync(wrapperFile, 'utf8'); } catch { /* no wrapper */ }
+  const isOld = oldTest(runtime, wrapperText);
+  const ctx = { runtime, askFromWidget, home, isOld };
+  const configs = [];
   for (const adapter of adapters.list()) {
     const file = adapter.configPath(home);
-    try {
-      if (!fsImpl.existsSync(file) || !holdsOurs(adapter, file)) continue;
-      const ours = adapter.id === 'codex'
-        ? fsImpl.readFileSync(file, 'utf8').split('\n').filter((l) => adapter.isOurs(l))
-        : commandsIn(Runtime.readJsonConfig(file).hooks).filter((c) => adapter.isOurs(c));
-      if (!ours.some(runsOld)) { log(`[rename] ${adapter.id}: left alone, its entries run another copy ${file}`); continue; }
-      if (adapter.id === 'claude') Runtime.backupOnce(file);
-      const r = adapter.install({ home, runtime, ...(adapter.id === 'claude' ? { askFromWidget } : {}) });
-      results.push({ id: adapter.id, file, changed: !!r.ok, ...(r.ok ? {} : { error: r.error }) });
-    } catch (err) {
-      results.push({ id: adapter.id, file, changed: false, error: err.message });
-    }
+    const base = { id: adapter.id, label: adapter.label, file };
+    let text;
+    try { text = fsImpl.readFileSync(file, 'utf8'); } catch (err) { if (err.code !== 'ENOENT') configs.push({ ...base, error: err.message }); continue; }
+    try { configs.push({ ...base, before: text, ...rewriteConfigText(adapter, text, ctx) }); } catch (err) { configs.push({ ...base, before: text, error: err.message }); }
   }
+  const wrapperOld = typeof wrapperText === 'string' && OLD.appPath.test(wrapperText);
+  const needsWrapper = !runtime.node && (wrapperOld || configs.some((c) => c.removed?.length && (c.id === 'codex' ? Runtime.argvNeedsWrapper(runtime) : Runtime.shellNeedsWrapper(runtime))));
+  const wrapper = needsWrapper && wrapperText !== Runtime.wrapperText(runtime) ? { file: wrapperFile, before: wrapperText, after: Runtime.wrapperText(runtime) } : null;
+  let mcpPlan = null;
   if (mcpEntry) {
     const file = mcp.configPath(home);
+    const st = mcp.status({ home, entry: mcpEntry });
+    const parts = (e) => [e?.command, ...(Array.isArray(e?.args) ? e.args : [])];
+    if (st.error) mcpPlan = { file, error: st.error };
+    else if (!st.entry) mcpPlan = { file, leftAlone: `no "${mcp.NAME}" entry` };
+    else if (!st.installed) mcpPlan = { file, leftAlone: `a "${mcp.NAME}" server that isn't Plexiform's` };
+    else if (st.current) mcpPlan = { file, leftAlone: 'already runs this app' };
+    else if (!parts(st.entry).some(isOld)) mcpPlan = { file, leftAlone: 'runs another copy, not the old app' };
+    else mcpPlan = { file, before: st.entry, after: mcpEntry };
+  }
+  return { wrapper, configs, mcp: mcpPlan, isOld };
+}
+
+// `<file>.pre-plexiform`, made fresh right before the rename changes the
+// file; one already there (an earlier try) is kept and a dated copy made.
+function backupName(file, now = () => new Date(), fsImpl = fs) {
+  const base = `${file}.pre-plexiform`;
+  return fsImpl.existsSync(base) ? `${base}-${stampOf(now())}` : base;
+}
+
+function backupFresh(file, now = () => new Date(), fsImpl = fs) {
+  const base = `${file}.pre-plexiform`;
+  for (const b of [base, `${base}-${stampOf(now())}`]) {
     try {
-      const st = mcp.status({ home, entry: mcpEntry });
-      if (st.error) throw new Error(st.error);
-      if (st.installed && !st.current && OLD.appPath.test(JSON.stringify(st.entry))) { mcp.install({ home, entry: mcpEntry }); results.push({ id: 'mcp', file, changed: true }); }
-    } catch (err) {
-      results.push({ id: 'mcp', file, changed: false, error: err.message });
+      fsImpl.copyFileSync(file, b, fs.constants.COPYFILE_EXCL);
+      try { fsImpl.chmodSync(b, fsImpl.statSync(file).mode & 0o777); } catch { /* best effort */ }
+      return b;
+    } catch (err) { if (err.code !== 'EEXIST') throw err; }
+  }
+  throw new Error(`${base} and a dated copy of it already exist`);
+}
+
+// Rewrites one config from a fresh read, backed up first; if another program
+// writes it in between, reads it again (three tries). → the backup's path.
+function applyConfig(adapter, file, ctx, { fsImpl = fs, now = () => new Date() } = {}) {
+  let backup = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const readAt = Runtime.mtimeOf(file, fsImpl);
+    const r = rewriteConfigText(adapter, fsImpl.readFileSync(file, 'utf8'), ctx);
+    if (r.after == null) return backup;
+    if (!backup) backup = backupFresh(file, now, fsImpl);
+    if (Runtime.writeTextAtomic(file, r.after, fsImpl, readAt)) {
+      if (adapter.noteAddedDenyRules) adapter.noteAddedDenyRules({ home: ctx.home, runtime: ctx.runtime, file, before: r.data, after: r.next, fs: fsImpl });
+      return backup;
     }
   }
-  for (const r of results) log(`[rename] ${r.id}: ${r.error ? `left alone (${r.error})` : 'now points at this app'} ${r.file}`);
+  throw new Error(`${file} kept changing under us`);
+}
+
+/**
+ * Points the old installed app's entries in every agent config at this app
+ * (see rewriteConfigText), the hook wrapper too while it execs the old app,
+ * and the MCP entry if it is Plexiform's and runs the old app. Each file is
+ * copied to .pre-plexiform right before it changes. → [{ id, file, changed,
+ * backup?, error? }]: any error means the step is not done (main.js keeps
+ * it pending, so the old app isn't offered for the Bin).
+ */
+function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js'), fsImpl = fs, log = console.log, now = () => new Date() }) {
+  const plan = planHooks({ home, runtime, askFromWidget, mcpEntry, adapters, mcp, fsImpl });
+  const results = [];
+  if (plan.wrapper) {
+    try { Runtime.ensureWrapper(runtime, fsImpl); results.push({ id: 'wrapper', file: plan.wrapper.file, changed: true }); } catch (err) { results.push({ id: 'wrapper', file: plan.wrapper.file, changed: false, error: err.message }); }
+  }
+  const ctx = { runtime, askFromWidget, home, isOld: plan.isOld };
+  for (const c of plan.configs) {
+    if (c.error) { results.push({ id: c.id, file: c.file, changed: false, error: c.error }); continue; }
+    for (const e of c.leftAlone) if (!/^not Plexiform's$/.test(e.reason)) log(`[rename] ${c.id}: left alone ${e.command} (${e.reason})`);
+    if (c.after == null) continue;
+    try {
+      const backup = applyConfig(adapters.list().find((a) => a.id === c.id), c.file, ctx, { fsImpl, now });
+      results.push({ id: c.id, file: c.file, changed: true, ...(backup ? { backup } : {}) });
+    } catch (err) { results.push({ id: c.id, file: c.file, changed: false, error: err.message }); }
+  }
+  if (plan.mcp?.error) results.push({ id: 'mcp', file: plan.mcp.file, changed: false, error: plan.mcp.error });
+  else if (plan.mcp?.after) {
+    try {
+      const backup = backupFresh(plan.mcp.file, now, fsImpl);
+      mcp.install({ home, entry: mcpEntry });
+      results.push({ id: 'mcp', file: plan.mcp.file, changed: true, backup });
+    } catch (err) { results.push({ id: 'mcp', file: plan.mcp.file, changed: false, error: err.message }); }
+  }
+  for (const r of results) log(`[rename] ${r.id}: ${r.error ? `not changed, trying again next launch (${r.error})` : `now points at this app${r.backup ? `; it was copied to ${r.backup}` : ''}`} ${r.file}`);
   return results;
 }
 
@@ -259,22 +528,25 @@ function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters
  * old app set it up on its first run (the marker in ~/.claude-traffic-light).
  * On Windows the old Run entry, named after the old AppUserModelID, says
  * whether it was on, and goes. On Linux the autostart file has the same name
- * and only its Exec changes.
+ * and only its Exec changes. → whether Open at Login is now on for this app
+ * (main.js says so: the person may have turned it off in the old one).
  */
 function moveLoginItem({ platform, app, loginItem, autoLaunchConfigured, execPath = process.execPath, log = console.log }) {
   if (platform === 'linux') {
-    if (loginItem.get()) loginItem.set(true);
-    return;
+    if (!loginItem.get()) return false;
+    loginItem.set(true);
+    return true;
   }
   if (platform !== 'win32') {
     if (autoLaunchConfigured) loginItem.set(true);
-    return;
+    return !!autoLaunchConfigured;
   }
   const oldExe = path.win32.join(path.win32.dirname(execPath), OLD.winExecutable);
   let wasOn = false;
   try { wasOn = (app.getLoginItemSettings({ path: oldExe }).launchItems || []).some((i) => i.name === OLD.appId && i.enabled !== false); } catch (err) { log(`[rename] could not read the old login item: ${err.message}`); }
   if (wasOn) loginItem.set(true);
   try { app.setLoginItemSettings({ openAtLogin: false, name: OLD.appId }); } catch (err) { log(`[rename] could not remove the old login item: ${err.message}`); }
+  return wasOn;
 }
 
 /**
@@ -299,11 +571,32 @@ function oldAppInstalled({ platform, home, exists = fs.existsSync }) {
   return false;
 }
 
-// Agent configs that still name the old .app (entries this app doesn't own,
-// or couldn't re-point): binning it would break them. → [file]
-function findOldReferences({ home, adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js'), fsImpl = fs }) {
-  const files = [...new Set([...adapters.list().map((a) => a.configPath(home)), mcp.configPath(home)])];
-  return files.filter((f) => { try { return fsImpl.readFileSync(f, 'utf8').includes(OLD.macBundleName); } catch { return false; } });
+// Files that still run the old app, so binning it would break them: hook
+// commands (and other `command`s) in the agent configs, Codex's config,
+// mcpServers in ~/.claude.json (not its project paths, which may name
+// anything), and the hook wrapper. readText lets the dry run look at what the
+// files would hold. → [file]
+function findOldReferences({ home, runtime = null, adapters = require('../adapters/index.js'), mcp = require('../mcp-install.js'), fsImpl = fs, readText = (f) => fsImpl.readFileSync(f, 'utf8') }) {
+  const { commandsIn } = require('../adapters/uninstall-all.js');
+  const names = (x) => OLD.appPath.test(String(x || ''));
+  const out = [];
+  for (const a of adapters.list()) {
+    const f = a.configPath(home);
+    try {
+      const text = readText(f);
+      if (a.id === 'codex' ? names(text) : commandsIn(Runtime.parseJsonConfig(text, f)).some(names)) out.push(f);
+    } catch { /* missing or unparsable */ }
+  }
+  const mf = mcp.configPath(home);
+  try {
+    const servers = Runtime.parseJsonConfig(readText(mf), mf).mcpServers || {};
+    if (Object.values(servers).some((e) => e && [e.command, ...(Array.isArray(e.args) ? e.args : [])].some(names))) out.push(mf);
+  } catch { /* missing or unparsable */ }
+  if (runtime) {
+    const w = Runtime.wrapperPath(runtime);
+    try { if (names(readText(w))) out.push(w); } catch { /* no wrapper */ }
+  }
+  return [...new Set(out)];
 }
 
 const oldAppPaths = (home) => ['/Applications', path.join(home, 'Applications')].map((d) => path.join(d, OLD.macBundleName));
@@ -363,4 +656,4 @@ async function runFollowUp({ userData, steps, fsImpl = fs, log = console.log }) 
   }
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, MAX_TRIES, assessTarget, copyDecision, copyUserData, readState, pending, markDone, parsePs, parseTasklist, findOldProcesses, quitOldInstance, rewriteConfigText, planHooks, backupName, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };

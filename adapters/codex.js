@@ -73,6 +73,7 @@ module.exports = {
   isOurs,
   commandFor,
   notifyLine,
+  topNotify,
   apply,
   strip,
   check,
@@ -82,15 +83,14 @@ module.exports = {
     const r = apply(readText(file, fsImpl), runtime);
     if (r.error) return { ok: false, file, error: r.error };
     if (Runtime.argvNeedsWrapper(runtime)) Runtime.ensureWrapper(runtime, fsImpl);
-    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
-    fsImpl.writeFileSync(file, r.text);
+    Runtime.writeTextAtomic(file, r.text, fsImpl);
     return { ok: true, file };
   },
   uninstall({ home, fs: fsImpl = fs }) {
     const file = configPath(home);
     const cur = readText(file, fsImpl);
     const next = strip(cur);
-    if (next !== cur) fsImpl.writeFileSync(file, next);
+    if (next !== cur) Runtime.writeTextAtomic(file, next, fsImpl);
     return { ok: true, file, changed: next !== cur };
   },
   isInstalled({ home, runtime, fs: fsImpl = fs }) {

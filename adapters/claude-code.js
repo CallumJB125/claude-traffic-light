@@ -183,10 +183,11 @@ function commandFor(event, runtime) {
 const eventsFor = (opts = {}) => (opts.askFromWidget ? HOOK_EVENTS.concat(OPTIONAL_EVENTS) : HOOK_EVENTS);
 
 // Pure: settings object in, settings object out, with exactly one current set
-// of our hooks and every foreign one kept.
+// of our hooks and every foreign one kept. opts.strip narrows which of ours
+// go first (the rename re-points only the old app's).
 function apply(settings, runtime, opts = {}) {
   const out = withDenyRules(settings, rulesOf({ ...opts, runtime }));
-  out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
+  out.hooks = Runtime.stripMatcherHooks(out.hooks, opts.strip || isOurs);
   for (const [event, , timeout] of eventsFor(opts)) {
     const hook = { type: 'command', command: commandFor(event, runtime) };
     if (timeout) hook.timeout = timeout;
@@ -212,6 +213,15 @@ function check(settings, runtime, opts = {}) {
 
 const configPath = (home) => path.join(home, '.claude', 'settings.json');
 
+// Only a rule that wasn't there before is Buddy's to remove later.
+function noteAddedDenyRules({ home, runtime, file, before, after, fs: fsImpl }) {
+  const had = Array.isArray(before.permissions?.deny) ? before.permissions.deny : [];
+  const added = denyRulesFor(home, runtime).filter((r) => !had.includes(r) && hasDenyRules(after, [r]));
+  if (!added.length) return;
+  const rec = addedRecord(home, runtime, fsImpl || fs);
+  rec.set(file, [...new Set(rec.get(file).concat(added))]);
+}
+
 module.exports = {
   id: 'claude',
   label: 'Claude Code',
@@ -229,6 +239,7 @@ module.exports = {
   apply,
   strip,
   check,
+  noteAddedDenyRules,
   resolveSignal,
   normalize,
   answer,
@@ -242,13 +253,7 @@ module.exports = {
     if (!hasDenyRules(cur, rules) && Object.keys(cur).length) Runtime.backupOnce(file, fsImpl);
     const next = apply(cur, runtime, { askFromWidget, home });
     Runtime.writeJsonConfig(file, next, fsImpl);
-    // Only a rule that wasn't there before is Buddy's to remove later.
-    const had = Array.isArray(cur.permissions?.deny) ? cur.permissions.deny : [];
-    const added = rules.filter((r) => !had.includes(r) && hasDenyRules(next, [r]));
-    if (added.length) {
-      const rec = addedRecord(home, runtime, fsImpl || fs);
-      rec.set(file, [...new Set(rec.get(file).concat(added))]);
-    }
+    noteAddedDenyRules({ home, runtime, file, before: cur, after: next, fs: fsImpl });
     return { ok: true, file };
   },
   uninstall({ home, fs: fsImpl }) {

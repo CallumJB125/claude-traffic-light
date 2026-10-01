@@ -82,7 +82,7 @@ const ALLOW = {
   'mcp-server.js': [/name: 'claude-buddy'/g],
   'MCP.md': [/claude-buddy/g],
   'settings.html': [/<code>claude-buddy<\/code>/g],
-  'PRIVACY.md': [/`claude-buddy`/g], // the MCP entry and the old data folder's name
+  'PRIVACY.md': [/`claude-buddy`/g, /"Claude Buddy Safe Storage"/g], // the MCP entry and the old data folder's name; the old Keychain item
   'package.json': [/"name": "claude-buddy"/g, /"schemes": \["plexiform", "claudebuddy"\]/g], // the npm name: the .deb package and updater cache keep it; the old links' scheme
   'package-lock.json': [/"name": "claude-buddy"/g],
   'remote/package.json': [/@claude-buddy\/remote/g],

@@ -83,6 +83,8 @@ test('userData: copied, not moved; the old folder is untouched; the lock, staged
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+const aside = (appData) => fs.readdirSync(appData).filter((n) => n.startsWith('Plexiform.pre-migration-')).sort();
+
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
 
 test('userData: an existing new folder is never overwritten, and a second launch copies nothing', () => {
@@ -114,7 +116,7 @@ test('userData: an existing new folder is never overwritten, and a second launch
 
 // Electron creates the new folder before main.js copies: getPath('userData')
 // makes it empty, a crash reporter adds Crashpad. Neither is a used folder.
-test('userData: a new folder Electron made (empty, or only Crashpad) is replaced by the copy; the old folder is untouched', () => {
+test('userData: a new folder Electron made (empty, or only Crashpad) gives way to the copy and is kept aside unless empty; the old folder is untouched', () => {
   for (const fresh of [[], ['Crashpad/'], ['Crashpad/settings.dat', 'Crashpad/attachments/', '.DS_Store']]) {
     const home = tmpHome();
     const { appData, old, userData } = oldProfile(home);
@@ -127,10 +129,13 @@ test('userData: a new folder Electron made (empty, or only Crashpad) is replaced
     const r = M.copyUserData({ appData, userData, log: quiet });
     assert.equal(r.copied, true, JSON.stringify(fresh));
     assert.equal(fs.readFileSync(path.join(userData, 'Preferences'), 'utf8'), fs.readFileSync(path.join(old, 'Preferences'), 'utf8'));
-    assert.ok(!fs.existsSync(path.join(userData, 'Crashpad')), 'the fresh folder went, Crashpad with it');
+    assert.ok(!fs.existsSync(path.join(userData, 'Crashpad')), 'the fresh folder gave way, Crashpad with it');
     assert.deepEqual(M.readState(userData).pending, M.STEPS);
     assert.deepEqual(snapshot(old), before);
-    assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'no temp or set-aside folder left');
+    const kept = aside(appData);
+    if (!fresh.length) assert.deepEqual(kept, [], 'an empty one is removed');
+    else { assert.equal(kept.length, 1, 'one with anything in it is kept'); assert.ok(fs.existsSync(path.join(appData, kept[0], 'Crashpad'))); assert.equal(r.keptAside, path.join(appData, kept[0])); }
+    assert.ok(!fs.readdirSync(appData).some((n) => n.includes('.migrating-')), 'no temp folder left');
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
@@ -153,7 +158,7 @@ test('userData: nothing to copy without an old folder; a dead launch\'s half cop
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('userData: the old app still running at copy time → nothing copied, a retry marker; the next launch copies over the folder this one used', () => {
+test('userData: the old app still running at copy time → nothing copied, a retry marker; the next launch copies, keeping the folder this one used aside', () => {
   const home = tmpHome();
   const { appData, old, userData } = oldProfile(home);
   const before = snapshot(old);
@@ -178,7 +183,9 @@ test('userData: the old app still running at copy time → nothing copied, a ret
   assert.equal(r2.copied, true);
   assert.equal(fs.readFileSync(path.join(userData, 'Local State'), 'utf8'), fs.readFileSync(path.join(old, 'Local State'), 'utf8'));
   assert.deepEqual(M.readState(userData).pending, M.STEPS);
-  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy']);
+  const kept = aside(appData);
+  assert.equal(kept.length, 1);
+  assert.equal(fs.readFileSync(path.join(appData, kept[0], 'Local State'), 'utf8'), '{"new":1}', 'what the retry launch wrote is kept');
   assert.deepEqual(snapshot(old), before);
 
   // The old app is asked only when a copy is about to happen.
@@ -254,11 +261,11 @@ function oldHooksProfile() {
 
 const commandsOf = (settings) => Object.values(settings.hooks || {}).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
 
-test('hooks: Buddy\'s entries at the old .app path now run the new app; foreign hooks, other keys and the deny rule stay; one backup', () => {
+test('hooks: Buddy\'s entries at the old .app path now run the new app; foreign hooks, other keys and the deny rule stay; a .pre-plexiform copy of each', () => {
   const { home, dataDir, settingsFile, before, geminiText } = oldHooksProfile();
   const newRt = runtimeAt(NEW_APP, dataDir);
   const r = M.rewriteHooks({ home, runtime: newRt, askFromWidget: true, mcpEntry: mcpEntryAt(NEW_APP), log: quiet });
-  assert.deepEqual(r.map((x) => [x.id, x.changed, x.error]), [['claude', true, undefined], ['cursor', true, undefined], ['codex', true, undefined], ['mcp', true, undefined]]);
+  assert.deepEqual(r.map((x) => [x.id, x.changed, x.error]), [['wrapper', true, undefined], ['claude', true, undefined], ['cursor', true, undefined], ['codex', true, undefined], ['mcp', true, undefined]]);
 
   const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(s.model, 'opus');
@@ -272,7 +279,7 @@ test('hooks: Buddy\'s entries at the old .app path now run the new app; foreign 
   assert.equal(ours.length, Claude.HOOK_EVENTS.length + Claude.OPTIONAL_EVENTS.length);
   assert.ok(ours.every((c) => c.startsWith(`ELECTRON_RUN_AS_NODE=1 "${NEW_APP}/Contents/MacOS/Plexiform" "${NEW_APP}/Contents/Resources/hooks/set-status.js"`)), ours[0]);
   assert.equal(Claude.isInstalled({ home, runtime: newRt, askFromWidget: true }), true);
-  assert.equal(fs.readFileSync(`${settingsFile}.buddy-backup`, 'utf8'), before, 'the backup is the file as it was');
+  assert.equal(fs.readFileSync(`${settingsFile}.pre-plexiform`, 'utf8'), before, 'the backup is the file as it was');
 
   const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'hooks.json'), 'utf8'));
   const cursorCmds = Object.values(cursor.hooks).flatMap((l) => l.map((h) => h.command));
@@ -296,7 +303,8 @@ test('hooks: Buddy\'s entries at the old .app path now run the new app; foreign 
   const again = M.rewriteHooks({ home, runtime: newRt, askFromWidget: true, mcpEntry: mcpEntryAt(NEW_APP), log: quiet });
   assert.deepEqual(again, [], 'nothing names the old app any more');
   assert.equal(fs.readFileSync(settingsFile, 'utf8'), settled);
-  assert.equal(fs.readFileSync(`${settingsFile}.buddy-backup`, 'utf8'), before);
+  assert.equal(fs.readFileSync(`${settingsFile}.pre-plexiform`, 'utf8'), before);
+  assert.ok(!fs.readdirSync(path.dirname(settingsFile)).some((n) => n.startsWith('settings.json.pre-plexiform-')), 'no second copy when nothing changes');
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -336,8 +344,8 @@ test('hooks: entries and an MCP entry that run a dev checkout (not the old app) 
   assert.deepEqual(r, []);
   assert.equal(fs.readFileSync(settingsFile, 'utf8'), before.s);
   assert.equal(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'), before.m);
-  assert.ok(!fs.existsSync(`${settingsFile}.buddy-backup`));
-  assert.ok(logs.some((m) => /claude: left alone, its entries run another copy/.test(m)));
+  assert.ok(!fs.existsSync(`${settingsFile}.buddy-backup`) && !fs.existsSync(`${settingsFile}.pre-plexiform`));
+  assert.ok(logs.some((m) => /claude: left alone .*set-status\.js.* \(runs a Plexiform script name from somewhere other than the old app/.test(m)));
 
   // The old Windows exe counts as the old app, in the MCP entry as in hooks.
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'claude-buddy': { command: 'C:\\Users\\me\\AppData\\Local\\Programs\\claude-buddy\\Claude Buddy.exe', args: ['C:/Users/me/AppData/Local/Programs/claude-buddy/resources/app.asar/mcp-server.js'] } } }));
@@ -347,7 +355,7 @@ test('hooks: entries and an MCP entry that run a dev checkout (not the old app) 
 
 // ── the old app ─────────────────────────────────────────────────────────────
 
-test('old instance: the old main process is asked to quit (SIGTERM) and waited for; helpers, this app and other OSes are not', () => {
+test('old instance: the old main process is asked to quit (SIGTERM) and waited for; helpers, this app, a copy outside Applications and other OSes are not', () => {
   const procs = [
     { pid: 111, command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' },
     { pid: 112, command: '/Applications/Claude Buddy.app/Contents/Frameworks/Claude Buddy Helper.app/Contents/MacOS/Claude Buddy Helper' },
@@ -358,14 +366,14 @@ test('old instance: the old main process is asked to quit (SIGTERM) and waited f
   const live = new Set([111, 114]);
   let slept = 0;
   const { asked, running } = M.quitOldInstance({
-    platform: 'darwin', listProcesses: () => procs, self: 113, log: quiet,
+    platform: 'darwin', home: '/Users/me', listProcesses: () => procs, self: 113, log: quiet,
     kill: (pid, sig) => kills.push([pid, sig]),
     isAlive: (pid) => live.has(pid),
     sleep: () => { slept += 1; if (slept === 3) live.clear(); },
   });
-  assert.deepEqual(asked, [111, 114]);
+  assert.deepEqual(asked, [111]);
   assert.deepEqual(running, []);
-  assert.deepEqual(kills, [[111, 'SIGTERM'], [114, 'SIGTERM']]);
+  assert.deepEqual(kills, [[111, 'SIGTERM']]);
   assert.equal(slept, 3);
 
   const stuck = [];
@@ -377,7 +385,7 @@ test('old instance: the old main process is asked to quit (SIGTERM) and waited f
   M.quitOldInstance({ platform: 'linux', listProcesses: () => [{ pid: 7, command: '/opt/Claude Buddy/plexiform --no-sandbox' }, { pid: 8, command: '/opt/Plexiform/plexiform' }, { pid: 9, command: '/opt/Claude Buddy/plexiform --type=renderer --enable-sandbox' }, { pid: 10, command: '/opt/Claude Buddy/plexiform --type=zygote' }], kill: (pid) => debKills.push(pid), isAlive: () => false, log: quiet });
   assert.deepEqual(debKills, [7]);
 
-  for (const platform of ['win32']) {
+  for (const platform of ['freebsd']) {
     let listed = false;
     assert.deepEqual(M.quitOldInstance({ platform, listProcesses: () => { listed = true; return procs; }, kill: () => assert.fail('no kill'), log: quiet }), { asked: [], running: [] });
     assert.equal(listed, false);
@@ -558,10 +566,12 @@ test('old app: still installed (so its Open at Login can start it) is checked pe
   assert.ok(!M.STEPS.includes('quit-old'), 'quitting the old app is not a once-only step');
 
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const quit = src.slice(src.indexOf('function quitOldAppIfInstalled()'), src.indexOf('function renameFollowUp()'));
+  assert.match(quit, /if \(!RenameMigration\.oldAppInstalled\(\{ platform: process\.platform, home: os\.homedir\(\) \}\)\) return;\s+const \{ asked \} = RenameMigration\.quitOldInstance\(/);
+  assert.match(quit, /if \(asked\.length && Notification\.isSupported\(\)\) new Notification\(/, 'and says why');
   const fn = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('return RenameMigration.runFollowUp('));
-  assert.match(fn, /if \(RenameMigration\.oldAppInstalled\(\{ platform: process\.platform, home \}\)\) \{\s+const \{ asked \} = RenameMigration\.quitOldInstance\(/);
-  assert.match(fn, /if \(asked\.length && Notification\.isSupported\(\)\) new Notification\(/, 'and says why');
-  assert.match(src, /'remove-old-app': \(\) => !TRANSLOCATED && RenameMigration\.offerRemoveOldApp\(/);
+  assert.match(fn, /quitOldAppIfInstalled\(\);/);
+  assert.match(src, /'remove-old-app': \(\) => !EPHEMERAL && RenameMigration\.offerRemoveOldApp\(/);
 });
 
 test('main.js copies userData before the instance lock and anything else that opens it, and only for the installed app', () => {
@@ -577,6 +587,350 @@ test('main.js copies userData before the instance lock and anything else that op
   assert.match(src, /const RENAME_MIGRATES = app\.isPackaged && !IS_DEV_RUN && !app\.commandLine\.hasSwitch\('user-data-dir'\);/);
   assert.match(src, /copyUserData\(\{\s+appData: app\.getPath\('appData'\),\s+userData: path\.join\(app\.getPath\('appData'\), app\.getName\(\)\),\s+quitOld: \(\) => RenameMigration\.quitOldInstance\(/, 'the target is worked out, not getPath(userData), which would create it; the old app is asked to quit before the copy');
   // The follow-up runs before the startup hook check, and never for a smoke run.
-  const follow = src.indexOf('if (RENAME_MIGRATES && gotLock) renameFollowUp()');
+  const follow = src.indexOf('if (RENAME_MIGRATES && gotLock) {\n    renameFollowUp()');
+  assert.ok(follow > 0);
   assert.ok(follow > src.indexOf('if (smokeReport) {') && follow < src.indexOf('if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();'));
+});
+
+// ── round 2: races, retries, never deleting ────────────────────────────────
+
+
+test('userData: a second launch that migrates and starts running during this one\'s slow copy is left alone (H1)', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  let other = null;
+  const slow = { ...fs, cpSync: (a, b, o) => {
+    fs.cpSync(a, b, o);
+    other = M.copyUserData({ appData, userData, pid: process.ppid, log: quiet });
+    fs.writeFileSync(path.join(userData, 'live-data'), 'written by the running instance');
+    fs.symlinkSync(`host-${process.ppid}`, path.join(userData, 'SingletonLock'));
+  } };
+  const logs = [];
+  const r = M.copyUserData({ appData, userData, fsImpl: slow, log: (m) => logs.push(m) });
+  assert.equal(other.copied, true);
+  assert.equal(r.copied, false);
+  assert.match(r.reason, /already migrated/);
+  assert.equal(fs.readFileSync(path.join(userData, 'live-data'), 'utf8'), 'written by the running instance');
+  assert.ok(isLink(path.join(userData, 'SingletonLock')), 'its lock is untouched');
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'no temp copy left, nothing moved aside');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: a new folder a live instance holds (SingletonLock names a running pid) is never moved, before or after the copy', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  fs.mkdirSync(userData, { recursive: true });
+  fs.symlinkSync(`host-${process.pid}`, path.join(userData, 'SingletonLock'));
+  const r = M.copyUserData({ appData, userData, log: quiet });
+  assert.equal(r.copied, false);
+  assert.match(r.reason, /already running on it \(pid \d+\)/);
+  assert.ok(isLink(path.join(userData, 'SingletonLock')));
+
+  // Fresh when the copy starts, taken by another launch before the swap.
+  fs.rmSync(userData, { recursive: true, force: true });
+  fs.mkdirSync(userData);
+  const slow = { ...fs, cpSync: (a, b, o) => { fs.cpSync(a, b, o); fs.symlinkSync(`host-${process.pid}`, path.join(userData, 'SingletonLock')); fs.writeFileSync(path.join(userData, 'Local State'), 'theirs'); } };
+  const r2 = M.copyUserData({ appData, userData, fsImpl: slow, log: quiet });
+  assert.equal(r2.copied, false);
+  assert.equal(fs.readFileSync(path.join(userData, 'Local State'), 'utf8'), 'theirs');
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy']);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: a retry folder holding data from the launches that ran on it is kept as Plexiform.pre-migration-<time>, never deleted (M-1, 70 #6)', () => {
+  const home = tmpHome();
+  const { appData, old, userData } = oldProfile(home);
+  const r1 = M.copyUserData({ appData, userData, quitOld: () => false, log: quiet, now: () => new Date('2026-10-01T09:00:00Z') });
+  assert.equal(r1.retry, true);
+  assert.equal(M.readState(userData).attempts, 1);
+  fs.writeFileSync(path.join(userData, 'weeks-of-board-data'), 'x');
+  const logs = [];
+  const r2 = M.copyUserData({ appData, userData, log: (m) => logs.push(m), now: () => new Date('2026-10-02T10:11:12.345Z') });
+  assert.equal(r2.copied, true);
+  assert.equal(fs.readFileSync(path.join(userData, 'Preferences'), 'utf8'), fs.readFileSync(path.join(old, 'Preferences'), 'utf8'));
+  const kept = aside(appData);
+  assert.deepEqual(kept, ['Plexiform.pre-migration-2026-10-02T10-11-12-345Z']);
+  assert.equal(fs.readFileSync(path.join(appData, kept[0], 'weeks-of-board-data'), 'utf8'), 'x');
+  assert.equal(r2.keptAside, path.join(appData, kept[0]));
+  assert.ok(logs.some((m) => /kept .*Plexiform\.pre-migration-/.test(m)));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: retries stop after three tries; the folder is kept as it is and the log says why (M-1)', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  const logs = [];
+  const tryOnce = () => M.copyUserData({ appData, userData, quitOld: () => false, log: (m) => logs.push(m) });
+  assert.equal(tryOnce().retry, true);
+  assert.equal(tryOnce().retry, true);
+  assert.equal(M.readState(userData).attempts, 2);
+  const third = tryOnce();
+  assert.deepEqual([third.copied, third.retry, third.gaveUp], [false, false, true]);
+  assert.equal(M.readState(userData).status, 'kept');
+  assert.match(logs.at(-1), /stopped trying after 3 tries/);
+  let asked = 0;
+  const fourth = M.copyUserData({ appData, userData, quitOld: () => { asked += 1; return true; }, log: (m) => logs.push(m) });
+  assert.equal(fourth.copied, false);
+  assert.equal(asked, 0, 'no more tries');
+  assert.match(fourth.reason, /stopped trying/);
+  assert.deepEqual(M.pending(userData), []);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: the folder moved aside comes back when the copy cannot take its place', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  M.copyUserData({ appData, userData, quitOld: () => false, log: quiet });
+  fs.writeFileSync(path.join(userData, 'mine'), 'keep me');
+  const failing = { ...fs, renameSync: (a, b) => { if (b === userData && a.includes('.migrating-')) { const e = new Error('EPERM: operation not permitted'); e.code = 'EPERM'; throw e; } return fs.renameSync(a, b); } };
+  const r = M.copyUserData({ appData, userData, fsImpl: failing, log: quiet });
+  assert.deepEqual([r.copied, r.retry], [false, true]);
+  assert.equal(fs.readFileSync(path.join(userData, 'mine'), 'utf8'), 'keep me', 'back in place');
+  assert.equal(M.readState(userData).status, 'retry');
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'no temp or aside folder left');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('userData: a failed tidy after the swap is only logged; the copy still counts (L-4)', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  fs.mkdirSync(userData);
+  const noTidy = { ...fs, rmdirSync: () => { throw new Error('EBUSY'); } };
+  const logs = [];
+  const r = M.copyUserData({ appData, userData, fsImpl: noTidy, log: (m) => logs.push(m) });
+  assert.equal(r.copied, true);
+  assert.deepEqual(M.readState(userData).pending, M.STEPS);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('old instance: macOS matches only /Applications and ~/Applications, never a dev build (70 #8)', () => {
+  const home = '/Users/me';
+  const procs = [
+    { pid: 1, command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' },
+    { pid: 2, command: '/Users/me/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' },
+    { pid: 3, command: '/Users/me/dev/ctl/dist/mac-arm64/Claude Buddy.app/Contents/MacOS/Claude Buddy' },
+    { pid: 4, command: '/Users/other/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy' },
+  ];
+  const kills = [];
+  M.quitOldInstance({ platform: 'darwin', home, listProcesses: () => procs, kill: (pid) => kills.push(pid), isAlive: () => false, log: quiet });
+  assert.deepEqual(kills, [1, 2]);
+});
+
+test('old instance: Windows lists with tasklist and asks Claude Buddy.exe to quit; one that would not is still running (M-2)', () => {
+  const csv = '"Claude Buddy.exe","4242","Console","1","120,000 K"\r\n"Claude Buddy.exe","4243","Console","1","40,000 K"\r\n"Plexiform.exe","77","Console","1","1 K"\r\n';
+  assert.deepEqual(M.parseTasklist(csv), [{ pid: 4242, command: 'Claude Buddy.exe' }, { pid: 4243, command: 'Claude Buddy.exe' }, { pid: 77, command: 'Plexiform.exe' }]);
+  assert.deepEqual(M.parseTasklist('INFO: No tasks are running which match the specified criteria.\r\n'), []);
+  const asked = [];
+  const live = new Set([4242, 4243]);
+  const r = M.quitOldInstance({ platform: 'win32', home: 'C:\\Users\\me', listProcesses: () => M.parseTasklist(csv), kill: (pid) => { asked.push(pid); if (pid === 4243) throw new Error('could only be terminated forcefully'); live.delete(pid); }, isAlive: (p) => live.has(p), sleep: () => {}, waitMs: 200, log: quiet });
+  assert.deepEqual(asked, [4242, 4243]);
+  assert.deepEqual(r.running, [4243], 'one that refused counts as running, so nothing is copied mid-write');
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  const c = M.copyUserData({ appData, userData, quitOld: () => r.running.length === 0, log: quiet });
+  assert.equal(c.retry, true);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('old instance: when ps fails, a live SingletonLock in the old folder counts as running; a stale one does not (L-1)', () => {
+  const home = tmpHome();
+  const { old } = oldProfile(home);
+  const broken = () => { throw new Error('ps: not found'); };
+  const kills = [];
+  const stale = M.quitOldInstance({ platform: 'darwin', home, listProcesses: broken, oldUserData: old, kill: (p) => kills.push(p), isAlive: () => false, log: quiet });
+  assert.deepEqual(stale.running, []);
+  fs.rmSync(path.join(old, 'SingletonLock'));
+  fs.symlinkSync(`host-${process.pid}`, path.join(old, 'SingletonLock'));
+  const logs = [];
+  const r = M.quitOldInstance({ platform: 'darwin', home, listProcesses: broken, oldUserData: old, kill: (p) => kills.push(p), log: (m) => logs.push(m) });
+  assert.deepEqual(r.running, [process.pid]);
+  assert.deepEqual(kills, [], 'a pid from a lock file is never signalled');
+  assert.ok(logs.some((m) => /SingletonLock/.test(m)));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: only the old app\'s entries are re-pointed; a look-alike set-status.js of the person\'s own and a dev checkout\'s entries stay (70 #5)', () => {
+  const { home, dataDir, settingsFile } = oldHooksProfile();
+  const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const mine = 'node "/Users/me/scripts/set-status.js" stop';
+  const dev = 'node "/Users/me/dev/ctl/hooks/set-status.js" tool-use';
+  s.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: mine }] });
+  s.hooks.PreToolUse.push({ matcher: '', hooks: [{ type: 'command', command: dev }] });
+  fs.writeFileSync(settingsFile, JSON.stringify(s, null, 2));
+  const cursorFile = path.join(home, '.cursor', 'hooks.json');
+  const c = JSON.parse(fs.readFileSync(cursorFile, 'utf8'));
+  const devCursor = 'node "/Users/me/dev/ctl/hooks/emit.js" --adapter cursor stop';
+  c.hooks.stop.push({ command: devCursor });
+  fs.writeFileSync(cursorFile, JSON.stringify(c));
+  const r = M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, log: quiet });
+  assert.ok(r.every((x) => !x.error), JSON.stringify(r));
+  const cmds = commandsOf(JSON.parse(fs.readFileSync(settingsFile, 'utf8')));
+  assert.ok(cmds.includes(mine), 'the person\'s own set-status.js stays');
+  assert.ok(cmds.includes(dev), 'the dev checkout\'s entry stays');
+  assert.ok(!cmds.some((x) => x.includes('Claude Buddy.app')));
+  assert.equal(cmds.filter((x) => x.includes(NEW_APP)).length, Claude.HOOK_EVENTS.length + Claude.OPTIONAL_EVENTS.length, 'one current set');
+  const cursorCmds = Object.values(JSON.parse(fs.readFileSync(cursorFile, 'utf8')).hooks).flatMap((l) => l.map((h) => h.command));
+  assert.ok(cursorCmds.includes(devCursor));
+  assert.equal(Claude.isInstalled({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true }), true, 'so the startup install never runs its broad strip');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: a dev checkout\'s Codex notify is left alone; an AppImage\'s hooks-<old version> entries are re-pointed, the current version\'s are not (L-6)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  const devLine = 'notify = ["node", "/Users/me/dev/ctl/hooks/emit.js", "--adapter", "codex"]';
+  fs.writeFileSync(path.join(home, '.codex', 'config.toml'), `${devLine}\nmodel = "o3"\n`);
+  const linuxRt = (ver) => Runtime.make({ execPath: '/home/me/Apps/Plexiform.AppImage', platform: 'linux', hooksDir: path.join(dataDir, `hooks-${ver}`, 'hooks'), dataDir });
+  assert.deepEqual(M.rewriteHooks({ home, runtime: linuxRt('2.0.0'), log: quiet }), []);
+  assert.match(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8'), /\/Users\/me\/dev\/ctl/);
+
+  const oldAppImage = Runtime.make({ execPath: '/home/me/Apps/Claude-Buddy-1.9.0.AppImage', platform: 'linux', hooksDir: path.join(dataDir, 'hooks-1.9.0', 'hooks'), dataDir });
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify(Claude.apply({}, oldAppImage, { home }), null, 2));
+  const r = M.rewriteHooks({ home, runtime: linuxRt('2.0.0'), log: quiet });
+  assert.deepEqual(r.map((x) => [x.id, x.changed]), [['claude', true]]);
+  const cmds = commandsOf(JSON.parse(fs.readFileSync(settingsFile, 'utf8')));
+  assert.ok(cmds.every((x) => x.includes('hooks-2.0.0')), cmds[0]);
+  assert.deepEqual(M.rewriteHooks({ home, runtime: linuxRt('2.0.0'), log: quiet }), [], 'the current version\'s entries are not old');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: a fresh .pre-plexiform copy of every file about to change, even when a .buddy-backup exists; never overwritten (70 #3)', () => {
+  const { home, dataDir, settingsFile, before } = oldHooksProfile();
+  fs.writeFileSync(`${settingsFile}.buddy-backup`, 'an old backup');
+  const files = { settings: settingsFile, cursor: path.join(home, '.cursor', 'hooks.json'), codex: path.join(home, '.codex', 'config.toml'), mcp: path.join(home, '.claude.json') };
+  const was = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, fs.readFileSync(f, 'utf8')]));
+  assert.equal(was.settings, before);
+  const r = M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, mcpEntry: mcpEntryAt(NEW_APP), log: quiet, now: () => new Date('2026-10-01T09:00:00Z') });
+  for (const [k, f] of Object.entries(files)) {
+    assert.equal(fs.readFileSync(`${f}.pre-plexiform`, 'utf8'), was[k], `${k} backed up as it was`);
+    assert.equal(r.find((x) => x.file === f).backup, `${f}.pre-plexiform`);
+  }
+  assert.equal(fs.readFileSync(`${settingsFile}.buddy-backup`, 'utf8'), 'an old backup', 'the one-time backup is not touched');
+  assert.ok(!fs.existsSync(path.join(home, '.gemini', 'settings.json.pre-plexiform')), 'nothing changed there, no copy');
+  // A second migration (an old entry put back) keeps the first copy and makes a new one.
+  fs.writeFileSync(settingsFile, before);
+  M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, log: quiet, now: () => new Date('2026-10-02T09:00:00Z') });
+  assert.equal(fs.readFileSync(`${settingsFile}.pre-plexiform`, 'utf8'), was.settings);
+  assert.equal(fs.readFileSync(`${settingsFile}.pre-plexiform-2026-10-02T09-00-00-000Z`, 'utf8'), before);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: Codex\'s config.toml is written atomically through a symlink, keeping its mode (70 #3)', () => {
+  const { home, dataDir } = oldHooksProfile();
+  const real = path.join(home, 'dotfiles', 'codex.toml');
+  const link = path.join(home, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(real), { recursive: true });
+  fs.renameSync(link, real);
+  fs.chmodSync(real, 0o640);
+  fs.symlinkSync(real, link);
+  const inode = fs.statSync(real).ino;
+  M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), log: quiet });
+  assert.ok(isLink(link), 'still a symlink');
+  assert.equal(fs.statSync(real).mode & 0o777, 0o640);
+  assert.notEqual(fs.statSync(real).ino, inode, 'replaced by rename, not written in place');
+  assert.match(fs.readFileSync(real, 'utf8'), /Plexiform\.app\/Contents\/Resources\/hooks\/emit\.js/);
+  assert.deepEqual(fs.readdirSync(path.dirname(real)).filter((n) => n.includes('tmp')), []);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: a settings file another program writes mid-rewrite is read again and both changes kept (70 #3)', () => {
+  const { home, dataDir, settingsFile } = oldHooksProfile();
+  let raced = false;
+  // Claude Code writes its settings after this read them, before the swap.
+  const racing = { ...fs, writeFileSync: (f, ...rest) => {
+    if (!raced && String(f).startsWith(`${settingsFile}.buddy-tmp.`)) {
+      raced = true;
+      const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      fs.writeFileSync(settingsFile, JSON.stringify({ ...s, theirs: true }, null, 2));
+      const t = new Date(Date.now() + 5000);
+      fs.utimesSync(settingsFile, t, t);
+    }
+    return fs.writeFileSync(f, ...rest);
+  } };
+  M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, fsImpl: racing, log: quiet });
+  const s = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(s.theirs, true, 'their write survived');
+  assert.ok(!commandsOf(s).some((c) => c.includes('Claude Buddy.app')), 'and ours went in on the retry');
+  const f = path.join(home, 'x.json');
+  fs.writeFileSync(f, '{}');
+  const readAt = fs.statSync(f).mtimeMs;
+  const t = new Date(Date.now() + 9000);
+  fs.utimesSync(f, t, t);
+  assert.equal(Runtime.writeJsonConfig(f, { a: 1 }, fs, readAt), false, 'changed since it was read: not written');
+  assert.equal(fs.readFileSync(f, 'utf8'), '{}');
+  assert.deepEqual(fs.readdirSync(home).filter((n) => n.includes('buddy-tmp')), []);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('follow-up: a hook rewrite that reports an error keeps hooks pending, so Remove is not offered; the next launch retries (70 #1)', async () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  M.copyUserData({ appData, userData, log: quiet });
+  const hooksHome = oldHooksProfile();
+  fs.writeFileSync(hooksHome.settingsFile, '{ broken');
+  const dialogs = [];
+  const steps = {
+    // as main.js
+    hooks: () => M.rewriteHooks({ home: hooksHome.home, runtime: runtimeAt(NEW_APP, hooksHome.dataDir), log: quiet }).every((r) => !r.error),
+    login: () => {},
+    'remove-old-app': () => M.offerRemoveOldApp({ platform: 'darwin', home, name: 'Plexiform', exists: () => true, log: quiet, showDialog: async (o) => { dialogs.push(o); return { response: 1 }; }, trashItem: async () => {} }),
+  };
+  await M.runFollowUp({ userData, steps, log: quiet });
+  assert.deepEqual(M.pending(userData), ['hooks', 'remove-old-app']);
+  assert.deepEqual(dialogs, [], 'Remove is not offered');
+  fs.writeFileSync(hooksHome.settingsFile, hooksHome.before);
+  await M.runFollowUp({ userData, steps, log: quiet });
+  assert.deepEqual(M.pending(userData), []);
+  assert.equal(dialogs.length, 2, 'offered once hooks are done (both old app paths)');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /hooks: \(\) => \(AUTO_INSTALL_HOOKS \? RenameMigration\.rewriteHooks\(\{[^}]*\}\)\.every\(\(r\) => !r\.error\) : false\)/);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(hooksHome.home, { recursive: true, force: true });
+});
+
+test('main.js: an app run from a disk image (/Volumes) or a translocated copy installs no hooks and offers no Remove (70 #2)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const m = /const EPHEMERAL = (\/.+\/)\.test\(process\.execPath\);/.exec(src);
+  assert.ok(m, 'EPHEMERAL is defined from the exec path');
+  const re = eval(m[1]); // eslint-disable-line no-eval
+  for (const p of ['/Volumes/Plexiform/Plexiform.app/Contents/MacOS/Plexiform', '/private/var/folders/x/T/AppTranslocation/ABC/d/Plexiform.app/Contents/MacOS/Plexiform']) assert.ok(re.test(p), p);
+  for (const p of ['/Applications/Plexiform.app/Contents/MacOS/Plexiform', '/Users/me/Applications/Plexiform.app/Contents/MacOS/Plexiform', '/Users/me/Volumes/Plexiform.app/x']) assert.ok(!re.test(p), p);
+  assert.match(src, /const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;/);
+  assert.match(src, /'remove-old-app': \(\) => !EPHEMERAL && RenameMigration\.offerRemoveOldApp\(/);
+  assert.doesNotMatch(src, /TRANSLOCATED/);
+});
+
+test('old app: findOldReferences looks at hook commands, mcpServers and the hook wrapper, not at unrelated text (70 #4, L-7)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const rt = runtimeAt(NEW_APP, dataDir);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ projects: { '/Users/me/Claude Buddy.app notes': {} }, mcpServers: {} }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { NOTE: 'moved from /Applications/Claude Buddy.app/' } }));
+  assert.deepEqual(M.findOldReferences({ home, runtime: rt }), []);
+  fs.mkdirSync(path.join(dataDir, 'bin'), { recursive: true });
+  fs.writeFileSync(Runtime.wrapperPath(rt), Runtime.wrapperText(runtimeAt(OLD_APP, dataDir)));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { mine: { command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', args: [] } } }));
+  assert.deepEqual(M.findOldReferences({ home, runtime: rt }), [path.join(home, '.claude.json'), Runtime.wrapperPath(rt)]);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('login item: moveLoginItem says whether it turned Open at Login on, so the app can say so (70 #7)', () => {
+  const loginItem = (on) => ({ get: () => on, set: () => {} });
+  assert.equal(M.moveLoginItem({ platform: 'darwin', app: {}, loginItem: loginItem(false), autoLaunchConfigured: true }), true);
+  assert.equal(M.moveLoginItem({ platform: 'darwin', app: {}, loginItem: loginItem(false), autoLaunchConfigured: false }), false);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /if \(RenameMigration\.moveLoginItem\(\{[^}]*\}\) && Notification\.isSupported\(\)\) new Notification\(/);
+});
+
+test('main.js: the quit check on later launches does not wait for the old app, and runs again after start-up and on wake (L-2, L-3)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const fn = src.slice(src.indexOf('function quitOldAppIfInstalled()'), src.indexOf('function renameFollowUp()'));
+  assert.match(fn, /waitMs: 0/);
+  assert.match(src, /setTimeout\(quitOldAppIfInstalled, 30 \* 1000\)/);
+  assert.match(src, /powerMonitor\.on\('resume', quitOldAppIfInstalled\)/);
+  assert.match(src, /powerMonitor\.on\('unlock-screen', quitOldAppIfInstalled\)/);
 });

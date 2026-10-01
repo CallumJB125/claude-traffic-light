@@ -102,30 +102,45 @@ function runsScript(command, names) {
 function readJsonConfig(file, fsImpl = fs) {
   let text;
   try { text = fsImpl.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return {}; throw err; }
-  if (!text.trim()) return {};
+  return parseJsonConfig(text, file);
+}
+
+function parseJsonConfig(text, file) {
+  if (!String(text).trim()) return {};
   const data = JSON.parse(text);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} is not a JSON object`);
   return data;
 }
 
+const mtimeOf = (file, fsImpl = fs) => { try { return fsImpl.statSync(file).mtimeMs; } catch { return null; } };
+
 // Atomic: a temp file beside it with the same mode, renamed over it, so an
 // agent reading its settings mid-write never sees half a file. A symlinked
 // config (dotfiles) is written through, never replaced by a plain file.
-function writeJsonConfig(link, data, fsImpl = fs) {
+// readAt (the mtime when it was read): if another program has written the
+// file since, nothing is written and this returns false, for the caller to
+// read it again.
+function writeTextAtomic(link, text, fsImpl = fs, readAt) {
   fsImpl.mkdirSync(path.dirname(link), { recursive: true });
   let file = link;
   try { file = fsImpl.realpathSync(link); } catch { /* new file */ }
   let mode;
   try { mode = fsImpl.statSync(file).mode & 0o777; } catch { /* new file: default mode */ }
   const tmp = `${file}.buddy-tmp.${process.pid}.${Date.now().toString(36)}`;
-  fsImpl.writeFileSync(tmp, JSON.stringify(data, null, 2), mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
+  fsImpl.writeFileSync(tmp, text, mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
   try {
     if (mode !== undefined) fsImpl.chmodSync(tmp, mode);
+    if (readAt !== undefined && mtimeOf(file, fsImpl) !== readAt) { fsImpl.unlinkSync(tmp); return false; }
     fsImpl.renameSync(tmp, file);
   } catch (err) {
     try { fsImpl.unlinkSync(tmp); } catch {}
     throw err;
   }
+  return true;
+}
+
+function writeJsonConfig(link, data, fsImpl = fs, readAt) {
+  return writeTextAtomic(link, JSON.stringify(data, null, 2), fsImpl, readAt);
 }
 
 // `<file>.buddy-backup`, once: never replaced, so it stays the file as it was
@@ -148,4 +163,4 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+module.exports = { stripMatcherHooks, readJsonConfig, parseJsonConfig, writeJsonConfig, writeTextAtomic, mtimeOf, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

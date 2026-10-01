@@ -120,7 +120,7 @@ const EXEC_NAMES = ['execFile', 'execFileSync', 'exec', 'execSync', 'spawn', 'sp
 const EXEC_RE = EXEC_NAMES.join('|');
 // Binaries that only ever work on this machine. Anything else, or a computed
 // name, must carry a marker. Absolute paths count only from system locations.
-const LOCAL_BINS = new Set(['afplay', 'say', 'powershell', 'osascript', 'tmux', 'ps', 'git', 'open', 'cmd', 'zsh', 'sh', 'shortcuts', 'ccusage', 'pbcopy', 'kitten', 'wezterm', 'tailscale', 'process.execPath']);
+const LOCAL_BINS = new Set(['afplay', 'say', 'powershell', 'osascript', 'tmux', 'ps', 'tasklist', 'taskkill', 'git', 'open', 'cmd', 'zsh', 'sh', 'shortcuts', 'ccusage', 'pbcopy', 'kitten', 'wezterm', 'tailscale', 'process.execPath']);
 const LOCAL_PATHS = new Set(['/Applications/Tailscale.app/Contents/MacOS/Tailscale']);
 const SYSTEM_DIRS = /^\/(?:usr\/(?:local\/)?bin|bin|usr\/sbin|sbin|opt\/homebrew\/bin)\//;
 function localBin(bin) {

@@ -21,9 +21,10 @@ function normalize(event, payload) {
   return [{ signal, sessionId: d.session_id || d.sessionId || null, cwd: d.cwd || null, tool: /^tool-/.test(signal) ? (d.tool_name || null) : null, pid: null, extra: {} }];
 }
 
-function apply(settings, runtime) {
+// opts.strip: which of ours go first (default all of them).
+function apply(settings, runtime, opts = {}) {
   const out = { ...(settings && typeof settings === 'object' ? settings : {}) };
-  out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
+  out.hooks = Runtime.stripMatcherHooks(out.hooks, opts.strip || isOurs);
   for (const [event] of EVENTS) out.hooks[event] = (out.hooks[event] || []).concat([{ matcher: '', hooks: [{ type: 'command', command: commandFor(event, runtime) }] }]);
   return out;
 }

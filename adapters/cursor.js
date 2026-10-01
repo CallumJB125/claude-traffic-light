@@ -33,19 +33,20 @@ function normalize(event, payload) {
 // "allow" keeps Cursor unblocked: Buddy watches, it never gates.
 const reply = (event) => (NEEDS_REPLY.has(event) ? { permission: 'allow', continue: true } : null);
 
-function strip(hooksJson) {
+function strip(hooksJson, ours = isOurs) {
   const out = hooksJson && typeof hooksJson === 'object' ? { ...hooksJson } : {};
   out.version = out.version || 1;
   out.hooks = {};
   for (const [ev, list] of Object.entries((hooksJson && hooksJson.hooks) || {})) {
-    const kept = (Array.isArray(list) ? list : []).filter((h) => !isOurs(h && h.command));
+    const kept = (Array.isArray(list) ? list : []).filter((h) => !ours(h && h.command));
     if (kept.length) out.hooks[ev] = kept;
   }
   return out;
 }
 
-function apply(hooksJson, runtime) {
-  const out = strip(hooksJson);
+// opts.strip: which of ours go first (default all of them).
+function apply(hooksJson, runtime, opts = {}) {
+  const out = strip(hooksJson, opts.strip);
   for (const ev of EVENTS) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
   return out;
 }
