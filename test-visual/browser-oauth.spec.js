@@ -102,3 +102,36 @@ test('browser Google/GitHub sign-in, team/client invitations and provider-only s
     expect(hub.db.get('SELECT COUNT(*) n FROM runner_enrollments').n).toBe(0);
   } finally { if (browser) await browser.close(); await hub.close(); }
 });
+
+test('a slow real methods response cannot reopen provider/email controls after requesting a code', async () => {
+  const { startAccounts } = await import('../board/hub/test/accounts-helpers.js');
+  const { fakeClients } = await import('../board/hub/test/fake-oauth.js');
+  const clients = fakeClients();
+  const hub = await startAccounts({ config: { googleWebClientId: clients.googleClientId, googleWebClientSecret: clients.googleClientSecret,
+    githubWebClientId: clients.githubClientId, githubWebClientSecret: clients.githubClientSecret, publicUrl: 'http://127.0.0.1', webDir: path.resolve(__dirname, '../board/web') } });
+  hub.hub.config.publicUrl = hub.base;
+  let browser, release;
+  try {
+    browser = await chromium.launch({ channel: 'chrome' });
+    const context = await browser.newContext(), page = await context.newPage();
+    let methodReady;
+    const ready = new Promise(resolve => { methodReady = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/auth/methods', async route => {
+      const response = await route.fetch(); methodReady(); await gate; await route.fulfill({ response });
+    });
+    await page.goto(`${hub.base}/signin`); await ready;
+    await page.locator('#email').fill('slow-methods@example.test');
+    await page.getByRole('button', { name: 'Email me a code' }).click();
+    await expect(page.locator('#code-form')).toBeVisible();
+    const lead = await page.locator('#signin-lead').textContent();
+    const answered = page.waitForResponse(r => r.url().endsWith('/api/auth/methods'));
+    release(); await answered;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.locator('#email-form')).toBeHidden();
+    await expect(page.locator('#oauth-options')).toBeHidden();
+    await expect(page.locator('#code-form')).toBeVisible();
+    await expect(page.locator('#signin-lead')).toHaveText(lead);
+    expect(hub.db.get('SELECT COUNT(*) n FROM login_flows').n).toBe(1);
+  } finally { release?.(); if (browser) await browser.close(); await hub.close(); }
+});

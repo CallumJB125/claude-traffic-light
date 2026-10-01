@@ -6,6 +6,7 @@ import { fakeClients, fakeProviders } from './fake-oauth.js';
 import { fakeClock } from './helpers.js';
 import { createLogger } from '../log.js';
 import { WEB_OAUTH_COOKIE } from '../identity/oauth-web.js';
+import { WebOAuth } from '../identity/oauth-web.js';
 
 const ORIGIN = 'https://plexiform.test';
 const RANDOM = 'A'.repeat(43);
@@ -78,6 +79,40 @@ test('stolen state/code without the initiating cookie cannot burn or create a se
   const stolen=await r.callback(s,gUser(),{cookie:null,query:new URLSearchParams({code:a.code,state:a.state})});
   assert.equal(stolen.location,'/signin#oauth=invalid');assert.equal(r.h.db.get('SELECT used FROM oauth_web_flows').used,0);
   const valid=await r.callback(s,gUser(),{query:new URLSearchParams({code:a.code,state:a.state})});assert.equal((await r.finish(valid)).result.body.ok,true);
+ }finally{await r.h.close();}
+});
+
+for(const provider of ['google','github'])test(`${provider} bound wrong-state/provider and malformed callbacks leave the legitimate flow usable exactly once`,async()=>{
+ const r=await webRig();try{
+  const s=await r.start(provider),a=r.p.authorize(s.body.url,provider==='google'?gUser():ghUser());
+  const good={state:a.state,code:a.code};
+  const service=new WebOAuth(r.h.hub),p=service.cookie({headers:{cookie:ck(s.cookies)}});
+  const wrongPkce=`${WEB_OAUTH_COOKIE}=${service.seal({...p,verifier:RANDOM})}`;
+  const invalidCallbacks=[
+   {query:new URLSearchParams({...good,state:RANDOM})},
+   {provider:provider==='google'?'github':'google'},
+   {query:new URLSearchParams([['state',a.state],['state',a.state],['code',a.code]])},
+   {query:new URLSearchParams([['state',a.state],['code',a.code],['code',a.code]])},
+   {query:new URLSearchParams([['state',a.state],['error','access_denied'],['error','access_denied']])},
+   {query:new URLSearchParams({...good,error:'access_denied'})},
+   {query:new URLSearchParams({...good,code:''})},
+   {query:new URLSearchParams({...good,code:'x'.repeat(2049)})},
+   {query:new URLSearchParams({...good,code:'malformed\ncode'})},
+   {query:new URLSearchParams({state:a.state,error:''})},
+   {query:new URLSearchParams({state:a.state,error:'x'.repeat(129)})},
+   {cookie:wrongPkce},
+  ];
+  for(const over of invalidCallbacks){
+   const cb=await r.callback(s,gUser(),{provider,query:new URLSearchParams(good),...over});
+   assert.equal(cb.location,'/signin#oauth=invalid'); assert.deepEqual(cb.cookies,[]);
+   assert.equal(r.h.db.get('SELECT used FROM oauth_web_flows').used,0);
+   assert.equal(r.h.db.get('SELECT COUNT(*) n FROM sessions').n,0);
+  }
+  assert.equal(r.p.requests.length,0,'unbound callbacks never contact a provider');
+  const valid=await r.callback(s,gUser(),{provider,query:new URLSearchParams(good)});
+  assert.equal((await r.finish(valid)).result.body.ok,true);
+  const replay=await r.callback(s,gUser(),{provider,query:new URLSearchParams(good)});
+  assert.equal(replay.location,'/signin#oauth=invalid');assert.equal(r.h.db.get('SELECT COUNT(*) n FROM sessions').n,1);
  }finally{await r.h.close();}
 });
 

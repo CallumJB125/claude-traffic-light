@@ -20,7 +20,7 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
   const fetch = async (path, opts) => {
     calls.push({ path, method: opts.method, headers: opts.headers, body: opts.body ? JSON.parse(opts.body) : undefined });
     const r = routes[path];
-    const out = typeof r === 'function' ? r(calls.at(-1)) : r ?? { status: 200, body: {} };
+    const out = await (typeof r === 'function' ? r(calls.at(-1)) : r ?? { status: 200, body: {} });
     if (out === 'network') throw new TypeError('fetch failed');
     return { ok: out.status < 400, status: out.status, json: async () => out.body };
   };
@@ -118,6 +118,35 @@ test('browser provider availability shows only its own configured buttons, indep
   assert.equal(p.els['google-signin'].hidden, false);
   assert.equal(p.els['github-signin'].hidden, true);
   assert.equal(p.els['signin-lead'].textContent, 'Choose how to sign in.');
+});
+
+test('delayed methods cannot reopen controls or replace the lead after entering the code phase', async () => {
+  for (const email of [true, false]) {
+    let release;
+    const p = page({ routes: { ...start, '/api/auth/methods': () => new Promise(resolve => { release = resolve; }) } });
+    p.els.email.value = 'jo@example.com'; await p.submit('email-form');
+    const lead = p.els['signin-lead'].textContent;
+    release({ status: 200, body: { email, web: { google: true, github: true } } });
+    await settle(); await settle();
+    assert.equal(p.els['email-form'].hidden, true);
+    assert.equal(p.els['oauth-options'].hidden, true);
+    assert.equal(p.els['code-form'].hidden, false);
+    assert.equal(p.els['signin-lead'].textContent, lead);
+  }
+});
+
+test('a response from the old method intent cannot overwrite a newer change-email intent', async () => {
+  const replies = [];
+  const p = page({ routes: { ...start, '/api/auth/methods': () => new Promise(resolve => replies.push(resolve)) } });
+  p.els.email.value = 'jo@example.com'; await p.submit('email-form');
+  await p.click('other-email'); assert.equal(replies.length, 2);
+  replies[1]({ status: 200, body: { email: true, web: { google: true, github: false } } });
+  await settle(); await settle();
+  replies[0]({ status: 200, body: { email: false, web: { google: false, github: true } } });
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, false);
+  assert.equal(p.els['google-signin'].hidden, false);
+  assert.equal(p.els['github-signin'].hidden, true);
 });
 
 test('OAuth start carries only strict invitation context and refuses poisoned provider URLs', async () => {
