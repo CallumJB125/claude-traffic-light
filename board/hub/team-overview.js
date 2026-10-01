@@ -32,9 +32,10 @@ export function teamOverview(hub, member, query, { cred = null } = {}) {
     const connection = run && hub.runners.get(run.device_id);
     const current = !!run && row.active_run_id === run.id && run.fence === row.fence && !run.ended_at && !runnerConnectionProblem(hub, connection)
       && run.on_behalf_of === connection.member_id && hub.activeMember(connection.member_id)?.org_id === org.id;
+    const freshHeartbeat = current && !!connection.generation && hub.lease(run.id)?.hb_connection_generation === connection.generation;
     let activity = 'no_live_run';
     if (row.active_run_id) {
-      activity = !current || view.live?.hb_age_ms == null || view.live.hb_age_ms > 30_000 ? 'disconnected'
+      activity = !freshHeartbeat || view.live?.hb_age_ms == null || view.live.hb_age_ms > 30_000 ? 'disconnected'
         : ['blocked', 'parked'].includes(view.run_state) ? 'waiting'
           : view.live?.green ? 'working' : view.live?.child_alive ? 'quiet' : 'idle';
     }
