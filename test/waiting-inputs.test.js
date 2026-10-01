@@ -281,31 +281,44 @@ test('M2: broad suggestions are never offered — whole-tool Bash/Write/Edit/Mul
 });
 
 test('L1: all-wildcard rules, odd tool names, shell prefixes and home-equivalent directories are dropped; narrow prefix rules stay', () => {
-  const home = os.homedir();
-  const kept = (s) => I.cleanSuggestions([s]).length === 1;
-  const rule = (toolName, ruleContent) => ({ type: 'addRules', behavior: 'allow', rules: [ruleContent === undefined ? { toolName } : { toolName, ruleContent }] });
-  const dirs = (d) => ({ type: 'addDirectories', directories: [d] });
-  for (const [t, c] of [['Bash', '**'], ['Bash', '*:*'], ['Bash', ' * '], ['Bash', '* *'], ['Bash', '\t*\n'], ['Bash', '\u200b*'], ['Bash', '*\u200b'], ['Bash', '\u3000*'],
-    ['Bash', 'sh:*'], ['Bash', 'bash -c:*'], ['Bash', '/bin/zsh:*'], ['Bash', 'env:*'], ['Bash', 'python3 -c:*'],
-    ['Edit', '/**'], ['Edit', '//**'], ['Edit', '~/**'], ['Edit', '**'], ['WebFetch', 'domain:*'],
-    ['Bash(*)'], ['bash'], ['BASH'], [' Bash'], ['Bash '], ['Read ', '/x/**'], ['1Bash']]) {
-    assert.equal(kept(rule(t, c)), false, JSON.stringify([t, c]));
+  // A throwaway home in a temp root of its own, so nothing depends on the machine this runs on
+  // (CI's /home/runner, a Mac's /Users/x): os.homedir() reads $HOME on every call.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-l1-home-')));
+  const home = path.join(root, 'home', 'runner');
+  fs.mkdirSync(home, { recursive: true });
+  const wasHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const kept = (s) => I.cleanSuggestions([s]).length === 1;
+    const rule = (toolName, ruleContent) => ({ type: 'addRules', behavior: 'allow', rules: [ruleContent === undefined ? { toolName } : { toolName, ruleContent }] });
+    const dirs = (d) => ({ type: 'addDirectories', directories: [d] });
+    for (const [t, c] of [['Bash', '**'], ['Bash', '*:*'], ['Bash', ' * '], ['Bash', '* *'], ['Bash', '\t*\n'], ['Bash', '\u200b*'], ['Bash', '*\u200b'], ['Bash', '\u3000*'],
+      ['Bash', 'sh:*'], ['Bash', 'bash -c:*'], ['Bash', '/bin/zsh:*'], ['Bash', 'env:*'], ['Bash', 'python3 -c:*'],
+      ['Edit', '/**'], ['Edit', '//**'], ['Edit', '~/**'], ['Edit', '**'], ['WebFetch', 'domain:*'],
+      ['Bash(*)'], ['bash'], ['BASH'], [' Bash'], ['Bash '], ['Read ', '/x/**'], ['1Bash']]) {
+      assert.equal(kept(rule(t, c)), false, JSON.stringify([t, c]));
+    }
+    for (const [t, c] of [['Bash', 'npm:*'], ['Bash', 'npm test:*'], ['Bash', 'git status'], ['Edit', '/repo/src/**'], ['Edit', '/work/node'], ['WebFetch', 'domain:example.com'],
+      ['Read'], ['WebSearch'], ['Task'], ['Glob'], ['mcp__server__tool'], ['mcp__my-server__do_thing']]) {
+      assert.equal(kept(rule(t, c)), true, JSON.stringify([t, c]));
+    }
+    // Home-equivalent on any OS: built from this machine's home (CI runs Linux, where it is /home/runner).
+    // Only where the disk ignores case (macOS, Windows) is the upper-cased home the same directory; the Data volume exists only on macOS.
+    const foldsCase = process.platform === 'darwin' || process.platform === 'win32';
+    for (const d of ['/', path.dirname(home), home, `${home}/`, `${home}/.`, ...(foldsCase ? [home.toUpperCase()] : []), '//' + home.slice(1), home.replace(/\/([^/]+)$/, '//$1'), `${path.dirname(home)}/./${path.basename(home)}`,
+      `/private/var/../..${home}`, '~', '~/x', 'C:\\', path.join(home, '.claude'), path.join(home, '.claude', 'x'), path.join(home, '.claude-traffic-light'), path.join(home, '.ssh'), path.join(home, '.ssh', 'keys'),
+      ...(process.platform === 'darwin' ? [`/System/Volumes/Data${home}`, '/System/Volumes/Data'] : []), `${home}\u0000`]) {
+      assert.equal(kept(dirs(d)), false, JSON.stringify(d));
+    }
+    for (const d of [path.join(home, 'Desktop'), path.join(home, 'code', 'proj'), '/tmp', '/Applications']) assert.equal(kept(dirs(d)), true, d);
+    // A symlink to home is home.
+    const link = path.join(fs.mkdtempSync(path.join(root, 'link-')), 'h');
+    fs.symlinkSync(home, link);
+    assert.equal(kept(dirs(link)), false, 'symlink to home');
+  } finally {
+    if (wasHome === undefined) delete process.env.HOME; else process.env.HOME = wasHome;
+    fs.rmSync(root, { recursive: true, force: true });
   }
-  for (const [t, c] of [['Bash', 'npm:*'], ['Bash', 'npm test:*'], ['Bash', 'git status'], ['Edit', '/repo/src/**'], ['Edit', '/work/node'], ['WebFetch', 'domain:example.com'],
-    ['Read'], ['WebSearch'], ['Task'], ['Glob'], ['mcp__server__tool'], ['mcp__my-server__do_thing']]) {
-    assert.equal(kept(rule(t, c)), true, JSON.stringify([t, c]));
-  }
-  // Home-equivalent on any OS: built from this machine's home (CI runs Linux, where it is /home/runner).
-  for (const d of ['/', path.dirname(home), home, `${home}/`, `${home}/.`, home.toUpperCase(), '//' + home.slice(1), home.replace(/\/([^/]+)$/, '//$1'), `${path.dirname(home)}/./${path.basename(home)}`,
-    `/private/var/../..${home}`, '~', '~/x', 'C:\\', path.join(home, '.claude'), path.join(home, '.claude', 'x'), path.join(home, '.claude-traffic-light'), path.join(home, '.ssh'), path.join(home, '.ssh', 'keys'),
-    `/System/Volumes/Data${home}`, '/System/Volumes/Data', `${home}\u0000`]) {
-    assert.equal(kept(dirs(d)), false, JSON.stringify(d));
-  }
-  for (const d of [path.join(home, 'Desktop'), path.join(home, 'code', 'proj'), '/tmp', '/Applications']) assert.equal(kept(dirs(d)), true, d);
-  // A symlink to home is home.
-  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-l1-')), 'h');
-  fs.symlinkSync(home, link);
-  assert.equal(kept(dirs(link)), false, 'symlink to home');
 });
 
 test('M2: answerOutput re-checks the suggestion before building updatedPermissions', () => {
