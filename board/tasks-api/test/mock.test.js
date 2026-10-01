@@ -1,20 +1,27 @@
 // The client against the mock: every event, push frame and result is
-// validated against schema.json while the demo scripts run end to end.
+// validated against schema.json while the demo scripts run end to end. The
+// demo scripts (A-E) are mock-only; the schema-conformance and green checks
+// also run against the real engine (board/tasks-engine) with its own tasks.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startMock, assertValid, waitFor, byScript } from './helpers.js';
+import { startMock, startTarget, assertValid, waitFor, byScript } from './helpers.js';
 
-async function withDemo(fn) {
-  const m = await startMock();
-  const events = [];
+function capture(m) {
   const pushes = [];
-  // Capture raw push frames too (not just what the client hands the handler).
   m.client.sock.prependListener('data', (chunk) => {
     for (const line of String(chunk).split('\n')) {
       if (!line.trim()) continue;
       try { const f = JSON.parse(line); if (f.push) pushes.push(f); } catch { /* partial line; the client reassembles */ }
     }
   });
+  return pushes;
+}
+
+async function withDemo(fn) {
+  const m = await startMock();
+  const events = [];
+  // Capture raw push frames too (not just what the client hands the handler).
+  const pushes = capture(m);
   await m.client.subscribe('*', { fromSeq: 1 }, (e) => events.push(e));
   try { await fn({ ...m, events, pushes }); } finally { await m.close(); }
   return { events, pushes };
@@ -147,5 +154,73 @@ test('state events carry the supervisor-computed green, and only running can be 
     }
     const running = [...srv.tasks.values()].find((t) => t.state === 'running');
     if (running) assert.equal(typeof client.isGreen(running.id), 'boolean');
+  });
+});
+
+// ── the same conformance checks against the real engine ─────────────────────
+
+async function withEngine(fn) {
+  const m = await startTarget('engine');
+  const events = [];
+  const pushes = capture(m);
+  await m.client.subscribe('*', { fromSeq: 1 }, (e) => events.push(e));
+  try { await fn({ ...m, events, pushes }); } finally { await m.close(); }
+  return { events, pushes };
+}
+
+const until = (client, id, pred, label) => waitFor(async () => { const d = await client.getTask(id); return pred(d) && d; }, { label, timeoutMs: 15000 });
+
+test('[engine] every event, push frame and read result matches the schema', async () => {
+  const { events, pushes } = await withEngine(async ({ client, spec, repo }) => {
+    const a = await client.createTask(spec);
+    const b = await client.createTask({ ...spec, text: 'Remote ask', source: 'slack', sourceMeta: { userId: 'u1', displayName: 'Dana' } });
+    let db = await client.getTask(b.id);
+    await client.act(b.id, 'approve', { approvalId: db.openApprovals[0].approvalId });
+    db = await until(client, b.id, (d) => d.blockedKind === 'plan', 'plan ask');
+    await client.act(b.id, 'answer', { askId: db.openAsk.askId, answer: 'Approve' });
+    await until(client, a.id, (d) => d.state === 'in_review', 'a in review');
+    await client.act(a.id, 'message', { body: 'Please also add a changelog entry' });
+    const c = await client.createTask({ ...spec, text: 'Pause and stop me' });
+    await until(client, c.id, (d) => d.state === 'running', 'c running');
+    await client.act(c.id, 'pause', {});
+    const t = await client.act(c.id, 'takeover', { mode: 'print' });
+    assertValid('ActResult', t);
+    await client.act(c.id, 'discard', { confirm: true });
+    await until(client, b.id, (d) => d.state === 'in_review', 'b in review');
+    await until(client, a.id, (d) => d.state === 'in_review', 'a in review again');
+    await new Promise((r) => setTimeout(r, 450));   // at least one hb push
+    assertValid('ListTasksResult', await client.listTasks());
+    for (const id of [a.id, b.id, c.id]) {
+      assertValid('GetTaskResult', await client.getTask(id), `getTask ${id}`);
+      assertValid('ListMessagesResult', await client.listMessages(id));
+    }
+    assertValid('DetectAIsResult', await client.detectAIs());
+    assertValid('GetLimitsResult', await client.getLimits());
+    assertValid('GetLimitsResult', await client.setLimits({ maxParallel: 3, perAi: { codex: 1 } }));
+    assertValid('GetClaimsResult', await client.getClaims(repo.checkout));
+  });
+  assert.ok(events.length > 40, `saw ${events.length} events`);
+  const seqs = events.map((e) => e.seq);
+  assert.deepEqual(seqs, [...seqs].sort((x, y) => x - y), 'events arrive in seq order');
+  assert.equal(new Set(seqs).size, seqs.length, 'no duplicate seqs');
+  for (const e of events) assertValid('Event', e, `event ${e.type}#${e.seq}`);
+  const types = new Set(events.map((e) => e.type));
+  // 'overlap' is not emitted by the engine yet (E1 finding); the rest are.
+  for (const t of ['state', 'transcript', 'tool', 'diff', 'approval', 'ask', 'cost', 'handover', 'claims', 'message', 'message-state']) assert.ok(types.has(t), `engine emits ${t}`);
+  assert.ok(pushes.some((p) => p.push === 'hb'));
+  for (const p of pushes) assertValid('Push', p, `push ${p.push}`);
+});
+
+test('[engine] state events carry the supervisor-computed green, and only running can be green', async () => {
+  await withEngine(async ({ client, spec, events }) => {
+    const { id } = await client.createTask(spec);
+    await waitFor(() => events.some((e) => e.type === 'state' && e.green), { label: 'a green state' });
+    for (const e of events.filter((x) => x.type === 'state')) {
+      if (e.green) assert.equal(e.state, 'running');
+      if (e.live) assert.equal(e.live.green, e.green);
+    }
+    assert.equal(typeof client.isGreen(id), 'boolean');
+    await until(client, id, (d) => d.state === 'in_review', 'in review');
+    assert.equal((await client.getTask(id)).green, false);
   });
 });
