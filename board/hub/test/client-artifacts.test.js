@@ -81,6 +81,22 @@ test('upload refuses poison paths/types/fields and enforces finite quota before 
   } finally { await h.close(); }
 });
 
+test('directory and first storage parent are synced before metadata; sync failure leaves no file or version', async () => {
+  for (const failAt of [1, 2]) {
+    const r = await rig(); const { h, owner, item } = r;
+    try {
+      const service = h.hub.clientArtifacts, synced = [], sync = service.syncDirectory.bind(service);
+      service.syncDirectory = (dir) => { synced.push(dir); assert.equal(h.db.get('SELECT COUNT(*) n FROM client_artifact_versions').n, 0); if (synced.length === failAt) throw new Error('injected directory sync failure'); sync(dir); };
+      const member = h.db.get('SELECT * FROM members WHERE user_id = ? AND org_id = ?', owner.body.user.id, r.workspace);
+      await assert.rejects(service.upload(member, item.id, r.body(), { ip: '127.0.0.1' }), /directory sync failure/);
+      assert.deepEqual(synced, [service.dir, h.app.config.dataDir].slice(0, failAt));
+      assert.equal(h.db.get('SELECT COUNT(*) n FROM client_artifact_versions').n, 0); assert.deepEqual(readdirSync(service.dir), []);
+      service.syncDirectory = sync;
+      await r.upload(); assert.equal(h.db.get('SELECT COUNT(*) n FROM client_artifact_versions').n, 1);
+    } finally { await h.close(); }
+  }
+});
+
 test('assigned client approvals bind exact version/hash, repeat idempotently, preserve history and never dispatch', async () => {
   const r = await rig(); const { h, as, owner, client, other, item, upload, approval, decide } = r;
   try {

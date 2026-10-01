@@ -76,6 +76,10 @@ export class ClientArtifacts {
     if (total.bytes + length > limits.workspaceBytes || total.n >= limits.workspaceVersions || n >= limits.itemVersions) throw new HubError('QUOTA_EXCEEDED', 'client deliverable storage limit reached', { resource: 'client_artifacts', ...limits });
   }
   file(id) { if (!UUID.test(id)) throw missing(); return join(this.dir, `${id}.bin`); }
+  syncDirectory(dir) {
+    const fd = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+  }
   upload(member, id, body, { ip, cred = null }) {
     const initial = this.staff(member, id, cred), input = bytesFor(body);
     return this.hub.withBoard(initial.board_id, () => {
@@ -95,6 +99,12 @@ export class ClientArtifacts {
           file = this.file(v.id);
           const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
           try { writeFileSync(fd, input.bytes); fsyncSync(fd); } finally { closeSync(fd); }
+          // The file's fsync does not persist its new directory entry.
+          // Both links must be durable before SQLite can commit metadata.
+          this.syncDirectory(this.dir);
+          // Sync the parent even when a failed earlier attempt left the
+          // directory behind before its parent sync completed.
+          this.syncDirectory(this.hub.config.dataDir);
           this.db.insert('client_artifact_versions', v);
           this.db.run('UPDATE client_approval_requests SET superseded_at = COALESCE(superseded_at, ?) WHERE item_id = ?', this.now(), id);
           this.clients.audit('client.artifact.publish', { member, target: v.id, ip });
