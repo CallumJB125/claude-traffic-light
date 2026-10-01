@@ -88,8 +88,9 @@
 //   // leased, then run handleWebhook (same lease, timeout and ctx). For a
 //   // provider that needs an answer within seconds (Slack: 3 s). A failure then
 //   // reaches no provider retry: it is audited (action 'webhook', 'failed' +
-//   // code) and the lease released, so a manual redelivery runs it. A hub
-//   // crash mid-handler loses the event until such a manual redelivery.
+//   // code) and the delivery marked done (a replay answers duplicate; D42
+//   // addendum C2). A hub crash mid-handler loses the event until a manual
+//   // redelivery once the lease expired.
 //   ackEarly: false,
 //   // …or per delivery: ackEarly({ payload, headers }) → boolean, called
 //   // synchronously after verify() and parseBody; only `true` is early, a
@@ -102,6 +103,12 @@
 //   // Never reflect request data in it, except a verified url_verification
 //   // `challenge` string.
 //   ackBody({ payload, headers }) → undefined | string | { … },
+//   // Optional, only with ackEarly (C2): an acknowledged delivery's handler
+//   // failed or timed out. Called once, after the audit; `error_code` is a
+//   // short code, never the error; `fetch` is the restricted fetch (no
+//   // retries, aborted after 10 s). For a fixed-text "couldn't do that" reply
+//   // (Slack: response_url). Errors are swallowed; the answer was already sent.
+//   async onAckedFailure({ payload, headers, error_code, fetch }) → void,
 //
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
@@ -149,6 +156,10 @@
 //   // {id, key, title, board_id, column_name} | null (never body or labels).
 //   // ctx.memberFor(subject) → member_id | null (linked on this connection and
 //   // able to write); ctx.subjectFor(member_id) → subject | null (a viewer's too).
+//   // ctx.linkState(subject) → 'active' | 'unavailable' | 'none' (this connection
+//   // only; never a member id). actAs for a linked member who can no longer act
+//   // throws { code: 'ACTOR_UNAVAILABLE', scope: 'member' } ('connection' for
+//   // created_by): answer the user with fixed text (D42 addendum C2).
 //   // ctx.hubUrl → the hub's https origin (BOARD_PUBLIC_URL, read at boot) | null:
 //   // the only base for a link to the hub (never config, provider.hub_url or a payload).
 //   // ctx.connection.settings.provider → what the provider said at connect time
