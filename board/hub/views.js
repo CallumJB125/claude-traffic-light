@@ -103,6 +103,15 @@ function deviceKind(hub, runRow) {
   return f === 'laptop' || f === 'desktop' ? f : null;
 }
 
+function runCost(hub, run) {
+  // A database default of zero is not a cost observation. Codex does not
+  // expose dollar telemetry through this adapter, including older rows.
+  const observed = aiOfDispatch(run) !== 'codex' && (run.cost_cents > 0 ||
+    !!hub.db.get("SELECT 1 x FROM events WHERE run_id = ? AND kind = 'cost' LIMIT 1", run.id));
+  return { cost_usd: observed ? run.cost_cents / 100 : null,
+    cost_source: observed ? 'provider_reported' : 'unavailable' };
+}
+
 export function cardView(hub, row, viewerId) {
   const runRow = hub.run(row.active_run_id) ?? (row.run_state ? hub.latestRun(row.id) : null);
   const repo = hub.repo(row.repo_id);
@@ -185,14 +194,14 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
     acceptance: row.acceptance,
     run: runRow ? {
       ...view.run,
-      id: runRow.id, fence: runRow.fence, status_summary: runRow.status_summary, cost_usd: runRow.cost_cents / 100,
+      id: runRow.id, fence: runRow.fence, status_summary: runRow.status_summary, ...runCost(hub, runRow),
       planned_paths: json(runRow.planned_paths, []), touched_paths: json(runRow.touched_paths, []),
       snapshot: runRow.snapshot_status ? { sha: runRow.last_snapshot_sha, ref: runRow.snapshot_ref, status: runRow.snapshot_status, reason: runRow.snapshot_reason, age_ms: hub.ageOf(runRow.snapshot_at) } : null,
     } : null,
     handover: doc && (doc.version || runRow) ? { doc: doc.doc, ages: doc.ages, markdown: doc.markdown } : null,
     feed,
     comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => ({
-      id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s Claude`,
+      id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(hub.run(c.author_run_id))]}`,
       source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to,
       delivered_age_ms: hub.ageOf(c.delivered_at), created_age_ms: hub.ageOf(c.created_at),
     })),
