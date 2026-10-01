@@ -208,6 +208,36 @@ async function authorizePending(id, provider) {
   if (res?.url && res.bind) window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
 }
 
+// Identity links (D98): the provider's sign-in opens in the same connect window as D42.
+async function linkIdentity(id, provider) {
+  const res = await withBusy(`integ-link:${id}`, () => api.startIdentityLink(id));
+  if (res?.url && res.bind) window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
+}
+
+async function unlinkIdentity(id) {
+  const res = await withBusy(`integ-link:${id}`, () => api.unlinkIdentity(id));
+  if (res) { toast('Unlinked.'); loadIntegrations(); }
+}
+
+async function toggleLinked(id) {
+  if (state.integ.linked?.[id]) {
+    const { [id]: _, ...rest } = state.integ.linked;
+    state.integ = { ...state.integ, linked: rest };
+    update();
+    return;
+  }
+  const res = await withBusy(`integ-link:${id}`, () => api.linkedMembers(id));
+  if (res?.identities) { state.integ = { ...state.integ, linked: { ...state.integ.linked, [id]: res.identities } }; update(); }
+}
+
+async function revokeIdentity(id, memberId) {
+  const res = await withBusy(`integ-link:${id}`, () => api.revokeIdentity(id, memberId));
+  if (!res) return;
+  state.integ = { ...state.integ, linked: { ...state.integ.linked, [id]: (state.integ.linked?.[id] ?? []).filter((x) => x.member_id !== memberId) } };
+  toast('Link revoked.');
+  update();
+}
+
 async function cancelPending(id) {
   const res = await withBusy(`integ-pending:${id}`, () => api.disconnectIntegration(id));
   state.integ = { ...state.integ, confirmCancel: null };
@@ -1256,6 +1286,10 @@ function onClick(e) {
     case 'integ-pending-cancel-ask': state.integ = { ...state.integ, confirmCancel: el.dataset.pending }; update(); return;
     case 'integ-pending-cancel-keep': state.integ = { ...state.integ, confirmCancel: null }; update(); return;
     case 'integ-pending-cancel': cancelPending(el.dataset.pending); return;
+    case 'integ-link': linkIdentity(el.dataset.conn, el.dataset.provider); return;
+    case 'integ-unlink': unlinkIdentity(el.dataset.conn); return;
+    case 'integ-linked': toggleLinked(el.dataset.conn); return;
+    case 'integ-revoke': revokeIdentity(el.dataset.conn, el.dataset.member); return;
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
