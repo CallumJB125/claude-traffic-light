@@ -375,7 +375,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
   route('PATCH', '/api/cards/:card_id', ({ member, params, body }) => api.patchCard(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body }) => api.action(member, params.card_id, params.action, body));
+  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body }) => api.comment(member, params.card_id, body));
@@ -388,7 +388,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }
     return h;
   });
-  route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id')));
+  route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id'), query.get('repo_id')));
   route('POST', '/api/permission-requests/:id/answer', ({ member, params, body }) => api.answerPermission(member, params.id, body));
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
   // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
@@ -741,12 +741,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
-      if (ident && r.replay === false && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+      const paidAction = DISPATCH_ACTIONS.has(params.action);
+      if (ident && (r.replay === false || paidAction) && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
       // Client operations always pass through their live grant/role checks.
       // Workspace creation and acceptance have durable transactional retries;
       // an old response must not bypass later removal or guest revocation.
-      const rid = r.replay !== false && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      // Paid dispatches use their durable, choice-bound row instead of a
+      // generic response cache that could replay a different AI/budget.
+      const rid = r.replay !== false && !paidAction && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       if (rid) {
         const hit = hub.cachedResponse(actor, rid);
         if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });

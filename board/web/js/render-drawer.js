@@ -12,7 +12,7 @@ const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
 
 export const FEED_LABEL = {
-  dispatched: 'Given to Claude', claimed: 'Runner claimed it', started: 'Claude started', blocked: 'Asked for help',
+  dispatched: 'Assigned to AI', claimed: 'Runner claimed it', started: 'Agent started', blocked: 'Asked for help',
   answered: 'Answered', parked: 'Parked: no agent running', requeued_answered: 'Answered and requeued', suspended: 'Laptop went to sleep',
   recovered: 'Back online', unresponsive: 'Lost signal', orphaned: 'Orphaned', reconnecting: 'Board restarted',
   failed: 'Run failed', stopped: 'Stopped', released: 'Claude released it', retried: 'Retried', taken_over: 'Taken over',

@@ -41,21 +41,21 @@ export function paletteDialog(dlg, model) {
     h('span', { class: 'pal-title' }, titleWithHits(item.title, indices)),
     item.hint ? h('span', { class: `pal-hint${item.kind === 'command' ? ' num' : ''}` }, item.hint) : null));
   });
-  return h('dialog', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': give ? 'Give a card to Claude' : 'Command palette', 'data-dialog': 'palette' },
+  return h('dialog', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': give ? 'Tackle a card with AI' : 'Command palette', 'data-dialog': 'palette' },
     h('div', { class: 'pal-field' },
       icon('search', 'icon-xs'),
       h('input', {
         class: 'pal-input', type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'pal-list', 'aria-autocomplete': 'list',
-        'aria-activedescendant': index >= 0 ? `pal-opt-${index}` : null, 'aria-label': give ? 'Pick a card to give to Claude' : 'Search cards and commands',
-        placeholder: give ? 'Pick a card to give to Claude' : 'Jump to a card or run a command', value: dlg.query ?? '',
+        'aria-activedescendant': index >= 0 ? `pal-opt-${index}` : null, 'aria-label': give ? 'Pick a card to tackle with AI' : 'Search cards and commands',
+        placeholder: give ? 'Pick a card to tackle with AI' : 'Jump to a card or run a command', value: dlg.query ?? '',
         'data-input': 'palette-q', autofocus: true, autocomplete: 'off', spellcheck: 'false',
       }),
       h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, 'Esc')),
     h('ul', { id: 'pal-list', class: 'pal-list', role: 'listbox', 'aria-label': 'Results' },
-      rows.length ? rows : h('li', { key: 'none', role: 'presentation', class: 'pal-empty' }, give ? 'No card can be given to Claude right now.' : 'Nothing matches.')),
+      rows.length ? rows : h('li', { key: 'none', role: 'presentation', class: 'pal-empty' }, give ? 'No card can be assigned to an AI right now.' : 'Nothing matches.')),
     h('p', { class: 'pal-foot', 'aria-hidden': 'true' },
       h('span', null, h('kbd', { class: 'kbd' }, '↑↓'), ' move'),
       h('span', null, h('kbd', { class: 'kbd' }, '↵'), ' choose'),
-      give ? null : h('span', null, h('kbd', { class: 'kbd' }, '⌘↵'), ' give card to Claude')),
+      give ? null : h('span', null, h('kbd', { class: 'kbd' }, '⌘↵'), ' tackle card with AI')),
     h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' }, results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No results'));
 }

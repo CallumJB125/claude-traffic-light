@@ -15,6 +15,7 @@ import { feedEvent, isFeedKind } from './hub.js';
 import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
 import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
+import { AI_IDS, AI_BACKENDS, aiOfDispatch, BUDGET_MAX_USD, runnerAis, readiness } from '../shared/ai.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -187,18 +188,20 @@ export class Api {
     };
   }
 
-  overlapPreview(member, cardId, targetMemberId) {
+  overlapPreview(member, cardId, targetMemberId, repoId) {
     const row = this.cardFor(member, cardId);
+    if (repoId && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, repoId)) throw new HubError('NOT_FOUND', 'repo not on this board');
+    const selectedRepo = repoId || row.repo_id;
     const tid = targetMemberId || member.id;
     const target = this.orgMember(member, tid);
     const prev = this.hub.latestRun(cardId);
     const self = {
-      run_id: 'preview', repo_id: row.repo_id, branch: null, title: row.title, body: row.body,
+      run_id: 'preview', repo_id: selectedRepo, branch: null, title: row.title, body: row.body,
       touched_paths: prev ? json(prev.touched_paths, []) : [], planned_paths: prev ? json(prev.planned_paths, []) : [],
     };
     const overlaps = [];
-    if (row.repo_id) {
-      for (const other of this.hub.liveRunsInRepo(row.repo_id)) {
+    if (selectedRepo) {
+      for (const other of this.hub.liveRunsInRepo(selectedRepo)) {
         if (other.card_id === row.id) continue;
         const sig = classifyPair(self, other);
         if (!sig.length) continue;
@@ -206,9 +209,13 @@ export class Api {
         overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
       }
     }
-    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(row.repo_id));
+    const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(selectedRepo));
     const sponsor = sponsorLine({ target: { member_id: tid, name: target.display_name, is_viewer: tid === member.id, device_name: dev?.device.name } }) ?? '';
-    return { overlaps, sponsor };
+    const runners = [...this.hub.runners.values()].filter((c) => c.ready && c.member_id === tid && c.repos.has(selectedRepo)).map((c) => ({
+      device_name: c.device.name,
+      ai: (c.ai ?? runnerAis(undefined)).map((a) => ({ id: a.id, label: a.label, available: [null, 'may_need_sign_in'].includes(readiness(a)), reason: readiness(a), budget: a.capabilities.budget, legacy: a.legacy })),
+    }));
+    return { overlaps, sponsor, runners, can_use_no_budget: tid === member.id || this.hub.isAdmin(member) };
   }
 
   // ── cards ─────────────────────────────────────────────────────────────────
@@ -520,11 +527,16 @@ export class Api {
     return true;
   }
 
-  async action(member, cardId, action, body) {
+  async action(member, cardId, action, body, { cred = null } = {}) {
     const type = ACTION_EVENTS[action];
     if (!type) throw new HubError('NOT_FOUND', `unknown action ${action}`);
     const row0 = this.cardFor(member, cardId);
-    return this.withWritableBoard(row0.board_id, () => this.actionLocked(member, cardId, action, type, body));
+    return this.withWritableBoard(row0.board_id, () => {
+      if (cred && !this.hub.accounts.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+      const current = this.hub.activeMember(member.id);
+      if (!current || current.org_id !== member.org_id || !this.hub.canWrite(current)) throw new HubError('FORBIDDEN', 'current membership cannot change this card');
+      return this.actionLocked(current, cardId, action, type, body);
+    });
   }
 
   actionLocked(member, cardId, action, type, body) {
@@ -550,7 +562,8 @@ export class Api {
       case 'retry':
       case 'take_over_with_claude': {
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
-        if (body.backend != null && body.backend !== 'claude_cli') throw new HubError('VALIDATION', 'only claude_cli is dispatchable in Phase 1');
+        const ai = body.ai ?? (body.backend === 'codex_cli' ? 'codex' : action === 'retry' ? aiOfDispatch(rel.dispatch ?? rel.run) : 'claude');
+        if (!AI_IDS.includes(ai) || (body.backend != null && body.backend !== AI_BACKENDS[ai])) throw new HubError('VALIDATION', 'invalid AI or mismatched backend');
         let target = body.target_member_id ?? null;
         if (target == null && action === 'retry') target = rel.run?.on_behalf_of ?? null;
         if (target != null) this.orgMember(member, target);
@@ -558,19 +571,33 @@ export class Api {
         if (existing && existing.card_id !== cardId) throw new HubError('CONFLICT', 'request_id belongs to another card');
         ctx.duplicate_request = !!existing;
         ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: 'claude_cli' });
-        // A budget given with the dispatch becomes the card's cap: the offer
-        // carries it and the runner passes it to --max-budget-usd.
-        if (body.budget_usd != null) {
-          if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd > 0)) throw new HubError('VALIDATION', 'budget_usd must be > 0');
-          const cents = Math.round(body.budget_usd * 100);
-          ctx.policy_ok = this.policyOk(row, cents);
-          if (!existing && cents !== row.budget_cents) {
+        const supplied = Object.hasOwn(body, 'budget_usd');
+        const mode = supplied ? (body.budget_usd === null ? 'none' : 'cap') : action === 'retry' ? rel.dispatch?.budget_mode ?? null : null;
+        let cents = supplied && body.budget_usd === null ? null : row.budget_cents;
+        if (supplied && body.budget_usd !== null) {
+          const max = this.hub.boardSettings(row.board_id).max_budget_usd;
+          if (!(typeof body.budget_usd === 'number' && Number.isFinite(body.budget_usd) && body.budget_usd >= 0.5 && body.budget_usd <= BUDGET_MAX_USD) || (!admin && Number.isFinite(max) && body.budget_usd > max)) throw new HubError('VALIDATION', 'budget must be between $0.50 and the allowed maximum');
+          cents = Math.round(body.budget_usd * 100);
+        }
+        if (mode === 'none' && (target ?? me) !== me && !admin) throw new HubError('POLICY_DENIED', 'a budget is required on a teammate’s machine', { reason: 'BUDGET_REQUIRED' });
+        if (ai === 'codex' && mode !== 'none') throw new HubError('POLICY_DENIED', 'Codex does not provide a native spend cap; explicitly choose no budget', { reason: 'BUDGET_UNSUPPORTED' });
+        const oldDefault = this.hub.boardSettings(row.board_id).default_budget_usd;
+        const beforeCap = rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents ?? (Number.isFinite(oldDefault) ? Math.round(oldDefault * 100) : null);
+        if (supplied && this.hub.cardSpentCents(cardId) > 0 && beforeCap != null && (cents == null || cents > beforeCap) && !involved(rel.dispatcher, rel.owner)) throw new HubError('FORBIDDEN', 'only the runner owner, dispatcher or an admin may raise the budget');
+        ctx.policy_ok = this.policyOk(row, mode === 'none' ? null : cents);
+        if (mode !== 'none') {
+          const effective = cents ?? Math.round((this.hub.boardSettings(row.board_id).default_budget_usd ?? 5) * 100);
+          if (effective - this.hub.cardSpentCents(cardId) < 50) ctx.policy_ok = false;
+        }
+        if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
+        if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents <= Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
+        if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents))) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: AI_BACKENDS[ai], ai, budget_mode: mode, budget_cents: mode === 'cap' ? cents : null });
+        if (supplied && !existing && cents !== row.budget_cents) {
             opts.pre = () => {
               this.db.run('UPDATE cards SET budget_cents = ? WHERE id = ?', cents, cardId);
               this.hub.journal({ board_id: row.board_id, card_id: cardId, actor_kind: 'member', actor_id: me, kind: 'card.update', payload: { fields: { budget_cents: [row.budget_cents, cents] }, request_id: body.request_id } });
             };
-          }
         }
         break;
       }
@@ -586,7 +613,11 @@ export class Api {
         if (!body.request_id) throw new HubError('VALIDATION', 'request_id required');
         if (body.target_member_id != null) this.orgMember(member, body.target_member_id);
         const target = body.target_member_id ?? rel.run?.on_behalf_of ?? null;
-        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment });
+        if (rel.dispatch?.budget_mode === 'none' && target !== me && !admin) throw new HubError('POLICY_DENIED', 'only the machine owner or an admin can assign uncapped work');
+        ctx.needs_confirm = this.hub.needsConfirm(me, target ?? me, row.repo_id);
+        const remaining = this.hub.remainingBudgetCents(row, rel.dispatch);
+        ctx.policy_ok = this.policyOk(row, rel.dispatch?.budget_mode === 'none' ? null : row.budget_cents) && (remaining == null || remaining >= 50);
+        Object.assign(event, { request_id: body.request_id, target_member_id: target, comment, ai: aiOfDispatch(rel.dispatch ?? rel.run), backend: rel.dispatch?.backend ?? rel.run?.backend ?? 'claude_cli', budget_mode: rel.dispatch?.budget_mode ?? null, budget_cents: rel.dispatch?.budget_cents ?? null });
         opts.pre = () => this.insertComment(member, cardId, { body: comment, for_agent: true });
         break;
       }

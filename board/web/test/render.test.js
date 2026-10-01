@@ -217,22 +217,22 @@ test('handoverBody drops the hub title and send-time "Last synced" line only', (
 
 // ── dialogs ────────────────────────────────────────────────────────────────
 
-test('Give to Claude: own runner by default, sponsor shown, overlap warned before dispatch', () => {
+test('Tackle with AI: own Codex account by default, sponsor and overlaps shown before dispatch', () => {
   const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
   const m = model([entry(v)]);
   const dlg = { kind: 'give', cardId: v.id, target: 'm-alice', repos: [{ id: 'r1', short_name: 'bondly' }], repo_id: 'r1', base_ref: 'dev', budget_usd: 5,
     preview: { overlaps: [{ other_card_id: 'c-9', other_key: 'BDL-9', other_owner: 'Bob', kind: 'overlapping', paths: ['backend/routes/applications.js'] }], sponsor: 'Runs on your MacBook Pro · your claude account' } };
   const n = giveDialog(dlg, m);
   const t = textOf(n);
-  assert.match(t, /Give BDL-1 to Claude/);
+  assert.match(t, /Tackle BDL-1 with AI/);
   assert.match(t, /Overlaps 1 live card/);
   assert.match(t, /BDL-9 \(Bob's Claude\) is editing backend\/routes\/applications\.js, which this card mentions/);
-  assert.match(t, /Runs on your MacBook Pro · your claude account/);
+  assert.match(t, /Runs on your machine · your Codex account/);
   const radios = findAll(n, (x) => x.tag === 'input' && x.props.type === 'radio');
   assert.equal(radios.find((r) => r.props.checked).props.value, 'm-alice');
   const teammate = textOf(giveDialog({ ...dlg, target: 'm-bob', preview: { overlaps: [] } }, m));
   assert.match(teammate, /Bob must confirm before it starts/);
-  assert.match(teammate, /Ask Bob's Claude/);
+  assert.match(teammate, /Ask Bob/);
 });
 
 test('take over from suspended explains fencing and needs an explicit confirm', () => {

@@ -1078,7 +1078,8 @@ async function openGive(cardId, mode) {
     target: state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
-    budget_usd: v.budget?.cap_usd ?? 5,
+    ai: 'codex', budget_mode: 'cap',
+    budget_usd: v.budget?.cap_usd ?? state.board?.settings?.default_budget_usd ?? 5,
     plan_approval: (v.labels ?? []).includes(PLAN_LABEL),
     repos: state.repos,
     preview: { loading: true },
@@ -1106,9 +1107,9 @@ async function loadPreview() {
   state.dialog = { ...d, preview: { loading: true }, previewToken: token };
   update();
   try {
-    const res = await api.overlapPreview(d.cardId, target);
+    const res = await api.overlapPreview(d.cardId, target, d.repo_id || null);
     if (state.dialog?.previewToken !== token) return;
-    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], sponsor: res.sponsor ?? null } };
+    state.dialog = { ...state.dialog, preview: { overlaps: res.overlaps ?? [], sponsor: res.sponsor ?? null, runners: res.runners ?? [], can_use_no_budget: res.can_use_no_budget === true } };
   } catch (err) {
     if (state.dialog?.previewToken !== token) return;
     state.dialog = { ...state.dialog, preview: { error: errorText(err) } };
@@ -1124,8 +1125,11 @@ async function submitGive(form) {
   const repo_id = fd.get('repo_id') || null;
   const base_ref = String(fd.get('base_ref') ?? '').trim() || null;
   const budget = Number(fd.get('budget_usd'));
+  const ai = fd.get('ai') || d.ai;
+  const uncapped = ai === 'codex' || fd.get('budget_mode') === 'none';
   const wantPlan = fd.get('plan_approval') === 'on';
-  if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. Claude only works inside a repo.' }; update(); return; }
+  if (!repo_id) { state.dialog = { ...d, error: 'Pick a repo first. The agent works inside that repo.' }; update(); return; }
+  if (!uncapped && (!Number.isFinite(budget) || budget < 0.5 || budget > 1000)) { state.dialog = { ...d, error: 'Choose a card budget between $0.50 and $1,000.' }; update(); return; }
   state.dialog = { ...d, busy: true, error: null };
   update();
   try {
@@ -1138,15 +1142,12 @@ async function submitGive(form) {
     if (Object.keys(patch).length) applyCard(await api.patchCard(d.cardId, { version: v.version, ...patch }));
     const isMe = target === state.me.member.id;
     const action = d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
-    const body = { target_member_id: isMe ? null : target };
-    if (d.mode !== 'redispatch') body.backend = 'claude_cli';
-    // Additive field (CONTRACT §9): the hub ignores it until it accepts a per-dispatch budget.
-    if (Number.isFinite(budget) && budget > 0) body.budget_usd = budget;
+    const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget };
     const res = await api.action(d.cardId, action, body);
     applyCard(res);
     state.dialog = null;
     const name = state.members.get(target)?.name;
-    toast(isMe ? `${v.key} is queued for your Claude.` : `Asked ${name}'s Claude. ${name} confirms before it starts.`);
+    toast(isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
   } catch (err) {
     state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
   }
@@ -1634,11 +1635,14 @@ function onChange(e) {
   if (what === 'board') { switchBoard(el.value); return; }
   if (what === 'integ-board') { setIntegrationBoard(el.dataset.conn, el.value); return; }
   if (what === 'give-target' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, target: el.value }; loadPreview(); }
+  if (what === 'give-ai' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, ai: el.value }; update(); }
+  if (what === 'give-budget-mode' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, budget_mode: el.value }; update(); }
+  if (what === 'give-budget' && state.dialog?.kind === 'give') state.dialog = { ...state.dialog, budget_usd: el.value };
   if (what === 'give-repo' && state.dialog?.kind === 'give') {
     const repo = state.repos?.find((r) => r.id === el.value);
     const form = el.form;
     state.dialog = { ...state.dialog, repo_id: el.value, base_ref: form?.base_ref?.value || repo?.default_branch || '' };
-    update();
+    loadPreview();
   }
   if (what === 'handover-kind' && state.dialog?.kind === 'handover') { state.dialog = { ...state.dialog, kind_: el.value }; update(); }
   if (what === 'move') moveCards([el.dataset.card], el.value);

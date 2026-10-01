@@ -48,7 +48,7 @@ test('a signed-in person connects only selected boards and Undo revokes the live
     await board.check();
     const boardId = await board.getAttribute('value');
     await settings.getByRole('button', { name: 'Connect boards' }).click();
-    await expect(settings.locator('#native-board-hint')).toContainText('Connected. Open a new session');
+    await expect(settings.locator('#native-board-hint')).toContainText('Connected. Open a new chat in Codex');
     await expect(board).toBeChecked();
     const userData = await h.app.evaluate(({ app }) => app.getPath('userData'));
     const grant = path.join(userData, 'native-board', 'codex.json');
