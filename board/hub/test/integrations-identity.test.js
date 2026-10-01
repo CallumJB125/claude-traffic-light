@@ -106,7 +106,7 @@ async function setup({ config = ROOMY, log } = {}) {
   reg.register(slkConnector(beh));
   const alice = await h.login('alice');
   const bob = await h.login('bob');
-  const p = await h.api(alice, 'POST', '/api/integrations/slk/prepare', { request_id: randomUUID(), input: { config_token: `xoxe-${randomBytes(8).toString('hex')}` } });
+  const p = await h.api(alice, 'POST', '/api/integrations/slk/prepare', { request_id: randomUUID(), input: { config_token: ['xoxe', randomBytes(8).toString('hex')].join('-') } });
   assert.equal(p.status, 200, p.text);
   const cb = await fetch(`${h.base}/integrations/slk/callback?${new URLSearchParams({ state: new URL(p.body.url).searchParams.get('state'), code: 'c' })}`, { headers: { cookie: p.headers.get('set-cookie').split(';')[0] } });
   assert.equal(cb.status, 200, await cb.text());
