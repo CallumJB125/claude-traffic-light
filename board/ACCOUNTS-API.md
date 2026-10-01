@@ -249,7 +249,7 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 
 | Path | What |
 |---|---|
-| `GET /signin` | minimal email → code sign-in page (client `web`); `#invite=<token>` returns to `/invite#<token>` once signed in. Signed in with no team, the board (`/`) offers Create a team, Join with a code or invite link, and any `pending_invites` |
+| `GET /signin` | minimal email → code sign-in page (client `web`); `#invite=<token>` resumes that explicit join once signed in, then opens the invited team's board. A failed join returns to `/invite#<token>` for recovery. First sign-in with no memberships and no usable invite automatically creates the first team and board; pending invitations are offered for acceptance; creation failures retain Create or join a team |
 | `GET /auth/email` | the same page; handles `#f=<flow_id>&c=<code>` magic links |
 | `GET /invite` | the invite landing page (see Invites) |
 | `GET /download` | `302` to `BOARD_DOWNLOAD_URL` (the app download), or `404` when none is configured |
@@ -340,6 +340,14 @@ The **last owner** can't be demoted or removed, and can't leave (`409 CONFLICT {
 
 `pro` teams get ×10; teams that existed before accounts are `self_hosted` (no limits).
 
+### `POST /api/account/setup`
+
+Bearer or cookie + CSRF, with the normal mutation origin and rate protections. The desktop and web clients call this after sign-in when an account has no memberships and no usable pending invitation. Returns the same account shape as `GET /api/account`, plus `setup: 'created' | 'existing' | 'invited'`.
+
+One immediate transaction checks current memberships and usable invites before creating anything. Existing members keep their teams; a pending invite that the verified address can accept wins over personal-team creation. Otherwise the ordinary `POST /api/teams` creation path makes **"<first name>'s team"** and its first board, with the caller as owner. The name fits the existing 60-character rule, strips control characters and falls back to `My team` if no first name is available. Concurrent requests from different installs reuse the one first team. The creation audit, verified-email requirement, invite-only newcomer restriction, quotas and per-user creation budget are the same as manual creation; failures write no partial team and clients retain the create-or-join fallback. Account reads and authentication itself remain free of setup mutations.
+
+Opening an explicit invite and signing in resumes acceptance into the inviter's team without a personal team or another Join click. Unsolicited pending invitations still need an acceptance choice. A wrong-account, expired, full or rate-limited invitation retains its existing recovery flow and never falls through to personal setup.
+
 ### `POST /api/teams`
 
 Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise). While sign-up is `allowlist`, an account an invite let in (`signup_via` `invite`, see Sign-up control) gets `403 FORBIDDEN` "Only team owners invited by the hub administrator can create teams while sign-up is invite-only".
@@ -396,9 +404,9 @@ The hub serves `/invite` as a static page (`Referrer-Policy: no-referrer`). Its 
 1. **`plexiform://invite/<token>`** at once,
 2. if the page is still in front 1.5 s later, it shows **"Open with older Buddy"**; only a click on it sends the token to the legacy scheme **`claudebuddy://invite/<token>`** (older builds register only that one, and any app could claim it, so the token never goes there on its own). A malformed fragment shows the generic "not valid" message,
 
-A browser already signed in to the hub (cookie session) doesn't jump to the app: the page offers **"Join *team*"** right there (`POST /api/invites/accept {t}` with the session's CSRF token, then the team's board), with the app as a second choice; signed in as another address it says so and offers to sign out and sign in with the right one. Signed out, on a hub with email codes, **"Join in your browser"** opens `/signin#invite=<token>` (the fragment again), which comes back to `/invite#<token>` once signed in. The page always shows **"Open in Plexiform"** (the `plexiform://` link) and, signed out, **"Download Plexiform for Mac"** (`/download`, which redirects to `BOARD_DOWNLOAD_URL`), with the steps: install, open (the app isn't signed by Apple yet: right-click or Control-click it in Applications, choose Open, then Open again), sign in with the invited address, then click the invite link in the email again.
+A browser already signed in to the hub (cookie session) doesn't jump to the app: the page offers **"Join *team*"** right there (`POST /api/invites/accept {t}` with the session's CSRF token, then the team's board), with the app as a second choice; signed in as another address it says so and offers to sign out and sign in with the right one. Signed out, on a hub with email codes, **"Join in your browser"** opens `/signin#invite=<token>` (the fragment again), which accepts that explicit invite once signed in and opens the invited team; failures come back to `/invite#<token>` for recovery. The page always shows **"Open in Plexiform"** (the `plexiform://` link) and, signed out, **"Download Plexiform for Mac"** (`/download`, which redirects to `BOARD_DOWNLOAD_URL`), with the steps: install, open (the app isn't signed by Apple yet: right-click or Control-click it in Applications, choose Open, then Open again), sign in with the invited address, then click the invite link in the email again.
 
-**The app**: register `plexiform://` (and keep `claudebuddy://` as an alias). On `plexiform://invite/<token>`, call preview to show who invited whom, then `POST /api/invites/accept {t}` with the Bearer token. If the user isn't signed in yet, sign in first and keep the token in memory (not on disk) until then.
+**The app**: register `plexiform://` (and keep `claudebuddy://` as an alias). On `plexiform://invite/<token>`, call preview to show who invited whom, then `POST /api/invites/accept {t}` with the Bearer token. If the user isn't signed in yet, sign in first and keep the token in memory (not on disk) until then; successful sign-in resumes acceptance without another Join click. A generic sign-in with pending invitations offers them for acceptance and creates no personal team.
 
 The invite mail (plain text) carries the team and inviter names, the link, an 8-letter **code** (`XXXX-XXXX`, for typing into the app instead of clicking), the expiry, and "You got this because *name* invited *address*. Ignore it to decline." Names are made safe: no control characters, quotes or angle brackets, one line, ≤ 60 characters, schemes stripped and domains defanged (`evil[.]com`), so the only link in the mail is the hub's.
 

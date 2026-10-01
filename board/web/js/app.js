@@ -507,6 +507,17 @@ async function boot() {
   }
   state.auth = 'ok';
   setCsrf(state.me.csrf_token);
+  if (state.authMode === 'accounts' && !state.me.member && !(state.me.pending_invites?.length)) {
+    try {
+      const setup = await api.setupAccount();
+      if (setup.teams?.length) { setOrg(setup.teams[0].id); return boot(); }
+      state.me.pending_invites = setup.pending_invites ?? [];
+    } catch (err) {
+      // Preserve the existing create-or-join forms when a rate limit,
+      // quota or admission rule prevents automatic setup.
+      state.onboard = { busy: false, error: accountErrorText(err, 'team'), where: 'create' };
+    }
+  }
   const wanted = new URLSearchParams(location.search).get('board');
   const boards = state.me.boards ?? [];
   state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;

@@ -22,6 +22,7 @@ const ROUTES = {
   emailStart: ['POST', '/api/auth/email/start'],
   emailVerify: ['POST', '/api/auth/email/verify'],
   account: ['GET', '/api/account'],
+  setupAccount: ['POST', '/api/account/setup'],
   signOut: ['POST', '/api/auth/signout'],
   deleteAccount: ['DELETE', '/api/account'],
   createTeam: ['POST', '/api/teams'],
@@ -368,6 +369,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     pendingEmail: () => (flow?.purpose === 'signin' ? flow.email : null),
 
     me: () => call('account'),
+    setupAccount: () => call('setupAccount', { body: { request_id: crypto.randomUUID() } }),
     createTeam(name) {
       const n = String(name ?? '').trim();
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });

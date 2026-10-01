@@ -17,7 +17,7 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
   const calls = [];
   const replaced = [];
   const fetch = async (path, opts) => {
-    calls.push({ path, method: opts.method, body: opts.body ? JSON.parse(opts.body) : undefined });
+    calls.push({ path, method: opts.method, headers: opts.headers, body: opts.body ? JSON.parse(opts.body) : undefined });
     const r = routes[path];
     const out = typeof r === 'function' ? r(calls.at(-1)) : r ?? { status: 200, body: {} };
     if (out === 'network') throw new TypeError('fetch failed');
@@ -109,19 +109,39 @@ test('a hub with no mailer: the email form is hidden and the page says to use th
   assert.equal(p.els['signin-lead'].textContent, text.EMAIL_OFF);
 });
 
-test('an invite opened while signed out resumes on /invite after the code; a malformed one is ignored', async () => {
-  const ok = { ...start, '/api/auth/email/verify': { status: 200, body: { user: {}, teams: [], csrf_token: 'x' } } };
+test('an explicit invite joins after sign-in with CSRF; a malformed one is ignored', async () => {
+  const ok = { ...start, '/api/auth/email/verify': { status: 200, body: { user: {}, teams: [], csrf_token: 'x' } }, '/api/invites/accept': { status: 200, body: { team: { id: 'team-1' } } } };
   const p = page({ hash: `#invite=${TOKEN}`, routes: ok });
   assert.match(p.els['signin-lead'].textContent, /accept your invite/);
   p.els.email.value = 'jo@example.com';
   await p.submit('email-form');
   p.els.code.value = '123456';
   await p.submit('code-form');
-  assert.deepEqual(p.replaced, [`/invite#${TOKEN}`]);
+  assert.deepEqual(p.replaced, ['/?org=team-1']);
+  const accept = p.calls.find((c) => c.path === '/api/invites/accept');
+  assert.equal(accept.method, 'POST');
+  assert.equal(accept.headers['X-CSRF-Token'], 'x');
+  assert.deepEqual(accept.body.t, TOKEN);
   const q = page({ hash: '#invite=inv_short', routes: ok });
   q.els.email.value = 'jo@example.com';
   await q.submit('email-form');
   q.els.code.value = '123456';
   await q.submit('code-form');
   assert.deepEqual(q.replaced, ['/']);
+  assert.equal(q.calls.some((c) => c.path === '/api/invites/accept'), false);
+});
+
+test('invite acceptance failures return to the invite recovery page without personal setup', async () => {
+  for (const error of ['WRONG_ACCOUNT', 'INVALID_TOKEN', 'RATE_LIMITED']) {
+    const p = page({ hash: `#invite=${TOKEN}`, routes: { ...start,
+      '/api/auth/email/verify': { status: 200, body: { user: {}, csrf_token: 'x' } },
+      '/api/invites/accept': { status: 403, body: { error: { code: error } } },
+    } });
+    p.els.email.value = 'jo@example.com';
+    await p.submit('email-form');
+    p.els.code.value = '123456';
+    await p.submit('code-form');
+    assert.deepEqual(p.replaced, [`/invite#${TOKEN}`]);
+    assert.equal(p.calls.some((c) => c.path === '/api/account/setup'), false);
+  }
 });

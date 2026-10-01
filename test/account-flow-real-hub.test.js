@@ -2,10 +2,10 @@
 // The desktop account flow (buddy-window/account-flow.js) against the REAL
 // hub process in accounts mode (loopback try-out, console mailer: codes are
 // read from its stderr), not the mock: a new person signs in with an email
-// code, gets create-or-join, creates a team that shows in the switcher, makes
+// code, gets a first team and board automatically in the switcher, makes
 // an invite and turns This Mac on (a runner token, sealed on disk, a live
 // /ws/runner socket). A second person opens the invite link signed out,
-// confirms the hub, signs in and joins from the previewed invite; a third
+// confirms the hub, signs in and resumes the explicit invite; a third
 // joins with the 8-letter code. The owner, signing in again on a fresh
 // install, lands on the team, not the create screen. Skipped when the board's
 // dependencies aren't installed.
@@ -118,12 +118,12 @@ function install(hub, root, name) {
   return { flow, A, store, client, children, deviceFile, signIn, token: () => vault.load()?.token ?? null };
 }
 
-test('desktop on the real hub: email code → create or join → team in the switcher → This Mac runs it; joiners by link and by code', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
+test('desktop on the real hub: automatic first team → This Mac runs it; invited sign-in joins directly, code join and returning owner', { skip: (!ready || !WebSocket) && 'board dependencies not installed' }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-realhub-'));
   const hub = await startRealHub(path.join(root, 'hub'));
   const installs = [];
   try {
-    // Owner: email, a wrong code (plain words with the tries left), the right one, no team yet.
+    // Owner: email, a wrong code (plain words with the tries left), then automatic setup.
     const o = install(hub, root, 'owner');
     installs.push(o);
     assert.equal((await o.A.hub(hub.origin)).ok, true);
@@ -136,15 +136,16 @@ test('desktop on the real hub: email code → create or join → team in the swi
     const wrong = await o.A.code(code === '000000' ? '000001' : '000000');
     assert.deepEqual([wrong.ok, wrong.error], [false, 'That code didn’t work. 4 tries left.']);
     assert.equal((await o.A.code(code)).ok, true);
-    assert.equal(o.flow.acct.screen, 'create-team', 'signed in with no team: the create-or-join choice');
+    assert.notEqual(o.flow.acct.screen, 'create-team', 'first sign-in completes setup without an extra screen');
 
-    // Create: the team is in the switcher and active; the creator is its owner.
-    assert.equal((await o.A.createTeam('Rocket Crew')).ok, true);
+    // Automatic setup: one team and board, active in the switcher.
     const ws = o.store.active();
     assert.equal(ws.kind, 'team');
-    assert.equal(ws.name, 'Rocket Crew');
+    assert.equal(ws.name, "owner's team");
     assert.equal(ws.role, 'owner');
     assert.ok(o.store.list().some((w) => w.id === ws.id), 'in the sidebar switcher');
+    assert.deepEqual((await o.client.me()).teams.map((t) => [t.name, t.boards.length]), [["owner's team", 1]]);
+    await o.A.go('team');
     const team = await o.A.state();
     assert.equal(team.screen, 'team');
     assert.deepEqual(team.members.map((m) => [m.role, m.you]), [['owner', true]]);
@@ -177,12 +178,9 @@ test('desktop on the real hub: email code → create or join → team in the swi
     assert.equal((await j.A.confirm(true)).ok, true);
     assert.equal(j.flow.acct.screen, 'email');
     await j.signIn('joiner@e2e.test');
-    assert.equal(j.flow.acct.screen, 'join', 'back on the invite after signing in');
-    const pv = await j.A.state();
-    assert.equal(pv.invite.team, 'Rocket Crew');
-    assert.equal((await j.A.accept(pv.invite.id)).ok, true);
     assert.equal(j.store.active().teamId, ws.teamId);
     assert.equal(j.store.active().role, 'member');
+    assert.deepEqual((await j.client.me()).teams.map((t) => t.id), [ws.teamId], 'the invite creates no personal team');
 
     // Joiner by code: the invite addressed to them is offered at once; the code works too.
     const c = install(hub, root, 'coder');
@@ -200,6 +198,7 @@ test('desktop on the real hub: email code → create or join → team in the swi
     await back.signIn('owner@e2e.test');
     assert.notEqual(back.flow.acct.screen, 'create-team');
     assert.equal(back.store.active().teamId, ws.teamId);
+    assert.deepEqual((await back.client.me()).teams.map((t) => t.id), [ws.teamId], 'a returning install reuses the same team');
   } finally {
     for (const i of installs) await i.flow.stopDevices().catch(() => {});
     await hub.stop();

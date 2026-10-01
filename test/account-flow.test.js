@@ -428,7 +428,8 @@ test('M2: switch account (wrong-account invite) stops the runner and deletes its
   assert.equal(h.flow.acct.screen, 'email');
   assert.equal((await h.A.email('callum@example.com')).ok, true);
   await h.A.code(h.hub.lastCode('callum@example.com'));
-  assert.equal(h.flow.acct.screen, 'join', 'the invite waited for the right account');
+  assert.equal(h.store.active().teamId, team.id, 'the invite resumes for the right account');
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1, 'no personal team for the invited account');
 }));
 
 test('M2/M3: delete account stops the runner, deletes its file and clears the hub’s storage', async () => harness(async (h) => {
@@ -698,7 +699,7 @@ test('oauth: Continue with Google, full path against the mock: loopback, exchang
   const r = await h.flow.pendingOAuth();
   assert.equal(r.ok, true, r.error);
   assert.equal(h.vault(h.origin).load().user.email, 'callum@example.com');
-  assert.equal(h.flow.acct.screen, 'create-team');
+  assert.equal(h.store.active().name, "callum's team");
   const start = h.hub.oauthStarts()[0];
   assert.equal(start.provider, 'google');
   assert.match(start.redirect_uri, /^http:\/\/127\.0\.0\.1:\d+\/callback$/);
@@ -739,7 +740,7 @@ test('oauth: a wrong state or a stray request never completes the flow nor echoe
   assert.equal(h.flow.acct.screen, 'browser', 'still waiting');
   const ok = await fetch(callback);
   assert.equal(await ok.text(), 'Finish signing in in Plexiform. You can close this tab.', 'nothing claims a sign-in the exchange hasn’t made yet');
-  await until(() => h.flow.acct.screen === 'create-team');
+  await until(() => h.store.active()?.kind === 'team');
   assert.ok(h.vault(h.origin).load());
 }));
 
@@ -874,7 +875,7 @@ test('oauth: the listener binds 127.0.0.1 only; other addresses, other Hosts and
   assert.deepEqual(await l.result, { ok: false, reason: 'cancelled' });
 });
 
-test('oauth: an invite waits through Continue with Google, then the join preview', async () => harness(async (h) => {
+test('oauth: an explicit invite waits through Continue with Google, then joins directly', async () => harness(async (h) => {
   const luke = await h.other('luke@example.com');
   const team = (await luke.createTeam('Pistor')).team;
   const inv = await luke.invite(team.id, 'callum@example.com', 'member');
@@ -885,11 +886,8 @@ test('oauth: an invite waits through Continue with Google, then the join preview
   assert.equal(h.flow.acct.screen, 'email');
   await h.A.oauth('google');
   assert.equal((await h.flow.pendingOAuth()).ok, true);
-  assert.equal(h.flow.acct.screen, 'join');
-  const s = await h.A.state();
-  assert.equal(s.invite.team, 'Pistor');
-  assert.equal((await h.A.accept(s.invite.id)).ok, true);
   assert.equal(h.store.active().name, 'Pistor');
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1);
 }));
 
 test('oauth: nothing starts for an unconfirmed hub; hub errors are plain sentences', async () => harness(async (h) => {
@@ -1320,6 +1318,7 @@ const confirmTeamByEmail = async (h, ws, slug) => {
 
 test('delete team (email): slug, code, a countdown, delete with that flow; only that team goes, the session and vault untouched', async () => harness(async (h) => {
   await h.signInAs('me@example.com');
+  const personal = h.store.active();
   await h.A.createTeam('Other');
   const other = h.store.active();
   await h.A.createTeam('Bondly Team');
@@ -1345,7 +1344,7 @@ test('delete team (email): slug, code, a countdown, delete with that flow; only 
   s = await h.A.state();
   assert.equal(s.notice, 'Bondly Team was deleted.');
   assert.equal(s.accounts.length, 1, 'still signed in');
-  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team').map((w) => w.id), [other.id]);
+  assert.deepEqual(h.store.list().filter((w) => w.kind === 'team').map((w) => w.id), [personal.id, other.id]);
   assert.equal(JSON.stringify(h.vault(h.origin).load()), before, 'the vault is exactly as it was');
   assert.equal(h.hub.liveTokens(), live);
 }));
@@ -1454,7 +1453,7 @@ test('delete team: switching team, leaving the screen or the account pages, and 
   assert.equal((await h.A.state()).team.deleteStep, null);
   await refusedNow();
   assert.equal(teamDeletes(h).length, 0);
-  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 2);
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 3);
 }));
 
 test('delete team: a failed DELETE (no longer an owner) keeps the check; once owner again the same check deletes it', async () => harness(async (h) => {
@@ -1909,15 +1908,58 @@ test('waits read in hours for a day-long lockout', () => {
   assert.equal(humanError(429, { error: { code: 'RATE_LIMITED', retry_after_s: 3600 } }, 'h'), 'Too many tries. Wait 60 minutes and try again.');
 });
 
-test('first sign-in with no team: the screen is the whole choice, create or join with a code or link', async () => harness(async (h) => {
+test('first sign-in creates one personal team and board without an extra screen', async () => harness(async (h) => {
+  await h.signInAs('new@example.com');
+  assert.equal(h.store.active().name, "new's team");
+  assert.equal(h.store.active().role, 'owner');
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1);
+  assert.equal(h.shown.includes('create-team'), false);
+  await h.A.signOut(h.host);
+  await h.signInAs('new@example.com');
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 1);
+}));
+
+test('automatic setup quota failure keeps create or join with a code or link', async () => harness(async (h) => {
   await h.signInAs('new@example.com');
   assert.equal(h.flow.acct.screen, 'create-team');
+  assert.match((await h.A.state()).alert, /plan|team|limit/);
   const page = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');
   const screen = page.slice(page.indexOf("'create-team'(s) {"), page.indexOf('  integrations(s) {'));
   assert.match(screen, /heading\('Create or join a team', null\)/);
   assert.match(screen, /onclick: \(\) => api\.go\('join'\) \}, 'Join with a code or link'\)/);
   assert.equal((await h.A.go('join')).ok, true);
   assert.equal(h.flow.acct.screen, 'join');
+}, { quotas: { teams: 0 } }));
+
+test('a setup reply after sign-out cannot restore the old account or workspace', async () => harness(async (h) => {
+  h.setAfterHub(async (u) => {
+    if (new URL(u).pathname !== '/api/account/setup') return;
+    h.setAfterHub(null);
+    await h.A.signOut(h.host);
+  });
+  await h.signInAs('new@example.com');
+  assert.equal(h.vault(h.origin).load(), null);
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 0);
+}));
+
+test('a newer invite during sign-in preview cannot ride the previous explicit join intent', async () => harness(async (h) => {
+  const owner = await h.other('owner@example.com');
+  const first = (await owner.createTeam('First')).team;
+  const second = (await owner.createTeam('Second')).team;
+  const oldInvite = await owner.invite(first.id, 'new@example.com', 'member');
+  const newInvite = await owner.invite(second.id, 'new@example.com', 'member');
+  h.flow.openInvite(oldInvite.link);
+  await h.A.confirm(true);
+  h.setAfterHub((u) => {
+    if (new URL(u).pathname !== '/api/invites/preview') return;
+    h.setAfterHub(null);
+    h.flow.openInvite(newInvite.link);
+  });
+  assert.equal((await h.A.email('new@example.com')).ok, true);
+  assert.equal((await h.A.code(h.hub.lastCode('new@example.com'))).ok, true);
+  assert.equal(h.requests.filter((u) => u.pathname === '/api/invites/accept').length, 0);
+  assert.equal((await h.A.state()).invite.team, 'Second');
+  assert.equal(h.store.list().filter((w) => w.kind === 'team').length, 0);
 }));
 
 test('sign-up control (D104): SIGNUP_CLOSED reads as the one fixed sentence on the OAuth and email-code paths, never the hub message', () => {

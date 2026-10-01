@@ -2,7 +2,7 @@
 // skipped without either), against the real hub process as a loopback
 // try-out with the console mailer: codes are read from the hub's log.
 // A new person signs in with an email code (one wrong code first: the page
-// says how many tries are left), gets "Create or join a team", creates one,
+// says how many tries are left), gets their first team and board automatically,
 // lands on its board and makes an invite from the Team view. A second person
 // opens that invite link signed out, signs in by code from the invite page
 // and joins, ending on the same team's board. The owner, signing in again
@@ -29,7 +29,7 @@ async function signInByCode(page, hub, email) {
   return until(() => codeFrom(hub.logFile, email), { what: `code for ${email}` });
 }
 
-test('web, accounts mode: email code → create a team → its board → invite; a second person joins from the link', { skip: !chromium && 'playwright not installed' }, async () => {
+test('web, accounts mode: email code → automatic first team and board → invite; invited sign-in joins directly', { skip: !chromium && 'playwright not installed' }, async () => {
   const root = tmpDir('bW-');
   const dataDir = path.join(root, 'hub');
   fs.mkdirSync(dataDir);
@@ -49,12 +49,12 @@ test('web, accounts mode: email code → create a team → its board → invite;
     assert.equal(await A.textContent('#signin-error'), 'That code isn’t right. 4 tries left.');
     await A.fill('#code', code);
     await A.click('#code-form button[type="submit"]');
-    await A.waitForSelector('text=Create or join a team');
+    await A.waitForSelector('.brand-board:has-text("owner\'s team")');
     assert.equal(await A.locator('text=isn\'t a member').count(), 0);
 
-    await A.fill('#team-name', 'Rocket Crew');
-    await A.click('form[data-form="create-team"] button[type="submit"]');
-    await A.waitForSelector('.brand-board:has-text("Rocket Crew")');
+    assert.equal(await A.locator('form[data-form="create-team"]').count(), 0);
+    const owner = await A.evaluate(() => fetch('/api/account').then((r) => r.json()));
+    assert.deepEqual(owner.teams.map((t) => [t.name, t.boards.length]), [["owner's team", 1]]);
     await A.waitForSelector('.column-empty');
     await A.click('.topbar [data-view="team"]');
     await A.fill('#invite-email', 'joiner@e2e.test');
@@ -86,10 +86,10 @@ test('web, accounts mode: email code → create a team → its board → invite;
     const code2 = await signInByCode(B, hub, 'joiner@e2e.test');
     await B.fill('#code', code2);
     await B.click('#code-form button[type="submit"]');
-    await B.waitForSelector('#join-web:has-text("Join Rocket Crew")');
-    await B.click('#join-web');
-    await B.waitForSelector('.brand-board:has-text("Rocket Crew")');
+    await B.waitForSelector('.brand-board:has-text("owner\'s team")');
     assert.match(B.url(), /\/\?org=/);
+    const joined = await B.evaluate(() => fetch('/api/account').then((r) => r.json()));
+    assert.deepEqual(joined.teams.map((t) => t.id), owner.teams.map((t) => t.id), 'only the invited team, no personal team');
 
     // Returning: the owner signs in on another browser and goes straight to the board.
     const C = await (await browser.newContext({ baseURL: hub.url })).newPage();
@@ -99,7 +99,7 @@ test('web, accounts mode: email code → create a team → its board → invite;
     await C.waitForSelector('#code-form:not([hidden])');
     await C.fill('#code', await until(() => codeFrom(hub.logFile, 'owner@e2e.test', 1), { what: 'second code' }));
     await C.click('#code-form button[type="submit"]');
-    await C.waitForSelector('.brand-board:has-text("Rocket Crew")');
+    await C.waitForSelector('.brand-board:has-text("owner\'s team")');
     assert.equal(await C.locator('text=Create or join a team').count(), 0);
   } finally {
     await browser?.close();

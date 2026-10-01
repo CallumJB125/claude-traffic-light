@@ -33,6 +33,7 @@ test('no team yet, with an invite addressed to you: one click joins it; errors s
   const v = noTeamScreen({ invites: [{ id: 'i1', team_name: 'Acme', inviter_first_name: 'Jo', role: 'viewer' }], onboard: { error: 'This team is full.', where: 'invites' } });
   assert.match(textOf(v), /Jo invited you to Acme as a viewer\./);
   assert.equal(byAttr(v, 'data-invite', 'i1').length, 1);
+  assert.equal(byAttr(v, 'data-form', 'create-team').length, 0, 'an invited newcomer joins the offered team');
   const alerts = byAttr(v, 'role', 'alert');
   assert.equal(alerts.length, 1);
   assert.equal(textOf(alerts[0]), 'This team is full.');
