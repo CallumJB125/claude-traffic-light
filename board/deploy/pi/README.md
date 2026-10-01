@@ -1,31 +1,40 @@
 # Deploying the hub on a Raspberry Pi (dogfood)
 
 Topology: hub bound to 127.0.0.1:8787 → Cloudflare Tunnel (remotely managed; ingress
-`<host>` → `http://127.0.0.1:8787`, Access enforced at the tunnel) → Cloudflare Access
-(One-time PIN email IdP, allow policy = member emails only). Nothing listens publicly.
+`<host>` → `http://127.0.0.1:8787`) → the internet. The hub runs in **accounts mode** (`BOARD_AUTH=accounts`):
+people sign in with Google, GitHub or an emailed code, create or join teams, and runners enrol per team. There is
+no Cloudflare Access in front of it, so the hub's own sign-up control (`BOARD_SIGNUP`), rate limits and request
+limits are the front door. Nothing listens publicly except through the tunnel. The Access mode this kit used to
+describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the production setup.
 
 | File | What |
 |---|---|
 | `buddy-hub.service` | the hub as `buddyhub`, sandboxed; only `/var/lib/buddy-hub` writable |
-| `hub.env.example` | `/etc/buddy-hub/hub.env` template (Access mode; dev auth is refused when a public URL is set) |
+| `hub.env.example` | `/etc/buddy-hub/hub.env` template (accounts mode, placeholders only; dev auth is refused when a public URL is set) |
 | `buddy-hub-backup.{service,timer}` + `backup.mjs` | nightly `VACUUM INTO` snapshot, 14 kept, in `/var/lib/buddy-hub/backups` |
-| `add-member.mjs` | seed email-only members on the host before anyone can sign in |
+| `add-member.mjs` | legacy (Access mode): seed email-only members on the host before anyone can sign in |
 | `deploy.sh` | ship `board/` at HEAD, `npm ci`, install units, restart, health check |
 
-`BOARD_SECRET` is not needed: the hub generates one on first start and keeps it in the data dir.
+`BOARD_SECRET` is REQUIRED in accounts mode and must be at least 32 bytes (`openssl rand -base64 48`); the hub refuses to start without it. Keep it with the data: changing it signs everyone out.
 
 ## First deploy
 
 1. Host prerequisites: Node ≥ 22, system user `buddyhub`, `/var/lib/buddy-hub` (buddyhub 0700),
    `/opt/buddy-hub` (root 0755), `/etc/buddy-hub` (root:buddyhub 0750).
-2. `/etc/buddy-hub/hub.env` from `hub.env.example`, mode 0640 root:buddyhub.
-3. From the laptop: `PI="ssh …" board/deploy/pi/deploy.sh`.
-4. Seed the rest of the team:
-   `sudo -u buddyhub node /opt/buddy-hub/board/deploy/pi/add-member.mjs a@x.com b@y.com`,
-   then delete the `BOARD_BOOTSTRAP*` lines from hub.env and restart.
-5. Tunnel: install the tunnel token and run cloudflared as a service.
-6. Verify from outside the tailnet (a phone on mobile data): unauthenticated → blocked at the
-   Cloudflare edge; an allowed email → one-time PIN → board.
+2. `/etc/buddy-hub/hub.env` from `hub.env.example` (fill every placeholder: a real `BOARD_SECRET`, `BOARD_PUBLIC_URL`,
+   the encryption key file, the SES or OAuth values, the sign-up allowlist), mode 0640 root:buddyhub. The credentials
+   live only in this file on the host, never in the repo.
+3. **Back up before every deploy** (a rollback cannot undo a migration): `sudo -u buddyhub node /opt/buddy-hub/board/deploy/pi/backup.mjs`
+   (or let the nightly timer have run); confirm a fresh file in `/var/lib/buddy-hub/backups`.
+4. From the laptop: `PI="ssh …" board/deploy/pi/deploy.sh`.
+5. Tunnel: install the tunnel token and run cloudflared as a service. Add an Access **Bypass** only for `/api/health`
+   if you use `BOARD_TUNNEL_PROBE_URL`.
+6. First account: sign in in the Plexiform app (Google, GitHub or an emailed code) with an address on `BOARD_SIGNUP_ALLOW`,
+   create the team there, and invite the rest by link/code. (`BOARD_BOOTSTRAP*` is only for seeding a team on an empty
+   DB; remove the lines after the first start.)
+7. Smoke test: `curl -s http://127.0.0.1:8787/api/health` on the host (`ok:true`, `auth:"accounts"`, `mail:{last_error_at:null,…}`);
+   then from a phone on mobile data: the sign-in page loads over https and an allowlisted address receives a code.
+   In the SES sandbox only verified addresses receive codes.
 
 ## Staging beside production
 
@@ -37,7 +46,13 @@ production data dir). It never touches production's backup timer. Point a separa
 
 Rollback: `deploy.sh` keeps the previous tree at `/opt/buddy-hub/board.prev`; move it back and
 restart. Restore a snapshot by stopping the hub, copying it over `board.db` and starting with
-`BOARD_RESTORE=1` once.
+`BOARD_RESTORE=1` once (after a restore the hub bumps every card's fence so nothing that was live before can write over
+the restored state).
+
+Rollback caveats: (1) migrations are forward-only: the old code cannot run against a newer schema, so a rollback after a
+migration needs the pre-deploy backup restored too (step 3 above). (2) `node hub/admin.js revoke-legacy-devices` (the
+accounts cutover: it revokes every old runner device) is NOT undone by a rollback or a restore: runners must enrol again.
+(3) `BOARD_SECRET` and `BOARD_ENC_KEY(_FILE)` must be the same ones the database was written with.
 
 Off-site backups: Litestream streams `/var/lib/buddy-hub/board.db` to the R2 bucket `plexiform-hub-backups`
 (1 s sync; root-only config at `/etc/litestream.yml`, set up by the operator). The nightly snapshot stays as a second copy.
