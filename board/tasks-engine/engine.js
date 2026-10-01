@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { taskFace, AI_LABEL } from '../tasks-api/face.js';
 import { validate } from '../tasks-api/validate.js';
@@ -31,7 +32,7 @@ import { makeGit, resolveGit } from './git.js';
 import { lstartOf, sameProcess, killTree, commandLines } from '../runner/procs.js';
 import { ensureDir, writeJsonAtomic, writeFileAtomic, clip, RUNNER_VERSION } from '../runner/util.js';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 export const SCHEMA = JSON.parse(fs.readFileSync(path.join(here, '..', 'tasks-api', 'schema.json'), 'utf8'));
 
 // States with a (possibly dead) agent behind them: they get a LeaseView.
