@@ -58,6 +58,7 @@ export const api = {
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
   boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
+  search: (q) => call('GET', `/api/search?${new URLSearchParams({ q })}`),
   createBoard: (body) => mut('POST', '/api/boards', body),
   renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
   archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),

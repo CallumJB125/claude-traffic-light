@@ -2,6 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
+import { tacklePreference, rememberTackle } from './tackle.js';
 import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
@@ -564,7 +565,7 @@ function rememberBoard() {
   }
 }
 
-async function switchBoard(id) {
+async function switchBoard(id, { openCard = null, section = null } = {}) {
   if (!state.boards.some((b) => b.id === id)) return;
   socket?.close(); socket = null;
   state.board = null;
@@ -577,7 +578,8 @@ async function switchBoard(id) {
   try { sessionStorage.removeItem('board-filters'); } catch { /* storage off */ }
   const query = new URLSearchParams(location.search);
   query.set('board', id); query.delete('q'); query.delete('f');
-  history.replaceState(null, '', `${location.pathname}?${query}`);
+  const fragment = openCard ? `#${new URLSearchParams({ card: openCard, ...(section ? { section } : {}) })}` : '';
+  history.replaceState(null, '', `${location.pathname}?${query}${fragment}`);
   state.conn = { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null };
   await boot();
 }
@@ -997,10 +999,14 @@ async function submitFeedback() {
 }
 
 function openFromHash() {
-  const m = location.hash.match(/^#card=(.+)$/);
-  if (!m) return;
-  const id = decodeURIComponent(m[1]);
-  const tryOpen = () => { if (state.cards.has(id)) openDetail(id); else if (state.conn.status !== 'open') setTimeout(tryOpen, 200); };
+  const query = new URLSearchParams(location.hash.slice(1)), id = query.get('card');
+  if (!id) return;
+  const section = query.get('section'), generation = boardGeneration;
+  const tryOpen = () => {
+    if (generation !== boardGeneration) return;
+    if (state.cards.has(id)) openDetail(id, section);
+    else if (state.conn.status !== 'open') setTimeout(tryOpen, 200);
+  };
   tryOpen();
 }
 
@@ -1073,13 +1079,15 @@ async function loadRepos() {
 async function openGive(cardId, mode) {
   const v = viewOf(cardId);
   if (!v) return;
+  const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
-    kind: 'give', cardId, mode,
-    target: state.me.member.id,
+    kind: 'give', cardId, mode, instance: {},
+    target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
-    ai: 'codex', budget_mode: 'cap',
-    budget_usd: v.budget?.cap_usd ?? state.board?.settings?.default_budget_usd ?? 5,
+    ai: retry ? v.run?.ai ?? 'claude' : preference.ai,
+    budget_mode: retry || v.budget?.cap_usd != null ? 'cap' : preference.budget_mode,
+    budget_usd: retry ? Math.max(v.budget?.cap_usd ?? 0, v.budget?.spent_usd ?? 0) + 0.5 : v.budget?.cap_usd ?? preference.budget_usd,
     plan_approval: (v.labels ?? []).includes(PLAN_LABEL),
     repos: state.repos,
     preview: { loading: true },
@@ -1119,6 +1127,8 @@ async function loadPreview() {
 
 async function submitGive(form) {
   const d = state.dialog;
+  const generation = boardGeneration, memberId = state.me?.member?.id;
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && state.dialog?.instance === d.instance;
   const v = viewOf(d.cardId);
   const fd = new FormData(form);
   const target = fd.get('target') || state.me.member.id;
@@ -1139,16 +1149,24 @@ async function submitGive(form) {
     if (repo_id !== (v.repo?.id ?? null)) patch.repo_id = repo_id;
     if (base_ref !== (v.base_ref ?? null)) patch.base_ref = base_ref;
     if (labels.size !== (v.labels ?? []).length || [...labels].some((l) => !(v.labels ?? []).includes(l))) patch.labels = [...labels];
-    if (Object.keys(patch).length) applyCard(await api.patchCard(d.cardId, { version: v.version, ...patch }));
+    if (Object.keys(patch).length) {
+      const changed = await api.patchCard(d.cardId, { version: v.version, ...patch });
+      if (!current()) return;
+      applyCard(changed);
+    }
+    if (!current()) return;
     const isMe = target === state.me.member.id;
-    const action = d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
+    const action = d.mode === 'retry' ? 'retry' : d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
     const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget };
     const res = await api.action(d.cardId, action, body);
+    if (!current()) return;
+    rememberTackle(memberId, { ai, budget_mode: uncapped ? 'none' : 'cap', budget_usd: Number.isFinite(budget) && budget >= 0.5 ? budget : d.budget_usd });
     applyCard(res);
     state.dialog = null;
     const name = state.members.get(target)?.name;
     toast(isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
   } catch (err) {
+    if (!current()) return;
     state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
   }
   update();
@@ -1281,11 +1299,12 @@ function togglePalette() {
   if (state.auth !== 'ok' || !state.board) return;
   if (state.dialog?.kind === 'palette') { closePalette(); return; }
   if (root.querySelector('dialog[open]:not([data-dialog="drawer"])')) return;
-  state.dialog = { kind: 'palette', query: '', index: 0, scope: null };
+  state.dialog = { kind: 'palette', query: '', index: 0, scope: null, instance: {} };
   renderNow();
 }
 
 function closePalette() {
+  clearTimeout(searchTimer);
   state.dialog = null;
   renderNow();
 }
@@ -1299,9 +1318,11 @@ function runPalette(item, { give = false } = {}) {
   const run = give ? { type: 'give', ...item.give } : item.run;
   if (!run) return;
   if (run.type === 'scope-give') { state.dialog = { ...state.dialog, scope: 'give', query: '', index: 0 }; renderNow(); return; }
+  if (run.type === 'scope-search') { state.dialog = { ...state.dialog, scope: 'search', query: '', index: 0, instance: {}, search: null }; renderNow(); return; }
   closePalette();
   switch (run.type) {
     case 'open-card': openDetail(run.id); break;
+    case 'open-search': openSearchResult(run); break;
     case 'view': setView(run.view); break;
     case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
     case 'new-card': openNewCard(); break;
@@ -1313,6 +1334,42 @@ function runPalette(item, { give = false } = {}) {
     case 'filter-clear': setFilters(emptyFilters()); break;
     default:
   }
+}
+
+let searchTimer = null;
+function searchSoon() {
+  clearTimeout(searchTimer);
+  const d = state.dialog, generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org
+    && state.dialog?.kind === 'palette' && state.dialog.scope === 'search' && state.dialog.instance === d.instance && state.dialog.query === d.query;
+  state.dialog = { ...d, search: null, searchError: null, searchLoading: d.query.trim().length >= 2 };
+  if (!state.dialog.searchLoading) return;
+  searchTimer = setTimeout(async () => {
+    if (!current()) return;
+    try {
+      const result = await api.search(d.query);
+      if (current()) { state.dialog = { ...state.dialog, search: result, searchLoading: false, index: 0 }; update(); }
+    } catch (error) {
+      if (current()) { state.dialog = { ...state.dialog, searchError: errorText(error), searchLoading: false }; update(); }
+    }
+  }, 150);
+}
+
+async function openSearchResult(run) {
+  const generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org;
+  try {
+    // Search is a snapshot; opening still checks the current resource access.
+    const data = await api.card(run.id);
+    if (!current()) return;
+    if (data.card.archived || data.card.board_id !== run.boardId) { toast('This work has changed. Search again.'); return; }
+    if (run.boardId === state.boardId) { openDetail(run.id, run.section); return; }
+    const result = await api.boards();
+    if (!current()) return;
+    if (!result.boards.some((board) => board.id === run.boardId && !board.archived_at)) { toast('This board is no longer available.'); return; }
+    state.boards = result.boards;
+    await switchBoard(run.boardId, { openCard: run.id, section: run.section });
+  } catch (error) { if (current()) toast(errorText(error)); }
 }
 
 function paletteKeydown(e) {
@@ -1521,7 +1578,11 @@ function onClick(e) {
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
     case 'stop': case 'cancel': case 'take_over_confirm':
       state.dialog = { kind: 'confirm', action, cardId }; update(); return;
-    case 'take_over': case 'take_over_myself': case 'retry': case 'approve_done':
+    case 'retry':
+      if (viewOf(cardId)?.fail_kind === 'budget') openGive(cardId, 'retry');
+      else doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId)));
+      return;
+    case 'take_over': case 'take_over_myself': case 'approve_done':
       doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId))); return;
     case 'request_changes': state.dialog = { kind: 'changes', cardId }; update(); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
@@ -1530,7 +1591,7 @@ function onClick(e) {
       withBusy(`pr:${prId}`, () => api.answerPermission(prId, el.dataset.decision, el.dataset.scope)).then((res) => {
         if (!res) return;
         applyCard(res);
-        toast(el.dataset.decision === 'deny' ? 'Denied. Claude is told why it can’t run that.' : 'Allowed. Claude continues.');
+        toast(el.dataset.decision === 'deny' ? 'Denied. The agent is told why it can’t run that.' : 'Allowed. The agent can continue.');
         if (state.detail) refreshDetail(state.detail.cardId);
       });
       return;
@@ -1625,7 +1686,11 @@ function onSubmit(e) {
 function onInput(e) {
   const el = e.target.closest?.('[data-input]');
   if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
-  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') { state.dialog = { ...state.dialog, query: el.value, index: 0 }; update(); }
+  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') {
+    state.dialog = { ...state.dialog, query: el.value, index: 0 };
+    if (state.dialog.scope === 'search') searchSoon();
+    update();
+  }
 }
 
 function onChange(e) {

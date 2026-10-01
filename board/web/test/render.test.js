@@ -226,7 +226,7 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   const t = textOf(n);
   assert.match(t, /Tackle BDL-1 with AI/);
   assert.match(t, /Overlaps 1 live card/);
-  assert.match(t, /BDL-9 \(Bob's Claude\) is editing backend\/routes\/applications\.js, which this card mentions/);
+  assert.match(t, /BDL-9 \(Bob's agent\) is editing backend\/routes\/applications\.js, which this card mentions/);
   assert.match(t, /Runs on your machine · your Codex account/);
   const radios = findAll(n, (x) => x.tag === 'input' && x.props.type === 'radio');
   assert.equal(radios.find((r) => r.props.checked).props.value, 'm-alice');

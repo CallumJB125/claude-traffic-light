@@ -20,6 +20,7 @@ import { redact } from './log.js';
 import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
+import { searchWork } from './search.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -43,7 +44,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 // An invite's answer is its link and code, shown once: the replay entry never holds them.
 const INVITE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } } });
-const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
+const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand', 'ai']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.md': 'text/markdown; charset=utf-8' };
 
@@ -345,6 +346,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     }, { auth: 'user', replay: false });
     route('GET', '/api/client/approvals/:approval_id', ({ ident, params }) => artifacts.approval(ident.user, params.approval_id, ident.cred), { auth: 'user', replay: false });
     route('POST', '/api/client/approvals/:approval_id/decision', ({ ident, params, body, ip }) => artifacts.decide(ident.user, params.approval_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
+    const feedback = hub.clientFeedback;
+    route('GET', '/api/boards/:board_id/client-feedback-intake', ({ member, params, ident }) => feedback.config(member, params.board_id, ident.cred), { replay: false });
+    route('PATCH', '/api/boards/:board_id/client-feedback-intake', ({ member, params, body, ip, ident }) => feedback.configure(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('GET', '/api/client/items/:item_id/feedback', ({ ident, params }) => feedback.list(ident.user, params.item_id, ident.cred), { auth: 'user', replay: false });
+    route('POST', '/api/client/items/:item_id/feedback', ({ ident, params, body, ip }) => feedback.create(ident.user, params.item_id, body, { ip, cred: ident.cred }), { auth: 'user', replay: false });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
@@ -374,6 +380,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
   route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/search', ({ member, query, ident }) => searchWork(hub, member, query, { cred: ident?.cred }), { limit: 'search_member' });
   route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));

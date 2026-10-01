@@ -12,3 +12,18 @@ export function tackleChoices(runners = []) {
   });
 }
 export const readinessText = (reason) => ({ not_installed: 'not installed', signed_out: 'sign in first', unsupported_version: 'update Codex first', may_need_sign_in: 'may need sign-in' }[reason] ?? '');
+
+export function tacklePreference(memberId, storage, defaultBudget = 5) {
+  const defaults = { ai: 'codex', budget_mode: 'cap', budget_usd: Number.isFinite(defaultBudget) && defaultBudget >= 0.5 && defaultBudget <= 1000 ? defaultBudget : 5 };
+  if (!memberId) return defaults;
+  try {
+    const value = JSON.parse((storage ?? globalThis.localStorage).getItem(`plexiform-tackle:${memberId}`));
+    return { ai: AI_IDS.includes(value?.ai) ? value.ai : defaults.ai,
+      budget_mode: value?.budget_mode === 'none' ? 'none' : 'cap',
+      budget_usd: Number.isFinite(value?.budget_usd) && value.budget_usd >= 0.5 && value.budget_usd <= 1000 ? value.budget_usd : defaults.budget_usd };
+  } catch { return defaults; }
+}
+export function rememberTackle(memberId, choice, storage) {
+  if (!memberId) return;
+  try { (storage ?? globalThis.localStorage).setItem(`plexiform-tackle:${memberId}`, JSON.stringify(choice)); } catch { /* storage off */ }
+}

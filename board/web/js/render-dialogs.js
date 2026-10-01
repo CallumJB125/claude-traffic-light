@@ -3,7 +3,7 @@
 // Escape for free; app.js opens them after render.
 import { h } from './h.js';
 import { icon, pixelClaude } from './icons.js';
-import { formatAge } from './view.js';
+import { formatAge, fmtUsd } from './view.js';
 import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
@@ -36,11 +36,11 @@ function overlapWarning(preview, targetName) {
   return h('div', { class: 'callout callout-warn', role: 'status' },
     h('p', { class: 'callout-title' }, icon('warn', 'icon-xs'), `Overlaps ${list.length} live card${list.length > 1 ? 's' : ''}`),
     h('ul', null, list.slice(0, 4).map((o) => h('li', { key: o.other_card_id },
-      h('strong', null, o.other_key), o.other_owner ? ` (${o.other_owner}'s Claude)` : '',
+      h('strong', null, o.other_key), o.other_owner ? ` (${o.other_owner}'s agent)` : '',
       o.kind === 'adjacent' ? ' is working nearby' : ' is editing',
       o.paths?.length ? [' ', h('code', null, o.paths[0]), o.paths.length > 1 ? ` +${o.paths.length - 1}` : ''] : '',
       o.kind === 'adjacent' ? '' : ', which this card mentions'))),
-    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s Claude` : 'Claude'} will see the same warning while it works.`));
+    h('p', { class: 'hint' }, `This never blocks. ${targetName ? `${targetName}'s agent` : 'The agent'} will see the same warning while it works.`));
 }
 
 export function giveDialog(dlg, model) {
@@ -59,9 +59,12 @@ export function giveDialog(dlg, model) {
   const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
   const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
   const waiting = !!dlg.preview?.loading;
+  const deviceLimit = dlg.mode === 'retry' && view.run?.budget_stop === 'device';
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
+    dlg.mode === 'retry' ? h('p', { class: 'hint' }, deviceLimit ? 'The machine owner must change their local limit before retrying. Raising this card budget cannot override it.' : `Spent across this card: ${fmtUsd(view.budget?.spent_usd ?? 0)}. Choose a higher total card budget to continue.`) : null,
+    uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
     h('fieldset', { class: 'field runner-pick' },
       h('legend', null, 'Whose machine runs it'),
       members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
@@ -100,7 +103,7 @@ export function giveDialog(dlg, model) {
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
-      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
+      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || deviceLimit || (dlg.mode === 'retry' && uncapped) || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
         busy ? 'Queuing…' : isMe ? 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 

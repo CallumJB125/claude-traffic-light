@@ -412,6 +412,8 @@ body.is-card-dragging .board { scroll-snap-type: none; }
 .pal-opt[data-tone="amber"] .pal-icon { color: var(--tone-amber); }
 .pal-opt[data-tone="red"] .pal-icon { color: var(--tone-red); }
 .pal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-opt[data-kind="search"] { padding-block: 8px; }
+.pal-snippet { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: var(--text-xs); }
 .pal-hit { color: var(--accent); font-weight: 650; }
 .pal-hint { flex: none; color: var(--faint); font-size: var(--text-xs); }
 .pal-empty { padding: 22px 12px; text-align: center; color: var(--muted); }

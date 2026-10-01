@@ -1236,7 +1236,11 @@ const FEED_TEXT = {
 export function feedEvent(hub, ev) {
   const data = json(ev.payload, {});
   let text = FEED_TEXT[ev.kind] ?? null;
-  if (ev.kind === 'progress') text = data.text;
+  if (ev.kind === 'created' && data.client_feedback_id) {
+    const source = hub.clientFeedback?.cardProvenance(ev.card_id);
+    text = source ? `Feedback from ${source.source_name} · intake authorized by ${source.intake_name}` : 'Client feedback received through staff-authorized intake';
+  }
+  else if (ev.kind === 'progress') text = data.text;
   else if (ev.kind === 'message') text = data.text;
   else if (ev.kind === 'error') text = data.first_line;
   else if (ev.kind === 'subagent') text = data.summary;
