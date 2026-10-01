@@ -1,5 +1,6 @@
 {
   "name": "claude-buddy",
+  "productName": "Plexiform",
   "version": "1.0.0",
   "description": "A pixel Claude that lives on your desk: a programmable traffic light for every Claude Code (and Cursor, Codex, Gemini\u2026) session \u2014 lights, moods, costumes, pets, a garden, and clicks that do things.",
   "main": "main.js",
@@ -28,8 +29,8 @@
   "author": "",
   "license": "MIT",
   "build": {
-    "appId": "com.callumbaker.claude-buddy",
-    "productName": "Claude Buddy",
+    "appId": "dev.plexiform.app",
+    "productName": "Plexiform",
     "files": [
       "main.js",
       "src/**/*",
@@ -122,10 +123,10 @@
       "category": "public.app-category.developer-tools",
       "target": "dmg",
       "extendInfo": {
-        "NSCalendarsFullAccessUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
-        "NSCalendarsUsageDescription": "Claude Buddy reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
-        "NSMicrophoneUsageDescription": "Claude Buddy listens only while you hold the talk key or press and hold the widget, to answer your question.",
-        "NSSpeechRecognitionUsageDescription": "Claude Buddy turns your question into text on this Mac. Audio is never stored or sent anywhere."
+        "NSCalendarsFullAccessUsageDescription": "Plexiform reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
+        "NSCalendarsUsageDescription": "Plexiform reads when your calendar events start and end, and whether they are marked busy, so it can hold non-urgent pings while you are in a meeting. It does not read event titles unless you turn that on.",
+        "NSMicrophoneUsageDescription": "Plexiform listens only while you hold the talk key or press and hold the widget, to answer your question.",
+        "NSSpeechRecognitionUsageDescription": "Plexiform turns your question into text on this Mac. Audio is never stored or sent anywhere."
       },
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",

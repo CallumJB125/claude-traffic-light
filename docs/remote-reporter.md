@@ -33,7 +33,7 @@ remote.js heartbeat --every 30 ── state of each live session ─────
    and Node 18+:
 
    ```bash
-   git clone <this repo> ~/claude-buddy && cd ~/claude-buddy
+   git clone <this repo> ~/plexiform && cd ~/plexiform
    node hooks/install.js --remote http://127.0.0.1:47173   # or: node hooks/remote.js pair <url | unix:/path.sock>
    # paste the pairing code when asked (it isn't echoed)
    ```
@@ -51,7 +51,7 @@ remote.js heartbeat --every 30 ── state of each live session ─────
    up:
 
    ```bash
-   node ~/claude-buddy/hooks/remote.js heartbeat --every 30    # in tmux, or a systemd user unit
+   node ~/plexiform/hooks/remote.js heartbeat --every 30    # in tmux, or a systemd user unit
    ```
 
 `node hooks/remote.js status` checks the pairing end to end. It reports

@@ -1,6 +1,7 @@
 // Plain-language help for the widget, and which states deserve a macOS
 // notification. Pure: main.js feeds it the resolved state and does the I/O.
 const Rules = require('./rules.js');
+const Brand = require('./brand.js');
 
 // ── First run ───────────────────────────────────────────────────────────────
 // The help panel opens by itself once per install, the first time the app
@@ -94,7 +95,7 @@ function explain(state, rules, extra = {}) {
   const byId = new Map((rules || []).map((r) => [r.id, r]));
   const lampRule = byId.get(owned.lamp);
   const out = {
-    headline: (state.firedNames && state.firedNames[0]) || look.name || 'Claude Buddy',
+    headline: (state.firedNames && state.firedNames[0]) || look.name || Brand.name,
     lamp: look.lamp || 'off',
     lampText: LAMP_TEXT[look.lamp] || LAMP_TEXT.off,
     meaning: ruleText(lampRule),

@@ -13,7 +13,7 @@ const { createService } = require('../src/updater/service.js');
 const { keyPair, startFeed, publish, tmpDir } = require('./updater-feed.js');
 
 const mac = process.platform === 'darwin';
-const ID = 'com.callumbaker.claude-buddy';
+const ID = require('../brand.js').appId;
 const quiet = { warn() {}, log() {} };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -55,4 +55,4 @@ function run({ home, mcp = null }) {
   return results;
 }
 
-module.exports = { run, commandsIn };
+module.exports = { run, commandsIn, holdsOurs };

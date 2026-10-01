@@ -9,6 +9,13 @@ if (process.argv.includes('--uninstall-hooks')) {
   require('./hooks/uninstall-hooks.js').main({ mcp: require('./mcp-install.js') });
   process.exit(0);
 }
+// `--rename-dry-run`: prints what the first launch after the rename from Claude Buddy
+// would do on this machine, writes nothing and exits, before anything creates
+// the userData folder (Electron is never asked for it; no crash reporter, log file or lock).
+if (process.argv.includes('--rename-dry-run')) {
+  require('./src/rename-dry-run.js').main();
+  process.exit(0);
+}
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, screen, clipboard, systemPreferences, nativeImage, dialog, net, powerMonitor, Notification, globalShortcut } = require('electron'); // privacy-flow: ics-feed
 const path = require('path');
 const fs = require('fs');
@@ -75,7 +82,7 @@ if (DEMO === 'agents') {
   const since = new Date().toISOString();
   const agent = (id, name, kind, status) => ({ id, name, kind, status, since, parent: 'demo' });
   writeJsonAtomic(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions', 'demo-agents.json'), {
-    sessionId: 'demo', host: 'demo', cwd: '/demo/claude-buddy', signal: 'tool-use', tool: 'Agent',
+    sessionId: 'demo', host: 'demo', cwd: '/demo/plexiform', signal: 'tool-use', tool: 'Agent',
     workingSince: since, tasks: { created: 0, done: 0 }, mode: 'ralph', iteration: 7,
     agents: [
       agent('a1', 'executor', 'subagent', 'working'),
@@ -91,8 +98,8 @@ if (DEMO === 'agents') {
 // `--demo knock`: walk to the terminal's Dock icon and knock, once, then quit.
 if (DEMO === 'knock') {
   // Must NOT be the same directory as the demo's Chromium userData
-  // (claude-buddy-demo-knock) — sharing it wedges the app before `ready`.
-  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-buddy-knock-home');
+  // (plexiform-demo-knock) — sharing it wedges the app before `ready`.
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'plexiform-knock-home');
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
   fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
   fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
@@ -149,6 +156,29 @@ const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
 
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
+
+// First launch after the rename from Claude Buddy: copy the old userData
+// across before anything opens it (the instance lock, safeStorage, the
+// updater, the team window). Only for the installed app in its own folder:
+// not dev runs, a checkout, or a --user-data-dir run such as the smoke test.
+// The folder is worked out, not asked for: asking Electron for it creates it.
+const RenameMigration = require('./src/rename-migration.js');
+const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && !app.commandLine.hasSwitch('user-data-dir');
+const listOldProcesses = () => RenameMigration.listProcesses(process.platform);
+// process.kill on Windows is TerminateProcess; taskkill without /F asks the app to close.
+const killOld = process.platform === 'win32'
+  ? (pid) => require('child_process').execFileSync('taskkill', ['/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
+  : process.kill;
+const OLD_USER_DATA = path.join(app.getPath('appData'), RenameMigration.OLD.userDataName);
+const quitOldOpts = { platform: process.platform, home: os.homedir(), listProcesses: listOldProcesses, kill: killOld, oldUserData: OLD_USER_DATA };
+// The old app is asked to quit first, so its databases aren't copied mid-write; if it won't, the copy waits for the next launch.
+const renameCopy = RENAME_MIGRATES ? RenameMigration.copyUserData({
+  appData: app.getPath('appData'),
+  userData: path.join(app.getPath('appData'), app.getName()),
+  quitOld: () => RenameMigration.quitOldInstance(quitOldOpts).running.length === 0,
+}) : null;
+const copied = !!renameCopy?.copied;
+if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
 
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
@@ -328,14 +358,18 @@ function areHooksInstalled() {
 }
 
 // An unparsable settings.json is left alone rather than written over.
-// Returns the error message, or null.
-function installHooks() {
-  try { Adapters.get('claude').install(claudeHookOpts()); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
+// Returns the error message, or null. narrow: while the rename's hooks step
+// is pending (and once the old app has quit), only the old app's entries and
+// this app's are replaced, never a look-alike script or a dev checkout's.
+function installHooks({ narrow = RENAME_MIGRATES && RenameMigration.pending(app.getPath('userData')).includes('hooks') } = {}) {
+  const opts = claudeHookOpts();
+  try { Adapters.get('claude').install({ ...opts, strip: narrow ? RenameMigration.renameStrip(Adapters.get('claude'), opts) : undefined }); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
 }
-// Opened straight from Downloads, macOS runs a random read-only copy; hooks
-// pinned to it break at the next launch, so none are written (Health says why).
-const TRANSLOCATED = /\/AppTranslocation\//.test(process.execPath);
-const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !TRANSLOCATED;
+// Opened straight from Downloads, macOS runs a random read-only copy; run
+// from a mounted disk image, the app is gone once it is ejected. Hooks pinned
+// to either break, so none are written (Health says why).
+const EPHEMERAL = RenameMigration.EPHEMERAL_PATH.test(process.execPath);
+const AUTO_INSTALL_HOOKS = !IS_DEV_RUN && !EPHEMERAL;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 fs.mkdirSync(REQUESTS_DIR, { recursive: true });
@@ -1049,7 +1083,7 @@ function createSettingsWindow() {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    title: 'Claude Buddy Preferences',
+    title: `${Brand.name} Preferences`,
     webPreferences: {
       spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
@@ -2362,7 +2396,7 @@ function createTray() {
   refreshTrayMenu = rebuildTrayMenu;
   if (IS_DEV_RUN && !app.isPackaged) global.__buddyTrayMenu = trayMenu;
   if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
-  tray.setToolTip('Claude Buddy');
+  tray.setToolTip(Brand.shortName);
   tray.setContextMenu(trayMenu);
   updateTrayMode();
 }
@@ -2595,7 +2629,7 @@ ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
-  const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
+  const name = `plexiform-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
@@ -3352,7 +3386,7 @@ ipcMain.handle('import-rules', async () => {
 // Dev runs register into a sandbox HOME.
 function mcpOpts() {
   return {
-    home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
+    home: IS_DEV_RUN ? path.join(os.tmpdir(), 'plexiform-mcp-dev-home') : os.homedir(),
     entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
@@ -3439,7 +3473,7 @@ ipcMain.handle('health-fix', (_e, id) => {
   let error = null;
   try {
     if (id === 'reinstall-hooks') {
-      if (!AUTO_INSTALL_HOOKS) error = TRANSLOCATED ? 'Buddy is running from a temporary copy; move it to Applications first' : 'dev runs never install hooks';
+      if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Buddy is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
     } else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
@@ -3554,7 +3588,7 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
 ipcMain.handle('setup-export', async (e) => {
-  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'plexiform-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
@@ -3632,7 +3666,7 @@ function maybePlayAlertSound() {
 // so the new process exited having printed nothing at all. That is the "the
 // test just does nothing" failure. A per-pid profile cannot collide, cannot
 // inherit a stale lock, and is deleted on the way out.
-const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `claude-buddy-dev-${process.pid}`) : null;
+const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `plexiform-dev-${process.pid}`) : null;
 if (DEV_PROFILE) {
   app.setPath('userData', DEV_PROFILE);
   const sweep = () => { try { fs.rmSync(DEV_PROFILE, { recursive: true, force: true }); } catch { /* already gone */ } };
@@ -3641,7 +3675,7 @@ if (DEV_PROFILE) {
   // Sweep profiles orphaned by a hard kill, so /tmp doesn't fill up.
   try {
     for (const d of fs.readdirSync(os.tmpdir())) {
-      const m = /^claude-buddy-dev-(\d+)$/.exec(d);
+      const m = /^plexiform-dev-(\d+)$/.exec(d);
       if (!m || Number(m[1]) === process.pid) continue;
       try { process.kill(Number(m[1]), 0); continue; } catch { /* that pid is gone */ }
       fs.rmSync(path.join(os.tmpdir(), d), { recursive: true, force: true });
@@ -3696,6 +3730,44 @@ if (!gotLock) {
   });
 }
 
+// While the old app is installed its Open at Login can start it again, and
+// the two would fight over the hooks: ask it to quit, and say why. Runs at
+// start (waiting up to 5 s, so it frees the signal port), 30 s later and on
+// wake (not waiting). Its own start-up install may have pointed the hooks back
+// at itself, so once it has gone they are put back.
+function quitOldAppIfInstalled(waitMs = 0) {
+  if (!RenameMigration.oldAppInstalled({ platform: process.platform, home: os.homedir() })) return;
+  const { asked } = RenameMigration.quitOldInstance({ ...quitOldOpts, waitMs });
+  if (asked.length) RenameMigration.whenGone(asked, () => { if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks({ narrow: true }); });
+  if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
+}
+
+// src/rename-migration.js, after ready; each step runs until it succeeds.
+function renameFollowUp() {
+  const home = os.homedir();
+  quitOldAppIfInstalled(5000);
+  if (renameCopy?.retry && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings come across next launch`, body: `${RenameMigration.OLD.productName} was still running. Quit it, then open ${Brand.name} again.`, silent: true }).show();
+  if (renameCopy?.gaveUp && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings did not come across`, body: `${Brand.name} stopped trying after ${RenameMigration.MAX_TRIES} launches (${renameCopy.reason}). Your old settings are still in ${OLD_USER_DATA}.`, silent: true }).show();
+  return RenameMigration.runFollowUp({
+    userData: app.getPath('userData'),
+    steps: {
+      // From a translocated copy or a disk image the hooks would point at a temporary path, and any
+      // config that couldn't be rewritten still runs the old app: either way, try again next launch.
+      hooks: () => (AUTO_INSTALL_HOOKS ? RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }).every((r) => !r.error) : false),
+      login: () => {
+        if (EPHEMERAL) return false;
+        if (RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }) && Notification.isSupported()) new Notification({ title: `${Brand.name} opens at login`, body: `As ${RenameMigration.OLD.productName} was set to. Turn it off from the tray menu if you'd rather it didn't.`, silent: true }).show();
+      },
+      // An ephemeral copy can't re-point the hooks, so the old app stays until it can.
+      'remove-old-app': () => !EPHEMERAL && RenameMigration.offerRemoveOldApp({
+        platform: process.platform, home, name: Brand.name, stillUsedBy: RenameMigration.findOldReferences({ home, runtime: HOOK_RUNTIME }),
+        showDialog: (opts) => { app.focus({ steal: true }); return dialog.showMessageBox(opts); },
+        trashItem: (p) => shell.trashItem(p),
+      }),
+    },
+  });
+}
+
 app.whenReady().then(() => {
   if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
@@ -3704,6 +3776,13 @@ app.whenReady().then(() => {
   // An AppImage's copies for older versions go only once this is the one running instance.
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
+  // The rest of the rename migration, once, before the hook check below: a
+  // running old copy is asked to quit and every agent config already points
+  // here. Its last step (offer to bin the old app) waits on the person.
+  if (RENAME_MIGRATES && gotLock) {
+    renameFollowUp().catch((err) => console.warn('[rename]', err.message));
+    RenameMigration.watchOldApp({ check: quitOldAppIfInstalled, powerMonitor });
+  }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();
@@ -3878,7 +3957,7 @@ app.whenReady().then(() => {
       // stderr, and a file: a GUI Electron process does not reliably deliver
       // stdout to a redirected shell.
       console.error('[demo knock]', JSON.stringify(report, null, 2));
-      try { fs.writeFileSync(path.join(os.tmpdir(), 'claude-buddy-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
+      try { fs.writeFileSync(path.join(os.tmpdir(), 'plexiform-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
       setTimeout(() => app.quit(), 2500);
     }, 2000);
   }

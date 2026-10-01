@@ -33,20 +33,40 @@ function normalize(event, payload) {
 // "allow" keeps Cursor unblocked: Buddy watches, it never gates.
 const reply = (event) => (NEEDS_REPLY.has(event) ? { permission: 'allow', continue: true } : null);
 
-function strip(hooksJson) {
+function strip(hooksJson, ours = isOurs) {
   const out = hooksJson && typeof hooksJson === 'object' ? { ...hooksJson } : {};
   out.version = out.version || 1;
   out.hooks = {};
   for (const [ev, list] of Object.entries((hooksJson && hooksJson.hooks) || {})) {
-    const kept = (Array.isArray(list) ? list : []).filter((h) => !isOurs(h && h.command));
+    const kept = (Array.isArray(list) ? list : []).filter((h) => !ours(h && h.command));
     if (kept.length) out.hooks[ev] = kept;
   }
   return out;
 }
 
-function apply(hooksJson, runtime) {
-  const out = strip(hooksJson);
-  for (const ev of EVENTS) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
+// opts.strip: which of ours are replaced, where they stand (the rename's
+// re-point: each event's first one becomes the current entry, the rest go);
+// without it every one of ours goes and the current set is appended.
+function apply(hooksJson, runtime, opts = {}) {
+  if (!opts.strip) {
+    const out = strip(hooksJson);
+    for (const ev of EVENTS) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
+    return out;
+  }
+  const out = hooksJson && typeof hooksJson === 'object' ? { ...hooksJson } : {};
+  out.version = out.version || 1;
+  out.hooks = {};
+  const done = new Set();
+  for (const [ev, list] of Object.entries((hooksJson && hooksJson.hooks) || {})) {
+    const kept = (Array.isArray(list) ? list : []).flatMap((h) => {
+      if (!opts.strip(h && h.command)) return [h];
+      if (!EVENTS.includes(ev) || done.has(ev)) return [];
+      done.add(ev);
+      return [{ command: commandFor(ev, runtime) }];
+    });
+    if (kept.length) out.hooks[ev] = kept;
+  }
+  for (const ev of EVENTS) if (!done.has(ev)) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
   return out;
 }
 

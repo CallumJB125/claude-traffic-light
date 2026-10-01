@@ -233,7 +233,7 @@
       if (t.unpricedTurns) kids.push(el('p', { class: 'uv-note', text: `${num(t.unpricedTurns)} turn${t.unpricedTurns === 1 ? '' : 's'} on models with no price (${d.dayFamily.unpricedModels.join(', ')}) are shown as Unpriced and left out of the cost.` }));
 
       if (!d.first) {
-        kids.push(el('p', { class: 'uv-empty', text: 'Nothing is recorded yet. Claude Buddy records your usage as you work, and reads the transcripts Claude Code still has the first time it runs.' }));
+        kids.push(el('p', { class: 'uv-empty', text: 'Nothing is recorded yet. Plexiform records your usage as you work, and reads the transcripts Claude Code still has the first time it runs.' }));
         root.replaceChildren(...kids);
         return;
       }
@@ -349,7 +349,7 @@
       if (!d) return;
       const text = kind === 'csv' ? I.toCsv(d.dayFamily.rows) : JSON.stringify({ range: { from: d.p.from, to: d.p.to }, mode: d.mode, total: d.dayFamily.total, rows: d.dayFamily.rows, priceVersion: d.dayFamily.priceVersion }, null, 2);
       const url = URL.createObjectURL(new Blob([text], { type: kind === 'csv' ? 'text/csv' : 'application/json' }));
-      const a = el('a', { href: url, download: `claude-buddy-usage-${d.p.from}-to-${d.p.to}.${kind}` });
+      const a = el('a', { href: url, download: `plexiform-usage-${d.p.from}-to-${d.p.to}.${kind}` });
       document.body.append(a);
       a.click();
       a.remove();

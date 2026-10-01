@@ -44,11 +44,12 @@ const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 function wrapperText(rt) {
   if (isWin(rt)) return `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${rt.execPath}" %*\r\n`;
-  return `#!/bin/sh\n# Claude Buddy hook runner: the app's own binary, running as Node.\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(rt.execPath)} "$@"\n`;
+  return `#!/bin/sh\n# Plexiform hook runner: the app's own binary, running as Node.\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(rt.execPath)} "$@"\n`;
 }
 
-// Written only when missing or different; returns the path, or null when the
-// runtime needs no wrapper (dev fallback).
+// Written only when missing or different, atomically: a hook firing mid-write
+// must never exec half a script. Returns the path, or null when the runtime
+// needs no wrapper (dev fallback).
 function ensureWrapper(rt, fsImpl = fs) {
   if (rt.node) return null;
   const file = wrapperPath(rt);
@@ -57,7 +58,7 @@ function ensureWrapper(rt, fsImpl = fs) {
   try { cur = fsImpl.readFileSync(file, 'utf8'); } catch { /* first write */ }
   if (cur !== text) {
     fsImpl.mkdirSync(pathFor(rt).dirname(file), { recursive: true });
-    fsImpl.writeFileSync(file, text, { mode: 0o755 });
+    writeTextAtomic(file, text, fsImpl, undefined, { newMode: 0o755 });
   }
   if (!isWin(rt)) { try { fsImpl.chmodSync(file, 0o755); } catch { /* best effort */ } }
   return file;
@@ -102,30 +103,61 @@ function runsScript(command, names) {
 function readJsonConfig(file, fsImpl = fs) {
   let text;
   try { text = fsImpl.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return {}; throw err; }
-  if (!text.trim()) return {};
-  const data = JSON.parse(text);
+  return parseJsonConfig(text, file);
+}
+
+const BOM = '\ufeff';
+
+function parseJsonConfig(text, file) {
+  const body = String(text).startsWith(BOM) ? String(text).slice(1) : String(text);
+  if (!body.trim()) return {};
+  const data = JSON.parse(body);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} is not a JSON object`);
   return data;
 }
 
+const mtimeOf = (file, fsImpl = fs) => { try { return fsImpl.statSync(file).mtimeMs; } catch { return null; } };
+
 // Atomic: a temp file beside it with the same mode, renamed over it, so an
 // agent reading its settings mid-write never sees half a file. A symlinked
 // config (dotfiles) is written through, never replaced by a plain file.
-function writeJsonConfig(link, data, fsImpl = fs) {
+// readAt (the mtime when it was read): if another program has written the
+// file since, nothing is written and this returns false, for the caller to
+// read it again. A read-only file is refused (temp plus rename would replace
+// it regardless). newMode: the mode for a file that doesn't exist yet.
+function writeTextAtomic(link, text, fsImpl = fs, readAt, { newMode } = {}) {
   fsImpl.mkdirSync(path.dirname(link), { recursive: true });
   let file = link;
   try { file = fsImpl.realpathSync(link); } catch { /* new file */ }
-  let mode;
-  try { mode = fsImpl.statSync(file).mode & 0o777; } catch { /* new file: default mode */ }
+  let mode = newMode;
+  let exists = false;
+  try { mode = fsImpl.statSync(file).mode & 0o777; exists = true; } catch { /* new file */ }
+  if (exists && !(mode & 0o200)) throw new Error(`${file} is read-only`);
   const tmp = `${file}.buddy-tmp.${process.pid}.${Date.now().toString(36)}`;
-  fsImpl.writeFileSync(tmp, JSON.stringify(data, null, 2), mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
+  fsImpl.writeFileSync(tmp, text, mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
   try {
     if (mode !== undefined) fsImpl.chmodSync(tmp, mode);
+    if (readAt !== undefined && mtimeOf(file, fsImpl) !== readAt) { fsImpl.unlinkSync(tmp); return false; }
     fsImpl.renameSync(tmp, file);
   } catch (err) {
     try { fsImpl.unlinkSync(tmp); } catch {}
     throw err;
   }
+  return true;
+}
+
+function writeJsonConfig(link, data, fsImpl = fs, readAt) {
+  return writeTextAtomic(link, JSON.stringify(data, null, 2), fsImpl, readAt);
+}
+
+// data as JSON in the style of `original`: its indentation (tabs or N
+// spaces), line endings, BOM and final newline (or its absence).
+function jsonTextLike(original, data) {
+  const s = String(original || '');
+  const ind = s.match(/^([ \t]+)\S/m);
+  const eol = s.includes('\r\n') ? '\r\n' : '\n';
+  const body = JSON.stringify(data, null, ind ? (ind[1][0] === '\t' ? '\t' : ind[1].length) : 2).replace(/\n/g, eol);
+  return (s.startsWith(BOM) ? BOM : '') + body + (/\n$/.test(s) ? eol : '');
 }
 
 // `<file>.buddy-backup`, once: never replaced, so it stays the file as it was
@@ -148,4 +180,27 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, writeJsonConfig, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+// The rename's re-point of the same shape: each event's first entry `isOurs`
+// claims becomes that event's wanted hook where it stands, the rest of ours
+// go, and an event with none of ours gets its wanted hook appended. Events,
+// groups and foreign hooks keep their order. wanted: [[event, hook]].
+function repointMatcherHooks(hooks, isOurs, wanted) {
+  const want = new Map(wanted);
+  const done = new Set();
+  const out = {};
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    const kept = (Array.isArray(groups) ? groups : [])
+      .map((h) => ({ ...h, hooks: (h.hooks || []).flatMap((hh) => {
+        if (!isOurs(hh.command)) return [hh];
+        if (!want.has(event) || done.has(event)) return [];
+        done.add(event);
+        return [want.get(event)];
+      }) }))
+      .filter((h) => h.hooks.length > 0);
+    if (kept.length) out[event] = kept;
+  }
+  for (const [event, hook] of want) if (!done.has(event)) out[event] = (out[event] || []).concat([{ matcher: '', hooks: [hook] }]);
+  return out;
+}
+
+module.exports = { stripMatcherHooks, repointMatcherHooks, jsonTextLike, readJsonConfig, parseJsonConfig, writeJsonConfig, writeTextAtomic, mtimeOf, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

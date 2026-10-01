@@ -163,6 +163,21 @@ the app allows, and only to exactly that version.
 and `/beta` under it (beta). The updater reads `release.json` there and, on
 Windows and AppImage, points electron-updater at the same folder.
 
+## Identity, and builds from before the rename
+
+Every release is `Plexiform.app` / `Plexiform.exe` / `plexiform` with bundle
+id and appId `dev.plexiform.app`, and `release.json` says
+`product: 'plexiform'` (test/rename-identity.test.js keeps package.json, the
+builder config, brand.js, the updater and release-sign in step). A local
+build from before the rename (`com.callumbaker.claude-buddy`) can't update
+itself to Plexiform: the macOS swap refuses an app with another bundle id.
+Install the DMG instead. On its first launch Plexiform copies the old
+`claude-buddy` data folder, re-points the hooks and the MCP entry, asks a
+running old copy to quit and offers to move it to the Bin
+(src/rename-migration.js). Windows and Linux get the data folder, hooks, MCP
+and login item; asking an old Windows copy to quit, or uninstalling it, is
+not handled (no release ever shipped under the old name there).
+
 ## R2 (Cloudflare)
 
 Bucket `plexiform-releases`. Secrets: `R2_ACCESS_KEY_ID`,

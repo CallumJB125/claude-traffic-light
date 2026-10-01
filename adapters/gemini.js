@@ -21,10 +21,17 @@ function normalize(event, payload) {
   return [{ signal, sessionId: d.session_id || d.sessionId || null, cwd: d.cwd || null, tool: /^tool-/.test(signal) ? (d.tool_name || null) : null, pid: null, extra: {} }];
 }
 
-function apply(settings, runtime) {
+// opts.strip: which of ours are replaced, where they stand (the rename's
+// re-point); without it every one of ours goes and the current set is appended.
+function apply(settings, runtime, opts = {}) {
   const out = { ...(settings && typeof settings === 'object' ? settings : {}) };
+  const wanted = EVENTS.map(([event]) => [event, { type: 'command', command: commandFor(event, runtime) }]);
+  if (opts.strip) {
+    out.hooks = Runtime.repointMatcherHooks(out.hooks, opts.strip, wanted);
+    return out;
+  }
   out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
-  for (const [event] of EVENTS) out.hooks[event] = (out.hooks[event] || []).concat([{ matcher: '', hooks: [{ type: 'command', command: commandFor(event, runtime) }] }]);
+  for (const [event, hook] of wanted) out.hooks[event] = (out.hooks[event] || []).concat([{ matcher: '', hooks: [hook] }]);
   return out;
 }
 

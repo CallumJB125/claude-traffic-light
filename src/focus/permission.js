@@ -1,4 +1,4 @@
-// macOS asks for Automation permission the first time Claude Buddy scripts a
+// macOS asks for Automation permission the first time Plexiform scripts a
 // terminal. That prompt names the app but not the reason, so the first time
 // an adapter that needs it actually runs, a notification says why. Never up
 // front: someone who only uses kitty is never asked about iTerm2.
@@ -21,7 +21,7 @@ function createExplainer({ load, save, notify, openSettings }) {
       if (!needs || needs.permission !== 'automation' || known().has(needs.app)) return null;
       known().add(needs.app);
       try { save([...known()]); } catch { /* shown again next launch: harmless */ }
-      notify({ title: `Claude Buddy will ask to control ${needs.app}`, body: `That's ${needs.reason}. macOS asks once; choose OK to allow it.` });
+      notify({ title: `Plexiform will ask to control ${needs.app}`, body: `That's ${needs.reason}. macOS asks once; choose OK to allow it.` });
       return { patient: true };
     },
     // Once per app per run: a refused permission would otherwise nag on every click.
@@ -30,7 +30,7 @@ function createExplainer({ load, save, notify, openSettings }) {
       deniedShown.add(needs.app);
       notify({
         title: `Can't switch to the exact ${needs.app} tab`,
-        body: 'Claude Buddy isn\'t allowed to control it. Click to open Privacy & Security › Automation and turn it on.',
+        body: 'Plexiform isn\'t allowed to control it. Click to open Privacy & Security › Automation and turn it on.',
         onClick: openSettings,
       });
     },

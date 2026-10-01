@@ -393,7 +393,7 @@ window.trafficLight.onVoice((st) => {
   document.body.classList.toggle('listening', listening);
   rig.talking(st.state === 'talking');
   if (listening) showVoiceText(st.partial ? `“${st.partial}”` : 'Listening…');
-  else if (st.state === 'authorizing') showVoiceText('Allow Claude Buddy in the macOS prompt');
+  else if (st.state === 'authorizing') showVoiceText(`Allow ${window.Brand.name} in the macOS prompt`);
   else if (st.state === 'thinking') showVoiceText(st.heard ? `“${st.heard}”` : '…');
   else if (st.state === 'talking') showVoiceText(st.text || '');
   else if (st.state === 'error') showVoiceText(st.error || 'Could not listen', 6000);

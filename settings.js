@@ -53,7 +53,7 @@
     const CAL_WORDS = {
       fullAccess: ['Connected.', true],
       notDetermined: ['Waiting for macOS calendar access. If no prompt appeared, untick and tick this again.', false],
-      denied: ['Calendar access is off. Turn on Claude Buddy in System Settings › Privacy & Security › Calendars.', false],
+      denied: ['Calendar access is off. Turn on Plexiform in System Settings › Privacy & Security › Calendars.', false],
       restricted: ['Calendar access is blocked on this Mac (a profile or Screen Time).', false],
       writeOnly: ['Buddy has “Add Events Only” access, which can’t see when you’re busy. Switch it to Full Access in System Settings › Privacy & Security › Calendars.', false],
       missing: ['Not available in this build (the calendar helper is missing). An ICS feed still works.', false],

@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const Runtime = require('./adapters/runtime.js');
 
 const NAME = 'claude-buddy';
 const SCRIPT = 'mcp-server.js';
@@ -27,36 +28,29 @@ function launch({ packaged, execPath, appPath, dir, root }) {
 
 const isOurs = (entry) => !!entry && Array.isArray(entry.args) && entry.args.some((a) => path.basename(String(a)) === SCRIPT);
 
-function read(file) {
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return {}; throw err; }
+const readText = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return null; throw err; } };
+
+function parse(text, file) {
+  if (text === null) return {};
   const data = JSON.parse(text); // a parse failure must abort, not clobber
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} is not a JSON object`);
   return data;
 }
 
-const mtime = (file) => { try { return fs.statSync(file).mtimeMs; } catch { return null; } };
+const read = (file) => parse(readText(file), file);
 
-// Temp file + rename, and only if nobody (Claude Code) wrote in between.
-function writeUnchanged(file, data, readAt) {
-  if (mtime(file) !== readAt) return false;
-  let mode = 0o600;
-  try { mode = fs.statSync(file).mode & 0o777; } catch { /* first write */ }
-  const tmp = `${file}.${process.pid}.buddy.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode });
-  if (mtime(file) !== readAt) { fs.rmSync(tmp, { force: true }); return false; }
-  fs.renameSync(tmp, file);
-  return true;
-}
-
+// Atomic, through a dotfiles symlink, in the file's own indent and newline
+// style, and only if nobody (Claude Code) wrote in between (Runtime.writeTextAtomic).
 function edit(home, change) {
   const file = configPath(home);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const readAt = mtime(file);
-    const data = read(file);
+    const readAt = Runtime.mtimeOf(file);
+    const text = readText(file);
+    const data = parse(text, file);
     const out = change(data);
     if (!out.changed) return { ...out, path: file };
-    if (writeUnchanged(file, data, readAt)) return { ...out, path: file };
+    const next = text === null ? `${JSON.stringify(data, null, 2)}\n` : Runtime.jsonTextLike(text, data);
+    if (Runtime.writeTextAtomic(file, next, fs, readAt, { newMode: 0o600 })) return { ...out, path: file };
   }
   throw new Error(`${file} kept changing under us; try again`);
 }
@@ -65,7 +59,7 @@ function install({ home, entry }) {
   return edit(home, (data) => {
     const servers = data.mcpServers && typeof data.mcpServers === 'object' ? data.mcpServers : {};
     const cur = servers[NAME];
-    if (cur && !isOurs(cur)) throw new Error(`an MCP server named "${NAME}" already exists and isn't Claude Buddy's`);
+    if (cur && !isOurs(cur)) throw new Error(`an MCP server named "${NAME}" already exists and isn't Plexiform's`);
     if (JSON.stringify(cur) === JSON.stringify(entry)) return { changed: false };
     data.mcpServers = { ...servers, [NAME]: entry };
     return { changed: true };

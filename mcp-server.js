@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Buddy's MCP server: lets any Claude Code session ask "what is the
+// Plexiform's MCP server: lets any Claude Code session ask "what is the
 // widget showing, and why?" without reading session files and app.log by hand.
 //
 // Runs standalone over stdio (`node mcp-server.js`) — no Electron. It reads
@@ -482,7 +482,7 @@ async function buddyUsageHistory({ root, range = '30d', groupBy = 'day', now = D
   const ext = History.extent(store);
   const cfg = Spend.normalize((readJson(path.join(root, 'config.json')) || {}).spend);
   return {
-    summary: `${Spend.money(t.cost)} across ${t.turns} turns from ${r.from} to ${r.to}${r.capped ? ` (the last ${HISTORY_MAX_DAYS} days: this tool answers at most that far back)` : ''}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${t.unpricedTurns ? ` ${t.unpricedTurns} turn${t.unpricedTurns === 1 ? '' : 's'} on unpriced models (${q.unpricedModels.join(', ')}) not in the cost.` : ''}${q.legacyDays ? ` ${q.legacyDays} early day${q.legacyDays === 1 ? '' : 's'} are cost-only estimates.` : ''}${ext ? '' : ' Nothing is recorded yet: Claude Buddy has to have run once.'}`,
+    summary: `${Spend.money(t.cost)} across ${t.turns} turns from ${r.from} to ${r.to}${r.capped ? ` (the last ${HISTORY_MAX_DAYS} days: this tool answers at most that far back)` : ''}${cfg.mode === 'subscription' ? ' — API-price equivalent, not a bill' : ''}.${t.unpricedTurns ? ` ${t.unpricedTurns} turn${t.unpricedTurns === 1 ? '' : 's'} on unpriced models (${q.unpricedModels.join(', ')}) not in the cost.` : ''}${q.legacyDays ? ` ${q.legacyDays} early day${q.legacyDays === 1 ? '' : 's'} are cost-only estimates.` : ''}${ext ? '' : ' Nothing is recorded yet: Plexiform has to have run once.'}`,
     range: { from: r.from, to: r.to }, groupBy, mode: cfg.mode,
     total: t,
     rows: rows.map(({ key, turns, input, output, cacheRead, cacheWrite, cost, unpricedTurns, routineTurns, sessions, legacyCost }) => ({ key, turns, cost, input, output, cacheRead, cacheWrite, unpricedTurns, routineTurns, sessions, ...(legacyCost ? { approximate: true } : {}) })),
@@ -528,7 +528,7 @@ async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, 
 }
 
 const TOOLS = [
-  { name: 'buddy_status', description: 'What the Claude Buddy widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
+  { name: 'buddy_status', description: 'What the Plexiform widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
   { name: 'buddy_why', description: 'Explain why a rule is or is not firing, or who owns a look channel, against the live session set. `query` is a rule id, a rule name (or part of one), or a channel: lamp, pose, eyes, costume, cameo, effect, pet, body, sign, sound, …', input: (z) => ({ query: z.string().describe('rule id, rule name, or channel name') }), run: (a, c) => buddyWhy({ ...c, query: a.query }) },
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
@@ -566,5 +566,5 @@ async function main() {
 module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, hookRuntime };
 
 if (require.main === module) {
-  main().catch((err) => { process.stderr.write(`claude-buddy mcp: ${err.stack || err}\n`); process.exit(1); });
+  main().catch((err) => { process.stderr.write(`plexiform mcp: ${err.stack || err}\n`); process.exit(1); });
 }

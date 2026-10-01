@@ -8,7 +8,7 @@ app.whenReady().then(() => {
   const win = new BrowserWindow({
     width: 1120,
     height: 780,
-    title: 'Claude Buddy — motion tuning',
+    title: 'Plexiform — motion tuning',
     backgroundColor: '#1c1a1f',
     webPreferences: { contextIsolation: true },
   });

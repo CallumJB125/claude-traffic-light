@@ -26,8 +26,9 @@ function tokenMatches(sent) {
 }
 
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
-// `aggregateState` and `broadcastStatus` are the live core callbacks.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus }) => {
+// `aggregateState` and `broadcastStatus` are the live core callbacks; tests
+// pass their own port, retry timing and app.
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
@@ -97,7 +98,13 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         done(200, { ok: true });
       });
     });
-    server.on('error', (e) => console.log('[signal server]', e.message));
+    // The old app, asked to quit at start-up, can hold the port for a few
+    // seconds yet: bind again until it lets go.
+    let tries = 0;
+    server.on('error', (e) => {
+      console.log('[signal server]', e.message);
+      if (e.code === 'EADDRINUSE' && tries < retries) { tries += 1; setTimeout(() => server.listen(port, '127.0.0.1'), retryMs); }
+    });
     const portFile = path.join(rootDir, 'port');
     server.on('listening', () => {
       // The token first, so whoever sees the port can already read it; chmod
@@ -110,9 +117,9 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         fs.renameSync(tmp, portFile);
       } catch {}
       // Only the instance that bound the port owns these files.
-      app.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
+      electronApp.on('will-quit', () => { try { fs.rmSync(portFile, { force: true }); fs.rmSync(tokenFile, { force: true }); } catch {} });
     });
-    server.listen(SIGNAL_PORT, '127.0.0.1');
+    server.listen(port, '127.0.0.1');
     return server;
   }
 

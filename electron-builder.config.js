@@ -4,10 +4,11 @@
 // `-c electron-builder.config.js`.
 //
 // Names the person sees (file names, DMG title, shortcuts, the Linux menu
-// entry) come from brand.js. productName and appId stay as they are until the
-// Stage 2 rename: Electron derives the data folder, the safeStorage Keychain
-// entry and the login item from them, so changing them now would reset every
-// install (.omc/plans/rename-plexiform.md).
+// entry) come from brand.js. productName and appId in package.json are
+// "Plexiform" and dev.plexiform.app; Electron derives the data folder, the
+// safeStorage Keychain entry and the login item from them, so an install made
+// under the old name is carried across on its first launch
+// (src/rename-migration.js).
 //
 // Signing is off until Callum has a Developer ID. build/sign.js falls back to
 // ad-hoc signing, which Apple Silicon needs to run the app at all.

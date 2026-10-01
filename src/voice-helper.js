@@ -6,8 +6,8 @@
 const readline = require('readline');
 
 const FRIENDLY = {
-  'speech-denied': 'Speech recognition is off for Claude Buddy. Turn it on in System Settings, Privacy and Security, Speech Recognition.',
-  'mic-denied': 'The microphone is off for Claude Buddy. Turn it on in System Settings, Privacy and Security, Microphone.',
+  'speech-denied': 'Speech recognition is off for Plexiform. Turn it on in System Settings, Privacy and Security, Speech Recognition.',
+  'mic-denied': 'The microphone is off for Plexiform. Turn it on in System Settings, Privacy and Security, Microphone.',
   'hold-unsupported': "Buddy can't tell when that key is let go. Pick another key in Preferences, or press and hold the widget instead.",
 };
 const friendly = (e) => FRIENDLY[e] || String(e || 'Listening failed.');
@@ -21,7 +21,7 @@ function createListener({ spawn, helperPath, exists, platform = process.platform
   let killTimer = null;
 
   const available = () => platform === 'darwin' && !!helperPath && exists(helperPath);
-  const unavailableReason = () => (platform !== 'darwin' ? 'Voice questions are macOS only for now.' : 'The voice helper is not built into this copy of Claude Buddy.');
+  const unavailableReason = () => (platform !== 'darwin' ? 'Voice questions are macOS only for now.' : 'The voice helper is not built into this copy of Plexiform.');
 
   // holdKey: the macOS keycode being held (hotkey), or null when the caller
   // says when to stop (a long-press on the widget ends on mouseup).
