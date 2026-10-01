@@ -65,7 +65,7 @@ test('Backups: the diff names what differs, and a subset restores with a before-
   const item = settings.locator('.bk-item[data-id="2026-09-28T09-15-00.000Z"]');
   await item.getByRole('button', { name: "See what's different" }).click();
   const picks = item.locator('.bk-pick');
-  await expect(picks).toHaveText(['paceTooltip: gone now, the backup has it', 'soundOnAmber: different from the backup', 'template: gone now, the backup has it']);
+  await expect(picks).toHaveText(['Spend pace in the widget tooltip: gone now, the backup has it', 'Sound when a session needs you: different from the backup', 'Rule template: gone now, the backup has it']);
   await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
   // the open diff is taller than the window, so shoot the window, not the element
@@ -90,4 +90,29 @@ test('Backups: a damaged snapshot is refused by the main process too', async () 
   const r = await settings.evaluate(() => window.settingsApi.backupsRestore('2026-09-29T10-00-00.000Z', {}));
   expect(r.error).toMatch(/damaged/);
   expect((await settings.evaluate(() => window.settingsApi.backupsDiff('2026-09-29T10-00-00.000Z'))).error).toMatch(/damaged/);
+});
+
+test('a backup folder that cannot be written never blocks a save, a reset or a face removal', async () => {
+  const blocked = path.join(os.tmpdir(), `cbuddy-bk-blocked-${process.pid}`);
+  fs.writeFileSync(blocked, 'a file where the backup folder should be');
+  const g = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_BACKUPS: path.join(blocked, 'sub') } });
+  try {
+    const widget = await windowByFile(g.app, 'index.html');
+    await widget.evaluate(() => window.trafficLight.openLights());
+    const lights = await windowByFile(g.app, 'lights.html');
+    await lights.waitForLoadState('load');
+    const cfg = () => JSON.parse(fs.readFileSync(path.join(g.home, 'config.json'), 'utf8'));
+    const rule = { id: 'only', name: 'Only rule', enabled: true, when: { signal: ['tool-use'] }, then: { lamp: 'green' } };
+    const saved = await lights.evaluate((r) => window.lightsApi.saveConfig({ rules: [r], template: null, __backupReason: 'template' }), rule);
+    expect(saved.error).toBeUndefined();
+    expect(cfg().rules.map((r) => r.id)).toEqual(['only']);
+    expect(cfg().__backupReason).toBeUndefined();
+    await lights.evaluate(() => window.lightsApi.resetRules());
+    expect(cfg().rules.length).toBeGreaterThan(1);
+    const removed = await lights.evaluate(() => window.lightsApi.cameos.remove('nobody'));
+    expect(removed && removed.error).toBeFalsy();
+  } finally {
+    await g.cleanup();
+    fs.rmSync(blocked, { force: true });
+  }
 });

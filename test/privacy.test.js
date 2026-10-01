@@ -28,7 +28,7 @@ test('Preferences renders PRIVACY.md itself, so the two cannot drift', () => {
   assert.match(html, /<blockquote><strong>DRAFT/);
   const settings = fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8');
   assert.match(settings, /privacy-render\.js/);
-  assert.match(settings, /privacyText\(\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'settings.js'), 'utf8'), /privacyText\(\)/);
   assert.match(fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'), /get-privacy[^\n]*PRIVACY\.md/);
   const files = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).build.files;
   assert.ok(files.includes('PRIVACY.md') && files.includes('privacy-render.js'), 'both must ship in the package');

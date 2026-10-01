@@ -52,7 +52,23 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const posix = (p) => p.split(path.sep).join('/');
 const idOf = (ms) => new Date(ms).toISOString().replace(/:/g, '-');
 const idToMs = (id) => Date.parse(id.replace(/^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})/, '$1:$2:$3').replace(/-\d+$/, ''));
-const isSnapshotDir = (n) => /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z(-\d+)?$/.test(n);
+// The one pattern for a snapshot id: exactly what idOf() makes, so an id from
+// a renderer can never name a path outside the backups folder.
+const ID_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z(-\d+)?$/;
+const isSnapshotId = (n) => typeof n === 'string' && ID_RE.test(n);
+const isSnapshotDir = isSnapshotId;
+const MAX_FILE = 50 * 1024 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// Plain names for the settings people recognise; anything else shows its key.
+const KEY_LABELS = {
+  rules: 'Your rules', presets: 'Your saved presets', template: 'Rule template', soundOnAmber: 'Sound when a session needs you',
+  paceTooltip: 'Spend pace in the widget tooltip', roam: 'Buddy roams the screen', randomEvents: 'Random events', seasonal: 'Seasonal looks',
+  showTasks: 'Task counts', showAgents: 'Agent chips', agentRoster: 'Agent list', showWidget: 'Show the widget', menuBarMode: 'Menu bar mode',
+  askFromWidget: 'Answer from the widget', autoAnswer: 'Auto-answer rules', notifyOnStates: 'Notifications', notifyStates: 'Which states notify',
+  spend: 'Spend alerts', voice: 'Voice', gitSignals: 'Git and CI signals', gitRepos: 'Watched repos', busyHold: 'Hold pings when busy',
+  remoteTailscale: 'Devices over Tailscale',
+};
+const keyLabel = (k) => KEY_LABELS[k] || k;
 const allowed = (name) => typeof name === 'string' && !name.includes('..') && SOURCES.some((s) => s.match.test(name));
 
 function create({
@@ -64,7 +80,8 @@ function create({
   let lastSaveAt = 0;
   let pending = null;
 
-  const ensureDir = (dir) => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); };
+  // chmod too: a folder that already existed keeps whatever mode it had.
+  const ensureDir = (dir) => { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); try { fs.chmodSync(dir, 0o700); } catch { /* not ours to change */ } };
 
   function collect() {
     const out = [];
@@ -84,30 +101,73 @@ function create({
     return out;
   }
 
+  const lstat = (p) => { try { return fs.lstatSync(p); } catch { return null; } };
+  const isRealDir = (p) => { const st = lstat(p); return !!st && st.isDirectory() && !st.isSymbolicLink(); };
+  // Never follow a link out of a snapshot: a planted symlink must not turn a
+  // restore into a copy of some other file.
+  const readRegular = (p, cap) => {
+    const st = lstat(p);
+    if (!st || !st.isFile() || st.isSymbolicLink()) throw new Error('not a regular file');
+    if (st.size > cap) throw new Error('too large');
+    return fs.readFileSync(p);
+  };
+
   const readManifest = (id) => {
-    const m = JSON.parse(fs.readFileSync(path.join(backupsDir, id, 'manifest.json'), 'utf8'));
+    if (!isSnapshotId(id)) throw new Error('not a backup id');
+    if (!isRealDir(path.join(backupsDir, id))) throw new Error('not a backup folder');
+    const m = JSON.parse(readRegular(path.join(backupsDir, id, 'manifest.json'), 1024 * 1024).toString('utf8'));
     if (!m || m.v !== 1 || !Array.isArray(m.files) || !Number.isFinite(Date.parse(m.createdAt))) throw new Error('unreadable manifest');
     for (const f of m.files) if (!f || !allowed(f.name) || !/^[0-9a-f]{64}$/.test(f.sha256) || !Number.isFinite(f.size)) throw new Error('manifest lists a file it should not');
     return m;
   };
 
-  function verify(id) {
+  // A file that would break the app when put back is refused, not restored.
+  const contentProblem = (name, buf) => {
+    if (name.endsWith('.json')) { try { JSON.parse(buf.toString('utf8')); } catch { return `${name} is not valid settings data`; } }
+    else if (name.endsWith('.png') && (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_MAGIC))) return `${name} is not a valid image`;
+    return null;
+  };
+
+  // `keep` hands back the verified bytes, so a restore writes exactly what was checked.
+  function inspect(id, keep = false) {
     let m;
     try { m = readManifest(id); } catch (err) { return { ok: false, problems: [`the backup's index is damaged (${err.message})`], manifest: null }; }
     const problems = [];
+    const data = new Map();
+    const root = path.join(backupsDir, id, 'files');
+    if (!isRealDir(root)) return { ok: false, problems: ['the backup has no files folder'], manifest: m };
     for (const f of m.files) {
+      let linked = false;
+      for (let d = path.dirname(path.join(root, f.name)); d !== root && d.startsWith(root); d = path.dirname(d)) if (!isRealDir(d)) linked = true;
+      if (linked) { problems.push(`${f.name} sits in a folder that is not a plain folder`); continue; }
+      if (f.size > MAX_FILE) { problems.push(`${f.name} is larger than a backup file should be`); continue; }
       let buf;
-      try { buf = fs.readFileSync(path.join(backupsDir, id, 'files', f.name)); } catch { problems.push(`${f.name} is missing`); continue; }
+      try { buf = readRegular(path.join(root, f.name), Math.min(f.size, MAX_FILE)); } catch (err) {
+        problems.push(err.message === 'too large' ? `${f.name} is larger than the backup says` : /not a regular/.test(err.message) && lstat(path.join(root, f.name)) ? `${f.name} is a link, not a file` : `${f.name} is missing`);
+        continue;
+      }
       if (buf.length !== f.size) problems.push(`${f.name} is cut short`);
       else if (sha256(buf) !== f.sha256) problems.push(`${f.name} has been changed or corrupted`);
+      else {
+        const bad = contentProblem(f.name, buf);
+        if (bad) problems.push(bad); else if (keep) data.set(f.name, buf);
+      }
     }
-    return { ok: !problems.length, problems, manifest: m };
+    return { ok: !problems.length, problems, manifest: m, data };
+  }
+  const verify = (id) => inspect(id);
+
+  // Stat-only version for pruning, which runs after every snapshot.
+  function looksIntact(id) {
+    let m;
+    try { m = readManifest(id); } catch { return false; }
+    return m.files.every((f) => { const st = lstat(path.join(backupsDir, id, 'files', f.name)); return st && st.isFile() && st.size === f.size; });
   }
 
   function ids() {
     let names = [];
-    try { names = fs.readdirSync(backupsDir); } catch { return []; }
-    return names.filter(isSnapshotDir).sort().reverse();
+    try { names = fs.readdirSync(backupsDir, { withFileTypes: true }); } catch { return []; }
+    return names.filter((e) => e.isDirectory() && isSnapshotDir(e.name)).map((e) => e.name).sort().reverse();
   }
 
   function dirSize(id) {
@@ -117,7 +177,7 @@ function create({
       try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
       for (const e of es) {
         const p = path.join(d, e.name);
-        if (e.isDirectory()) walk(p); else { try { total += fs.statSync(p).size; } catch { /* gone */ } }
+        if (e.isDirectory()) walk(p); else { try { total += fs.lstatSync(p).size; } catch { /* gone */ } }
       }
     };
     walk(path.join(backupsDir, id));
@@ -183,11 +243,13 @@ function create({
     const all = ids().map((id) => {
       let manifest = null;
       try { manifest = readManifest(id); } catch { /* damaged */ }
-      return { id, at: manifest ? Date.parse(manifest.createdAt) : idToMs(id), reason: manifest && manifest.reason, size: dirSize(id) };
+      return { id, at: manifest ? Date.parse(manifest.createdAt) : idToMs(id), reason: manifest && manifest.reason, size: dirSize(id), good: !!manifest && looksIntact(id) };
     });
+    // The floor of newest snapshots counts only ones that can be restored, so
+    // a run of damaged ones cannot push the last good backup out.
     const keep = new Set(protect);
-    all.slice(0, cfg.keepNewest).forEach((s) => keep.add(s.id));
-    for (const s of all) if (s.reason === 'before-restore' && t - s.at < cfg.keepBeforeRestoreMs) keep.add(s.id);
+    all.filter((s) => s.good).slice(0, cfg.keepNewest).forEach((s) => keep.add(s.id));
+    for (const s of all) if (s.reason === 'before-restore' && s.good && t - s.at < cfg.keepBeforeRestoreMs) keep.add(s.id);
     const removed = [];
     const drop = (s) => { fs.rmSync(path.join(backupsDir, s.id), { recursive: true, force: true }); removed.push(s.id); };
     const left = all.filter((s) => {
@@ -195,10 +257,13 @@ function create({
       return true;
     });
     let total = left.reduce((n, s) => n + s.size, 0);
-    for (let i = left.length - 1; i >= 0 && total > cfg.maxBytes; i--) {
-      if (keep.has(left[i].id)) continue;
-      total -= left[i].size;
-      drop(left[i]);
+    // under size pressure damaged ones go first, then the oldest good ones
+    const order = [...left.filter((s) => !s.good).reverse(), ...left.filter((s) => s.good).reverse()];
+    for (const s of order) {
+      if (total <= cfg.maxBytes) break;
+      if (keep.has(s.id)) continue;
+      total -= s.size;
+      drop(s);
     }
     return { removed };
   }
@@ -234,10 +299,13 @@ function create({
   }
 
   function dailyCheck() {
+    try { prune(); } catch (err) { log(`[backups] prune failed: ${err.message}`); }
     const last = newestManifest();
     if (last && now() - Date.parse(last.manifest.createdAt) < cfg.dailyMs) return { taken: false, why: 'recent' };
     return run('daily');
   }
+
+  const safeParse = (buf) => { try { return JSON.parse(buf.toString('utf8')); } catch { return null; } };
 
   const label = (name) => {
     if (name === 'config.json') return 'Your settings and rules';
@@ -247,33 +315,32 @@ function create({
     return m ? `Usage history for ${m[1]}${m[2] ? ' (counting detail)' : ''}` : name;
   };
 
-  const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+  const readJson = (file) => { try { return JSON.parse(readRegular(file, MAX_FILE).toString('utf8')); } catch { return null; } };
 
   function diff(id) {
-    const v = verify(id);
+    const v = inspect(id, true);
     if (!v.ok) return { error: 'This backup is damaged, so it cannot be compared.', problems: v.problems };
     const current = new Map(collect().map((f) => [f.name, f]));
     const files = [];
     for (const f of v.manifest.files) {
-      const now_ = current.get(f.name);
-      if (!now_) files.push({ name: f.name, label: label(f.name), status: 'missing-now', say: `${label(f.name)}: not on this computer now (the backup has it)` });
-      else if (now_.sha256 !== f.sha256) files.push({ name: f.name, label: label(f.name), status: 'changed', say: `${label(f.name)}: different from the backup` });
+      const here = current.get(f.name);
+      if (!here) files.push({ name: f.name, label: label(f.name), status: 'missing-now', say: `${label(f.name)}: not on this computer now (the backup has it)` });
+      else if (here.sha256 !== f.sha256) files.push({ name: f.name, label: label(f.name), status: 'changed', say: `${label(f.name)}: different from the backup` });
     }
     const inBackup = new Set(v.manifest.files.map((f) => f.name));
     for (const name of current.keys()) {
       if (!inBackup.has(name)) files.push({ name, label: label(name), status: 'only-now', say: `${label(name)}: added since this backup (a restore leaves it alone)` });
     }
     const configKeys = [];
-    const was = readJson(path.join(backupsDir, id, 'files', 'config.json'));
-    const is = current.has('config.json') ? readJson(path.join(dataDir, 'config.json')) : null;
+    const was = v.data.has('config.json') ? safeParse(v.data.get('config.json')) : null;
+    const is = current.has('config.json') ? safeParse(current.get('config.json').buf) : null;
     if (was && typeof was === 'object' && files.some((f) => f.name === 'config.json')) {
       const cur = is && typeof is === 'object' ? is : {};
       for (const key of [...new Set([...Object.keys(was), ...Object.keys(cur)])].sort()) {
-        const a = JSON.stringify(was[key]);
-        const b = JSON.stringify(cur[key]);
-        if (a === b) continue;
+        if (JSON.stringify(was[key]) === JSON.stringify(cur[key])) continue;
         const status = !(key in cur) ? 'missing-now' : !(key in was) ? 'only-now' : 'changed';
-        configKeys.push({ key, status, say: status === 'missing-now' ? `${key}: gone now, the backup has it` : status === 'only-now' ? `${key}: added since this backup` : `${key}: different from the backup` });
+        const name = keyLabel(key);
+        configKeys.push({ key, label: name, status, say: status === 'missing-now' ? `${name}: gone now, the backup has it` : status === 'only-now' ? `${name}: added since this backup, kept as it is` : `${name}: different from the backup` });
       }
     }
     return { id, createdAt: v.manifest.createdAt, files, configKeys, same: !files.length };
@@ -282,47 +349,72 @@ function create({
   const writeAtomic = (file, buf) => {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const tmp = `${file}.restore-tmp`;
-    fs.writeFileSync(tmp, buf, { mode: 0o600 });
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(tmp, buf, { mode: 0o600, flag: 'wx' });
     fs.renameSync(tmp, file);
+    try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
   };
 
   // `files`: names to restore (default: every file in the snapshot, or none
   // when only `configKeys` is given).
   // `configKeys`: restore just these top-level keys of config.json and leave
   // the rest of it as it is now; ignored when config.json itself is listed.
-  function restore(id, { files, configKeys } = {}) {
-    const v = verify(id);
+  // A key the backup does not have is left alone unless `removeAbsent`.
+  function restore(id, { files, configKeys, removeAbsent = false } = {}) {
+    const v = inspect(id, true);
     if (!v.ok) return { error: 'This backup is damaged, so it was not restored.', problems: v.problems };
     const have = new Set(v.manifest.files.map((f) => f.name));
     const wantKeys = Array.isArray(configKeys) && configKeys.length ? configKeys.map(String) : null;
-    let names = Array.isArray(files) ? files.filter((n) => have.has(n)) : wantKeys ? [] : [...have];
+    const names = Array.isArray(files) ? files.filter((n) => have.has(n)) : wantKeys ? [] : [...have];
     if (Array.isArray(files) && files.some((n) => !have.has(n))) return { error: 'That file is not in this backup.' };
-    if (wantKeys && !names.includes('config.json')) {
-      if (!have.has('config.json')) return { error: 'This backup has no settings file.' };
-    }
+    if (wantKeys && !names.includes('config.json') && !have.has('config.json')) return { error: 'This backup has no settings file.' };
     if (!names.length && !wantKeys) return { error: 'Nothing was chosen to restore.' };
     // A restore must itself be undoable, even if it changes nothing.
     const before = snapshot('before-restore', { force: true, protect: [id] });
     const restored = [];
-    for (const name of names) {
-      writeAtomic(path.join(dataDir, name), fs.readFileSync(path.join(backupsDir, id, 'files', name)));
-      restored.push(name);
-    }
     const keysDone = [];
-    if (wantKeys && !names.includes('config.json')) {
-      const was = readJson(path.join(backupsDir, id, 'files', 'config.json')) || {};
-      const cur = readJson(path.join(dataDir, 'config.json')) || {};
-      for (const k of wantKeys) {
-        if (k === '__proto__') continue;
-        if (Object.prototype.hasOwnProperty.call(was, k)) cur[k] = was[k]; else delete cur[k];
-        keysDone.push(k);
+    try {
+      for (const name of names) {
+        writeAtomic(path.join(dataDir, name), v.data.get(name));
+        restored.push(name);
       }
-      writeAtomic(path.join(dataDir, 'config.json'), Buffer.from(JSON.stringify(cur, null, 2)));
+      if (wantKeys && !names.includes('config.json')) {
+        const was = safeParse(v.data.get('config.json')) || {};
+        const cur = readJson(path.join(dataDir, 'config.json')) || {};
+        for (const k of wantKeys) {
+          if (k === '__proto__') continue;
+          if (Object.prototype.hasOwnProperty.call(was, k)) cur[k] = was[k];
+          else if (removeAbsent) delete cur[k];
+          else continue;
+          keysDone.push(k);
+        }
+        writeAtomic(path.join(dataDir, 'config.json'), Buffer.from(JSON.stringify(cur, null, 2)));
+      }
+    } catch (err) {
+      return { error: `Could not finish restoring: ${err.message}. Your settings from just before were kept as a backup (${before.id}), so nothing is lost.`, beforeRestoreId: before.id };
     }
     return { restored, configKeys: keysDone, beforeRestoreId: before.id, usage: restored.some((n) => n.startsWith('usage/')) };
   }
 
-  return { snapshot, list, verify, diff, restore, prune, onSave, flush, dailyCheck, dir: backupsDir };
+  // For callers that must never be blocked by a failing backup (Reset, Import).
+  const snapshotSafe = (reason, opts) => run(reason, opts);
+
+  return { snapshot, snapshotSafe, list, verify, diff, restore, prune, onSave, flush, dailyCheck, dir: backupsDir };
 }
 
-module.exports = { create, SOURCES, EXCLUDED, DEFAULTS, REASONS, allowed };
+// Whether a config save is replacing the user's rules wholesale (template,
+// preset load, reset, a big import) rather than editing them. `marker` is the
+// Lights window saying so explicitly; the rest is a check on the content.
+const BACKUP_MARKERS = ['template', 'preset', 'reset'];
+function needsBackup({ prevRules = [], nextRules, prevPresets = [], nextPresets, marker }) {
+  if (BACKUP_MARKERS.includes(marker)) return marker;
+  if (Array.isArray(nextPresets) && nextPresets.length < prevPresets.length) return 'preset-removed';
+  if (!Array.isArray(nextRules)) return null;
+  const was = new Map(prevRules.map((r) => [r.id, JSON.stringify(r)]));
+  const nowIds = new Set(nextRules.map((r) => r.id));
+  let changed = nextRules.filter((r) => was.get(r.id) !== JSON.stringify(r)).length + prevRules.filter((r) => !nowIds.has(r.id)).length;
+  if (!changed) return null;
+  return nextRules.length < prevRules.length || changed > 3 ? 'rules-replaced' : null;
+}
+
+module.exports = { create, needsBackup, isSnapshotId, keyLabel, BACKUP_MARKERS, SOURCES, EXCLUDED, DEFAULTS, REASONS, allowed };

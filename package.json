@@ -39,6 +39,7 @@
       "index.html",
       "settings.html",
       "settings-backups.js",
+      "settings.js",
       "privacy-render.js",
       "PRIVACY.md",
       "settings-preload.js",

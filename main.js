@@ -268,7 +268,7 @@ const backups = BACKUPS_DIR ? Backups.create({ dataDir: ROOT_DIR, backupsDir: BA
 // Before anything that deletes or replaces what the user made. A failed backup
 // is logged, not fatal: a full disk must not make Reset impossible.
 function backupFirst() {
-  const r = backups ? backups.snapshot('manual') : { taken: false };
+  const r = backups ? backups.snapshotSafe('manual') : { taken: false };
   if (r.error) console.warn('[backups] manual snapshot failed:', r.error);
   return r;
 }
@@ -2563,11 +2563,14 @@ ipcMain.handle('save-config', (e, partial) => {
 // saveConfig plus everything a changed setting has to reach outside config.json.
 function commitConfig(partial) {
   const prev = loadConfig();
-  // A template, a preset load and "reset to defaults" all arrive as a whole new
-  // rules list (or a shorter preset list); keep what is being replaced first.
-  const ids = (rs) => (rs || []).map((r) => r.id).join();
-  if ((partial.rules && (ids(partial.rules) !== ids(prev.rules) || (partial.template ?? null) !== (prev.template ?? null)))
-    || (partial.presets && partial.presets.length < prev.presets.length)) backupFirst();
+  // The Lights window says when a save replaces the rules wholesale
+  // (template, preset, reset); a big content change counts too.
+  const marker = partial.__backupReason;
+  delete partial.__backupReason;
+  if (Backups.needsBackup({
+    prevRules: prev.rules, nextRules: Array.isArray(partial.rules) ? partial.rules.map(Rules.normalizeRule) : undefined,
+    prevPresets: prev.presets, nextPresets: partial.presets, marker: typeof marker === 'string' ? marker : null,
+  })) backupFirst();
   const before = prev.askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
@@ -3445,7 +3448,7 @@ ipcMain.handle('health-fix', (_e, id) => {
 // Preferences → Backups. Settings is the only caller.
 const backupsSenderOk = (e) => !!settingsWin && e.sender === settingsWin.webContents;
 const backupsOff = { error: 'Backups are off in this run.' };
-const safeId = (id) => typeof id === 'string' && /^[0-9TZ.:-]{1,40}$/.test(id);
+const safeId = Backups.isSnapshotId;
 ipcMain.handle('backups-list', (e) => {
   if (!backupsSenderOk(e)) return { error: 'not allowed' };
   return backups ? { dir: backups.dir, snapshots: backups.list() } : backupsOff;

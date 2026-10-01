@@ -58,11 +58,11 @@
       return label;
     };
     const list = el('div', 'bk-diff');
-    list.append(el('div', 'bk-note', 'Tick what to bring back. Anything you leave out stays as it is now.'));
+    list.append(el('div', 'bk-note', 'Tick what to bring back. Anything you leave out, and anything added since this backup, stays as it is now.'));
     for (const f of d.files) {
       if (f.name === 'config.json' && d.configKeys.length) {
         list.append(el('div', 'bk-head', 'Your settings and rules'));
-        for (const k of d.configKeys) list.append(row(k.say, { key: k.key }));
+        for (const k of d.configKeys) list.append(k.status === 'only-now' ? el('div', 'bk-note', k.say) : row(k.say, { key: k.key }));
       } else if (f.status === 'only-now') {
         list.append(el('div', 'bk-note', f.say));
       } else list.append(row(f.say, { file: f.name }));
@@ -85,7 +85,7 @@
     li.dataset.damaged = s.damaged ? '1' : '';
     const head = el('div', 'bk-title', s.damaged ? `Damaged backup from ${when(s.createdAt)}` : `Restore your settings from ${when(s.createdAt)}`);
     const meta = el('div', 'bk-meta', s.damaged
-      ? `Plexiform will not restore this one: ${s.problems[0] || 'it is incomplete'}. It is cleared out in time.`
+      ? `Plexiform will not restore this one: ${s.problems[0] || 'it is incomplete'}. It is removed automatically once it is over 30 days old or the backup folder needs the room.`
       : `${s.reason ? REASON[s.reason] : 'unknown'} · ${size(s.size)}`);
     const holder = el('div', 'bk-holder');
     li.append(head, meta);
@@ -95,6 +95,7 @@
         button("See what's different", () => { open = s.id; showDiff(s, holder); }),
         armed('Restore everything', 'Click again to restore everything', () => restore(s, undefined)),
       );
+      acts.lastChild.setAttribute('aria-label', `Restore everything from ${when(s.createdAt)}`);
       li.append(acts);
     }
     li.append(holder);
