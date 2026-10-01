@@ -1228,7 +1228,10 @@ export function createIntegrations({
       p = hub.txn(() => {
         const cur = livePending(id);
         if (!cur || cur.created_by !== member.id || cur.match !== '{}') return null;
-        if (!answer.needs) {
+        // Until the paste, settings holds only the fields asked for: the second
+        // step takes those keys and no others; the answer then replaces it.
+        if (answer.needs) db.run('UPDATE integration_pending SET settings = ? WHERE id = ?', JSON.stringify({ needs_fields: answer.needs.fields }), id);
+        else {
           db.run('UPDATE integration_pending SET match = ?, settings = ?, external_id = ? WHERE id = ?', JSON.stringify(answer.match), JSON.stringify(answer.settings), answer.external_id, id);
           for (const [kind, value] of Object.entries(answer.secrets)) {
             const s = hub.vault.seal(id, kind, value);
@@ -1293,6 +1296,8 @@ export function createIntegrations({
     if (!p || p.org_id !== member.org_id || p.created_by !== member.id || !conn?.connect.prepare) throw pendingNotFound();
     if (p.match !== '{}') throw new HubError('CONFLICT', 'this setup already has its app', { reason: 'PENDING_READY' });
     if (preparing.has(id)) throw new HubError('CONFLICT', 'this setup is already being prepared', { reason: 'PENDING_BUSY' });
+    const asked = safeJson(p.settings, {})?.needs_fields;
+    if (isPlainObject(input) && Object.keys(input).some((k) => !Array.isArray(asked) || !asked.includes(k))) throw new HubError('VALIDATION', 'send only the fields this setup asked for');
     const clean = prepareInput(conn, input);
     limitOrThrow(hub, 'integration_prepare_member', member.id);
     limitOrThrow(hub, 'integration_prepare_org', member.org_id);

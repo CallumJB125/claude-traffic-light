@@ -434,6 +434,29 @@ test('paste fallback: an empty input answers needs (no secrets yet); the creator
   } finally { await h.close(); }
 });
 
+test('second step: only the keys the earlier needs.fields named; any other key (declared for prepare or not) is VALIDATION and prepare is not called', async () => {
+  const { h, beh, alice } = await setup();
+  try {
+    beh.prepare = ({ input }) => (Object.keys(input).length
+      ? { secrets: { client_secret: CS }, settings: { app_id: input.app_id }, match: { app_id: input.app_id } }
+      : { needs: { fields: ['app_id', 'client_secret'], create_url: 'https://pend.example/apps?new_app=1' } });
+    const n = await prep(h, alice, 'pend', {});
+    assert.deepEqual(n.body.needs.fields, ['app_id', 'client_secret']);
+    const id = n.body.pending.id;
+    const calls = beh.prepared.length;
+    for (const input of [{ app_id: 'A1', config_token: configToken() }, { app_id: 'A1', client_id: '1.2' }, { app_id: 'A1', unknown_key: 'x' }, { config_token: configToken() }]) {
+      const r = await prep(h, alice, id, input);
+      assert.equal(r.status, 400, JSON.stringify(Object.keys(input)));
+      assert.equal(r.body.error.code, 'VALIDATION');
+    }
+    assert.equal(beh.prepared.length, calls, 'prepare never saw a refused input');
+    assert.equal(pendingRow(h, id).match, '{}', 'the row is still waiting for its paste');
+    const ok = await prep(h, alice, id, { app_id: 'A1', client_secret: CS });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual(Object.keys(beh.prepared.at(-1).input).sort(), ['app_id', 'client_secret']);
+  } finally { await h.close(); }
+});
+
 // ── amendment 4: the pending 404 ──────────────────────────────────────────
 
 test('a webhook to a pending id is exactly the unknown-connection 404 (status, body, headers), over HTTP and in the registry', async () => {
