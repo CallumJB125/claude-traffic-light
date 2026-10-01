@@ -55,7 +55,7 @@ module.exports = {
     const clients = list.ok ? viewers(list.stdout, sessionId, grouped === '1' ? group : '') : [];
     if (clients.length === 0) {
       log(`tmux ${pane}: left alone, no client shows its session`);
-      return { ok: false, detached: true, command: attachCommand(name, Ids.tmuxSocket(s)), reason: 'tmux session has no attached client' };
+      return { ok: false, detached: true, command: attachCommand(name, Ids.tmuxSocket(s), ctx.env, ctx.uid), reason: 'tmux session has no attached client' };
     }
     if (clients.length > 1) {
       log(`tmux ${pane}: left alone, ${clients.length} clients show its windows`);
