@@ -558,7 +558,7 @@
         if (!cur || !settled(cur.id)) return false;
         e.preventDefault();
         const p = V.primary(cur, now());
-        if (!p) { setError(cur.id, cur.kind === 'permission' ? 'Enter only allows read-only commands and edits inside the project: click Allow if you mean it.' : 'Pick an option.'); return true; }
+        if (!p) { setError(cur.id, cur.kind === 'permission' ? (cur.enterNote ? `Enter skips this (${cur.enterNote}): click Allow if you mean it.` : 'Enter only allows read-only commands and edits inside the project: click Allow if you mean it.') : 'Pick an option.'); return true; }
         if (p.type === 'open') open(cur); else send(cur, p.id, undefined);
         return true;
       }

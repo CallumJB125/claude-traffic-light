@@ -257,3 +257,10 @@ test('a gesture "allow" never answers a request younger than 600 ms', () => {
   assert.ok(E.gestureAllowTarget([{ id: 'r1', kind: 'permission' }], [input]).why, 'no creation time: not known to be old enough');
   assert.ok(E.gestureAllowTarget([{ id: 'r1', kind: 'permission', createdAt: new Date(Date.now() - 1000).toISOString() }], [input]).req);
 });
+
+test('Enter-skip reasons are worded for the widget, not the phone', () => {
+  const E = require('../src/enter-allow.js');
+  assert.equal(E.widgetWording('touch is not on the remote allow-list'), 'touch is not on the read-only list');
+  assert.equal(E.widgetWording('WebFetch is desk-only'), 'WebFetch always needs a click');
+  assert.equal(E.widgetWording('outside the session directory'), 'outside the session directory');
+});

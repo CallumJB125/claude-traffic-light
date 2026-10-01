@@ -464,3 +464,12 @@ test('Enter never approves a plan; ⌘. still sends it back to planning', async 
     assert.deepEqual(t.calls.answer.map((c) => c[1]), ['deny'], mode);
   }
 });
+
+test('Enter on a safe command that is not on the read-only list says why it skipped it', async () => {
+  const t = setup();
+  t.show([perm({ enterAllow: false, enterNote: 'touch is not on the read-only list', text: 'touch x.txt', headline: 'touch x.txt' })]);
+  t.key('Enter');
+  await tick();
+  assert.equal(t.calls.answer.length, 0);
+  assert.match(t.$('.ib-err').textContent, /Enter skips this \(touch is not on the read-only list\): click Allow/);
+});
