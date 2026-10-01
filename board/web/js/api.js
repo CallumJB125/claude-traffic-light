@@ -89,6 +89,7 @@ export const api = {
   packet: (id) => call('GET', `/api/cards/${enc(id)}/packet`),
   writePacket: (id, body) => mut('POST', `/api/cards/${enc(id)}/packet`, body),
   messages: (id) => call('GET', `/api/cards/${enc(id)}/messages`),
+  ownership: (id, boardId) => call('GET', `/api/cards/${enc(id)}/ownership${boardId ? `?board_id=${enc(boardId)}` : ''}`),
   sendMessage: (id, body) => mut('POST', `/api/cards/${enc(id)}/messages`, body),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
   patchCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}`, body),

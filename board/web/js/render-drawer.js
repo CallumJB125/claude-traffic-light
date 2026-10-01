@@ -9,6 +9,7 @@ import { LABEL_COLORS, canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
 import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
+import { ownershipPanel } from './render-ownership.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
@@ -141,7 +142,7 @@ export function handoverBody(markdown) {
 }
 
 function tabs(active, counts) {
-  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
+  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['ownership', 'Coordination'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Card sections' },
     list.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': String(active === id), 'aria-controls': 'tabpanel',
@@ -153,6 +154,7 @@ function tabPanel(tab, detail, model, elapsed) {
   const d = detail.data;
   if (tab === 'packet') return packetPanel(detail, model);
   if (tab === 'messages') return messagePanel(detail, model);
+  if (tab === 'ownership') return ownershipPanel(detail, model, detail.ownership_elapsed_ms ?? 0);
   if (tab === 'handover') {
     if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. The agent can record progress and next steps during the run.');
     return h('div', null,
