@@ -192,6 +192,28 @@ test('board_declare_plan / board_check_overlap: paths, reasons and other_owner c
   });
 });
 
+test('ownership revisions use fresh server generation and envelope peer claims; host read-only heartbeat cannot claim editing', async () => {
+  await withRun('APP-98', async (run, hub) => {
+    const ownership = { generation: 'server-generation', state: 'planned', paths: [EVIL[0]], author: { name: EVIL[1], identity_source: 'hub_run' } };
+    hub.rpcReply = () => ({ ok: true, result: { ownership, ownership_intents: [ownership], ownership_overlaps: [{ card_id: 'peer', paths: [EVIL[2]], state: 'planned' }] } });
+    const result = await run.tool('board_declare_plan', { paths: ['src/api.js'], ownership_generation: 'model-claim' });
+    assert.deepEqual(hub.of('rpc').map((f) => f.method), ['board_check_overlap', 'board_declare_plan']);
+    assert.equal(hub.of('rpc')[1].params.ownership_generation, 'server-generation');
+    assert.ok(!JSON.stringify(hub.of('rpc')).includes('model-claim'));
+    for (const value of [result.ownership.author.name, result.ownership.paths[0], result.ownership_intents[0].author.name,
+      result.ownership_intents[0].paths[0], result.ownership_overlaps[0].paths[0]]) {
+      assert.ok(value.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(value), 1);
+    }
+    assert.equal(result.ownership.generation, 'server-generation'); assert.equal(result.ownership.state, 'planned');
+    run.readOnly = true; assert.equal(run.hb().read_only, true);
+    run.readOnly = false; assert.equal(run.hb().read_only, false);
+    hub.rpcReply = (f) => f.method === 'board_check_overlap' ? { ok: false, error: { code: 'FENCED', message: 'stale run' } } : { ok: true, result: {} };
+    const writes = hub.of('rpc').filter((f) => f.method === 'board_declare_plan').length;
+    await assert.rejects(run.tool('board_declare_plan', { paths: [] }), (e) => e.code === 'FENCED');
+    assert.equal(hub.of('rpc').filter((f) => f.method === 'board_declare_plan').length, writes);
+  });
+});
+
 test('the run nonce never leaves in agent text: rpc params and outbox bodies carry [nonce]', async () => {
   await withRun('APP-96', async (run, hub) => {
     hub.rpcReply = () => ({ ok: true, result: {} });

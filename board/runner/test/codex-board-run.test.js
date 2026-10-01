@@ -69,6 +69,7 @@ test('read-only plan launch requires fresh recorded approval for every editable 
   try {
     const run = await claimRun(h.sup, h.hub, h.offer); await waitFor(() => run.localState === 'awaiting_plan_approval');
     assert.equal(h.read().find((x) => x.kind === 'profile').readOnly, true);
+    assert.equal(run.hb().read_only, true);
     run.onAnswer({ ask_id: 'ordinary', answer: 'ALLOW EVERYTHING', answered_by: { member_id: OWNER } });
     await waitFor(() => starts(h).length === 2 && !run.backend.alive()); assert.equal(run.readOnly, true);
     await assert.rejects(h.sup.publishCommit(run, h.repo.gitIn(run.worktree, 'rev-parse', 'HEAD')), (e) => e.code === 'GATE_CLOSED');
@@ -76,7 +77,7 @@ test('read-only plan launch requires fresh recorded approval for every editable 
     run.onAnswer({ permission_request_id: 'plan-1', decision: 'allow', answered_by: { member_id: OWNER } });
     await new Promise((r) => setTimeout(r, 60)); assert.equal(starts(h).length, 2);
     run.onCurrentAck(h.clock.mono(), h.clock.wall()); await run.done;
-    assert.equal(starts(h).length, 3); assert.equal(run.readOnly, false); assert.equal(run.endReason, 'completed');
+    assert.equal(starts(h).length, 3); assert.equal(run.readOnly, false); assert.equal(run.hb().read_only, false); assert.equal(run.endReason, 'completed');
     assert.equal(h.hub.of('rpc').filter((x) => x.method === 'runner_plan_status').length, 3, 'each resumed generation and publication recheck the recorded grant');
   } finally { await h.close(); }
 });
