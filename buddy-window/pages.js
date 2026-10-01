@@ -129,7 +129,8 @@ function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, si
   if (!signedIn) return { ok: false, reason: 'signed-out' };
   let page;
   try { page = new URL(pageUrl); } catch { return { ok: false, reason: 'opener' }; }
-  if (page.origin !== hubOrigin || page.searchParams.get('view') !== 'integrations') return { ok: false, reason: 'opener' };
+  // The Integrations view lives at / (hubPageUrl): any other path on the hub (a callback or static page) is not it.
+  if (page.origin !== hubOrigin || page.pathname !== '/' || page.searchParams.getAll('view').join() !== 'integrations') return { ok: false, reason: 'opener' };
   if (referrer) { try { if (new URL(referrer).origin !== hubOrigin) return { ok: false, reason: 'opener' }; } catch { return { ok: false, reason: 'opener' }; } }
   if (!(gestureAt > 0 && now - gestureAt >= 0 && now - gestureAt <= GESTURE_MS)) return { ok: false, reason: 'gesture' };
   if (!connectUrlOk(url)) return { ok: false, reason: 'url' };

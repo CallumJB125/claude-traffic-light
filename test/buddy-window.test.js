@@ -90,6 +90,7 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   no({ pageUrl: `${hub}/?org=t1` }, 'opener');
   no({ pageUrl: `${hub}/?view=table` }, 'opener');
   no({ referrer: 'https://evil.example.com/x' }, 'opener');
+  for (const pageUrl of [`${hub}/integrations/github/callback?view=integrations`, `${hub}/docs/x?view=integrations`, `${hub}/api/x?view=integrations`, `${hub}:444/?view=integrations`, `http://app.plexiform.dev/?view=integrations`, 'about:blank', 'not a url', undefined, `${hub}/?view=integrations&view=table`]) no({ pageUrl }, 'opener');
   no({ referrer: 'http://app.plexiform.dev/' }, 'opener');
   no({ signedIn: false }, 'signed-out');
   no({ frameName: 'buddy-connect' }, 'name');
