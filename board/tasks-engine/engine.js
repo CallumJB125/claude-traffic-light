@@ -115,8 +115,11 @@ export class TasksEngine extends EventEmitter {
     this.createCache = new Map();
     this.actCache = new Map();
     this.timers = new Set();
+    this.pendingOperations = new Set();
     this.ais = [];
+    this.closing = false;
     this.closed = false;
+    this.closePromise = null;
     const ramGb = Math.round(os.totalmem() / 2 ** 30);
     this.ramGb = ramGb;
     this.limits = { maxParallel: Math.min(opts.maxParallel ?? defaultMaxParallel(ramGb), 8), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
@@ -402,12 +405,20 @@ export class TasksEngine extends EventEmitter {
 
   #withLock(task, fn) {
     const prev = this.locks.get(task.id) ?? Promise.resolve();
-    const p = prev.then(fn, fn);
+    const p = this.#track(prev.then(fn, fn));
     this.locks.set(task.id, p.catch(() => {}));
     return p;
   }
 
+  #track(p) {
+    this.pendingOperations.add(p);
+    const done = () => this.pendingOperations.delete(p);
+    p.then(done, done);
+    return p;
+  }
+
   #later(ms, fn) {
+    if (this.closing || this.closed) return null;
     const t = setTimeout(() => { this.timers.delete(t); fn(); }, Math.max(0, ms));
     t.unref?.();
     this.timers.add(t);
@@ -441,6 +452,7 @@ export class TasksEngine extends EventEmitter {
 
   // ── create ────────────────────────────────────────────────────────────────
   principal(ctx = {}) {
+    if (this.closing || this.closed) throw new ApiError('INTERNAL', 'shutting down');
     const p = ctx.auth ? ctx.auth() : ctx.principal ?? { kind: 'full' }; // Direct supervisor calls are trusted.
     if (!p || !['full', 'relay'].includes(p.kind)) throw new ApiError('UNAUTHENTICATED', 'relay grant revoked or expired');
     return p;
@@ -503,7 +515,7 @@ export class TasksEngine extends EventEmitter {
       const id = await prior.pending;
       return { id, duplicate: true };
     }
-    const pending = this.#create(spec, ctx);
+    const pending = this.#track(this.#create(spec, ctx));
     const entry = { hash, at: this.now(), pending };
     this.createCache.set(cacheKey, entry);
     try {
@@ -515,7 +527,7 @@ export class TasksEngine extends EventEmitter {
   }
 
   async #create(spec, ctx = {}) {
-    if (this.closed) throw new ApiError('INTERNAL', 'shutting down');
+    if (this.closing || this.closed) throw new ApiError('INTERNAL', 'shutting down');
     const source = spec.source ?? 'local';
     // A spin-off's parent: the task whose session asked for it (§9.2, inherited rules).
     const parent = source === 'mcp' && spec.sourceMeta?.parentSessionId
@@ -695,7 +707,7 @@ export class TasksEngine extends EventEmitter {
   #slots() { return [...this.tasks.values()].filter((t) => SLOT.has(t.state)); }
 
   #schedule() {
-    if (this.closed) return;
+    if (this.closing || this.closed) return;
     const queued = [...this.tasks.values()].filter((t) => t.state === 'queued' && !t.awaitingConfirm && !t.resumeAtReset && !t.launching).sort((a, b) => a.createdAt - b.createdAt);
     for (const t of queued) {
       const slots = this.#slots();
@@ -714,14 +726,15 @@ export class TasksEngine extends EventEmitter {
   }
 
   async #launch(task) {
-    if (task.state !== 'claimed' || this.closed) return;
+    if (task.state !== 'claimed' || this.closing || this.closed) return;
     const start = task.pendingStart ?? { resume: false, prompt: null };
     task.pendingStart = null;
     try {
       await this.#prepareWorkspace(task);
-      if (task.state !== 'claimed' || this.closed) return;
+      if (task.state !== 'claimed' || this.closing || this.closed) return;
       await this.#spawn(task, start);
     } catch (e) {
+      if (this.closing || this.closed) return;
       this.log.warn('task start failed', { task_id: task.id, code: e.code ?? null });
       if (task.state !== 'claimed') return;
       if (e.code === 'WORKTREE_MISSING') this.#emit(task, 'error', { code: 'NOT_FOUND', message: 'worktree deleted', fatal: true });
@@ -795,10 +808,12 @@ export class TasksEngine extends EventEmitter {
   }
 
   async #spawn(task, { resume, prompt }) {
+    if (this.closing || this.closed) return;
     const B = this.backends[task.ai.id];
     const info = this.#aiInfo(task.ai.id);
     if (!B || !info?.bin || !B.describe().startable) throw Object.assign(new Error('not available'), { code: 'NOT_AVAILABLE' });
     await this.#closeIdleIpc(task);
+    if (this.closing || this.closed) return;
     const { runDir, socketPath } = this.#runFiles(task);
     const token = crypto.randomBytes(24).toString('base64url');
     const run = {
@@ -809,6 +824,7 @@ export class TasksEngine extends EventEmitter {
     run.exited = new Promise((r) => { run.resolveExited = r; });
     this.#writeRunFiles(task, runDir, socketPath, token);
     if (task.ai.id !== 'codex') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
+    if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
     const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
     if (task.ai.id === 'codex' && this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
@@ -818,6 +834,12 @@ export class TasksEngine extends EventEmitter {
     Object.assign(env, { TMPDIR: path.join(cacheDir, 'tmp'), npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: path.join(cacheDir, 'xdg'), PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') });
     const dataReal = fs.realpathSync(this.dataDir);
     const remaining = task.cost.budgetUsd != null ? Math.max(0.01, round2(task.cost.budgetUsd - task.cost.usd)) : null;
+    const gitAccess = await this.#gitAccess(task);
+    if (this.closing || this.closed) {
+      if (this.runs.get(task.id) === run) await this.#cleanupRun(task, run);
+      else await run.ipc?.close();
+      return;
+    }
     const backend = new B({
       bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume,
       budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: task.ai.id === 'codex' ? undefined : DEFAULT_MAX_TURNS,
@@ -825,14 +847,19 @@ export class TasksEngine extends EventEmitter {
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
-      dataDir: dataReal, cacheDir, ...await this.#gitAccess(task),
+      dataDir: dataReal, cacheDir, ...gitAccess,
     });
     run.backend = backend;
     this.#attach(task, run);
+    if (this.closing || this.closed) {
+      if (this.runs.get(task.id) === run) await this.#cleanupRun(task, run);
+      else await run.ipc?.close();
+      return;
+    }
     try {
       backend.start(prompt ?? (resume ? this.#withPending(task, 'You were resumed. Continue where you left off.') : this.#withPending(task, this.#finalPrompt(task))));
     } catch (e) {
-      this.runs.delete(task.id);
+      if (this.runs.get(task.id) === run) this.runs.delete(task.id);
       await run.ipc?.close();
       throw e;
     }
@@ -845,7 +872,7 @@ export class TasksEngine extends EventEmitter {
 
   #cacheDir(task) { return path.join(this.env.TMPDIR || os.tmpdir(), `buddy-task-${task.id}`); }
 
-  #isLive(task, run) { return !this.closed && this.runs.get(task.id) === run; }
+  #isLive(task, run) { return !this.closing && !this.closed && this.runs.get(task.id) === run; }
 
   #attach(task, run) {
     const b = run.backend;
@@ -1151,7 +1178,7 @@ export class TasksEngine extends EventEmitter {
         throw Object.assign(new Error('board tools are not available in a local task'), { code: 'VALIDATION' });
       },
       cancel: (re, ctx) => {
-        if (!run) return;
+        if (!run || this.closing || this.closed) return;
         for (const [approvalId, a] of run.approvals) {
           if (a.connKey !== `${ctx.connId}:${re}`) continue;
           run.approvals.delete(approvalId);
@@ -1164,7 +1191,7 @@ export class TasksEngine extends EventEmitter {
 
   #hook(task, run, event, payload) {
     const driving = !run;   // the user's interactive session after a take over
-    const ok = driving ? task.state === 'handed_over' : this.#isLive(task, run) && !run.stopping && ['claimed', 'running', 'quiet', 'blocked'].includes(task.state);
+    const ok = !this.closing && !this.closed && (driving ? task.state === 'handed_over' : this.#isLive(task, run) && !run.stopping && ['claimed', 'running', 'quiet', 'blocked'].includes(task.state));
     switch (event) {
       case 'pre': {
         if (!ok) return deny('this task is not running');
@@ -1231,6 +1258,7 @@ export class TasksEngine extends EventEmitter {
     // the model calling the approval tool itself is not, and can never allow.
     let st = tuid ? run.tools.get(tuid) : null;
     for (let i = 0; tuid && !st && i < 30; i++) { await new Promise((r) => setTimeout(r, 50)); st = run.tools.get(tuid); }
+    if (!this.#isLive(task, run) || run.stopping) return { behavior: 'deny', message: 'This task is not running.' };
     if (!st || st.name !== toolName || toolName.startsWith('mcp__board__')) return { behavior: 'deny', message: 'Calling approval directly cannot grant anything.' };
     const key = runAllowKey(toolName, input);
     if (run.allow.has(key)) return { behavior: 'allow' };
@@ -1600,7 +1628,7 @@ export class TasksEngine extends EventEmitter {
 
   // ── timers ────────────────────────────────────────────────────────────────
   #tick() {
-    if (this.closed) return;
+    if (this.closing || this.closed) return;
     const now = this.now();
     for (const [id, run] of this.runs) {
       if (run.backend?.alive?.()) run.hbAt = now;
@@ -1628,23 +1656,41 @@ export class TasksEngine extends EventEmitter {
    * becomes orphaned (resumable with retry). leaveRuns: only close sockets and
    * files (the next start treats the runs as a crashed engine's).
    */
-  async close({ leaveRuns = false } = {}) {
-    if (this.closed) return;
+  close({ leaveRuns = false } = {}) {
+    if (this.closePromise) return this.closePromise;
+    this.closing = true;
     clearInterval(this.tick);
     clearInterval(this.detectTimer);
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    this.closePromise = this.#close({ leaveRuns });
+    return this.closePromise;
+  }
+
+  async #close({ leaveRuns }) {
+    // Complete accepted Git preparation before its workspace or store can
+    // be released. Git retains its command timeout; custom backends must
+    // honor their own stop bound. A timeout never pretends work is drained.
+    while (this.pendingOperations.size) await Promise.allSettled([...this.pendingOperations]);
     if (!leaveRuns) {
       for (const [id, run] of [...this.runs]) {
         const task = this.tasks.get(id);
         await this.#withLock(task, async () => {
-          if (!this.#isLive(task, run)) return;
-          await this.#stopRun(task, run);
+          if (this.runs.get(id) !== run) return;
+          if (run.backend) await this.#stopRun(task, run);
+          else await this.#cleanupRun(task, run);
           this.#audit(task, 'supervisor', 'orphaned', 'the engine shut down');
           this.#writeHandover(task, 'checkpoint_incomplete');
           this.#setState(task, 'orphaned');
         });
       }
+    }
+    // A preparation that finished during shutdown owns useful work, but
+    // never started an AI. Retain it as a resumable task, including leaveRuns.
+    for (const task of this.tasks.values()) if (task.state === 'claimed' && !this.runs.has(task.id)) {
+      this.#audit(task, 'supervisor', 'orphaned', 'the engine shut down before the session started');
+      this.#writeHandover(task, 'checkpoint_incomplete');
+      this.#setState(task, 'orphaned');
     }
     this.closed = true;
     for (const run of this.runs.values()) await run.ipc?.close();

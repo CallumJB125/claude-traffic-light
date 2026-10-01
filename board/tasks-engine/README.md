@@ -75,6 +75,16 @@ window leaves the helper running. Quitting the app gracefully stops active
 runs, which can be retried after restarting; a utilityProcess does not outlive
 Electron. The UI states this explicitly.
 
+Shutdown rejects new or replayed mutations and prevents further backend starts
+as soon as closing begins. It joins accepted task creation and task locks,
+including local Git workspace preparation, before closing the store. Prepared
+worktrees remain available as orphaned tasks for retry. Concurrent close callers
+share completion and the first caller's `leaveRuns` choice. Git keeps its existing
+60-second per-command timeout; custom backends must honor their own stop bounds.
+There is no total-deadline shortcut that reports success while admitted work can
+still modify a workspace. Normal shutdown stops existing runs; `leaveRuns` leaves
+their processes for restart recovery and only closes this engine's IPC and store.
+
 ## What E1 implements
 
 - Methods: all twelve. `act`: `stop`, `pause`, `resume` (`now`, and `reset`
