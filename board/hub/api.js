@@ -587,7 +587,7 @@ export class Api {
           if (effective - this.hub.cardSpentCents(cardId) < 50) ctx.policy_ok = false;
         }
         if (row.fail_kind === 'budget' && rel.run?.terminal_reason === 'budget_device') throw new HubError('POLICY_DENIED', 'the machine owner must change their local limit', { reason: 'DEVICE_LIMIT' });
-        if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents <= Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
+        if (!existing && row.fail_kind === 'budget' && (!involved(rel.dispatcher, rel.owner) || mode === 'none' || cents == null || cents < Math.max(row.budget_cents ?? 0, this.hub.cardSpentCents(cardId)) + 50)) throw new HubError('POLICY_DENIED', 'increase the budget as its owner before continuing', { reason: 'BUDGET_TOO_LOW' });
         if (existing && (existing.backend !== AI_BACKENDS[ai] || existing.target_member_id !== target || existing.budget_mode !== mode || (mode === 'cap' && existing.budget_cents !== cents))) throw new HubError('CONFLICT', 'request_id already belongs to another dispatch choice');
         Object.assign(event, { request_id: body.request_id, target_member_id: target, backend: AI_BACKENDS[ai], ai, budget_mode: mode, budget_cents: mode === 'cap' ? cents : null });
         if (supplied && !existing && cents !== row.budget_cents) {

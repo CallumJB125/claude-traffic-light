@@ -2,6 +2,7 @@
 // loop. Rendering is a pure function of `state` (render-*.js); this file owns
 // clocks, network and DOM events.
 import { h, render } from './h.js';
+import { tacklePreference, rememberTackle } from './tackle.js';
 import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
@@ -1073,13 +1074,15 @@ async function loadRepos() {
 async function openGive(cardId, mode) {
   const v = viewOf(cardId);
   if (!v) return;
+  const preference = tacklePreference(state.me.member.id, undefined, state.board?.settings?.default_budget_usd ?? 5), retry = mode === 'retry';
   state.dialog = {
-    kind: 'give', cardId, mode,
-    target: state.me.member.id,
+    kind: 'give', cardId, mode, instance: {},
+    target: retry ? v.run?.owner?.member_id ?? state.me.member.id : state.me.member.id,
     repo_id: v.repo?.id ?? '',
     base_ref: v.base_ref ?? '',
-    ai: 'codex', budget_mode: 'cap',
-    budget_usd: v.budget?.cap_usd ?? state.board?.settings?.default_budget_usd ?? 5,
+    ai: retry ? v.run?.ai ?? 'claude' : preference.ai,
+    budget_mode: retry || v.budget?.cap_usd != null ? 'cap' : preference.budget_mode,
+    budget_usd: retry ? Math.max(v.budget?.cap_usd ?? 0, v.budget?.spent_usd ?? 0) + 0.5 : v.budget?.cap_usd ?? preference.budget_usd,
     plan_approval: (v.labels ?? []).includes(PLAN_LABEL),
     repos: state.repos,
     preview: { loading: true },
@@ -1119,6 +1122,8 @@ async function loadPreview() {
 
 async function submitGive(form) {
   const d = state.dialog;
+  const generation = boardGeneration, memberId = state.me?.member?.id;
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && state.dialog?.instance === d.instance;
   const v = viewOf(d.cardId);
   const fd = new FormData(form);
   const target = fd.get('target') || state.me.member.id;
@@ -1139,16 +1144,24 @@ async function submitGive(form) {
     if (repo_id !== (v.repo?.id ?? null)) patch.repo_id = repo_id;
     if (base_ref !== (v.base_ref ?? null)) patch.base_ref = base_ref;
     if (labels.size !== (v.labels ?? []).length || [...labels].some((l) => !(v.labels ?? []).includes(l))) patch.labels = [...labels];
-    if (Object.keys(patch).length) applyCard(await api.patchCard(d.cardId, { version: v.version, ...patch }));
+    if (Object.keys(patch).length) {
+      const changed = await api.patchCard(d.cardId, { version: v.version, ...patch });
+      if (!current()) return;
+      applyCard(changed);
+    }
+    if (!current()) return;
     const isMe = target === state.me.member.id;
-    const action = d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
+    const action = d.mode === 'retry' ? 'retry' : d.mode === 'redispatch' ? 'take_over_with_claude' : 'dispatch';
     const body = { target_member_id: isMe ? null : target, ai, budget_usd: uncapped ? null : budget };
     const res = await api.action(d.cardId, action, body);
+    if (!current()) return;
+    rememberTackle(memberId, { ai, budget_mode: uncapped ? 'none' : 'cap', budget_usd: Number.isFinite(budget) && budget >= 0.5 ? budget : d.budget_usd });
     applyCard(res);
     state.dialog = null;
     const name = state.members.get(target)?.name;
     toast(isMe ? `${v.key} is queued for ${ai === 'codex' ? 'Codex' : 'Claude Code'}.` : `Asked ${name}. They confirm before work starts.`);
   } catch (err) {
+    if (!current()) return;
     state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
   }
   update();
@@ -1521,7 +1534,11 @@ function onClick(e) {
     case 'take_over_with_claude': openGive(cardId, 'redispatch'); return;
     case 'stop': case 'cancel': case 'take_over_confirm':
       state.dialog = { kind: 'confirm', action, cardId }; update(); return;
-    case 'take_over': case 'take_over_myself': case 'retry': case 'approve_done':
+    case 'retry':
+      if (viewOf(cardId)?.fail_kind === 'budget') openGive(cardId, 'retry');
+      else doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId)));
+      return;
+    case 'take_over': case 'take_over_myself': case 'approve_done':
       doAction(cardId, action, {}, DONE_COPY[action]?.(keyOf(cardId))); return;
     case 'request_changes': state.dialog = { kind: 'changes', cardId }; update(); return;
     case 'hand_over': state.dialog = { kind: 'handover', cardId, kind_: 'queue' }; update(); return;
@@ -1530,7 +1547,7 @@ function onClick(e) {
       withBusy(`pr:${prId}`, () => api.answerPermission(prId, el.dataset.decision, el.dataset.scope)).then((res) => {
         if (!res) return;
         applyCard(res);
-        toast(el.dataset.decision === 'deny' ? 'Denied. Claude is told why it can’t run that.' : 'Allowed. Claude continues.');
+        toast(el.dataset.decision === 'deny' ? 'Denied. The agent is told why it can’t run that.' : 'Allowed. The agent can continue.');
         if (state.detail) refreshDetail(state.detail.cardId);
       });
       return;

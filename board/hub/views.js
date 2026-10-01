@@ -149,6 +149,7 @@ export function cardView(hub, row, viewerId) {
     run: runRow ? {
       id: runRow.id, backend: runRow.backend, device_name: hub.device(runRow.device_id)?.name ?? null,
       ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
+      budget_stop: runRow.terminal_reason === 'budget_device' ? 'device' : runRow.terminal_reason === 'budget' ? 'card' : null,
       owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
     } : null,
     live: leaseView(hub, row),

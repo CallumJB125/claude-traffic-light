@@ -119,6 +119,22 @@ test('dispatch choices are idempotent and a reused request cannot replace its AI
   assert.equal(h.hub.pendingDispatch(card.id).ai, 'codex');
 });
 
+test('budget owner can add exactly the minimum remaining spend, while a device limit cannot be overridden', async (t) => {
+  const { h, alice, bob, runner } = await fixture(t);
+  const run = await h.startRun(alice, runner, { budget_usd: 5 });
+  await runner.out({ ...runMsg(run), kind: 'facts', items: [{ kind: 'cost', cost_usd: 5 }] });
+  await runner.out({ ...runMsg(run), kind: 'run.failed', fail_kind: 'budget', budget_scope: 'card' });
+  assert.equal((await h.action(bob, run.card_id, 'retry', { budget_usd: 5.5 })).status, 403);
+  assert.equal((await h.action(alice, run.card_id, 'retry', { budget_usd: 5 })).body.error.reason, 'BUDGET_TOO_LOW');
+  assert.equal((await h.action(alice, run.card_id, 'retry', { budget_usd: 5.5 })).status, 200);
+  const offer = await runner.next('offer', (o) => o.card_id === run.card_id && o.fence !== run.fence);
+  assert.equal(offer.budget_usd, 0.5);
+  const second = await runner.claim(offer), active = { ...run, run_id: second.run_id, fence: second.fence };
+  await runner.out({ ...runMsg(active), kind: 'run.failed', fail_kind: 'budget', budget_scope: 'device' });
+  const detail = await h.api(alice, 'GET', `/api/cards/${run.card_id}`); assert.equal(detail.body.card.run.budget_stop, 'device');
+  assert.equal((await h.action(alice, run.card_id, 'retry', { budget_usd: 20 })).body.error.reason, 'DEVICE_LIMIT');
+});
+
 test('overlap preview returns bounded capability projections and scopes the selected repo', async (t) => {
   const { h, alice, runner } = await fixture(t);
   await advertise(h, runner, [codex({ label: 'Untrusted custom label' })]);

@@ -15,13 +15,13 @@ export const FEED_LABEL = {
   dispatched: 'Assigned to AI', claimed: 'Runner claimed it', started: 'Agent started', blocked: 'Asked for help',
   answered: 'Answered', parked: 'Parked: no agent running', requeued_answered: 'Answered and requeued', suspended: 'Laptop went to sleep',
   recovered: 'Back online', unresponsive: 'Lost signal', orphaned: 'Orphaned', reconnecting: 'Board restarted',
-  failed: 'Run failed', stopped: 'Stopped', released: 'Claude released it', retried: 'Retried', taken_over: 'Taken over',
+  failed: 'Run failed', stopped: 'Stopped', released: 'Agent released it', retried: 'Retried', taken_over: 'Taken over',
   handing_over: 'Handing over', handed_over: 'Handed over', human_on_it: 'A person took it', in_review: 'Sent for review',
   changes_requested: 'Changes requested', merged: 'Merged', approved_done: 'Marked done', cancelled: 'Cancelled',
   declined: 'Declined on the runner', prep_failed: 'Worktree prep failed', requeued_claim_timeout: 'Requeued: runner never started',
   pr_closed_unmerged: 'PR closed without merging', progress: 'Progress', status: 'Status', comment: 'Comment',
   tool_start: 'Tool', tool_end: 'Tool finished', file: 'File', command: 'Command', error: 'Error', git: 'Git', plan: 'Plan',
-  subagent: 'Subagent', message: 'Claude said', compacted: 'Context compacted', cost: 'Cost', session: 'Session', degraded: 'Degraded',
+  subagent: 'Subagent', message: 'Agent said', compacted: 'Context compacted', cost: 'Cost', session: 'Session', degraded: 'Degraded',
   salvage: 'Salvage', withdrawn: 'Request withdrawn', created: 'Created', evidence: 'Evidence', plan_declared: 'Plan declared',
   handover_frozen: 'Handover frozen',
 };
@@ -60,7 +60,8 @@ function askBlock(ask, model) {
   const open = ask.state === 'open' || ask.state == null;
   const busy = model.busy?.has(`ask:${ask.id}`);
   const kind = ask.kind ?? 'question';
-  const head = { question: 'Question from Claude', clarify: 'Claude needs a detail', decision: 'Decision needed', plan: 'Plan ready to approve', conflict: 'Merge conflict', loop: 'Looks stuck' }[kind] ?? 'Question';
+  const ai = model.detail?.data?.run?.ai_label ?? 'The agent';
+  const head = { question: `Question from ${ai}`, clarify: `${ai} needs a detail`, decision: 'Decision needed', plan: 'Plan ready to approve', conflict: 'Merge conflict', loop: 'Looks stuck' }[kind] ?? 'Question';
   if (!open) {
     return h('li', { key: `ask-${ask.id}`, class: 'ask is-answered' },
       h('p', { class: 'ask-head' }, icon('check', 'icon-xs'), head),

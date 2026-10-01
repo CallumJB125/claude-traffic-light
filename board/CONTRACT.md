@@ -1002,3 +1002,7 @@ Acceptance: `hub/test/client-feedback.test.js` uses actual hub HTTP/DB/queue pat
 ## Run cost availability
 
 Card detail `run.cost_usd` is nullable and accompanied by `cost_source`: `provider_reported` or `unavailable`. A zero database default is not measured usage. Legacy positive recorded costs and explicit cost observations (including zero) remain reported values. Codex dollar telemetry is unavailable through this adapter, including historical rows, so its cost is null rather than a claim of free work. Agent comment attribution uses the actual run AI.
+
+## Tackle browser continuation
+
+The browser remembers successful AI/budget choices per member; those preferences grant no authority. The server still checks live runner readiness, account ownership, budget permissions and the exact request choice. Each assignment dialog has a unique intent bound to the current board generation and member. Closing/reopening it or changing identity during a repository patch suppresses the old continuation before dispatch. Card-budget retries show aggregate card spending and require at least $0.50 beyond the previous cap or spending, whichever is greater. A device-budget stop is shown separately and cannot be overridden by a card-budget increase. Actual Chrome acceptance: `test/e2e/tackle-web.test.js` uses a real hub and protocol fixtures, verifies real dispatch/claim/retry, per-member choices, signed-out readiness and stale-dialog suppression; it invokes no provider model.
