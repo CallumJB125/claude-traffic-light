@@ -45,6 +45,22 @@ export function runBudget(cardUsd, localUsd) {
   return { usd: undefined, scope: null };
 }
 
+/**
+ * The desktop's "Budget reached" notice, for the giver's own device only:
+ * exactly {type:'runner.event', event:'run.budget_reached', run_id, card_id,
+ * spent_usd, budget_usd, card_key?} (the app drops anything else), or null.
+ */
+export function budgetReachedEvent(run, memberId) {
+  const ID = /^[A-Za-z0-9_-]{1,64}$/;
+  const num = (n) => Number.isFinite(n) && n >= 0 && n <= 1_000_000;
+  if (!memberId || run?.offer?.dispatched_by?.member_id !== memberId) return null;
+  if (!ID.test(run.run_id ?? '') || !ID.test(run.card_id ?? '') || !num(run.costUsd) || !num(run.budgetUsd)) return null;
+  return {
+    type: 'runner.event', event: 'run.budget_reached', run_id: run.run_id, card_id: run.card_id, spent_usd: run.costUsd, budget_usd: run.budgetUsd,
+    ...(typeof run.key === 'string' && /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/.test(run.key) ? { card_key: run.key } : {}),
+  };
+}
+
 // The AI an offer asks for (D-7); omitted = Claude.
 export const aiOf = (offer) => (typeof offer?.ai === 'string' && /^[a-z]{1,32}$/.test(offer.ai) ? offer.ai : offer?.ai == null ? 'claude' : null);
 
@@ -582,6 +598,7 @@ export class Supervisor extends EventEmitter {
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
     const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
     run.budgetScope = budget.scope;
+    run.budgetUsd = budget.usd;
     const backend = new Backend({
       bin: ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
       budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
@@ -598,6 +615,12 @@ export class Supervisor extends EventEmitter {
     if (run.ending || run.fenced) return;
     this.log.info('resuming run', { run_id: run.run_id });
     this.#spawn(run, { resume: true });
+  }
+
+  // A run stopped on its budget: tell the app (app-entry posts it), giver's device only.
+  onBudgetReached(run) {
+    const ev = budgetReachedEvent(run, this.memberId);
+    if (ev) this.emit('runner_event', ev);
   }
 
   runEnded(run) {

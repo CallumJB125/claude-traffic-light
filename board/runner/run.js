@@ -314,6 +314,7 @@ export class Run {
       return;
     }
     if (r.terminal_reason === 'budget' || r.subtype === 'error_max_budget_usd') {
+      this.sup.onBudgetReached?.(this);
       return this.fail('budget', 'budget cap reached (--max-budget-usd)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
     }
     // A turn limit is not a budget: it must never read "Budget reached" (D-5).

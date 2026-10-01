@@ -221,13 +221,13 @@ test('app mode presence: default deny, no paths, hashed ids, opt-in redacted ≤
 
 // A live run under the app, then SIGTERM: the handover window, a pushed
 // snapshot at the run's fence and release{requeue}, not a crash orphan.
-function appWithRepo(root, scenario) {
+function appWithRepo(root, scenario, { acceptFrom = [] } = {}) {
   const repo = makeRepo(root);
   const data = path.join(root, 'app-data');
   fs.mkdirSync(data, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({
     repos: { [REPO_ID]: { opt_in: true, local_path: repo.checkout, max_concurrent: 2, approvals_from: [] } },
-    accept_from: {}, backends: { claude: fakeClaudeBin(root, scenario) }, never_auto_labels: ['never_auto'],
+    accept_from: { [REPO_ID]: acceptFrom }, backends: { claude: fakeClaudeBin(root, scenario) }, never_auto_labels: ['never_auto'],
   }), { mode: 0o600 });
   return repo;
 }
@@ -346,4 +346,51 @@ test('app mode: data_dir must be private: a symlink is refused, a wider director
     await hub.close();
     rm(root);
   }
+});
+
+// "Budget reached" reaches the giver's own desktop (and only theirs) as exactly
+// {type:'runner.event', event:'run.budget_reached', run_id, card_id, spent_usd, budget_usd, card_key?}.
+async function budgetRun(scenario, { by, acceptFrom } = {}) {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  appWithRepo(root, scenario, { acceptFrom });
+  const app = spawnApp(root);
+  try {
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    hub.send(offerFor({ key: 'BUD-7', ...(by ? { by } : {}) }));
+    await waitFor(() => hub.outs('run.failed')[0], { what: 'run.failed', timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 300));
+    return { failed: hub.outs('run.failed')[0], events: app.messages.filter((m) => m.type === 'runner.event') };
+  } finally {
+    app.child.kill('SIGKILL');
+    await hub.close();
+    rm(root);
+  }
+}
+
+test('app mode: a budget stop on the giver\'s own device posts exactly run.budget_reached', async () => {
+  const { failed, events } = await budgetRun({ steps: [{ result: 'error_max_budget_usd', cost: 1.25 }] });
+  assert.equal(failed.fail_kind, 'budget');
+  assert.equal(events.length, 1);
+  const e = events[0];
+  assert.deepEqual(Object.keys(e).sort(), ['budget_usd', 'card_id', 'card_key', 'event', 'run_id', 'spent_usd', 'type']);
+  assert.equal(e.event, 'run.budget_reached');
+  assert.equal(e.card_id, 'card-BUD-7');
+  assert.equal(e.card_key, 'BUD-7');
+  assert.match(e.run_id, /^[A-Za-z0-9_-]{1,64}$/);
+  assert.equal(e.spent_usd, 1.25);
+  assert.equal(e.budget_usd, 1);
+});
+
+test('app mode: max_turns never posts run.budget_reached', async () => {
+  const { failed, events } = await budgetRun({ steps: [{ result: 'error_max_turns' }] });
+  assert.equal(failed.fail_kind, 'error');
+  assert.deepEqual(events, []);
+});
+
+test('app mode: a budget stop of a teammate\'s card on this device posts nothing (only the giver\'s device hears it)', async () => {
+  const { failed, events } = await budgetRun({ steps: [{ result: 'error_max_budget_usd', cost: 1.25 }] }, { by: 'm-teammate', acceptFrom: ['m-teammate'] });
+  assert.equal(failed.fail_kind, 'budget');
+  assert.deepEqual(events, []);
 });
