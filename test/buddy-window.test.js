@@ -166,6 +166,53 @@ test('connect window wiring: gesture-tracked, guarded, cookie set before the loa
   assert.match(fn, /sandbox: true/);
 });
 
+test('connect window guardrails pinned: hub-view opener only, neutral name, own partition with no bearer, callback close, host title, fail-closed', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  const hubView = src.slice(src.indexOf('function makeHubView('), src.indexOf('async function openConnect'));
+  // Only the hub view's window.open handler can start one, and only for the current, signed-in account hub.
+  assert.equal(src.split('openConnect(').length - 1, 2, 'declared once, called once');
+  assert.equal(src.split('connectDecision(').length - 1, 1);
+  assert.ok(hubView.includes('openConnect(url, h, c)') && hubView.includes('connectDecision('));
+  assert.match(hubView, /signedIn: !!h\.bearer && signedIn\(h\.origin\) && hubInfo\?\.origin === h\.origin/);
+  assert.match(hubView, /pageUrl: wc\.getURL\(\)/, 'the opener is judged by the hub view’s own main-frame URL');
+  assert.match(hubView, /wc\.on\('will-frame-navigate', \(e\) => \{ if \(!e\.isMainFrame && decide\(e\.url\) !== 'allow'\) e\.preventDefault\(\); \}\);/, 'frames stay on the hub origin');
+  assert.match(hubView, /gestureAt = 0;\n\s+if \(c\.ok\)/, 'one gesture, one try');
+  // The page's own window (named with the bind) is never created: the handler always denies, and ours has no name.
+  const handler = hubView.slice(hubView.indexOf('wc.setWindowOpenHandler('), hubView.indexOf('const guard'));
+  assert.ok(!/action: 'allow'|overrideBrowserWindowOptions/.test(handler));
+  assert.match(handler, /return \{ action: 'deny' \};\n\s+\}\);/);
+  const ctor = fn.slice(fn.indexOf('new BrowserWindow('), fn.indexOf('w.hubOrigin = h.origin'));
+  assert.ok(ctor.length > 0 && !/frameName|bind|name:/.test(ctor), 'nothing names the connect window');
+  assert.equal(fn.replace(/\/\/.*$/gm, '').match(/\bbind\b/g).length, 2, 'the bind reaches only bindCookie');
+  assert.match(fn, /w\.loadURL\(url\)/);
+  // Its own partition: never the hub's (which carries the bearer header), and cleared on sign-out.
+  assert.match(fn, /session\.fromPartition\(integrationPartitionFor\(h\.origin\)\)/);
+  assert.ok(!/h\.partition|teamPartition|webRequest/.test(fn));
+  for (const o of ['https://app.plexiform.dev', 'https://buddy.example.com', 'http://127.0.0.1:4100']) {
+    assert.notEqual(integrationPartitionFor(o), teamPartition(o));
+    assert.ok(integrationPartitionFor(o).startsWith('persist:integration-auth-') && teamPartition(o).startsWith('persist:board-'));
+  }
+  assert.match(src, /function installBearer\(origin\) \{\n\s+const partition = teamPartition\(origin\);/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'account-flow.js'), 'utf8'), /const parts = \[partitionFor\(origin\), integrationPartitionFor\(origin\)\];/);
+  // The first page must be the authorize host; the callback page closes the window shortly after it loads.
+  assert.match(fn, /if \(host !== authorizeHost\) \{ log\('connect window closed: first page not the authorize host'\); wc\.stop\(\); w\.close\(\); \}/);
+  assert.match(fn, /wc\.on\('did-finish-load', \(\) => \{\n\s+if \(closing \|\| !isConnectCallback\(wc\.getURL\(\), w\.hubOrigin\)\) return;/);
+  assert.match(fn, /setTimeout\(\(\) => \{\n\s+if \(!w\.isDestroyed\(\)\) w\.close\(\);[\s\S]*?\}, 1500\);/);
+  // The title shows the host on screen; the page can't replace it.
+  assert.match(fn, /w\.on\('page-title-updated', \(e\) => e\.preventDefault\(\)\);/);
+  assert.match(fn, /w\.setTitle\(`\$\{BRAND\.CONNECT_TITLE\} · \$\{new URL\(u\)\.host\}`\)/);
+  // Fail closed on anything malformed.
+  const hub = 'https://app.plexiform.dev';
+  const ok = { url: 'https://github.com/login/oauth/authorize', frameName: 'plexiform-connect|github|b', pageUrl: `${hub}/?view=integrations`, hubOrigin: hub, signedIn: true, gestureAt: 1, now: 2 };
+  assert.equal(connectDecision(ok).ok, true);
+  for (const over of [{ url: undefined }, { url: '::' }, { frameName: undefined }, { frameName: 42 }, { pageUrl: undefined }, { hubOrigin: undefined }, { referrer: '::' }, { gestureAt: NaN }, { now: NaN }, { gestureAt: 5 }]) {
+    assert.equal(connectDecision({ ...ok, ...over }).ok, false, JSON.stringify(over));
+  }
+  assert.equal(connectNavOk(undefined, hub), false);
+  assert.equal(isConnectCallback(`${hub}/integrations/github/callback`, undefined), false);
+});
+
 // ── hub env ────────────────────────────────────────────────────────────────
 
 test('hub env is an allowlist: no secrets from our env, loopback bind, no secret in local mode', () => {
