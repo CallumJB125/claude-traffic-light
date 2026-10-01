@@ -48,6 +48,7 @@ function oldProfile(home) {
   put('updater.json', '{"lastIssuedAt":{"stable":"2026-09-01T00:00:00.000Z"}}');
   put('board/hub.db', 'db');
   put('runner/abc-t1/state.json', '{}');
+  put('board-dev/worktrees/x/README', 'big');
   put('buddy-accounts/abc.bin', 'sealed under the old Keychain item');
   put('buddy-devices/abc-t1.bin', 'sealed too');
   put('updates/staged/x', 'stale');
@@ -58,7 +59,7 @@ function oldProfile(home) {
   return { appData, old, userData: path.join(appData, 'Plexiform') };
 }
 
-test('userData: copied, not moved; the old folder is untouched; the lock, staged updates, caches and sealed blobs stay behind', () => {
+test('userData: copied, not moved; the old folder is untouched; the lock, staged updates, caches, sealed blobs and the runner stay behind', () => {
   const home = tmpHome();
   const { appData, old, userData } = oldProfile(home);
   const before = snapshot(old);
@@ -67,17 +68,17 @@ test('userData: copied, not moved; the old folder is untouched; the lock, staged
   assert.equal(r.copied, true);
   assert.equal(r.from, old);
   assert.deepEqual(snapshot(old), before, 'the old folder is byte-for-byte and mtime-for-mtime as it was');
-  for (const f of ['Preferences', 'Local State', 'Local Storage/leveldb/000003.log', 'buddy-workspaces.json', 'updater.json', 'board/hub.db', 'runner/abc-t1/state.json']) {
+  for (const f of ['Preferences', 'Local State', 'Local Storage/leveldb/000003.log', 'buddy-workspaces.json', 'updater.json', 'board/hub.db']) {
     assert.equal(fs.readFileSync(path.join(userData, f), 'utf8'), fs.readFileSync(path.join(old, f), 'utf8'), f);
   }
-  for (const f of ['SingletonLock', 'updates', 'Cache', 'Code Cache', 'buddy-accounts', 'buddy-devices']) assert.ok(!fs.existsSync(path.join(userData, f)) && !isLink(path.join(userData, f)), `${f} not copied`);
-  assert.deepEqual(r.skipped, ['Cache', 'Code Cache', 'SingletonLock', 'buddy-accounts', 'buddy-devices', 'updates']);
+  for (const f of ['SingletonLock', 'updates', 'Cache', 'Code Cache', 'buddy-accounts', 'buddy-devices', 'runner', 'board-dev']) assert.ok(!fs.existsSync(path.join(userData, f)) && !isLink(path.join(userData, f)), `${f} not copied`);
+  assert.deepEqual(r.skipped, ['Cache', 'Code Cache', 'SingletonLock', 'board-dev', 'buddy-accounts', 'buddy-devices', 'runner', 'updates']);
   const state = M.readState(userData);
   assert.deepEqual(state.pending, M.STEPS);
   assert.equal(state.from, old);
   assert.equal(state.copiedAt, '2026-10-01T09:00:00.000Z');
   assert.equal(logs.length, 1);
-  assert.match(logs[0], /copied .*claude-buddy to .*Plexiform .*left out: Cache, Code Cache, SingletonLock, buddy-accounts, buddy-devices, updates/);
+  assert.match(logs[0], /copied .*claude-buddy to .*Plexiform .*left out: Cache, Code Cache, SingletonLock, board-dev, buddy-accounts, buddy-devices, runner, updates/);
   assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy'], 'no temp folder left behind');
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -408,33 +409,78 @@ test('login item: turned on for the new app where the old one had set it up; the
   assert.deepEqual(calls.splice(0), []);
 });
 
-test('follow-up: each pending step runs once, in order; a step that returns false stays pending; a throw is logged and done', async () => {
+test('follow-up: each pending step runs once, in order; a step that returns false or throws stays pending', async () => {
   const home = tmpHome();
   const { appData, userData } = oldProfile(home);
   M.copyUserData({ appData, userData, log: quiet });
   const ran = [];
   const logs = [];
-  let hooksReady = false;
+  let loginWorks = false;
   const steps = {
-    'quit-old': () => { ran.push('quit-old'); },
-    hooks: () => { ran.push('hooks'); if (!hooksReady) return false; return undefined; },
-    login: () => { ran.push('login'); throw new Error('boom'); },
+    hooks: () => { ran.push('hooks'); },
+    login: () => { ran.push('login'); if (!loginWorks) throw new Error('boom'); },
     'remove-old-app': async () => { ran.push('remove-old-app'); },
   };
   const p = M.runFollowUp({ userData, steps, log: (m) => logs.push(m) });
-  assert.deepEqual(ran.slice(0, 3), ['quit-old', 'hooks', 'login'], 'the synchronous steps are done before it returns');
+  assert.deepEqual(ran.slice(0, 2), ['hooks', 'login'], 'the synchronous steps are done before it returns');
   await p;
-  assert.deepEqual(ran, ['quit-old', 'hooks', 'login', 'remove-old-app']);
-  assert.deepEqual(M.pending(userData), ['hooks']);
-  assert.match(logs[0], /login failed: boom/);
+  assert.deepEqual(ran, ['hooks', 'login', 'remove-old-app']);
+  assert.deepEqual(M.pending(userData), ['login'], 'a step that threw is not marked done');
+  assert.match(logs[0], /login failed, trying again next launch: boom/);
   ran.length = 0;
-  hooksReady = true;
+  loginWorks = true;
   await M.runFollowUp({ userData, steps, log: quiet });
-  assert.deepEqual(ran, ['hooks']);
+  assert.deepEqual(ran, ['login']);
   assert.deepEqual(M.pending(userData), []);
   await M.runFollowUp({ userData, steps, log: quiet });
-  assert.deepEqual(ran, ['hooks']);
+  assert.deepEqual(ran, ['login']);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('follow-up: a translocated launch (hooks stay pending) is never offered Remove; the next proper launch is', async () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  M.copyUserData({ appData, userData, log: quiet });
+  let translocated = true;
+  const dialogs = [];
+  const logs = [];
+  const steps = {
+    hooks: () => (translocated ? false : undefined),
+    login: () => {},
+    // as main.js: Remove is never offered from a translocated copy
+    'remove-old-app': () => !translocated && M.offerRemoveOldApp({ platform: 'darwin', home, name: 'Plexiform', exists: () => true, log: quiet, showDialog: async (o) => { dialogs.push(o); return { response: 0 }; }, trashItem: async () => {} }),
+  };
+  await M.runFollowUp({ userData, steps, log: (m) => logs.push(m) });
+  assert.deepEqual(dialogs, []);
+  assert.deepEqual(M.pending(userData), ['hooks', 'remove-old-app']);
+  assert.ok(logs.some((m) => /not offering to remove the old app while the hooks still point at it/.test(m)));
+  // Even were hooks done, a translocated launch keeps remove-old-app pending.
+  M.markDone(userData, 'hooks');
+  await M.runFollowUp({ userData, steps, log: quiet });
+  assert.deepEqual(dialogs, []);
+  assert.deepEqual(M.pending(userData), ['remove-old-app']);
+  translocated = false;
+  await M.runFollowUp({ userData, steps, log: quiet });
+  assert.equal(dialogs.length, 2, 'both old app paths offered');
+  assert.deepEqual(M.pending(userData), []);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('old app: still installed (so its Open at Login can start it) is checked per platform; main.js asks it to quit on every launch while it is', () => {
+  const there = new Set(['/Users/fixture/Applications/Claude Buddy.app']);
+  const exists = (p) => there.has(p);
+  assert.equal(M.oldAppInstalled({ platform: 'darwin', home: '/Users/fixture', exists }), true);
+  assert.equal(M.oldAppInstalled({ platform: 'darwin', home: '/Users/other', exists }), false);
+  assert.equal(M.oldAppInstalled({ platform: 'linux', home: '/home/x', exists: (p) => p === '/opt/Claude Buddy' }), true);
+  assert.equal(M.oldAppInstalled({ platform: 'linux', home: '/home/x', exists }), false);
+  assert.equal(M.oldAppInstalled({ platform: 'win32', home: 'C:/Users/x', exists: () => true }), false);
+  assert.ok(!M.STEPS.includes('quit-old'), 'quitting the old app is not a once-only step');
+
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const fn = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('return RenameMigration.runFollowUp('));
+  assert.match(fn, /if \(RenameMigration\.oldAppInstalled\(\{ platform: process\.platform, home \}\)\) \{\s+const \{ asked \} = RenameMigration\.quitOldInstance\(/);
+  assert.match(fn, /if \(asked\.length && Notification\.isSupported\(\)\) new Notification\(/, 'and says why');
+  assert.match(src, /'remove-old-app': \(\) => !TRANSLOCATED && RenameMigration\.offerRemoveOldApp\(/);
 });
 
 test('main.js copies userData before the instance lock and anything else that opens it, and only for the installed app', () => {

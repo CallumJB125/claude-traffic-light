@@ -3716,17 +3716,23 @@ if (!gotLock) {
   });
 }
 
-// src/rename-migration.js, after ready; each step runs once.
+// src/rename-migration.js, after ready; each step runs until it succeeds.
 function renameFollowUp() {
   const home = os.homedir();
+  // While the old app is installed its Open at Login can start it again, and
+  // the two would fight over the hooks: ask it to quit on every launch, and say why.
+  if (RenameMigration.oldAppInstalled({ platform: process.platform, home })) {
+    const { asked } = RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses });
+    if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
+  }
   return RenameMigration.runFollowUp({
     userData: app.getPath('userData'),
     steps: {
-      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: listOldProcesses }); },
       // From a translocated copy the hooks would point at a temporary path: try again next launch.
       hooks: () => { if (!AUTO_INSTALL_HOOKS) return false; RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }); },
       login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },
-      'remove-old-app': () => RenameMigration.offerRemoveOldApp({
+      // A translocated copy can't re-point the hooks, so the old app stays until it can.
+      'remove-old-app': () => !TRANSLOCATED && RenameMigration.offerRemoveOldApp({
         platform: process.platform, home, name: Brand.name,
         showDialog: (opts) => { app.focus({ steal: true }); return dialog.showMessageBox(opts); },
         trashItem: (p) => shell.trashItem(p),

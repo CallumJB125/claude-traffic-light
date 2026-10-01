@@ -10,9 +10,10 @@
 // the old folder: the old app keeps working if the person goes back to it.
 //
 // The rest waits for app ready and runs once (the pending list in
-// rename-migration.json, inside the new folder): ask a running old copy to
-// quit, point the agents' hooks and the MCP entry at this app, move Open at
-// Login across, and offer to put the old app in the Bin. Everything that
+// rename-migration.json, inside the new folder): point the agents' hooks and
+// the MCP entry at this app, move Open at Login across, and offer to put the
+// old app in the Bin. While the old app is still installed, a running copy
+// of it is asked to quit on every launch. Everything that
 // touches the machine is passed in, so tests run against a temp HOME with
 // stubbed processes, dialogs and Bin.
 const fs = require('fs');
@@ -30,7 +31,7 @@ const OLD = Object.freeze({
 });
 
 const STATE_FILE = 'rename-migration.json';
-const STEPS = ['quit-old', 'hooks', 'login', 'remove-old-app'];
+const STEPS = ['hooks', 'login', 'remove-old-app'];
 
 // Not copied, by top-level name:
 //   Singleton*        the old instance's lock; a live one would make this app quit
@@ -38,8 +39,10 @@ const STEPS = ['quit-old', 'hooks', 'login', 'remove-old-app'];
 //   buddy-accounts,   sealed with safeStorage under the old Keychain item,
 //   buddy-devices     which this app never reads: the person signs in again
 //   caches            Chromium rebuilds them
+//   runner,           the team runner's outbox and worktrees, bound to the old
+//   board-dev         paths and device credentials (left behind above); can be large
 const SKIP = new Set([
-  'SingletonLock', 'SingletonSocket', 'SingletonCookie', 'updates', 'buddy-accounts', 'buddy-devices',
+  'SingletonLock', 'SingletonSocket', 'SingletonCookie', 'updates', 'buddy-accounts', 'buddy-devices', 'runner', 'board-dev',
   'Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache', 'Crashpad',
 ]);
 
@@ -252,6 +255,13 @@ function moveLoginItem({ platform, app, loginItem, autoLaunchConfigured, log = c
   }
 }
 
+// Whether the old app is still on disk, so its Open at Login may start it again.
+function oldAppInstalled({ platform, home, exists = fs.existsSync }) {
+  if (platform === 'darwin') return oldAppPaths(home).some((p) => exists(p));
+  if (platform === 'linux') return exists('/opt/Claude Buddy');
+  return false;
+}
+
 const oldAppPaths = (home) => ['/Applications', path.join(home, 'Applications')].map((d) => path.join(d, OLD.macBundleName));
 
 /**
@@ -285,23 +295,26 @@ async function offerRemoveOldApp({ platform, home, name, exists = fs.existsSync,
 }
 
 /**
- * Runs the steps still pending, each at most once. A step function returns
- * false to stay pending (e.g. hooks while running from a translocated copy).
- * steps: { 'quit-old': fn, hooks: fn, login: fn, 'remove-old-app': async fn }
+ * Runs the steps still pending, each until it succeeds. A step function
+ * returns false, or throws, to stay pending (e.g. hooks while running from a
+ * translocated copy). remove-old-app waits while hooks is pending: binning the
+ * old app would break the hooks still pointing into it.
+ * steps: { hooks: fn, login: fn, 'remove-old-app': async fn }
  */
 async function runFollowUp({ userData, steps, fsImpl = fs, log = console.log }) {
   for (const step of pending(userData, fsImpl)) {
     const fn = steps[step];
     if (!fn) continue;
+    if (step === 'remove-old-app' && pending(userData, fsImpl).includes('hooks')) { log('[rename] not offering to remove the old app while the hooks still point at it'); continue; }
     let keep = false;
     // Synchronous steps finish before this returns its promise, so main's own
     // hook check right after sees what they wrote.
     try {
       const r = fn();
       keep = (r && typeof r.then === 'function' ? await r : r) === false;
-    } catch (err) { log(`[rename] ${step} failed: ${err.message}`); }
+    } catch (err) { keep = true; log(`[rename] ${step} failed, trying again next launch: ${err.message}`); }
     if (!keep) markDone(userData, step, fsImpl);
   }
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, oldAppPaths, offerRemoveOldApp, runFollowUp };
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, copyUserData, readState, pending, markDone, parsePs, quitOldInstance, rewriteHooks, moveLoginItem, oldAppInstalled, oldAppPaths, offerRemoveOldApp, runFollowUp };
