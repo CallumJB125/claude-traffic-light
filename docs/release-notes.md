@@ -10,11 +10,11 @@ Plexiform for Mac, Windows and Linux. This is the first beta build.
 - **Jumping to a session running in a detached tmux session** no longer switches the terminal tab you are on. If the session's terminal can't be found, Plexiform tells you and shows the command to attach.
 
 <!-- DRAFT additions. Uncomment a line only when it is on main AND in the build being tagged; they are all on main now except where noted.
-- **Characters.** New characters to pick as your Body in Lights: a rubber duck, octopus, CRT monitor, blob, capybara and cactus, then an owl, penguin, fox, bee, axolotl and mushroom. [wave 3, on its own branch (egg, toaster, cloud, astronaut, sloth, T-rex, cyclops): add the line "…and an egg, toaster, cloud, astronaut, sloth, T-rex and cyclops" only once it is merged]
+- **Characters.** New characters to pick as your Body in Lights: a rubber duck, octopus, CRT monitor, blob, capybara and cactus, then an owl, penguin, fox, bee, axolotl and mushroom.
 - **Hatch a character.** In Lights, under Body, "+ Hatch" opens a small window: choose a shape, size, arms, accessory and colour (or "Surprise me"), watch it on the real character as you go, and save it. It is made on your computer from templates and kept in `~/.claude-traffic-light/characters`. Describing a character to an AI is not in this release.
 - **Right-click the widget** to open the Plexiform window. Shift- or Option-right-click still opens the full menu.
 - **A Usage pop-out** from the tray or widget menu: today's spend, this week's, and the busiest model.
-- **Send feedback.** A "Something's off / Idea" form in the app. It saves your note on your computer; you can attach diagnostics and a screenshot, and nothing is sent until you choose to send it. [70: please confirm the exact senders offered before this ships]
+- **Send feedback.** A "Something's off / Idea" form in the app. It saves your report on your computer (a folder with the note, optional diagnostics and an optional screenshot of Plexiform's own windows), and you can copy it. If you're signed in to a team whose hub has a board called "Plexiform feedback", you can press Send to file it there as a card, which your team can see; the screenshot stays on your computer, and nothing is sent until you press Send.
 -->
 
 **Known limits**
