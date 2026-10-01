@@ -565,7 +565,7 @@ function rememberBoard() {
   }
 }
 
-async function switchBoard(id) {
+async function switchBoard(id, { openCard = null, section = null } = {}) {
   if (!state.boards.some((b) => b.id === id)) return;
   socket?.close(); socket = null;
   state.board = null;
@@ -578,7 +578,8 @@ async function switchBoard(id) {
   try { sessionStorage.removeItem('board-filters'); } catch { /* storage off */ }
   const query = new URLSearchParams(location.search);
   query.set('board', id); query.delete('q'); query.delete('f');
-  history.replaceState(null, '', `${location.pathname}?${query}`);
+  const fragment = openCard ? `#${new URLSearchParams({ card: openCard, ...(section ? { section } : {}) })}` : '';
+  history.replaceState(null, '', `${location.pathname}?${query}${fragment}`);
   state.conn = { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null };
   await boot();
 }
@@ -998,10 +999,14 @@ async function submitFeedback() {
 }
 
 function openFromHash() {
-  const m = location.hash.match(/^#card=(.+)$/);
-  if (!m) return;
-  const id = decodeURIComponent(m[1]);
-  const tryOpen = () => { if (state.cards.has(id)) openDetail(id); else if (state.conn.status !== 'open') setTimeout(tryOpen, 200); };
+  const query = new URLSearchParams(location.hash.slice(1)), id = query.get('card');
+  if (!id) return;
+  const section = query.get('section'), generation = boardGeneration;
+  const tryOpen = () => {
+    if (generation !== boardGeneration) return;
+    if (state.cards.has(id)) openDetail(id, section);
+    else if (state.conn.status !== 'open') setTimeout(tryOpen, 200);
+  };
   tryOpen();
 }
 
@@ -1294,11 +1299,12 @@ function togglePalette() {
   if (state.auth !== 'ok' || !state.board) return;
   if (state.dialog?.kind === 'palette') { closePalette(); return; }
   if (root.querySelector('dialog[open]:not([data-dialog="drawer"])')) return;
-  state.dialog = { kind: 'palette', query: '', index: 0, scope: null };
+  state.dialog = { kind: 'palette', query: '', index: 0, scope: null, instance: {} };
   renderNow();
 }
 
 function closePalette() {
+  clearTimeout(searchTimer);
   state.dialog = null;
   renderNow();
 }
@@ -1312,9 +1318,11 @@ function runPalette(item, { give = false } = {}) {
   const run = give ? { type: 'give', ...item.give } : item.run;
   if (!run) return;
   if (run.type === 'scope-give') { state.dialog = { ...state.dialog, scope: 'give', query: '', index: 0 }; renderNow(); return; }
+  if (run.type === 'scope-search') { state.dialog = { ...state.dialog, scope: 'search', query: '', index: 0, instance: {}, search: null }; renderNow(); return; }
   closePalette();
   switch (run.type) {
     case 'open-card': openDetail(run.id); break;
+    case 'open-search': openSearchResult(run); break;
     case 'view': setView(run.view); break;
     case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
     case 'new-card': openNewCard(); break;
@@ -1326,6 +1334,42 @@ function runPalette(item, { give = false } = {}) {
     case 'filter-clear': setFilters(emptyFilters()); break;
     default:
   }
+}
+
+let searchTimer = null;
+function searchSoon() {
+  clearTimeout(searchTimer);
+  const d = state.dialog, generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org
+    && state.dialog?.kind === 'palette' && state.dialog.scope === 'search' && state.dialog.instance === d.instance && state.dialog.query === d.query;
+  state.dialog = { ...d, search: null, searchError: null, searchLoading: d.query.trim().length >= 2 };
+  if (!state.dialog.searchLoading) return;
+  searchTimer = setTimeout(async () => {
+    if (!current()) return;
+    try {
+      const result = await api.search(d.query);
+      if (current()) { state.dialog = { ...state.dialog, search: result, searchLoading: false, index: 0 }; update(); }
+    } catch (error) {
+      if (current()) { state.dialog = { ...state.dialog, searchError: errorText(error), searchLoading: false }; update(); }
+    }
+  }, 150);
+}
+
+async function openSearchResult(run) {
+  const generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  const current = () => generation === boardGeneration && state.me?.member?.id === memberId && currentOrg() === org;
+  try {
+    // Search is a snapshot; opening still checks the current resource access.
+    const data = await api.card(run.id);
+    if (!current()) return;
+    if (data.card.archived || data.card.board_id !== run.boardId) { toast('This work has changed. Search again.'); return; }
+    if (run.boardId === state.boardId) { openDetail(run.id, run.section); return; }
+    const result = await api.boards();
+    if (!current()) return;
+    if (!result.boards.some((board) => board.id === run.boardId && !board.archived_at)) { toast('This board is no longer available.'); return; }
+    state.boards = result.boards;
+    await switchBoard(run.boardId, { openCard: run.id, section: run.section });
+  } catch (error) { if (current()) toast(errorText(error)); }
 }
 
 function paletteKeydown(e) {
@@ -1642,7 +1686,11 @@ function onSubmit(e) {
 function onInput(e) {
   const el = e.target.closest?.('[data-input]');
   if (el?.dataset.input === 'filter-q') setFilters({ ...state.filters, q: el.value });
-  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') { state.dialog = { ...state.dialog, query: el.value, index: 0 }; update(); }
+  if (el?.dataset.input === 'palette-q' && state.dialog?.kind === 'palette') {
+    state.dialog = { ...state.dialog, query: el.value, index: 0 };
+    if (state.dialog.scope === 'search') searchSoon();
+    update();
+  }
 }
 
 function onChange(e) {

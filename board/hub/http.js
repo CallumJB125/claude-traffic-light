@@ -20,6 +20,7 @@ import { redact } from './log.js';
 import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
+import { searchWork } from './search.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -379,6 +380,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
   route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/search', ({ member, query, ident }) => searchWork(hub, member, query, { cred: ident?.cred }), { limit: 'search_member' });
   route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));

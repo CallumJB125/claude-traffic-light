@@ -104,6 +104,7 @@ const MATRIX = {
   },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, alt: (fx) => [`/api/boards/${fx.B.board}?include_archived=1`] },
   'GET /api/boards': { kind: 'team' },
+  'GET /api/search': { kind: 'cross', path: (fx) => `/api/search?q=secret&board_id=${fx.B.board}`, alt: (fx) => [`/api/search?q=secret&team=${fx.B.team}`] },
   'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
   'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
   'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
