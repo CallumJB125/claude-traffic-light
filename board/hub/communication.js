@@ -9,6 +9,7 @@ import { cleanPacketText, packetRelativePath } from '../shared/packet-text.js';
 import { AI_IDS, aiOfDispatch } from '../shared/ai.js';
 import { limitOrThrow } from './ratelimit.js';
 import { safeEqual } from './auth.js';
+import { requireRows } from './quotas.js';
 
 const FIELDS = ['brief', 'decisions', 'progress', 'nextAction', 'artifacts', 'reportedChecks'];
 const missing = () => new HubError('NOT_FOUND', 'task context not found');
@@ -255,6 +256,7 @@ export class TeamCommunication {
     if (this.db.get('SELECT COUNT(*) n FROM task_messages WHERE card_id = ?', scope.row.id).n >= 1000) throw new HubError('QUOTA_EXCEEDED', 'task message limit reached');
     limitOrThrow(this.hub, 'communication_write_member', scope.member.id);
     return this.hub.txn(() => {
+      requireRows(this.hub, scope.member.org_id, 'comments');
       if (!thread) {
         thread = { id: randomUUID(), org_id: scope.member.org_id, repo_id: scope.row.repo_id, seed_card_id: scope.row.id,
           seed_member_id: scope.member.id, seed_run_id: scope.run?.id ?? null, created_at: this.hub.iso() };

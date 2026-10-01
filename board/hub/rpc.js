@@ -12,6 +12,7 @@ import { limitOrThrow } from './ratelimit.js';
 import { runnerConnectionProblem } from './runner-authority.js';
 import { TeamCommunication } from './communication.js';
 import { ownershipPath } from './ownership.js';
+import { insertCardRecord } from './card-record.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
 const clip = (s, n) => {
@@ -277,13 +278,11 @@ const METHODS = {
     const labels = JSON.stringify(hub.labels(row).filter((l) => POLICY_LABELS.includes(l)));
     let key;
     hub.txn(() => {
-      const b = hub.board(row.board_id);
-      key = `${b.key_prefix}-${b.next_key}`;
-      hub.db.run('UPDATE boards SET next_key = next_key + 1 WHERE id = ?', row.board_id);
-      hub.db.insert('cards', {
-        id, board_id: row.board_id, key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels,
-        parent_card_id: row.id, created_by: member.id, created_by_run_id: run.id, created_at: now, updated_at: now, state_since: now,
-      });
+      const child = insertCardRecord(hub, row.board_id, member.id, {
+        title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels,
+        parent_card_id: row.id, created_by_run_id: run.id,
+      }, { id, now });
+      key = child.key;
       hub.journal({ board_id: row.board_id, card_id: id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id, kind: 'card.create', payload: {
         key, title, body, acceptance, repo_id: run.repo_id, base_ref: row.base_ref ?? null, labels, budget_cents: null, column_name: 'todo', assignees: [], parent_card_id: row.id, request_id: null,
       } });
