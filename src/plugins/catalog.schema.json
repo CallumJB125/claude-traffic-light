@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plexiform.local/schema/catalog.schema.json",
+  "title": "Plexiform plugin catalogue",
+  "description": "One normalised list of things people add to Claude Code: plugins, marketplaces, MCP servers, skills, subagents, hooks, slash commands and output styles. Types mirror src/types.js.",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "generator", "sources", "stats", "featured", "collections", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "generator": { "type": "string" },
+    "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+    "stats": { "type": "object" },
+    "featured": { "type": "array", "items": { "$ref": "#/$defs/featured" } },
+    "collections": { "type": "array", "items": { "$ref": "#/$defs/collection" } },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "crawl": { "type": "object" },
+    "snapshot": { "type": "object" }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["id", "url", "count", "fetchedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "url": { "type": "string" },
+        "count": { "type": "integer" },
+        "fetchedAt": { "type": "string" },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "featured": {
+      "type": "object",
+      "required": ["id", "curation"],
+      "properties": {
+        "id": { "type": "string" },
+        "curation": { "enum": ["seed", "human"] },
+        "reason": { "type": "string" },
+        "addedAt": { "type": "string" }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "required": ["id", "title", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": ["string", "null"] },
+        "entries": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "install": {
+      "type": "object",
+      "required": ["kind", "steps"],
+      "properties": {
+        "kind": { "enum": ["plugin", "marketplace", "plugin-dir", "mcp", "copy", "manual"] },
+        "steps": { "type": "array", "items": { "type": "string" } },
+        "inSession": { "type": "array", "items": { "type": "string" } },
+        "scopes": { "type": "array", "items": { "enum": ["user", "project", "local"] } },
+        "defaultScope": { "enum": ["user", "project", "local"] },
+        "sessionOnly": { "type": "boolean" },
+        "marketplace": { "type": "string" },
+        "addSource": { "type": "string" },
+        "plugin": { "type": "string" },
+        "name": { "type": "string" },
+        "transport": { "type": "string" },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "url": { "type": "string" },
+        "from": { "type": "object" },
+        "to": { "type": "object" },
+        "bundle": { "type": "boolean" },
+        "note": { "type": "string" }
+      }
+    },
+    "flag": {
+      "type": "object",
+      "required": ["id", "severity", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "enum": ["hook-shell", "hook-sees-everything", "hook-network", "curl-pipe-sh", "sensitive-files", "recursive-delete", "sudo", "persistence", "broad-filesystem", "unrestricted-bash", "obfuscated", "minified", "binaries", "install-scripts", "remote-service", "unpinned-package", "needs-secrets"] },
+        "severity": { "enum": ["info", "low", "medium", "high"] },
+        "message": { "type": "string" },
+        "evidence": { "type": ["string", "null"] }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id", "type", "name", "description", "official", "trust", "source", "marketplaces", "listedIn", "install", "adds", "requires", "license", "repo", "installSignal", "readme", "media", "security", "scan", "dedupe", "collections", "tested", "score"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^(plugin|marketplace|mcp-server|skill|subagent|hook|command|output-style):" },
+        "type": { "enum": ["plugin", "marketplace", "mcp-server", "skill", "subagent", "hook", "command", "output-style"] },
+        "name": { "type": "string" },
+        "displayName": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] },
+        "official": { "type": "boolean", "description": "Listed in a marketplace Anthropic runs (claude-plugins-official, claude-code-plugins, anthropic-agent-skills)." },
+        "trust": { "enum": ["anthropic", "anthropic-community", "community"] },
+        "category": { "type": ["string", "null"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "source": {
+          "type": "object",
+          "required": ["repo", "path", "url"],
+          "properties": {
+            "repo": { "type": ["string", "null"], "description": "GitHub owner/name" },
+            "path": { "type": ["string", "null"], "description": "Subdirectory inside the repo" },
+            "ref": { "type": ["string", "null"] },
+            "sha": { "type": ["string", "null"] },
+            "url": { "type": ["string", "null"] },
+            "homepage": { "type": ["string", "null"] },
+            "kind": { "type": ["string", "null"], "description": "Marketplace source kind: path | github | url | git-subdir | npm | archive | command | repo" },
+            "registry": { "type": ["object", "null"] },
+            "packages": { "type": "array", "items": { "type": "object", "required": ["registryType", "identifier"], "properties": { "registryType": { "type": "string" }, "identifier": { "type": "string" }, "version": { "type": ["string", "null"] } } } }
+          }
+        },
+        "marketplaces": {
+          "type": "array",
+          "items": { "type": "object", "required": ["name", "addSource", "plugin"], "properties": { "name": { "type": "string" }, "addSource": { "type": "string" }, "plugin": { "type": "string" }, "trust": { "type": "string" } } }
+        },
+        "listedIn": { "type": "array", "items": { "type": "string" } },
+        "install": { "type": "array", "items": { "$ref": "#/$defs/install" } },
+        "adds": {
+          "type": "object",
+          "required": ["skills", "agents", "commands", "hooks", "mcpServers", "lspServers", "outputStyles", "tools"],
+          "properties": {
+            "skills": { "type": "array", "items": { "type": "string" } },
+            "agents": { "type": "array", "items": { "type": "string" } },
+            "commands": { "type": "array", "items": { "type": "string" } },
+            "hooks": { "type": "array", "items": { "type": "object", "required": ["event", "type"], "properties": { "event": { "type": "string" }, "matcher": { "type": ["string", "null"] }, "type": { "type": "string" } } } },
+            "mcpServers": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "transport": { "type": ["string", "null"] } } } },
+            "lspServers": { "type": "array", "items": { "type": "string" } },
+            "outputStyles": { "type": "array", "items": { "type": "string" } },
+            "tools": { "type": "array", "items": { "type": "string" }, "description": "MCP tool names when known (filled by the Tested-by-Buddy harness later)" },
+            "bundleCount": { "type": ["integer", "null"] },
+            "plugins": { "type": ["integer", "null"] }
+          }
+        },
+        "requires": {
+          "type": "object",
+          "required": ["env", "runtimes", "os"],
+          "properties": {
+            "env": { "type": "array", "items": { "type": "object", "required": ["name", "secret", "required"], "properties": { "name": { "type": "string" }, "secret": { "type": "boolean" }, "required": { "type": "boolean" }, "description": { "type": ["string", "null"] } } } },
+            "runtimes": { "type": "array", "items": { "type": "string" } },
+            "os": { "type": ["array", "null"], "items": { "enum": ["macos", "linux", "windows"] }, "description": "null = unknown / not stated" },
+            "osSource": { "type": ["string", "null"] }
+          }
+        },
+        "license": { "type": ["string", "null"] },
+        "repo": {
+          "type": ["object", "null"],
+          "properties": {
+            "stars": { "type": "integer" },
+            "forks": { "type": "integer" },
+            "openIssues": { "type": ["integer", "null"] },
+            "archived": { "type": "boolean" },
+            "isFork": { "type": "boolean" },
+            "parent": { "type": ["object", "null"] },
+            "lastCommit": { "type": ["string", "null"], "description": "Last commit touching the entry's own path when known, else the default branch" },
+            "createdAt": { "type": ["string", "null"] },
+            "topics": { "type": "array", "items": { "type": "string" } },
+            "defaultBranch": { "type": "string" }
+          }
+        },
+        "installSignal": {
+          "type": "object",
+          "properties": {
+            "npmWeeklyDownloads": { "type": ["integer", "null"] },
+            "npmDependents": { "type": ["integer", "null"] },
+            "marketplaceCount": { "type": "integer" },
+            "sourceCount": { "type": "integer" }
+          }
+        },
+        "readme": { "type": "object", "required": ["summary"], "properties": { "summary": { "type": ["string", "null"] }, "length": { "type": ["integer", "null"] } } },
+        "media": { "type": "array", "items": { "type": "object", "required": ["url", "kind"], "properties": { "url": { "type": "string" }, "kind": { "enum": ["image", "gif", "video"] }, "social": { "type": "boolean" } } } },
+        "security": {
+          "type": "object",
+          "required": ["level", "flags", "canDo", "scanned"],
+          "additionalProperties": false,
+          "properties": {
+            "level": { "enum": ["low", "medium", "high"] },
+            "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } },
+            "canDo": { "type": "array", "items": { "type": "string" }, "description": "Plain-language 'What this can do on your machine'" },
+            "scanned": { "enum": ["deep", "metadata"] }
+          }
+        },
+        "scan": { "type": "object", "required": ["deep"], "properties": { "deep": { "type": "boolean" }, "truncatedTree": { "type": "boolean" } } },
+        "dedupe": { "type": "object", "required": ["contentHash", "mirrors"], "properties": { "contentHash": { "type": ["string", "null"], "description": "git blob sha of plugin.json / SKILL.md" }, "mirrors": { "type": "array", "items": { "type": "string" } } } },
+        "collections": { "type": "array", "items": { "type": "string" } },
+        "tested": {
+          "type": ["object", "null"],
+          "description": "Tested-by-Buddy result (harness/), null until tested",
+          "properties": { "date": { "type": "string" }, "loaded": { "type": "boolean" }, "verdict": { "type": "string" }, "claudeVersion": { "type": "string" }, "inventory": { "type": "object" } }
+        },
+        "score": {
+          "type": "object",
+          "required": ["total", "components", "confidence"],
+          "properties": {
+            "total": { "type": "number", "minimum": 0, "maximum": 100 },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "components": {
+              "type": "object",
+              "required": ["maintenance", "adoption", "docs", "tests", "license", "issues", "security"],
+              "additionalProperties": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
