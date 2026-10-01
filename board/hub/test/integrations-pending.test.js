@@ -159,8 +159,11 @@ test('prepare → url + bind + cookie; the callback promotes the row: same id, p
     assert.equal(c.external_id, 'T1');
     const settings = JSON.parse(c.settings);
     assert.deepEqual(settings.pinned, { app_id: APP.app_id, client_id: APP.client_id });
-    assert.equal(settings.config.app_id, APP.app_id, 'the pending settings win over exchange settings');
-    assert.equal(settings.config.bot_user_id, 'UB1');
+    // D42 addendum C1: provider facts live in settings.provider (⊇ pinned), never config.
+    assert.equal(settings.provider.app_id, APP.app_id, 'the pending settings win over exchange settings');
+    assert.equal(settings.provider.bot_user_id, 'UB1');
+    for (const [k, v] of Object.entries(settings.pinned)) assert.equal(settings.provider[k], v, `pinned ${k} copied into provider`);
+    assert.equal(settings.config, undefined);
     assert.equal(pendingRow(h, p.id), null);
     assert.equal(pendingSecrets(h, p.id).length, 0);
     const after = h.db.all('SELECT * FROM connection_secrets WHERE connection_id = ? ORDER BY kind', p.id);
@@ -655,10 +658,12 @@ test('settings.pinned: PATCH and setSettings can\'t write it; a raw update that 
     const p = await ready(h, alice);
     await callback(h, p.state, p.cookie);
     const pinned = { app_id: APP.app_id, client_id: APP.client_id };
-    const r = await h.api(alice, 'PATCH', `/api/integrations/${p.id}`, { request_id: randomUUID(), pinned: { app_id: 'EVIL' }, config: { pinned: 'cfg' } });
+    const r = await h.api(alice, 'PATCH', `/api/integrations/${p.id}`, { request_id: randomUUID(), pinned: { app_id: 'EVIL' }, config: { x: 'cfg' } });
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(r.body.connection.settings.pinned, pinned);
-    reg.setSettings(p.id, { pinned: { app_id: 'EVIL' } });
+    // D42 addendum C1: a config key named after a namespace, and setSettings naming pinned, are VALIDATION.
+    assert.equal((await h.api(alice, 'PATCH', `/api/integrations/${p.id}`, { request_id: randomUUID(), config: { pinned: 'cfg' } })).status, 400);
+    assert.throws(() => reg.setSettings(p.id, { pinned: { app_id: 'EVIL' } }), (e) => e.code === 'VALIDATION');
     assert.deepEqual(JSON.parse(h.db.get('SELECT settings FROM connections WHERE id = ?', p.id).settings).pinned, pinned);
     assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ pinned: { app_id: 'EVIL' } }), p.id), /pinned/);
     assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({}), p.id), /pinned/);
@@ -898,7 +903,8 @@ test('fresh DB after every migration: the id-exclusivity and pinned triggers exi
   const { h } = await setup();
   try {
     const names = h.db.all("SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger'").map((r) => `${r.tbl_name}.${r.name}`);
-    for (const t of ['connections.connection_id_not_pending', 'integration_pending.pending_id_not_connection', 'connections.connections_pinned_fixed', 'integration_pending.integration_pending_answer_once']) {
+    for (const t of ['connections.connection_id_not_pending', 'integration_pending.pending_id_not_connection', 'connections.connections_pinned_fixed', 'integration_pending.integration_pending_answer_once',
+      'connections.connections_provider_fixed', 'connections.connections_id_never_reused']) {
       assert.ok(names.includes(t), t);
     }
   } finally { await h.close(); }

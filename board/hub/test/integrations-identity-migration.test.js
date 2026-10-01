@@ -74,10 +74,10 @@ test('023 aborts, changing nothing, rather than delete a row it can\'t attribute
   }
 });
 
-test('after every migration the 023 and 025 triggers exist (a later rebuild of connections, members or external_identities must re-create them)', () => {
+test('after every migration the 023, 025 and 026 triggers exist (a later rebuild of connections, members or external_identities must re-create them)', () => {
   const db = openDb(':memory:');
   const names = new Set(db.all("SELECT name FROM sqlite_master WHERE type = 'trigger'").map((r) => r.name));
-  for (const t of ['external_identities_ins', 'external_identities_no_update', 'members_removed_unlink', 'connections_revoked_unlink', 'connections_identity_fixed']) {
+  for (const t of ['external_identities_ins', 'external_identities_no_update', 'members_removed_unlink', 'connections_revoked_unlink', 'connections_identity_fixed', 'connections_provider_fixed', 'connections_id_never_reused']) {
     assert.ok(names.has(t), `trigger ${t} is missing`);
   }
 });
