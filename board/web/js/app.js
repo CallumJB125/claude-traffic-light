@@ -462,6 +462,12 @@ function resetDashboard() {
 function onHubEpoch(epoch) {
   const prev = state.dash.epoch;
   if (prev && epoch && prev !== epoch) {
+    if (state.detail) {
+      detailRefresh++;
+      state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+      update();
+      if (state.detail.tab === 'ownership' && state.conn.status === 'open') refreshDetail(state.detail.cardId, { ownership: true });
+    }
     resetDashboard();
     if (state.view === 'dashboard') loadJournal();
   }
@@ -782,6 +788,10 @@ async function signOut() {
 function onStatus({ status, retryAt }) {
   const prev = state.conn.status;
   if (status === 'signed_out') { socket?.close(); boot(); return; }
+  if (state.detail && (status !== 'open' || prev !== 'open')) {
+    detailRefresh++;
+    state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+  }
   if (status === 'lost' && prev !== 'lost') {
     state.conn.lostAt = new Date();
     state.conn.lostPerf = perf();

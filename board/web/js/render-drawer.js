@@ -219,7 +219,7 @@ function evidenceBlock(view, detail) {
     h('ul', { class: 'evidence' },
       pr ? h('li', null, icon('branch', 'icon-xs'), h('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer' }, `PR #${pr.number}`), h('span', { class: 'muted' }, ` · ${pr.state}`)) : null,
       ev?.tests ? h('li', { 'data-tone': ev.tests === 'pass' ? 'green' : ev.tests === 'fail' ? 'red' : null }, icon(ev.tests === 'pass' ? 'check' : ev.tests === 'fail' ? 'close' : 'dot', 'icon-xs'), ev.tests === 'pass' ? 'Tests pass' : ev.tests === 'fail' ? 'Tests fail' : 'No tests run') : null,
-      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Self-reported by Claude') : null,
+      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Reported by the agent') : null,
       list.map((e, i) => h('li', { key: e.id ?? i }, icon('dot', 'icon-xs'), `${e.kind ?? 'evidence'}: ${e.summary ?? e.ref ?? ''}`))));
 }
 
@@ -231,7 +231,7 @@ function overlapsBlock(overlaps, elapsed) {
       icon('warn', 'icon-xs'),
       h('div', null,
         h('p', null, h('button', { type: 'button', class: 'link', 'data-action': 'open', 'data-card': o.other_card_id }, o.other_key),
-          o.other_owner ? ` (${o.other_owner}'s Claude)` : '', o.kind === 'adjacent' ? ' is working nearby' : ' is editing the same files'),
+          o.other_owner ? ` (${o.other_owner}'s ${o.other_provider_label ?? 'agent'})` : '', o.kind === 'adjacent' ? ' has related work' : ' has overlapping work'),
         o.paths?.length ? h('p', { class: 'overlap-paths' }, o.paths.slice(0, 4).map((p) => h('code', null, p))) : null,
         h('p', { class: 'muted num' }, `${o.level ?? ''}${o.reasons?.length ? ` · ${o.reasons.join(', ')}` : ''}${o.age_ms != null ? ` · ${ago(add(o.age_ms, elapsed))}` : ''}`))))),
     h('p', { class: 'muted small' }, 'Overlaps never block. Talk to each other, or let one card finish first.'));

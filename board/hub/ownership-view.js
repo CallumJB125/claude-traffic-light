@@ -3,6 +3,32 @@
 import { TeamCommunication } from './communication.js';
 import { HubError } from './db.js';
 
+const deliveryBindings = new WeakMap();
+function projection(hub, scope, narrowed) {
+  scope.run = hub.run(scope.row.active_run_id);
+  const result = hub.ownership.snapshotFor(scope, narrowed);
+  const decorate = (entry) => {
+    if (!entry) return null;
+    const row = hub.card(entry.card_id), live = hub.ownership.live.get(entry.run_id);
+    return { ...entry, card_key: row?.key ?? null, card_title: row?.title ?? null,
+      expires_in_ms: entry.state === 'editing' && live ? Math.max(0, live.deadline - hub.mono()) : null };
+  };
+  return { ...result, ownership: decorate(result.ownership), ownership_intents: result.ownership_intents.map(decorate),
+    global_filesystem_lock: false };
+}
+
+// Synchronous final-delivery guard: the ordinary handler awaits the read too.
+// Private binding avoids trusting result fields or a replaced caller identity.
+export function guardOwnership(hub, result) {
+  const bound = deliveryBindings.get(result);
+  if (!bound || bound.hub !== hub) throw new HubError('FORBIDDEN', 'Coordination needs a current read.');
+  const scope = new TeamCommunication(hub).human(bound.actor, bound.cardId, bound.credential, false, bound.narrowed);
+  if (scope.row.board_id !== bound.boardId || scope.row.repo_id !== bound.repoId) {
+    throw new HubError('CONFLICT', 'Task context changed; reload the task.');
+  }
+  Object.assign(result, projection(hub, scope, bound.narrowed));
+}
+
 export async function readOwnership(hub, member, cardId, cred, options = {}) {
   const communication = new TeamCommunication(hub);
   const actor = member && Object.freeze({ id: member.id, org_id: member.org_id, user_id: member.user_id });
@@ -17,14 +43,8 @@ export async function readOwnership(hub, member, cardId, cred, options = {}) {
   if (scope.row.board_id !== initial.row.board_id || scope.row.repo_id !== initial.row.repo_id) {
     throw new HubError('CONFLICT', 'Task context changed; reload the task.');
   }
-  scope.run = hub.run(scope.row.active_run_id);
-  const result = hub.ownership.snapshotFor(scope, narrowed);
-  const decorate = (entry) => {
-    if (!entry) return null;
-    const row = hub.card(entry.card_id), live = hub.ownership.live.get(entry.run_id);
-    return { ...entry, card_key: row?.key ?? null, card_title: row?.title ?? null,
-      expires_in_ms: entry.state === 'editing' && live ? Math.max(0, live.deadline - hub.mono()) : null };
-  };
-  return { ...result, ownership: decorate(result.ownership), ownership_intents: result.ownership_intents.map(decorate),
-    global_filesystem_lock: false };
+  const result = projection(hub, scope, narrowed);
+  deliveryBindings.set(result, Object.freeze({ hub, actor, credential, cardId, narrowed,
+    boardId: initial.row.board_id, repoId: initial.row.repo_id }));
+  return result;
 }

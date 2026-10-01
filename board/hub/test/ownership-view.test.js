@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { communicationRig } from './communication-helpers.js';
 import { runHb, until } from './helpers.js';
 import { OWNERSHIP_TTL_MS } from '../ownership.js';
-import { readOwnership } from '../ownership-view.js';
+import { readOwnership, guardOwnership } from '../ownership-view.js';
 
 async function declared(t) {
   const f = await communicationRig(t);
@@ -113,4 +114,40 @@ test('queued caller mutations cannot replace the original credential or board se
     const result = await pending;
     assert.equal(result.error?.code, 'UNAUTHENTICATED'); assert.equal(result.value, undefined);
   } finally { release?.(); await held; }
+});
+
+for (const change of ['credential-revoked', 'owner-rebound', 'repository-moved', 'peer-removed', 'lease-expired']) {
+  test(`final ordinary HTTP response boundary rechecks ${change}`, async t => {
+    const f = await declared(t), hub=f.h.hub, original=hub.ownership.snapshotFor.bind(hub.ownership); let calls=0;
+    hub.ownership.snapshotFor=(...args)=>{
+      const result=original(...args);
+      if(++calls===2)queueMicrotask(()=>{
+        if(change==='credential-revoked')f.db.run('UPDATE user_devices SET revoked_at=? WHERE id=?',hub.iso(),f.users.amember.device_id);
+        if(change==='owner-rebound'){
+          f.db.run('UPDATE user_devices SET user_id=? WHERE id=?',f.users.ub.id,f.users.amember.device_id);
+          f.db.run('UPDATE members SET user_id=? WHERE id=?',f.users.ub.id,f.A.member);
+        }
+        if(change==='repository-moved'){
+          const repo=randomUUID();f.db.insert('repos',{id:repo,org_id:f.A.team,canonical_url:`github.com/current/${repo}`,short_name:'current'});
+          f.db.run('INSERT INTO board_repos(board_id,repo_id) VALUES(?,?)',f.A.board,repo);
+          f.db.run('UPDATE cards SET repo_id=? WHERE id=?',repo,f.sender.run.card_id);
+        }
+        if(change==='peer-removed')f.db.run('UPDATE members SET removed_at=? WHERE id=?',hub.iso(),f.A.admin);
+        if(change==='lease-expired')f.h.clock.advance(OWNERSHIP_TTL_MS+1);
+      });return result;
+    };
+    const r=await f.as(f.users.amember,'GET',`/api/cards/${f.sender.run.card_id}/ownership`);
+    if(['credential-revoked','owner-rebound','repository-moved'].includes(change)){
+      assert.ok([401,403,404,409].includes(r.status),`status ${r.status}`);assert.equal(r.text.includes('src/shared'),false);
+    }else{
+      assert.equal(r.status,200);
+      if(change==='peer-removed'){assert.equal(r.body.ownership_intents.length,1);assert.deepEqual(r.body.ownership_overlaps,[]);}
+      else{assert.equal(r.body.ownership.state,'planned');assert.equal(r.body.ownership.expires_in_ms,null);}
+    }
+  });
+}
+test('final delivery refuses forged projection bindings',async t=>{
+  const f=await declared(t),value=await readOwnership(f.h.hub,f.h.hub.member(f.A.member),f.sender.run.card_id,{kind:'device',id:f.users.amember.device_id});
+  assert.throws(()=>guardOwnership(f.h.hub,{...value}),{code:'FORBIDDEN'});
+  assert.throws(()=>guardOwnership({},value),{code:'FORBIDDEN'});
 });
