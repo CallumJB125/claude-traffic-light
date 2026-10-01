@@ -350,6 +350,75 @@ test('manifest POST: a refusal carries a fixed reason only; nothing from the bod
   assert.ok(!/postBody/.test(fn), 'the raw body never reaches the connect window');
 });
 
+// ── connect window lifetime ──────────────────────────────────────────────
+
+const { createConnectLife, CONNECT_LIFETIME_MS } = require('../buddy-window/connect-life');
+function lifeTimers() {
+  const live = new Map();
+  let next = 1;
+  return {
+    live,
+    setTimer: (fn, ms) => { const id = next++; live.set(id, { fn, ms }); return id; },
+    clearTimer: (id) => { live.delete(id); },
+    fire(id) { const t = live.get(id); live.delete(id); t.fn(); },
+  };
+}
+function lifeWin() {
+  const w = new EventEmitter();
+  w.destroyed = false;
+  w.closes = 0;
+  w.isDestroyed = () => w.destroyed;
+  w.close = () => { w.closes += 1; if (!w.destroyed) { w.destroyed = true; w.emit('closed'); } };
+  return w;
+}
+
+test('connect window lifetime: closes itself 10 minutes after it opens, expiry runs before the close, one timer per window', () => {
+  assert.equal(CONNECT_LIFETIME_MS, 10 * 60 * 1000);
+  const t = lifeTimers();
+  const life = createConnectLife({ setTimer: t.setTimer, clearTimer: t.clearTimer });
+  const w = lifeWin();
+  const order = [];
+  w.on('closed', () => order.push('closed'));
+  life.arm(w, () => order.push(`expire:${w.isDestroyed()}`));
+  life.arm(w, () => order.push('second'));
+  assert.equal(t.live.size, 1, 'one timer per window');
+  const [[id, timer]] = [...t.live];
+  assert.equal(timer.ms, CONNECT_LIFETIME_MS);
+  t.fire(id);
+  assert.deepEqual(order, ['expire:false', 'closed']);
+  assert.equal(w.closes, 1);
+  assert.equal(t.live.size, 0);
+});
+
+test('connect window lifetime: a normal close clears the timer; a window already gone is left alone', () => {
+  const t = lifeTimers();
+  const life = createConnectLife({ setTimer: t.setTimer, clearTimer: t.clearTimer });
+  const w = lifeWin();
+  let expired = 0;
+  life.arm(w, () => { expired += 1; });
+  w.close();
+  assert.equal(t.live.size, 0, 'cleared on normal close');
+  const w2 = lifeWin();
+  life.arm(w2, () => { expired += 1; });
+  const [[id]] = [...t.live];
+  w2.destroyed = true; // destroyed without a 'closed' we saw
+  t.fire(id);
+  assert.equal(expired, 0);
+  assert.equal(w2.closes, 0);
+});
+
+test('connect window lifetime wiring: armed on every connect window; an expired one also loses its partition’s storage on close', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(src, /const connectLife = createConnectLife\(\);/);
+  assert.equal(src.split('createConnectLife(').length - 1, 1, 'one life (and so one timer set) for the app');
+  assert.ok(fn.indexOf('connectWin = w;') < fn.indexOf('connectLife.arm(w,') && fn.indexOf('connectLife.arm(w,') < fn.indexOf('w.loadURL'), 'armed as soon as the window exists, before it loads');
+  assert.match(fn, /connectLife\.arm\(w, \(\) => \{ expired = true; log\('connect window closed: 10 minutes passed'\); \}\);/);
+  const closed = fn.slice(fn.indexOf("w.on('closed'"));
+  assert.match(closed, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
+  assert.match(closed, /if \(expired\) ses\.clearStorageData\(\)\.catch\(\(\) => \{\}\);/);
+});
+
 // ── hub env ────────────────────────────────────────────────────────────────
 
 test('hub env is an allowlist: no secrets from our env, loopback bind, no secret in local mode', () => {

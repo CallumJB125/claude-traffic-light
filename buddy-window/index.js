@@ -23,6 +23,7 @@ const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromL
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
+const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
 
 const SIDEBAR_W = 216;
@@ -485,6 +486,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // and an empty window.name, so the bind in the name never reaches the provider.
   let connectWin = null;
   let connectOpening = false;
+  const connectLife = createConnectLife();
   async function openConnect(url, h, { provider, bind, post = null }) {
     // One at a time: swapping windows would let the old one's close handler remove the new bind cookie.
     if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }
@@ -504,6 +506,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     });
     w.hubOrigin = h.origin;
     connectWin = w;
+    let expired = false;
+    connectLife.arm(w, () => { expired = true; log('connect window closed: 10 minutes passed'); });
     const wc = w.webContents;
     // The first page must be the authorize host the hub named; later hops are the provider's own.
     let first = true;
@@ -540,6 +544,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (connectWin === w) connectWin = null;
       // The hub's callback clears it too; a window closed early must not leave it behind.
       ses.cookies.remove(cookie.url, cookie.name).catch(() => {}); // privacy-flow: integration-connect
+      // A sign-in left open that long is abandoned: drop what the provider stored too.
+      if (expired) ses.clearStorageData().catch(() => {});
     });
     // The manifest POST is this window's first and only POST from us: connectDecision rebuilt its URL and body.
     (post ? w.loadURL(post.url, { postData: post.postData, extraHeaders: post.extraHeaders }) : w.loadURL(url)).catch(() => {}); // privacy-flow: integration-connect
