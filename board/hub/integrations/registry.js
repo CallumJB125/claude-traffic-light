@@ -68,10 +68,12 @@ function canonRepo(repo) {
   if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
   return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
 }
-// A pr link whose state is one of these frees the card's PR slot for relink().
-// Both end a PR on GitHub; a closed one can be reopened, and if it is the
-// card's verified PR, relink() takes the slot back for it.
-const PR_ENDED = new Set(['closed', 'merged']);
+// Only a link closed without merging frees the card's PR slot for relink(). A
+// merged one is final: otherwise anyone with push access could open another PR
+// from the board branch after the merge and take the done card's status. A
+// closed one can be reopened, and if it is the card's verified PR, relink()
+// takes the slot back for it.
+const PR_ENDED = new Set(['closed']);
 // {number, repo: canonical} from an https '<repo>/pull/<n>' URL, else null.
 function prOfUrl(url) {
   const u = typeof url === 'string' ? url.trim() : '';

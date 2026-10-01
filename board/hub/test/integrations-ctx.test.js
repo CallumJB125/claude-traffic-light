@@ -488,18 +488,21 @@ test('relink: #12 closed unmerged, then the verified #13 takes the slot and its 
   } finally { await h.close(); }
 });
 
-test('relink: before the hub verifies a PR, an ended link frees the slot for any PR; after, only the verified PR takes it, ended or not', async () => {
+test('relink: before the hub verifies a PR, only a link closed unmerged frees the slot (merged is final); after, only the verified PR takes it, ended or not', async () => {
   const { h, reg } = await setup();
   try {
     const { ctx, cardId } = await inReview(h, reg, 'BDL-71');
     const relink = (from, to, url) => ctx.act('link.pr', {}, async (s) => s.relink(cardId, 'pr', from, to, url));
     const status = (id, st) => ctx.act('link.pr', {}, async (s) => s.linkStatus(cardId, 'pr', id, st));
     await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-12'));
-    // No verified PR yet: only an ended link frees the slot.
-    for (const st of [null, 'open', 'draft']) {
+    // No verified PR yet: only a link closed unmerged frees the slot. Merged is
+    // final: someone with push access opening another PR from the board branch
+    // must not take the done card's slot.
+    for (const st of [null, 'open', 'draft', 'merged']) {
       if (st) await status('gh-12', { state: st });
       await assert.rejects(relink('gh-12', 'gh-13', prUrl(13)), (e) => e.code === 'CONFLICT', String(st));
     }
+    assert.equal(ctx.linkedByCard(cardId, 'pr'), 'gh-12');
     await status('gh-12', { state: 'closed' });
     await relink('gh-12', 'gh-13');
     await status('gh-13', { state: 'closed' });
