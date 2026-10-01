@@ -42,6 +42,7 @@ function createSetupsService({ sources, home, machine=()=>({home}), fsApi=fs, sc
         const data=await call(entry,'list');
         if(token!==generation || !current(source)) return {status:'changed',teams:[],sources:schema.sources()};
         if(!data || !Array.isArray(data.profiles) || data.profiles.length>500 || !['complete','partial','unavailable'].includes(data.status)) {teams.push({name:clean(source.name),status:'unavailable',profiles:[]});partial=true;continue;}
+        if(data.status==='unavailable') {teams.push({name:clean(source.name),status:'unavailable',profiles:[]});partial=true;continue;}
         const profiles=[];
         for(const profile of data.profiles) {
           const v=profile?.current_version;

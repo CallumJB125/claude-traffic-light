@@ -171,9 +171,15 @@ export class Setups {
       if(out.version_id && !this.db.get('SELECT 1 x FROM setup_versions WHERE id=? AND profile_id=?',out.version_id,row.id)) throw new HubError('CONFLICT','the reported version was removed');
     }
     if(out.profiles) {
-      if(out.status!=='unavailable' && !this.hub.vault.available) throw new HubError('POLICY_DENIED','Setups encryption is unavailable');
+      if(out.status==='unavailable') {
+        if(out.profiles.length || out.baseline)throw new HubError('POLICY_DENIED','Setups is unavailable');
+        return;
+      }
+      if(!this.hub.vault.available) throw new HubError('POLICY_DENIED','Setups encryption is unavailable');
       for(const profile of out.profiles) { const {row}=this.profile(current,profile.id,cred); if(row.current_version_id!==profile.current_version?.id) throw new HubError('CONFLICT','Setups changed; refresh'); }
-      if(out.baseline) {const baseline=this.db.get('SELECT * FROM setup_baselines WHERE org_id=?',current.org_id);if(!baseline || baseline.profile_id!==out.baseline.profile_id || baseline.version_id!==out.baseline.version_id || baseline.selection!==canonical(out.baseline.selection))throw new HubError('CONFLICT','team baseline changed; refresh');}
+      const row=this.db.get('SELECT profile_id,version_id,selection,required,updated_at FROM setup_baselines WHERE org_id=?',current.org_id);
+      const baseline=row?{...row,selection:JSON.parse(row.selection),required:!!row.required,meaning:'reminder_only'}:null;
+      if(canonical(baseline)!==canonical(out.baseline??null))throw new HubError('CONFLICT','team baseline changed; refresh');
     }
   }
   // Private operator primitive: bounded rotation; the previous key stays needed

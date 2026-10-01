@@ -138,3 +138,19 @@ test('membership removal/rejoin retains account-scoped retry tombstones and neve
   const result=await fx.as(fx.users.amember,'POST',path(fx),b);assert.equal(result.status,409,result.text);assert.equal(fx.db.get('SELECT COUNT(*) n FROM setup_versions').n,0);
   const captured=await fx.as(fx.users.amember,'GET',path(fx),undefined,{'x-plexiform-member':oldMember});assert.equal(captured.status,401);assert.equal(captured.body.profiles,undefined);
 });
+for(const change of ['required','timestamp','removed','added'])test(`post-await list refuses full baseline ${change} changes`,async t=>{
+  const fx=await fixture(t),p=await publish(fx),baseline={request_id:randomUUID(),profile_id:p.profile.id,version_id:p.version.id,selection:[p.payload.files[0].id],required:true};
+  if(change!=='added')assert.equal((await fx.as(fx.users.ua,'PUT',`/api/teams/${fx.A.team}/setup-baseline`,baseline)).status,200);
+  const s=fx.h.hub.setups,list=s.list.bind(s);s.list=(...args)=>{const out=list(...args);queueMicrotask(()=>{
+    if(change==='required')fx.db.run('UPDATE setup_baselines SET required=0 WHERE org_id=?',fx.A.team);
+    if(change==='timestamp')fx.db.run('UPDATE setup_baselines SET updated_at=? WHERE org_id=?','2026-10-02T00:00:00.000Z',fx.A.team);
+    if(change==='removed')fx.db.run('DELETE FROM setup_baselines WHERE org_id=?',fx.A.team);
+    if(change==='added')fx.db.insert('setup_baselines',{org_id:fx.A.team,profile_id:p.profile.id,version_id:p.version.id,selection:canonical(baseline.selection),required:1,updated_at:fx.h.hub.iso()});
+  });return out;};
+  const result=await fx.as(fx.users.ua,'GET',path(fx));assert.equal(result.status,409,result.text);assert.equal(result.body.baseline,undefined);assert.equal(result.body.profiles,undefined);
+});
+test('keyless current list withholds an existing baseline and every profile',async t=>{
+  const fx=await fixture(t),p=await publish(fx);assert.equal((await fx.as(fx.users.ua,'PUT',`/api/teams/${fx.A.team}/setup-baseline`,{request_id:randomUUID(),profile_id:p.profile.id,version_id:p.version.id,selection:[p.payload.files[0].id],required:true})).status,200);
+  fx.h.hub.vaultKey=null;fx.h.hub._vaultFor=undefined;
+  const result=await fx.as(fx.users.ua,'GET',path(fx));assert.equal(result.status,200,result.text);assert.equal(result.body.status,'unavailable');assert.equal(result.body.baseline,null);assert.deepEqual(result.body.profiles,[]);
+});

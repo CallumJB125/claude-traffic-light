@@ -56,6 +56,12 @@ test('extracted MCP JSON refuses account/project keys while permitting only the 
 test('unavailable/current-principal mismatch yields empty summaries and no stale full read',async t=>{
   const f=fixture(t);f.source.call=async()=>({ok:true,principal:{...f.principal,user_id:'other'},status:'complete',profiles:[]});const state=await f.service.snapshot();assert.equal(state.status,'partial');assert.equal(state.teams[0].status,'unavailable');assert.deepEqual(state.teams[0].profiles,[]);assert.equal((await f.service.read('https://renderer.example')).ok,false);
 });
+test('native unavailable source withholds profiles, baseline and source capability even with valid stale metadata',async t=>{
+  const f=fixture(t),p=sample(),checked=schema.validatePayload(p);
+  f.source.call=async()=>({ok:true,principal:f.principal,status:'unavailable',profiles:[{id:randomUUID(),owner_user_id:'u1',current_version:{id:randomUUID(),number:1,content_hash:checked.content_hash,sources:['git'],file_count:1,item_count:0}}],baseline:{required:true}});
+  const state=await f.service.snapshot();assert.equal(state.status,'partial');assert.deepEqual(state.teams[0].profiles,[]);assert.equal(state.teams[0].status,'unavailable');for(const capability of ['handle','baseline','role'])assert.equal(Object.hasOwn(state.teams[0],capability),false);
+  assert.equal((await f.service.draft(state.teams[0].handle,{sources:['git'],inventory:false,ssh:false})).ok,false);
+});
 test('snapshot principal/team/device markers are rechecked after asynchronous summaries',async t=>{
   const f=fixture(t);let release;f.source.call=()=>new Promise(r=>release=r);const pending=f.service.snapshot();for(let n=0;n<30&&!release;n++)await new Promise(r=>setImmediate(r));f.setCurrent(false);release({ok:true,principal:f.principal,status:'complete',profiles:[]});assert.deepEqual((await pending).teams,[]);
 });
