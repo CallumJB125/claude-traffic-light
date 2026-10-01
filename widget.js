@@ -106,7 +106,8 @@ function applyStatus(data) {
   // A preview carries no inputs: keep what is showing rather than flicker.
   if (data.reason === 'travel') bubble.update([]);
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
-  renderBudget(data.reason === 'travel' ? null : data.budget);
+  // A look preview carries no budget field: keep what is showing.
+  if (data.budget !== undefined || data.reason === 'travel') renderBudget(data.reason === 'travel' ? null : data.budget);
   renderAway(data.reason === 'travel' ? null : data.away);
   idleNow = data.reason === 'idle' && !(data.inputs && data.inputs.length);
   if (idleNow && !hintAsked) { hintAsked = true; window.trafficLight.teamHint().then((h) => { hintOffer = h; paintRow(); }).catch(() => {}); }
@@ -230,15 +231,22 @@ function budgetButton(label, quiet, onClick) {
   const b = document.createElement('button');
   if (quiet) b.className = 'quiet';
   b.textContent = label;
+  b.title = 'Opens the card on your board';
   b.addEventListener('mousedown', stop);
   b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
   return b;
 }
+// Rebuilt only when what it shows changes: every status broadcast calls this,
+// and replacing the buttons between a mousedown and its mouseup loses the click.
+let budgetKey = null;
 function renderBudget(list) {
   const first = list && list[0];
   document.body.classList.toggle('budget', !!first);
-  if (!first) { budgetShown = null; budgetFailed = false; return; }
+  if (!first) { budgetShown = null; budgetFailed = false; budgetKey = null; return; }
   if (first.runId !== budgetShown) { budgetShown = first.runId; budgetFailed = false; }
+  const key = JSON.stringify([first.runId, first.text, budgetFailed, list.length]);
+  if (key === budgetKey) return;
+  budgetKey = key;
   const more = list.length > 1 ? ` (+${list.length - 1} more)` : '';
   document.getElementById('budget-text').textContent = budgetFailed ? BUDGET_FALLBACK : `${first.text}${more}`;
   document.getElementById('budget-text').title = first.text;
@@ -248,7 +256,7 @@ function renderBudget(list) {
   };
   document.getElementById('budget-acts').replaceChildren(...(budgetFailed
     ? [budgetButton('Open board', false, () => window.trafficLight.budgetNotice('board', first.runId))]
-    : [budgetButton('Increase budget & continue…', false, open), budgetButton('Stop', true, open)]));
+    : [budgetButton('Increase budget & continue…', false, open), budgetButton('Stop run…', true, open)]));
 }
 document.getElementById('budget-x').addEventListener('mousedown', stop);
 document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPropagation(); if (budgetShown) window.trafficLight.budgetNotice('dismiss', budgetShown); });

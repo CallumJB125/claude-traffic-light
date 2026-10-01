@@ -64,3 +64,33 @@ test('the fragment is base64url JSON {v:1, card_id}', () => {
   assert.match(f, /^plexiform-budget=[A-Za-z0-9_-]+$/);
   assert.deepEqual(JSON.parse(Buffer.from(f.split('=')[1], 'base64url').toString()), { v: 1, card_id: 'card-9' });
 });
+
+test('notify once per stop: a resumed run that hits a new budget notifies again', () => {
+  const n = B.createNotices();
+  assert.equal(n.handle(ev()).notify, true);
+  assert.equal(n.handle(ev()).notify, false);
+  n.handle({ type: 'run.resumed', run_id: 'run_1' });
+  assert.equal(n.handle(ev({ budget_usd: 10, spent_usd: 9.9 })).notify, true);
+});
+
+test('the notified set is bounded', () => {
+  const n = B.createNotices();
+  for (let i = 0; i < 500; i++) n.handle(ev({ run_id: `r${i}` }));
+  assert.ok(n.notifiedSize() <= 100);
+});
+
+test('a dismissed run stays gone when the runner re-emits it, until it resumes or ends', () => {
+  const n = B.createNotices();
+  n.handle(ev());
+  n.dismiss('run_1');
+  const again = n.handle(ev());
+  assert.deepEqual([again.added, again.changed, again.notify], [false, false, false]);
+  assert.equal(n.list().length, 0);
+  n.handle({ type: 'run.ended', run_id: 'run_1' });
+  assert.equal(n.handle(ev()).notify, true);
+});
+
+test('a 64-char card_id still gives an acceptable fragment', () => {
+  const f = B.fragment(B.classify(ev({ card_id: 'a'.repeat(64) })).notice);
+  assert.match(f, /^plexiform-budget=[A-Za-z0-9_-]{1,512}$/);
+});
