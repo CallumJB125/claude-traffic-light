@@ -106,8 +106,14 @@ const MATRIX = {
   'GET /api/integrations': { kind: 'team' },
   'POST /api/integrations/:provider/token': { kind: 'cross', path: () => '/api/integrations/fake/token', headers: (fx) => ({ 'x-board-team': fx.B.team }), body: { token: 'fake_pwned12345' } },
   'POST /api/integrations/:provider/start': { kind: 'cross', path: () => '/api/integrations/fake/start', headers: (fx) => ({ 'x-board-team': fx.B.team }) },
-  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} } },
-  'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}` },
+  // Pending connections (D97): a provider with B's team header, or B's pending id.
+  'POST /api/integrations/:target/prepare': {
+    kind: 'cross', path: () => '/api/integrations/fake/prepare', headers: (fx) => ({ 'x-board-team': fx.B.team }), body: { input: {} },
+    alt: (fx) => [`/api/integrations/${fx.B.pending}/prepare`],
+  },
+  'POST /api/integrations/:id/authorize': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.pending}/authorize` },
+  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} }, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
+  'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
 };
 
