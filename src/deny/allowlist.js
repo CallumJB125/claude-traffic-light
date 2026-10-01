@@ -113,14 +113,23 @@ function resolvedPath(p, cwd, realpath) {
   try { return `${realpath(abs.slice(0, k) || '/').replace(/\/+$/, '')}/${abs.slice(k + 1)}`; } catch { return null; }
 }
 
-function broadCwd(cwd, home) {
-  if (typeof cwd !== 'string') return false;
-  const c = cwd.replace(/\/+$/, '') || '/';
-  if (c === '/') return true;
-  if (typeof home === 'string' && home.startsWith('/')) {
-    const h = home.replace(/\/+$/, '');
-    if (c === h || h.startsWith(c + '/')) return true;
+// Posix normalisation without a filesystem: // and . dropped, .. resolved.
+function normPath(p) {
+  const out = [];
+  for (const part of p.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') out.pop(); else out.push(part);
   }
+  return '/' + out.join('/');
+}
+
+// Is `dir` the root, the home directory or above it? A relative dir can't be placed, so it counts.
+function broadDir(dir, homes) {
+  if (typeof dir !== 'string') return false;
+  if (!dir.startsWith('/')) return true;
+  const c = normPath(dir);
+  if (c === '/') return true;
+  for (const h of homes) if (c === h || h.startsWith(c + '/')) return true;
   return c.split('/').filter(Boolean).length < 3;
 }
 
@@ -178,13 +187,19 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
     const p = pathOf(input);
     if (!p) return 'no file path';
     if (isSecret(p) || RUNS_CODE_LATER.test(p)) return 'protected path';
-    if (!inside(cwd, p)) return 'outside the session directory';
-    if (broadCwd(cwd, home)) return 'the session directory is / or the home directory';
-    const real = resolvedPath(p, cwd, realpath);
+    const dir = typeof cwd === 'string' && cwd.startsWith('/') ? normPath(cwd) : cwd;
+    if (!inside(dir, p)) return 'outside the session directory';
+    const homes = typeof home === 'string' && home.startsWith('/') ? [normPath(home)] : [];
+    const realHome = homes.length ? resolvedPath(homes[0], null, realpath) : null;
+    if (realHome) homes.push(normPath(realHome));
+    if (broadDir(dir, homes)) return 'the session directory is / or the home directory';
+    const realCwd = typeof dir === 'string' && dir.startsWith('/') ? resolvedPath(dir, null, realpath) : null;
+    if (realCwd && broadDir(realCwd, homes)) return 'the session directory is / or the home directory (through a symlink)';
+    const real = resolvedPath(p, dir, realpath);
     if (real) {
       if (isSecret(real) || RUNS_CODE_LATER.test(real)) return 'protected path (through a symlink)';
-      const realCwd = resolvedPath(cwd, null, realpath);
-      if (realCwd && !inside(realCwd, real)) return 'outside the session directory (through a symlink)';
+      if (realCwd && !inside(normPath(realCwd), normPath(real))) return 'outside the session directory (through a symlink)';
+      if (broadDir(normPath(real).replace(/\/[^/]*$/, '') || '/', homes)) return 'writes straight into / or the home directory (through a symlink)';
     }
     return null;
   }

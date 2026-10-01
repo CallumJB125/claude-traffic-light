@@ -171,3 +171,36 @@ test('awk: | inside regex and string literals is data; pipes and system() are no
 test('awk: a / after a string is division, so it cannot hide a pipe', () => {
   assert.equal(deny("awk '{print \"a\" / 2 | \"sh\"}' f").blocked, true);
 });
+
+test('allow-list: the session directory is normalised and resolved before the home / root check', () => {
+  const edit = (cwd, opts = {}, file_path = '.config/nvim/init.lua') => allowListReason({ toolName: 'Edit', toolInput: { file_path, old_string: 'a', new_string: 'b' }, cwd }, { home: '/Users/x', ...opts });
+  for (const cwd of ['/Users/x/.', '/Users/x/app/..', '/Users/x//', '/', '/Users/x/app/../..', '/Users/x/./app/../.']) {
+    assert.notEqual(edit(cwd, {}, 'notes.txt'), null, cwd);
+  }
+  const link = { '/Users/x/work/link': '/Users/x', '/Users/x/work/deep/a/b': '/Users/x/work/link2', '/Users/x/work/link2': '/Users/x' };
+  const realpath = (p) => {
+    for (const [from, to] of Object.entries(link)) if (p === from || p.startsWith(from + '/')) return realpath(to + p.slice(from.length));
+    return p;
+  };
+  assert.notEqual(edit('/Users/x/work/link', { realpath }, 'notes.txt'), null, 'cwd is a symlink to home');
+  assert.notEqual(edit('/Users/x/work/deep/a/b', { realpath }, 'notes.txt'), null, 'cwd is a nested symlink to home');
+  assert.equal(edit('/Users/x/work/app', { realpath }, 'src/a.ts'), null, 'a real project stays editable');
+  const into = (p) => (p === '/Users/x/work/app/out' ? '/Users/x/notes.txt' : p);
+  assert.notEqual(edit('/Users/x/work/app', { realpath: into }, 'out'), null, 'a file that resolves straight into home');
+});
+
+test('files that run code later include ~/.config, build files and JS config files', () => {
+  for (const p of ['/Users/x/.config/autostart/x.desktop', '/Users/x/.config/nvim/init.lua', '/Users/x/.config/systemd/user/x.service', 'Makefile', 'GNUmakefile', 'sub/makefile',
+    'justfile', 'Justfile', '.pre-commit-config.yaml', 'tests/conftest.py', 'jest.config.js', 'vitest.config.ts', 'vite.config.mjs', 'playwright.config.ts', '.eslintrc.js', 'eslint.config.mjs',
+    'babel.config.js', '.envrc', '.husky/pre-commit', '.github/workflows/ci.yml', '.vscode/tasks.json', '.vscode/settings.json', '.git/hooks/pre-push', '.git/config']) {
+    assert.equal(evaluateDenyList(rules, { toolName: 'Write', toolInput: { file_path: p, content: 'x' } }).ruleId, 'runs-code-later', p);
+    assert.equal(remoteVerdict(rules, { toolName: 'Edit', toolInput: { file_path: p }, cwd: '/Users/x/app' }).blocked, true, p);
+  }
+  assert.equal(remoteVerdict(rules, { toolName: 'Edit', toolInput: { file_path: '/Users/x/app/bin/cli.js' }, cwd: '/Users/x/app' }, { home: '/Users/x' }).blocked, false);
+});
+
+test("a shell tool's description is not executed, so it is not judged as a command", () => {
+  assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'ls', description: 'rm -rf / then ship 👨‍💻 and r​m' } }).blocked, false);
+  assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'rm -rf /', description: 'list files' } }).blocked, true);
+  assert.equal(evaluateDenyList(rules, { toolName: 'Bash', toolInput: { command: 'ls', extra: 'rm -rf /' } }).blocked, true, 'other fields are still judged');
+});

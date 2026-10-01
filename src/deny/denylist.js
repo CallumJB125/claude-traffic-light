@@ -38,7 +38,7 @@ export const FILE_WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|write_file|
 // Paths whose contents are secrets or grant access.
 export const CREDENTIAL_PATHS = /(^|[\s"'=:/~])(\.ssh|\.aws|\.gnupg|\.kube|\.docker\/config\.json|\.netrc|\.npmrc|\.pypirc|\.config\/gh|\.claude|\.claude\.json|\.claude-traffic-light|\.board|Library\/Keychains|\.zsh_history|\.bash_history|\.history|fish_history)(\/|\b|$)/;
 // Files that run code later: writing one is as good as running it.
-export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$|\.gitconfig$|\.config\/(git|fish)\/|\.local\/bin\/)|(^~|^\/Users\/[^/]+|^\/home\/[^/]+|^\/root)\/bin\/|^\/(usr\/(local\/)?|opt\/homebrew\/)?s?bin\//;
+export const RUNS_CODE_LATER = /(^|\/)(\.(zshrc|zprofile|zshenv|zlogin|bashrc|bash_profile|bash_login|profile|envrc)$|\.git\/(hooks|config)(\/|$)|\.husky\/|LaunchAgents\/|LaunchDaemons\/|crontab|\.github\/workflows\/|\.claude\/|\.mcp\.json$|\.vscode\/(tasks|settings)\.json$|package\.json$|\.gitconfig$|\.config\/|\.local\/bin\/|(GNU)?[Mm]akefile$|\.?[Jj]ustfile$|\.pre-commit-config\.ya?ml$|conftest\.py$|(jest|vitest|vite|playwright|babel|eslint)\.config\.[cm]?[jt]s$|\.eslintrc\.c?js$|\.babelrc\.js$)|(^~|^\/Users\/[^/]+|^\/home\/[^/]+|^\/root)\/bin\/|^\/(usr\/(local\/)?|opt\/homebrew\/)?s?bin\//;
 
 // ── git ────────────────────────────────────────────────────────────────────
 // Config keys whose value is a program git runs (or a file of such keys).
@@ -457,12 +457,15 @@ export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [
   if (canonical.length > MAX_REMOTE_INPUT_CHARS) return desk('input-too-large', 'input too large to review remotely');
   const labels = new Set((repoLabels || []).map((l) => String(l).toLowerCase()));
   const texts = stringsIn(toolInput ?? {});
+  // A shell tool's description is shown, never run: judge everything else as commands.
+  const plain = toolInput && typeof toolInput === 'object' && !Array.isArray(toolInput);
+  const shellTexts = plain ? stringsIn(Object.fromEntries(Object.entries(toolInput).filter(([k]) => k !== 'description'))) : texts;
   for (const r of compiled) {
     if (r.tool && !test(r.tool, String(toolName ?? ''))) continue;
     if (r.labels && !r.labels.some((l) => labels.has(l))) continue;
     if (r.builtin === 'shell' || r.builtin === 'git-force-push') {
       const only = r.builtin === 'git-force-push' ? 'git-force-push' : null;
-      for (const t of texts) {
+      for (const t of shellTexts) {
         const f = shellFinding(t, only);
         if (f) return desk(f.id, `${r.reason}: ${f.reason}`);
       }
