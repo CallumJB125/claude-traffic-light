@@ -81,6 +81,16 @@ function sendJson(res, status, body, headers = {}) {
   res.end(data);
 }
 
+// A connector's early webhook ack (text or pre-serialised JSON, ≤ 4 KiB):
+// never rendered as a page, never framed.
+function sendRaw(res, status, type, data, headers = {}) {
+  res.writeHead(status, {
+    'content-type': type, 'content-length': String(Buffer.byteLength(data)), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'", [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers,
+  });
+  res.end(data);
+}
+
 // Dispatch-like actions start paid agent runs: a tighter per-member limit.
 export const DISPATCH_ACTIONS = new Set(['dispatch', 'retry', 'take_over_with_claude']);
 
@@ -488,6 +498,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           if (verifiedPairs.size > readLimits.verifiedMax) verifiedPairs.delete(verifiedPairs.keys().next().value);
         }
         if (out.status === 401) return failed(out.status, out.body);
+        if (typeof out.raw === 'string') return sendRaw(res, out.status, out.type, out.raw, out.headers);
         return sendJson(res, out.status, out.body, out.headers);
       } catch (e) {
         if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));

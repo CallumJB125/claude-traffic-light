@@ -102,3 +102,85 @@ test('F1: the default stays JSON (400 on invalid JSON); defineConnector refuses 
   assert.throws(() => probe('f1d', { parseBody: 'form' }), /parseBody is a function/);
   assert.throws(() => probe('f1e', { parseBody: () => ({}), handleWebhook: undefined, verify: undefined }), /parseBody/);
 });
+
+// ── F2 ackBody ────────────────────────────────────────────────────────────
+
+const tick = (ms = 50) => new Promise((r) => setTimeout(r, ms));
+const send = (h, conn, body, id = randomUUID()) => fetch(`${h.base}/integrations/${conn.id}/webhook`, {
+  method: 'POST', headers: { 'x-ok': '1', 'x-id': id, 'content-type': 'application/x-www-form-urlencoded' }, body,
+});
+const securityHeaders = (res) => {
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.match(res.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
+};
+
+test('F2: an ackEarly connector\'s ackBody sets the early answer: undefined is an empty 200, a string text/plain, an object JSON; the handler still runs', async () => {
+  const { h } = await setup();
+  try {
+    let answer;
+    const ran = [];
+    const conn = connect(h, 'f2a', {
+      ackEarly: true, parseBody: parseForm, ackBody: () => answer,
+      handleWebhook: async ({ payload }) => { ran.push(payload.n); },
+    });
+    answer = undefined;
+    let res = await send(h, conn, formOf({ n: '1', text: 'reflect-me' }));
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), '');
+    assert.equal(res.headers.get('content-length'), '0');
+    securityHeaders(res);
+    answer = 'Adding that card…';
+    res = await send(h, conn, formOf({ n: '2' }));
+    assert.equal(res.headers.get('content-type'), 'text/plain; charset=utf-8');
+    assert.equal(await res.text(), 'Adding that card…');
+    securityHeaders(res);
+    answer = { response_type: 'ephemeral', text: 'On it' };
+    res = await send(h, conn, formOf({ n: '3' }));
+    assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+    assert.deepEqual(await res.json(), { response_type: 'ephemeral', text: 'On it' });
+    securityHeaders(res);
+    await h.hub.idle();
+    assert.deepEqual(ran, ['1', '2', '3']);
+    // A finished delivery again is still the registry's duplicate answer, never the connector's.
+    res = await send(h, conn, formOf({ n: '3' }));
+    assert.deepEqual(await res.json(), { ok: true, duplicate: true });
+  } finally { await h.close(); }
+});
+
+test('F2: an ackBody over 4 KiB, unserialisable, of another type or that throws is an empty 200; nothing of the request is added', async () => {
+  const { h } = await setup();
+  try {
+    let answer;
+    const conn = connect(h, 'f2b', { ackEarly: true, parseBody: parseForm, ackBody: () => answer() });
+    const circular = {};
+    circular.self = circular;
+    const cases = [
+      () => 'x'.repeat(4097), () => ({ text: 'y'.repeat(4096) }), () => circular, () => ({ n: 10n }), () => [1], () => 42, () => true, () => null,
+      () => Promise.resolve('late'), () => { throw new Error('reflect-me'); },
+    ];
+    for (const [i, c] of cases.entries()) {
+      answer = c;
+      const res = await send(h, conn, formOf({ i: String(i), text: 'reflect-me' }));
+      assert.equal(res.status, 200, `case ${i}`);
+      assert.equal(await res.text(), '', `case ${i}`);
+      securityHeaders(res);
+    }
+    answer = () => 'z'.repeat(4096);
+    assert.equal((await (await send(h, conn, formOf({ i: 'max' }))).text()).length, 4096, 'exactly 4 KiB is kept');
+    await h.hub.idle();
+  } finally { await h.close(); }
+});
+
+test('F2: without ackBody the early ack is unchanged; ackBody needs ackEarly', async () => {
+  const { h } = await setup();
+  try {
+    const conn = connect(h, 'f2c', { ackEarly: true });
+    const res = await send(h, conn, '{"a":1}');
+    assert.deepEqual(await res.json(), { ok: true, accepted: true });
+    await h.hub.idle();
+  } finally { await h.close(); }
+  assert.throws(() => probe('f2d', { ackBody: () => undefined }), /ackBody is a function, for a connector that declares ackEarly/);
+  assert.throws(() => probe('f2e', { ackEarly: true, ackBody: 'ok' }), /ackBody/);
+});

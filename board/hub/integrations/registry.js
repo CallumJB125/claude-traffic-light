@@ -53,6 +53,7 @@ const ASK_GATED_ACTIONS = new Set(['approve_done']);
 const LINK_STATUS_MAX = 512;
 const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
+const ACK_MAX = 4096;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
@@ -786,6 +787,8 @@ export function createIntegrations({
     // Spent only by verified deliveries that will run: whoever merely knows
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
+    // Before the handler starts, so it can't see what the handler did to payload.
+    const ack = conn.ackEarly ? earlyAck(conn, payload, headers) : null;
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
@@ -829,7 +832,23 @@ export function createIntegrations({
     const bg = settle().catch((e) => warn('integration webhook settle failed', c, e));
     hub.inflight.add(bg);
     bg.finally(() => hub.inflight.delete(bg));
-    return { status: 200, body: { ok: true, accepted: true } };
+    return { status: 200, ...ack };
+  }
+
+  // The early answer: the default JSON, or the connector's ackBody as an
+  // empty body, short text or small JSON. Anything else, over ACK_MAX, or a
+  // throw is an empty 200 (the provider only needs the 200 in time).
+  function earlyAck(conn, payload, headers) {
+    if (!conn.ackBody) return { body: { ok: true, accepted: true } };
+    const empty = { raw: '', type: 'text/plain; charset=utf-8' };
+    let v;
+    try { v = conn.ackBody({ payload, headers }); } catch { return empty; }
+    let out;
+    if (typeof v === 'string') out = { raw: v, type: 'text/plain; charset=utf-8' };
+    else if (isBareObject(v)) {
+      try { out = { raw: JSON.stringify(v), type: 'application/json; charset=utf-8' }; } catch { return empty; }
+    } else return empty;
+    return typeof out.raw === 'string' && Buffer.byteLength(out.raw) <= ACK_MAX ? out : empty;
   }
 
   // A delivery acknowledged early whose handler failed: no provider retry is

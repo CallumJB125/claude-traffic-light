@@ -48,6 +48,13 @@
 //   // code) and the lease released, so a manual redelivery runs it. A hub
 //   // crash mid-handler loses the event until such a manual redelivery.
 //   ackEarly: false,
+//   // Optional, only with ackEarly: the early answer's body (default
+//   // {"ok":true,"accepted":true}). undefined → an empty 200; a string →
+//   // text/plain; a plain object → JSON; over 4 KiB, unserialisable, any other
+//   // type or a throw → an empty 200. Synchronous; runs before the handler.
+//   // Never reflect request data in it, except a verified url_verification
+//   // `challenge` string.
+//   ackBody({ payload, headers }) → undefined | string | { … },
 //
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
@@ -135,6 +142,7 @@ export function defineConnector(spec) {
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
+  if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
   if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
