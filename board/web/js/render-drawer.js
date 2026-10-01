@@ -9,6 +9,7 @@ import { LABEL_COLORS, canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
 import { packetPanel, messagePanel } from './render-communication.js';
 import { captureBadge } from './render-capture.js';
+import { ownershipPanel } from './render-ownership.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
@@ -141,7 +142,7 @@ export function handoverBody(markdown) {
 }
 
 function tabs(active, counts) {
-  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
+  const list = [['activity', 'Activity'], ['packet', 'Task context'], ['messages', 'Messages'], ['ownership', 'Coordination'], ['handover', 'Handover'], ['comments', `Comments${counts.comments ? ` ${counts.comments}` : ''}`], ['details', 'Details']];
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Card sections' },
     list.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', id: `tab-${id}`, class: 'tab', 'aria-selected': String(active === id), 'aria-controls': 'tabpanel',
@@ -153,6 +154,7 @@ function tabPanel(tab, detail, model, elapsed) {
   const d = detail.data;
   if (tab === 'packet') return packetPanel(detail, model);
   if (tab === 'messages') return messagePanel(detail, model);
+  if (tab === 'ownership') return ownershipPanel(detail, model, detail.ownership_elapsed_ms ?? 0);
   if (tab === 'handover') {
     if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. The agent can record progress and next steps during the run.');
     return h('div', null,
@@ -217,7 +219,7 @@ function evidenceBlock(view, detail) {
     h('ul', { class: 'evidence' },
       pr ? h('li', null, icon('branch', 'icon-xs'), h('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer' }, `PR #${pr.number}`), h('span', { class: 'muted' }, ` · ${pr.state}`)) : null,
       ev?.tests ? h('li', { 'data-tone': ev.tests === 'pass' ? 'green' : ev.tests === 'fail' ? 'red' : null }, icon(ev.tests === 'pass' ? 'check' : ev.tests === 'fail' ? 'close' : 'dot', 'icon-xs'), ev.tests === 'pass' ? 'Tests pass' : ev.tests === 'fail' ? 'Tests fail' : 'No tests run') : null,
-      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Self-reported by Claude') : null,
+      ev?.verification ? h('li', null, icon(ev.verification === 'hub_verified' ? 'check' : 'person', 'icon-xs'), ev.verification === 'hub_verified' ? 'Verified by the board against GitHub' : 'Reported by the agent') : null,
       list.map((e, i) => h('li', { key: e.id ?? i }, icon('dot', 'icon-xs'), `${e.kind ?? 'evidence'}: ${e.summary ?? e.ref ?? ''}`))));
 }
 
@@ -229,7 +231,7 @@ function overlapsBlock(overlaps, elapsed) {
       icon('warn', 'icon-xs'),
       h('div', null,
         h('p', null, h('button', { type: 'button', class: 'link', 'data-action': 'open', 'data-card': o.other_card_id }, o.other_key),
-          o.other_owner ? ` (${o.other_owner}'s Claude)` : '', o.kind === 'adjacent' ? ' is working nearby' : ' is editing the same files'),
+          o.other_owner ? ` (${o.other_owner}'s ${o.other_provider_label ?? 'agent'})` : '', o.kind === 'adjacent' ? ' has related work' : ' has overlapping work'),
         o.paths?.length ? h('p', { class: 'overlap-paths' }, o.paths.slice(0, 4).map((p) => h('code', null, p))) : null,
         h('p', { class: 'muted num' }, `${o.level ?? ''}${o.reasons?.length ? ` · ${o.reasons.join(', ')}` : ''}${o.age_ms != null ? ` · ${ago(add(o.age_ms, elapsed))}` : ''}`))))),
     h('p', { class: 'muted small' }, 'Overlaps never block. Talk to each other, or let one card finish first.'));

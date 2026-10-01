@@ -255,7 +255,7 @@ export class Api {
         const sig = classifyPair(self, other);
         if (!sig.length) continue;
         const level = sig.reduce((a, s) => ({ high: 3, medium: 2, low: 1 }[s.level] > { high: 3, medium: 2, low: 1 }[a] ? s.level : a), 'low');
-        overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
+        overlaps.push({ other_card_id: other.card_id, other_key: other.card_key, other_owner: other.owner_name, other_provider_label: other.provider_label ?? 'Agent', level, kind: kindOf(level), reasons: sig.map((s) => s.reason), paths: [...new Set(sig.flatMap((s) => s.paths))], age_ms: 0 });
       }
     }
     const dev = [...this.hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(selectedRepo));

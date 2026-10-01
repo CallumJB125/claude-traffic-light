@@ -19,7 +19,7 @@ import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText 
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
-import { aiOfDispatch, acceptsAi } from '../shared/ai.js';
+import { aiOfDispatch, acceptsAi, AI_LABELS } from '../shared/ai.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
@@ -1067,7 +1067,8 @@ export class Hub extends EventEmitter {
     const rows = this.db.all(`SELECT r.*, c.key AS card_key, c.title AS card_title, c.body AS card_body FROM runs r JOIN cards c ON c.active_run_id = r.id
       WHERE r.repo_id = ? AND r.ended_at IS NULL`, repoId);
     return rows.map((r) => ({
-      run_id: r.id, card_id: r.card_id, card_key: r.card_key, owner_label: `${this.memberName(r.on_behalf_of) ?? '?'}'s Claude`,
+      run_id: r.id, card_id: r.card_id, card_key: r.card_key, owner_label: `${this.memberName(r.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(r)] ?? 'agent'}`,
+      provider_label: AI_LABELS[aiOfDispatch(r)] ?? 'Agent',
       owner_name: this.memberName(r.on_behalf_of), repo_id: r.repo_id, branch: r.branch, fence: r.fence, device_id: r.device_id,
       touched_paths: json(r.touched_paths, []), planned_paths: json(r.planned_paths, []),
       locked_paths: this.db.all('SELECT path FROM path_locks WHERE run_id = ?', r.id).map((x) => x.path),
@@ -1155,6 +1156,7 @@ export class Hub extends EventEmitter {
       const first = raw.filter((x) => x.run_a === o.other.run_id || x.run_b === o.other.run_id).map((x) => this.ageOf(x.first_seen));
       return {
         other_card_id: o.other.card_id ?? null, other_key: o.other.card_key ?? null, other_owner: o.other.owner_name ?? null,
+        other_provider_label: o.other.provider_label ?? 'Agent',
         level: o.level, kind: o.kind, reasons: o.reasons, paths: o.paths, age_ms: first.length ? Math.max(...first) : 0,
       };
     });

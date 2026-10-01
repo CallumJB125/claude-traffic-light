@@ -369,7 +369,7 @@ function buildModel() {
     const d = state.detail;
     const elapsed_ms = d.rx != null ? Math.max(0, clockNow - d.rx) : 0;
     const data = d.data ? { ...d.data, feed: (d.data.feed ?? []).map((ev) => ({ ...ev, at_age_ms: ev.at_age_ms == null ? null : ev.at_age_ms + Math.max(0, clockNow - (ev._rx ?? d.rx)) })) } : null;
-    detail = { ...d, data, elapsed_ms };
+    detail = { ...d, data, elapsed_ms, ownership_elapsed_ms: d.ownershipRx == null ? 0 : Math.max(0, now - d.ownershipRx) };
   }
   const labelColors = Array.isArray(state.board?.labels) ? colorMap(state.board.labels) : null;
   const fctx = { viewerId: state.me?.member?.id, members: state.members, labelColors };
@@ -462,6 +462,12 @@ function resetDashboard() {
 function onHubEpoch(epoch) {
   const prev = state.dash.epoch;
   if (prev && epoch && prev !== epoch) {
+    if (state.detail) {
+      detailRefresh++;
+      state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+      update();
+      if (state.detail.tab === 'ownership' && state.conn.status === 'open') refreshDetail(state.detail.cardId, { ownership: true });
+    }
     resetDashboard();
     if (state.view === 'dashboard') loadJournal();
   }
@@ -782,6 +788,10 @@ async function signOut() {
 function onStatus({ status, retryAt }) {
   const prev = state.conn.status;
   if (status === 'signed_out') { socket?.close(); boot(); return; }
+  if (state.detail && (status !== 'open' || prev !== 'open')) {
+    detailRefresh++;
+    state.detail = { ...state.detail, ownership: null, ownershipLoaded: false, ownershipRx: null, ownershipError: null };
+  }
   if (status === 'lost' && prev !== 'lost') {
     state.conn.lostAt = new Date();
     state.conn.lostPerf = perf();
@@ -791,6 +801,7 @@ function onStatus({ status, retryAt }) {
   state.conn.status = status;
   state.conn.retryAt = retryAt ?? null;
   update();
+  if (status === 'open' && prev !== 'open' && state.detail?.tab === 'ownership') refreshDetail(state.detail.cardId, { ownership: true });
 }
 
 function onMessage(msg) {
@@ -989,14 +1000,14 @@ let detailRefresh = 0;
 async function openDetail(cardId, section = null) {
   if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const same = state.detail?.cardId === cardId;
-  const tab = ['handover', 'comments', 'packet', 'messages'].includes(section) ? section : (same ? state.detail.tab : 'activity');
+  const tab = ['handover', 'comments', 'packet', 'messages', 'ownership'].includes(section) ? section : (same ? state.detail.tab : 'activity');
   state.detail = { ...(same ? state.detail : {}), intent: ++drawerSession, cardId, data: same ? state.detail.data : null, rx: same ? state.detail.rx : null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
   update();
   await refreshDetail(cardId);
 }
 
-async function refreshDetail(cardId, { communication = false } = {}) {
+async function refreshDetail(cardId, { communication = false, ownership = false } = {}) {
   if (!cardId || state.detail?.cardId !== cardId) return;
   const generation = boardGeneration, intent = state.detail.intent, request = ++detailRefresh;
   const current = () => generation === boardGeneration && state.detail?.cardId === cardId && state.detail.intent === intent && request === detailRefresh;
@@ -1004,6 +1015,18 @@ async function refreshDetail(cardId, { communication = false } = {}) {
     const data = await api.card(cardId);
     if (!current()) return;
     state.detail = { ...state.detail, data, rx: perf(), error: null };
+    if (state.detail.tab === 'ownership' && !data.card.archived
+      && (ownership || !state.detail.ownershipLoaded || perf() - (state.detail.ownershipRx ?? 0) >= 5000)) {
+      try {
+        const requestStarted = perf();
+        const result = await api.ownership(cardId, state.boardId);
+        if (!current()) return;
+        state.detail = { ...state.detail, ownershipLoaded: true, ownershipRx: requestStarted, ownership: result, ownershipError: null };
+      } catch (err) {
+        if (!current()) return;
+        state.detail = { ...state.detail, ownershipLoaded: true, ownership: null, ownershipError: errorText(err) };
+      }
+    }
     if (['packet', 'messages'].includes(state.detail.tab) && !data.card.archived
       && (communication || !state.detail.packetLoaded || perf() - (state.detail.communicationRx ?? 0) >= 5000)) {
       const [packet, messages] = await Promise.allSettled([api.packet(cardId), api.messages(cardId)]);
@@ -1016,7 +1039,8 @@ async function refreshDetail(cardId, { communication = false } = {}) {
     }
   } catch (err) {
     if (!current()) return;
-    state.detail = { ...state.detail, error: errorText(err) };
+    state.detail = { ...state.detail, error: errorText(err), ...(state.detail.tab === 'ownership'
+      ? { ownershipLoaded: true, ownership: null, ownershipError: errorText(err) } : {}) };
   }
   update();
 }
@@ -1774,7 +1798,8 @@ function onClick(e) {
       });
       return;
     }
-    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'tab': if (state.detail) { state.detail = { ...state.detail, tab: el.dataset.tab }; update(); if (['packet', 'messages', 'ownership'].includes(el.dataset.tab)) refreshDetail(state.detail.cardId); } return;
+    case 'ownership-reload': if (state.detail) refreshDetail(state.detail.cardId, { ownership: true }); return;
     case 'packet-reload': if (state.detail) state.detail = { ...state.detail, packetDraft: null, packetSaveError: null }; // explicit discard
     case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
@@ -2049,6 +2074,7 @@ function onKeydown(e) {
     e.preventDefault();
     state.detail = { ...state.detail, tab: tabs[i].dataset.tab };
     update();
+    if (['packet', 'messages', 'ownership'].includes(tabs[i].dataset.tab)) refreshDetail(state.detail.cardId);
     queueMicrotask(() => root.querySelector(`#tab-${tabs[i].dataset.tab}`)?.focus());
   }
 }
@@ -2097,6 +2123,14 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
 setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
+let ownershipPollBusy = false;
+setInterval(async () => {
+  if (ownershipPollBusy || state.auth !== 'ok' || state.conn.status !== 'open' || document.visibilityState !== 'visible'
+    || state.detail?.tab !== 'ownership' || !state.detail.data || state.detail.data.card.archived) return;
+  ownershipPollBusy = true;
+  try { await refreshDetail(state.detail.cardId, { ownership: true }); }
+  finally { ownershipPollBusy = false; }
+}, 5000);
 
 loadTheme();
 loadLocalCard();
