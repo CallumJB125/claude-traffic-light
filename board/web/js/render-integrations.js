@@ -100,6 +100,71 @@ function manifestForm(c, mf) {
     h('button', { type: 'submit', class: 'btn btn-sm btn-primary' }, `Create the app on ${c.name}`));
 }
 
+// ── pending connections (D97) ───────────────────────────────────────────────
+
+const INPUT_LABEL = { config_token: 'App configuration token', app_id: 'App ID', client_id: 'Client ID', client_secret: 'Client secret', signing_secret: 'Signing secret' };
+const inputLabel = (k) => INPUT_LABEL[k] ?? k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+// Ids are shown as typed; anything else (secrets, tokens) stays masked.
+const inputType = (k) => (/_id$/.test(k) ? 'text' : 'password');
+
+// Uncontrolled inputs: a value never enters the model, so it can't be
+// re-rendered, stored or logged; takeInput empties them on submit.
+function inputField(k, autofocus = false) {
+  return h('label', { key: k, class: 'field' }, h('span', null, inputLabel(k)),
+    h('input', { class: 'input', name: k, type: inputType(k), autocomplete: 'off', spellcheck: 'false', required: true, autofocus: autofocus || null }));
+}
+
+/** The named inputs of a prepare form, trimmed, non-empty; every input is cleared at once. */
+export function takeInput(form) {
+  const out = {};
+  for (const el of form.querySelectorAll('input[name]')) {
+    const v = String(el.value ?? '').trim();
+    if (v) out[el.name] = v;
+    el.value = '';
+  }
+  return out;
+}
+
+function prepareForm(c, busy) {
+  const token = c.prepare.includes('config_token');
+  return h('div', { class: 'integ-prepare' },
+    token ? h('form', { class: 'integ-token', 'data-form': 'integ-prepare', 'data-provider': c.id },
+      inputField('config_token'),
+      h('div', { class: 'integ-card-actions' },
+        h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Create the ${c.name} app`))) : null,
+    h('button', { type: 'button', class: token ? 'link small' : 'btn btn-sm btn-primary', 'data-action': 'integ-paste', 'data-provider': c.id, disabled: busy || null },
+      token ? 'Paste app credentials instead' : `Connect ${c.name}`));
+}
+
+function pendingCard(p, m) {
+  const connector = m.available.find((c) => c.id === p.provider);
+  const name = connector?.name ?? p.provider;
+  const mins = Math.max(0, Math.ceil((Date.parse(p.expires_at) - m.nowMs) / 60_000));
+  const mine = p.created_by === m.meId;
+  const busy = m.busy.has(`integ-pending:${p.id}`);
+  const needs = m.needs?.[p.id];
+  const fields = needs?.fields ?? (connector?.prepare ?? []).filter((k) => k !== 'config_token');
+  const createUrl = typeof needs?.create_url === 'string' && /^https:\/\//.test(needs.create_url) ? needs.create_url : null;
+  const confirming = m.confirmCancel === p.id;
+  return h('article', { key: p.id, class: 'integ-card integ-pending', 'data-pending': p.id },
+    h('header', { class: 'integ-card-head' },
+      h('h3', { class: 'integ-name' }, name),
+      h('p', { class: 'integ-health', 'data-tone': 'grey' }, h('span', { class: 'integ-dot', 'aria-hidden': 'true' }),
+        `${p.ready ? 'Waiting for approval' : 'Waiting for the app’s credentials'} · expires in ${mins} min`)),
+    mine && !p.ready ? h('form', { class: 'integ-token', 'data-form': 'integ-prepare', 'data-pending': p.id },
+      createUrl ? h('p', { class: 'small' }, h('a', { href: createUrl, target: '_blank', rel: 'noopener noreferrer' }, `Create the app on ${name}`), ', then paste its credentials here.') : null,
+      fields.map((k, i) => inputField(k, i === 0)),
+      h('div', { class: 'integ-card-actions' }, h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Continue'))) : null,
+    h('div', { class: 'integ-card-actions' },
+      mine && p.ready ? h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'integ-authorize', 'data-pending': p.id, 'data-provider': p.provider, disabled: busy || null }, 'Continue') : null,
+      confirming
+        ? h('span', { class: 'integ-confirm' },
+          h('span', { class: 'small' }, `Cancel this setup? Also delete the app this setup created on ${name}: the hub can’t do that for you.`),
+          h('button', { type: 'button', class: 'btn btn-sm btn-danger', 'data-action': 'integ-pending-cancel', 'data-pending': p.id }, 'Cancel setup'),
+          h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-pending-cancel-keep' }, 'Keep'))
+        : h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'integ-pending-cancel-ask', 'data-pending': p.id }, 'Cancel')));
+}
+
 function availableCard(c, m) {
   const manifest = c.connect === 'app_install' && m.manifest?.provider === c.id && /^https:\/\//.test(m.manifest.action ?? '') ? m.manifest : null;
   const tokenOpen = m.tokenFor === c.id;
@@ -112,6 +177,7 @@ function availableCard(c, m) {
       : !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
       : manifest ? manifestForm(c, manifest)
+      : Array.isArray(c.prepare) && c.connect !== 'token' ? prepareForm(c, busy)
       : c.connect === 'token'
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
@@ -156,9 +222,11 @@ export function integrationsScreen(model) {
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel,
   };
   const connected = data.connections ?? [];
-  const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id));
+  const pending = vm.canEdit ? data.pending ?? [] : [];
+  const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id) && !pending.some((p) => p.provider === c.id));
   return main(
     h('header', { class: 'integview-head' },
       h('h1', null, 'Integrations'),
@@ -169,6 +237,9 @@ export function integrationsScreen(model) {
       h('h2', { id: 'integ-connected' }, 'Connected'),
       connected.length ? h('div', { class: 'integ-grid' }, connected.map((c) => connectedCard(c, vm)))
         : h('p', { class: 'muted' }, 'Nothing connected yet.')),
+    pending.length ? h('section', { class: 'integ-group', 'aria-labelledby': 'integ-pending' },
+      h('h2', { id: 'integ-pending' }, 'Being set up'),
+      h('div', { class: 'integ-grid' }, pending.map((p) => pendingCard(p, vm)))) : null,
     h('section', { class: 'integ-group', 'aria-labelledby': 'integ-available' },
       h('h2', { id: 'integ-available' }, 'Add a tool'),
       vm.local ? h('p', { class: 'integ-local muted' }, 'Connect tools on a team hub: sign in and open your team’s board.') : null,

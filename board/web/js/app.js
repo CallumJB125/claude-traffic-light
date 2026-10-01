@@ -15,7 +15,7 @@ import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
-import { integrationsScreen, connectWindowTarget } from './render-integrations.js';
+import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
 import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
@@ -179,6 +179,39 @@ async function submitIntegrationToken(form) {
   if (!token) return;
   const res = await withBusy(`integ-connect:${provider}`, () => api.connectToken(provider, token));
   if (res) { state.integ = { ...state.integ, tokenFor: null }; toast('Connected.'); loadIntegrations(); }
+}
+
+// Pending connections (D97). The pasted values leave the form at once and
+// never enter state: takeInput clears the inputs before the request goes.
+function preparedAnswer(provider, res) {
+  if (!res?.pending) return;
+  if (res.needs) state.integ = { ...state.integ, needs: { ...state.integ.needs, [res.pending.id]: res.needs } };
+  if (res.url && res.bind) window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
+  loadIntegrations();
+}
+
+async function submitPrepare(form) {
+  const pendingId = form.dataset.pending;
+  const provider = pendingId ? state.integ.data?.pending?.find((p) => p.id === pendingId)?.provider : form.dataset.provider;
+  const input = takeInput(form);
+  if (!provider || !Object.keys(input).length) return;
+  const key = pendingId ? `integ-pending:${pendingId}` : `integ-connect:${provider}`;
+  preparedAnswer(provider, await withBusy(key, () => api.prepareIntegration(pendingId ?? provider, input)));
+}
+
+async function pasteInstead(provider) {
+  preparedAnswer(provider, await withBusy(`integ-connect:${provider}`, () => api.prepareIntegration(provider, {})));
+}
+
+async function authorizePending(id, provider) {
+  const res = await withBusy(`integ-pending:${id}`, () => api.authorizeIntegration(id));
+  if (res?.url && res.bind) window.open(res.url, connectWindowTarget(provider, res.bind, navigator.userAgent), 'noopener');
+}
+
+async function cancelPending(id) {
+  const res = await withBusy(`integ-pending:${id}`, () => api.disconnectIntegration(id));
+  state.integ = { ...state.integ, confirmCancel: null };
+  if (res) { toast('Setup cancelled.'); loadIntegrations(); } else update();
 }
 
 async function toggleActivity(id) {
@@ -827,6 +860,7 @@ async function submitGive(form) {
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
   if (kind === 'integ-token') return submitIntegrationToken(form);
+  if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'label-create') {
     const fd0 = new FormData(form);
     const name = String(fd0.get('name') ?? '').trim();
@@ -1217,6 +1251,11 @@ function onClick(e) {
     case 'integ-disconnect-ask': state.integ = { ...state.integ, confirmDisconnect: el.dataset.conn }; update(); return;
     case 'integ-disconnect-cancel': state.integ = { ...state.integ, confirmDisconnect: null }; update(); return;
     case 'integ-disconnect': disconnectIntegration(el.dataset.conn); return;
+    case 'integ-paste': pasteInstead(el.dataset.provider); return;
+    case 'integ-authorize': authorizePending(el.dataset.pending, el.dataset.provider); return;
+    case 'integ-pending-cancel-ask': state.integ = { ...state.integ, confirmCancel: el.dataset.pending }; update(); return;
+    case 'integ-pending-cancel-keep': state.integ = { ...state.integ, confirmCancel: null }; update(); return;
+    case 'integ-pending-cancel': cancelPending(el.dataset.pending); return;
     case 'dashboard-refresh': if (el.getAttribute('aria-disabled') !== 'true') loadJournal(); return;
     case 'table-sort': state.table = { ...state.table, sort: nextSort(state.table.sort, el.dataset.by) }; update(); return;
     case 'access-login': e.preventDefault(); location.reload(); return;
