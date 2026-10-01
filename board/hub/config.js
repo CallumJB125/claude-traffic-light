@@ -168,6 +168,10 @@ function validateMail(cfg) {
 
 export const SIGNIN_METHODS = Object.freeze(['google', 'github']);
 
+// What hub.env.example ships with: an accounts hub refuses to start on any of it.
+export const PLACEHOLDER = /change-me|replace-with|example|placeholder/i;
+const EXAMPLE_DOMAIN = /(^|\.)example\.(com|org|net)\.?$/i;
+
 export const SIGNUP_MODES = Object.freeze(['open', 'allowlist']);
 const SIGNUP_ALLOW_MAX_CHARS = 8192;
 const SIGNUP_ALLOW_MAX_ENTRIES = 256;
@@ -217,9 +221,11 @@ export function oauthProviders(cfg) {
 function validateAccounts(cfg) {
   const loop = isLoopback(cfg.bind);
   if (!cfg.secret) throw new Error('BOARD_AUTH=accounts needs BOARD_SECRET (at least 32 bytes)');
+  if (PLACEHOLDER.test(cfg.secret)) throw new Error('BOARD_SECRET still has its example placeholder: set a real secret (openssl rand -base64 48)');
   let url = null;
   if (cfg.publicUrl) {
     try { url = new URL(cfg.publicUrl); } catch { throw new Error(`BOARD_PUBLIC_URL is not a URL: ${cfg.publicUrl}`); }
+    if (EXAMPLE_DOMAIN.test(url.hostname)) throw new Error('BOARD_PUBLIC_URL still names an example host: set the address people reach this hub at');
   }
   const exposed = isExposed(cfg);
   if (!url && !(loop && cfg.accountsDev)) throw new Error('BOARD_AUTH=accounts needs BOARD_PUBLIC_URL (only a loopback bind with BOARD_ACCOUNTS_DEV=1 may do without)');
@@ -231,7 +237,10 @@ function validateAccounts(cfg) {
   const methods = cfg.signinMethods ?? [];
   const bad = methods.filter((m) => !SIGNIN_METHODS.includes(m));
   if (bad.length) throw new Error(`BOARD_SIGNIN_METHODS takes ${SIGNIN_METHODS.join(', ')} (got ${bad.join(', ')})`);
-  signupPolicy(cfg);
+  const signup = signupPolicy(cfg);
+  if ([...signup.domains, ...[...signup.emails].map((e) => e.slice(e.lastIndexOf('@') + 1))].some((d) => EXAMPLE_DOMAIN.test(d))) {
+    throw new Error('BOARD_SIGNUP_ALLOW still has an example.com/.org/.net entry: list your own domains and addresses');
+  }
   if (cfg.consoleMailer && (exposed || !loop)) throw new Error('BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed');
   if (exposed) {
     if (url?.protocol !== 'https:') throw new Error('an exposed BOARD_AUTH=accounts hub (BOARD_PUBLIC_URL off loopback, or BOARD_TUNNEL_PROBE_URL) needs an https BOARD_PUBLIC_URL');

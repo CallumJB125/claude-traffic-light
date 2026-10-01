@@ -10,6 +10,11 @@ import { resendMailer, createMailer, consoleMailer } from '../identity/mailer.js
 import { startHub, testConfig } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
 import { sha256hex } from '../auth.js';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadKey } from '../vault.js';
 
 const base = (over = {}) => ({ ...testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true }), ...over });
 
@@ -19,10 +24,10 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   assert.throws(() => validateConfig(base({ accountsDev: false })), /needs BOARD_PUBLIC_URL \(only a loopback bind with BOARD_ACCOUNTS_DEV=1/);
   assert.throws(() => validateConfig(base({ bind: '0.0.0.0' })), /needs BOARD_PUBLIC_URL|https BOARD_PUBLIC_URL/);
   assert.throws(() => validateConfig(base({ secret: null })), /needs BOARD_SECRET/);
-  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'http://buddy.example.com' })), /https BOARD_PUBLIC_URL/);
-  assert.throws(() => validateConfig(base({ publicUrl: 'http://buddy.example.com' })), /must be https unless/);
+  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'http://buddy.acme.test' })), /https BOARD_PUBLIC_URL/);
+  assert.throws(() => validateConfig(base({ publicUrl: 'http://buddy.acme.test' })), /must be https unless/);
   assert.throws(() => validateConfig(base({ resendApiKey: 're_x' })), /needs BOARD_MAIL_FROM/);
-  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'https://buddy.example.com', resendApiKey: 're_x', mailFrom: 'x@y.z', trustCfIp: true })), /BOARD_TRUST_CF_IP needs a loopback/);
+  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'https://buddy.acme.test', resendApiKey: 're_x', mailFrom: 'x@y.z', trustCfIp: true })), /BOARD_TRUST_CF_IP needs a loopback/);
   assert.throws(() => validateConfig(base({ bootstrap: 'alice,1,a@x.io' })), /BOARD_BOOTSTRAP=<email> only/);
   assert.throws(() => validateConfig(base({ signinMethods: ['myspace'] })), /BOARD_SIGNIN_METHODS takes google, github/);
   assert.throws(() => validateConfig(testConfig({ auth: 'dev', trustCfIp: true })), /unset BOARD_TRUST_CF_IP/);
@@ -36,11 +41,11 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   assert.deepEqual([oc.googleClientId, oc.googleClientSecret, oc.githubClientId, oc.githubClientSecret], ['g-id', 'g-sec', 'gh-id', 'gh-sec']);
   assert.equal(oenv.BOARD_GOOGLE_CLIENT_SECRET, undefined);
   assert.equal(oenv.BOARD_GITHUB_CLIENT_SECRET, undefined);
-  assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.example.com', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
+  assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.acme.test', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
 });
 
 test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-in method, never the console mailer; no Resend key needed', () => {
-  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
+  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
   assert.doesNotThrow(() => validateConfig(exposed()), 'Google only, no mailer');
   assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co' })), 'a mailer is a sign-in method');
   // D76: a configured OAuth provider (client id AND secret) is a sign-in method: BOARD_SIGNIN_METHODS becomes optional.
@@ -51,9 +56,9 @@ test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-
   assert.throws(() => validateConfig(exposed({ consoleMailer: true })), /BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed/);
   assert.throws(() => validateConfig(exposed({ bind: '0.0.0.0', trustCfIp: false })), /needs BOARD_TRUST_CF_IP=1/, 'a direct non-loopback bind is never enough');
   // A tunnel probe means exposed, even with a loopback URL (or none).
-  assert.throws(() => validateConfig(base({ tunnelProbeUrl: 'https://buddy.example.com/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
-  assert.throws(() => validateConfig(base({ publicUrl: 'http://127.0.0.1:8787', tunnelProbeUrl: 'https://buddy.example.com/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
-  assert.doesNotThrow(() => validateConfig(exposed({ tunnelProbeUrl: 'https://buddy.example.com/api/health' })));
+  assert.throws(() => validateConfig(base({ tunnelProbeUrl: 'https://buddy.acme.test/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
+  assert.throws(() => validateConfig(base({ publicUrl: 'http://127.0.0.1:8787', tunnelProbeUrl: 'https://buddy.acme.test/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
+  assert.doesNotThrow(() => validateConfig(exposed({ tunnelProbeUrl: 'https://buddy.acme.test/api/health' })));
   // The console mailer: loopback and not exposed only; never picked when exposed.
   assert.doesNotThrow(() => validateConfig(base({ consoleMailer: true })));
   assert.equal(createMailer(base({ consoleMailer: true })).kind, 'console');
@@ -332,4 +337,60 @@ test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S
   const late = { version: 20, name: 'reserved_later', sql: 'CREATE TABLE _late (a INTEGER);' };
   assert.deepEqual(migrate(db, { migrations: [...all, late].sort((a, b) => a.version - b.version) }), [20]);
   db.close();
+});
+
+// Placeholders left in from hub.env.example (production cutover review): a
+// hub that would sign with a published secret, link to a reserved host or
+// admit an example domain refuses to start, and never says the value.
+const realSecret = () => randomBytes(48).toString('base64');
+const WORDS = ['change' + '-me', 'replace' + '-with', 'exam' + 'ple', 'place' + 'holder'];
+
+test('accounts refuses a BOARD_SECRET that is still a placeholder, with a fixed text that never repeats it', () => {
+  const priv = `q${randomBytes(6).toString('hex')}`;
+  for (const w of WORDS) {
+    for (const secret of [`${w}-${priv}-${'z'.repeat(32)}`, `${priv}${w.toUpperCase()}${'z'.repeat(32)}`]) {
+      assert.throws(() => validateConfig(base({ secret })), (e) => e.message === 'BOARD_SECRET still has its example placeholder: set a real secret (openssl rand -base64 48)' && !e.message.includes(priv), secret.slice(0, 20));
+      assert.throws(() => loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_ACCOUNTS_DEV: '1' }), (e) => !e.message.includes(priv));
+    }
+  }
+  for (let i = 0; i < 20; i++) assert.doesNotThrow(() => validateConfig(base({ secret: realSecret() })), 'a random secret');
+  // Dev mode is a loopback try-out: unchanged.
+  assert.doesNotThrow(() => validateConfig(testConfig({ auth: 'dev', secret: `${WORDS[0]}-${'z'.repeat(40)}` })));
+});
+
+test('accounts refuses an example.com/.org/.net BOARD_PUBLIC_URL and BOARD_SIGNUP_ALLOW entries on those domains', () => {
+  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
+  assert.doesNotThrow(() => validateConfig(exposed()));
+  const ex = (tld) => ['exam', 'ple.', tld].join('');
+  for (const host of [ex('com'), ex('org'), ex('net'), `app.${ex('com')}`, `a.b.${ex('org')}`, `x.${ex('net')}`, ex('COM')]) {
+    assert.throws(() => validateConfig(exposed({ publicUrl: `https://${host}` })), (e) => e.message === 'BOARD_PUBLIC_URL still names an example host: set the address people reach this hub at' && !e.message.includes(host.toLowerCase()), host);
+  }
+  for (const host of [`${ex('com')}.acme.test`, `my${ex('com')}`, 'example.io']) {
+    assert.doesNotThrow(() => validateConfig(exposed({ publicUrl: `https://${host}` })), `${host} is not a reserved example host`);
+  }
+  for (const entry of [`domain:${ex('com')}`, `email:someone@${ex('org')}`, `domain:sub.${ex('net')}`, `email:a@b.${ex('com')}`, `DOMAIN:${ex('COM')}`]) {
+    assert.throws(() => validateConfig(exposed({ signupAllow: `domain:acme.test,${entry}` })), (e) => e.message === 'BOARD_SIGNUP_ALLOW still has an example.com/.org/.net entry: list your own domains and addresses' && !e.message.includes('acme'), entry);
+  }
+  assert.doesNotThrow(() => validateConfig(exposed({ signupAllow: `domain:acme.test,email:a@my${ex('com')}` })));
+  // Outside accounts mode nothing changes.
+  assert.doesNotThrow(() => validateConfig(testConfig({ auth: 'access', accessTeam: 't', accessAud: 'a', publicUrl: `https://${ex('com')}` })));
+});
+
+test('BOARD_ENC_KEY / BOARD_ENC_KEY_FILE text that still has a placeholder word is refused in accounts mode, even when it decodes to 32 bytes', () => {
+  // 43 base64 characters and '=': 32 bytes, so only the words give it away.
+  const b64 = (w) => `${w}${'A'.repeat(43 - w.length)}=`;
+  const dir = mkdtempSync(join(tmpdir(), 'enckey-'));
+  for (const w of WORDS) {
+    const text = /^[A-Za-z]+$/.test(w) ? b64(w) : `${w}-${'a'.repeat(30)}`;
+    assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: text }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY still has an example placeholder: set a real key (openssl rand -base64 32)' && !e.message.includes(text), w);
+    const f = join(dir, `${w}.key`);
+    writeFileSync(f, `${text}\n`, { mode: 0o600 });
+    assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: f }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY_FILE still holds an example placeholder: set a real key (openssl rand -base64 32)', w);
+  }
+  // The same 32-byte text outside accounts mode decodes as before.
+  assert.equal(loadKey({ env: { BOARD_ENC_KEY: b64(WORDS[2]) }, hasParentPort: false }).length, 32);
+  for (let i = 0; i < 20; i++) {
+    const k = randomBytes(32).toString(i % 2 ? 'hex' : 'base64');
+    assert.equal(loadKey({ env: { BOARD_ENC_KEY: k }, hasParentPort: false, refusePlaceholder: true }).length, 32, 'a random key');
+  }
 });

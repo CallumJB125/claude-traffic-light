@@ -404,15 +404,15 @@ test('C1 ctx.hubUrl: an https origin only (no path, query, fragment or credentia
 });
 
 test('C1 ctx.hubUrl: app.js passes BOARD_PUBLIC_URL at boot; a PATCH of config.hub_url changes nothing', async () => {
-  const acc = await startAccounts({ config: { publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
+  const acc = await startAccounts({ config: { publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
   try {
     acc.hub.setVaultKey(randomBytes(32));
     const reg = acc.app.integrations;
     reg.register(slackish(newBeh()));
     const c = reg.createConnection({ orgId: acc.ids.org, memberId: acc.ids.alice, provider: 'slackish', external_id: 'T1' });
-    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
+    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.acme.test');
     reg.setSettings(c.id, { config: { hub_url: EVIL } });
-    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
+    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.acme.test');
   } finally { await acc.app.close({ graceMs: 200 }); }
 });
 
