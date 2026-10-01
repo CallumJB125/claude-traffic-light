@@ -123,7 +123,7 @@ export function cardView(hub, row, viewerId) {
   const budgetCap = row.budget_cents;
   const stateAge = hub.ageOf(row.state_since);
   return {
-    id: row.id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
+    id: row.id, board_id: row.board_id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
     label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
     cover: row.cover ?? null,
     archived: row.archived_at ? { at_age_ms: Math.round(hub.ageOf(row.archived_at)), by_name: hub.memberName(row.archived_by) } : null,
@@ -161,7 +161,7 @@ export function boardSnapshot(hub, boardId, viewerId, { includeArchived = false 
   const members = hub.db.all('SELECT * FROM members WHERE org_id = ? AND removed_at IS NULL ORDER BY display_name', board.org_id);
   return {
     board_id: boardId,
-    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
+    board: { id: board.id, name: board.name, key_prefix: board.key_prefix, archived_at: board.archived_at, settings: json(board.settings, {}), labels: hub.labelRegistry(boardId) },
     cards: cards.map((c) => cardView(hub, c, viewerId)),
     members: members.map((m) => ({ member_id: m.id, name: m.display_name, login: publicLogin(m), avatar_url: m.github_id > 0 ? `https://avatars.githubusercontent.com/u/${m.github_id}` : null })),
   };

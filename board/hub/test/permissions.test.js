@@ -24,6 +24,8 @@ const EXPECTED = {
   'label.write': [1, 1, 1, 0],
   'label.manage': [1, 1, 0, 0],
   'board.create': [1, 1, 0, 0],
+  'board.rename': [1, 1, 0, 0],
+  'board.archive': [1, 1, 0, 0],
   'repo.manage': [1, 1, 0, 0],
   'team.settings': [1, 1, 0, 0],
   'invite.create': [1, 1, 0, 0],

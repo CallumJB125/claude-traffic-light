@@ -44,6 +44,7 @@ const state = {
   me: null,
   boardId: null,
   board: null,
+  boards: [],
   members: new Map(),
   cards: new Map(), // id → {view, rx}
   conn: { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null },
@@ -75,6 +76,8 @@ const state = {
 };
 
 let socket = null;
+let boardGeneration = 0;
+const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
 
 // ── theme ────────────────────────────────────────────────────────────────────
 
@@ -319,6 +322,7 @@ function buildModel() {
   return {
     me: state.me,
     board: state.board,
+    boards: state.boards,
     members: state.members,
     entries,
     visible: filtered.entries,
@@ -341,7 +345,7 @@ function buildModel() {
     quickAdd: state.quickAdd,
     drag: state.drag || state.kbd ? dragModel(state.drag ?? { ids: state.kbd.ids, over: state.kbd.over, mode: 'keyboard' }, entries) : null,
     openCardId: state.detail?.cardId ?? null,
-    readOnly: state.me?.member?.role === 'viewer',
+    readOnly: boardReadOnly(),
     view: state.view,
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
@@ -483,6 +487,8 @@ function syncDialogs() {
 // ── auth + boot ──────────────────────────────────────────────────────────────
 
 async function boot() {
+  const generation = ++boardGeneration;
+  const current = () => generation === boardGeneration;
   state.auth = 'loading';
   update();
   // /api/health says whether this hub offers dev login (BOARD_AUTH=dev) or Access.
@@ -490,8 +496,11 @@ async function boot() {
     try { state.authMode = (await api.health()).auth ?? 'access'; } catch { state.authMode = 'access'; }
   }
   try {
-    state.me = await api.me();
+    const me = await api.me();
+    if (!current()) return;
+    state.me = me;
   } catch (err) {
+    if (!current()) return;
     // A sign-in in several orgs: the hub lists them; take ?org= or the first.
     if (err.code === 'CONFLICT' && Array.isArray(err.extra?.orgs) && err.extra.orgs.length && !currentOrg()) {
       const want = new URLSearchParams(location.search).get('org');
@@ -510,26 +519,118 @@ async function boot() {
   if (state.authMode === 'accounts' && !state.me.member && !(state.me.pending_invites?.length)) {
     try {
       const setup = await api.setupAccount();
+      if (!current()) return;
       if (setup.teams?.length) { setOrg(setup.teams[0].id); return boot(); }
       state.me.pending_invites = setup.pending_invites ?? [];
     } catch (err) {
+      if (!current()) return;
       // Preserve the existing create-or-join forms when a rate limit,
       // quota or admission rule prevents automatic setup.
       state.onboard = { busy: false, error: accountErrorText(err, 'team'), where: 'create' };
     }
   }
+  try { const result = await api.boards(true); if (!current()) return; state.boards = result.boards; }
+  catch { if (!current()) return; state.boards = state.me.boards ?? []; }
+  if (!current()) return;
   const wanted = new URLSearchParams(location.search).get('board');
-  const boards = state.me.boards ?? [];
-  state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards[0]?.id ?? null;
+  const boards = state.boards;
+  let remembered = null;
+  try { remembered = localStorage.getItem(lastBoardKey()); } catch { /* storage off */ }
+  state.boardId = boards.find((b) => b.id === wanted)?.id ?? boards.find((b) => b.id === remembered && !b.archived_at)?.id ?? boards.find((b) => !b.archived_at)?.id ?? null;
   // A new account has no team: offer to create or join one, not "not a member".
   if (!state.boardId) { state.auth = state.authMode === 'accounts' && !state.me.member ? 'no_team' : 'forbidden'; update(); return; }
+  state.board = { ...boards.find((b) => b.id === state.boardId), settings: {}, labels: [] };
   document.title = `${boards.find((b) => b.id === state.boardId)?.name ?? 'Board'} · ${BRAND.name}`;
+  rememberBoard();
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
   socket?.close();
-  socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage, onStatus });
+  socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage: (m) => { if (current()) onMessage(m); }, onStatus: (...args) => { if (current()) onStatus(...args); } });
   update();
   openFromHash();
+}
+
+function lastBoardKey() {
+  return `board-last:${state.me?.org?.id ?? currentOrg()}:${state.me?.user?.id ?? state.me?.member?.id}`;
+}
+
+function rememberBoard() {
+  if (!state.boards.find((b) => b.id === state.boardId)?.archived_at) {
+    try { localStorage.setItem(lastBoardKey(), state.boardId); } catch { /* storage off */ }
+  }
+}
+
+async function switchBoard(id) {
+  if (!state.boards.some((b) => b.id === id)) return;
+  socket?.close(); socket = null;
+  state.board = null;
+  state.cards = new Map(); state.archived = null; state.members = new Map();
+  state.cardsRev += 1;
+  state.detail = null; state.dialog = null; state.selection = new Set();
+  state.drag = null; state.kbd = null; state.quickAdd = null;
+  state.showArchived = false; state.repos = null; state.themeMenu = false;
+  state.filters = emptyFilters();
+  try { sessionStorage.removeItem('board-filters'); } catch { /* storage off */ }
+  const query = new URLSearchParams(location.search);
+  query.set('board', id); query.delete('q'); query.delete('f');
+  history.replaceState(null, '', `${location.pathname}?${query}`);
+  state.conn = { status: 'connecting', lostAt: null, lostPerf: null, retryAt: null };
+  await boot();
+}
+
+async function manageBoards() {
+  state.dialog = { kind: 'boards' }; update();
+  const generation = boardGeneration;
+  try {
+    const result = await api.boards(true);
+    if (generation === boardGeneration) { state.boards = result.boards; update(); }
+  } catch (err) {
+    if (generation === boardGeneration && state.dialog?.kind === 'boards') { state.dialog = { ...state.dialog, error: errorText(err) }; update(); }
+  }
+}
+
+async function submitBoardDialog(form) {
+  const d = state.dialog;
+  if (!d || d.busy || d.kind !== form.dataset.form) return;
+  state.dialog = { ...d, busy: true }; update();
+  const generation = boardGeneration;
+  try {
+    const fd = new FormData(form);
+    let result;
+    if (d.kind === 'new-board') {
+      const key_prefix = String(fd.get('key_prefix') ?? '').trim();
+      result = await api.createBoard({ name: String(fd.get('name') ?? '').trim(), ...(key_prefix ? { key_prefix } : {}) });
+    } else if (d.kind === 'rename-board') result = await api.renameBoard(d.id, String(fd.get('name') ?? '').trim());
+    else result = await api.archiveBoard(d.id);
+    if (generation !== boardGeneration) return;
+    state.boards = (await api.boards(true)).boards;
+    if (generation !== boardGeneration) return;
+    state.dialog = null;
+    if (d.kind === 'new-board') await switchBoard(result.board.id);
+    else if (d.kind === 'archive-board' && state.boardId === d.id) await switchBoard(state.boards.find((b) => !b.archived_at).id);
+    else { if (state.board?.id === result.board.id) state.board = { ...state.board, ...result.board }; update(); }
+  } catch (err) {
+    if (generation === boardGeneration && state.dialog?.kind === d.kind) { state.dialog = { ...d, busy: false, error: errorText(err) }; update(); }
+  }
+}
+
+async function restoreBoard(id) {
+  const generation = boardGeneration;
+  const result = await withBusy(`board:${id}`, () => api.restoreBoard(id));
+  if (!result) return;
+  const boards = (await api.boards(true)).boards;
+  if (generation !== boardGeneration) return;
+  state.boards = boards;
+  if (state.board?.id === id) state.board = { ...state.board, ...result.board };
+  update();
+}
+
+async function setIntegrationBoard(id, target_board_id) {
+  const result = await withBusy(`integ:${id}`, () => api.patchIntegration(id, { target_board_id }));
+  if (result?.connection) {
+    state.integ = { ...state.integ, data: { ...state.integ.data, connections: state.integ.data.connections.map((c) => c.id === id ? result.connection : c) } };
+    update();
+  }
 }
 
 // ── accounts: a first team ─────────────────────────────────────────────────
@@ -631,6 +732,14 @@ function onStatus({ status, retryAt }) {
 function onMessage(msg) {
   const now = perf();
   switch (msg.type) {
+    case 'team.boards': {
+      if (msg.org_id !== state.me?.org?.id) return;
+      state.boards = msg.boards;
+      state.me = { ...state.me, boards: msg.boards.filter((b) => !b.archived_at) };
+      const board = msg.boards.find((b) => b.id === state.boardId);
+      if (board && state.board) { state.board = { ...state.board, ...board }; document.title = `${board.name} · ${BRAND.name}`; }
+      break;
+    }
     case 'welcome': onHubEpoch(msg.hub_epoch); break;
     case 'snapshot': {
       if (msg.board_id !== state.boardId) return;
@@ -722,6 +831,7 @@ async function loadArchived() {
     const rx = perf();
     state.archived = new Map(snap.cards.filter((c) => c.archived && !state.cards.has(c.id)).map((c) => [c.id, { view: c, rx }]));
   } catch (err) {
+    if (state.boardId !== boardId) return;
     toast(errorText(err), 'error');
   }
   update();
@@ -775,14 +885,18 @@ async function setCover(cardId, token) {
 // so the manager never waits on the socket.
 async function labelCall(fn) {
   const d = state.dialog;
+  const generation = boardGeneration, boardId = state.boardId;
   if (d?.kind === 'labels') { state.dialog = { ...d, busy: true, error: null }; update(); }
   try {
     await fn();
-    const res = await api.labels(state.boardId);
+    if (generation !== boardGeneration) return false;
+    const res = await api.labels(boardId);
+    if (generation !== boardGeneration) return false;
     if (state.board) state.board = { ...state.board, labels: res.labels };
     if (state.dialog?.kind === 'labels') state.dialog = { kind: 'labels', busy: false, error: null };
     return true;
   } catch (err) {
+    if (generation !== boardGeneration) return false;
     if (state.dialog?.kind === 'labels') state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
     else toast(errorText(err), 'error');
     return false;
@@ -801,6 +915,7 @@ async function openDetail(cardId, section = null) {
 }
 
 async function refreshDetail(cardId) {
+  if (!cardId || state.detail?.cardId !== cardId) return;
   try {
     const data = await api.card(cardId);
     if (state.detail?.cardId !== cardId) return;
@@ -890,10 +1005,13 @@ function openFromHash() {
 async function withBusy(key, fn) {
   if (state.busy.has(key)) return undefined;
   state.busy.add(key);
+  const generation = boardGeneration;
   update();
   try {
-    return await fn();
+    const result = await fn();
+    return generation === boardGeneration ? result : undefined;
   } catch (err) {
+    if (generation !== boardGeneration) return undefined;
     toast(errorText(err), 'error');
     if (err.code === 'VERSION_CONFLICT' || err.code === 'ILLEGAL_TRANSITION') refreshBoardCard(err);
     if (err.code === 'ALREADY_ANSWERED' && state.detail) refreshDetail(state.detail.cardId);
@@ -911,6 +1029,7 @@ function refreshBoardCard() {
 
 function applyCard(res) {
   if (!res?.card) return;
+  if (res.card.board_id && res.card.board_id !== state.boardId) return;
   if (res.card.archived) state.archived?.set(res.card.id, { view: res.card, rx: perf() });
   else state.cards.set(res.card.id, { view: res.card, rx: perf() });
   state.cardsRev += 1;
@@ -1032,6 +1151,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
   if (kind === 'integ-start') return connectIntegration(form.dataset.provider, 'app_install', takeInput(form));
@@ -1070,15 +1190,20 @@ async function submitDialogForm(form, submitter) {
   const cardId = form.dataset.card;
   const fd = new FormData(form);
   const run = async (fn, doneText) => {
-    state.dialog = { ...d, busy: true, error: null };
+    const generation = boardGeneration;
+    const submitted = { ...d, busy: true, error: null };
+    state.dialog = submitted;
     update();
     try {
-      applyCard(await fn());
-      state.dialog = null;
+      const res = await fn();
+      if (generation !== boardGeneration) return;
+      applyCard(res);
+      if (state.dialog === submitted) state.dialog = null;
       if (doneText) toast(doneText);
-      if (state.detail?.cardId === cardId) refreshDetailSoon(cardId);
+      if (cardId && state.detail?.cardId === cardId) refreshDetailSoon(cardId);
     } catch (err) {
-      state.dialog = state.dialog ? { ...state.dialog, busy: false, error: errorText(err) } : null;
+      if (generation !== boardGeneration) return;
+      if (state.dialog === submitted) state.dialog = { ...submitted, busy: false, error: errorText(err) };
     }
     update();
   };
@@ -1187,7 +1312,7 @@ function runPalette(item, { give = false } = {}) {
 
 function paletteKeydown(e) {
   const d = state.dialog;
-  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: state.me?.member?.role === 'viewer', filters: state.filters }).length;
+  const n = paletteResults(d, { entries: buildModel().entries, view: state.view, readOnly: boardReadOnly(), filters: state.filters }).length;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (!n) return;
@@ -1208,7 +1333,7 @@ function paletteKeydown(e) {
 let pendingSeq = 0;
 
 function openQuickAdd() {
-  if (state.me?.member?.role === 'viewer' || state.view !== 'board') return false;
+  if (boardReadOnly() || state.view !== 'board') return false;
   state.quickAdd = { open: true, seed: '', confirm: null, keep: false };
   renderNow();
   const ta = root.querySelector('.quickadd-input');
@@ -1226,6 +1351,8 @@ function closeQuickAdd() {
 // card then replaces each placeholder. A failure removes it and hands the text
 // back in the field.
 async function createQuick(titles, keep) {
+  if (boardReadOnly()) return;
+  const generation = boardGeneration, boardId = state.boardId;
   const prefix = state.board?.key_prefix ?? null;
   const memberId = state.me?.member?.id ?? null;
   const temps = titles.map((t) => pendingCard(t, ++pendingSeq, { prefix, memberId }));
@@ -1235,11 +1362,14 @@ async function createQuick(titles, keep) {
   update();
   const failed = [];
   for (const v of temps) {
+    if (generation !== boardGeneration) return;
     try {
-      const res = await api.createCard(state.boardId, { title: v.title });
+      const res = await api.createCard(boardId, { title: v.title });
+      if (generation !== boardGeneration) return;
       state.cards.delete(v.id);
       applyCard(res);
     } catch (err) {
+      if (generation !== boardGeneration) return;
       state.cards.delete(v.id);
       failed.push(v.title);
       toast(`Couldn't add “${v.title}”: ${errorText(err)}`, 'error');
@@ -1276,6 +1406,7 @@ function onPaste(e) {
 }
 
 async function openNewCard() {
+  if (boardReadOnly()) return;
   state.dialog = { kind: 'new', repos: state.repos };
   update();
   const repos = await loadRepos();
@@ -1293,6 +1424,7 @@ function say(text) {
 }
 
 function moveCards(ids, column, { flipFrom = null } = {}) {
+  if (boardReadOnly()) return { moves: [], skipped: [] };
   const plan = planMoves(ids, viewOf, column);
   const summary = moveSummary(plan, column);
   say(summary);
@@ -1367,6 +1499,15 @@ function onClick(e) {
   const action = el.dataset.action;
   const cardId = el.dataset.card;
   switch (action) {
+    case 'manage-boards': manageBoards(); return;
+    case 'new-board': state.dialog = { kind: 'new-board' }; update(); return;
+    case 'rename-board': case 'archive-board': {
+      const b = state.boards.find((b) => b.id === el.dataset.board);
+      if (b) { state.dialog = { kind: action, id: b.id, name: b.name }; update(); }
+      return;
+    }
+    case 'restore-board': restoreBoard(el.dataset.board); return;
+    case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
@@ -1486,6 +1627,8 @@ function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el) return;
   const what = el.dataset.change;
+  if (what === 'board') { switchBoard(el.value); return; }
+  if (what === 'integ-board') { setIntegrationBoard(el.dataset.conn, el.value); return; }
   if (what === 'give-target' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, target: el.value }; loadPreview(); }
   if (what === 'give-repo' && state.dialog?.kind === 'give') {
     const repo = state.repos?.find((r) => r.id === el.value);
@@ -1586,7 +1729,7 @@ function onKeydown(e) {
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
   if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'n' && state.auth === 'ok' && state.board && !root.querySelector('dialog[open]')) {
     e.preventDefault();
-    if (state.me?.member?.role !== 'viewer' && !openQuickAdd()) openNewCard();
+    if (!boardReadOnly() && !openQuickAdd()) openNewCard();
     return;
   }
   if (!typing && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && state.view !== 'dashboard' && !root.querySelector('dialog[open]')) {

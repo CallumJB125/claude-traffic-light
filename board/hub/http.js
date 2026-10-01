@@ -317,6 +317,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
     route('DELETE', '/api/teams/:team_id', ({ member, body, ip, ident }) => teams.remove(member, body, { ip, cred: ident.cred }));
     route('POST', '/api/teams/:team_id/boards', ({ member, body, ip }) => teams.createBoard(member, body, { ip }));
+    route('GET', '/api/teams/:team_id/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
     route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
     route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
     route('DELETE', '/api/teams/:team_id/members/:member_id', ({ member, params, ip }) => teams.removeMember(member, params.member_id, { ip }));
@@ -339,6 +340,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
+  route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
+  route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
+  route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
+  route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
+  route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }));
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body }) => api.createLabel(member, params.board_id, body));
@@ -456,6 +462,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       const patch = {};
       if (body.autonomy !== undefined) patch.autonomy = body.autonomy;
       if (body.config !== undefined) patch.config = body.config;
+      if (body.target_board_id !== undefined) patch.target_board_id = body.target_board_id;
       return { connection: integrations.setSettings(params.id, patch, { memberId: member.id }) };
     });
     route('DELETE', '/api/integrations/:id', ({ member, params }) => {

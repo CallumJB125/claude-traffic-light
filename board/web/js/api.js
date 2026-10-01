@@ -57,6 +57,11 @@ export const api = {
   // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
   methods: () => call('GET', '/api/auth/methods'),
   setupAccount: () => mut('POST', '/api/account/setup'),
+  boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
+  createBoard: (body) => mut('POST', '/api/boards', body),
+  renameBoard: (id, name) => mut('PATCH', `/api/boards/${enc(id)}`, { name }),
+  archiveBoard: (id) => mut('POST', `/api/boards/${enc(id)}/archive`),
+  restoreBoard: (id) => mut('POST', `/api/boards/${enc(id)}/restore`),
   signout: () => mut('POST', '/api/auth/signout'),
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
@@ -116,6 +121,10 @@ export function errorText(err) {
     case 'ALREADY_ANSWERED': return `Already answered by ${err.extra?.answered_by?.name ?? err.extra?.answered_by ?? 'a teammate'}.`;
     case 'VERSION_CONFLICT': return 'Someone changed this card a moment ago. It has been refreshed; try again.';
     case 'CONFLICT':
+      if (err.extra?.reason === 'PREFIX_TAKEN') return 'This key prefix is already used by another board. Choose a different prefix or leave it blank.';
+      if (err.extra?.reason === 'LAST_ACTIVE_BOARD') return 'Keep at least one active board. Create or restore another board first.';
+      if (err.extra?.reason === 'ACTIVE_RUN') return 'Stop active runs before archiving this board.';
+      if (err.extra?.reason === 'BOARD_ARCHIVED') return 'This board is archived and read-only. Restore it before making changes.';
       if (err.extra?.reason === 'ARCHIVED') return 'This card is archived. Restore it first.';
       if (err.extra?.reason === 'RUN_ACTIVE') return 'Stop, cancel or finish the run before archiving.';
       if (err.extra?.reason === 'TOO_MANY_CARDS') return 'That label is on too many cards to change at once.';

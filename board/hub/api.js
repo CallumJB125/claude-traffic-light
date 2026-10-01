@@ -14,7 +14,7 @@ import { cardView, cardDetail, boardSnapshot, publicLogin, labelDef, EMAIL_ONLY,
 import { feedEvent, isFeedKind } from './hub.js';
 import { can } from './permissions.js';
 import { limitOrThrow } from './ratelimit.js';
-import { quotaFor } from './identity/teams.js';
+import { quotaFor, teamName, createTeamBoard } from './identity/teams.js';
 
 const ACTION_EVENTS = {
   dispatch: 'dispatch', cancel: 'cancel', stop: 'stop', retry: 'retry', take_over: 'take_over', hand_over: 'hand_over',
@@ -90,10 +90,66 @@ export class Api {
     if (!this.hub.isAdmin(member)) throw new HubError('FORBIDDEN', 'admin only');
   }
 
+  writableBoard(boardId) {
+    if (this.hub.board(boardId)?.archived_at) throw new HubError('CONFLICT', 'this board is archived: restore it first', { reason: 'BOARD_ARCHIVED' });
+  }
+
+  withWritableBoard(boardId, fn) {
+    return this.hub.withBoard(boardId, () => { this.writableBoard(boardId); return fn(); });
+  }
+
+  listBoards(member, { includeArchived = false } = {}) {
+    return { boards: this.hub.boardList(member.org_id, { includeArchived }) };
+  }
+
+  createBoard(member, body) {
+    return createTeamBoard(this.hub, member, body, (id) => this.audit(member.id, 'board.create', id));
+  }
+
+  updateBoard(member, boardId, body) {
+    if (!can(member, 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
+    this.boardFor(member, boardId);
+    const name = teamName(body.name);
+    return this.withWritableBoard(boardId, () => this.hub.txn(() => {
+      if (!can(this.hub.activeMember(member.id), 'board.rename')) throw new HubError('FORBIDDEN', 'only admins can rename boards');
+      const before = this.hub.board(boardId);
+      if (before.name !== name) {
+        this.db.run('UPDATE boards SET name = ? WHERE id = ?', name, boardId);
+        this.audit(member.id, 'board.rename', boardId);
+        this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind: 'board.rename', payload: { name: [before.name, name] } });
+        this.hub.later(() => this.hub.broadcastBoards(member.org_id));
+      }
+      return { board: this.hub.boardList(member.org_id).find((b) => b.id === boardId) };
+    }));
+  }
+
+  setBoardArchived(member, boardId, archived) {
+    if (!can(member, 'board.archive')) throw new HubError('FORBIDDEN', 'only admins can archive or restore boards');
+    this.boardFor(member, boardId);
+    return this.hub.withBoard(boardId, () => this.hub.txn(() => {
+      if (!can(this.hub.activeMember(member.id), 'board.archive')) throw new HubError('FORBIDDEN', 'only admins can archive or restore boards');
+      const board = this.hub.board(boardId);
+      if (!!board.archived_at === archived) return { board: this.hub.boardList(member.org_id, { includeArchived: true }).find((b) => b.id === boardId) };
+      if (archived) {
+        if (this.db.get('SELECT COUNT(*) AS n FROM boards WHERE org_id = ? AND archived_at IS NULL', member.org_id).n <= 1) throw new HubError('CONFLICT', 'the last active board cannot be archived', { reason: 'LAST_ACTIVE_BOARD' });
+        if (this.db.get(`SELECT 1 AS x FROM cards c LEFT JOIN runs r ON r.card_id = c.id
+          WHERE c.board_id = ? AND (r.ended_at IS NULL AND r.id IS NOT NULL OR c.active_run_id IS NOT NULL
+          OR c.run_state IN ('queued','claimed','running','quiet','blocked','parked','suspended','reconnecting','unresponsive','orphaned','handing_over')) LIMIT 1`, boardId)) throw new HubError('CONFLICT', 'stop active runs before archiving this board', { reason: 'ACTIVE_RUN' });
+      }
+      const at = archived ? this.hub.iso() : null;
+      this.db.run('UPDATE boards SET archived_at = ? WHERE id = ?', at, boardId);
+      const kind = archived ? 'board.archive' : 'board.restore';
+      this.audit(member.id, kind, boardId);
+      this.hub.journal({ board_id: boardId, actor_kind: 'member', actor_id: member.id, kind, payload: { archived_at: at } });
+      this.hub.later(() => this.hub.broadcastBoards(member.org_id));
+      return { board: this.hub.boardList(member.org_id, { includeArchived: true }).find((b) => b.id === boardId) };
+    }));
+  }
+
   // ── reads ─────────────────────────────────────────────────────────────────
   me(member) {
     const org = this.db.get('SELECT id, name FROM orgs WHERE id = ?', member.org_id);
-    const boards = this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', member.org_id);
+    const boards = this.hub.boardList(member.org_id);
     return { member: publicMember(member), org, boards };
   }
 
@@ -175,7 +231,7 @@ export class Api {
     const via = this.hub.viaScope.getStore();
     const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
       ? { connection_id: via.connection_id, request_id: body.request_id } : null;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, () => {
       const id = randomUUID();
       const now = this.hub.iso();
       let prior = null;
@@ -219,7 +275,7 @@ export class Api {
   async patchCard(member, cardId, body) {
     this.requireWrite(member);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, () => {
       const row = this.hub.card(cardId);
       if (row.archived_at) throw archivedError();
       if (!Number.isSafeInteger(body.version) || body.version !== row.version) throw new HubError('VERSION_CONFLICT', 'card changed since you loaded it', { version: row.version });
@@ -284,7 +340,7 @@ export class Api {
   async archive(member, cardId, body) {
     this.requireWrite(member);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, () => {
       const row = this.hub.card(cardId);
       if (!row.archived_at) {
         if (row.run_state != null && row.run_state !== 'done' && row.run_state !== 'failed') {
@@ -304,7 +360,7 @@ export class Api {
   async restore(member, cardId, body) {
     this.requireWrite(member);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, () => {
       const row = this.hub.card(cardId);
       if (row.archived_at) {
         this.hub.txn(() => {
@@ -338,7 +394,7 @@ export class Api {
     const name = labelName(body.name);
     const color = colorToken(body.color, 'color');
     const description = 'description' in body ? str(body.description, 200, 'description') : undefined;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, () => {
       const old = this.labelByName(boardId, name);
       if (old) return { label: this.updateLabelLocked(member, boardId, old, { color, description }, body.request_id).label };
       const plan = this.db.get('SELECT o.plan FROM orgs o JOIN boards b ON b.org_id = o.id WHERE b.id = ?', boardId).plan;
@@ -366,7 +422,7 @@ export class Api {
       color: 'color' in body ? colorToken(body.color, 'color') : undefined,
       description: 'description' in body ? str(body.description, 200, 'description') : undefined,
     };
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, () => {
       const old = this.labelByName(boardId, name);
       if (!old) throw new HubError('NOT_FOUND', 'label not found');
       return this.updateLabelLocked(member, boardId, old, patch, body.request_id);
@@ -403,7 +459,7 @@ export class Api {
     this.requireLabel(member, 'label.manage');
     if (isReservedLabel(name)) throw new HubError('VALIDATION', 'via: and policy labels are reserved', { reason: 'RESERVED_LABEL' });
     const strip = body.strip === true;
-    return this.hub.withBoard(boardId, () => {
+    return this.withWritableBoard(boardId, () => {
       const old = this.labelByName(boardId, name);
       if (!old) throw new HubError('NOT_FOUND', 'label not found');
       const hits = strip ? this.labelRewrite(boardId, old.name, null) : [];
@@ -468,7 +524,7 @@ export class Api {
     const type = ACTION_EVENTS[action];
     if (!type) throw new HubError('NOT_FOUND', `unknown action ${action}`);
     const row0 = this.cardFor(member, cardId);
-    return this.hub.withBoard(row0.board_id, () => this.actionLocked(member, cardId, action, type, body));
+    return this.withWritableBoard(row0.board_id, () => this.actionLocked(member, cardId, action, type, body));
   }
 
   actionLocked(member, cardId, action, type, body) {
@@ -565,7 +621,7 @@ export class Api {
     if (!['allow', 'deny'].includes(body.decision)) throw new HubError('VALIDATION', 'decision must be allow or deny');
     const scope = body.scope ?? 'once';
     if (!['once', 'run'].includes(scope)) throw new HubError('VALIDATION', 'scope must be once or run');
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, () => {
       const pr = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
       if (!['open', 'parked'].includes(pr.state)) {
         throw new HubError('ALREADY_ANSWERED', 'another approver answered first', { answered_by: this.hub.memberName(pr.answered_by), state: pr.state });
@@ -613,7 +669,7 @@ export class Api {
     const row0 = this.cardFor(member, cardId);
     if (!this.hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot comment');
     const text = str(body.body, 10_000, 'body', { required: true });
-    return this.hub.withBoard(row0.board_id, () => {
+    return this.withWritableBoard(row0.board_id, () => {
       if (this.hub.card(cardId).archived_at) throw archivedError();
       let id;
       this.hub.txn(() => {
@@ -680,9 +736,11 @@ export class Api {
     this.boardFor(member, boardId);
     const repo = this.hub.repo(body.repo_id);
     if (!repo || repo.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'repo not found');
-    this.db.run('INSERT OR IGNORE INTO board_repos (board_id, repo_id) VALUES (?, ?)', boardId, repo.id);
-    this.audit(member.id, 'board.repo.add', `${boardId}:${repo.id}`);
-    return { ok: true };
+    return this.withWritableBoard(boardId, () => {
+      this.db.run('INSERT OR IGNORE INTO board_repos (board_id, repo_id) VALUES (?, ?)', boardId, repo.id);
+      this.audit(member.id, 'board.repo.add', `${boardId}:${repo.id}`);
+      return { ok: true };
+    });
   }
 
   // Access maps members by email only (any IdP, e.g. the one-time PIN), so a

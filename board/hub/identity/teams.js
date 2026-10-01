@@ -70,6 +70,40 @@ export function backfillSlugs(db) {
 
 const keyPrefix = (name) => (String(name).normalize('NFKD').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'BRD');
 
+export function boardPrefix(db, orgId, name, given) {
+  const base = given ?? keyPrefix(name);
+  if (typeof base !== 'string' || !/^[A-Z]{1,10}$/.test(base)) throw new HubError('VALIDATION', 'key_prefix must be 1–10 capital letters');
+  const taken = (prefix) => !!db.get('SELECT 1 AS x FROM boards WHERE org_id = ? AND key_prefix = ?', orgId, prefix);
+  if (!taken(base)) return base;
+  if (given !== undefined) throw new HubError('CONFLICT', 'that key prefix is already used in this team', { reason: 'PREFIX_TAKEN' });
+  // Letter suffixes preserve the prefix contract (ALP, ALPA, ALPB, …).
+  for (let n = 1; n < 100_000; n++) {
+    let x = n, suffix = '';
+    while (x) { x -= 1; suffix = String.fromCharCode(65 + x % 26) + suffix; x = Math.floor(x / 26); }
+    const prefix = `${base.slice(0, 10 - suffix.length)}${suffix}`;
+    if (!taken(prefix)) return prefix;
+  }
+  throw new HubError('CONFLICT', 'no free key prefix: choose another board name');
+}
+
+export function createTeamBoard(hub, member, body, audit) {
+  if (!can(member, 'board.create')) throw new HubError('FORBIDDEN', 'only admins can add boards');
+  const name = teamName(body.name);
+  return hub.txn(() => {
+    const org = hub.db.get('SELECT * FROM orgs WHERE id = ? AND deleted_at IS NULL', member.org_id);
+    if (!org) throw new HubError('NOT_FOUND', 'team not found');
+    const prefix = boardPrefix(hub.db, org.id, name, body.key_prefix);
+    const limit = quotaFor(org.plan, 'boards');
+    if (hub.db.get('SELECT COUNT(*) AS n FROM boards WHERE org_id = ?', org.id).n >= limit) throw quotaError('boards', limit);
+    const board = { id: randomUUID(), org_id: org.id, name, key_prefix: prefix };
+    hub.db.insert('boards', board);
+    audit(board.id);
+    hub.journal({ board_id: board.id, actor_kind: 'member', actor_id: member.id, kind: 'board.create', payload: { name, key_prefix: prefix } });
+    hub.later(() => hub.broadcastBoards(org.id));
+    return { board: { id: board.id, name, key_prefix: prefix, archived_at: null } };
+  });
+}
+
 export const publicTeam = (o) => ({ id: o.id, name: o.name, slug: o.slug, plan: o.plan });
 
 export class Teams {
@@ -135,6 +169,7 @@ export class Teams {
       this.db.insert('boards', board);
       this.db.insert('members', member);
       this.audit('team.create', member, { ip, target: org.id, detail: { slug: org.slug } });
+      this.hub.journal({ board_id: board.id, actor_kind: 'member', actor_id: member.id, kind: 'board.create', payload: { name, key_prefix: board.key_prefix } });
     });
     return { team: publicTeam(this.org(org.id)), board: { id: board.id, name: board.name, key_prefix: board.key_prefix } };
   }
@@ -217,19 +252,7 @@ export class Teams {
 
   /** POST /api/teams/:team_id/boards {name, key_prefix?} (admin). */
   createBoard(member, body, { ip }) {
-    if (!can(member, 'board.create')) throw new HubError('FORBIDDEN', 'only admins can add boards');
-    const o = this.org(member.org_id);
-    const name = teamName(body.name);
-    const prefix = body.key_prefix ?? keyPrefix(name);
-    if (typeof prefix !== 'string' || !/^[A-Z]{1,10}$/.test(prefix)) throw new HubError('VALIDATION', 'key_prefix must be 1–10 capital letters');
-    const limit = quotaFor(o.plan, 'boards');
-    if (this.count('SELECT COUNT(*) AS n FROM boards WHERE org_id = ?', o.id) >= limit) throw quotaError('boards', limit);
-    const board = { id: randomUUID(), org_id: o.id, name, key_prefix: prefix };
-    this.hub.txn(() => {
-      this.db.insert('boards', board);
-      this.audit('board.create', member, { ip, target: board.id });
-    });
-    return { board: { id: board.id, name, key_prefix: prefix } };
+    return createTeamBoard(this.hub, member, body, (id) => this.audit('board.create', member, { ip, target: id }));
   }
 
   // ── members ───────────────────────────────────────────────────────────────

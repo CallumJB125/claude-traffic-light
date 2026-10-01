@@ -116,6 +116,11 @@ function connectedCard(conn, m) {
     h('section', { class: 'integ-section', 'aria-label': 'What it may do on its own' },
       h('h4', null, 'On its own'),
       autonomyRows(conn, connector, m.canEdit, m.busy.has(`integ:${conn.id}`))),
+    h('section', { class: 'integ-section' },
+      h('label', { class: 'field' }, h('span', null, 'New cards go to'),
+        m.canEdit ? h('select', { class: 'input input-sm', 'aria-label': `Target board for ${connector?.name ?? conn.provider}`, 'data-change': 'integ-board', 'data-conn': conn.id, disabled: m.busy.has(`integ:${conn.id}`) || null },
+          (m.boards ?? []).filter((b) => !b.archived_at || b.id === conn.target_board_id).map((b) => h('option', { key: b.id, value: b.id, selected: b.id === conn.target_board_id }, `${b.name}${b.archived_at ? ' (Archived — intake paused)' : ''}`)))
+          : h('span', null, (m.boards ?? []).find((b) => b.id === conn.target_board_id)?.name ?? 'Team board'))),
     connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
     h('div', { class: 'integ-card-actions' },
       m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
@@ -291,13 +296,14 @@ export function connectWindowTarget(provider, bind, userAgent) {
 export function integrationsScreen(model) {
   const m = model.integrations;
   const main = (...kids) => h('main', { class: 'integview', id: 'board', 'aria-label': 'Integrations' }, ...kids);
-  if (!m || m.status === 'loading' && !m.data) return main(h('p', { class: 'muted', role: 'status' }, 'Loading integrations…'));
+  if (!m || !m.data && m.status !== 'error') return main(h('p', { class: 'muted', role: 'status' }, 'Loading integrations…'));
   if (m.status === 'error' && !m.data) {
     return main(h('div', { class: 'callout callout-warn', role: 'alert' }, h('p', null, m.error ?? 'Couldn’t load integrations.'),
       h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-reload' }, 'Try again')));
   }
   const data = m.data;
   const vm = {
+    boards: model.boards ?? model.me?.boards ?? [],
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
     canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,

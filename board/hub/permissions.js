@@ -30,6 +30,8 @@ export const MATRIX = Object.freeze({
   'label.write': WRITERS,        // board label registry: create, recolour, describe (D91)
   'label.manage': ADMINS,        // … rename and delete: both rewrite cards across the board
   'board.create': ADMINS,
+  'board.rename': ADMINS,
+  'board.archive': ADMINS,
   'repo.manage': ADMINS,
   'team.settings': ADMINS,       // rename
   'invite.create': ADMINS,

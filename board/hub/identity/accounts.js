@@ -582,7 +582,7 @@ export class Accounts {
     if (this.db.get('SELECT 1 AS x FROM orgs WHERE slug IS NULL LIMIT 1')) backfillSlugs(this.db);
     const rows = this.db.all(`SELECT o.id, o.name, o.slug, o.plan, m.role, m.id AS member_id FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.removed_at IS NULL AND o.deleted_at IS NULL ORDER BY o.name, o.id`, userId);
-    return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
+    return rows.map((t) => ({ ...t, boards: this.hub.boardList(t.id) }));
   }
 
   /** GET /api/account → {user, identities, teams, pending_invites} (invites for the user's verified addresses, P3). */

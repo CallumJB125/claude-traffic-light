@@ -240,6 +240,10 @@ export class Hub extends EventEmitter {
   activeMember(id) { return id ? this.db.get('SELECT * FROM members WHERE id = ? AND removed_at IS NULL', id) : null; }
   memberName(id) { return this.member(id)?.display_name ?? null; }
   board(id) { return this.db.get('SELECT * FROM boards WHERE id = ?', id); }
+
+  boardList(orgId, { includeArchived = false } = {}) {
+    return this.db.all(`SELECT id, name, key_prefix, archived_at FROM boards WHERE org_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'} ORDER BY name, id`, orgId);
+  }
   repo(id) { return id ? this.db.get('SELECT * FROM repos WHERE id = ?', id) : null; }
   device(id) { return id ? this.db.get('SELECT * FROM devices WHERE id = ?', id) : null; }
   pendingDispatch(cardId) { return this.db.get("SELECT * FROM dispatches WHERE card_id = ? AND state = 'pending'", cardId); }
@@ -318,6 +322,7 @@ export class Hub extends EventEmitter {
   apply(cardId, event, { ctx = {}, actor = null, device = null, pre = null, extra = {} } = {}) {
     const row = this.card(cardId);
     if (!row) return { ok: false, error: { code: 'NOT_FOUND', message: 'card not found' } };
+    if (this.board(row.board_id)?.archived_at) return { ok: false, error: { code: 'CONFLICT', message: 'this board is archived: restore it first', reason: 'BOARD_ARCHIVED' } };
     const card = fromDb(row);
     const res = step(card, event, ctx);
     if (!res.ok) return res;
@@ -967,6 +972,16 @@ export class Hub extends EventEmitter {
     for (const b of this.browsers) if (b.boardId === boardId) b.send({ type: 'board.labels', board_id: boardId, labels });
   }
 
+  broadcastBoards(orgId) {
+    const boards = this.boardList(orgId, { includeArchived: true });
+    for (const browser of this.browsers) {
+      browser.recheck();
+      if (browser.ws.readyState === 1 && browser.liveCandidates().some((m) => m.org_id === orgId)) {
+        browser.send({ type: 'team.boards', org_id: orgId, boards });
+      }
+    }
+  }
+
   broadcastEvent(cardId, eventId) {
     const row = this.card(cardId);
     const ev = this.db.get('SELECT * FROM events WHERE id = ?', eventId);
@@ -1127,7 +1142,7 @@ export class Hub extends EventEmitter {
   }
 
   async #pollMerges() {
-    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review' AND archived_at IS NULL");
+    const rows = this.db.all("SELECT * FROM cards WHERE run_state = 'in_review' AND archived_at IS NULL AND board_id IN (SELECT id FROM boards WHERE archived_at IS NULL)");
     for (const row of rows) {
       const ev = this.db.get("SELECT * FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", row.id);
       const number = prNumberOf(ev?.ref);
@@ -1148,15 +1163,14 @@ export class Hub extends EventEmitter {
         }
         continue;
       }
-      this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
-      if (pull.merged || pull.state === 'closed') {
-        await this.withBoard(row.board_id, () => {
+      await this.withBoard(row.board_id, () => {
+        if (this.board(row.board_id)?.archived_at || this.card(row.id)?.archived_at) return;
+        this.prStatus.set(row.id, { number, url: pull.html_url, state: pull.merged ? 'merged' : pull.state, merged_by: pull.merged_by, merged_at: pull.merged_at });
+        if (pull.merged || pull.state === 'closed') {
           const r = this.apply(row.id, { type: pull.merged ? 'pr_merged' : 'pr_closed', pr: number, by: pull.merged_by ?? null });
           if (!r.ok) this.log.warn('merge poll step failed', { card_id: row.id, code: r.error.code });
-        });
-      } else {
-        this.broadcastCard(row.id);
-      }
+        } else this.broadcastCard(row.id);
+      });
     }
   }
 

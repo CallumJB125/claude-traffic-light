@@ -28,6 +28,10 @@ export const JOURNAL_KINDS = Object.freeze([
   'card.archive',       // {request_id, archived_at, archived_by} (D94)
   'card.restore',       // {request_id}
   'device.outbox',      // {reason:'runner_acked'|'gap'|'reset', from, to, outbox_id?}: a device's last_seq_acked moved other than by an ack (board_id NULL)
+  'board.create',       // {name, key_prefix}; team-wide board lifecycle
+  'board.rename',       // {name: [before, after]}; keys and links never change
+  'board.archive',      // {archived_at}; board becomes read-only
+  'board.restore',      // {archived_at: null}
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

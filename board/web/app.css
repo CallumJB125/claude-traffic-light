@@ -235,6 +235,11 @@ select.input { appearance: none; padding-right: 28px; background-image: linear-g
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand-mark { width: 30px; height: 33px; flex: none; }
 .brand-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.board-switcher { max-width: 180px; }
+.board-manager-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.board-manager-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.board-archived { margin: 0 24px 12px; }
+@media (max-width: 760px) { .board-switcher { max-width: 125px; } .brand-text { display: none; } .board-manager-row { align-items: flex-start; flex-direction: column; } }
 .brand-board { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-key { color: var(--faint); font-size: var(--text-sm); }
 .topbar-status { margin-right: auto; }

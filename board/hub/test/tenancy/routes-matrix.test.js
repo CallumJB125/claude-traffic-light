@@ -40,6 +40,7 @@ const MATRIX = {
   'PATCH /api/teams/:team_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}`, body: { name: 'pwned' } },
   'DELETE /api/teams/:team_id': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}`, body: { confirm_slug: 'x' } },
   'POST /api/teams/:team_id/boards': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/boards`, body: { name: 'pwned' } },
+  'GET /api/teams/:team_id/boards': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/boards`, alt: (fx) => [`/api/teams/${fx.B.team}/boards?include_archived=1`] },
   'GET /api/teams/:team_id/members': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/members` },
   'PATCH /api/teams/:team_id/members/:member_id': {
     kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/members/${fx.B.s}`, body: { role: 'admin' },
@@ -74,6 +75,11 @@ const MATRIX = {
     alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],
   },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, alt: (fx) => [`/api/boards/${fx.B.board}?include_archived=1`] },
+  'GET /api/boards': { kind: 'team' },
+  'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
+  'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
+  'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
+  'POST /api/boards/:board_id/restore': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/restore` },
   'GET /api/boards/:board_id/alerts': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/alerts` },
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
   'GET /api/boards/:board_id/presence': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/presence` },
@@ -113,7 +119,7 @@ const MATRIX = {
     alt: (fx) => [`/api/integrations/${fx.B.pending}/prepare`],
   },
   'POST /api/integrations/:id/authorize': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.pending}/authorize` },
-  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} }, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
+  'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: (fx) => ({ autonomy: {}, target_board_id: fx.B.board }), alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
   // Identity links (D98): B's connection (and B's member) from team A or no team.

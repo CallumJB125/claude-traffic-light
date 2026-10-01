@@ -251,6 +251,38 @@ export function dialog(model) {
     case 'palette': return paletteDialog(d, model);
     case 'labels': return labelsDialog(d, model);
     case 'feedback': return feedbackDialog(d, model);
+    case 'boards': return boardsDialog(d, model);
+    case 'new-board': case 'rename-board': case 'archive-board': return boardDialog(d);
     default: return null;
   }
+}
+
+function boardsDialog(d, model) {
+  const boards = model.boards ?? [];
+  const active = boards.filter((b) => !b.archived_at).length;
+  return shell('boards', 'Boards', h('div', { class: 'modal-body board-manager' },
+    h('p', { class: 'hint' }, 'Everyone on the team can see every board. Archived boards stay read-only until restored.'),
+    h('button', { type: 'button', class: 'btn btn-primary', 'data-action': 'new-board' }, 'New board'),
+    boards.map((b) => h('section', { key: b.id, class: 'board-manager-row', 'data-board': b.id },
+      h('div', null, h('strong', null, b.name), h('span', { class: 'hint num' }, ` · ${b.key_prefix}${b.archived_at ? ' · Archived' : ''}`)),
+      h('div', { class: 'board-manager-actions' },
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'switch-board', 'data-board': b.id }, 'Open'),
+        b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'restore-board', 'data-board': b.id, disabled: d.busy || null }, 'Restore')
+          : h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'rename-board', 'data-board': b.id }, 'Rename'),
+        !b.archived_at ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'archive-board', 'data-board': b.id, disabled: active <= 1 || null, title: active <= 1 ? 'Keep at least one active board' : null }, 'Archive') : null))),
+    errorLine(d)));
+}
+
+function boardDialog(d) {
+  const archive = d.kind === 'archive-board';
+  const create = d.kind === 'new-board';
+  return shell(d.kind, archive ? `Archive ${d.name}?` : create ? 'New board' : 'Rename board',
+    h('form', { class: 'modal-body', 'data-form': d.kind },
+      archive ? h('p', null, 'The board becomes read-only and leaves the switcher. Its cards and history stay available, and an admin can restore it.')
+        : field('board-name', 'Board name', h('input', { id: 'board-name', name: 'name', class: 'input', value: d.name ?? '', maxlength: '60', required: true, autofocus: true })),
+      create ? field('board-prefix', 'Card key prefix (optional)', h('input', { id: 'board-prefix', name: 'key_prefix', class: 'input num', maxlength: '10', pattern: '[A-Z]{1,10}', placeholder: 'Chosen from the name', autocomplete: 'off' }), 'A unique prefix makes card keys unambiguous within your team.') : null,
+      errorLine(d),
+      h('div', { class: 'modal-foot' },
+        h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
+        h('button', { type: 'submit', class: 'btn btn-primary', disabled: d.busy || null, 'aria-busy': d.busy ? 'true' : null }, archive ? 'Archive board' : create ? 'Create board' : 'Save name'))));
 }

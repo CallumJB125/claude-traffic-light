@@ -201,6 +201,7 @@ export const SHAPES = Object.freeze({
     'card.upsert': { board_id: 'string', card: 'object' },
     'card.remove': { board_id: 'string', card_id: 'string' },
     'board.labels': { board_id: 'string', labels: 'array' },
+    'team.boards': { org_id: 'string', boards: 'array' },
     'lease.tick': { card_id: 'string', live: 'object', state_age_ms: 'int' },
     'event.append': { card_id: 'string', event: 'object' },
     'team.presence': { members: 'array' },

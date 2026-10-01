@@ -377,7 +377,28 @@ Soft delete: from that moment every route for the team, its boards and cards ans
 
 ### `POST /api/teams/:id/boards`
 
-Admin. `{name, key_prefix?}` (`key_prefix`: 1–10 capital letters) → `{board:{id, name, key_prefix}}`.
+Admin. `{name, key_prefix?}` (`key_prefix`: 1–10 capital letters) → `{board:{id, name, key_prefix, archived_at:null}}`. Prefixes are unique within a team, including archived boards. Without an explicit prefix the hub derives one from the name and adds letter suffixes when needed (`ALP`, `ALPA`, `ALPB`). An explicit collision is `409 CONFLICT {reason:'PREFIX_TAKEN'}`. The existing total-board quota includes archived boards.
+
+### Board lifecycle and selection
+
+Release 1 boards are **team-wide**: every team role can see every board, including archived boards opened explicitly. No private board grants are introduced here.
+
+| Route | Who | Request / response |
+|---|---|---|
+| `GET /api/teams/:id/boards?include_archived=1` | any team member | `{boards:[{id,name,key_prefix,archived_at}]}`; active only without the flag |
+| `GET /api/boards?include_archived=1` | any member of the selected team | same list; selected by the normal team header |
+| `POST /api/boards` | admin of selected team | same creation body and policy as `POST /api/teams/:id/boards` |
+| `PATCH /api/boards/:id` | admin | `{name}` → `{board}`; names only, keys remain unchanged |
+| `POST /api/boards/:id/archive` | admin | `{}` → `{board}`; idempotent; last active board → `409 CONFLICT {reason:'LAST_ACTIVE_BOARD'}`, active or queued runs → `{reason:'ACTIVE_RUN'}` |
+| `POST /api/boards/:id/restore` | admin | `{}` → `{board}`; idempotent |
+
+Archival checks and member mutations share the board queue, and a queued write rechecks archival before it runs. Archived boards leave `/api/me`, `/api/account` team board arrays and other active lists. Explicit snapshots, card details and journal remain readable; card, label, repo-link and lifecycle rename mutations fail `409 CONFLICT {reason:'BOARD_ARCHIVED'}` until restore. Integrations and state-machine facts cannot mutate an archived board. Audit and journal cover `board.create`, `board.rename`, `board.archive`, `board.restore`; the same transaction commits the change. `team.boards {org_id,boards}` pushes the full public board list only to authenticated members of that team.
+
+The bundled web page used by the desktop app has a board switcher and admin Boards controls for New, rename, archive and restore. Switching resets cards, selection, filters, drawer, dialogs, socket and dashboard; late replies from the previous board are ignored. The last active board is remembered separately per team and account in the browser partition. Explicit archived links open read-only.
+
+Each integration connection stores `target_board_id`; admin `PATCH /api/integrations/:id {target_board_id}` accepts only an active board in that connection's team. Existing connections migrate to their original first board; new ones start on the team's first active board. The Integrations view exposes the selection. An archived target **pauses intake** until restored or changed, without moving new work to another board. The compatibility helper `ctx.boardIds()[0]` respects the selected target; `ctx.boards()` omits archives.
+
+Migration **029** adds archival, prefix uniqueness and the connection target. A legacy duplicate prefix refuses the migration before persistent schema changes, without rewriting any card, journal, run or external link. Preview affected board IDs and card counts with **`node hub/board-prefix-audit.js <path-to-board.db>`**; the script opens SQLite read-only and prints review options. An empty board can receive an unused prefix after operator review. Boards with cards require a reviewed key/link or forward-allocation repair plan before retrying migration; no automatic rekey is performed.
 
 ### `GET /api/teams/:id/members`
 

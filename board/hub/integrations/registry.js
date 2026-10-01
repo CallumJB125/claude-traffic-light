@@ -251,6 +251,7 @@ export function createIntegrations({
     id: c.id, provider: c.provider, external_id: c.external_id, display_name: c.display_name,
     scopes: safeJson(c.scopes, []), status: c.status, health: safeJson(c.health, null),
     settings: safeJson(c.settings, {}), created_at: c.created_at,
+    target_board_id: c.target_board_id ?? null,
   });
   const consumerName = (c) => `integration:${c.provider}:${c.id}`;
 
@@ -305,6 +306,7 @@ export function createIntegrations({
       db.insert('connections', {
         id, org_id: orgId, provider, external_id: ext, display_name: display_name == null ? null : String(display_name).slice(0, 200),
         scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(stored), created_by: memberId, created_at: now(),
+        target_board_id: db.get('SELECT id FROM boards WHERE org_id = ? AND archived_at IS NULL ORDER BY rowid LIMIT 1', orgId)?.id ?? null,
       });
       // Their AAD is `<id>|<kind>|<key_id>` already: they open here and nowhere else.
       for (const r of copied) db.insert('connection_secrets', { connection_id: id, kind: r.kind, key_id: r.key_id, nonce: r.nonce, ciphertext: r.ciphertext, created_at: now() });
@@ -601,6 +603,11 @@ export function createIntegrations({
       const card = cardId ? hub.card(cardId) : null;
       return card && hub.board(card.board_id)?.org_id === c.org_id ? card : null;
     };
+    const writableCard = (cardId) => {
+      const card = cardInOrg(cardId);
+      if (!card) throw new HubError('NOT_FOUND', 'card not found');
+      api.writableBoard(card.board_id);
+    };
 
     // The newest link of `kind` this connection has on a card of its org.
     const linkedByCard = (cardId, kind) => (cardInOrg(cardId)
@@ -653,6 +660,7 @@ export function createIntegrations({
     };
 
     function link(cardId, kind, externalId, url = null) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       // One PR per card per connection: a second one (a decoy from the same
       // branch into another base) must not become a handle on the card.
@@ -673,6 +681,7 @@ export function createIntegrations({
      * kind 'pr_superseded', with its status.
      */
     function relink(cardId, kind, oldExternalId, newExternalId, url = null) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       if (String(kind) !== 'pr') throw new HubError('VALIDATION', 'only a pr link is relinked');
       const from = String(oldExternalId);
@@ -704,6 +713,7 @@ export function createIntegrations({
     // Partial updates merge: a PR event knows the state, a check suite the
     // checks, a review the review; none may clobber the others.
     function linkStatus(cardId, kind, externalId, patch) {
+      writableCard(cardId);
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       const link = db.get('SELECT status FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ? AND card_id = ?', c.id, String(kind), String(externalId), cardId);
       if (!link) throw new HubError('NOT_FOUND', 'this integration has no such link on that card');
@@ -813,7 +823,7 @@ export function createIntegrations({
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
       // the card's review.
-      if (card.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
+      if (card.archived_at || hub.board(card.board_id)?.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
       const refusal = () => notVerified(card.id, prN, repo);
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
@@ -825,7 +835,7 @@ export function createIntegrations({
         // Evidence may have changed while this waited on the board queue.
         const late = refusal();
         if (late) { audit('failed', late); return { done: false, reason: late }; }
-        if (hub.card(card.id).archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
+        if (hub.card(card.id).archived_at || hub.board(card.board_id)?.archived_at) { audit('skipped', 'archived'); return { done: false, decision: 'skipped', reason: 'archived' }; }
         const r = hub.apply(card.id, { type, pr: prN, by: byLogin }, { actor: c.id });
         if (!r.ok) return { done: false, reason: r.error.code };
         audit('auto');
@@ -834,7 +844,7 @@ export function createIntegrations({
     }
 
     const ctx = {
-      connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by },
+      connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by, target_board_id: c.target_board_id ?? null },
       system: conn.systemEvents.length ? { event: systemEvent } : null,
       secret: (kind) => secrets()[kind] ?? null,
       fetch: retryingFetch,
@@ -851,10 +861,18 @@ export function createIntegrations({
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
-      boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
+      // Existing connectors taking boardIds()[0] respect this connection's
+      // selected target. An archived target pauses intake; never reroute it.
+      boardIds: () => {
+        const current = row(c.id);
+        if (!current || current.status !== 'active') return [];
+        const ids = db.all('SELECT id FROM boards WHERE org_id = ? AND archived_at IS NULL ORDER BY rowid', c.org_id).map((b) => b.id);
+        if (current.target_board_id == null) return ids;
+        return ids.includes(current.target_board_id) ? [current.target_board_id, ...ids.filter((id) => id !== current.target_board_id)] : [];
+      },
       // What a chat picker shows: never settings, repos or anything secret.
       boards: () => db.all(`SELECT b.id, b.name FROM boards b JOIN orgs o ON o.id = b.org_id
-        WHERE b.org_id = ? AND o.deleted_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
+        WHERE b.org_id = ? AND o.deleted_at IS NULL AND b.archived_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
       // A card's face only: never its body, acceptance, labels or budget,
       // which a connector would otherwise echo into a shared channel.
       card: (cardId) => {
@@ -1907,10 +1925,11 @@ export function createIntegrations({
     /**
      * PATCH (D42 addendum C1): `autonomy` and `config` merged key by key in one
      * transaction (null deletes); provider and pinned are never reachable. One
-     * journal row names the changed keys, never a value.
+     * journal row names the changed keys, never a value. `target_board_id`
+     * selects an active board of this team outside the provider settings.
      */
     setSettings(id, patch, { memberId = null } = {}) {
-      if (!isPlainObject(patch) || Object.keys(patch).some((k) => k !== 'autonomy' && k !== 'config')) throw new HubError('VALIDATION', 'settings take autonomy and config only');
+      if (!isPlainObject(patch) || Object.keys(patch).some((k) => !['autonomy', 'config', 'target_board_id'].includes(k))) throw new HubError('VALIDATION', 'settings take autonomy, config and target_board_id only');
       if (patch.autonomy !== undefined && !isPlainObject(patch.autonomy)) throw new HubError('VALIDATION', 'autonomy must be an object');
       if (patch.config !== undefined && !isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
       return hub.txn(() => {
@@ -1920,6 +1939,11 @@ export function createIntegrations({
         if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
         const cur = safeJson(c.settings, {}) ?? {};
         const changed = { autonomy: [], config: [] };
+        const target = patch.target_board_id === undefined ? c.target_board_id : patch.target_board_id;
+        if (target !== c.target_board_id) {
+          if (typeof target !== 'string' || !db.get('SELECT 1 AS x FROM boards WHERE id = ? AND org_id = ? AND archived_at IS NULL', target, c.org_id)) throw new HubError('NOT_FOUND', 'active board not found');
+          changed.target_board_id = true;
+        }
         const autonomy = isPlainObject(cur.autonomy) ? { ...cur.autonomy } : {};
         for (const [a, m] of Object.entries(patch.autonomy ?? {})) {
           if (POISON_KEYS.includes(a)) throw new HubError('VALIDATION', `${conn.name} has no such action`);
@@ -1952,9 +1976,9 @@ export function createIntegrations({
           if (JSON.stringify(config[k]) !== JSON.stringify(v)) { config[k] = v; changed.config.push(k); }
         }
         if (patch.config !== undefined && Buffer.byteLength(JSON.stringify(config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
-        if (!changed.autonomy.length && !changed.config.length) return publicConnection(c);
+        if (!changed.autonomy.length && !changed.config.length && !changed.target_board_id) return publicConnection(c);
         const next = { ...cur, ...(changed.autonomy.length ? { autonomy } : {}), ...(changed.config.length ? { config } : {}) };
-        db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
+        db.run('UPDATE connections SET settings = ?, target_board_id = ? WHERE id = ?', JSON.stringify(next), target, id);
         hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind: 'integration.settings', payload: { connection_id: c.id, provider: c.provider, changed } });
         return publicConnection(row(id));
       });
