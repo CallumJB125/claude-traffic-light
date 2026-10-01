@@ -51,9 +51,10 @@ App-manifest flow) declares `connect.manifestForm({state, redirectUri, webhookUr
 and `connect.formHost` (one of `hosts`) instead: `/start` then returns `{form, bind}` and refuses a form whose
 `action` isn't https on exactly `formHost` or whose fields aren't strings; the web renders a real POST form the
 admin submits; the web CSP's `form-action` names each `formHost`. Every flow gets `webhookUrl` (the connection's
-id is minted at `/start`, so a manifest can name its webhook URL) and `config` (the stored `settings.config` of
-your team's active connection of this provider, for a reconnect; else `{}`). `exchange` may return `settings`
-(non-secret scalars ≤ 2 KB → `settings.config`; `autonomy` is ignored) and `next_url` (https on one of `hosts`:
+id is minted at `/start`, so a manifest can name its webhook URL) and `config` (`{...settings.config,
+...settings.provider}` of your team's newest active connection of this provider, for a reconnect; else `{}`).
+`exchange` may return `settings` (non-secret scalars ≤ 2 KB → `settings.provider`, see below; `autonomy` is
+ignored) and `next_url` (https on one of `hosts`:
 the success page's single "Continue on <name>" link, e.g. installing the app). Anything else it returns, such
 as an id or org, is ignored.
 
@@ -77,7 +78,9 @@ anything else is the 404). Nothing else runs for it: no handler, lease, rate tok
 provider's answer or your arguments, and don't count on the log's redaction); it must return `match` with exactly the same keys and values
 (Slack: `app_id` from the `oauth.v2.access` answer and `client_id`), and the recorded `external_id` if you gave one,
 else the app is refused and the row stays. It may add secret kinds (the bot token), never replace a pending one.
-Promotion keeps the id and copies the sealed secrets unchanged; `settings.pinned` = `match`, fixed for good. The
+Promotion keeps the id and copies the sealed secrets unchanged; `settings.pinned` = `match`, fixed for good, and
+`settings.provider` = exchange settings ⊕ pending settings ⊕ every `match` key ⊕ the registry's `hub_url` (so
+don't use `hub_url` as a `match` key: that answer is refused). The
 hub never deletes the app it made at the provider: the admin is told to. Such a connector has no plain
 `/start` flow (404); only the pending row's callback connects it.
 
@@ -87,12 +90,27 @@ redirectUri, connection, secrets, fetch}) → {id_token}}` (OpenID Connect, scop
 from the hub (`POST /api/integrations/<id>/identity/start`); you build the authorize URL (https on `hosts`) and
 trade the code for the raw `id_token`; the registry verifies it (RS256 against `jwksUrl`, `iss`, `aud` = the
 pinned `client_id`, `exp`/`iat`, the nonce, `workspaceClaim` = the connection's `external_id`, `sub` ~
-`subjectRe`) and writes the link. Take the client id from `connection.settings.pinned`, never `settings.config`
-(admins edit that). Throw fixed text only: `secrets` holds your app's client secret. Then, inside
+`subjectRe`) and writes the link. `connection` is `{external_id, settings: {pinned, provider}}` (frozen; no
+`config`, which admins edit): take the client id from `settings.pinned`. Throw fixed text only: `secrets` holds your app's client secret. Then, inside
 `ctx.act(action, {subject}, run)`, `s.actAs(m)` takes only `ctx.memberFor(subject)` (a linked member who can
 write): resolve the actor with it and do nothing for `null` (reply with the hub URL so they can link). Use
 `ctx.subjectFor(memberId)` to reach a member (a viewer too) in a DM. Never link from the provider side or from
 an email match.
+
+**Settings namespaces, admin config and links (D42 addendum C1).** A connection's `settings` holds `autonomy` and
+`config` (an admin's: `PATCH /api/integrations/:id` merges them key by key, `null` deletes a key, a `config` key
+that `provider` holds is refused, the merged `config` ≤ 8 KB) and `provider` and `pinned` (written once, with the
+row; migration 026's trigger aborts any later change, including adding `provider` to an old row). `provider` is
+what your `exchange` (or `verifyToken`, or a pending `prepare`) returned as `settings`, plus every `match` key and
+the registry's `hub_url`. Read workspace, app and client ids **only** from `ctx.connection.settings.provider`,
+`settings.pinned` or `ctx.connection.external_id`, never from `config`, and bind security checks (which workspace
+a payload must come from) to `external_id`. A connection made before 026 has no `provider`: if you need a
+provider fact, refuse to act when `provider` is missing or its team id is not `external_id` (fail closed; the
+admin reconnects). Declare `configKeys: ['default_board_id', …]` to limit what an admin may set (an undeclared key
+with a value is `VALIDATION`, `null` for it a no-op); without it any key name of 1–64 `[A-Za-z0-9_-]` starting
+with a letter is accepted. **Links to the hub** come only from `ctx.hubUrl` (the hub's `BOARD_PUBLIC_URL`
+origin, read at boot; `null` when the hub has none or it is not an https origin, and then you send no link):
+never from `config`, `provider.hub_url` or anything in a payload.
 
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,

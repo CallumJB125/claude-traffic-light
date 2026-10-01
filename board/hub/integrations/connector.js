@@ -23,12 +23,12 @@
 //     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
 //     async exchange({ query, redirectUri, webhookUrl, config, secrets, fetch }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
-//         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored as settings.config),
+//         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored once as settings.provider: D42 addendum C1),
 //         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
 //         match?: {k: scalar} (required after prepare: exactly the pending match, D97) },
-//     (`webhookUrl` is this connection's future webhook URL; `config` is the
-//     stored settings.config of the org's active connection of this provider, else {},
-//     overlaid with the pending settings after prepare; `secrets` is the pending
+//     (`webhookUrl` is this connection's future webhook URL; `config` is
+//     {...settings.config, ...settings.provider} of the org's newest active connection of
+//     this provider, else {}, overlaid with the pending settings after prepare; `secrets` is the pending
 //     row's unsealed secrets after prepare, else {}; exchange may add kinds, never replace one)
 //
 //     // Optional, oauth/app_install without manifestForm (D97): the app is
@@ -51,7 +51,7 @@
 //     // challenge); anything else, and every other delivery, is the
 //     // unknown-connection 404. Nothing else runs (no handler, lease or audit).
 //     handshake({ payload, headers }) → boolean,   // Slack: payload.type === 'url_verification'
-//     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
+//     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets, settings? }, // token (settings → settings.provider)
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
 //
@@ -60,8 +60,8 @@
 //   // checks state and nonce and verifies the id_token (RS256 against jwksUrl,
 //   // iss, aud = settings.pinned.client_id, exp/iat, nonce, workspaceClaim =
 //   // external_id, sub ~ subjectRe); the connector only builds the URL and
-//   // trades the code. `connection` is {external_id, settings} (take the client
-//   // id from settings.pinned, never settings.config); `redirectUri` is the
+//   // trades the code. `connection` is {external_id, settings: {pinned, provider}}
+//   // (frozen, never config: take the client id from settings.pinned); `redirectUri` is the
 //   // identityRedirectUri prepare got. Throw fixed text only: `secrets` holds
 //   // the app's client secret.
 //   identity: {
@@ -138,6 +138,10 @@
 //   // Applied only for the card's hub-verified PR (ctx.verifiedPr): pass its `pr` and `repo`.
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
+//   // Optional (D42 addendum C1): the settings.config keys an admin may set
+//   // through PATCH (1–32 names, ^[A-Za-z][A-Za-z0-9_-]{0,63}$). Undeclared: any such name.
+//   configKeys: ['default_board_id'],
+//
 //   async health(ctx) → { ok, detail? },
 //
 //   // Pure reads a handler may use (org-scoped, nothing secret):
@@ -145,6 +149,11 @@
 //   // {id, key, title, board_id, column_name} | null (never body or labels).
 //   // ctx.memberFor(subject) → member_id | null (linked on this connection and
 //   // able to write); ctx.subjectFor(member_id) → subject | null (a viewer's too).
+//   // ctx.hubUrl → the hub's https origin (BOARD_PUBLIC_URL, read at boot) | null:
+//   // the only base for a link to the hub (never config, provider.hub_url or a payload).
+//   // ctx.connection.settings.provider → what the provider said at connect time
+//   // (immutable; undefined on a connection made before migration 026: fail closed).
+//   // Read provider facts from it, settings.pinned or ctx.connection.external_id, never config.
 // })
 
 import { isIP } from 'node:net'; // privacy-flow: hub-server
