@@ -136,7 +136,9 @@ test('start input: a connector that declares none refuses any input; input reach
   } finally { await h.close(); }
 });
 
-test('callback: an app owned by another organization, or by a user, is refused for an org start; nothing is written', async () => {
+const NOT_OWNED_TEXT = 'GitHub created this app under a different owner than the organization you named. Delete that app on GitHub and start again.';
+
+test('callback: an app owned by another organization, or by a user, is refused for an org start with the coded NOT_OWNED text and a link to that app; nothing is written', async () => {
   const { h, gh, alice } = await setup();
   try {
     const before = written(h);
@@ -144,10 +146,132 @@ test('callback: an app owned by another organization, or by a user, is refused f
       const r = await start(h, alice, { input: { org: 'acme-co' } });
       gh.app = app(owner);
       const out = await callback(h, stateOf(r), r.body.bind);
-      assert.deepEqual(out, { ok: false, error: 'The provider did not accept the connection. Try again.' }, JSON.stringify(owner));
+      assert.deepEqual(out, { ok: false, code: 'NOT_OWNED', error: NOT_OWNED_TEXT, link: { url: `https://github.com/apps/${gh.app.slug}`, text: 'Open that app on GitHub' } }, JSON.stringify(owner));
     }
     assert.equal(gh.calls, 3, 'refused on GitHub\'s answer, not before it');
     assert.deepEqual(written(h), before, 'no connection, sealed secret or journal row');
+  } finally { await h.close(); }
+});
+
+test('callback page: NOT_OWNED shows the fixed sentence and one plain link to the app, built from its checked slug', async () => {
+  const { h, gh, alice } = await setup();
+  try {
+    const r = await start(h, alice, { input: { org: 'acme-co' } });
+    gh.app = app({ login: 'other-org', type: 'Organization' });
+    const res = await fetch(`${h.base}/integrations/github/callback?${new URLSearchParams({ state: stateOf(r), code: 'abc123' })}`, { headers: { cookie: `board_int_github=${r.body.bind}` } });
+    const page = await res.text();
+    assert.equal(res.status, 400);
+    assert.match(page, /data-connect="error"/);
+    assert.ok(page.includes(NOT_OWNED_TEXT.replace(/'/g, '&#39;')), page);
+    assert.deepEqual([...page.matchAll(/<a href="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map((m) => [m[1], m[2]]), [[`https://github.com/apps/${gh.app.slug}`, 'Open that app on GitHub']]);
+    assert.equal(page.includes('did not accept'), false);
+  } finally { await h.close(); }
+});
+
+test('NOT_OWNED: the registry keeps only its own text; a link off the connector\'s hosts, an unknown code or a start with no inputs is the generic refusal', async () => {
+  const { h, reg, alice } = await setup();
+  try {
+    let thrown = null;
+    reg.register(defineConnector({
+      id: 'owner-test', name: 'Owner Test', scopes: [], secrets: [], hosts: ['example.com'],
+      connect: {
+        kind: 'app_install', formHost: 'example.com', startInputs: ['org'], startInput: (k, v) => (/^[a-z]{1,10}$/.test(v) ? v : null),
+        manifestForm: (a) => ({ action: `https://example.com/new?state=${encodeURIComponent(a.state)}`, fields: { m: 'x' } }),
+        exchange: async () => { throw thrown; },
+      },
+    }));
+    const run = async (input) => {
+      const s = await h.api(alice, 'POST', '/api/integrations/owner-test/start', { request_id: randomUUID(), ...(input ? { input } : {}) });
+      assert.equal(s.status, 200, s.text);
+      return reg.oauthCallback({ provider: 'owner-test', query: new URLSearchParams({ state: new URL(s.body.form.action).searchParams.get('state'), code: 'c' }), publicUrl: h.base, bindCookie: s.body.bind });
+    };
+    const generic = { ok: false, error: 'The provider did not accept the connection. Try again.' };
+    const text = 'Owner Test created this app under a different owner than the organization you named. Delete that app on Owner Test and start again.';
+    thrown = Object.assign(new Error('<b>provider words</b>'), { code: 'NOT_OWNED', url: 'https://example.com/apps/x' });
+    assert.deepEqual(await run({ org: 'acme' }), { ok: false, code: 'NOT_OWNED', error: text, link: { url: 'https://example.com/apps/x', text: 'Open that app on Owner Test' } });
+    for (const url of ['https://evil.example/apps/x', 'http://example.com/apps/x', 'javascript:alert(1)', 'https://example.com:8443/x', 'https://u:p@example.com/x', 42, { href: 'https://example.com/' }]) {
+      thrown = Object.assign(new Error('x'), { code: 'NOT_OWNED', url });
+      assert.deepEqual(await run({ org: 'acme' }), { ok: false, code: 'NOT_OWNED', error: text }, String(url));
+    }
+    thrown = Object.assign(new Error('x'), { code: 'NOT_OWNED', url: 'https://example.com/apps/x' });
+    assert.deepEqual(await run(), generic, 'no organization was named: the owner sentence would be wrong');
+    thrown = Object.assign(new Error('Delete everything'), { code: 'SOMETHING_ELSE', url: 'https://example.com/apps/x' });
+    assert.deepEqual(await run({ org: 'acme' }), generic);
+  } finally { await h.close(); }
+});
+
+test('no org named: a previous connection\'s provider.org is not where the app is made; the state carries no org and GitHub\'s owner is taken', async () => {
+  const { h, reg, gh, alice } = await setup();
+  try {
+    reg.createConnection({
+      external_id: '9001', display_name: 'old-org', scopes: [], secrets: { app_private_key: pem(), webhook_secret: randomBytes(20).toString('hex') },
+      settings: { provider: { app_id: 9001, app_slug: 'plexiform-old-org-abcd', login: 'old-org', org: 'old-org' } }, orgId: h.ids.org, memberId: h.ids.alice, provider: 'github',
+    });
+    let newest = 'old-org';
+    for (const owner of [{ login: 'callum', type: 'User' }, { login: 'new-org', type: 'Organization' }]) {
+      const r = await start(h, alice, { input: {} });
+      assert.equal(r.status, 200, r.text);
+      assert.match(r.body.form.action, /^https:\/\/github\.com\/settings\/apps\/new\?state=/, 'the user\'s own page, not an earlier org\'s');
+      assert.match(JSON.parse(r.body.form.fields.manifest).name, new RegExp(`^Plexiform-${newest}-[a-z0-9]{4}$`), 'named from the newest connection\'s login only');
+      assert.equal(Object.hasOwn(payloadOf(stateOf(r)), 'si'), false);
+      gh.app = app(owner);
+      const out = await callback(h, stateOf(r), r.body.bind);
+      assert.equal(out.ok, true, out.error);
+      const settings = JSON.parse(h.db.get('SELECT settings FROM connections WHERE id = ?', out.connection.id).settings);
+      assert.equal(settings.provider.login, owner.login);
+      assert.equal(settings.provider.org, owner.type === 'Organization' ? owner.login : undefined);
+      newest = owner.login;
+    }
+  } finally { await h.close(); }
+});
+
+test('/start: a replayed request_id is the fixed REPLAYED 409 whatever its input; the cache holds no org, state, form or bind', async () => {
+  const { h, alice } = await setup();
+  try {
+    const rid = randomUUID();
+    const first = await h.api(alice, 'POST', '/api/integrations/github/start', { request_id: rid, input: { org: 'acme-co' } });
+    assert.equal(first.status, 200, first.text);
+    const replayed = { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } };
+    for (const input of [{ org: 'evil-org' }, { org: 'acme-co' }, undefined]) {
+      const again = await h.api(alice, 'POST', '/api/integrations/github/start', { request_id: rid, ...(input ? { input } : {}) });
+      assert.equal(again.status, 409, again.text);
+      assert.deepEqual(again.body, replayed);
+      assert.equal(again.headers.get('set-cookie'), null, 'no bind cookie on a replay');
+    }
+    const entry = JSON.stringify(h.hub.cachedResponse(h.ids.alice, rid));
+    for (const leak of ['acme-co', stateOf(first), first.body.bind, 'form', 'bind', 'state', 'github.com']) assert.equal(entry.includes(leak), false, leak);
+    // A refused start is cached the same way: its replay can't tell which value was refused.
+    const rid2 = randomUUID();
+    assert.equal((await h.api(alice, 'POST', '/api/integrations/github/start', { request_id: rid2, input: { org: '../x' } })).status, 400);
+    assert.deepEqual((await h.api(alice, 'POST', '/api/integrations/github/start', { request_id: rid2, input: { org: 'acme-co' } })).body, replayed);
+  } finally { await h.close(); }
+});
+
+test('start input: the normalised value is held to 256 bytes too (a multibyte answer under 256 characters is refused)', async () => {
+  const { h, reg, alice } = await setup();
+  try {
+    let answer = null;
+    reg.register(defineConnector({
+      id: 'wide-test', name: 'Wide', scopes: [], secrets: [], hosts: ['example.com'],
+      connect: {
+        kind: 'app_install', formHost: 'example.com', startInputs: ['team'], startInput: () => answer,
+        manifestForm: (a) => ({ action: `https://example.com/new?state=${encodeURIComponent(a.state)}`, fields: { m: 'x' } }),
+        exchange: async () => ({ external_id: randomUUID(), display_name: 'x', scopes: [], secrets: {} }),
+      },
+    }));
+    const go = () => h.api(alice, 'POST', '/api/integrations/wide-test/start', { request_id: randomUUID(), input: { team: 'a' } });
+    for (const a of ['\u00e9'.repeat(129), '\u{1F600}'.repeat(65), `${'x'.repeat(255)}\u00e9`]) {
+      answer = a;
+      assert.ok(a.length <= 256 && Buffer.byteLength(a) > 256);
+      const r = await go();
+      assert.equal(r.status, 400, r.text);
+      assert.deepEqual(r.body.error, { code: 'VALIDATION', message: 'that value is not valid here: check it and try again' });
+      assert.equal(r.headers.get('set-cookie'), null);
+    }
+    for (const a of ['\u00e9'.repeat(128), 'x'.repeat(256)]) {
+      answer = a;
+      assert.equal((await go()).status, 200, `${Buffer.byteLength(a)} bytes`);
+    }
   } finally { await h.close(); }
 });
 

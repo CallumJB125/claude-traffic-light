@@ -37,9 +37,13 @@
 //     // plain text an admin may give at /start (GitHub: the organization).
 //     startInputs: ['org'],                    // 1–4 names; `input` at /start may hold only these
 //     startInput(name, value) → normalized string | null,   // your rule; null (or a throw) is a fixed VALIDATION
-//     (the normalized values reach authorizeUrl/manifestForm as `input` (always an object; check
-//     them again there), are signed into the state and come back to exchange as `startInput`
-//     ({} when none): check the provider's answer against them. Never store them as settings.)
+//     (the normalized values (1–256 bytes) reach authorizeUrl/manifestForm as `input` (always an
+//     object; check them again there; {} is no preference, never an earlier connection's provider
+//     facts), are signed into the state and come back to exchange as `startInput` ({} when none):
+//     check the provider's answer against them. Never store them as settings. An app made under
+//     another owner: throw { code: 'NOT_OWNED', url?: 'https://<one of hosts>/…' }; the callback
+//     page shows the registry's fixed text and, for url, one link to that app.)
+//     (exchange's `query` is the callback's URLSearchParams: read query.get('code'))
 //
 //     // Optional, oauth/app_install without manifestForm (D97): the app is
 //     // made from input an admin pastes (Slack: a configuration token).

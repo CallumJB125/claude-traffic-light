@@ -229,16 +229,16 @@ test('connect window guardrails pinned: hub-view opener only, neutral name, own 
 const MF_HUB = 'https://app.plexiform.dev';
 const MF_STATE = `${'P'.repeat(40)}.${'m_-'.repeat(14)}`;
 const MF_HOOK = `${MF_HUB}/integrations/0b6f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e/webhook`;
-async function githubForm(provider = {}) {
+async function githubForm(input = {}) {
   const gh = (await import('../board/hub/integrations/github/index.js')).default;
-  return gh.connect.manifestForm({ state: MF_STATE, redirectUri: `${MF_HUB}/integrations/github/callback`, webhookUrl: MF_HOOK, provider, config: {} });
+  return gh.connect.manifestForm({ state: MF_STATE, redirectUri: `${MF_HUB}/integrations/github/callback`, webhookUrl: MF_HOOK, provider: {}, config: {}, input });
 }
 const formBody = (fields, contentType = 'application/x-www-form-urlencoded') => ({ contentType, data: [{ type: 'rawData', bytes: Buffer.from(new URLSearchParams(Object.entries(fields)).toString()) }] });
 const mfBase = (over = {}) => ({ url: `https://github.com/settings/apps/new?state=${MF_STATE}`, frameName: 'plexiform-connect|github|bnd1', referrer: `${MF_HUB}/?org=t1&view=integrations`, pageUrl: `${MF_HUB}/?org=t1&view=integrations`, hubOrigin: MF_HUB, signedIn: true, gestureAt: 1000, now: 2000, ...over });
 
 test('manifest POST: the GitHub connector’s own form (user and org) is accepted, its body re-encoded from the checked manifest', async () => {
-  for (const config of [{}, { org: 'acme-co' }]) {
-    const f = await githubForm(config);
+  for (const input of [{}, { org: 'acme-co' }]) {
+    const f = await githubForm(input);
     assert.deepEqual(Object.keys(f.fields), ['manifest'], 'the form the hub serves has one field');
     const c = connectDecision(mfBase({ url: f.action, postBody: formBody(f.fields) }));
     assert.equal(c.ok, true, JSON.stringify(c));

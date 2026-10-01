@@ -18,8 +18,11 @@ const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' };
 const APP_EVENTS = ['pull_request', 'pull_request_review', 'check_suite'];
 const PEM = /^-----BEGIN (RSA )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END \1PRIVATE KEY-----\r?\n?$/;
+const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,32}[a-z0-9])?$/;
 const validLogin = (v) => (typeof v === 'string' && LOGIN.test(v) ? v : null);
-const NOT_OWNED = 'the app is not owned by the organization named at connect';
+// Coded so the registry shows its own fixed text; url (built here from the
+// checked slug) lets the admin find and delete the app GitHub made anyway.
+const notOwned = (slug) => Object.assign(new Error('the app is not owned by the organization named at connect'), { code: 'NOT_OWNED', ...(SLUG.test(slug) ? { url: `https://github.com/apps/${slug}` } : {}) });
 // {} or {org: <login>} → the org or null; anything else → false.
 const namedOrg = (v) => {
   if (v === undefined) return null;
@@ -46,7 +49,7 @@ function checkApp(app) {
   if (!isObj(app)) bad('no app');
   if (!posInt(app.id)) bad('a bad app id');
   if (!isObj(app.owner) || !posInt(app.owner.id) || !validLogin(app.owner.login)) bad('a bad owner');
-  if (typeof app.slug !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,32}[a-z0-9])?$/.test(app.slug)) bad('a bad slug');
+  if (typeof app.slug !== 'string' || !SLUG.test(app.slug)) bad('a bad slug');
   if (typeof app.pem !== 'string' || app.pem.length > 8192 || !PEM.test(app.pem)) bad('a bad private key');
   if (typeof app.webhook_secret !== 'string' || app.webhook_secret.length < 16 || app.webhook_secret.length > 256) bad('a bad webhook secret');
   const perms = isObj(app.permissions) ? app.permissions : bad('no permissions');
@@ -220,20 +223,20 @@ export default defineConnector({
     // exchange check it again.
     startInputs: ['org'],
     startInput: (name, value) => (name === 'org' ? validLogin(value) : null),
-    // A reconnect reads the last app's owner from provider, never an admin's
-    // config; an org named at this start wins.
+    // Only an org named at this start (typed, signed, checked at exchange)
+    // picks the owner: never an earlier connection's provider.org or an
+    // admin's config. None named: the signed-in account's own page.
     manifestForm({ state, redirectUri, webhookUrl, provider, input }) {
-      const named = namedOrg(input);
-      if (named === false) throw new Error('not a GitHub organization');
-      const org = named ?? validLogin(provider?.org);
+      const org = namedOrg(input);
+      if (org === false) throw new Error('not a GitHub organization');
       const action = org ? `https://github.com/organizations/${org}/settings/apps/new?state=${encodeURIComponent(state)}` : `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`;
       const name = appName(org ?? validLogin(provider?.login));
       return { action, fields: { manifest: JSON.stringify(manifest({ redirectUri, webhookUrl, name })) } };
     },
     // The manifest callback: trade the one-time code for the app's credentials.
     async exchange({ query, fetch, startInput }) {
-      // The registry's callback hands over URLSearchParams.
-      const code = String((typeof query?.get === 'function' ? query.get('code') : query?.code) ?? '');
+      // The registry's callback hands over URLSearchParams, and only that.
+      const code = String((typeof query?.get === 'function' ? query.get('code') : null) ?? '');
       if (!/^[A-Za-z0-9]{1,100}$/.test(code)) throw new Error('bad manifest code');
       const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } }); // privacy-flow: integrations-hub
       if (!res.ok) throw new Error(`manifest conversion failed: ${res.status}`);
@@ -241,7 +244,8 @@ export default defineConnector({
       // The org named at start is signed into the state: an app GitHub made
       // anywhere else (a user, another org) is not this connection's.
       const named = namedOrg(startInput);
-      if (named === false || (named && (app.owner.type !== 'Organization' || app.owner.login.toLowerCase() !== named.toLowerCase()))) throw new Error(NOT_OWNED);
+      if (named === false) throw new Error('not a GitHub organization');
+      if (named && (app.owner.type !== 'Organization' || app.owner.login.toLowerCase() !== named.toLowerCase())) throw notOwned(app.slug);
       const org = app.owner.type === 'Organization' ? app.owner.login : null;
       return {
         // Each app is its own connection: a reconnect makes a new app, and
