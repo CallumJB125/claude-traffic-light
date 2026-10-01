@@ -1,6 +1,11 @@
 name: Windows native directory acceptance
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       ref:
