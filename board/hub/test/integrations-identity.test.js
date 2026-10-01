@@ -663,7 +663,9 @@ test('act(…, {subject}): actAs only memberFor(subject) — an unlinked user ca
     await assert.rejects(make(ub, h.ids.alice), (e) => e.code === 'FORBIDDEN', 'a linked user never acts as someone else');
     assert.equal((await make(ub, h.ids.bob)).decision, 'auto');
     h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", h.ids.bob);
-    for (const as of [h.ids.bob, h.ids.alice]) await assert.rejects(make(ub, as), (e) => e.code === 'FORBIDDEN', 'a viewer-linked user can do nothing');
+    // D42 addendum C2: still linked to bob, who can't act now → ACTOR_UNAVAILABLE (member); anyone else stays FORBIDDEN.
+    await assert.rejects(make(ub, h.ids.bob), (e) => e.code === 'ACTOR_UNAVAILABLE' && e.scope === 'member', 'a viewer-linked user can do nothing');
+    await assert.rejects(make(ub, h.ids.alice), (e) => e.code === 'FORBIDDEN', 'a viewer-linked user can do nothing');
     h.db.run("UPDATE members SET role = 'member' WHERE id = ?", h.ids.bob);
     // A handle taken while linked stops working once the link goes.
     await assert.rejects(ctx.act('card.create', { subject: ub }, async (s) => {

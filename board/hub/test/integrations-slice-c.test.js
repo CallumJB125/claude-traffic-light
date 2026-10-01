@@ -467,3 +467,268 @@ test('C1 migration 026 applies over a DB at 025 (024 reserved); a legacy row loa
   assert.throws(() => db.exec(`UPDATE connections SET settings = '{"provider":{"app_id":2}}' WHERE id = 'ka'`), /settings.provider never changes/);
   db.close();
 });
+
+// ── C2: actor scope, linkState, early-ack failure, card tokens ───────────
+
+// A chat-shaped connector whose handler and bus consumer the test drives.
+const actorConnector = (beh, over = {}) => defineConnector({
+  id: 'cmd', name: 'Cmd', scopes: [], secrets: [], hosts: ['api.cmd.example'],
+  connect: { kind: 'token', verifyToken: async () => ({ external_id: 'W1' }) },
+  verify: ({ headers }) => (headers['x-ok'] === '1' ? { ok: true, dedupe_key: headers['x-id'] } : { ok: false, reason: 'nope' }),
+  async handleWebhook({ payload, ctx }) { return beh.handle(payload, ctx); },
+  consumes: ['card.transition'],
+  async onEvent(row, ctx) { return beh.onEvent?.(row, ctx); },
+  actions: { 'card.create': { default: 'auto' } },
+  ...over,
+});
+
+async function actorSetup({ over = {}, reg: makeReg = null } = {}) {
+  const h = await startHub({ config: ROOMY });
+  h.hub.setVaultKey(randomBytes(32));
+  const beh = { calls: 0, caught: [] };
+  const reg = makeReg ? makeReg(h) : h.app.integrations;
+  reg.register(actorConnector(beh, over));
+  const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'cmd', external_id: 'W1' });
+  const linkSubject = (subject, memberId, connectionId = conn.id) => h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('cmd', 'W1', ?, ?, ?, 'oauth_link', ?)", subject, memberId, connectionId, h.hub.iso());
+  const ua = `U${randomBytes(4).toString('hex').toUpperCase()}`;
+  const ub = `U${randomBytes(4).toString('hex').toUpperCase()}`;
+  linkSubject(ua, h.ids.alice);
+  linkSubject(ub, h.ids.bob);
+  return { h, reg, beh, conn, ua, ub, linkSubject };
+}
+
+const sendHttp = async (h, conn, payload, id = randomUUID()) => {
+  const res = await fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'x-ok': '1', 'x-id': id, 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+  const headers = Object.fromEntries([...res.headers].filter(([k]) => k !== 'date'));
+  return { status: res.status, text: await res.text(), headers };
+};
+const webhookAudit = (h, conn) => h.db.all("SELECT decision, error FROM integration_audit WHERE connection_id = ? AND action = 'webhook'", conn.id).map((r) => ({ ...r }));
+const actAudit = (h, conn) => h.db.all("SELECT decision, error FROM integration_audit WHERE connection_id = ? AND action = 'card.create' ORDER BY at, rowid", conn.id).map((r) => ({ ...r }));
+const health = (h, conn) => h.db.get('SELECT health FROM connections WHERE id = ?', conn.id).health;
+
+// The handler resolves its member, then (in the race this simulates) the
+// member is demoted or removed before it acts.
+const actForSubject = (h, beh, { catchIt = false } = {}) => async (payload, ctx) => {
+  beh.calls += 1;
+  const m = ctx.memberFor(payload.user);
+  if (payload.demote) h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", m);
+  if (payload.remove) h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', h.hub.iso(), m);
+  try {
+    await ctx.act('card.create', { subject: payload.user }, (s) => s.actAs(m).createCard(h.ids.board, { request_id: payload.rid, title: 'From chat' }));
+  } catch (e) {
+    if (!catchIt) throw e;
+    beh.caught.push({ code: e.code, scope: e.scope, linkState: ctx.linkState(payload.user) });
+  }
+};
+
+test('C2 a linked member demoted after memberFor: ACTOR_UNAVAILABLE scope member, audited for that act; the answer is byte-for-byte a success; no health change, no dead letter; the delivery is done', async () => {
+  const { h, beh, conn, ua, ub } = await actorSetup();
+  try {
+    beh.handle = actForSubject(h, beh);
+    const ok = await sendHttp(h, conn, { user: ua, rid: 'r-ok' });
+    assert.equal(ok.status, 200, ok.text);
+    const healthy = health(h, conn);
+    const id = randomUUID();
+    const skipped = await sendHttp(h, conn, { user: ub, rid: 'r-demoted', demote: true }, id);
+    assert.deepEqual(skipped, ok, 'same status, body and headers as a success');
+    assert.equal(health(h, conn), healthy, 'health untouched');
+    assert.deepEqual(webhookAudit(h, conn), []);
+    assert.deepEqual(actAudit(h, conn).at(-1), { decision: 'failed', error: 'actor_unavailable' });
+    assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'From chat'").length, 1);
+    const again = await sendHttp(h, conn, { user: ub, rid: 'r-demoted', demote: true }, id);
+    assert.equal(JSON.parse(again.text).duplicate, true, 'done, not released');
+    assert.equal(beh.calls, 2);
+  } finally { await h.close(); }
+});
+
+test('C2 the connector sees ACTOR_UNAVAILABLE {scope:\'member\'} (demoted or removed linked member) and linkState says unavailable; a member the subject does not map to stays FORBIDDEN', async () => {
+  const { h, reg, beh, conn, ua, ub } = await actorSetup();
+  try {
+    beh.handle = actForSubject(h, beh, { catchIt: true });
+    assert.equal((await hookIn(reg, conn, { user: ub, rid: 'r1', demote: true })).status, 200);
+    assert.deepEqual(beh.caught[0], { code: 'ACTOR_UNAVAILABLE', scope: 'member', linkState: 'unavailable' });
+    h.db.run("UPDATE members SET role = 'member' WHERE id = ?", h.ids.bob);
+    assert.equal((await hookIn(reg, conn, { user: ub, rid: 'r2', remove: true })).status, 200);
+    assert.deepEqual(beh.caught[1], { code: 'ACTOR_UNAVAILABLE', scope: 'member', linkState: 'none' }, 'removal deletes the link (023), the act still names the member');
+    const ctx = reg.ctxFor(conn.id);
+    await assert.rejects(ctx.act('card.create', { subject: ua }, (s) => s.actAs(h.ids.bob)), (e) => e.code === 'FORBIDDEN');
+    assert.equal(JSON.parse(health(h, conn) ?? '{}').ok !== false, true);
+  } finally { await h.close(); }
+});
+
+test('C2 created_by unavailable keeps today\'s answer and flips health (webhook and bus); a linked member on the bus changes no health', async () => {
+  const { h, reg, beh, conn, ub } = await actorSetup();
+  try {
+    const cardId = (await h.createCard(await h.login('alice'), { title: 'Bus card' })).id;
+    const bus = h.app.bus;
+    const fire = async () => {
+      h.hub.journal({ board_id: h.ids.board, card_id: cardId, kind: 'card.transition', payload: { to: 'done' } });
+      h.hub.emit('journal');
+      await bus.settle();
+    };
+    // A linked member, demoted, acted for on the bus: no health change.
+    beh.onEvent = async (row, ctx) => ctx.act('card.create', { subject: ub }, (s) => s.actAs(h.ids.bob));
+    h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", h.ids.bob);
+    await fire();
+    assert.equal(health(h, conn), null, 'no health written for a member');
+    assert.deepEqual(actAudit(h, conn).at(-1), { decision: 'failed', error: 'actor_unavailable' });
+    // created_by demoted: bus and webhook flip health.
+    h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", h.ids.bob);
+    h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", h.ids.alice);
+    beh.onEvent = async (row, ctx) => ctx.act('card.create', {}, (s) => s.actAs(ctx.connection.created_by));
+    await fire();
+    assert.equal(JSON.parse(health(h, conn)).last_error, 'actor_unavailable');
+    h.db.run("UPDATE connections SET health = NULL WHERE id = ?", conn.id);
+    beh.handle = async (payload, ctx) => ctx.act('card.create', {}, (s) => s.actAs(ctx.connection.created_by));
+    const r = await hookIn(reg, conn, { n: 1 });
+    assert.deepEqual([r.status, r.body], [200, { ok: true, skipped: true }]);
+    assert.equal(JSON.parse(health(h, conn)).last_error, 'actor_unavailable');
+  } finally { await h.close(); }
+});
+
+test('C2 ctx.linkState: active, unavailable (viewer, paused connection), none (unlinked, bad subject, another connection\'s subject); never a member id', async () => {
+  const { h, reg, conn, ua, ub } = await actorSetup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    assert.equal(ctx.linkState(ua), 'active');
+    assert.equal(ctx.linkState(ub), 'active');
+    for (const bad of [undefined, null, '', 7, {}, ['x'], 'U'.repeat(129), 'UNLINKED1']) assert.equal(ctx.linkState(bad), 'none', String(bad));
+    h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", h.ids.bob);
+    assert.equal(ctx.linkState(ub), 'unavailable');
+    h.db.run("UPDATE connections SET status = 'paused' WHERE id = ?", conn.id);
+    assert.equal(ctx.linkState(ua), 'unavailable');
+    h.db.run("UPDATE connections SET status = 'active' WHERE id = ?", conn.id);
+    // A subject linked on another connection (another workspace) is none here.
+    const other = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'cmd', external_id: 'W2' });
+    const uo = 'UOTHERWS1';
+    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('cmd', 'W2', ?, ?, ?, 'oauth_link', ?)", uo, h.ids.alice, other.id, h.hub.iso());
+    assert.equal(ctx.linkState(uo), 'none');
+    assert.equal(reg.ctxFor(other.id).linkState(uo), 'active');
+    assert.equal(ctx.linkState.length, 1);
+  } finally { await h.close(); }
+});
+
+test('C2 early ack: a failed handler is audited and the delivery marked done (the same bytes answer duplicate, never re-run); onAckedFailure gets a short code, a payload copy and the restricted fetch', async () => {
+  const fetched = [];
+  const { h, reg, beh, conn } = await actorSetup({
+    over: {
+      ackEarly: true,
+      async onAckedFailure(a) { beh.failures.push({ ...a, payloadKeys: Object.keys(a.payload) }); fetched.push(await a.fetch('https://evil.example/x').then(() => 'reached', (e) => e.healthCode)); },
+    },
+  });
+  try {
+    beh.failures = [];
+    beh.handle = async (payload) => { beh.calls += 1; payload.mutated = true; throw Object.assign(new Error(`views.open refused ${payload.secretish}`), { healthCode: 'provider_error' }); };
+    const id = randomUUID();
+    const body = { secretish: 'trigger-123', n: 1 };
+    for (let i = 0; i < 3; i += 1) {
+      const r = await hookIn(reg, conn, body, id);
+      assert.equal(r.status, 200);
+      await h.hub.idle();
+      if (i > 0) assert.deepEqual(r.body, { ok: true, duplicate: true });
+    }
+    assert.equal(beh.calls, 1, 'ran once');
+    assert.deepEqual(webhookAudit(h, conn), [{ decision: 'failed', error: 'provider_error' }]);
+    assert.deepEqual([...new Set(h.db.all("SELECT state FROM inbound_dedupe WHERE provider = 'cmd'").map((r) => r.state))], ['done']);
+    assert.equal(beh.failures.length, 1);
+    assert.equal(beh.failures[0].error_code, 'provider_error');
+    assert.deepEqual(beh.failures[0].payload, body, 'the payload as parsed, not as the handler left it');
+    assert.equal(beh.failures[0].headers['x-id'], id);
+    assert.equal(JSON.stringify(beh.failures[0]).includes('views.open'), false, 'never the error');
+    assert.deepEqual(fetched, ['host_refused']);
+    // Success calls nothing.
+    beh.handle = async () => {};
+    assert.equal((await hookIn(reg, conn, { n: 2 })).status, 200);
+    await h.hub.idle();
+    assert.equal(beh.failures.length, 1);
+  } finally { await h.close(); }
+});
+
+test('C2 early ack: a handler that times out and later fails ends done; a late (non-early) delivery is still released so the provider retry runs (GitHub unchanged)', async () => {
+  let gate;
+  const { h, reg, beh, conn } = await actorSetup({
+    over: { ackEarly: ({ payload }) => payload.early === true, onAckedFailure: (a) => { beh.codes.push(a.error_code); throw new Error('ignored'); } },
+    reg: (hh) => createIntegrations({ hub: hh.hub, api: new Api(hh.hub), log: null, handlerTimeoutMs: 30 }),
+  });
+  try {
+    beh.codes = [];
+    beh.handle = async (payload) => {
+      beh.calls += 1;
+      if (payload.early) await new Promise((resolve, reject) => { gate = { resolve, reject }; });
+      else throw new Error('late failure');
+    };
+    const id = randomUUID();
+    assert.equal((await hookIn(reg, conn, { early: true }, id)).status, 200);
+    await h.hub.idle();
+    assert.deepEqual(beh.codes, ['handler_timeout']);
+    assert.equal((await hookIn(reg, conn, { early: true }, id)).status, 503, 'still leased while it runs');
+    gate.reject(new Error('late fail'));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual([...new Set(h.db.all("SELECT state FROM inbound_dedupe WHERE provider = 'cmd'").map((r) => r.state))], ['done']);
+    assert.deepEqual((await hookIn(reg, conn, { early: true }, id)).body, { ok: true, duplicate: true });
+    assert.equal(beh.calls, 1);
+    // Late: released, and run again on the retry; onAckedFailure never called.
+    const late = randomUUID();
+    assert.equal((await hookIn(reg, conn, { early: false }, late)).status, 500);
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = 'cmd' AND dedupe_key LIKE ?", `${conn.id}:${late}`).n, 0);
+    assert.equal((await hookIn(reg, conn, { early: false }, late)).status, 500);
+    assert.equal(beh.calls, 3);
+    assert.deepEqual(beh.codes, ['handler_timeout']);
+  } finally { await h.close(); }
+  const github = (await import('../integrations/github/index.js')).default;
+  assert.equal(github.ackEarly, undefined, 'GitHub answers late: its failures stay released for its retries');
+  assert.equal(github.onAckedFailure, undefined);
+});
+
+test('C2 defineConnector: onAckedFailure is a function, only with ackEarly', () => {
+  const beh = {};
+  assert.throws(() => actorConnector(beh, { onAckedFailure: () => {} }), /onAckedFailure/);
+  assert.throws(() => actorConnector(beh, { ackEarly: true, onAckedFailure: 'x' }), /onAckedFailure/);
+  assert.ok(actorConnector(beh, { ackEarly: true, onAckedFailure: () => {} }));
+});
+
+test('C2 F-2: a request integration_requests already holds spends integration_conn but no card token, for another member too; naming another board is CONFLICT with no card token', async () => {
+  const { h, reg, conn, ua, ub } = await actorSetup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const card = (subject, member, rid, board = h.ids.board) => ctx.act('card.create', { subject }, (s) => s.actAs(member).createCard(board, { request_id: rid, title: 'Same message' }));
+    const bucket = (rule, key) => h.hub.limiter.buckets.get(`${rule}|${key}`);
+    const subjKey = (s) => `${conn.id}|${h.hub.refHash(s)}`;
+    const first = await card(ua, h.ids.alice, 'msg-1');
+    const second = await card(ub, h.ids.bob, 'msg-1');
+    assert.equal(second.result.card.id, first.result.card.id, 'one card');
+    assert.equal(bucket('integration_card_subject', subjKey(ub)), undefined, 'the second member\'s card bucket untouched');
+    assert.equal(bucket('integration_card_conn', conn.id).tokens, 19, 'card_conn spent once');
+    assert.equal(bucket('integration_conn', conn.id).tokens, 118, 'integration_conn on every call');
+    const board2 = randomUUID();
+    h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, 'Two', 'TWO')", board2, h.ids.org);
+    const carol = randomUUID();
+    h.db.insert('members', { id: carol, org_id: h.ids.org, github_id: -424242, github_login: 'carolc', email: 'carolc@dev.local', display_name: 'carol', role: 'member', created_at: h.hub.iso() });
+    const uc = 'UCAROL01';
+    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('cmd', 'W1', ?, ?, ?, 'oauth_link', ?)", uc, carol, conn.id, h.hub.iso());
+    await assert.rejects(card(uc, carol, 'msg-1', board2), (e) => e.code === 'CONFLICT');
+    assert.equal(bucket('integration_card_subject', subjKey(uc)), undefined);
+    assert.equal(bucket('integration_card_conn', conn.id).tokens, 19);
+  } finally { await h.close(); }
+});
+
+test('C2 F-2: a repeat of a request that made its card answers the same whether the caller\'s card bucket is full or spent (no probe)', async () => {
+  const { h, reg, conn, ua, ub } = await actorSetup();
+  try {
+    const ctx = reg.ctxFor(conn.id);
+    const card = (subject, member, rid) => ctx.act('card.create', { subject }, (s) => s.actAs(member).createCard(h.ids.board, { request_id: rid, title: 'Probe' }));
+    const made = await card(ua, h.ids.alice, 'msg-probe');
+    const carol = randomUUID();
+    h.db.insert('members', { id: carol, org_id: h.ids.org, github_id: -434343, github_login: 'carold', email: 'carold@dev.local', display_name: 'carol', role: 'member', created_at: h.hub.iso() });
+    const uc = 'UCAROL02';
+    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('cmd', 'W1', ?, ?, ?, 'oauth_link', ?)", uc, carol, conn.id, h.hub.iso());
+    const full = await card(ub, h.ids.bob, 'msg-probe');
+    for (let i = 0; i < 5; i += 1) await card(uc, carol, `own-${i}`);
+    await assert.rejects(card(uc, carol, 'own-5'), (e) => e.code === 'RATE_LIMITED', 'carol\'s bucket is spent');
+    const spent = await card(uc, carol, 'msg-probe');
+    assert.equal(full.result.card.id, made.result.card.id);
+    assert.equal(spent.result.card.id, made.result.card.id);
+    assert.deepEqual(Object.keys(spent), Object.keys(full));
+    assert.equal(spent.decision, full.decision);
+  } finally { await h.close(); }
+});
