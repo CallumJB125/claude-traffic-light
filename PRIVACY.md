@@ -143,6 +143,8 @@ These are planned. None of them exists in the app today, and each would update t
 
 Before any of these ships, this notice will name the processors involved and the countries your data would go to. Sending personal information abroad is regulated by POPIA section 72 and GDPR Chapter V, so each would need a lawful transfer basis. The same applies today to the team board: its hub is reached through Cloudflare, which acts as a processor passing the traffic through, and the hub host may be outside your country. With accounts, sign-in data also goes to Google or GitHub and email to Resend, each of which may process it outside your country. Presence is shared on the basis of your consent.
 
+**Backups (local).** Plexiform copies your own settings to a second folder so that deleting `~/.claude-traffic-light` doesn't lose them: `~/Library/Application Support/Plexiform Backups` on macOS and `%APPDATA%\Plexiform Backups` on Windows. Each backup is a folder named by its date and time, holding `config.json` (your settings, rules, presets, templates and auto-answer rules), `cameos/` (your face photos and their names) and `usage/daily/` (your usage history: token counts and project folder paths, no prompts), plus a manifest with the time, app version and a SHA-256 of every file. It is an allow-list: nothing else is copied. Never copied: the connection `token`, `approval-secret.json` and `approval-counts.json`, device keys (`devices.json`, `remote.json`), team hub account files, `sessions/`, `requests/`, `owned/`, logs, port files and window positions. One setting you may have typed into `config.json`, a calendar subscription link, is copied with it, because it is part of your settings. The folder is readable only by you (mode 0700, files 0600). Nothing in it is sent anywhere. Preferences → Backups lists them, shows what differs from your current settings and restores all or part; a restore first saves your current settings as another backup, so it can be undone. Plexiform backs up after a settings change (at most once a minute, and only if something changed) and once a day.
+
 ## How long things are kept
 
 What the code does today:
@@ -154,6 +156,7 @@ What the code does today:
 - **Permission requests:** removed when answered. A leftover request is swept after about 75 seconds and a leftover answer after 10 minutes, while Plexiform is running.
 - **Team hub (if you join):** its change journal is append-only (comment bodies are not copied into it). Presence is held in memory only and expires after 90 seconds. The hub host keeps nightly database snapshots, the last 14. Until accounts ship, deletion is on request; when they ship, a code-confirmed delete anonymises your user and revokes every device and session.
 - **Busy cache and `away.json`:** `away.json` is deleted when dismissed or expired; the feed cache is overwritten on each fetch.
+- **Backups:** 30 days, and no more than about 200 MB in total, oldest first, but the 5 newest are always kept. A backup saved just before a restore is kept for at least 7 days.
 - **Everything else** (config, cameos, window position) stays until you delete it.
 
 PROPOSED, not built: let you choose how many days of stats to keep.
@@ -168,13 +171,14 @@ PROPOSED, not built: let you choose how many days of stats to keep.
 
 ## Delete your data
 
-Plexiform never deletes your data for you. To remove it yourself:
+Plexiform never deletes your settings for you (it only prunes old backups, as above). The reset actions in the Lights window (Reset rules, removing a face, Replace everything on import) first save a backup. To remove everything yourself:
 
 1. Quit the app from its tray (menu-bar) icon → Quit.
 2. Remove the hooks it added to Claude Code (in `~/.claude/settings.json`, or `%USERPROFILE%\.claude\settings.json` on Windows), and the `claude-buddy` entry in `~/.claude.json` if you turned on the Claude integration. Hooks for Cursor, Codex and Gemini, if connected, are in those tools' own config.
 3. Delete the folder `~/.claude-traffic-light` (`%USERPROFILE%\.claude-traffic-light` on Windows), which includes `bin/buddy-hook`.
-4. Delete Electron's app data: `~/Library/Application Support/Claude Buddy` on macOS, `%APPDATA%\Claude Buddy` on Windows.
-5. Uninstall the app the usual way for your system: on macOS drag Plexiform from Applications to the Bin, on Windows use Settings → Apps. Turn off "Open at login" first if you enabled it.
+4. Delete the backup folder (`~/Library/Application Support/Plexiform Backups`, `%APPDATA%\Plexiform Backups` on Windows) if you want your settings gone for good, since deleting step 3's folder leaves it behind on purpose.
+5. Delete Electron's app data: `~/Library/Application Support/Claude Buddy` on macOS, `%APPDATA%\Claude Buddy` on Windows.
+6. Uninstall the app the usual way for your system: on macOS drag Plexiform from Applications to the Bin, on Windows use Settings → Apps. Turn off "Open at login" first if you enabled it.
 
 ## Your rights
 

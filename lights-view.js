@@ -559,7 +559,7 @@
       if (!armed) {
         x.classList.add('armed');
         x.textContent = 'remove?';
-        x.title = 'Click again to remove';
+        x.title = 'Click again to remove this photo. A backup of your faces is kept first (Preferences → Backups).';
         armed = setTimeout(() => { armed = null; x.classList.remove('armed'); x.innerHTML = X_ICON; x.title = label; }, 2500);
         return;
       }
@@ -1195,6 +1195,7 @@
     const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
     const parts = [s.rules != null && n(s.rules, 'rule'), s.presets != null && n(s.presets, 'preset'), s.cameos && n(s.cameos, 'face'), s.settings.length && 'agent settings'].filter(Boolean);
     $('setup-summary').innerHTML = `<b>${escape(parts.join(', ') || 'Nothing usable in that file')}</b>`
+      + '<br>Replace deletes your current rules, presets and faces that are not in this file. A backup is kept first (Preferences → Backups).'
       + (s.old ? '<br>From an older version — updated as it loads.' : '')
       + (s.dropped ? `<br>${n(s.dropped, 'face')} skipped (not a valid photo).` : '')
       + (s.commands.length ? `<br>Clicks in this setup run:${s.commands.map((c) => `<code>${escape(c)}</code>`).join('')}` : '');

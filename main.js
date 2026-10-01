@@ -34,6 +34,7 @@ const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const Voice = require('./src/voice.js');
 const Health = require('./src/health.js');
+const Backups = require('./src/backups.js');
 const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = require('./src/motion-gate.js');
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
@@ -255,7 +256,21 @@ function saveConfig(partial) {
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
   configCache = { key: null, value: null }; // two writes inside one ms would share an mtime
+  backups?.onSave();
   return next;
+}
+
+// Outside the data folder, so deleting that folder doesn't take the backups
+// (src/backups.js). A dev run without its own folder makes none: it must not
+// write into the real install's backups.
+const BACKUPS_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_BACKUPS || (IS_DEV_RUN ? null : path.join(app.getPath('appData'), `${Brand.name} Backups`));
+const backups = BACKUPS_DIR ? Backups.create({ dataDir: ROOT_DIR, backupsDir: BACKUPS_DIR, appVersion: app.getVersion(), log: (m) => console.warn(m) }) : null;
+// Before anything that deletes or replaces what the user made. A failed backup
+// is logged, not fatal: a full disk must not make Reset impossible.
+function backupFirst() {
+  const r = backups ? backups.snapshot('manual') : { taken: false };
+  if (r.error) console.warn('[backups] manual snapshot failed:', r.error);
+  return r;
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────
@@ -724,6 +739,7 @@ function cameoListing() {
   return Cameos.listing(Cameos.loadIndex(CAMEO_DIR), Cameos.loadIndex(CAMEO_BUILT_DIR)).map((c) => ({ ...c, src: photos[c.id]?.src || null }));
 }
 function cameosChanged() {
+  backups?.onSave();
   cameoCache = null;
   stateMemo = { at: 0, key: null, value: null };
   broadcastStatus();
@@ -3421,6 +3437,49 @@ ipcMain.handle('health-fix', (_e, id) => {
   console.log(`[health] fix ${JSON.stringify(id)}${error ? ` failed: ${error}` : ''}`);
   return { error, report: healthReport() };
 });
+// Preferences → Backups. Settings is the only caller.
+const backupsSenderOk = (e) => !!settingsWin && e.sender === settingsWin.webContents;
+const backupsOff = { error: 'Backups are off in this run.' };
+const safeId = (id) => typeof id === 'string' && /^[0-9TZ.:-]{1,40}$/.test(id);
+ipcMain.handle('backups-list', (e) => {
+  if (!backupsSenderOk(e)) return { error: 'not allowed' };
+  return backups ? { dir: backups.dir, snapshots: backups.list() } : backupsOff;
+});
+ipcMain.handle('backups-now', (e) => {
+  if (!backupsSenderOk(e)) return { error: 'not allowed' };
+  if (!backups) return backupsOff;
+  try { return backups.snapshot('manual'); } catch (err) { return { error: err.message }; }
+});
+ipcMain.handle('backups-diff', (e, id) => {
+  if (!backupsSenderOk(e)) return { error: 'not allowed' };
+  if (!backups) return backupsOff;
+  return safeId(id) ? backups.diff(id) : { error: 'bad arguments' };
+});
+ipcMain.handle('backups-restore', (e, id, pick) => {
+  if (!backupsSenderOk(e)) return { error: 'not allowed' };
+  if (!backups) return backupsOff;
+  if (!safeId(id)) return { error: 'bad arguments' };
+  const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 500) : undefined);
+  let r;
+  try { r = backups.restore(id, { files: strs(pick?.files), configKeys: strs(pick?.configKeys) }); } catch (err) { return { error: `Could not restore: ${err.message}` }; }
+  if (r.error) return r;
+  console.log(`[backups] restored ${id}: ${r.restored.join(', ')}${r.configKeys.length ? ` + keys ${r.configKeys.join(', ')}` : ''}`);
+  // Config and rules are read from disk on every change; usage history is
+  // held by the history worker, so restoring it takes a relaunch.
+  configCache = { key: null, value: null };
+  historyStore = null;
+  cameosChanged();
+  broadcastStatus();
+  const relaunch = r.usage && !IS_DEV_RUN;
+  if (relaunch) setTimeout(() => { app.relaunch(); app.exit(0); }, 2500);
+  return { ...r, relaunch };
+});
+ipcMain.handle('backups-open-folder', (e) => {
+  if (!backupsSenderOk(e) || !backups) return null;
+  fs.mkdirSync(backups.dir, { recursive: true, mode: 0o700 });
+  return shell.openPath(backups.dir);
+});
+
 ipcMain.handle('health-copy-diagnostics', () => {
   let logText = '';
   for (const f of ['app.log.old', 'app.log']) { try { logText += fs.readFileSync(path.join(ROOT_DIR, f), 'utf8'); } catch { /* rotated away or never written */ } }
@@ -3470,6 +3529,7 @@ ipcMain.handle('cameos-add', (_e, p) => {
 });
 ipcMain.handle('cameos-remove', (_e, id) => {
   try {
+    backupFirst();
     Cameos.removePhoto(CAMEO_DIR, String(id));
     return cameosChanged();
   } catch (err) { return { error: err.message }; }
@@ -3502,6 +3562,7 @@ ipcMain.handle('setup-import-pick', async () => {
 });
 ipcMain.handle('setup-import-apply', (_e, mode) => {
   if (!pendingSetup) return { error: 'Choose a setup file first.' };
+  backupFirst();
   const plan = Setup.planImport(pendingSetup, { config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng }, mode === 'replace' ? 'replace' : 'merge');
   pendingSetup = null;
   // Faces first, so rules that wear them resolve on the first broadcast.
@@ -3512,6 +3573,7 @@ ipcMain.handle('setup-import-apply', (_e, mode) => {
 });
 
 ipcMain.handle('reset-rules', () => {
+  backupFirst();
   const next = saveConfig({ rules: Rules.defaultRules() });
   broadcastStatus();
   return next;
@@ -3665,6 +3727,10 @@ app.whenReady().then(() => {
   syncTailnetListener();
   // Tailscale can come up (or change address) after Buddy does.
   every(60000, () => { if (loadConfig().remoteTailscale) syncTailnetListener(); }, 'tailnet');
+  if (backups) {
+    backups.dailyCheck();
+    every(60 * 60 * 1000, () => backups.dailyCheck(), 'backups');
+  }
   if (DEMO === 'weed') {
     // pots ×12 fetch+plant ≈ 25 s, grow 10 s, harvest ≈ 60 s, dry 25 s, trim, deals 30 s each;
     // at 6½ min a fake session appears so the state changes and the hammer teardown plays.
@@ -3854,7 +3920,7 @@ function guardRenderer(w, name, recreate) {
 }
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
-app.on('before-quit', () => { flushStats(); lightsWin?.destroy(); settingsWin?.destroy(); });
+app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); });
 // The embedded board hub gets SIGTERM and a grace period to close its DB
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;
