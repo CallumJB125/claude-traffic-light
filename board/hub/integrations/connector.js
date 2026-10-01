@@ -43,6 +43,14 @@
 //     fetch without retries; its errors are fixed text with no `cause`.
 //     `webhookUrl` names the pending id the connection keeps; `identityRedirectUri`
 //     is exactly the redirectUri D98's identity flow will use.)
+//     // Optional, prepare connectors only, needs ackBody (D97, slice B3): the one
+//     // delivery a ready pending id answers. Called synchronously, only after
+//     // verify() passed under that pending row's own secrets and parseBody;
+//     // only a plain `true` counts. The answer is then ackBody's string, which
+//     // must be 1–256 printable ASCII characters (Slack: the url_verification
+//     // challenge); anything else, and every other delivery, is the
+//     // unknown-connection 404. Nothing else runs (no handler, lease or audit).
+//     handshake({ payload, headers }) → boolean,   // Slack: payload.type === 'url_verification'
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
@@ -202,6 +210,9 @@ export function defineConnector(spec) {
       errs.push(`connect.prepareInputs lists 1–${PREPARE_INPUTS_MAX} distinct input names (^[a-z][a-z0-9_]{0,39}$)`);
     }
     if (cn.kind === 'token' || cn.manifestForm !== undefined) errs.push('connect.prepare is for an oauth/app_install connector with authorizeUrl (not token, not manifestForm)');
+  }
+  if (cn?.handshake !== undefined && (typeof cn.handshake !== 'function' || typeof cn.prepare !== 'function' || typeof spec.ackBody !== 'function')) {
+    errs.push('connect.handshake is a function, for a connector that declares connect.prepare and ackBody');
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');

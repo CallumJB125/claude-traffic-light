@@ -113,7 +113,7 @@ test('M-1: a flooding (connection, IP) pair gets its pair cap of body reads (har
     const open = (conn) => {
       const u = new URL(`${h.base}/integrations/${conn.id}/webhook`);
       const out = { status: null };
-      out.req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (res) => { res.resume(); out.status = res.statusCode; });
+      out.req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(500_000) } }, (res) => { res.resume(); out.status = res.statusCode; });
       out.req.on('error', () => {});
       out.req.write('{"partial":');
       return out;

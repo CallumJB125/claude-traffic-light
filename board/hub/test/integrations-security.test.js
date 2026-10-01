@@ -437,17 +437,19 @@ test('M7: callback and webhook failures are a generic 500; a multi-byte state si
 
 // ── M8 ────────────────────────────────────────────────────────────────────
 
-test('M8: an unknown webhook target is 404 before the body is read', async () => {
-  const { h } = await setup();
+// D97 slice B3 (amendment 4): an unknown id's body is read like any other
+// (so it can't be told from a pending id), under the same deadline.
+test('M8: an unknown webhook target never holds the hub past the read deadline', async () => {
+  const h = await startHub({ config: { webhookReads: { deadlineMs: 300 } } });
   try {
     const u = new URL(`${h.base}/integrations/${randomUUID()}/webhook`);
     const status = await new Promise((resolve, reject) => {
-      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(5_000_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
+      const req = request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-length': String(500_000) } }, (res) => { res.resume(); resolve(res.statusCode); });
       req.on('error', reject);
       req.write('{"partial":');
-      setTimeout(() => reject(new Error('the hub waited for the body')), 2000).unref();
+      setTimeout(() => reject(new Error('the hub waited past its deadline')), 2000).unref();
     });
-    assert.equal(status, 404);
+    assert.equal(status, 408);
   } finally { await h.close(); }
 });
 
