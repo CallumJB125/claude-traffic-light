@@ -1044,6 +1044,9 @@ function handleDeepLink(url) {
   }
 }
 app.on('open-url', (e, url) => { e.preventDefault(); handleDeepLink(url); });
+// The updater IPC trusts the app's own pages by path, so an app window must
+// never be navigated to another page (a dropped file, a stray link).
+app.on('web-contents-created', (_e, wc) => Updater.guardNavigation(wc));
 // Only an installed app may claim the scheme: a dev run would steal it from it.
 if (app.isPackaged) for (const scheme of BRAND.SCHEMES) app.setAsDefaultProtocolClient(scheme);
 let lightsWin = null;

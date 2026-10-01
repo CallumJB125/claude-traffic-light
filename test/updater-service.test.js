@@ -620,7 +620,8 @@ function ipcEvent(url, { subframe = false } = {}) {
   const sender = { mainFrame, isDestroyed: () => false, sent: [], send(ch, s) { this.sent.push([ch, s.status]); } };
   return { sender, senderFrame: subframe ? { url } : mainFrame };
 }
-const APP = 'file:///Applications/Plexiform.app/Contents/Resources/app.asar';
+// The app's own folder as main.js loads it (app.asar when packaged).
+const APP = require('url').pathToFileURL(Updater.APP_ROOT).href;
 
 function ipcRig() {
   publish(feed, { privateKey, version: '1.2.0', files: [DEB('1.2.0')] });
@@ -685,8 +686,54 @@ test('PoC 4: other pages, subframes and web pages are forbidden everything, get-
   assert.ok(Updater.policyFor({ sender: wc, senderFrame: { url, frameTreeNodeId: 7, parent: null } }));
   assert.equal(Updater.policyFor({ sender: wc, senderFrame: { url, frameTreeNodeId: 8, parent: wc.mainFrame } }), null);
   assert.equal(Updater.policyFor({ sender: wc, senderFrame: { url, frameTreeNodeId: 7, parent: wc.mainFrame } }), null);
-  // on Windows the file URL carries a drive letter
-  assert.ok(Updater.policyFor(ipcEvent('file:///C:/Program%20Files/Plexiform/resources/app.asar/updates.html')));
+  // a percent-encoded URL for the same file is the same page
+  assert.ok(Updater.policyFor(ipcEvent(`${APP}/updates%2Ehtml`)));
+});
+
+// N3 (security re-review): the policy matched the file NAME, so any local updates.html had updater rights.
+test('N3: a same-named page anywhere but the app folder is forbidden; the real app pages are allowed', async () => {
+  const { handlers } = ipcRig();
+  const forbidden = { ok: false, error: 'forbidden' };
+  const elsewhere = [
+    'file:///tmp/updates.html',
+    'file:///Applications/Plexiform.app/Contents/Resources/app.asar/updates.html',
+    `${APP}/sub/updates.html`,
+    `${APP}/../updates.html`,
+    'file:///C:/Users/x/Downloads/updates.html',
+    'file://evil.example/share/updates.html',
+    'file:///tmp/index.html',
+  ];
+  for (const url of elsewhere) {
+    assert.equal(Updater.policyFor(ipcEvent(url)), null, url);
+    assert.deepEqual(await handlers['updater:get-state'](ipcEvent(url)), forbidden, url);
+    assert.deepEqual(await handlers['updater:install'](ipcEvent(url), { when: 'now' }), forbidden, url);
+  }
+  assert.equal((await handlers['updater:get-state'](ipcEvent(`${APP}/updates.html`))).status, 'idle');
+  assert.equal((await handlers['updater:get-state'](ipcEvent(`${APP}/index.html?x=1#y`))).status, 'idle');
+  assert.deepEqual(await handlers['updater:check'](ipcEvent(`${APP}/index.html`)), forbidden);
+});
+
+test('N3: the navigation guard keeps an app window on app pages and opens no windows', () => {
+  for (const page of ['index.html', 'settings.html', 'lights.html', 'help.html', 'overlay.html', 'tray.html', 'updates.html']) assert.ok(Updater.isAppPage(`${APP}/${page}`), page);
+  assert.ok(Updater.isAppPage(`${APP}/lights.html?now=1`), 'loadFile with a query');
+  for (const url of ['file:///tmp/updates.html', 'https://plexiform.dev/updates.html', 'https://claude.ai', `${APP}/buddy-window/info.html`, `${APP}/PRIVACY.md`, 'about:blank', 'not a url', '']) assert.equal(Updater.isAppPage(url), false, url);
+
+  const wcAt = (current) => {
+    const wc = new EventEmitter();
+    wc.getURL = () => current;
+    wc.setWindowOpenHandler = (fn) => { wc.openHandler = fn; };
+    Updater.guardNavigation(wc);
+    return wc;
+  };
+  const blocked = (wc, url) => { let prevented = false; wc.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
+  const app = wcAt(`${APP}/index.html`);
+  assert.deepEqual(app.openHandler({ url: 'https://claude.ai' }), { action: 'deny' });
+  assert.equal(blocked(app, 'file:///tmp/updates.html'), true);
+  assert.equal(blocked(app, 'https://claude.ai'), true);
+  assert.equal(blocked(app, `${APP}/updates.html`), false);
+  assert.equal(blocked(wcAt(''), 'file:///tmp/updates.html'), true, 'nothing loaded yet');
+  // another module's view on its own pages keeps its own guard (buddy-window)
+  assert.equal(blocked(wcAt('https://hub.example/'), 'https://hub.example/next'), false);
 });
 
 test('PoC 4: an old beta rollback is refused on a switch to beta (beta key, floor, rollbackFrom)', async () => {

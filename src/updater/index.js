@@ -7,12 +7,15 @@
 //   push    updater:state (UpdaterState) on every change, to every window
 //           that has asked for the state
 // Who may call what is decided per window (SENDER_POLICY): the main frame of
-// the app's own updates.html gets everything; the widget (index.html) may
-// read the state and install, but not force a restart; anything else,
-// another page, a subframe or a web page, gets { ok: false, error: 'forbidden' }.
+// the app's own updates.html (by full path under APP_ROOT, never by name)
+// gets everything; the widget (index.html) may read the state and install,
+// but not force a restart; anything else, another page, a same-named file
+// elsewhere, a subframe or a web page, gets { ok: false, error: 'forbidden' }.
+// guardNavigation keeps the app's windows on the app's own pages.
 // main.js calls start() once; setRequired() is for the hub handshake.
 const fs = require('fs');
 const path = require('path');
+const { fileURLToPath } = require('url');
 const Brand = require('../../brand.js');
 const Machine = require('../../hooks/session-machine.js');
 const Rules = require('../../rules.js');
@@ -20,7 +23,10 @@ const V = require('./verify.js');
 const MacSwap = require('./mac-swap.js');
 const { createService } = require('./service.js');
 
-const BUILD_DIR = path.join(__dirname, '..', '..', 'build');
+// The app's own folder (app.asar when packaged): main.js lives here and its
+// loadFile('index.html') etc. resolve against it.
+const APP_ROOT = path.resolve(__dirname, '..', '..');
+const BUILD_DIR = path.join(APP_ROOT, 'build');
 // One file per channel, by exact name: no other key (a retired one included) is trusted.
 const KEY_FILES = { stable: 'update-key.pub.pem', beta: 'update-key-beta.pub.pem' };
 const FORBIDDEN = Object.freeze({ ok: false, error: 'forbidden' });
@@ -56,12 +62,25 @@ function busyReason(state) {
   return null;
 }
 
-// Page (basename of the file:// main frame) → what it may call.
-const SENDER_POLICY = {
-  'updates.html': () => true,
-  'index.html': (channel, args) => channel === 'updater:get-state'
-    || (channel === 'updater:install' && ['now', 'idle'].includes(args[0]?.when) && !args[0]?.force),
-};
+// Every page main.js loads (plus builder-2's updates.html), by full path.
+const APP_PAGES = new Set(['index.html', 'settings.html', 'lights.html', 'help.html', 'overlay.html', 'tray.html', 'updates.html'].map((p) => path.join(APP_ROOT, p)));
+
+// A file: URL → its absolute path, or null for anything else.
+function filePath(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'file:' ? path.resolve(fileURLToPath(u)) : null;
+  } catch { return null; }
+}
+
+const isAppPage = (url) => APP_PAGES.has(filePath(url));
+
+// Page (full path of the file:// main frame) → what it may call.
+const SENDER_POLICY = new Map([
+  [path.join(APP_ROOT, 'updates.html'), () => true],
+  [path.join(APP_ROOT, 'index.html'), (channel, args) => channel === 'updater:get-state'
+    || (channel === 'updater:install' && ['now', 'idle'].includes(args[0]?.when) && !args[0]?.force)],
+]);
 
 function policyFor(e) {
   const frame = e?.senderFrame;
@@ -70,12 +89,21 @@ function policyFor(e) {
   // WebFrameMain objects are cached per frame, so the main frame is the same
   // object; the id comparison is for a wrapper made afresh.
   if (frame !== main && !(frame.parent === null && frame.frameTreeNodeId != null && frame.frameTreeNodeId === main.frameTreeNodeId)) return null;
-  let url;
-  try { url = new URL(frame.url); } catch { return null; }
-  if (url.protocol !== 'file:') return null;
-  let name;
-  try { name = path.posix.basename(decodeURIComponent(url.pathname)); } catch { return null; }
-  return Object.hasOwn(SENDER_POLICY, name) ? SENDER_POLICY[name] : null;
+  return SENDER_POLICY.get(filePath(frame.url)) || null;
+}
+
+// For every webContents (app.on('web-contents-created')): no new windows, and
+// a window showing an app page (or nothing yet) navigates only to app pages,
+// so a dropped file or a stray link can't put another page where the updater
+// IPC is trusted. Views on other pages (buddy-window's) keep their own
+// guards and replace the open handler with theirs. External links go through
+// shell.openExternal from main, never a navigation.
+function guardNavigation(wc) {
+  wc.on('will-navigate', (e, url) => {
+    const current = wc.getURL();
+    if ((!current || current === 'about:blank' || isAppPage(current)) && !isAppPage(url)) e.preventDefault();
+  });
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
 }
 
 const allowed = (e, channel, args) => !!policyFor(e)?.(channel, args);
@@ -149,4 +177,4 @@ const setRequired = (minVersion, hubName) => service?.setRequired(minVersion, hu
 const healthStatus = () => (service ? service.healthStatus() : { state: 'unknown', detail: 'not set up yet' });
 const markLaunched = ({ app }) => MacSwap.markLaunched({ userData: app.getPath('userData'), updatedFrom: launch.updatedFrom });
 
-module.exports = { start, setRequired, healthStatus, markLaunched, busyReason, register, loadShippedKeys, loadBuiltAt, policyFor, KEY_FILES };
+module.exports = { start, setRequired, healthStatus, markLaunched, busyReason, register, loadShippedKeys, loadBuiltAt, policyFor, isAppPage, guardNavigation, APP_ROOT, KEY_FILES };
