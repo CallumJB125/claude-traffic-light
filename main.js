@@ -1154,7 +1154,7 @@ function createSettingsWindow() {
   showDock();
   settingsWin.on('closed', () => {
     settingsWin = null;
-    if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
   });
 }
 
@@ -1283,9 +1283,87 @@ function createUpdatesWindow() {
   showDock();
   updatesWin.on('closed', () => {
     updatesWin = null;
-    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
   });
 }
+
+// Hatch: make a character from a few choices (characters/hatch.js), keep it
+// under <data dir>/characters (src/character-store.js). The page only ever
+// sends choices; main keeps what it generated and saves that by token, so a
+// compromised page cannot write art of its own. Everything is validated on the
+// way in and again when read back.
+const CharacterStore = require('./src/character-store.js');
+const Hatch = require('./characters/hatch.js');
+const characterStore = CharacterStore.create({ dir: path.join(ROOT_DIR, 'characters'), log: (m) => console.warn(m) });
+let hatchWin = null;
+const hatchResults = new Map();
+function broadcastCharacters() {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('characters:changed');
+}
+function createHatchWindow() {
+  if (hatchWin) {
+    hatchWin.show();
+    hatchWin.focus();
+    return;
+  }
+  hatchWin = new BrowserWindow({
+    width: 640,
+    height: 480,
+    useContentSize: true,
+    minimizable: false,
+    maximizable: false,
+    title: 'Hatch a character',
+    backgroundColor: '#1c1a1f',
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'hatch-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  hatchWin.setMenuBarVisibility(false);
+  hatchWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const HATCH_URL = require('url').pathToFileURL(path.join(__dirname, 'hatch.html')).href;
+  const stay = (e, url) => { if (url.split(/[?#]/)[0] !== HATCH_URL) e.preventDefault(); };
+  hatchWin.webContents.on('will-navigate', stay);
+  hatchWin.webContents.on('will-redirect', stay);
+  hatchWin.loadFile('hatch.html');
+  showDock();
+  hatchWin.on('closed', () => {
+    hatchWin = null;
+    hatchResults.clear();
+    if (process.platform === 'darwin' && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
+  });
+}
+const fromHatch = (e) => !!hatchWin && e.sender === hatchWin.webContents;
+ipcMain.handle('characters:list', () => characterStore.list().map((c) => c.character));
+ipcMain.handle('hatch:open', (e) => { if (lightsWin && e.sender === lightsWin.webContents) createHatchWindow(); });
+ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) hatchWin.close(); });
+// ai: false until the hand-off engine can run a hidden AI task (the template path is the fallback either way)
+ipcMain.handle('hatch:options', (e) => (fromHatch(e) ? { shapes: Hatch.SHAPES, sizes: Hatch.SIZES, arms: Hatch.ARMS, accessories: Hatch.ACCESSORIES, ai: false } : null));
+ipcMain.handle('hatch:surprise', (e) => (fromHatch(e) ? Hatch.surprise(Date.now()) : null));
+ipcMain.handle('hatch:generate', async (e, params) => {
+  if (!fromHatch(e)) return null;
+  const r = await Hatch.runHatch({ params });
+  if (!r.character) return null;
+  const token = require('crypto').randomUUID();
+  hatchResults.set(token, { character: r.character, params: r.params, source: r.source });
+  while (hatchResults.size > 8) hatchResults.delete(hatchResults.keys().next().value);
+  return { token, character: r.character, source: r.source };
+});
+ipcMain.handle('hatch:save', (e, token) => {
+  if (!fromHatch(e)) return { error: 'Not allowed.' };
+  const made = typeof token === 'string' ? hatchResults.get(token) : null;
+  if (!made) return { error: 'Nothing to save yet.' };
+  try {
+    const saved = characterStore.save({ ...made.character, id: characterStore.freeId(made.character.name) }, { source: 'hatch', params: made.params });
+    hatchResults.delete(token); // one token, one save
+    broadcastCharacters();
+    return { ok: true, id: saved.id, name: saved.name };
+  } catch (err) {
+    console.warn(`hatch save failed: ${err.message}`);
+    return { error: /at most/.test(err.message) ? err.message : 'Could not save it.' };
+  }
+});
+ipcMain.handle('hatch:remove', (e, id) => {
+  if (!(lightsWin && e.sender === lightsWin.webContents)) return false;
+  try { const ok = characterStore.remove(id); if (ok) broadcastCharacters(); return ok; } catch { return false; }
+});
 
 // The Usage pop-out: a small read-only glance (today, this week, busiest model)
 // next to whatever opened it. The full analytics page stays in the Lights
@@ -1522,7 +1600,7 @@ function createWaitingWindow() {
   showDock();
   waitingWin.on('closed', () => {
     waitingWin = null;
-    if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (IS_MAC && !lightsWin && !settingsWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
   });
 }
 
@@ -1655,7 +1733,7 @@ function createLightsWindow() {
     // The next editor opens shown; only the machine-wide reasons carry over.
     lightsMotion.set('hidden', false);
     lightsMotion.set('minimized', false);
-    if (process.platform === 'darwin' && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+    if (process.platform === 'darwin' && !settingsWin && !updatesWin && !buddyWin?.isOpen() && !hatchWin) app.dock.hide();
   });
 }
 

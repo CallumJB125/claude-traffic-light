@@ -434,7 +434,12 @@
       extra: (o) => (cameoById(o)?.user ? faceRemoveBtn(cameoById(o)) : null),
     });
     $('cameos').appendChild(faceAddBtn());
-    picker($('bodies'), R.BODIES, r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; });
+    const userBodies = window.BuddyCharacters.ids().filter((id) => id.startsWith('u-'));
+    picker($('bodies'), [...R.BODIES, ...userBodies], r.then.body, (o) => ({ body: o || 'claude', bodyColor: r.then.bodyColor }), (o) => { r.then.body = o; }, {
+      label: (o) => (userBodies.includes(o) ? window.BuddyCharacters.get(o).name : null),
+      extra: (o) => (userBodies.includes(o) ? hatchRemoveBtn(o) : null),
+    });
+    $('bodies').appendChild(hatchAddBtn());
     picker($('effects'), R.EFFECTS, r.then.effect, (o) => ({ effect: o || 'none', waitMinutes: 20 }), (o) => { r.then.effect = o; });
     picker($('pets'), R.PETS, r.then.pet, (o) => ({ pet: o || 'none' }), (o) => { r.then.pet = o; });
     picker($('agents'), R.AGENT_STYLES, r.then.agents, (o) => ({ agents: o || 'robot', agentsColor: r.then.agentsColor, minions: SAMPLE_MINIONS }), (o) => { r.then.agents = o; });
@@ -572,6 +577,39 @@
     });
     return x;
   }
+  function hatchRemoveBtn(id) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'face-x';
+    const label = `Delete ${window.BuddyCharacters.get(id).name}`;
+    x.title = label;
+    x.setAttribute('aria-label', label);
+    x.innerHTML = X_ICON;
+    let armed = null;
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!armed) {
+        x.classList.add('armed');
+        x.textContent = 'delete?';
+        armed = setTimeout(() => { armed = null; x.classList.remove('armed'); x.innerHTML = X_ICON; }, 3000);
+        return;
+      }
+      clearTimeout(armed);
+      window.lightsApi.removeCharacter(id);
+    });
+    return x;
+  }
+
+  function hatchAddBtn() {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'addhatch';
+    b.title = 'Make a new character';
+    b.innerHTML = '<span>+ Hatch</span>';
+    b.addEventListener('click', () => window.lightsApi.openHatch());
+    return b;
+  }
+
   function faceAddBtn() {
     const b = document.createElement('button');
     b.type = 'button';
@@ -805,6 +843,8 @@
   $('face-modal').addEventListener('dragover', (e) => { e.preventDefault(); $('face-pane').classList.add('dragging'); });
   $('face-modal').addEventListener('dragleave', (e) => { if (!$('face-modal').contains(e.relatedTarget)) $('face-pane').classList.remove('dragging'); });
   $('face-modal').addEventListener('drop', (e) => { e.preventDefault(); $('face-pane').classList.remove('dragging'); faceFromFile(e.dataTransfer.files[0]); });
+  // hatched characters arrive after the first draw, and when one is saved or removed
+  window.addEventListener('user-characters', () => { try { renderEditor(); } catch { /* no rule selected yet */ } });
   document.addEventListener('paste', (e) => {
     if (!faceOpen()) return;
     const item = Array.from(e.clipboardData?.items || []).find((i) => i.type.startsWith('image/'));
