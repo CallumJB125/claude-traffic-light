@@ -207,14 +207,18 @@ test('Google: an allowlisted Workspace address signs up; a non-allowed one gets 
   } finally { await r.h.close(); }
 });
 
-test('GitHub: an allowlisted verified primary signs up; a non-allowed one is refused; an unverified or non-primary allowlisted address never counts', async () => {
+test('GitHub: a verified primary an email: entry lists signs up; a domain: entry never admits one; a non-allowed one is refused; an unverified or non-primary allowlisted address never counts', async () => {
   const r = await rig();
   try {
-    const ok = await r.oauth('github', { id: 501, login: 'octo501', name: 'Octo', email: 'octo@allowed.test' });
+    const ok = await r.oauth('github', { id: 501, login: 'octo501', name: 'Octo', email: 'Pat@Elsewhere.test' });
     assert.equal(ok.status, 200, ok.text);
     assert.ok(r.h.db.get("SELECT 1 AS x FROM identities WHERE provider = 'github' AND subject = '501'"));
+    assert.equal(r.h.db.get("SELECT u.signup_via FROM users u JOIN identities i ON i.user_id = u.id WHERE i.provider = 'github' AND i.subject = '501'").signup_via, 'allowlist');
     const n = r.users();
     for (const who of [
+      // GitHub's verified primary may be years old (a mailbox at a former employer): domain: entries are for code and Google only.
+      { id: 506, login: 'o506', email: 'octo@allowed.test' },
+      { id: 507, login: 'o507', email: 'x@sub.partner.test' },
       { id: 502, login: 'o502', email: 'o502@nope.test' },
       { id: 503, login: 'o503', emails: [{ email: 'u@allowed.test', primary: false, verified: false }, { email: 'u@nope.test', primary: true, verified: true }] },
       { id: 504, login: 'o504', emails: [{ email: 'v@allowed.test', primary: false, verified: true }, { email: 'v@nope.test', primary: true, verified: true }] },
@@ -228,6 +232,11 @@ test('GitHub: an allowlisted verified primary signs up; a non-allowed one is ref
     assert.equal(unverified.body.error.code, 'EMAIL_UNVERIFIED', 'never an unverified address');
     assert.equal(r.users(), n);
     assert.equal(r.h.db.get("SELECT COUNT(*) AS n FROM identities WHERE provider = 'github'").n, 1);
+    // The same domain still admits an email code and an authoritative Google account.
+    const code = await r.emailSignIn('octo@allowed.test');
+    assert.equal(code.v.status, 200, code.v.text);
+    const g = await r.oauth('google', { sub: 'g-dom', email: 'gdom@allowed.test', name: 'G', hd: 'allowed.test' });
+    assert.equal(g.status, 200, g.text);
   } finally { await r.h.close(); }
 });
 

@@ -319,8 +319,8 @@ export class OAuth {
       linked = !!user;
     }
     if (!user) {
-      // D104: GitHub's verified primary address, or one Google is authoritative for; never a weaker one.
-      const signupVia = this.accounts.requireSignup(who.email, { eligible: who.provider === 'github' || who.authoritative });
+      // D104: GitHub's verified primary address (never through a domain: entry), or one Google is authoritative for; never a weaker one.
+      const signupVia = this.accounts.requireSignup(who.email, { eligible: who.provider === 'github' || who.authoritative, domains: who.provider !== 'github' });
       // The address is the new account's primary unless someone holds it: an
       // authoritative newcomer takes it from a weaker holder; a weaker newcomer gets none.
       const holder = this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', who.email);

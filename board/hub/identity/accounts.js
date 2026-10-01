@@ -157,12 +157,14 @@ export class Accounts {
    * live member row an admin or BOARD_BOOTSTRAP made for it ('member_row'),
    * or a usable pending invite to it ('invite'); else null. `eligible` false
    * (a Google address Google is not authoritative for) never qualifies.
+   * `domains` false (GitHub: its verified primary may be a mailbox the user
+   * lost years ago) skips the domain: entries.
    */
-  signupVia(email, { eligible = true } = {}) {
+  signupVia(email, { eligible = true, domains = true } = {}) {
     const p = this.signup;
     if (p.mode === 'open') return 'open';
     if (!eligible) return null;
-    if (p.emails.has(email) || p.domains.has(email.slice(email.lastIndexOf('@') + 1))) return 'allowlist';
+    if (p.emails.has(email) || (domains && p.domains.has(email.slice(email.lastIndexOf('@') + 1)))) return 'allowlist';
     const row = this.db.all(`SELECT m.email FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
     if (row) return 'member_row';
