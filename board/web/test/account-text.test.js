@@ -57,3 +57,9 @@ test('join: a code, a bare token or this board’s invite link; another board’
   assert.match(parseJoin(`javascript:alert(1)`, ORIGIN).error, /doesn’t look like an invite/);
   assert.match(parseJoin('', ORIGIN).error, /Paste/);
 });
+
+test('sign-up control (D104): SIGNUP_CLOSED is the fixed invite-only sentence at any step, never the hub message', () => {
+  for (const step of ['verify', 'start', 'invite']) {
+    assert.equal(accountErrorText({ status: 403, code: 'SIGNUP_CLOSED', extra: { message: 'hub words' } }, step), 'Sign-up is invite-only right now. Ask a team owner for an invite.');
+  }
+});

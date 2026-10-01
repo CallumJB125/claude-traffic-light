@@ -39,6 +39,9 @@ test('settings window renders its default state', async () => {
 // Each test launch is a fresh app copy; showing it in the Dock left stray icons behind.
 test('a test run never shows in the Dock, even with windows open', async () => {
   test.skip(process.platform !== 'darwin', 'the Dock is macOS-only');
+  // Opens its own windows: Playwright restarts the worker after any failed test, which
+  // relaunches the app with only the widget, so this must not lean on earlier tests.
+  await widget.evaluate(() => window.trafficLight.openLights());
   const lights = await windowByFile(h.app, 'lights.html');
   await lights.evaluate(() => window.lightsApi.openPreferences());
   await windowByFile(h.app, 'settings.html');

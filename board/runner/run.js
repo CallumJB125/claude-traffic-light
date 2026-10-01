@@ -154,6 +154,9 @@ export class Run {
   onWake(slept_ms) {
     this.wake = { slept_ms, mono: this.clock.mono() };
     this.postWakeActivity = false;
+    // An event held by the activity throttle happened before sleep. Sending
+    // it after the recovery heartbeat would falsely count it as fresh work.
+    this.pendingActivity = null;
   }
 
   // Called every tick.

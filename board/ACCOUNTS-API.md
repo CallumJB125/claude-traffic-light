@@ -6,7 +6,7 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 
 ## Conventions
 
-- JSON in and out. Every response has header `Board-Protocol: 1`. Mutations need `Content-Type: application/json`.
+- JSON in and out. Every response has header `Board-Protocol: 1`. Mutations need `Content-Type: application/json`. A body is read only after the route's credential is checked, is at most 64 KiB on these routes (`413 PAYLOAD_TOO_LARGE`) and must arrive within 20 s (`408 TIMEOUT`) (CONTRACT D105).
 - Errors: `{"error": {"code": "<CODE>", "message": "…", …extra}}`. The HTTP status comes from the code (table at the end). `429` responses also send `Retry-After: <s>` and `error.retry_after_s`.
 - `request_id` (uuid) is optional on the account routes. When present on a mutation, a repeat within 10 minutes replays the first answer (header `Board-Replayed: 1`). Creating or resending an invite is the exception: its answer holds a link and code shown once, so a repeat answers `409 CONFLICT {reason:'REPLAYED'}` "This invite was already made. Resend it to get a new link." and the replay cache never holds them; the apps offer Resend.
 - Timestamps are ISO-8601 UTC strings.
@@ -25,6 +25,18 @@ Without a mailer:
 - Invites are still created and still bound to the invited address, but the hub sends nothing: the inviter gets the link and the code once and shares them (copy, or a prefilled `mailto:` draft in their own mail client). See `POST /api/teams/:id/invites`.
 
 An exposed hub (a `BOARD_PUBLIC_URL` off loopback, or a tunnel probe) must be https, behind cloudflared with `BOARD_TRUST_CF_IP=1`, and have at least one sign-in method (a configured Google or GitHub client, `BOARD_SIGNIN_METHODS`, or a mailer); it never uses the console mailer.
+
+### Sign-up control (D104)
+
+Who may make a **new** account. `BOARD_SIGNUP=allowlist` (the default in accounts mode) or `open` (any verified address, as before D104). With `allowlist`, a new account is made only for a verified address that `BOARD_SIGNUP_ALLOW` lists (a comma list of `domain:<domain>` and `email:<address>`, folded like stored addresses: NFKC, trimmed, lower case; a `domain:` entry matches that exact domain only, never a sub-domain or a longer name, so `domain:example.com` does not admit `a@evilexample.com`, `a@example.com.evil.com` or `a@sub.example.com`), or that holds a pending invite still good to accept (the invite is the allowlist for its address), or that an admin or `BOARD_BOOTSTRAP` gave a member row not yet linked to an account. An empty list is invite-only (one warning at start-up). Existing accounts sign in on every path as before. The address that counts is the one the sign-in proved: an email code's, GitHub's verified primary, or a Google address Google is authoritative for (D83; a non-authoritative Google address never qualifies, not even with an invite). **GitHub never qualifies through a `domain:` entry**: its verified primary may be a mailbox the person lost years ago, so a new GitHub account needs an `email:` entry for that exact address, a usable invite, or an unlinked member row.
+
+- **Email code start** for a new address that may not sign up: the same `200 {flow_id, expires_in}`, no mail, a dud flow (as for a silenced start), and it spends no mail budget and is never a mail failure.
+- **Verify** re-checks when it would make the account (the list or the invite may have changed since the start): `403 SIGNUP_CLOSED`, the account is not made and the flow is spent.
+- **Google / GitHub** for a new user who may not sign up: `403 SIGNUP_CLOSED`, no account, identity or token.
+
+**Invited accounts don't spread.** A new account records what let it in (`users.signup_via`: `allowlist`, `member_row`, `invite`, or `open` when `BOARD_SIGNUP=open`; accounts from before this are `NULL` and count as `allowlist`). It is set when the account is made and never changes. While `BOARD_SIGNUP=allowlist`, an account that only an invite let in (`invite`) may accept invites and be in any number of teams, but `POST /api/teams` answers it `403 FORBIDDEN` "Only team owners invited by the hub administrator can create teams while sign-up is invite-only", so it never owns a team it could invite more newcomers into. With `open` everyone may create teams.
+
+`SIGNUP_CLOSED`'s message is always "Sign-up is invite-only right now. Ask a team owner for an invite.": it names the mode, never the list. The list is never in an answer, a log line or the database. Audit: `auth.signup.refused` (`method`; `email_ref` or `subject_ref`, keyed hashes).
 
 ## Credentials
 
@@ -101,7 +113,7 @@ The mail holds a 6-digit code, valid for 10 minutes and one use, with "Never sha
 
 For `client:'web'` the response also sets `__Host-buddy_flow` (10 min). That cookie binds the magic link to this browser.
 
-Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `404 METHOD_DISABLED` (no mailer on this hub), `429 RATE_LIMITED`.
+Errors: `400 VALIDATION` (bad email, bad client), `401 UNAUTHENTICATED` (a delete flow while signed out), `404 METHOD_DISABLED` (no mailer on this hub), `429 RATE_LIMITED`. A new address that may not sign up (D104) gets the ordinary `200`, and no mail.
 
 ### `POST /api/auth/email/verify`
 
@@ -281,6 +293,7 @@ Errors:
 | `400 INVALID_TOKEN` | any flow problem (unknown, used, expired, another network, wrong `state` or verifier, a `redirect_uri` or `provider` in the body that differs), an id_token that fails a check, a step-up by another identity or device. One generic answer |
 | `401 UNAUTHENTICATED` | a step-up start without a valid Bearer |
 | `403 EMAIL_UNVERIFIED` | the Google account's address isn't verified, or the GitHub account has no primary verified address |
+| `403 SIGNUP_CLOSED` | a new user this hub's sign-up control does not admit (D104); no account is made |
 | `404 METHOD_DISABLED` | that provider isn't configured on this hub |
 | `429 RATE_LIMITED` | see Rate limits (starts, open flows, exchanges, failure budget) |
 | `502 PROVIDER_ERROR` | the provider refused the code (reused, expired, or the verifier didn't match at the provider) |
@@ -329,7 +342,7 @@ The **last owner** can't be demoted or removed, and can't leave (`409 CONFLICT {
 
 ### `POST /api/teams`
 
-Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise).
+Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise). While sign-up is `allowlist`, an account an invite let in (`signup_via` `invite`, see Sign-up control) gets `403 FORBIDDEN` "Only team owners invited by the hub administrator can create teams while sign-up is invite-only".
 
 ```json
 { "name": "Acme Rockets", "slug": "acme" }
@@ -484,12 +497,15 @@ The app's runner process gets `{"type": "runner.config", "hub_url": "https://…
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
 | `WRONG_ACCOUNT` | 403 | a valid invite token for another address (names no address) |
+| `SIGNUP_CLOSED` | 403 | a new account the hub's sign-up control does not admit (D104): Google, GitHub, or an email code whose address stopped qualifying after the start; the fixed invite-only text, never the list |
 | `QUOTA_EXCEEDED` | 403 | a plan limit, or the runner enrolment caps (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
 | `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66), or an OAuth route for a provider this hub hasn't configured |
 | `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug; a second pending invite for one address (`invite_id`) |
 | `ALREADY_MEMBER` | 409 | inviting, or accepting an invite, for someone already in the team (`team`) |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |
+| `TIMEOUT` | 408 | the request body did not arrive within 20 s (D105) |
+| `PAYLOAD_TOO_LARGE` | 413 | a body over 64 KiB (D105) |
 | `RATE_LIMITED` | 429 | see Rate limits (`retry_after_s`) |
 | `PROVIDER_ERROR` | 502 | Google or GitHub refused the sign-in code |
 | `PROVIDER_UNAVAILABLE` | 503 | Google or GitHub (or Google's signing keys) couldn't be reached |

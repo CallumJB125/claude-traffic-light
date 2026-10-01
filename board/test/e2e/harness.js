@@ -192,9 +192,9 @@ export async function startRunner({ root, name, member, hubPort, repo, repoId, s
       c.on('error', reject);
     }),
     cliPid: (runId) => r.ledger()[runId]?.pid ?? null,
-    signal(sig, { cli = true } = {}) {
+    signal(sig, { cli = true, runner = true } = {}) {
       if (cli) for (const e of Object.values(r.ledger())) { try { process.kill(-e.pid, sig); } catch { try { process.kill(e.pid, sig); } catch { /* gone */ } } }
-      try { process.kill(proc.pid, sig); } catch { /* gone */ }
+      if (runner) { try { process.kill(proc.pid, sig); } catch { /* gone */ } }
     },
     async stop() {
       try { process.kill(proc.pid, 'SIGCONT'); } catch { /* gone */ }

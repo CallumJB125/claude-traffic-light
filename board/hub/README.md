@@ -68,10 +68,12 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_LOCAL_SECRET` | random per start | With `BOARD_AUTH=local`, **tests only**: the `board_local` cookie value (≥ 32 bytes). Unset: 32 random bytes (hex) per launch, sent only in the parentPort `board.listening` message, never logged or printed |
 | `BOARD_ACCESS_TEAM` | — | Access team name: certs at `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Required for `access` |
 | `BOARD_ACCESS_AUD` | — | The Access application AUD tag. Required for `access` |
-| `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta` |
+| `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta`. Removed from the environment once read, never in a dump of the config |
 | `BOARD_PUBLIC_URL` | — | Public origin, e.g. `https://board.example.com`. Accepted as a same-origin `Origin` for mutations and WS upgrades |
 | `BOARD_TRUST_CF_IP` | off | `accounts` only, loopback bind only: take the client IP for rate limits from `CF-Connecting-IP` (cloudflared on the same host). Required once the hub is exposed |
 | `BOARD_SIGNIN_METHODS` | — | `accounts`, optional: comma list `google`, `github` (D66). Since D76 `GET /api/auth/methods` reports the providers whose client id and secret are set, and a configured provider is a sign-in method on its own; this list still counts as one for the exposure check |
+| `BOARD_SIGNUP` | `allowlist` | `accounts`: who may make a new account (D104). `allowlist`: only verified addresses `BOARD_SIGNUP_ALLOW` lists, invited addresses and unlinked member rows (`BOARD_BOOTSTRAP`); `open`: any verified address. Existing accounts are never affected |
+| `BOARD_SIGNUP_ALLOW` | — | `accounts` with `allowlist`: comma list of `domain:<domain>` (that exact domain, no sub-domains; email codes and authoritative Google accounts only, never GitHub, whose verified primary can be years old) and `email:<address>` (any sign-in method), case-insensitive, at most 8192 characters and 256 entries; a bad entry stops start-up with a text that never repeats the list. Empty: invite-only (one warning at start-up). Never logged; removed from the environment once read |
 | `BOARD_GOOGLE_CLIENT_ID` | — | `accounts`: the Google OAuth *Desktop* client id. With `BOARD_GOOGLE_CLIENT_SECRET`, turns on Google sign-in and the Google re-authentication step-up (D76–D78) |
 | `BOARD_GOOGLE_CLIENT_SECRET` | — | `accounts`: that client's secret. Removed from the environment once read |
 | `BOARD_GITHUB_CLIENT_ID` | — | `accounts`: the GitHub OAuth App client id (callback `http://127.0.0.1/callback`, device flow off). With `BOARD_GITHUB_CLIENT_SECRET`, turns on GitHub sign-in and step-up (D76–D78) |
@@ -95,7 +97,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_BOOTSTRAP` | — | `email` (Access one-time PIN, no GitHub identity) or `github_login,github_id,email`: on a DB with no members, create the org, a board and this owner |
 | `BOARD_BOOTSTRAP_BOARD` | `Team:BRD` (`Me:ME` with `BOARD_AUTH=local`) | `Name:KEYPREFIX` for the bootstrap board. Under `local` the org takes the name, the board is always "My board" and takes the prefix |
 | `BOARD_RESTORE` | off | `1`: apply the restore fence bump (+1000, new epoch) at boot. A `<BOARD_DB>.restored` marker does the same |
-| `BOARD_TUNNEL_PROBE_URL` | — | Public URL of `/api/health`, probed every `BOARD_TUNNEL_PROBE_MS`. It counts as healthy only when the answer has the `Board-Protocol` header, so give `/api/health` an Access **Bypass** policy. While the probe fails, orphaning is suspended. Unset: the tunnel is assumed healthy |
+| `BOARD_TUNNEL_PROBE_URL` | — | Public URL of `/api/health`, probed every `BOARD_TUNNEL_PROBE_MS`. It counts as healthy only when the answer has the `Board-Protocol` header, so behind Cloudflare Access (`BOARD_AUTH=access`) give `/api/health` an Access **Bypass** policy; an accounts hub has no Access application in front of it at all (remove it at cutover). While the probe fails, orphaning is suspended. Unset: the tunnel is assumed healthy |
 | `BOARD_TUNNEL_PROBE_MS` | `15000` | Probe interval |
 | `BOARD_GITHUB_TOKEN` | — | Read-only token (fine-grained: Pull requests + Contents read). Enables PR/commit verification and the Done merge poll. A PR only counts when it is a same-repo PR from the run branch into the run's base branch (D90); forks and retargeted PRs stay `self_reported` and never move the card. Unset: evidence stays `self_reported` and no auto-Done |
 | `BOARD_GITHUB_API` | `https://api.github.com` | GitHub API base URL |
@@ -104,6 +106,12 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
 | `BOARD_SHUTDOWN_GRACE_MS` | `5000` | How long a graceful shutdown waits for WS close handshakes and queued writes |
 | `BOARD_WEBHOOK_READ_MS` | `3000` | How long an integration webhook's body may take to arrive before it is cut with 408 (it is read before the signature is checked) |
+
+**Placeholders (accounts mode).** The hub refuses to start while `BOARD_SECRET`, `BOARD_ENC_KEY`, the text of `BOARD_ENC_KEY_FILE`, `BOARD_ENC_KEY_PREVIOUS`, `BOARD_SES_ACCESS_KEY_ID`, `BOARD_SES_SECRET_ACCESS_KEY`, `BOARD_SES_SESSION_TOKEN`, `BOARD_RESEND_API_KEY`, `BOARD_GOOGLE_CLIENT_SECRET`, `BOARD_GITHUB_CLIENT_SECRET` or `BOARD_GITHUB_TOKEN` (each only when set) contains `change-me`, `replace-with`, `example` or `placeholder` (any case), while `BOARD_PUBLIC_URL` names `example.com`, `example.org` or `example.net` (or a host under them), or while a `BOARD_SIGNUP_ALLOW` entry is on one of those domains. The error names the variable, never its value. Other modes are unchanged.
+
+### Request limits (D105)
+
+Fixed, no environment variable: the whole request within 30 s, its headers within 15 s, keep-alive idle 120 s (longer than cloudflared's 90 s idle pool, so the tunnel always closes an idle origin connection first and never reuses one the hub is closing); an answer given before a body was read says `Connection: close`; on `/api` the credential is checked before any body is read, a body is at most 1 MiB on card routes and 64 KiB elsewhere, and must arrive within 20 s (408). The webhook ingress keeps its own limits (`BOARD_WEBHOOK_READ_MS`). Tests override the numbers through `config.requestLimits` (`hub/http.js` `REQUEST_LIMITS`).
 
 ## Cloudflare Access
 
@@ -189,6 +197,16 @@ node hub/admin.js delete-team <slug>
 The same transaction as `DELETE /api/account` / `DELETE /api/teams/:id`, without the
 step-up (audit `by: "operator"`). It opens the database directly: stop the hub
 first, or rely on its 5 s `busy_timeout`.
+
+## Accounts an invite let in (sign-up `allowlist`)
+
+While `BOARD_SIGNUP=allowlist`, an account that only an invite let in may join teams but
+not create one (D104, `users.signup_via = 'invite'`); it stays that way (nothing promotes
+it). To see who they are:
+
+```sh
+sqlite3 /var/lib/buddy-hub/board.db "SELECT primary_email, created_at FROM users WHERE signup_via = 'invite' AND deleted_at IS NULL"
+```
 
 ## Cutover to `BOARD_AUTH=accounts`: runner credentials
 

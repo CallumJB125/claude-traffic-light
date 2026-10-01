@@ -30,10 +30,16 @@ const trayClick = (label) => h.app.evaluate((_e, l) => global.__buddyTrayMenu.it
 const emit = (name) => h.app.evaluate(({ BrowserWindow }, n) => BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Usage')?.emit(n), name);
 async function openPop({ focus = true } = {}) {
   await expect.poll(() => h.app.evaluate(() => !!global.__buddyTrayMenu).catch(() => false), { timeout: 15000 }).toBe(true);
+  if (!focus) {
+    // A visible macOS run may focus a new window naturally. Model an OS
+    // refusal before the real ready-to-show handler calls show()/focus().
+    await h.app.evaluate(({ app }) => { app.once('browser-window-created', (_e, w) => w.setFocusable(false)); });
+  }
   await trayClick('Open Usage…');
   const pop = await windowByFile(h.app, 'usage-pop.html');
   await pop.waitForLoadState('load');
-  // A headless run never gives the window real focus; this is the event it would see.
+  if (!focus) expect(await h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'Usage')?.isFocusable())).toBe(false);
+  // Supply the event on runners where a shown window does not get real focus.
   if (focus) await emit('focus');
   return pop;
 }

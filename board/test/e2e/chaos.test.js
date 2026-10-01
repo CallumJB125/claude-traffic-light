@@ -111,15 +111,44 @@ test('SIGSTOP the runner and its CLI (lid closed) → suspended, never green; SI
     await dispatch(s, s.alice, card);
     await until(() => greenNow(s, s.alice, card.id), { what: 'green', timeout: 15000 });
     const w = watch(s.alice, card.id, 25);
+    const runId = (await s.view(s.alice, card.id)).card.run.id;
+    await until(async () => {
+      const h = (await s.alice.call('GET', `/api/cards/${card.id}/handover?format=json`)).body;
+      return h?.doc?.layers?.narrative?.version >= 1;
+    }, { what: 'CLI has produced tool activity before sleep' });
+    // Stop the CLI first so no new work races the suspend notification.
+    A.signal('SIGSTOP', { runner: false });
     await A.control({ type: 'host_suspending' });   // Buddy's powerMonitor relay
     await until(async () => (await stateOf(s, s.alice, card.id)) === 'suspended', { what: 'suspended' });
     const tStop = Date.now();
-    A.signal('SIGSTOP');
+    A.signal('SIGSTOP', { cli: false });
     await sleep(2 * TTL_MS + 1000);
     assert.equal(await stateOf(s, s.alice, card.id), 'suspended', 'a sleeping laptop stays suspended, not unresponsive');
     const tCont = Date.now();
+    // Recover the runner while the CLI is still stopped: the HTTP watcher
+    // cannot be relied on to sample a brief grey state between two frames.
+    // Without new CLI activity the recovered card must STAY grey, including
+    // after the next heartbeat. A throttled pre-sleep event is not fresh work.
+    const fakeBefore = A.fakeLog(runId).length;
+    A.signal('SIGCONT', { cli: false });
+    const recovered = await until(async () => {
+      const v = (await s.view(s.alice, card.id)).card;
+      return v.run_state !== 'suspended' && v;
+    }, { what: 'recovered with CLI still stopped' });
+    assert.equal(recovered.run_state, 'quiet', `recovery before fresh activity: ${JSON.stringify(recovered.live)}`);
+    assert.equal(recovered.live.green, false, 'the first recovered view is grey');
+    assert.equal(recovered.live.post_wake_activity, false, 'no post-wake activity while the CLI is stopped');
+    const wakeHb = A.proxy.frames('up').find((f) => f.type === 'hb' && f.at >= tCont && f.slept_ms > 0);
+    assert.ok(wakeHb, 'the recovery heartbeat reports the detected sleep');
+    await until(() => A.proxy.frames('down').some((f) => f.type === 'hb.ack' && f.seq_hb > wakeHb.seq_hb), { what: 'next heartbeat acknowledged with CLI still stopped' });
+    const held = (await s.view(s.alice, card.id)).card;
+    assert.equal(held.run_state, 'quiet', 'recovered card stays quiet without new CLI activity');
+    assert.equal(held.live.green, false, 'recovered card stays grey without new CLI activity');
+    assert.equal(held.live.post_wake_activity, false);
+    assert.equal(A.fakeLog(runId).length, fakeBefore, 'the stopped CLI produced no fresh work');
+    assert.deepEqual(A.proxy.frames('up').filter((f) => f.at >= tCont && f.type === 'out' && f.msg?.kind === 'activity'), [], 'no pre-sleep activity is sent as fresh after wake');
+    const tCliCont = Date.now();
     A.signal('SIGCONT');
-    await until(async () => !['suspended'].includes(await stateOf(s, s.alice, card.id)), { what: 'recovered' });
     await until(() => greenNow(s, s.alice, card.id), { what: 'green after fresh activity', timeout: 15000 });
     await sleep(300);
     const tl = w.stop();
@@ -127,6 +156,8 @@ test('SIGSTOP the runner and its CLI (lid closed) → suspended, never green; SI
     const after = tl.filter((x) => x.t > tCont && x.run_state !== 'suspended');
     assert.equal(after[0].green, false, 'the first recovered view is grey');
     const firstGreen = after.find((x) => x.green);
+    assert.ok(after.filter((x) => x.t < tCliCont).every((x) => !x.green), 'every recovered view is grey while the CLI is stopped');
+    assert.ok(A.proxy.frames('up').some((f) => f.at >= tCliCont && f.type === 'out' && f.msg?.kind === 'activity'), 'fresh activity arrives after resuming the CLI');
     assert.ok(firstGreen && firstGreen.post_wake_activity === true, `green only with post-wake activity ${JSON.stringify(after.slice(0, 12).map((x) => [x.t - tCont, x.run_state, x.green, x.post_wake_activity]))}`);
     const log = A.logs();
     assert.ok(log.some((l) => l.msg === 'host woke' && l.source === 'tick_gap'), 'the runner detected the sleep by the tick gap');

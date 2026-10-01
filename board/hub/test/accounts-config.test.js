@@ -10,6 +10,11 @@ import { resendMailer, createMailer, consoleMailer } from '../identity/mailer.js
 import { startHub, testConfig } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
 import { sha256hex } from '../auth.js';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadKey, loadPreviousKey } from '../vault.js';
 
 const base = (over = {}) => ({ ...testConfig({ auth: 'accounts', devLoginSecret: null, accountsDev: true }), ...over });
 
@@ -19,10 +24,10 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   assert.throws(() => validateConfig(base({ accountsDev: false })), /needs BOARD_PUBLIC_URL \(only a loopback bind with BOARD_ACCOUNTS_DEV=1/);
   assert.throws(() => validateConfig(base({ bind: '0.0.0.0' })), /needs BOARD_PUBLIC_URL|https BOARD_PUBLIC_URL/);
   assert.throws(() => validateConfig(base({ secret: null })), /needs BOARD_SECRET/);
-  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'http://buddy.example.com' })), /https BOARD_PUBLIC_URL/);
-  assert.throws(() => validateConfig(base({ publicUrl: 'http://buddy.example.com' })), /must be https unless/);
+  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'http://buddy.acme.test' })), /https BOARD_PUBLIC_URL/);
+  assert.throws(() => validateConfig(base({ publicUrl: 'http://buddy.acme.test' })), /must be https unless/);
   assert.throws(() => validateConfig(base({ resendApiKey: 're_x' })), /needs BOARD_MAIL_FROM/);
-  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'https://buddy.example.com', resendApiKey: 're_x', mailFrom: 'x@y.z', trustCfIp: true })), /BOARD_TRUST_CF_IP needs a loopback/);
+  assert.throws(() => validateConfig(base({ bind: '0.0.0.0', publicUrl: 'https://buddy.acme.test', resendApiKey: 're_x', mailFrom: 'x@y.z', trustCfIp: true })), /BOARD_TRUST_CF_IP needs a loopback/);
   assert.throws(() => validateConfig(base({ bootstrap: 'alice,1,a@x.io' })), /BOARD_BOOTSTRAP=<email> only/);
   assert.throws(() => validateConfig(base({ signinMethods: ['myspace'] })), /BOARD_SIGNIN_METHODS takes google, github/);
   assert.throws(() => validateConfig(testConfig({ auth: 'dev', trustCfIp: true })), /unset BOARD_TRUST_CF_IP/);
@@ -36,11 +41,11 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   assert.deepEqual([oc.googleClientId, oc.googleClientSecret, oc.githubClientId, oc.githubClientSecret], ['g-id', 'g-sec', 'gh-id', 'gh-sec']);
   assert.equal(oenv.BOARD_GOOGLE_CLIENT_SECRET, undefined);
   assert.equal(oenv.BOARD_GITHUB_CLIENT_SECRET, undefined);
-  assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.example.com', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
+  assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.acme.test', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
 });
 
 test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-in method, never the console mailer; no Resend key needed', () => {
-  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
+  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
   assert.doesNotThrow(() => validateConfig(exposed()), 'Google only, no mailer');
   assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co' })), 'a mailer is a sign-in method');
   // D76: a configured OAuth provider (client id AND secret) is a sign-in method: BOARD_SIGNIN_METHODS becomes optional.
@@ -51,9 +56,9 @@ test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-
   assert.throws(() => validateConfig(exposed({ consoleMailer: true })), /BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed/);
   assert.throws(() => validateConfig(exposed({ bind: '0.0.0.0', trustCfIp: false })), /needs BOARD_TRUST_CF_IP=1/, 'a direct non-loopback bind is never enough');
   // A tunnel probe means exposed, even with a loopback URL (or none).
-  assert.throws(() => validateConfig(base({ tunnelProbeUrl: 'https://buddy.example.com/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
-  assert.throws(() => validateConfig(base({ publicUrl: 'http://127.0.0.1:8787', tunnelProbeUrl: 'https://buddy.example.com/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
-  assert.doesNotThrow(() => validateConfig(exposed({ tunnelProbeUrl: 'https://buddy.example.com/api/health' })));
+  assert.throws(() => validateConfig(base({ tunnelProbeUrl: 'https://buddy.acme.test/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
+  assert.throws(() => validateConfig(base({ publicUrl: 'http://127.0.0.1:8787', tunnelProbeUrl: 'https://buddy.acme.test/api/health', signinMethods: ['github'], trustCfIp: true })), /needs an https BOARD_PUBLIC_URL/);
+  assert.doesNotThrow(() => validateConfig(exposed({ tunnelProbeUrl: 'https://buddy.acme.test/api/health' })));
   // The console mailer: loopback and not exposed only; never picked when exposed.
   assert.doesNotThrow(() => validateConfig(base({ consoleMailer: true })));
   assert.equal(createMailer(base({ consoleMailer: true })).kind, 'console');
@@ -189,7 +194,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -204,7 +209,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23, 25, 26, 28]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
@@ -214,7 +219,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
   // 017, 022, 023, 025 and 026 need 008's tables, so that DB skips them (018 and 019 don't).
   const skipped = new DatabaseSync(':memory:');
   migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8 && m.version !== 17 && m.version !== 22 && m.version !== 23 && m.version !== 25 && m.version !== 26) });
-  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 19/);
+  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 28/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
   const from017 = [17, 22].flatMap((v) => [...all.find((m) => m.version === v).sql.matchAll(/CREATE TRIGGER (xteam_\w+)/g)].map((x) => x[1]));
   assert.deepEqual(triggers(skipped), want.filter((t) => !from017.includes(t)));
@@ -275,7 +280,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
     INSERT INTO boards (id, org_id, name, key_prefix) VALUES ('ba','oa','A','AAA'), ('bb','ob','B','BBB');
     INSERT INTO cards (id, board_id, key, title, labels, created_by, created_at, updated_at) VALUES ('ca','ba','AAA-1','a','["bug"]','ma','${NOW}','${NOW}');
   `);
-  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26]);
+  assert.deepEqual(migrate(at17, { migrations: all }), [18, 19, 22, 23, 25, 26, 28]);
   assert.deepEqual({ ...at17.prepare('SELECT labels, cover, archived_at, archived_by FROM cards').get() }, { labels: '["bug"]', cover: null, archived_at: null, archived_by: null }, 'existing cards untouched');
   assert.deepEqual(at17.prepare('PRAGMA foreign_key_check').all(), []);
   const fresh = new DatabaseSync(':memory:');
@@ -304,7 +309,7 @@ test('018/019 apply on a populated DB at 017 and on a fresh DB; labels, covers a
 
 test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S2b/S2c); a later 020/021 still applies after it', () => {
   const all = loadMigrations();
-  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26], '020, 021 and 024 are reserved, not shipped here');
+  assert.deepEqual(all.filter((m) => m.version > 19).map((m) => m.version), [22, 23, 25, 26, 28], '020, 021, 024 and 027 are reserved, not shipped here');
   const NOW = '2026-09-30T10:00:00.000Z';
   const db = new DatabaseSync(':memory:');
   migrate(db, { migrations: all.filter((m) => m.version <= 19) });
@@ -313,7 +318,7 @@ test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}'), ('mb','ob',2,'b','b@x.io','B','owner','${NOW}');
     INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at, settings) VALUES ('ka','oa','slack','T1','ma','${NOW}','{"pinned":{"app_id":"A1"}}');
   `);
-  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26]);
+  assert.deepEqual(migrate(db, { migrations: all }), [22, 23, 25, 26, 28]);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   const pend = (id, org = 'oa', member = 'ma') => db.prepare("INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, 'slack', ?, ?, ?)").run(id, org, member, NOW, '2026-09-30T11:00:00.000Z');
   assert.throws(() => pend('p0', 'oa', 'mb'), /cross-team reference/);
@@ -332,4 +337,145 @@ test('022 applies at 019 with 020/021 absent (an intentional gap, reserved for S
   const late = { version: 20, name: 'reserved_later', sql: 'CREATE TABLE _late (a INTEGER);' };
   assert.deepEqual(migrate(db, { migrations: [...all, late].sort((a, b) => a.version - b.version) }), [20]);
   db.close();
+});
+
+// Placeholders left in from hub.env.example (production cutover review): a
+// hub that would sign with a published secret, link to a reserved host or
+// admit an example domain refuses to start, and never says the value.
+const realSecret = () => randomBytes(48).toString('base64');
+const WORDS = ['change' + '-me', 'replace' + '-with', 'exam' + 'ple', 'place' + 'holder'];
+
+test('accounts refuses a BOARD_SECRET that is still a placeholder, with a fixed text that never repeats it', () => {
+  const priv = `q${randomBytes(6).toString('hex')}`;
+  for (const w of WORDS) {
+    for (const secret of [`${w}-${priv}-${'z'.repeat(32)}`, `${priv}${w.toUpperCase()}${'z'.repeat(32)}`]) {
+      assert.throws(() => validateConfig(base({ secret })), (e) => e.message === 'BOARD_SECRET still has its example placeholder: set a real secret (openssl rand -base64 48)' && !e.message.includes(priv), secret.slice(0, 20));
+      assert.throws(() => loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_ACCOUNTS_DEV: '1' }), (e) => !e.message.includes(priv));
+    }
+  }
+  for (let i = 0; i < 20; i++) assert.doesNotThrow(() => validateConfig(base({ secret: realSecret() })), 'a random secret');
+  // Dev mode is a loopback try-out: unchanged.
+  assert.doesNotThrow(() => validateConfig(testConfig({ auth: 'dev', secret: `${WORDS[0]}-${'z'.repeat(40)}` })));
+});
+
+test('accounts refuses an example.com/.org/.net BOARD_PUBLIC_URL and BOARD_SIGNUP_ALLOW entries on those domains', () => {
+  const exposed = (over = {}) => base({ publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
+  assert.doesNotThrow(() => validateConfig(exposed()));
+  const ex = (tld) => ['exam', 'ple.', tld].join('');
+  for (const host of [ex('com'), ex('org'), ex('net'), `app.${ex('com')}`, `a.b.${ex('org')}`, `x.${ex('net')}`, ex('COM')]) {
+    assert.throws(() => validateConfig(exposed({ publicUrl: `https://${host}` })), (e) => e.message === 'BOARD_PUBLIC_URL still names an example host: set the address people reach this hub at' && !e.message.includes(host.toLowerCase()), host);
+  }
+  for (const host of [`${ex('com')}.acme.test`, `my${ex('com')}`, 'example.io']) {
+    assert.doesNotThrow(() => validateConfig(exposed({ publicUrl: `https://${host}` })), `${host} is not a reserved example host`);
+  }
+  for (const entry of [`domain:${ex('com')}`, `email:someone@${ex('org')}`, `domain:sub.${ex('net')}`, `email:a@b.${ex('com')}`, `DOMAIN:${ex('COM')}`]) {
+    assert.throws(() => validateConfig(exposed({ signupAllow: `domain:acme.test,${entry}` })), (e) => e.message === 'BOARD_SIGNUP_ALLOW still has an example.com/.org/.net entry: list your own domains and addresses' && !e.message.includes('acme'), entry);
+  }
+  assert.doesNotThrow(() => validateConfig(exposed({ signupAllow: `domain:acme.test,email:a@my${ex('com')}` })));
+  // Outside accounts mode nothing changes.
+  assert.doesNotThrow(() => validateConfig(testConfig({ auth: 'access', accessTeam: 't', accessAud: 'a', publicUrl: `https://${ex('com')}` })));
+});
+
+test('BOARD_ENC_KEY / BOARD_ENC_KEY_FILE text that still has a placeholder word is refused in accounts mode, even when it decodes to 32 bytes', () => {
+  // 43 base64 characters and '=': 32 bytes, so only the words give it away.
+  const b64 = (w) => `${w}${'A'.repeat(43 - w.length)}=`;
+  const dir = mkdtempSync(join(tmpdir(), 'enckey-'));
+  for (const w of WORDS) {
+    const text = /^[A-Za-z]+$/.test(w) ? b64(w) : `${w}-${'a'.repeat(30)}`;
+    assert.throws(() => loadKey({ env: { BOARD_ENC_KEY: text }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY still has an example placeholder: set a real key (openssl rand -base64 32)' && !e.message.includes(text), w);
+    const f = join(dir, `${w}.key`);
+    writeFileSync(f, `${text}\n`, { mode: 0o600 });
+    assert.throws(() => loadKey({ env: { BOARD_ENC_KEY_FILE: f }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY_FILE still holds an example placeholder: set a real key (openssl rand -base64 32)', w);
+  }
+  // The same 32-byte text outside accounts mode decodes as before.
+  assert.equal(loadKey({ env: { BOARD_ENC_KEY: b64(WORDS[2]) }, hasParentPort: false }).length, 32);
+  for (let i = 0; i < 20; i++) {
+    const k = randomBytes(32).toString(i % 2 ? 'hex' : 'base64');
+    assert.equal(loadKey({ env: { BOARD_ENC_KEY: k }, hasParentPort: false, refusePlaceholder: true }).length, 32, 'a random key');
+  }
+});
+
+test('accounts refuses a placeholder in every secret-ish variable that is set (the deploy kit\'s own values included), naming the variable, never the value', () => {
+  const hex = (n) => randomBytes(n).toString('hex');
+  const base64 = (n) => randomBytes(n).toString('base64');
+  const envFor = (over = {}) => ({ BOARD_AUTH: 'accounts', BOARD_SECRET: base64(48), BOARD_ACCOUNTS_DEV: '1', ...over });
+  const ses = { BOARD_MAIL_PROVIDER: 'ses', BOARD_SES_REGION: 'af-south-1', BOARD_SES_ACCESS_KEY_ID: hex(10).toUpperCase(), BOARD_SES_SECRET_ACCESS_KEY: base64(30), BOARD_MAIL_FROM: 'a@b.co' };
+  const cases = {
+    BOARD_SES_ACCESS_KEY_ID: ses,
+    BOARD_SES_SECRET_ACCESS_KEY: ses,
+    BOARD_SES_SESSION_TOKEN: ses,
+    BOARD_RESEND_API_KEY: { BOARD_MAIL_FROM: 'a@b.co' },
+    BOARD_GOOGLE_CLIENT_SECRET: { BOARD_GOOGLE_CLIENT_ID: 'g-id' },
+    BOARD_GITHUB_CLIENT_SECRET: { BOARD_GITHUB_CLIENT_ID: 'gh-id' },
+    BOARD_GITHUB_TOKEN: {},
+  };
+  const priv = hex(5).toUpperCase();
+  for (const [name, extra] of Object.entries(cases)) {
+    // The real thing passes; each placeholder word refuses it.
+    assert.doesNotThrow(() => loadConfig(envFor({ ...extra, [name]: name === 'BOARD_SES_ACCESS_KEY_ID' ? hex(10).toUpperCase() : base64(30) })), `${name}: a real-looking value`);
+    for (const w of WORDS) {
+      const value = `${w}-${priv}`;
+      assert.throws(() => loadConfig(envFor({ ...extra, [name]: value })), (e) => e.message === `${name} still has an example placeholder: set the real value` && !e.message.includes(priv), `${name} ${w}`);
+    }
+  }
+  // AWS's documentation key id shape passes the format check, not this one.
+  assert.throws(() => loadConfig(envFor({ ...ses, BOARD_SES_ACCESS_KEY_ID: `${priv}EXAM${'PLE'}` })), (e) => e.message === 'BOARD_SES_ACCESS_KEY_ID still has an example placeholder: set the real value');
+  // Exactly what hub.env.example ships with.
+  const kit = { BOARD_SECRET: `${WORDS[0]}-openssl-rand-base64-48-before-first-start` };
+  assert.equal(kit.BOARD_SECRET.length, 51);
+  assert.throws(() => loadConfig(envFor(kit)), /^Error: BOARD_SECRET still has its example placeholder/);
+  assert.throws(() => loadConfig(envFor({ ...ses, BOARD_SES_SECRET_ACCESS_KEY: WORDS[0] })), /^Error: BOARD_SES_SECRET_ACCESS_KEY still has an example placeholder/);
+  assert.throws(() => loadConfig(envFor({ BOARD_PUBLIC_URL: `https://app.${['exam', 'ple.com'].join('')}`, BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google' })), /^Error: BOARD_PUBLIC_URL still names an example host/);
+  assert.throws(() => loadConfig(envFor({ BOARD_SIGNUP_ALLOW: `domain:${['exam', 'ple.com'].join('')}` })), /^Error: BOARD_SIGNUP_ALLOW still has an example/);
+  // Other modes read none of these as accounts secrets: unchanged.
+  assert.doesNotThrow(() => loadConfig({ BOARD_AUTH: 'dev', BOARD_GITHUB_TOKEN: `${WORDS[0]}-x` }));
+  // The previous encryption key too.
+  assert.throws(() => loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: `${WORDS[3]}${'A'.repeat(32)}=` }, hasParentPort: false, refusePlaceholder: true }), (e) => e.message === 'BOARD_ENC_KEY_PREVIOUS still has an example placeholder: set a real key (openssl rand -base64 32)');
+  assert.equal(loadPreviousKey({ env: { BOARD_ENC_KEY_PREVIOUS: base64(32) }, hasParentPort: false, refusePlaceholder: true }).length, 32);
+});
+
+test('app: an accounts hub refuses a placeholder BOARD_ENC_KEY / BOARD_ENC_KEY_PREVIOUS at start; a dev hub takes the same 32 bytes', async () => {
+  const text = `${WORDS[2]}${'A'.repeat(43 - WORDS[2].length)}=`;
+  for (const name of ['BOARD_ENC_KEY', 'BOARD_ENC_KEY_PREVIOUS']) {
+    try {
+      if (name === 'BOARD_ENC_KEY_PREVIOUS') process.env.BOARD_ENC_KEY = randomBytes(32).toString('hex');
+      process.env[name] = text;
+      const started = await startAccounts().catch((e) => e);
+      if (!(started instanceof Error)) await started.close();
+      assert.equal(started?.message, `${name} still has an example placeholder: set a real key (openssl rand -base64 32)`);
+      if (name === 'BOARD_ENC_KEY_PREVIOUS') process.env.BOARD_ENC_KEY = randomBytes(32).toString('hex');
+      process.env[name] = text;
+      const dev = await startHub();
+      await dev.close();
+    } finally {
+      delete process.env.BOARD_ENC_KEY;
+      delete process.env.BOARD_ENC_KEY_PREVIOUS;
+    }
+  }
+});
+
+test('BOARD_SECRET and BOARD_SIGNUP_ALLOW leave process.env once read and never show in a dump of the config; a plain env object is left alone', async () => {
+  const { inspect } = await import('node:util');
+  const secret = randomBytes(48).toString('base64');
+  const allow = `domain:${randomBytes(4).toString('hex')}.test`;
+  const keep = { ...process.env };
+  try {
+    Object.assign(process.env, { BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_SIGNUP_ALLOW: allow, BOARD_ACCOUNTS_DEV: '1' });
+    const cfg = loadConfig(process.env);
+    assert.equal(process.env.BOARD_SECRET, undefined);
+    assert.equal(process.env.BOARD_SIGNUP_ALLOW, undefined);
+    assert.equal(cfg.secret, secret);
+    assert.equal(cfg.signupAllow, allow);
+    const dumps = [JSON.stringify(cfg), inspect(cfg), JSON.stringify({ ...cfg }), Object.keys(cfg).join(',')].join('\n');
+    assert.ok(!dumps.includes(secret) && !dumps.includes(allow), 'not in a dump');
+    assert.ok(!Object.keys(cfg).includes('secret') && !Object.keys(cfg).includes('signupAllow'));
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
+    Object.assign(process.env, keep);
+  }
+  // Pure for any other env object: it reads from it and deletes nothing from it.
+  const env = { BOARD_AUTH: 'accounts', BOARD_SECRET: secret, BOARD_SIGNUP_ALLOW: allow, BOARD_ACCOUNTS_DEV: '1' };
+  assert.equal(loadConfig(env).secret, secret);
+  assert.equal(env.BOARD_SECRET, secret);
+  assert.equal(env.BOARD_SIGNUP_ALLOW, allow);
 });

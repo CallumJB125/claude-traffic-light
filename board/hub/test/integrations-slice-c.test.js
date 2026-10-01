@@ -404,15 +404,15 @@ test('C1 ctx.hubUrl: an https origin only (no path, query, fragment or credentia
 });
 
 test('C1 ctx.hubUrl: app.js passes BOARD_PUBLIC_URL at boot; a PATCH of config.hub_url changes nothing', async () => {
-  const acc = await startAccounts({ config: { publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
+  const acc = await startAccounts({ config: { publicUrl: 'https://buddy.acme.test', trustCfIp: true, signinMethods: ['google'], accountsDev: false } });
   try {
     acc.hub.setVaultKey(randomBytes(32));
     const reg = acc.app.integrations;
     reg.register(slackish(newBeh()));
     const c = reg.createConnection({ orgId: acc.ids.org, memberId: acc.ids.alice, provider: 'slackish', external_id: 'T1' });
-    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
+    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.acme.test');
     reg.setSettings(c.id, { config: { hub_url: EVIL } });
-    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
+    assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.acme.test');
   } finally { await acc.app.close({ graceMs: 200 }); }
 });
 
@@ -491,7 +491,7 @@ test('C1 migration 026 applies over a DB at 025 (024 reserved); a legacy row loa
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}');
     INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at, settings) VALUES ('ka','oa','github','1','ma','${NOW}','{"config":{"app_id":1}}');
   `);
-  assert.deepEqual(migrate(db, { migrations: all }), [26]);
+  assert.deepEqual(migrate(db, { migrations: all }), [26, 28]);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN ('connections_provider_fixed', 'connections_id_never_reused')").get().n, 2);
   assert.equal(db.prepare("SELECT settings FROM connections WHERE id = 'ka'").get().settings, '{"config":{"app_id":1}}');
   db.exec(`UPDATE connections SET settings = '{"config":{"app_id":2}}' WHERE id = 'ka'`);
