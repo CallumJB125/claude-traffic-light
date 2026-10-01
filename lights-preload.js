@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('lightsApi', {
     return r;
   },
   resetRules: () => ipcRenderer.invoke('reset-rules'),
+  openHatch: () => ipcRenderer.invoke('hatch:open'),
+  removeCharacter: (id) => ipcRenderer.invoke('hatch:remove', id),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   getStats: (days) => ipcRenderer.invoke('get-stats', days),
   exportStats: (format, days) => ipcRenderer.invoke('export-stats', format, days),
@@ -39,4 +41,10 @@ contextBridge.exposeInMainWorld('lightsApi', {
   onAutoRulePrefill: (cb) => ipcRenderer.on('auto-rule-prefill', (e, rule) => cb(rule)),
   onMotionPaused: (cb) => ipcRenderer.on('motion-paused', (e, paused) => cb(paused)),
   onWindowFocus: (cb) => ipcRenderer.on('window-focus', (e, focused) => cb(focused)),
+});
+
+// User characters: the list main has validated, and a nudge when it changes.
+contextBridge.exposeInMainWorld('userCharacters', {
+  list: () => ipcRenderer.invoke('characters:list'),
+  onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
 });

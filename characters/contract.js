@@ -66,6 +66,13 @@
     revs.set(def.id, (revs.get(def.id) || 0) + 1);
     return def;
   }
+  // a character the user removed: built-ins are never removable
+  function unregister(id) {
+    if (builtins.has(id) || !registry.has(id)) return false;
+    registry.delete(id);
+    revs.set(id, (revs.get(id) || 0) + 1);
+    return true;
+  }
   const sealBuiltins = () => { sealed = true; };
   const isBuiltin = (id) => builtins.has(id);
   const revision = (id) => revs.get(id) || 0;
@@ -171,5 +178,5 @@
   // a row from [letter, count] runs, so wide rows are not counted by eye
   const run = (...segs) => segs.map(([c, n]) => c.repeat(n)).join('');
 
-  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, px, run, USER_PREFIX, register, sealBuiltins, isBuiltin, revision, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
+  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, px, run, USER_PREFIX, register, unregister, sealBuiltins, isBuiltin, revision, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
 });

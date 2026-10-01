@@ -62,3 +62,9 @@ contextBridge.exposeInMainWorld('trafficLight', {
   voiceStop: () => ipcRenderer.invoke('voice-stop'),
   onVoice: (cb) => ipcRenderer.on('voice-state', (e, st) => cb(st)),
 });
+
+// User characters: the list main has validated, and a nudge when it changes.
+contextBridge.exposeInMainWorld('userCharacters', {
+  list: () => ipcRenderer.invoke('characters:list'),
+  onChange: (cb) => ipcRenderer.on('characters:changed', () => cb()),
+});

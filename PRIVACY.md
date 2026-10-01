@@ -45,6 +45,7 @@ Everything below lives in `~/.claude-traffic-light` on your computer:
 - `config.json`: your settings and rules.
 - `stats.json`: per-day and per-project counts, times and costs, keyed by folder name.
 - `cameos/`, including `cameos/index.json`: photos you add and their names.
+- `characters/`: characters you hatch, one folder each, holding the character's art and the choices you made. They are made from templates on your computer and are never uploaded.
 - `git-signals.json`: recent pull request and build events with their titles and links, the ids of events already shown, your GitHub login, branch names, local folder paths and the logins of reviewers. It holds no passwords or tokens.
 - `busy-ics-cache.json` (only with a calendar subscription link): event times and the repeat rules, status and free/busy flags of those events, plus a fingerprint (SHA-256) of the link, never the link itself. Meeting titles are kept only if you turned on "show meeting name".
 - `away.json`: a recap written after any busy spell, including a Focus one (Focus reading is on by default). It lists session ids, folder paths, tool names, the names of rules that held a notification, and why you were busy: the Focus mode's name, or the meeting's title only if you turned on "show meeting name" (up to 60 characters). It is deleted when you dismiss it or it expires.

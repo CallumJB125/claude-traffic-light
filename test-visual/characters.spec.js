@@ -11,6 +11,8 @@ const AXES = ['costume', 'cameo', 'eyes', 'pose', 'mouth', 'sign', 'routine'];
 const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost', 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus', 'owl', 'penguin', 'fox', 'bee', 'axolotl', 'mushroom'];
 // test-only shapes (matrix/probes.js) that push the contract's edges
 const PROBES = ['u-probe-tall', 'u-probe-blob', 'u-probe-wide', 'u-probe-screen'];
+// Hatch template characters (matrix/hatched.js, from scripts/hatch-fixtures.js), registered as an install would be
+const HATCHED = ['u-otter', 'u-brick', 'u-fennec', 'u-jar', 'u-pebble', 'u-stretch', 'u-block', 'u-tower'];
 
 let app;
 let page;
@@ -25,7 +27,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await app?.close(); });
 
-for (const body of [...BODIES, ...PROBES]) {
+for (const body of [...BODIES, ...PROBES, ...HATCHED]) {
   for (const axis of AXES) {
     test(`matrix: ${body} × ${axis}`, async () => {
       errors.length = 0;
@@ -39,7 +41,7 @@ for (const body of [...BODIES, ...PROBES]) {
 
 // B3 geometry, measured on the rendered rig in rig units.
 const within = (b, x0, y0, x1, y1, pad = 0) => b.x0 >= x0 - pad && b.y0 >= y0 - pad && b.x1 <= x1 + pad && b.y1 <= y1 + pad;
-for (const body of [...BODIES, ...PROBES]) {
+for (const body of [...BODIES, ...PROBES, ...HATCHED]) {
   test(`geometry: ${body}`, async () => {
     errors.length = 0;
     await page.goto(`${PAGE}?body=${body}&axis=geometry`);
@@ -78,6 +80,6 @@ for (const body of [...BODIES, ...PROBES]) {
     expect(g.hit.face).toBe(true);
     expect(g.hit.corner).toBe(false);
     // invisible parts (unworn costumes, props at rest) never catch the mouse
-    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'octopus', 'crt', 'blob', 'capybara', 'fox', 'u-probe-wide'].includes(body));
+    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'octopus', 'crt', 'blob', 'capybara', 'fox', 'u-probe-wide', 'u-otter', 'u-brick', 'u-fennec', 'u-stretch', 'u-block', 'u-tower'].includes(body));
   });
 }
