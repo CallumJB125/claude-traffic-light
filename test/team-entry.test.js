@@ -35,7 +35,7 @@ test('settings view: neutral, signed out, signed in', () => {
 test('tray and widget right-click are built from the same template', () => {
   assert.match(main, /\.\.\.AppMenu\.appItems\(\{ pages: BuddyPages\.PAGES, groups: BuddyPages\.GROUPS, open: openBuddy/);
   assert.match(main, /buildWidgetMenu = buildMenu;\n\s+trayMenu = buildMenu\(\);/);
-  assert.match(main, /const menu = buildWidgetMenu\(\);/);
+  assert.match(main, /const menu = buildWidgetMenu\('widget'\);/);
   assert.match(main, /ipcMain\.handle\('widget-menu', \(e\) => \{\n\s+if \(!win \|\| win\.isDestroyed\(\) \|\| e\.sender !== win\.webContents\) return;/);
 });
 
