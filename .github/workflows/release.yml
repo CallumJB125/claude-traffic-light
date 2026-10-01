@@ -92,7 +92,9 @@ jobs:
       # fresh install (src/updater/index.js loadBuiltAt).
       - name: Release floor
         shell: bash
-        run: node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
+        run: |
+          node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')"
+          cat build/release-floor.json
 
       # Gates tag builds only: beta and dry runs report failures without
       # blocking packaging and the smoke test. Bounded, so a hung test can't
