@@ -24,6 +24,7 @@ import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 import { searchWork } from './search.js';
 import { teamOverview } from './team-overview.js';
 import { Workflows } from './workflows.js';
+import { WorkflowExecutions } from './workflow-executions.js';
 import { TeamCommunication } from './communication.js';
 import { WorkCapture } from './work-capture.js';
 import { Planning } from './planning.js';
@@ -245,6 +246,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 
 export function createHttpHandler({ hub, api, config, integrations = null }) {
   const workflows = new Workflows(hub);
+  const workflowExecutions = new WorkflowExecutions(api);
   const communication = new TeamCommunication(hub);
   const workCapture = new WorkCapture(hub);
   const planning = new Planning(api);
@@ -290,6 +292,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
     if (params.workflow_id) return hub.db.get('SELECT r.org_id FROM workflow_recipes r JOIN orgs o ON o.id = r.org_id WHERE r.id = ? AND o.deleted_at IS NULL', params.workflow_id)?.org_id ?? null;
+    if (params.instance_id) return hub.db.get('SELECT b.org_id FROM workflow_instances i JOIN boards b ON b.id=i.board_id JOIN orgs o ON o.id=b.org_id WHERE i.id=? AND o.deleted_at IS NULL',params.instance_id)?.org_id ?? null;
+    if (params.plan_id) return hub.db.get('SELECT p.org_id FROM workflow_execution_plans p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL',params.plan_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/permission-requests/')) {
@@ -431,6 +435,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/workflows/:workflow_id/versions', ({ member, params, body, ident }) => workflows.publish(member, params.workflow_id, body, ident?.cred), { replay: false });
   route('POST', '/api/workflows/:workflow_id/archive', ({ member, params, body, ident }) => workflows.archive(member, params.workflow_id, body, ident?.cred), { replay: false });
   route('POST', '/api/boards/:board_id/workflows/:workflow_id/apply', ({ member, params, body, ident }) => workflows.apply(member, params.workflow_id, params.board_id, body, ident?.cred), { replay: false });
+  if(hub.accounts){
+    const options=query=>{
+      if([...query.keys()].some(key=>!['board_id','org'].includes(key)))throw new HubError('VALIDATION','Unknown workflow preview query.');
+      return communicationOptions(query);
+    };
+    const guarded={replay:false,responseGuard:(_ctx,out)=>workflowExecutions.guard(out)};
+    route('POST','/api/workflow-instances/:instance_id/preview',({member,params,body,ident,query})=>workflowExecutions.preview(member,params.instance_id,body,ident.cred,options(query)),{...guarded,strictBody:true,maxBody:32*1024});
+    route('GET','/api/workflow-plans/:plan_id',({member,params,ident,query})=>workflowExecutions.read(member,params.plan_id,ident.cred,options(query)),{...guarded,limit:'communication_read_member'});
+  }
   route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
