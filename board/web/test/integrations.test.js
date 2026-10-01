@@ -134,3 +134,24 @@ test('a manifest connect renders a real POST form: hidden fields, one "Create th
   assert.equal(findAll(integrationsScreen(m({ data: { available, connections: [], vault: true }, manifest: { ...manifest, provider: 'fake' } })), (n) => n.tag === 'form' && n.props.method === 'post').length, 0);
   assert.equal(findAll(integrationsScreen(m({ data: { available, connections: [], vault: true }, manifest: { ...manifest, action: 'http://github.com/x' } })), (n) => n.tag === 'form').length, 0);
 });
+
+test('local hub (no accounts): a plain note says where to connect, and no connect button or manifest form is offered', () => {
+  const v = integrationsScreen(m({ local: true, manifest: { provider: 'github', action: 'https://github.com/settings/apps/new?state=s', fields: { manifest: '{}' } } }));
+  const note = findAll(v, (n) => n.props?.class === 'integ-local muted');
+  assert.equal(note.length, 1);
+  assert.equal(textOf(note[0]), 'Connect tools on a team hub: sign in and open your team’s board.');
+  assert.equal(note[0].tag, 'p');
+  assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
+  assert.equal(findAll(v, (n) => n.tag === 'form').length, 0);
+  assert.equal(findAll(v, (n) => n.tag === 'a').length, 0, 'text only');
+  const team = integrationsScreen(m());
+  assert.equal(findAll(team, (n) => n.props?.class === 'integ-local muted').length, 0, 'a team hub shows no note');
+  assert.equal(byAttr(team, 'data-action', 'integ-connect').length, 1);
+});
+
+test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local' \} : null,/);
+  assert.match(src, /state\.authMode = \(await api\.health\(\)\)\.auth/);
+});
