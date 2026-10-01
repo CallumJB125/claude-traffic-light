@@ -91,7 +91,7 @@ test('relay sender trust is bound by its private token record, never caller meta
 });
 
 test('MCP relay cannot omit or replace its authenticated parent to widen repo or permission scope', async () => {
-  const m = await setup({ steps: [{ result: 'success', text: 'plan' }] });
+  const m = await setup({ steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] });
   const other = makeRepo(fs.mkdtempSync(path.join(m.dir, 'other-')));
   let relay;
   try {
@@ -132,6 +132,22 @@ test('spin-offs: limited to the parent task\'s repo, capped at its level, and a 
     assert.equal(rk.planFirst, true);
     for (const id of [parent.id, kid.id, rp.id, rkid.id]) await m.client.act(id, 'stop', {});
   } finally { await m.done(); }
+});
+
+test('bound MCP parent inherits effective unapproved plan mode and inactive parent cannot spawn', async () => {
+  const m = await setup({ steps: [{ result: 'success', text: 'Plan only' }] });
+  let relay;
+  try {
+    const { id } = await m.client.createTask({ ...m.spec, permissionLevel: 'auto-edits', planFirst: true });
+    const parent = await waitFor(async () => { const d = await m.client.getTask(id); return d.blockedKind === 'plan' && d; });
+    relay = await connect({ socketPath: m.eng.socketPath, token: addRelayToken({ dataDir: m.dataDir, source: 'mcp', parentSessionId: parent.sessionId }) });
+    const kid = await relay.createTask({ ...m.spec, permissionLevel: 'auto-edits', planFirst: false });
+    const d = await m.client.getTask(kid.id);
+    assert.equal(d.permissionLevel, 'plan', 'nominal auto-edits cannot bypass effective parent plan mode');
+    assert.equal(d.planFirst, true);
+    await m.client.act(id, 'stop', {});
+    await assert.rejects(relay.createTask(m.spec), (e) => e.code === 'POLICY_DENIED', 'token is stale after terminal parent');
+  } finally { relay?.close(); await m.done(); }
 });
 
 test('caches go to a per-task dir; the global caches are not writable', async () => {

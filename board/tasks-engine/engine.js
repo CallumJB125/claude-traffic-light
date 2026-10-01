@@ -394,8 +394,9 @@ export class TasksEngine extends EventEmitter {
         ...metadata, ...(principal.userId ? { userId: principal.userId } : {}),
         ...(principal.parentSessionId ? { parentSessionId: principal.parentSessionId } : {}),
       } };
-      if (principal.source === 'mcp' && (!principal.parentSessionId || ![...this.tasks.values()].some((t) => t.sessionId === principal.parentSessionId))) {
-        throw new ApiError('POLICY_DENIED', 'an agent relay needs its authenticated parent task');
+      const parent = [...this.tasks.values()].find((t) => t.sessionId === principal.parentSessionId);
+      if (principal.source === 'mcp' && (!parent || !['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over'].includes(parent.state))) {
+        throw new ApiError('POLICY_DENIED', 'an agent relay needs its active authenticated parent task');
       }
     }
     const cacheKey = `${principal?.kind === 'relay' ? principal.id : 'full'}:${requestId}`;
@@ -432,7 +433,9 @@ export class TasksEngine extends EventEmitter {
     const clamps = [];
     // §9.2: agent-authored and remote tasks never exceed auto-edits, nor a spin-off its parent's level.
     if ((source === 'mcp' || remote) && LEVEL_RANK[level] > LEVEL_RANK['auto-edits']) { clamps.push(`${level} clamped to auto-edits`); level = 'auto-edits'; }
-    if (parent && LEVEL_RANK[level] > LEVEL_RANK[parent.permissionLevel]) { clamps.push(`${level} clamped to the parent's ${parent.permissionLevel}`); level = parent.permissionLevel; }
+    const parentPlanning = !!parent?.planFirst && !parent.planApproved;
+    const parentLevel = parentPlanning ? 'plan' : parent?.permissionLevel;
+    if (parent && LEVEL_RANK[level] > LEVEL_RANK[parentLevel]) { clamps.push(`${level} clamped to the parent's ${parentLevel}`); level = parentLevel; }
     const surface = spec.surface ?? 'background';
     if (surface !== 'background') throw new ApiError('CAPABILITY_MISSING', 'only background runs are available yet', { capability: 'surface' });
     if (spec.model != null && !MODEL_RE.test(spec.model)) throw new ApiError('VALIDATION', 'model is not a model name');
@@ -489,7 +492,7 @@ export class TasksEngine extends EventEmitter {
       id, title: (spec.title ?? spec.text.split('\n')[0]).slice(0, 120) || 'Task', spec,
       state: 'queued', blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null,
       ai: { id: ai.id, reason: ai.reason, model: spec.model ?? null }, surface, permissionLevel: level,
-      planFirst: remote ? true : !!spec.planFirst, planApproved: false, source, sourceMeta: spec.sourceMeta ?? {},
+      planFirst: remote || parentPlanning || !!spec.planFirst, planApproved: false, source, sourceMeta: spec.sourceMeta ?? {},
       awaitingConfirm: remoteNeedsAccept, repo: top ? { root: top, name: path.basename(top) } : null, branch, worktree, workInPlace,
       worktreeCreated: false, gitDir: null, baseBranch, baseSha, sessionId: crypto.randomUUID(), sessionStarted: false, nonce: hex(8),
       cost: { usd: 0, budgetUsd: spec.budgetUsd ?? null }, numTurns: 0, turn: 0, createdAt: now, stateSince: now, lastSeq: 0,
