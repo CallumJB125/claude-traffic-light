@@ -177,8 +177,7 @@
       "board/runner/procs.js",
       "board/runner/ipc.js",
       "board/runner/launch.js",
-      "node_modules/@modelcontextprotocol/sdk/**",
-      "node_modules/zod/**"
+      "node_modules/**"
     ]
   },
   "devDependencies": {
