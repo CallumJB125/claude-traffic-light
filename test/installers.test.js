@@ -35,60 +35,114 @@ test('every platform builds what it can update from, and nothing that cannot', (
   assert.equal(config.mac.sign, './build/sign.js');
 });
 
-test('R2 staging puts the feed files last and caches only installers', () => {
-  const plan = R2.stagePlan('1.2.0', ['latest-mac.yml', 'Plexiform-1.2.0-mac-arm64.dmg', 'latest.yml', 'Plexiform-1.2.0-win-x64.exe', '.DS_Store']);
-  assert.deepEqual(plan.map((p) => p.key), ['1.2.0/Plexiform-1.2.0-mac-arm64.dmg', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/latest-mac.yml', '1.2.0/latest.yml']);
-  assert.equal(R2.cacheControl('latest-linux.yml'), 'no-cache, max-age=0');
+test('R2 staging puts the feed files last; only names with a version are cached', () => {
+  const plan = R2.stagePlan('1.2.0', ['latest-mac.yml', 'Plexiform-1.2.0-mac-arm64.dmg', 'latest.yml', 'Plexiform-1.2.0-win-x64.exe', 'SHA256SUMS.txt', '.DS_Store']);
+  assert.deepEqual(plan.map((p) => p.key), ['1.2.0/Plexiform-1.2.0-mac-arm64.dmg', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/SHA256SUMS.txt', '1.2.0/latest-mac.yml', '1.2.0/latest.yml']);
+  for (const feed of ['latest-linux.yml', 'beta.yml', 'beta-mac.yml', 'release.json', 'release.json.sig', 'SHA256SUMS.txt']) assert.equal(R2.cacheControl(feed), 'no-cache, max-age=0', feed);
   assert.match(R2.cacheControl('Plexiform-1.2.0-linux-x86_64.AppImage'), /immutable/);
+  assert.match(R2.cacheControl('Plexiform-1.2.0-win-x64.exe.blockmap'), /immutable/);
   assert.throws(() => R2.stagePlan('../evil', []), /not a version/);
+  assert.throws(() => R2.stagePlan('1.2.0', ['release.json', 'latest.yml']), /signed at promote time/);
 });
 
 test('R2 beta staging goes under beta/ only', () => {
-  const plan = R2.stagePlan('1.0.0-beta.7', ['Plexiform-1.0.0-beta.7-mac-arm64.zip', 'latest-mac.yml'], 'beta/');
-  assert.deepEqual(plan.map((p) => p.key), ['beta/1.0.0-beta.7/Plexiform-1.0.0-beta.7-mac-arm64.zip', 'beta/1.0.0-beta.7/latest-mac.yml']);
+  const plan = R2.stagePlan('1.0.0-beta.7', ['Plexiform-1.0.0-beta.7-mac-arm64.zip', 'beta-mac.yml'], 'beta/');
+  assert.deepEqual(plan.map((p) => p.key), ['beta/1.0.0-beta.7/Plexiform-1.0.0-beta.7-mac-arm64.zip', 'beta/1.0.0-beta.7/beta-mac.yml']);
   assert.ok(plan.every((p) => /^beta\/[^/]+\/[^/]+$/.test(p.key)), 'never the bucket root or beta/ root');
 });
 
-test('R2 promote copies installers, then the feed, then the signed manifest; it refuses an unstaged or unsigned version', () => {
-  const keys = ['1.2.0/release.json.sig', '1.2.0/release.json', '1.2.0/Plexiform-1.2.0-mac-arm64.zip', '1.2.0/latest-mac.yml', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/latest.yml', '1.2.0/nested/x'];
-  const plan = R2.promotePlan('1.2.0', keys);
-  assert.deepEqual(plan.map((p) => p.to), ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-win-x64.exe', 'latest-mac.yml', 'latest.yml', 'release.json', 'release.json.sig']);
-  assert.equal(R2.cacheControl('release.json'), 'no-cache, max-age=0');
-  assert.equal(R2.cacheControl('release.json.sig'), 'no-cache, max-age=0');
-  assert.throws(() => R2.promotePlan('1.3.0', keys), /no latest\*\.yml staged/);
-  assert.throws(() => R2.promotePlan('1.2.0', keys.filter((k) => !k.endsWith('.sig'))), /no release\.json\.sig: the apps would refuse it/);
-  const beta = R2.promotePlan('1.2.0-beta.3', keys.map((k) => `beta/${k.replace('1.2.0/', '1.2.0-beta.3/')}`), 'beta/');
-  assert.ok(beta.every((p) => /^beta\/[^/]+$/.test(p.to)), 'beta promotes to beta/ only');
-  assert.equal(beta.at(-1).to, 'beta/release.json.sig');
+test('R2 promote plan: installers, then the feed files (latest*.yml or beta*.yml); never a staged manifest', () => {
+  const names = ['release.json.sig', 'release.json', 'Plexiform-1.2.0-mac-arm64.zip', 'latest-mac.yml', 'Plexiform-1.2.0-win-x64.exe', 'latest.yml', 'nested/x'];
+  const plan = R2.promotePlan('1.2.0', names);
+  assert.deepEqual(plan.map((p) => p.to), ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-win-x64.exe', 'latest-mac.yml', 'latest.yml']);
+  assert.throws(() => R2.promotePlan('1.3.0', ['Plexiform-1.3.0-win-x64.exe']), /no feed file/);
+  const beta = R2.promotePlan('1.2.0-beta.3', ['Plexiform-1.2.0-beta.3-win-x64.exe', 'beta.yml'], 'beta/');
+  assert.deepEqual(beta.map((p) => p.to), ['beta/Plexiform-1.2.0-beta.3-win-x64.exe', 'beta/beta.yml']);
 });
 
-test('R2 staging puts the signed manifest after the feed files', () => {
-  const plan = R2.stagePlan('1.2.0', ['release.json.sig', 'latest.yml', 'release.json', 'Plexiform-1.2.0-win-x64.exe']);
-  assert.deepEqual(plan.map((p) => p.name), ['Plexiform-1.2.0-win-x64.exe', 'latest.yml', 'release.json', 'release.json.sig']);
-});
-
-test('R2 promote --manifest-dir uploads the re-signed manifest instead of the staged one', () => {
-  const saved = { ...process.env };
-  Object.assign(process.env, { R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'bk' });
+// A fake `aws s3` over an in-memory bucket.
+function fakeAws(bucket) {
   const calls = [];
-  const run = (_bin, args) => { calls.push(args.slice(1, 4)); return ['latest.yml', 'Plexiform-1.1.0-win-x64.exe', 'release.json', 'release.json.sig'].map((n) => `2026-10-01 00:00:00 1 ${n}`).join('\n'); };
-  const log = console.log;
-  console.log = () => {};
-  try { R2.main(['promote', '1.1.0', '--manifest-dir', 'resigned'], run); } finally { console.log = log; process.env = saved; }
-  assert.deepEqual(calls.slice(1).map((c) => [c[1], c[2]]), [
+  const run = (_bin, args) => {
+    const [, op, a, b] = args;
+    calls.push(args.slice(1));
+    const key = (u) => u.replace(/^s3:\/\/[^/]+\//, '');
+    if (op === 'ls') {
+      const prefix = key(a);
+      const names = [...bucket.keys()].filter((k) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map((k) => k.slice(prefix.length));
+      if (!names.length) throw new Error('exit 1');
+      return names.map((n) => `2026-10-01 00:00:00 1 ${n}`).join('\n');
+    }
+    if (op === 'cp') {
+      if (a.startsWith('s3://') && b.startsWith('s3://')) bucket.set(key(b), bucket.get(key(a)));
+      else if (b.startsWith('s3://')) bucket.set(key(b), fs.readFileSync(a));
+      else fs.writeFileSync(b, bucket.get(key(a)));
+      return '';
+    }
+    throw new Error(`unexpected aws ${op}`);
+  };
+  return { run, calls };
+}
+const R2_ENV = { R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'bk' };
+
+// H4 (code review): R2 first, the manifest signed at promote time last, to both <version>/ and the root.
+test('R2 promote copies the staged files, then uploads the manifest signed now: <version>/ first, the root last', () => {
+  const bucket = new Map([['1.1.0/latest.yml', 'y'], ['1.1.0/Plexiform-1.1.0-win-x64.exe', 'e']]);
+  const { run, calls } = fakeAws(bucket);
+  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-'));
+  fs.writeFileSync(path.join(signed, 'release.json'), 'm');
+  fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
+  R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_ENV);
+  const copies = calls.filter((c) => c[0] === 'cp').map((c) => [c[1].replace(signed, 'signed'), c[2]]);
+  assert.deepEqual(copies, [
     ['s3://bk/1.1.0/Plexiform-1.1.0-win-x64.exe', 's3://bk/Plexiform-1.1.0-win-x64.exe'],
     ['s3://bk/1.1.0/latest.yml', 's3://bk/latest.yml'],
-    ['resigned/release.json', 's3://bk/release.json'],
-    ['resigned/release.json.sig', 's3://bk/release.json.sig'],
+    ['signed/release.json', 's3://bk/1.1.0/release.json'],
+    ['signed/release.json.sig', 's3://bk/1.1.0/release.json.sig'],
+    ['signed/release.json', 's3://bk/release.json'],
+    ['signed/release.json.sig', 's3://bk/release.json.sig'],
   ]);
+  // L8: every copy says its content type
+  for (const c of calls.filter((x) => x[0] === 'cp')) assert.ok(c.includes('--content-type'), c.join(' '));
+  assert.throws(() => R2.main(['promote', '1.1.0'], run, () => {}, R2_ENV), /needs --manifest-dir/);
 });
 
-test('R2 is skipped cleanly when its secrets are not set', () => {
+// M7 (code review): re-running a tag must not change a release that is live.
+test('R2 stage refuses a version that was already promoted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-'));
+  fs.writeFileSync(path.join(dir, 'latest.yml'), 'y');
+  const { run } = fakeAws(new Map([['1.2.0/release.json', 'm'], ['1.2.0/latest.yml', 'y']]));
+  assert.throws(() => R2.main(['stage', '1.2.0', dir], run, () => {}, R2_ENV), /already promoted/);
+  const fresh = fakeAws(new Map());
+  R2.main(['stage', '1.3.0', dir], fresh.run, () => {}, R2_ENV);
+  assert.deepEqual(fresh.calls.filter((x) => x[0] === 'cp').map((x) => x[2]), ['s3://bk/1.3.0/latest.yml']);
+});
+
+test('R2: only staging may run without its secrets; promote and the fetches fail hard', () => {
   const cfg = R2.config({});
   assert.deepEqual(cfg.missing, ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_RELEASES_BUCKET']);
-  const full = R2.config({ R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'plexiform-releases' });
+  const full = R2.config(R2_ENV);
   assert.equal(full.endpoint, 'https://acc.r2.cloudflarestorage.com');
   assert.equal(full.env.AWS_DEFAULT_REGION, 'auto');
+  const logs = [];
+  R2.main(['stage', '1.2.0', 'out'], () => assert.fail('no aws call'), (s) => logs.push(s), {});
+  assert.match(logs[0], /skipped/);
+  for (const argv of [['promote', '1.2.0', '--manifest-dir', 'x'], ['promote-beta', '1.2.0-beta.1', '--manifest-dir', 'x'], ['fetch-live', 'x'], ['fetch-staged', '1.2.0', 'x']]) {
+    assert.throws(() => R2.main(argv, () => assert.fail('no aws call'), () => {}, {}), /not set/, argv[0]);
+  }
+});
+
+test('R2 fetch-live and fetch-staged download what is there, and nothing when nothing is live', () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'live-'));
+  const empty = fakeAws(new Map());
+  R2.main(['fetch-live', out], empty.run, () => {}, R2_ENV);
+  assert.deepEqual(fs.readdirSync(out), []);
+  const { run } = fakeAws(new Map([['beta/release.json', 'm'], ['beta/release.json.sig', 's'], ['beta/1.0.0-beta.2/beta.yml', 'y'], ['beta/1.0.0-beta.2/release.json', 'm']]));
+  R2.main(['fetch-live', out, '--beta'], run, () => {}, R2_ENV);
+  assert.deepEqual(fs.readdirSync(out).sort(), ['release.json', 'release.json.sig']);
+  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'staged-'));
+  R2.main(['fetch-staged', '1.0.0-beta.2', staged, '--beta'], run, () => {}, R2_ENV);
+  assert.deepEqual(fs.readdirSync(staged), ['beta.yml'], 'the staged files, never a manifest');
 });
 
 test('the smoke test refuses a real home or data folder', () => {
@@ -127,4 +181,173 @@ test('Linux has its own icon set: square PNGs named by size', () => {
     const [w, h] = [buf.readUInt32BE(16), buf.readUInt32BE(20)];
     assert.equal(`${w}x${h}.png`, f, 'the name says the real size');
   }
+});
+
+const ROOT = path.join(__dirname, '..');
+const readText = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+
+// Top-level jobs of a workflow, as { name: text }.
+function jobsOf(yml) {
+  const body = yml.slice(yml.indexOf('\njobs:\n') + 7);
+  const out = {};
+  let cur = null;
+  for (const line of body.split('\n')) {
+    const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+    if (m) { cur = m[1]; out[cur] = ''; } else if (cur) out[cur] += `${line}\n`;
+  }
+  return out;
+}
+
+// B1 / M1 (reviews): the key must not be reachable from a branch push or a branch-name condition.
+test('release.yml: tags and manual runs only, nothing signed, no branch conditions', () => {
+  const yml = readText('.github/workflows/release.yml');
+  const on = yml.slice(yml.indexOf('\non:\n'), yml.indexOf('\npermissions:'));
+  assert.ok(!/branches:/.test(on), 'no branch push trigger');
+  assert.ok(!/refs\/heads\//.test(yml), 'no branch-name condition');
+  assert.equal((yml.match(/if: github\.event_name == 'workflow_dispatch' && inputs\.beta\n/g) || []).length, 2, 'beta only on a manual run');
+  assert.ok(!/SIGNING_KEY/.test(yml), 'a tag build signs nothing');
+  assert.match(yml, /\npermissions:\n {2}contents: read\n/);
+  const jobs = jobsOf(yml);
+  assert.match(jobs.build, /permissions:\n {6}contents: read/);
+  for (const j of ['stage', 'stage-beta']) assert.match(jobs[j], /permissions:\n {6}contents: write/, j);
+  // the bounded unit tests (a hang on Windows ate the whole job once)
+  assert.match(jobs.build, /timeout-minutes: 60/);
+  assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
+  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
+  assert.ok(!/npm test/.test(jobs.build));
+  assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
+  // stage-beta runs its scripts from this workflow's own commit
+  assert.match(jobs['stage-beta'], /ref: \$\{\{ github\.sha \}\}/);
+});
+
+test('release-promote.yml: the release environment, both keys only there, signed from the GitHub Release, the feed before GitHub', () => {
+  const yml = readText('.github/workflows/release-promote.yml');
+  const jobs = jobsOf(yml);
+  assert.deepEqual(Object.keys(jobs), ['promote']);
+  assert.match(jobs.promote, /\n {4}environment: release\n/);
+  assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY \}\}/);
+  assert.match(jobs.promote, /PLEXIFORM_UPDATE_SIGNING_KEY_BETA: \$\{\{ secrets\.PLEXIFORM_UPDATE_SIGNING_KEY_BETA \}\}/);
+  assert.match(yml, /\npermissions:\n {2}contents: read\n/);
+  const order = ['gh release download', 'release-r2.js fetch-live', 'release-sign.js build assets', 'release-sign.js verify-files', 'release-r2.js "$cmd"', 'gh release edit'];
+  const at = order.map((s) => jobs.promote.indexOf(s));
+  assert.ok(at.every((i) => i > 0), JSON.stringify(at));
+  assert.deepEqual([...at].sort((a, b) => a - b), at, 'download, live, sign, check R2, promote R2, then publish on GitHub');
+  assert.ok(!/resign/.test(jobs.promote), 'never re-signs what R2 serves');
+});
+
+// M4 / #6 (reviews): workflow inputs reach the shell only through env.
+test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
+  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml']) {
+    const yml = readText(f);
+    for (const line of yml.split('\n')) {
+      if (!/\$\{\{[^}]*inputs\./.test(line)) continue;
+      assert.match(line, /^\s+(?:[A-Z_]+|ref|if|group):\s|^\s+if:\s|^\s+ref:\s/, `${f}: ${line.trim()}`);
+    }
+    // every job that names a signing key runs in the release environment
+    for (const [name, body] of Object.entries(jobsOf(yml))) {
+      if (/SIGNING_KEY/.test(body)) assert.match(body, /\n {4}environment: release\n/, `${f} ${name}`);
+    }
+    for (const m of yml.matchAll(/uses: (\S+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+  }
+});
+
+// M9 (code review): the copied NSIS block must stay electron-builder's own.
+test('installer.nsh: the copied removal block is exactly electron-builder\'s default for the pinned version', () => {
+  const ours = readText('build/installer.nsh');
+  const tpl = fs.readFileSync(require.resolve('app-builder-lib/templates/nsis/uninstaller.nsh'), 'utf8');
+  const norm = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+  const def = /!ifmacrodef customRemoveFiles\s*\n\s*!insertmacro customRemoveFiles\s*\n\s*!else\n([\s\S]*?)\n\s*!endif/.exec(tpl);
+  assert.ok(def, 'electron-builder still has a default customRemoveFiles block');
+  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)!macroend/.exec(ours);
+  assert.ok(copy);
+  assert.equal(norm(copy[1]), norm(def[1]));
+  assert.match(ours, /nsExec::Exec \/TIMEOUT=\d+ '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --uninstall-hooks'/);
+  assert.ok(!/ExecWait/.test(ours.replace(/^;.*$/gm, '')), 'no unbounded wait');
+});
+
+test('electron-builder is pinned exactly, at 26.15.3 or later, and node_modules has that version', () => {
+  const want = pkg.devDependencies['electron-builder'];
+  assert.match(want, /^\d+\.\d+\.\d+$/, 'no range');
+  const [maj, min, pat] = want.split('.').map(Number);
+  assert.ok(maj > 26 || (maj === 26 && (min > 15 || (min === 15 && pat >= 3))), want);
+  assert.equal(require('electron-builder/package.json').version, want);
+  assert.equal(require('app-builder-lib/package.json').version, want);
+});
+
+test('the builder config has no update-feed override: the feed is brand.js', () => {
+  assert.equal(config.publish[0].url, Brand.urls.updates);
+  assert.ok(!/PLEXIFORM_UPDATE_FEED/.test(readText('electron-builder.config.js')));
+  assert.ok(!/PLEXIFORM_UPDATE_FEED/.test(readText('.github/workflows/release.yml')));
+});
+
+// M10 (code review): prerm against stub getent, runuser, readlink and timeout.
+test('prerm: only login accounts and root with Plexiform data, each run as itself under a time limit; never on upgrade', { skip: process.platform === 'win32' && 'POSIX sh' }, () => {
+  const { execFileSync } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prerm-'));
+  const bin = path.join(root, 'bin');
+  const log = path.join(root, 'calls.log');
+  fs.mkdirSync(bin);
+  const app = path.join(root, 'opt', 'Plexiform', 'plexiform');
+  fs.mkdirSync(path.join(path.dirname(app), 'resources', 'hooks'), { recursive: true });
+  fs.writeFileSync(app, '#!/bin/sh\n');
+  fs.chmodSync(app, 0o755);
+  fs.writeFileSync(path.join(path.dirname(app), 'resources', 'hooks', 'uninstall-hooks.js'), '');
+  const home = (n, data = true) => { const h = path.join(root, 'home', n); fs.mkdirSync(data ? path.join(h, '.claude-traffic-light') : h, { recursive: true }); return h; };
+  const passwd = [
+    `root:x:0:0:root:${home('root')}:/bin/bash`,
+    `daemon:x:2:2:daemon:${home('daemon')}:/usr/sbin/nologin`,
+    `alice:x:1000:1000:Alice:${home('alice')}:/bin/bash`,
+    `bob:x:1001:1001:Bob:${home('bob', false)}:/bin/bash`,
+    `nobody:x:65534:65534:nobody:${home('nobody')}:/usr/sbin/nologin`,
+    `weird:x:abc:1:w:${home('weird')}:/bin/sh`,
+  ].join('\n');
+  const stub = (name, body) => { fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`); fs.chmodSync(path.join(bin, name), 0o755); };
+  stub('readlink', `echo "${app}"`);
+  stub('runuser', `echo "runuser $*" >> "${log}"`);
+  stub('timeout', `echo "timeout $1" >> "${log}"; shift; exec "$@"`);
+  for (const tool of ['dirname', 'cat']) fs.symlinkSync(execFileSync('/bin/sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim(), path.join(bin, tool));
+  const getent = () => stub('getent', `[ "$1" = passwd ] && cat <<'EOF'\n${passwd}\nEOF`);
+  const prerm = config.deb.fpm[config.deb.fpm.indexOf('--before-remove') + 1];
+  const run = (arg) => {
+    fs.rmSync(log, { force: true });
+    execFileSync('/bin/sh', [prerm, arg], { env: { PATH: bin, PLEXIFORM_BIN: path.join(root, 'link') } });
+    return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];
+  };
+  getent();
+  const calls = run('remove');
+  const script = path.join(path.dirname(app), 'resources', 'hooks', 'uninstall-hooks.js');
+  assert.deepEqual(calls, [
+    'timeout 30', `runuser -u root -- env HOME=${path.join(root, 'home', 'root')} ELECTRON_RUN_AS_NODE=1 ${app} ${script}`,
+    'timeout 30', `runuser -u alice -- env HOME=${path.join(root, 'home', 'alice')} ELECTRON_RUN_AS_NODE=1 ${app} ${script}`,
+  ]);
+  assert.deepEqual(run('upgrade'), [], 'an upgrade keeps the hooks');
+  fs.rmSync(path.join(bin, 'timeout'));
+  assert.equal(run('purge').filter((l) => l.startsWith('runuser')).length, 2, 'without timeout it still runs');
+  fs.rmSync(path.join(bin, 'getent'));
+  assert.deepEqual(run('remove'), [], 'no getent: nothing, and no failure');
+  getent();
+  fs.rmSync(path.join(bin, 'runuser'));
+  assert.deepEqual(run('remove'), [], 'no runuser: nothing, and no failure');
+});
+
+// L11 (code review): an empty, not-yet-loading window is not "loaded".
+test('smoke: window-loaded waits for the widget page itself to finish loading', async () => {
+  const { EventEmitter } = require('events');
+  const wc = Object.assign(new EventEmitter(), { url: '', loading: false, getURL() { return this.url; }, isLoading() { return this.loading; } });
+  let settled = null;
+  const p = Smoke.windowLoaded(wc, { timeoutMs: 2000 }).then((v) => { settled = v; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, null, 'blank and idle is not loaded');
+  wc.url = 'file:///x/app.asar/index.html';
+  wc.loading = true;
+  wc.emit('did-finish-load');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, null, 'still loading');
+  wc.loading = false;
+  wc.emit('did-finish-load');
+  await p;
+  assert.equal(settled, true);
+  const other = Object.assign(new EventEmitter(), { getURL: () => 'https://example.com/index.html', isLoading: () => false });
+  assert.equal(await Smoke.windowLoaded(other, { timeoutMs: 50 }), false);
 });

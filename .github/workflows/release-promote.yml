@@ -1,37 +1,54 @@
-# Makes a staged version live, or rolls back to an older one. Run by hand:
+# Makes a staged version live, or rolls back to an older one, and is the only
+# place a release is signed. Run by hand from main:
 #   Actions → Promote release → version "1.2.0"
-# It publishes that version's draft GitHub Release and marks it latest, then
-# points the R2 feed at it: installers, then latest*.yml, then the signed
-# release.json last (scripts/release-r2.js refuses a version without one).
 #
-# Rolling back: run it with the previous version and tick "rollback". The
-# apps refuse a downgrade unless the manifest is signed as a rollback, and a
-# manifest issued before one they already accepted, so this re-signs the
-# staged release.json with rollback:true and a fresh issuedAt. That needs the
-# PLEXIFORM_UPDATE_SIGNING_KEY secret. (Re-promoting a newer version after a
-# rollback needs a fresh signature too: stage a new version, or tick rollback.)
+# In order:
+#   1. download that version's GitHub Release assets (the draft the tag build
+#      staged); these, not R2, are what gets signed
+#   2. read the live release.json from R2 and verify it with this repo's key
+#   3. sign a fresh release.json from the assets (new issuedAt, expiresAt in
+#      30 days). An older version than the live one is refused unless
+#      "rollback" is ticked; a rollback names the versions it rolls back from
+#      (the live one, what it rolled back from, and "rollback_from")
+#   4. check that what R2 staged is byte for byte the signed files
+#   5. point the R2 feed at it: installers, feed files, then the signed
+#      release.json last (scripts/release-r2.js)
+#   6. publish the GitHub Release last (stable: marked latest)
+# Any failure stops before the feed changes, or before GitHub says it's out.
 #
-# "beta" promotes beta/<version>/ to the beta feed (beta/) instead; there is
-# no GitHub Release for betas.
+# Re-running it for the live version re-signs it with a fresh issuedAt and
+# expiry, which is also how an expiring release is renewed.
+#
+# The job runs in the `release` environment, which holds
+# PLEXIFORM_UPDATE_SIGNING_KEY (stable) and PLEXIFORM_UPDATE_SIGNING_KEY_BETA
+# (beta) and only deploys from main or a v* tag. Anyone who can run workflows
+# on main can run this (docs/RELEASING.md).
+#
+# "beta" promotes beta/<version>/ to the beta feed (beta/), signed with the
+# beta key, and publishes the GitHub prerelease.
 name: Promote release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to make live, without the v (e.g. 1.2.0)
+        description: Version to make live, without the v (e.g. 1.2.0 or 1.2.0-beta.7)
         required: true
       rollback:
-        description: 'Rollback: re-sign as a rollback (rollback:true, fresh issuedAt) so apps on a newer version accept it'
+        description: 'Rollback: an older version than the live one; apps on the newer versions go back to it'
         type: boolean
         default: false
+      rollback_from:
+        description: 'Rollback only: more versions to roll back from, comma-separated (the live version is always included)'
+        required: false
+        default: ''
       beta:
         description: 'Beta: promote beta/<version>/ to the beta feed (beta/)'
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-promote
@@ -40,32 +57,73 @@ concurrency:
 jobs:
   promote:
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
     env:
+      VERSION: ${{ inputs.version }}
+      ROLLBACK: ${{ inputs.rollback }}
+      ROLLBACK_FROM: ${{ inputs.rollback_from }}
+      BETA: ${{ inputs.beta }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Check the version
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Check the inputs
         run: |
-          echo "${{ inputs.version }}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "::error::not a version"; exit 1; }
+          printf '%s' "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' || { echo "::error::not a version"; exit 1; }
+          printf '%s' "$ROLLBACK_FROM" | grep -Eqx '([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)?(, *[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)*' || { echo "::error::rollback_from is not a comma-separated list of versions"; exit 1; }
+          if [ "$BETA" = true ]; then
+            case "$VERSION" in *-beta.*) ;; *) echo "::error::the beta feed takes -beta versions only"; exit 1 ;; esac
+            echo "CHANNEL=beta" >> "$GITHUB_ENV"; echo "R2_BETA=--beta" >> "$GITHUB_ENV"
+          else
+            case "$VERSION" in *-*) echo "::error::the stable feed takes release versions only (tick beta)"; exit 1 ;; esac
+            echo "CHANNEL=stable" >> "$GITHUB_ENV"; echo "R2_BETA=" >> "$GITHUB_ENV"
+          fi
 
-      - name: Publish on GitHub and mark latest
-        if: ${{ !inputs.beta }}
+      - name: Download the GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "v${{ inputs.version }}" --draft=false --latest
+        run: gh release download "v$VERSION" --dir assets
 
-      - name: Re-sign release.json as a rollback
-        if: ${{ inputs.rollback }}
+      - name: Read the live release.json
+        run: node scripts/release-r2.js fetch-live live $R2_BETA
+
+      - name: Sign release.json
         env:
           PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
+          PLEXIFORM_UPDATE_SIGNING_KEY_BETA: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY_BETA }}
         run: |
-          mkdir -p resigned
-          node scripts/release-r2.js fetch-manifest "${{ inputs.version }}" resigned ${{ inputs.beta && '--beta' || '' }}
-          node scripts/release-sign.js resign resigned/release.json --rollback
+          extra=()
+          if [ "$ROLLBACK" = true ]; then extra=(--rollback --rollback-from "$ROLLBACK_FROM"); fi
+          node scripts/release-sign.js build assets --channel "$CHANNEL" --version "$VERSION" --notes-file docs/release-notes.md --live live --out signed "${extra[@]}"
+
+      - name: Check what R2 staged against the signed files
+        run: |
+          node scripts/release-r2.js fetch-staged "$VERSION" staged $R2_BETA
+          node scripts/release-sign.js verify-files signed/release.json staged --channel "$CHANNEL"
 
       - name: Point the R2 feed at it
-        run: node scripts/release-r2.js ${{ inputs.beta && 'promote-beta' || 'promote' }} "${{ inputs.version }}" ${{ inputs.rollback && '--manifest-dir resigned' || '' }}
+        run: |
+          if [ "$BETA" = true ]; then cmd=promote-beta; else cmd=promote; fi
+          node scripts/release-r2.js "$cmd" "$VERSION" --manifest-dir signed
+
+      - name: Publish on GitHub (last)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$BETA" = true ]; then
+            gh release edit "v$VERSION" --draft=false --prerelease
+          else
+            gh release edit "v$VERSION" --draft=false --latest
+          fi

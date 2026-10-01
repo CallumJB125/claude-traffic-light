@@ -15,17 +15,16 @@ const path = require('path');
 const Brand = require('./brand.js');
 const base = require('./package.json').build;
 
-// Where the installed app looks for updates: GitHub Releases now, the R2
-// bucket at download.plexiform.dev once it is live (a brand.js change).
-const FEED = process.env.PLEXIFORM_UPDATE_FEED || Brand.urls.updates || 'https://github.com/CallumJB125/claude-traffic-light/releases/latest/download';
 
 const artifact = (ext) => `${Brand.name}-\${version}-\${os}-\${arch}.${ext}`;
 
 module.exports = {
   ...base,
   artifactName: artifact('${ext}'),
-  // electron-updater reads app-update.yml (written from this) to find the feed.
-  publish: [{ provider: 'generic', url: FEED }],
+  // Written into app-update.yml. The updater never reads it (src/updater/
+  // points electron-updater at each signed release's own folder); it is
+  // here because electron-builder writes the latest*.yml feed files from it.
+  publish: [{ provider: 'generic', url: Brand.urls.updates }],
 
   mac: {
     ...base.mac,

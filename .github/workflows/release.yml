@@ -1,36 +1,37 @@
 # Builds the Mac, Windows and Linux installers from a version tag, smoke-tests
-# each packaged app, and stages the release. Nothing reaches users here:
+# each packaged app, and stages the release. Nothing reaches users here, and
+# nothing is signed:
 #   - the GitHub Release is created as a DRAFT
-#   - on R2 the files land under <version>/, and the feed files the apps read
-#     (latest*.yml, release.json at the bucket root) are not touched
-#   - release.json lists every installer's sha512 and is signed with
-#     PLEXIFORM_UPDATE_SIGNING_KEY; the apps install nothing it doesn't cover
-# Making a version live is release-promote.yml, run by hand. Rolling back is
-# the same workflow with an older version and "rollback" ticked.
+#   - on R2 the files land under <version>/; the feed files the apps read
+#     (latest*.yml / beta*.yml, release.json at the bucket root) are not touched
+#   - a tag whose release was already published, or whose version was already
+#     promoted on R2, fails instead of changing it
+# Making a version live, and signing its release.json, is release-promote.yml
+# (a manual run in the `release` environment, which holds the signing keys).
 #
-# Signing is off until there is a Developer ID (see docs/RELEASING.md).
+# Beta: run this by hand with "beta" ticked. It builds <ref> as
+# <version>-beta.<run>, stages it to R2 beta/<version>/ and a draft GitHub
+# prerelease, and nothing else.
+#
+# Code signing is off until there is a Developer ID (see docs/RELEASING.md).
 name: Release
 
 on:
   push:
     tags: ['v*.*.*']
-    # Until this workflow is on main (workflow_dispatch only runs workflows on
-    # the default branch), a push to this branch is the beta dry run.
-    # REMOVE before merging.
-    branches: ['feat/installers']
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Tag or branch to build (a dry run: artifacts only, nothing staged)'
+        description: 'Tag or branch to build (a dry run: artifacts only, nothing staged, unless beta)'
         required: true
         default: main
       beta:
-        description: 'Beta: version it <version>-beta.<run>, point it at the beta feed, and upload to R2 beta/<version>/ (no GitHub Release, no feed files)'
+        description: 'Beta: version it <version>-beta.<run> and stage it to R2 beta/<version>/ and a draft GitHub prerelease'
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -51,13 +52,16 @@ jobs:
           - os: ubuntu-latest
             platform: linux
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -74,27 +78,38 @@ jobs:
 
       - run: npm ci
 
-      # A beta build gets a prerelease version and looks for updates on the
-      # beta feed, so beta installs never follow the stable one.
+      # A beta build gets a prerelease version, so it follows the beta feed
+      # (its updater picks the channel from the version).
       - name: Beta version
-        if: (github.event_name == 'workflow_dispatch' && inputs.beta) || github.ref == 'refs/heads/feat/installers'
+        if: github.event_name == 'workflow_dispatch' && inputs.beta
         shell: bash
         run: |
           v="$(node -p "require('./package.json').version")-beta.${GITHUB_RUN_NUMBER}"
           npm version --no-git-tag-version "$v"
-          echo "PLEXIFORM_UPDATE_FEED=https://download.plexiform.dev/beta" >> "$GITHUB_ENV"
           echo "beta version $v"
 
-      # Gates tag builds only: branch and beta dry runs report failures without
-      # blocking packaging and the smoke test. The ICS tests assume SAST, and
-      # Electron-based tests need a display and no sandbox on Linux runners.
+      # The app refuses any release.json signed before this moment, even on a
+      # fresh install (src/updater/index.js loadBuiltAt).
+      - name: Release floor
+        shell: bash
+        run: node -e "require('fs').writeFileSync('build/release-floor.json', JSON.stringify({ builtAt: new Date().toISOString() }) + '\n')" && cat build/release-floor.json
+
+      # Gates tag builds only: beta and dry runs report failures without
+      # blocking packaging and the smoke test. Bounded, so a hung test can't
+      # eat the job. The ICS tests assume SAST, and Electron-based tests need
+      # a display and no sandbox on Linux runners.
       - name: Unit tests
         shell: bash
+        timeout-minutes: 20
         env:
           TZ: Africa/Johannesburg
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum npm test; else npm test; fi
+          run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
+          status=0
+          run node --test --test-force-exit --test-timeout=120000 test/*.test.js test/adapters/*.test.js || status=1
+          node --test --test-force-exit --test-timeout=120000 remote/test/ || status=1
+          exit $status
         continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Native helpers (Mac)
@@ -105,7 +120,8 @@ jobs:
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder -c electron-builder.config.js --${{ matrix.platform }} --publish never
+          PLATFORM: ${{ matrix.platform }}
+        run: npx electron-builder -c electron-builder.config.js "--$PLATFORM" --publish never
 
       - name: Smoke test (Linux)
         if: matrix.platform == 'linux'
@@ -115,11 +131,12 @@ jobs:
         if: matrix.platform != 'linux'
         run: node scripts/smoke-installed.js
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-${{ matrix.platform }}
           if-no-files-found: error
           retention-days: 14
+          # *.yml: latest*.yml for a release, beta*.yml for a -beta version
           path: |
             dist/*.dmg
             dist/*.zip
@@ -127,39 +144,44 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.blockmap
-            dist/latest*.yml
+            dist/*.yml
+            !dist/builder-debug.yml
 
   stage:
     name: stage (draft release + R2)
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: installers-*
           path: out
           merge-multiple: true
 
-      # Installed apps refuse any release without this signature, so a tag
-      # release fails here rather than staging one nobody can install.
-      - name: Sign release.json
-        env:
-          PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
-        run: node scripts/release-sign.js build out --channel stable --version "${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md
+      - name: Check the installers and feed files
+        run: node scripts/release-sign.js check out --channel stable --version "${GITHUB_REF_NAME#v}"
 
       - name: Checksums
         working-directory: out
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
+      # A published release is never changed by re-running its tag.
       - name: Draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --draft --title "Plexiform ${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md --verify-tag
+          if draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != true ]; then echo "::error::$GITHUB_REF_NAME is already published; bump the version"; exit 1; fi
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --title "Plexiform ${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md --verify-tag
+          fi
           gh release upload "$GITHUB_REF_NAME" out/* --clobber
 
       - name: Upload to R2 (versioned; the live feed is untouched)
@@ -171,31 +193,49 @@ jobs:
         run: node scripts/release-r2.js stage "${GITHUB_REF_NAME#v}" out
 
   stage-beta:
-    name: stage beta (R2 beta/<version>/ only)
+    name: stage beta (R2 beta/<version>/ + draft prerelease)
     needs: build
-    if: (github.event_name == 'workflow_dispatch' && inputs.beta) || github.ref == 'refs/heads/feat/installers'
+    if: github.event_name == 'workflow_dispatch' && inputs.beta
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      # The scripts come from this workflow's own commit; only the built
+      # artifacts come from the ref that was built.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: installers-*
           path: out
           merge-multiple: true
 
-      # Signed when the key is set; otherwise a warning, and beta apps will
-      # refuse this build (it still uploads, for manual testing).
-      - name: Sign release.json (if the key is set)
-        env:
-          PLEXIFORM_UPDATE_SIGNING_KEY: ${{ secrets.PLEXIFORM_UPDATE_SIGNING_KEY }}
-        run: node scripts/release-sign.js build out --channel beta --notes-file docs/release-notes.md --optional
+      - name: Version and check
+        id: v
+        run: |
+          v="$(node scripts/release-sign.js version out)"
+          case "$v" in *-beta.*) ;; *) echo "::error::$v is not a beta version"; exit 1 ;; esac
+          node scripts/release-sign.js check out --channel beta --version "$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Checksums
         working-directory: out
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      # The promote workflow signs from these assets, not from R2.
+      - name: Draft GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+          BUILT_REF: ${{ inputs.ref }}
+        run: |
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$BUILT_REF" --jq .sha)"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "::error::v$VERSION already exists"; exit 1; fi
+          gh release create "v$VERSION" --draft --prerelease --target "$sha" --title "Plexiform $VERSION" --notes-file docs/release-notes.md
+          gh release upload "v$VERSION" out/*
 
       - name: Upload to R2 beta/ (never the root feed)
         env:
@@ -203,7 +243,5 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_RELEASES_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: |
-          v="$(ls out | sed -nE 's/^Plexiform-(.+)-(mac|win|linux)-.*/\1/p' | head -1)"
-          echo "version $v"
-          node scripts/release-r2.js stage-beta "$v" out
+          VERSION: ${{ steps.v.outputs.version }}
+        run: node scripts/release-r2.js stage-beta "$VERSION" out
