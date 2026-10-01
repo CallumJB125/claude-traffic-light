@@ -37,7 +37,8 @@
 //   // leased, then run handleWebhook (same lease, timeout and ctx). For a
 //   // provider that needs an answer within seconds (Slack: 3 s). A failure then
 //   // reaches no provider retry: it is audited (action 'webhook', 'failed' +
-//   // code) and the lease released, so a manual redelivery runs it.
+//   // code) and the lease released, so a manual redelivery runs it. A hub
+//   // crash mid-handler loses the event until such a manual redelivery.
 //   ackEarly: false,
 //
 //   // Optional: the provider's published webhook source ranges (GitHub's
