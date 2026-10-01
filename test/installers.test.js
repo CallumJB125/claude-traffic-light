@@ -499,3 +499,13 @@ test('release.yml passes test files, never a bare directory, to node --test', ()
   for (const l of runs) assert.doesNotMatch(l, /\s[\w./-]+\/(\s|\|\||$)/, `bare directory in: ${l.trim()}`);
   assert.match(yml, /remote\/test\/\*\.test\.js/);
 });
+
+// A failing Windows smoke test must not fail the Windows job: stage needs every
+// build job, so it would block the macOS release while Windows doesn't ship.
+test('release.yml: the Mac/Windows smoke test only reports on Windows; Mac and Linux block', () => {
+  const yml = readText('.github/workflows/release.yml');
+  const step = yml.slice(yml.indexOf('- name: Smoke test (Mac, Windows)'), yml.indexOf('- uses: actions/upload-artifact'));
+  assert.match(step, /continue-on-error: \$\{\{ matrix\.platform == 'win' \}\}/);
+  const linux = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Smoke test (Mac, Windows)'));
+  assert.doesNotMatch(linux, /continue-on-error/);
+});

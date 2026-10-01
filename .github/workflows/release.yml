@@ -134,9 +134,13 @@ jobs:
         if: matrix.platform == 'linux'
         run: xvfb-run --auto-servernum node scripts/smoke-installed.js
 
+      # Windows only reports, like its Unit tests: a failing Windows job would
+      # otherwise skip stage (needs: build) and block the macOS release.
+      # Remove together with the Unit tests one when WINDOWS_RELEASE flips.
       - name: Smoke test (Mac, Windows)
         if: matrix.platform != 'linux'
         run: node scripts/smoke-installed.js
+        continue-on-error: ${{ matrix.platform == 'win' }}
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
