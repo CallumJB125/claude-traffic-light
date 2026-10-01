@@ -268,10 +268,13 @@ test('more files that run code later or steer agents', () => {
 });
 
 test('the real checks stay fast on large pathological inputs', () => {
-  const units = ['a', "'", '"', ' ', '(', '$(', '`', ';', '|', '\n', '<<a\n', '#', '\\', '{', "a'", 'x=', '$((', 'sh -c '];
+  const units = ['a', "'", '"', ' ', '(', '$(', '`', ';', '|', '\n', '<<a\n', '#', '\\', '{', "a'", 'x=', '$((', 'sh -c ',
+    '*** Update File: ', '*** Move to: a/', '--- a/', '+++ "', 'diff --git "a\\', 'diff --git a b ', 'rename to ', '\r\n+++ b/.git/', '"\\0', ' / ', '\n+++ b/src/a "x\\" '];
   for (const unit of units) {
     const c = unit.repeat(Math.ceil(65536 / unit.length));
-    for (const [name, fn] of [['parseShell', () => parseShell(c)], ['tokenize', () => tokenize(c)], ['evaluateDenyList', () => deny(c)], ['allowListReason', () => allowListReason({ toolName: 'Bash', toolInput: { command: c } })]]) {
+    for (const [name, fn] of [['parseShell', () => parseShell(c)], ['tokenize', () => tokenize(c)], ['evaluateDenyList', () => deny(c)], ['allowListReason', () => allowListReason({ toolName: 'Bash', toolInput: { command: c } })],
+      ['evaluateDenyList apply_patch 4 KB', () => evaluateDenyList(rules, { toolName: 'apply_patch', toolInput: { input: c.slice(0, 4096) }, cwd: '/Users/a/app' })],
+      ['allowListReason apply_patch', () => allowListReason({ toolName: 'apply_patch', toolInput: { input: c }, cwd: '/Users/a/app' })]]) {
       const t = performance.now();
       fn();
       const ms = performance.now() - t;

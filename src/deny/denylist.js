@@ -54,6 +54,59 @@ export function cleanPath(p) {
 }
 const pathMatches = (re, p) => re.test(p) || re.test(cleanPath(p));
 
+// The raw path, cleaned, and (for a relative path) cleaned against the session directory.
+export function pathForms(p, dir) {
+  const out = [p, cleanPath(p)];
+  if (!p.startsWith('/') && typeof dir === 'string' && dir.startsWith('/')) out.push(cleanPath(`${dir}/${p}`));
+  return out;
+}
+
+// ── paths named in a patch ─────────────────────────────────────────────────
+// apply_patch envelopes and unified / git diffs name their files in headers,
+// not in a path field, and a whole-patch scan can't anchor a path pattern at
+// the start of one. Every reading a patch tool might use is returned: the
+// whole value, each word of it (a timestamp may follow after spaces), quoted
+// names unescaped as git writes them, and each with its first segment
+// dropped (a/ b/ under -p1).
+const PATCH_HEADER = /^(?:\*\*\*\s*(?:(?:add|update|delete)\s+file|move\s+to)\s*:|---|\+\+\+|diff\s+--git|(?:rename|copy)\s+(?:from|to))(.*)$/i;
+const C_ESCAPES = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const unquote = (s) => s.replace(/\\([0-7]{1,3}|[\s\S])/g, (_, e) => (/^[0-7]/.test(e) ? String.fromCharCode(parseInt(e, 8) & 0xff) : C_ESCAPES[e] ?? e));
+
+function headerWords(v) {
+  const out = [v];
+  let i = 0;
+  while (i < v.length) {
+    while (i < v.length && /\s/.test(v[i])) i++;
+    if (i >= v.length) break;
+    const start = i;
+    if (v[i] === '"') {
+      for (i++; i < v.length && v[i] !== '"'; i++) if (v[i] === '\\') i++;
+      out.push(unquote(v.slice(start + 1, i)));
+      i++;
+    } else {
+      while (i < v.length && !/\s/.test(v[i])) i++;
+      out.push(v.slice(start, i));
+    }
+  }
+  return out;
+}
+
+export function patchPaths(text) {
+  const out = [];
+  if (typeof text !== 'string' || !/\*\*\*|---|\+\+\+|diff|rename|copy/i.test(text)) return out;
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const m = PATCH_HEADER.exec(line.trim());
+    if (!m) continue;
+    for (const w of headerWords(m[1].trim())) {
+      if (!w) continue;
+      out.push(w);
+      const k = w.indexOf('/');
+      if (k >= 0 && k < w.length - 1) out.push(w.slice(k + 1));
+    }
+  }
+  return out;
+}
+
 // ── git ────────────────────────────────────────────────────────────────────
 // Config keys whose value is a program git runs (or a file of such keys).
 const GIT_CODE_KEY = /^(core\.(sshcommand|pager|fsmonitor|hookspath|editor|askpass|gitproxy|alternaterefscommand)|.*\.(helper|command|textconv|cmd|program|driver|uploadpack|receivepack|difffilter)|alias\.|diff\.external|uploadpack\.packobjectshook|filter\..*\.(clean|smudge|process)|include(if)?\.|pager\.|sequence\.editor|protocol\..*allow)/i;
@@ -455,7 +508,7 @@ function toRegExp(x) {
   return x instanceof RegExp ? x : new RegExp(String(x));
 }
 
-function stringsIn(v, out = [], depth = 0) {
+export function stringsIn(v, out = [], depth = 0) {
   if (depth > 64) return out;
   if (typeof v === 'string') out.push(v);
   else if (Array.isArray(v)) for (const x of v) stringsIn(x, out, depth + 1);
@@ -476,21 +529,23 @@ export function compileRules(rules = DEFAULT_RULES) {
 
 // For file tools a `paths: true` rule looks at the path fields only (raw and
 // cleaned): a file's content isn't a path it touches. Tools without a path
-// field (apply_patch) and every other tool are scanned whole.
+// field (apply_patch) and every other tool are scanned whole, plus every path
+// their strings name in patch headers (raw, cleaned and against `cwd`).
 const READ_FILE_TOOLS = /^(Read|Grep|Glob|LS|NotebookRead|read_file|read_many_files|list_directory|glob|search_file_content)$/i;
-function pathTexts(toolName, input, texts) {
+function pathTexts(toolName, input, texts, cwd) {
   let vals = null;
   if ((FILE_WRITE_TOOLS.test(toolName) || READ_FILE_TOOLS.test(toolName)) && input && typeof input === 'object' && !Array.isArray(input)) {
     const fields = ['file_path', 'notebook_path', 'path', 'glob', ...(/^glob$/i.test(toolName) ? ['pattern'] : [])];
     vals = fields.map((f) => input[f]).filter((x) => typeof x === 'string');
   }
-  return (vals?.length ? vals : texts).flatMap((t) => [t, cleanPath(t)]);
+  if (vals?.length) return vals.flatMap((t) => [t, cleanPath(t)]);
+  return [...texts.flatMap((t) => [t, cleanPath(t)]), ...texts.flatMap(patchPaths).flatMap((p) => pathForms(p, cwd))];
 }
 
 const desk = (ruleId, reason) => ({ blocked: true, ruleId, reason, message: DESK_MESSAGE });
 
 // → { blocked: true, ruleId, reason, message } or { blocked: false }
-export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [] }) {
+export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [], cwd = null }) {
   const canonical = canonicalize(toolInput ?? {});
   if (canonical.length > MAX_REMOTE_INPUT_CHARS) return desk('input-too-large', 'input too large to review remotely');
   const labels = new Set((repoLabels || []).map((l) => String(l).toLowerCase()));
@@ -509,7 +564,7 @@ export function evaluateDenyList(compiled, { toolName, toolInput, repoLabels = [
       }
       continue;
     }
-    if (r.input && !(r.paths ? pathTexts(String(toolName ?? ''), toolInput, texts) : texts).some((t) => test(r.input, t))) continue;
+    if (r.input && !(r.paths ? pathTexts(String(toolName ?? ''), toolInput, texts, cwd) : texts).some((t) => test(r.input, t))) continue;
     if (!r.input && !r.labels && !r.tool) continue; // an empty rule matches nothing
     return desk(r.id, r.reason);
   }
