@@ -724,6 +724,7 @@ export class Api {
     const devices = this.db.all('SELECT id FROM devices WHERE member_id = ? AND revoked_at IS NULL', m.id);
     this.hub.txn(() => {
       this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, m.id);
+      this.hub.dropMemberPending(m.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, m.id);
       this.audit(member.id, 'member.remove', m.id);
     });

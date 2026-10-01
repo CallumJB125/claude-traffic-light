@@ -96,6 +96,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   h.app.integrations.register(fake);
   const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
   B.connection = h.app.integrations.createConnection({ ...v, display_name: `${MARK} workspace`, orgId: B.team, memberId: B.owner, provider: 'fake' }).id;
+  // A pending connection of B's (D97), as the prepare route leaves it.
+  B.pending = randomUUID();
+  db.run('INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)', B.pending, B.team, 'fake', B.owner, now, new Date(Date.parse(now) + 3_600_000).toISOString());
   // B's owner's install enrolled as a runner in B (P4).
   const eb = await as(users.ub, 'POST', `/api/teams/${B.team}/enrol`, { device_name: `${MARK} runner` });
   if (eb.status !== 200) throw new Error(`enrol: ${eb.text}`);
@@ -118,6 +121,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM invites WHERE org_id = ?', B.team),
       q('SELECT * FROM connections WHERE org_id = ?', B.team),
       q('SELECT * FROM connection_secrets WHERE connection_id = ?', B.connection),
+      q('SELECT * FROM integration_pending WHERE org_id = ?', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
     ].join('\n');

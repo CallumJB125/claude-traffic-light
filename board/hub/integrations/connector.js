@@ -21,12 +21,28 @@
 //     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
 //     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
 //     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
-//     async exchange({ query, redirectUri, webhookUrl, config, fetch }) →   // oauth/app_install callback
+//     async exchange({ query, redirectUri, webhookUrl, config, secrets, fetch }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
 //         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored as settings.config),
-//         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link) },
+//         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
+//         match?: {k: scalar} (required after prepare: exactly the pending match, D97) },
 //     (`webhookUrl` is this connection's future webhook URL; `config` is the
-//     stored settings.config of the org's active connection of this provider, else {})
+//     stored settings.config of the org's active connection of this provider, else {},
+//     overlaid with the pending settings after prepare; `secrets` is the pending
+//     row's unsealed secrets after prepare, else {}; exchange may add kinds, never replace one)
+//
+//     // Optional, oauth/app_install without manifestForm (D97): the app is
+//     // made from input an admin pastes (Slack: a configuration token).
+//     prepareInputs: ['config_token', 'app_id', …],  // 1–8 key names; only these keys of `input` reach prepare
+//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, config, fetch }) →
+//       { needs: { fields: [key of prepareInputs], create_url: 'https://<one of hosts>/…' } }   // ask for a paste
+//       | { secrets: {kind: string}, settings?: {k: scalar}, match: {k: scalar} (1–8), external_id? },
+//     (`input` values are strings of 1–4096 bytes, held only for this call: never
+//     put them in an error, a log line, secrets or settings. Any throw becomes a
+//     fixed VALIDATION and is logged as a code only. `fetch` is the restricted
+//     fetch without retries; its errors are fixed text with no `cause`.
+//     `webhookUrl` names the pending id the connection keeps; `identityRedirectUri`
+//     is exactly the redirectUri D98's identity flow will use.)
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
@@ -107,6 +123,8 @@ import { isIP } from 'node:net'; // privacy-flow: hub-server
 const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
 const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
+const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const PREPARE_INPUTS_MAX = 8;
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // The only state-machine events an integration may raise as the system (D42):
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
@@ -155,6 +173,15 @@ export function defineConnector(spec) {
       if (typeof cn.formHost !== 'string' || !spec.hosts?.includes?.(cn.formHost)) errs.push('connect.formHost (the host the manifest form posts to) must be one of hosts');
     } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
   }
+  if (cn && (cn.prepare !== undefined || cn.prepareInputs !== undefined)) {
+    const keys = cn.prepareInputs;
+    if (typeof cn.prepare !== 'function') errs.push('connect.prepare is a function, declared together with connect.prepareInputs');
+    if (!Array.isArray(keys) || !keys.length || keys.length > PREPARE_INPUTS_MAX || new Set(keys).size !== keys.length
+      || keys.some((k) => typeof k !== 'string' || !PREPARE_KEY_RE.test(k) || ['constructor', 'prototype'].includes(k))) {
+      errs.push(`connect.prepareInputs lists 1–${PREPARE_INPUTS_MAX} distinct input names (^[a-z][a-z0-9_]{0,39}$)`);
+    }
+    if (cn.kind === 'token' || cn.manifestForm !== undefined) errs.push('connect.prepare is for an oauth/app_install connector with authorizeUrl (not token, not manifestForm)');
+  }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
@@ -172,5 +199,7 @@ export function defineConnector(spec) {
     else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
   }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
+  // The registry filters pasted input by prepareInputs: a connector can't widen it later.
+  const connect = Array.isArray(cn?.prepareInputs) ? Object.freeze({ ...cn, prepareInputs: Object.freeze([...cn.prepareInputs]) }) : spec.connect;
+  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
 }

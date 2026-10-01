@@ -55,9 +55,9 @@ export function testConfig(over = {}) {
   });
 }
 
-export async function startHub({ clock = fakeClock(), github = fakeGitHub(), config = {}, dataDir, fetchImpl } = {}) {
+export async function startHub({ clock = fakeClock(), github = fakeGitHub(), config = {}, dataDir, fetchImpl, log = silentLogger } = {}) {
   const cfg = testConfig({ ...config, ...(dataDir ? { dataDir, dbPath: join(dataDir, 'board.db') } : {}) });
-  const app = createApp(cfg, { clock, log: silentLogger, github, timers: false, ...(fetchImpl ? { fetchImpl } : {}) });
+  const app = createApp(cfg, { clock, log, github, timers: false, ...(fetchImpl ? { fetchImpl } : {}) });
   if (!cfg.devSeed) seedDev(app.hub, { repoUrl: cfg.devRepo });   // same fixture data under Access auth
   const addr = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${addr.port}`;

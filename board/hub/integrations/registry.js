@@ -57,6 +57,18 @@ const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
 const ACK_MAX = 4096;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Pending connections (D97).
+const PENDING_TTL_MS = 3_600_000;
+const PENDING_SWEEP_MS = 60_000;
+const PREPARE_TIMEOUT_MS = 30_000;
+const PREPARE_INPUT_MAX = 4096;
+const AUTHORIZE_MAX = 5;
+const MATCH_MAX = 8;
+const MATCH_KEY = /^[a-z][a-z0-9_]{0,39}$/;
+const MATCH_STR_MAX = 200;
+const CREATE_URL_MAX = 8 * 1024;
+const NOT_ACCEPTED = 'That was not accepted. Check it and try again.';
+const SETUP_EXPIRED = 'This setup has expired. Start again from Buddy.';
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -182,7 +194,9 @@ export function createIntegrations({
   });
   const consumerName = (c) => `integration:${c.provider}:${c.id}`;
 
-  function createConnection({ orgId, memberId, provider, external_id, display_name, scopes = [], secrets = {}, settings = {}, id = randomUUID() }) {
+  // `pending` (D97): promote that pending row, which must be live, this
+  // member's and have this id; its sealed rows are copied as they are.
+  function createConnection({ orgId, memberId, provider, external_id, display_name, scopes = [], secrets = {}, settings = {}, id = randomUUID(), pending = null }) {
     const conn = connectors.get(provider);
     if (!conn) throw new HubError('VALIDATION', `unknown integration ${provider}`);
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
@@ -196,6 +210,16 @@ export function createIntegrations({
       if (typeof v !== 'string' || !v || Buffer.byteLength(v) > SECRET_MAX_BYTES) throw new HubError('VALIDATION', `${conn.name} returned a secret this hub will not store`);
     }
     hub.txn(() => {
+      let copied = [];
+      if (pending) {
+        const p = livePending(id);
+        if (!p || p.id !== pending.id || p.org_id !== orgId || p.provider !== provider || p.created_by !== memberId) throw new HubError('NOT_FOUND', SETUP_EXPIRED);
+        // The callback checked the role before exchange() ran; it may have changed since.
+        const m = db.get('SELECT org_id, role, removed_at FROM members WHERE id = ?', memberId);
+        if (!m || m.removed_at || m.org_id !== orgId || !['owner', 'admin'].includes(m.role)) throw new HubError('NOT_FOUND', SETUP_EXPIRED);
+        copied = db.all('SELECT kind, key_id, nonce, ciphertext FROM integration_pending_secrets WHERE pending_id = ?', id);
+        if (copied.some((r) => Object.hasOwn(secrets, r.kind))) throw new HubError('VALIDATION', 'Could not save the connection.');
+      }
       // Unique per org among live rows (partial index); revoked rows stay for
       // their audit history. A workspaceUnique provider (one install per
       // workspace) is unique across every org, with the same answer, so the
@@ -206,10 +230,14 @@ export function createIntegrations({
       if (clash) {
         throw new HubError('CONFLICT', `this ${conn.name} is already connected`);
       }
+      // First: connection_id_not_pending aborts the insert while the row exists.
+      if (pending) db.run('DELETE FROM integration_pending WHERE id = ?', id);
       db.insert('connections', {
         id, org_id: orgId, provider, external_id: ext, display_name: display_name == null ? null : String(display_name).slice(0, 200),
         scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(settings), created_by: memberId, created_at: now(),
       });
+      // Their AAD is `<id>|<kind>|<key_id>` already: they open here and nowhere else.
+      for (const r of copied) db.insert('connection_secrets', { connection_id: id, kind: r.kind, key_id: r.key_id, nonce: r.nonce, ciphertext: r.ciphertext, created_at: now() });
       for (const [kind, value] of Object.entries(secrets)) {
         const s = hub.vault.seal(id, kind, value);
         db.insert('connection_secrets', { connection_id: id, kind, key_id: s.key_id, nonce: s.nonce, ciphertext: s.ciphertext, created_at: now() });
@@ -720,6 +748,7 @@ export function createIntegrations({
   // ── inbound webhooks ────────────────────────────────────────────────────
 
   function sweepDedupe() {
+    sweepPending();
     db.run('DELETE FROM inbound_dedupe WHERE received_at < ?', new Date(hub.wallMs() - DEDUPE_KEEP_MS).toISOString());
     db.run('DELETE FROM integration_audit WHERE at < ?', new Date(hub.wallMs() - AUDIT_KEEP_MS).toISOString());
   }
@@ -754,7 +783,11 @@ export function createIntegrations({
     return !!(list && family && list.check(a, family === 4 ? 'ipv4' : 'ipv6'));
   }
 
-  /** The HTTP layer asks this before reading a body: unknown or inactive → 404 unread. */
+  /**
+   * The HTTP layer asks this before reading a body: unknown or inactive → 404
+   * unread. A pending id (D97) is unknown here and in webhook(); slice B3 adds
+   * its one exception, a verified url_verification handshake.
+   */
   function webhookTarget(connectionId) {
     const c = row(connectionId);
     return !!(c && c.status === 'active' && connectors.get(c.provider)?.handleWebhook);
@@ -914,6 +947,8 @@ export function createIntegrations({
   const mac = (payload) => createHmac('sha256', hub.secret).update(`integration-state|${payload}`).digest();
   const redirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/callback`;
   const webhookFor = (publicUrl, id) => `${publicUrl}/integrations/${id}/webhook`;
+  // The one place the identity callback URL is made (D97 prepare now, D98's identity flow later).
+  const identityRedirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/identity/callback`;
   // A reconnect hands the connector what it stored last time (app id, slug…):
   // the non-secret config of the org's newest active connection of that provider.
   const configFor = (orgId, provider) => {
@@ -953,20 +988,26 @@ export function createIntegrations({
     ? { name: `__Host-board_int_${provider}`, path: '/', secure: true }
     : { name: `board_int_${provider}`, path: '/integrations/', secure: false });
 
+  // A signed state for (member, provider, connection id), its bind and the bind cookie.
+  function mintState(member, provider, id, publicUrl, extra = {}) {
+    const bind = randomBytes(24).toString('base64url');
+    const payload = b64(JSON.stringify({
+      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind), i: id, ...extra,
+    }));
+    return { state: `${payload}.${mac(payload).toString('base64url')}`, bind, cookie: { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 } };
+  }
+
   function oauthStart({ member, provider, publicUrl }) {
     const conn = connectors.get(provider);
-    if (!conn || conn.connect.kind === 'token') throw new HubError('NOT_FOUND', 'no such integration');
+    // A prepare connector connects only through its pending row (D97): the
+    // plain flow would skip the match check and never pin the app.
+    if (!conn || conn.connect.kind === 'token' || conn.connect.prepare) throw new HubError('NOT_FOUND', 'no such integration');
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
-    const bind = randomBytes(24).toString('base64url');
     // The connection id is minted now: a manifest must name its webhook URL
     // before the app (and so the connection) exists.
     const id = randomUUID();
-    const payload = b64(JSON.stringify({
-      m: member.id, o: member.org_id, p: provider, n: randomBytes(16).toString('base64url'), e: Date.now() + STATE_TTL_MS, b: sha(bind), i: id,
-    }));
-    const state = `${payload}.${mac(payload).toString('base64url')}`;
+    const { state, bind, cookie } = mintState(member, provider, id, publicUrl);
     const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), config: configFor(member.org_id, provider) };
-    const cookie = { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 };
     if (conn.connect.manifestForm) return { form: manifestFormOf(conn, conn.connect.manifestForm(args)), bind, cookie };
     return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
@@ -984,6 +1025,8 @@ export function createIntegrations({
     if (got.length !== want.length || !timingSafeEqual(got, want)) return invalid;
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
     if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    // A state from before the connector declared prepare, or minted by /start.
+    if (conn.connect.prepare && st.pd !== 1) return invalid;
     // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
     if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
@@ -991,27 +1034,297 @@ export function createIntegrations({
     const member = hub.member(st.m);
     if (!member || member.removed_at || member.org_id !== st.o || !['owner', 'admin'].includes(member.role)) return { ok: false, error: 'Only a team admin can connect this.' };
     if (query.get('error')) return { ok: false, error: 'The connection was cancelled.' };
+    // A pending row (D97) is finished only by the member who prepared it.
+    const pending = st.pd === 1 ? livePending(st.i) : null;
+    if (st.pd === 1 && (!pending || pending.org_id !== st.o || pending.provider !== provider || pending.created_by !== st.m || pending.match === '{}')) return { ok: false, error: SETUP_EXPIRED };
+    let held = {};
+    if (pending) {
+      try { held = pendingSecretsOf(pending.id); } catch (e) {
+        warn('integration pending secrets could not be opened', conn, e);
+        return { ok: false, error: 'Could not save the connection.' };
+      }
+    }
     let v;
     try {
-      v = await conn.connect.exchange({ query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i), config: configFor(member.org_id, provider), fetch: restrictedFetch(conn) });
+      v = await conn.connect.exchange({
+        query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i),
+        config: pending ? pendingConfig(pending) : configFor(member.org_id, provider), secrets: { ...held }, fetch: restrictedFetch(conn),
+      });
     } catch (e) {
       warn('integration connect failed', conn, e);
       return { ok: false, error: 'The provider did not accept the connection. Try again.' };
     }
-    const config = v?.settings === undefined ? null : exchangeConfig(v.settings);
+    if (pending) {
+      const want = safeJson(pending.match, {});
+      const got = isPlainObject(v?.match) ? v.match : null;
+      const keys = Object.keys(want);
+      const same = !!got && Object.keys(got).length === keys.length && keys.every((k) => Object.hasOwn(got, k) && got[k] === want[k]);
+      if (!same || (pending.external_id != null && String(v?.external_id ?? '') !== pending.external_id)) {
+        return { ok: false, error: 'This app does not match the one being set up. Start again.' };
+      }
+      if (isPlainObject(v?.secrets) && Object.keys(v.secrets).some((k) => Object.hasOwn(held, k))) return { ok: false, error: 'Could not save the connection.' };
+    }
+    let config = v?.settings === undefined ? null : exchangeConfig(v.settings);
     if (config === null && v?.settings !== undefined) return { ok: false, error: 'Could not save the connection.' };
+    // The pending settings win: exchange can't move the app it was pinned to.
+    if (pending) config = exchangeConfig({ ...(config ?? {}), ...safeJson(pending.settings, {}) });
+    if (pending && config === null) return { ok: false, error: 'Could not save the connection.' };
     const next = v?.next_url == null ? null : urlOn(v.next_url, conn.hosts);
     if (v?.next_url != null && !next) warn('integration next_url refused', conn, 'not https on a declared host');
     try {
       // Named fields only: exchange() can't pick the id, org, member or autonomy.
       const connection = createConnection({
         external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {},
-        settings: config ? { config } : {}, id: st.i, orgId: member.org_id, memberId: member.id, provider,
+        settings: { ...(config ? { config } : {}), ...(pending ? { pinned: safeJson(pending.match, {}) } : {}) },
+        id: st.i, orgId: member.org_id, memberId: member.id, provider, pending,
       });
       return { ok: true, connection, provider_name: conn.name, next_url: next?.href ?? null };
     } catch (e) {
+      // The app exists at the provider but can't be connected here: the row goes, and the admin deletes the app.
+      if (pending && e instanceof HubError && e.code === 'CONFLICT') {
+        hub.txn(() => dropPending(db.all('SELECT id, provider FROM integration_pending WHERE id = ?', pending.id), 'integration.prepare_cancel', member.id));
+        return { ok: false, error: `${e.message}. Delete the app this setup created on ${conn.name}.` };
+      }
       return { ok: false, error: e instanceof HubError ? e.message : 'Could not save the connection.' };
     }
+  }
+
+  // ── pending connections (D97) ───────────────────────────────────────────
+  // A row of integration_pending, never a connection: no query above sees it.
+  // Expired rows are invisible at once (expires_at in every read) and purged
+  // by sweepPending. The admin's pasted input lives only in callPrepare's
+  // memory: nothing derived from it is logged, thrown, cached or stored except
+  // what the connector returns as secrets (sealed) or settings/match.
+
+  const livePending = (id) => (typeof id === 'string' ? db.get('SELECT * FROM integration_pending WHERE id = ? AND expires_at > ?', id, now()) : null);
+  const publicPending = (p) => ({ id: p.id, provider: p.provider, status: 'pending', created_by: p.created_by, created_at: p.created_at, expires_at: p.expires_at, ready: p.match !== '{}' });
+  const pendingConfig = (p) => ({ ...configFor(p.org_id, p.provider), ...safeJson(p.settings, {}) });
+  const notAccepted = () => new HubError('VALIDATION', NOT_ACCEPTED);
+  const pendingNotFound = () => new HubError('NOT_FOUND', 'no such integration');
+  const preparing = new Set(); // pending ids whose prepare (first or second step) is at the provider
+  let lastSweep = -Infinity;
+
+  function pendingSecretsOf(id) {
+    const out = {};
+    for (const r of db.all('SELECT * FROM integration_pending_secrets WHERE pending_id = ?', id)) out[r.kind] = hub.vault.open(id, r.kind, r);
+    return out;
+  }
+
+  // Inside a transaction. The secrets go with each row (integration_pending_secrets_purge).
+  function dropPending(rows, kind, memberId = null) {
+    for (const p of rows) {
+      db.run('DELETE FROM integration_pending WHERE id = ?', p.id);
+      hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind, payload: { pending_id: p.id, provider: p.provider } });
+    }
+  }
+
+  /** Delete expired pending rows; at most once a minute (the reaper calls it every tick). */
+  function sweepPending() {
+    const t = hub.wallMs();
+    if (t - lastSweep < PENDING_SWEEP_MS) return 0;
+    lastSweep = t;
+    const rows = db.all('SELECT id, provider FROM integration_pending WHERE expires_at <= ?', now());
+    if (rows.length) hub.txn(() => dropPending(rows, 'integration.prepare_expire'));
+    return rows.length;
+  }
+
+  // The declared keys only; never echoes a value.
+  function prepareInput(conn, input) {
+    if (input === undefined) return {};
+    if (!isPlainObject(input)) throw new HubError('VALIDATION', 'input must be an object');
+    const out = {};
+    for (const k of conn.connect.prepareInputs) {
+      if (!Object.hasOwn(input, k)) continue;
+      const v = input[k];
+      if (typeof v !== 'string' || !v || Buffer.byteLength(v) > PREPARE_INPUT_MAX) throw new HubError('VALIDATION', `each input is text of 1 to ${PREPARE_INPUT_MAX} bytes`);
+      out[k] = v;
+    }
+    return out;
+  }
+
+  // 1–8 scalar entries, else null.
+  function cleanMatch(m) {
+    if (!isPlainObject(m)) return null;
+    const entries = Object.entries(m);
+    if (!entries.length || entries.length > MATCH_MAX) return null;
+    const ok = ([k, x]) => MATCH_KEY.test(k) && ((typeof x === 'string' && x.length <= MATCH_STR_MAX) || (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean');
+    return entries.every(ok) ? Object.fromEntries(entries) : null;
+  }
+
+  // prepare's answer, copied into plain values; anything off is the fixed VALIDATION.
+  function prepareAnswer(conn, v) {
+    if (!isPlainObject(v)) throw notAccepted();
+    if (v.needs !== undefined) {
+      const n = v.needs;
+      if (!isPlainObject(n) || !Array.isArray(n.fields) || !n.fields.length || n.fields.length > MATCH_MAX) throw notAccepted();
+      const fields = [...n.fields];
+      if (new Set(fields).size !== fields.length || fields.some((f) => typeof f !== 'string' || !conn.connect.prepareInputs.includes(f))) throw notAccepted();
+      const url = typeof n.create_url === 'string' && Buffer.byteLength(n.create_url) <= CREATE_URL_MAX ? urlOn(n.create_url, conn.hosts) : null;
+      if (!url) throw notAccepted();
+      return { needs: { fields, create_url: url.href } };
+    }
+    if (!isPlainObject(v.secrets)) throw notAccepted();
+    const secrets = {};
+    for (const [k, x] of Object.entries(v.secrets)) {
+      if (!conn.secrets.includes(k) || typeof x !== 'string' || !x || Buffer.byteLength(x) > SECRET_MAX_BYTES) throw notAccepted();
+      secrets[k] = x;
+    }
+    if (!Object.keys(secrets).length) throw notAccepted();
+    const settings = v.settings === undefined ? {} : exchangeConfig(v.settings);
+    const match = cleanMatch(v.match);
+    if (settings === null || !match) throw notAccepted();
+    const ext = v.external_id ?? null;
+    if (ext !== null && (typeof ext !== 'string' || !ext || ext.length > 200)) throw notAccepted();
+    return { secrets, settings, match, external_id: ext };
+  }
+
+  // The restricted fetch without retries (creating an app is not idempotent).
+  // Its errors are rebuilt with fixed text and no cause: a fetch error's cause
+  // can carry the request, headers and all (the pasted token as a Bearer).
+  function prepareFetch(conn, signal) {
+    const once = restrictedFetch(conn);
+    return async (u, init = {}) => {
+      let refused = false;
+      try {
+        return await once(u, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal });
+      } catch (e) {
+        refused = e?.healthCode === 'host_refused';
+      }
+      throw refused ? tagged('that host is not declared', 'host_refused') : tagged('the request failed', 'provider_unreachable');
+    };
+  }
+
+  // Never touches what the connector threw: its message, cause or fields may hold the input.
+  async function callPrepare(conn, args) {
+    const controller = new AbortController();
+    try {
+      const v = await withTimeout(Promise.resolve().then(() => conn.connect.prepare({ ...args, fetch: prepareFetch(conn, controller.signal) })), PREPARE_TIMEOUT_MS, controller);
+      return prepareAnswer(conn, v);
+    } catch {
+      log?.warn?.('integration prepare failed', { integration: conn.id, err: 'connector_error' });
+      throw notAccepted();
+    } finally {
+      controller.abort();
+    }
+  }
+
+  const prepareArgs = (orgId, provider, id, input, publicUrl) => ({
+    input, webhookUrl: webhookFor(publicUrl, id), redirectUri: redirectFor(publicUrl, provider),
+    identityRedirectUri: identityRedirectFor(publicUrl, provider), config: configFor(orgId, provider),
+  });
+
+  function authorizeFor(conn, p, member, publicUrl) {
+    const { state, bind, cookie } = mintState(member, p.provider, p.id, publicUrl, { pd: 1 });
+    const url = conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, p.provider), webhookUrl: webhookFor(publicUrl, p.id), config: pendingConfig(p) });
+    return { url, bind, cookie };
+  }
+
+  // Seals the answer on the row (still live and still this member's). Once the
+  // provider made an app, failing to keep it here orphans it there: the row
+  // goes and the admin is told, in fixed text, to delete that app.
+  function finishPrepare(conn, member, id, answer, publicUrl) {
+    let p = null;
+    try {
+      p = hub.txn(() => {
+        const cur = livePending(id);
+        if (!cur || cur.created_by !== member.id || cur.match !== '{}') return null;
+        if (!answer.needs) {
+          db.run('UPDATE integration_pending SET match = ?, settings = ?, external_id = ? WHERE id = ?', JSON.stringify(answer.match), JSON.stringify(answer.settings), answer.external_id, id);
+          for (const [kind, value] of Object.entries(answer.secrets)) {
+            const s = hub.vault.seal(id, kind, value);
+            db.insert('integration_pending_secrets', { pending_id: id, kind, key_id: s.key_id, nonce: s.nonce, ciphertext: s.ciphertext, created_at: now() });
+          }
+        }
+        hub.journal({ board_id: null, actor_kind: 'member', actor_id: member.id, kind: 'integration.prepare', payload: { pending_id: id, provider: conn.id } });
+        return livePending(id);
+      });
+    } catch (e) {
+      if (answer.needs) throw e;
+      log?.warn?.('integration prepare could not be saved', { integration: conn.id, err: 'save_failed' });
+    }
+    if (!p && !answer.needs) {
+      hub.txn(() => dropPending(db.all("SELECT id, provider FROM integration_pending WHERE id = ? AND match = '{}'", id), 'integration.prepare_cancel', member.id));
+      throw new HubError('CONFLICT', `Could not save this setup. Delete the app it created on ${conn.name}.`);
+    }
+    if (!p) throw pendingNotFound();
+    if (answer.needs) return { pending: publicPending(p), needs: answer.needs };
+    return { pending: publicPending(p), ...authorizeFor(conn, p, member, publicUrl) };
+  }
+
+  /** POST /api/integrations/:provider/prepare → {pending, needs} | {pending, url, bind, cookie}. */
+  async function pendingCreate({ member, provider, input, publicUrl }) {
+    const conn = connectors.get(provider);
+    if (!conn?.connect.prepare) throw new HubError('NOT_FOUND', 'no such integration');
+    if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
+    const clean = prepareInput(conn, input);
+    const id = randomUUID();
+    // The row is reserved before the provider is called: the unique indexes let
+    // one prepare per (org, provider) and per admin reach it.
+    hub.txn(() => {
+      const t = now();
+      dropPending(db.all('SELECT id, provider FROM integration_pending WHERE (created_by = ? OR (org_id = ? AND provider = ?)) AND expires_at <= ?', member.id, member.org_id, provider, t), 'integration.prepare_expire');
+      const live = db.get('SELECT id FROM integration_pending WHERE created_by = ? OR (org_id = ? AND provider = ?)', member.id, member.org_id, provider);
+      if (live) throw new HubError('CONFLICT', 'a setup is already pending: continue or delete it first', { reason: 'PENDING_EXISTS', pending_id: live.id });
+      limitOrThrow(hub, 'integration_prepare_member', member.id);
+      limitOrThrow(hub, 'integration_prepare_org', member.org_id);
+      db.insert('integration_pending', { id, org_id: member.org_id, provider, created_by: member.id, created_at: t, expires_at: new Date(hub.wallMs() + PENDING_TTL_MS).toISOString() });
+    });
+    // A second step for this row must wait: it would make a second app, and
+    // this call's cleanup below would delete the row it finished.
+    preparing.add(id);
+    try {
+      let answer;
+      try {
+        answer = await callPrepare(conn, prepareArgs(member.org_id, provider, id, clean, publicUrl));
+      } catch (e) {
+        db.run('DELETE FROM integration_pending WHERE id = ?', id);
+        throw e;
+      }
+      return finishPrepare(conn, member, id, answer, publicUrl);
+    } finally {
+      preparing.delete(id);
+    }
+  }
+
+  /** POST /api/integrations/:id/prepare: the pasted fields for a row with no secrets yet (its creator only). */
+  async function pendingPrepare({ member, id, input, publicUrl }) {
+    const p = livePending(id);
+    const conn = p && connectors.get(p.provider);
+    if (!p || p.org_id !== member.org_id || p.created_by !== member.id || !conn?.connect.prepare) throw pendingNotFound();
+    if (p.match !== '{}') throw new HubError('CONFLICT', 'this setup already has its app', { reason: 'PENDING_READY' });
+    if (preparing.has(id)) throw new HubError('CONFLICT', 'this setup is already being prepared', { reason: 'PENDING_BUSY' });
+    const clean = prepareInput(conn, input);
+    limitOrThrow(hub, 'integration_prepare_member', member.id);
+    limitOrThrow(hub, 'integration_prepare_org', member.org_id);
+    preparing.add(id);
+    try {
+      const answer = await callPrepare(conn, prepareArgs(p.org_id, p.provider, id, clean, publicUrl));
+      if (answer.needs) throw notAccepted();
+      return finishPrepare(conn, member, id, answer, publicUrl);
+    } finally {
+      preparing.delete(id);
+    }
+  }
+
+  /** POST /api/integrations/:id/authorize: a fresh state and bind, ≤ 5 per row, never a longer life. */
+  function pendingAuthorize({ member, id, publicUrl }) {
+    const p = livePending(id);
+    const conn = p && connectors.get(p.provider);
+    if (!p || p.org_id !== member.org_id || p.created_by !== member.id || !conn?.connect.prepare) throw pendingNotFound();
+    if (p.match === '{}') throw new HubError('CONFLICT', 'this setup has no app yet', { reason: 'PENDING_NOT_READY' });
+    const took = db.run('UPDATE integration_pending SET authorize_count = authorize_count + 1 WHERE id = ? AND authorize_count < ?', id, AUTHORIZE_MAX);
+    if (Number(took.changes) !== 1) throw new HubError('RATE_LIMITED', 'this setup was resumed too often: delete it and start again');
+    return authorizeFor(conn, p, member, publicUrl);
+  }
+
+  /** DELETE on a live pending row of the member's org → true; anything else → false (the caller tries a connection). */
+  function pendingDelete({ member, id }) {
+    return hub.txn(() => {
+      const p = livePending(id);
+      if (!p || p.org_id !== member.org_id) return false;
+      dropPending([p], 'integration.prepare_cancel', member.id);
+      return true;
+    });
   }
 
   // ── the bus: one consumer per connection (a stuck team never stalls another) ──
@@ -1073,10 +1386,18 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
-    orgOf: (id) => row(id)?.org_id ?? null,
+    orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,
+    pendingList: (orgId) => db.all('SELECT * FROM integration_pending WHERE org_id = ? AND expires_at > ? ORDER BY created_at, id', orgId, now()).map(publicPending),
+    pendingCreate,
+    pendingPrepare,
+    pendingAuthorize,
+    pendingDelete,
+    sweepPending,
+    /** The identity callback URL for a connection (D97 prepare got the same string). */
+    identityRedirectUri: (publicUrl, connectionId) => { const c = row(connectionId); return c ? identityRedirectFor(publicUrl, c.provider) : null; },
     createConnection,
     revokeConnection,
     /** Token-style connect: the connector checks the token with its provider. */
@@ -1095,7 +1416,9 @@ export function createIntegrations({
         if (!isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
         if (Buffer.byteLength(JSON.stringify(patch.config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
       }
-      const next = { ...safeJson(c.settings, {}), ...patch };
+      const cur = safeJson(c.settings, {});
+      // pinned names the app a pending connection was promoted for (D97): never patched.
+      const next = { ...cur, ...patch, pinned: cur.pinned };
       for (const [a, m] of Object.entries(next.autonomy ?? {})) {
         if (!Object.hasOwn(conn.actions, a)) throw new HubError('VALIDATION', `${conn.name} has no action ${a}`);
         if (!AUTONOMY.includes(m)) throw new HubError('VALIDATION', 'autonomy must be auto, ask or off');

@@ -117,6 +117,14 @@ export class Hub extends EventEmitter {
         this.db.run('UPDATE connection_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE connection_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.connection_id, r.kind, r.key_id);
         resealed += 1;
       }
+      // Pending secrets (D97) too: promotion copies their ciphertext as it is.
+      for (const r of this.db.all('SELECT pending_id, kind, key_id, nonce, ciphertext FROM integration_pending_secrets WHERE key_id != ?', v.keyId)) {
+        let plain;
+        try { plain = v.open(r.pending_id, r.kind, r); } catch { unopened += 1; continue; }
+        const s = v.seal(r.pending_id, r.kind, plain);
+        this.db.run('UPDATE integration_pending_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE pending_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.pending_id, r.kind, r.key_id);
+        resealed += 1;
+      }
     });
     this.log.info('vault re-sealed under the current key', { resealed, unopened });
     return { resealed, unopened };
@@ -252,6 +260,16 @@ export class Hub extends EventEmitter {
   revokeDeletedTeamConnections(now) {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
+    this.db.run('DELETE FROM integration_pending WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+  }
+  // Only its creator, still an owner/admin, can finish a pending connection
+  // (D97): one who is removed, demoted or deleted loses it at once, with its
+  // sealed secrets (trigger), inside the caller's transaction.
+  dropMemberPending(memberId) {
+    for (const p of this.db.all('SELECT id, provider FROM integration_pending WHERE created_by = ?', memberId)) {
+      this.db.run('DELETE FROM integration_pending WHERE id = ?', p.id);
+      this.journal({ board_id: null, actor_kind: 'system', actor_id: null, kind: 'integration.prepare_cancel', payload: { pending_id: p.id, provider: p.provider } });
+    }
   }
   // … and its label registry goes at once (member-written names; nothing reads it again). Cards wait for the P5 purge.
   dropDeletedTeamLabels() {
@@ -876,6 +894,7 @@ export class Hub extends EventEmitter {
     this.recheckBrowsers();
     this.enrolments?.recheck();
     this.oauth?.sweep();
+    this.sweepIntegrationsPending?.();
     this.presence.sweep();
     await this.idle();
   }

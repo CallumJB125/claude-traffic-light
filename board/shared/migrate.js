@@ -17,6 +17,11 @@
 // `-- migrate: foreign_keys=off rebuilds`) marks a file that drops and
 // recreates tables: a later version's triggers or indexes on those tables would
 // be lost, so it is refused when any higher version is already applied.
+//
+// A rebuild drops the table's triggers with it, including ones an earlier
+// migration put there for safety: one that rebuilds `connections` must
+// re-create connection_id_not_pending and connections_pinned_fixed (022, D97),
+// and one that rebuilds integration_pending its triggers too.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

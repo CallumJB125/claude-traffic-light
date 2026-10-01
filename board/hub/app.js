@@ -76,6 +76,8 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.on('journal', () => bus.poke());
   const integrations = createIntegrations({ hub, api, bus, log, fetchImpl });
   for (const c of connectorsFor(config)) integrations.register(c);
+  // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
+  hub.sweepIntegrationsPending = () => integrations.sweepPending();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
   const handler = createHttpHandler({ hub, api, config, integrations });
   const server = createServer(handler);

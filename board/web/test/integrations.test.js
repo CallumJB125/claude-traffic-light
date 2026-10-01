@@ -155,3 +155,75 @@ test('the app tells the Integrations page it is on the local hub from /api/healt
   assert.match(src, /integrations: state\.view === 'integrations' \? \{ \.\.\.state\.integ, nowMs: Date\.now\(\), local: state\.authMode === 'local' \} : null,/);
   assert.match(src, /state\.authMode = \(await api\.health\(\)\)\.auth/);
 });
+
+// ── pending connections (D97) ─────────────────────────────────────────────
+
+const pend = { id: 'pend', name: 'Pend', scopes: [], connect: 'oauth', actions: {}, prepare: ['config_token', 'app_id', 'client_id', 'client_secret', 'signing_secret'] };
+const row = (over = {}) => ({ id: 'p1', provider: 'pend', status: 'pending', created_by: 'm-alice', created_at: '2026-09-30T19:18:00Z', expires_at: '2026-09-30T20:42:00Z', ready: true, ...over });
+const pm = (over = {}, role = 'owner') => m({ data: { available: [pend], connections: [], vault: true, pending: [] }, ...over }, role);
+const inputs = (v) => findAll(v, (n) => n.tag === 'input');
+
+test('a prepare connector: admins get a password field for the configuration token and a paste-instead button; inputs never carry a value', () => {
+  const v = integrationsScreen(pm());
+  const f = byAttr(v, 'data-form', 'integ-prepare');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].props['data-provider'], 'pend');
+  const [token] = inputs(f[0]);
+  assert.equal(token.props.name, 'config_token');
+  assert.equal(token.props.type, 'password');
+  assert.equal(token.props.value, undefined);
+  assert.match(textOf(f[0]), /App configuration token/);
+  assert.match(textOf(f[0]), /Create the Pend app/);
+  assert.equal(byAttr(v, 'data-action', 'integ-paste').length, 1);
+  assert.match(textOf(integrationsScreen(pm({}, 'member'))), /A team admin can connect this/);
+  assert.equal(byAttr(integrationsScreen(pm({}, 'member')), 'data-form', 'integ-prepare').length, 0);
+});
+
+test('a ready pending row of mine: "Waiting for approval · expires in N min", Continue and Cancel; Cancel asks first and says to delete the app at the provider', () => {
+  const v = integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row()] } }));
+  assert.match(textOf(v), /Waiting for approval · expires in 42 min/);
+  assert.equal(byAttr(v, 'data-action', 'integ-authorize')[0].props['data-pending'], 'p1');
+  assert.equal(byAttr(v, 'data-form', 'integ-prepare').length, 0, 'no new setup while one is pending');
+  assert.equal(byAttr(v, 'data-action', 'integ-pending-cancel-ask').length, 1);
+  const c = integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row()] }, confirmCancel: 'p1' }));
+  assert.match(textOf(c), /delete the app this setup created on Pend/i);
+  assert.match(textOf(c), /the hub can’t/);
+  assert.equal(byAttr(c, 'data-action', 'integ-pending-cancel')[0].props['data-pending'], 'p1');
+  // Another admin's row: no Continue (only its creator can finish), Cancel stays.
+  const o = integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row({ created_by: 'm-bob' })] } }));
+  assert.equal(byAttr(o, 'data-action', 'integ-authorize').length, 0);
+  assert.equal(byAttr(o, 'data-action', 'integ-pending-cancel-ask').length, 1);
+});
+
+test('a pending row that needs a paste: the create link and the fields (ids as text, secrets as password, no values)', () => {
+  const needs = { p1: { fields: ['app_id', 'client_id', 'client_secret', 'signing_secret'], create_url: 'https://pend.example/apps?new_app=1' } };
+  const v = integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row({ ready: false })] }, needs }));
+  const link = findAll(v, (n) => n.tag === 'a' && n.props.href === needs.p1.create_url);
+  assert.equal(link.length, 1);
+  assert.equal(link[0].props.rel, 'noopener noreferrer');
+  const f = byAttr(v, 'data-form', 'integ-prepare')[0];
+  assert.equal(f.props['data-pending'], 'p1');
+  assert.deepEqual(inputs(f).map((i) => [i.props.name, i.props.type, i.props.value]), [['app_id', 'text', undefined], ['client_id', 'text', undefined], ['client_secret', 'password', undefined], ['signing_secret', 'password', undefined]]);
+  // An http create_url is never linked.
+  const bad = integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row({ ready: false })] }, needs: { p1: { ...needs.p1, create_url: 'http://pend.example/x' } } }));
+  assert.equal(findAll(bad, (n) => n.tag === 'a').length, 0);
+});
+
+test('takeInput reads the form\'s named inputs and clears them at once', () => {
+  const els = [{ name: 'config_token', value: ' tok-value ' }, { name: 'app_id', value: '' }];
+  const form = { querySelectorAll: () => els };
+  assert.deepEqual(integ.takeInput(form), { config_token: 'tok-value' });
+  assert.deepEqual(els.map((e) => e.value), ['', '']);
+});
+
+test('password managers keep out of secret fields: the configuration token, pasted secrets and the token connector field', () => {
+  const pinned = (i) => [i.props.autocomplete, i.props['data-1p-ignore'], i.props['data-lpignore']];
+  const [token] = inputs(byAttr(integrationsScreen(pm()), 'data-form', 'integ-prepare')[0]);
+  assert.deepEqual(pinned(token), ['new-password', '', 'true']);
+  const needs = { p1: { fields: ['app_id', 'client_secret'], create_url: 'https://pend.example/apps?new_app=1' } };
+  const paste = inputs(byAttr(integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row({ ready: false })] }, needs })), 'data-form', 'integ-prepare')[0]);
+  assert.deepEqual(paste.map(pinned), [['off', '', 'true'], ['new-password', '', 'true']]);
+  const [tok] = inputs(byAttr(integrationsScreen(m({ tokenFor: 'fake' })), 'data-form', 'integ-token')[0]);
+  assert.equal(tok.props.name, 'token');
+  assert.deepEqual(pinned(tok), ['new-password', '', 'true']);
+});

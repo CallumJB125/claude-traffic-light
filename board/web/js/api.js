@@ -77,6 +77,9 @@ export const api = {
   connectToken: (provider, token) => mut('POST', `/api/integrations/${enc(provider)}/token`, { token }),
   startConnect: (provider) => mut('POST', `/api/integrations/${enc(provider)}/start`),
   patchIntegration: (id, patch) => mut('PATCH', `/api/integrations/${enc(id)}`, patch),
+  // D97: target is a provider (start) or a pending id (the pasted fields).
+  prepareIntegration: (target, input) => mut('POST', `/api/integrations/${enc(target)}/prepare`, { input }),
+  authorizeIntegration: (id) => mut('POST', `/api/integrations/${enc(id)}/authorize`),
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
