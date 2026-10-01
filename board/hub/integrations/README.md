@@ -63,6 +63,14 @@ ignored) and `next_url` (https on one of `hosts`:
 the success page's single "Continue on <name>" link, e.g. installing the app). Anything else it returns, such
 as an id or org, is ignored.
 
+**Start inputs (D42 addendum "start inputs").** An `oauth`/`app_install` connector without `prepare` may ask the admin
+for a little plain text at `/start` (GitHub: the organization to create the app under): declare
+`connect.startInputs: ['org']` (1–4 names `^[a-z][a-z0-9_]{0,39}$`) and `connect.startInput(name, value) → normalized | null`,
+your rule for a value (keep it strict: it lands in a URL). The registry refuses a bad or undeclared one with a fixed
+`VALIDATION`, passes the rest to `authorizeUrl`/`manifestForm` as `input` (check it again there), signs it into the state
+and hands it back to `exchange` as `startInput`, where you **must** check the provider's answer against it (GitHub: the
+app's owner is that organization) and refuse otherwise. Never store it as config; keep only what the provider says.
+
 **Pending connections (D97).** A provider whose app must be created first (Slack, from a configuration
 token) declares `connect.prepareInputs: [...]` and `connect.prepare({input, webhookUrl, redirectUri,
 identityRedirectUri, provider, config, fetch})`. The admin's `POST /api/integrations/<id>/prepare {input}` reaches it with

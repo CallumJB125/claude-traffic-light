@@ -75,7 +75,7 @@ export const api = {
   // Integrations (team-level; admins connect, configure and disconnect).
   integrations: () => call('GET', '/api/integrations'),
   connectToken: (provider, token) => mut('POST', `/api/integrations/${enc(provider)}/token`, { token }),
-  startConnect: (provider) => mut('POST', `/api/integrations/${enc(provider)}/start`),
+  startConnect: (provider, input) => mut('POST', `/api/integrations/${enc(provider)}/start`, input && Object.keys(input).length ? { input } : undefined),
   patchIntegration: (id, patch) => mut('PATCH', `/api/integrations/${enc(id)}`, patch),
   // D97: target is a provider (start) or a pending id (the pasted fields).
   prepareIntegration: (target, input) => mut('POST', `/api/integrations/${enc(target)}/prepare`, { input }),

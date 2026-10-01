@@ -88,16 +88,29 @@ function identitySection(conn, name, m) {
       : h('p', { class: 'muted small' }, 'Nobody has linked an account yet.')) : null);
 }
 
+// Who the app ended up under, from the provider facts admins see (D42
+// addendum C1): an account or organization login, public at the provider.
+const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+function ownerLine(conn, name) {
+  const p = conn.settings?.provider;
+  const org = typeof p?.org === 'string' && LOGIN_RE.test(p.org) ? p.org : null;
+  const login = typeof p?.login === 'string' && LOGIN_RE.test(p.login) ? p.login : null;
+  if (org) return `Created under the ${name} organization ${org}`;
+  return login ? `Created under the ${name} account ${login}` : null;
+}
+
 function connectedCard(conn, m) {
   const connector = m.available.find((c) => c.id === conn.provider);
   const hl = health(conn, m.nowMs);
+  const owner = ownerLine(conn, connector?.name ?? conn.provider);
   const open = m.open === conn.id;
   const confirming = m.confirmDisconnect === conn.id;
   return h('article', { key: conn.id, class: 'integ-card', 'data-provider': conn.provider },
     h('header', { class: 'integ-card-head' },
       h('div', null,
         h('h3', { class: 'integ-name' }, connector?.name ?? conn.provider),
-        conn.display_name ? h('p', { class: 'integ-account muted small' }, conn.display_name) : null),
+        conn.display_name ? h('p', { class: 'integ-account muted small' }, conn.display_name) : null,
+        owner ? h('p', { class: 'integ-owner muted small' }, owner) : null),
       h('p', { class: 'integ-health', 'data-tone': hl.tone }, h('span', { class: 'integ-dot', 'aria-hidden': 'true' }), hl.text)),
     h('section', { class: 'integ-section', 'aria-label': 'What it may do on its own' },
       h('h4', null, 'On its own'),
@@ -117,10 +130,35 @@ function connectedCard(conn, m) {
 // A provider's App-manifest flow (GitHub) takes a POSTed form, not a link:
 // a real form the admin submits themselves (no auto-submit, no inline script
 // under the CSP). The hub checked the action host; https is re-checked here.
+// Where the app will be made, read back from the form's own action (the
+// typed org never enters the model).
+function manifestOwner(c, action) {
+  let path;
+  try { path = new URL(action).pathname; } catch { return null; }
+  const org = /^\/organizations\/([A-Za-z0-9-]{1,39})\/settings\/apps\/new$/.exec(path)?.[1];
+  if (org) return `The app will be created under the ${c.name} organization ${org}.`;
+  return path === '/settings/apps/new' ? `The app will be created under the ${c.name} account you're signed in as.` : null;
+}
+
 function manifestForm(c, mf) {
+  const owner = manifestOwner(c, mf.action);
   return h('form', { class: 'integ-manifest', method: 'post', action: mf.action, target: mf.target ?? '_blank', rel: 'noopener noreferrer' },
+    owner ? h('p', { class: 'small' }, owner) : null,
     Object.entries(mf.fields ?? {}).map(([name, value]) => h('input', { key: name, type: 'hidden', name, value })),
     h('button', { type: 'submit', class: 'btn btn-sm btn-primary' }, `Create the app on ${c.name}`));
+}
+
+// D42 addendum "start inputs": optional plain text sent with /start only.
+// Uncontrolled like inputField: takeInput reads and empties it on submit.
+function startForm(c, busy) {
+  const help = `integ-start-help-${c.id}`;
+  return h('form', { class: 'integ-token', 'data-form': 'integ-start', 'data-provider': c.id },
+    c.start.map((k) => h('label', { key: k, class: 'field' },
+      h('span', null, k === 'org' ? `${c.name} organization (optional)` : `${inputLabel(k)} (optional)`),
+      h('input', { class: 'input', name: k, type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', ...NO_MANAGER, 'aria-describedby': k === 'org' ? help : null }))),
+    c.start.includes('org') ? h('p', { id: help, class: 'muted small' }, `Leave empty to create the app under the ${c.name} account you're signed in as. For a team's repositories, enter the organization name.`) : null,
+    h('div', { class: 'integ-card-actions' },
+      h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Connect ${c.name}`)));
 }
 
 // ── pending connections (D97) ───────────────────────────────────────────────
@@ -206,6 +244,7 @@ function availableCard(c, m) {
       : !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
       : manifest ? manifestForm(c, manifest)
+      : Array.isArray(c.start) && c.start.length && c.connect !== 'token' ? startForm(c, busy)
       : Array.isArray(c.prepare) && c.connect !== 'token' ? prepareForm(c, busy)
       : c.connect === 'token'
         ? (tokenOpen

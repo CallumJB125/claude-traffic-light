@@ -255,6 +255,23 @@ test('manifest POST: the GitHub connector’s own form (user and org) is accepte
   assert.match(org.action, /^https:\/\/github\.com\/organizations\/acme-co\/settings\/apps\/new\?state=/);
 });
 
+test('manifest POST: the form GitHub\'s manifestForm builds for an organization named at connect passes the unchanged desktop check; an odd org never reaches a form', async () => {
+  const gh = (await import('../board/hub/integrations/github/index.js')).default;
+  const build = (input) => gh.connect.manifestForm({ state: MF_STATE, redirectUri: `${MF_HUB}/integrations/github/callback`, webhookUrl: MF_HOOK, provider: {}, config: {}, input });
+  for (const org of ['acme-co', 'Acme-Co', 'a', 'x'.repeat(39)]) {
+    const f = build({ org });
+    assert.equal(new URL(f.action).pathname, `/organizations/${org}/settings/apps/new`);
+    const c = connectDecision(mfBase({ url: f.action, postBody: formBody(f.fields) }));
+    assert.equal(c.ok, true, `${org} ${JSON.stringify(c)}`);
+    assert.equal(c.post.url, f.action);
+    assert.deepEqual(JSON.parse(new URLSearchParams(c.post.postData[0].bytes.toString()).get('manifest')), JSON.parse(f.fields.manifest));
+  }
+  // Path-like or odd names are refused by the connector before any form exists (the hub refuses them at /start too).
+  for (const org of ['ac/me', '../acme', 'acme/../../settings', 'ac%2Fme', 'acme?x=1', 'acme#x', 'ac me', '-acme', 'acme-', 'ac--me', 'x'.repeat(40), 'ácme', '']) {
+    assert.throws(() => build({ org }), /not a GitHub organization/, org);
+  }
+});
+
 test('manifest POST: a GET to the same page still takes the GET path (no body, no post)', () => {
   const c = connectDecision(mfBase());
   assert.deepEqual(c, { ok: true, provider: 'github', bind: 'bnd1' });
