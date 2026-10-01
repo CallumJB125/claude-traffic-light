@@ -89,6 +89,7 @@ test('helper: waits for the app, swaps the bundles, launches the new one, then c
   assert.equal(versionOf(current), '1.2.0');
   assert.deepEqual(lines(r.log), ['1.2.0 --updated-from=1.1.0']);
   assert.match(fs.readFileSync(path.join(r.updates, 'swap.log'), 'utf8'), /swap ok/);
+  assert.ok(await until(() => !fs.existsSync(path.join(r.updates, 'downloads'))));
   for (const gone of ['previous/Plexiform.app', 'downloads', MacSwap.PENDING]) assert.ok(!fs.existsSync(path.join(r.updates, gone)), gone);
 });
 
@@ -192,7 +193,8 @@ test('end to end: signed zip on the feed → verified → unpacked → swapped �
     assert.ok(await until(() => swaps() >= 1, 10000));
     assert.equal(versionOf(current), '1.2.0');
     assert.deepEqual(lines(r.log), ['1.2.0 --updated-from=1.1.0']);
-    assert.ok(!fs.existsSync(path.join(r.updates, 'downloads')), 'L12: the zip is gone after a good swap');
+    // the helper logs "swap ok" and then removes them
+    assert.ok(await until(() => !fs.existsSync(path.join(r.updates, 'downloads'))), 'L12: the zip is gone after a good swap');
 
     // the relaunched 1.2.0 can go back to 1.1.0: its own signed release, downloaded and checked again
     const after = make();
