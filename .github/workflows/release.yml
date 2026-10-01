@@ -115,7 +115,7 @@ jobs:
           run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run --auto-servernum "$@"; else "$@"; fi; }
           status=0
           run node --test --test-force-exit --test-timeout=120000 test/*.test.js test/adapters/*.test.js || status=1
-          node --test --test-force-exit --test-timeout=120000 remote/test/ || status=1
+          node --test --test-force-exit --test-timeout=120000 remote/test/*.test.js || status=1
           exit $status
         continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') || matrix.platform == 'win' }}
 

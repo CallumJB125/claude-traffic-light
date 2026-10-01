@@ -489,3 +489,13 @@ test('every workflow file is valid YAML with jobs and an on: trigger', () => {
     assert.ok('on' in doc || true in doc, `${f}: no on: trigger`);
   }
 });
+
+// Node 22 (the version CI runs) treats a bare directory argument to --test as
+// one missing file: the remote suite then "fails" without running a test.
+test('release.yml passes test files, never a bare directory, to node --test', () => {
+  const yml = readText('.github/workflows/release.yml');
+  const runs = yml.split('\n').filter((l) => /node --test\b/.test(l));
+  assert.ok(runs.length >= 2, runs.join('\n'));
+  for (const l of runs) assert.doesNotMatch(l, /\s[\w./-]+\/(\s|\|\||$)/, `bare directory in: ${l.trim()}`);
+  assert.match(yml, /remote\/test\/\*\.test\.js/);
+});
