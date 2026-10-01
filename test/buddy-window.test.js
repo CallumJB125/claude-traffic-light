@@ -1695,7 +1695,7 @@ test('accounts: create a team, invite by email (link shown once), preview withou
   const other = await signIn(hub, origin, 'other@example.com');
   const wrong = await other.c.acceptInvite({ t: token });
   assert.equal(wrong.wrongAccount, true);
-  assert.equal(wrong.error, 'This invite is for s…@example.com. Switch account?');
+  assert.equal(wrong.error, 'This invite was sent to a different email address. Switch account?');
 
   const sam = await signIn(hub, origin, 'sam@example.com');
   const pending = (await sam.c.me()).pending_invites;
@@ -1719,12 +1719,21 @@ test('accounts: create a team, invite by email (link shown once), preview withou
   assert.equal((await owner.c.listInvites(teamId)).invites.length, 0);
 }));
 
+test('accounts: a replayed invite request is "already made", with no link or code', async () => {
+  const { createAccountClient: make } = require('../buddy-window/accounts');
+  const fetchImpl = async () => new Response(JSON.stringify({ error: { code: 'CONFLICT', message: 'This invite was already made. Resend it to get a new link.', reason: 'REPLAYED' } }), { status: 409 });
+  const c = make({ origin: 'https://h.example.com', store: { load: () => ({ hub: 'https://h.example.com', token: 'bdt_x' }), save() {}, clear() {} }, fetchImpl });
+  const r = await c.invite('t1', 'sam@example.com', 'member');
+  assert.deepEqual([r.ok, r.replayed, r.error, r.link, r.code], [false, true, 'This invite was already made. Resend it to get a new link.', undefined, undefined]);
+});
+
 test('accounts: the accept error codes are read in either encoding', () => {
   const { createAccountClient: make } = require('../buddy-window/accounts');
   const reply = (status, error) => async () => new Response(JSON.stringify({ error }), { status });
   const run = (status, error) => make({ origin: 'https://h.example.com', store: { load: () => ({ hub: 'https://h.example.com', token: 'bdt_x' }), save() {}, clear() {} }, fetchImpl: reply(status, error) }).acceptInvite({ t: 'tok' });
   return Promise.all([
-    run(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }).then((r) => assert.equal(r.error, 'This invite is for c…@example.com. Switch account?')),
+    run(403, { code: 'WRONG_ACCOUNT' }).then((r) => assert.deepEqual([r.wrongAccount, r.error], [true, 'This invite was sent to a different email address. Switch account?'])),
+    run(403, { code: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }).then((r) => assert.equal(r.error, 'This invite was sent to a different email address. Switch account?', 'never the address')),
     run(403, { code: 'FORBIDDEN', reason: 'WRONG_ACCOUNT', email_masked: 'c…@example.com' }).then((r) => assert.equal(r.wrongAccount, true)),
     run(409, { code: 'ALREADY_MEMBER', team: { id: 't1', name: 'Bondly' } }).then((r) => assert.deepEqual([r.alreadyMember, r.team, r.error], [true, { id: 't1', name: 'Bondly' }, 'You’re already in Bondly.'])),
     run(409, { code: 'CONFLICT', reason: 'ALREADY_MEMBER', team: { id: 't1', name: 'Bondly' } }).then((r) => assert.equal(r.alreadyMember, true)),

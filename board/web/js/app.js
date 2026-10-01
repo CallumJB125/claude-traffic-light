@@ -563,6 +563,29 @@ async function createInvite(email, role) {
     const r = await api.createInvite(teamId, email, role);
     state.invite = { busy: false, error: null, made: { email, link: String(r.link ?? ''), code: String(r.code ?? ''), mailed: r.mailed === true } };
   } catch (err) {
+    const replayed = err.code === 'CONFLICT' && err.extra?.reason === 'REPLAYED';
+    state.invite = { busy: false, error: accountErrorText(err, 'invite'), made: null, resend: replayed ? { email } : null };
+  }
+  update();
+}
+
+// After a REPLAYED answer: the invite exists but its link and code were shown once, so make new ones.
+async function resendInvite() {
+  const teamId = state.me?.org?.id;
+  const offer = state.invite.resend;
+  if (!teamId || !offer || state.invite.busy) return;
+  state.invite = { ...state.invite, busy: true };
+  update();
+  try {
+    const list = await api.listInvites(teamId);
+    const inv = (list?.invites ?? []).find((i) => String(i.email).toLowerCase() === offer.email.trim().toLowerCase());
+    if (!inv) {
+      state.invite = { busy: false, error: 'There’s no invite waiting for that address now. Create it again.', made: null };
+    } else {
+      const r = await api.resendInvite(teamId, inv.id);
+      state.invite = { busy: false, error: null, made: { email: String(inv.email), link: String(r.link ?? ''), code: String(r.code ?? ''), mailed: r.mailed === true } };
+    }
+  } catch (err) {
     state.invite = { busy: false, error: accountErrorText(err, 'invite'), made: null };
   }
   update();
@@ -1394,6 +1417,7 @@ function onClick(e) {
     case 'accept-invite': joinTeam('invites', { invite_id: el.dataset.invite }); return;
     case 'signout': signOut(); return;
     case 'copy-invite': copyInvite(el.dataset.what); return;
+    case 'resend-invite': resendInvite(); return;
     default:
   }
 }

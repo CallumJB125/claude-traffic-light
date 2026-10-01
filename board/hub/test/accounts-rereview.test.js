@@ -92,17 +92,17 @@ test('L-H: delete_team is its own step-up with its own mail; neither purpose is 
   }
 });
 
-test('L-G: a verify on an unknown or suppressed flow answers attempts_left 5, like a fresh flow', async () => {
+test('L-G: a verify on a suppressed flow counts down like a real one; an unknown flow answers attempts_left 5', async () => {
   const h = await startAccounts({ config: { mailDailyCap: 2 } });
   try {
     await h.start('a@example.com');               // the one new-address mail of the day
-    const quiet = await h.start('b@example.com'); // suppressed: no row
-    assert.equal(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), null);
-    for (const id of [quiet.body.flow_id, 'made-up']) {
+    const quiet = await h.start('b@example.com'); // suppressed: a dud row, no mail
+    assert.ok(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id));
+    for (const [id, left] of [[quiet.body.flow_id, 4], ['made-up', 5]]) {
       const r = await wrong(h, id);
       assert.equal(r.status, 400);
       assert.equal(r.body.error.code, 'INVALID_TOKEN');
-      assert.equal(r.body.error.attempts_left, 5);
+      assert.equal(r.body.error.attempts_left, left);
     }
   } finally {
     await h.close();

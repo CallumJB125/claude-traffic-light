@@ -8,7 +8,7 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 
 - JSON in and out. Every response has header `Board-Protocol: 1`. Mutations need `Content-Type: application/json`.
 - Errors: `{"error": {"code": "<CODE>", "message": "…", …extra}}`. The HTTP status comes from the code (table at the end). `429` responses also send `Retry-After: <s>` and `error.retry_after_s`.
-- `request_id` (uuid) is optional on the account routes. When present on a mutation, a repeat within 10 minutes replays the first answer (header `Board-Replayed: 1`).
+- `request_id` (uuid) is optional on the account routes. When present on a mutation, a repeat within 10 minutes replays the first answer (header `Board-Replayed: 1`). Creating or resending an invite is the exception: its answer holds a link and code shown once, so a repeat answers `409 CONFLICT {reason:'REPLAYED'}` "This invite was already made. Resend it to get a new link." and the replay cache never holds them; the apps offer Resend.
 - Timestamps are ISO-8601 UTC strings.
 
 ## Sign-in methods and mail (D66)
@@ -17,7 +17,7 @@ The hub sends **no mail unless a mailer is configured**, and none is required. S
 
 ### `GET /api/auth/methods`
 
-**No auth**, rate limited (60 a minute per IP). → `{"google": true, "github": true, "email": false}`: booleans only, so the app shows the right sign-in buttons. `google`/`github` are true when the hub has that provider's client id **and** secret (`BOARD_GOOGLE_CLIENT_ID`/`_SECRET`, `BOARD_GITHUB_CLIENT_ID`/`_SECRET`); `email` is true only when the hub has a mailer.
+**No auth**, rate limited (60 a minute per IP). → `{"google": true, "github": true, "email": false}`: booleans only, so the app shows the right sign-in buttons. `google`/`github` are true when the hub has that provider's client id **and** secret (`BOARD_GOOGLE_CLIENT_ID`/`_SECRET`, `BOARD_GITHUB_CLIENT_ID`/`_SECRET`); `email` is true only when the hub has a mailer and its last 5 background sends have not all failed; the next send that succeeds turns it back on. Only this flag changes: the email routes stay open, so someone mid-flow still verifies and a new start may still try (`GET /api/health` `mail.failing` says the same).
 
 Without a mailer:
 
@@ -132,7 +132,7 @@ No auth for sign-in. A delete flow needs the same user's credential.
 - **The linking trade-off.** An address is the only thing that ties such a pre-made member row (or an invite) to a person. If an admin typed the wrong address, whoever proves that address (by a code sent to it, or by a Google account authoritative for it: Workspace `hd` = its domain, or Gmail) gets that membership. Addresses are compared in one canonical form (NFKC-folded, trimmed, lower-cased with full Unicode). Only an email identity (a code sent to the address), an authoritative Google identity, or a primary address one of those set proves an address; a GitHub identity never does (D83).
 - Magic link (web only): the page at `/auth/email` reads the fragment and POSTs `{flow_id, code, via:'link'}`. A browser without the matching `__Host-buddy_flow` cookie gets `428 CONFIRM_REQUIRED {email_masked:"j•••@example.com"}`, and the page asks "Sign in as j•••@example.com?" before re-POSTing with `confirm:true`. A link scanner's GET only loads the page, because the fragment never reaches the server, so it consumes nothing.
 - Errors:
-  - `400 INVALID_TOKEN`: one generic answer for an unknown, wrong, used, expired or dead flow. After a wrong code it includes `attempts_left`; a flow_id with no flow behind it (made up, or a start the limits silenced) answers `attempts_left: 5`.
+  - `400 INVALID_TOKEN`: one generic answer for an unknown, wrong, used, expired or dead flow. After a wrong code it includes `attempts_left`; a made-up flow_id answers `attempts_left: 5`. A start the limits silenced still has a flow (no mail, and no code matches it), so its tries count down and it dies like any other; it never ends a live flow of the address. Sign-in flows are deleted a day after they expire.
   - `428 CONFIRM_REQUIRED`: see the magic-link rule above.
   - `429 RATE_LIMITED`.
   - `400 VALIDATION`: bad `form_factor` or an oversized name.
@@ -148,7 +148,7 @@ Bearer or cookie.
 
 - `teams` has one entry per live membership in a team that isn't deleted, sorted by name: `{id, name, slug, plan, role, member_id, boards}`.
 - Every team has a `slug` (teams made by the legacy seed/bootstrap paths get one the first time they're listed).
-- `pending_invites` lists the open invites addressed to one of the user's **verified** addresses, in teams that exist and that the user isn't already in. Accept one with `POST /api/invites/accept {invite_id}` (no token needed).
+- `pending_invites` lists the open invites addressed to one of the user's **verified** addresses, in teams that exist and that the user isn't already in, and that could still be accepted (not one whose inviter may no longer invite as its role). Accept one with `POST /api/invites/accept {invite_id}` (no token needed).
 
 `401 UNAUTHENTICATED` without a valid credential.
 
@@ -433,7 +433,7 @@ Bearer or cookie + CSRF. One of:
 |---|---|
 | `200` (same body again) | the same user accepts the same invite again (idempotent) |
 | `400 INVALID_TOKEN` | the token is malformed, unknown, used by someone else, expired, withdrawn, or its team was deleted; with `invite_id`/`code`, also any invite not addressed to one of **your** verified addresses (so ids and codes reveal nothing) |
-| `403 WRONG_ACCOUNT {email_masked}` | a valid token addressed to someone else, e.g. `c•••@example.com`: sign in with that address |
+| `403 WRONG_ACCOUNT` | a valid token addressed to someone else: sign in with that address (the answer names no address, not even masked) |
 | `409 ALREADY_MEMBER {team:{id, name}}` | you are already in that team |
 | `403 QUOTA_EXCEEDED` | the team is full |
 
@@ -483,7 +483,7 @@ The app's runner process gets `{"type": "runner.config", "hub_url": "https://…
 | `STEP_UP_REQUIRED` | 401 | `DELETE /api/account` or `DELETE /api/teams/:id` without a fresh, unused step-up: an email flow of its purpose, or a Google/GitHub re-authentication from this device (`max_age_s`, `purpose`: `'delete'` / `'delete_team'`) |
 | `FORBIDDEN` | 403 | cross-origin request, a cookie mutation without a valid `X-CSRF-Token`, or a role that may not do this in a team the user is in |
 | `EMAIL_UNVERIFIED` | 403 | creating a team, or inviting, without a verified email |
-| `WRONG_ACCOUNT` | 403 | a valid invite token for another address (`email_masked`) |
+| `WRONG_ACCOUNT` | 403 | a valid invite token for another address (names no address) |
 | `QUOTA_EXCEEDED` | 403 | a plan limit, or the runner enrolment caps (`resource`, `limit`) |
 | `NOT_FOUND` | 404 | unknown route, or a resource (or team header) outside the user's live teams |
 | `METHOD_DISABLED` | 404 | an email-code route on a hub without a mailer (D66), or an OAuth route for a provider this hub hasn't configured |

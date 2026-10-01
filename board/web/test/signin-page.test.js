@@ -46,6 +46,7 @@ test('a wrong code says how many tries are left; a dead or expired one asks for 
   await p.submit('email-form');
   assert.equal(p.els['code-form'].hidden, false);
   assert.equal(p.els['code-foot'].hidden, false, 'resend and change-email links show with the code box');
+  assert.equal(p.els['signin-lead'].textContent, 'We’ve asked for a 6-digit code to be sent to jo@example.com. It works for 10 minutes.', 'asked for, not "sent": the hub cannot know it arrived');
   p.els.code.value = '111111';
   await p.submit('code-form');
   assert.equal(p.els['signin-error'].textContent, 'That code isn’t right. 4 tries left.');
@@ -91,7 +92,7 @@ test('resend: a short gap first, then never a fourth code in 15 minutes (the hub
   t += 31_000;
   await p.click('resend');
   assert.equal(p.els['signin-error'].hidden, true);
-  assert.match(p.els['signin-lead'].textContent, /new code/);
+  assert.equal(p.els['signin-lead'].textContent, 'We’ve asked for a new code. Use the newest email: older codes stop working.');
   t += 31_000;
   await p.click('resend');
   t += 31_000;

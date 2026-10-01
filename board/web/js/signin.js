@@ -80,7 +80,8 @@ $('email-form').addEventListener('submit', (ev) => {
   guarded(async () => {
     showError(null);
     email = String($('email').value ?? '').trim();
-    if (await askForCode()) codeStep(`We sent a 6-digit code to ${email}. It works for 10 minutes.`);
+    // "Asked for", not "sent": the hub answers before it mails, so it can't know the mail went.
+    if (await askForCode()) codeStep(`We’ve asked for a 6-digit code to be sent to ${email}. It works for 10 minutes.`);
   });
 });
 
@@ -92,7 +93,7 @@ $('code-form').addEventListener('submit', (ev) => {
 $('resend').addEventListener('click', () => {
   guarded(async () => {
     showError(null);
-    if (await askForCode()) codeStep('We sent a new code. Use the newest email: older codes stop working.');
+    if (await askForCode()) codeStep('We’ve asked for a new code. Use the newest email: older codes stop working.');
   });
 });
 

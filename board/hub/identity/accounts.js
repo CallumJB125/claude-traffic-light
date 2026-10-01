@@ -25,6 +25,10 @@ export const SESSION_ROTATE_MS = 86_400_000;
 const ROTATE_GRACE_MS = 60_000;
 const TOUCH_MS = 60_000;
 const LIVE_FLOWS_PER_EMAIL = 3;
+// A silenced start's row (no mail) holds this instead of a code HMAC, so no code ever matches it.
+const DUD = 'dud:';
+// Background sends failing this many times in a row: /api/auth/methods stops offering email until one succeeds.
+export const MAIL_FAILING_AFTER = 5;
 // Step-ups: deleting the account, deleting a team (L-H). One can't be spent on the other.
 export const STEP_UP_PURPOSES = Object.freeze(['delete', 'delete_team']);
 const PURPOSES = new Set(['signin', ...STEP_UP_PURPOSES]);
@@ -99,10 +103,14 @@ export class Accounts {
     // A send runs in the background after the hub has answered "started", so a broken
     // mailer is invisible to the person signing in: /api/health carries when one last failed.
     this.mailLastErrorAt = null;
+    this.mailFailures = 0;
     if (mailer && !mailer.tracked) {
       const send = mailer.send.bind(mailer);
       mailer.send = async (mail) => {
-        try { return await send(mail); } catch (e) { this.mailLastErrorAt = this.hub.iso(); throw e; }
+        let out;
+        try { out = await send(mail); } catch (e) { this.mailLastErrorAt = this.hub.iso(); this.mailFailures++; throw e; }
+        this.mailFailures = 0;
+        return out;
       };
       mailer.tracked = true;
     }
@@ -161,11 +169,15 @@ export class Accounts {
     return LOOPBACK_HOST.test(host) ? `http://${host}` : null;
   }
 
+  // Only what the clients are offered: the email routes stay open, so someone mid-flow still
+  // verifies, and a new start may still try (its success turns email back on).
+  mailFailing() { return this.mailFailures >= MAIL_FAILING_AFTER; }
+
   /** GET /api/auth/methods (no auth): which sign-in buttons to show (D66, D76). Booleans only. */
   methods({ ip }) {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
     const m = oauthProviders(this.hub.config);
-    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer };
+    return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer && !this.mailFailing() };
   }
 
   // ── email one-time codes (only with a mailer, D66) ────────────────────────
@@ -218,32 +230,35 @@ export class Accounts {
     // Per mailbox (+tags folded, M-C); a step-up per user, so nobody else can use up its buckets (M-A).
     const box = purpose === 'signin' ? mailbox(email) : `delete|${userId}`;
     const mine = `${box}|${netKey(ip)}`;
-    if (!lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok) {
-      // Same answer, no mail, no row: a verify on this flow_id fails like a wrong code.
-      this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'email_rate' }, ip });
-      return out;
-    }
-    if (!this.mailBudget(email)) {
-      this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: 'mail_cap' }, ip });
-      return out;
-    }
-    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const now = this.now();
     let nonce = null;
     if (client === 'web' && purpose === 'signin') {
       nonce = b64url(randomBytes(24));
       appendCookie(res, `${FLOW_COOKIE}=${nonce}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${FLOW_TTL_MS / 1000}`);
     }
-    this.hub.txn(() => {
-      // At most three live flows per address: older ones die.
-      this.db.run(`UPDATE login_flows SET dead_at = ? WHERE id IN (
-        SELECT id FROM login_flows WHERE email = ? AND purpose = ? AND dead_at IS NULL AND consumed_at IS NULL AND expires_at > ?
-        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, LIVE_FLOWS_PER_EMAIL - 1);
-      this.db.insert('login_flows', {
-        id: flowId, email, purpose, client, user_id: userId, device_name: deviceName, platform,
-        code_hash: this.codeHash(flowId, code), browser_nonce_hash: nonce ? sha256hex(nonce) : null,
-        created_at: now, expires_at: this.at(FLOW_TTL_MS), ip_prefix: ipPrefix(ip),
+    const row = {
+      id: flowId, email, purpose, client, user_id: userId, device_name: deviceName, platform,
+      browser_nonce_hash: nonce ? sha256hex(nonce) : null, created_at: now, expires_at: this.at(FLOW_TTL_MS), ip_prefix: ipPrefix(ip),
+    };
+    // Silenced: the same answer and cookie, no mail, and a dud row no code matches, so a verify
+    // counts down and the flow dies like a real one (a fixed "5 tries left" would say this
+    // address asked recently). A dud never kills the flows the address already has.
+    const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
+      ? 'email_rate' : !this.mailBudget(email) ? 'mail_cap' : null;
+    if (quiet) {
+      this.hub.txn(() => {
+        this.db.insert('login_flows', { ...row, code_hash: `${DUD}${randomBytes(32).toString('hex')}` });
+        this.audit('auth.code.suppressed', { user: userId, detail: { email_ref: this.emailRef(email), reason: quiet }, ip });
       });
+      return out;
+    }
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    this.hub.txn(() => {
+      // At most three live flows per address: older ones die (duds don't count).
+      this.db.run(`UPDATE login_flows SET dead_at = ? WHERE id IN (
+        SELECT id FROM login_flows WHERE email = ? AND purpose = ? AND dead_at IS NULL AND consumed_at IS NULL AND expires_at > ? AND code_hash NOT LIKE '${DUD}%'
+        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`, now, email, purpose, now, LIVE_FLOWS_PER_EMAIL - 1);
+      this.db.insert('login_flows', { ...row, code_hash: this.codeHash(flowId, code) });
       this.audit('auth.code.sent', { user: userId, target: flowId, detail: { email_ref: this.emailRef(email), client, purpose }, ip });
     });
     const link = client === 'web' && purpose === 'signin' ? this.linkOrigin(req) : null;
@@ -262,7 +277,7 @@ export class Accounts {
     const code = typeof body.code === 'string' ? body.code.trim() : '';
     const invalid = (msg = 'that code is wrong or has expired: ask for a new one', extra = {}) => new HubError('INVALID_TOKEN', msg, extra);
     const f = flowId ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
-    // A suppressed start made no row: its flow_id answers like a fresh one (L-G).
+    // A flow_id nobody was given answers like a fresh flow (L-G).
     if (!f) throw invalid(undefined, { attempts_left: MAX_ATTEMPTS });
     if (f.dead_at || f.consumed_at || f.verified_at || f.expires_at <= now) throw invalid();
     // The failure budget (H2): locked means no code is even checked.

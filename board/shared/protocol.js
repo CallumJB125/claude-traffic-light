@@ -18,7 +18,7 @@ export const ERRORS = Object.freeze({
   POLICY_DENIED: 403,
   QUOTA_EXCEEDED: 403,      // accounts: a free-plan limit (extra: resource, limit; D62)
   EMAIL_UNVERIFIED: 403,    // accounts: team create / invite needs a verified email
-  WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (extra: email_masked; D64)
+  WRONG_ACCOUNT: 403,       // accounts: a valid invite for another address (names no address; D64)
   NOT_FOUND: 404,
   METHOD_DISABLED: 404,     // accounts: that sign-in method is not configured on this hub (D66)
   ILLEGAL_TRANSITION: 409,

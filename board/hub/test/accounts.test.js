@@ -145,7 +145,7 @@ test('rate limits: per address (silent, no mail), per IP (429), verify lockout p
     const quiet = await h.start('carol@example.com');
     assert.equal(quiet.status, 200, 'over the per-address limit: same answer');
     assert.equal(h.mailer.sent.length, sent, 'but no mail');
-    assert.equal(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), null);
+    assert.ok(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), 'a dud flow, so its tries count down');
     assert.equal((await h.call('POST', '/api/auth/email/verify', { body: { flow_id: quiet.body.flow_id, code: '123456' } })).body.error.code, 'INVALID_TOKEN');
 
     // Per IP: 20 starts an hour (4 used above).
@@ -170,6 +170,9 @@ test('rate limits: per address (silent, no mail), per IP (429), verify lockout p
   }
 });
 
+// A silenced start leaves a dud row (no mail, no code matches it): a real flow is any other row.
+const REAL_FLOW = "SELECT id FROM login_flows WHERE id = ? AND code_hash NOT LIKE 'dud:%'";
+
 // Many flows from one network, without the per-IP limits (their own tests are above).
 const ROOMY = { capacity: 1e9, per_ms: 60_000 };
 const roomy = (extra = {}) => ({ rateLimits: { auth_start_ip: ROOMY, auth_verify_ip: ROOMY, login_ip: ROOMY, auth_start_global: ROOMY, ...extra } });
@@ -185,7 +188,7 @@ test('H2 failure budget: at most 20 wrong codes a day per address (case/space va
     for (let minute = 0; minute < 24 * 60; minute += 5) {
       for (const v of variants) {
         const s = await h.call('POST', '/api/auth/email/start', { body: { email: v, client: 'buddy_desktop' } });
-        if (!h.db.get('SELECT id FROM login_flows WHERE id = ?', s.body.flow_id)) continue;
+        if (!h.db.get(REAL_FLOW, s.body.flow_id)) continue;
         flows++;
         for (let i = 0; i < 5; i++) {
           const r = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: s.body.flow_id, code: String(100000 + guesses).padStart(6, '0') } });
@@ -199,7 +202,7 @@ test('H2 failure budget: at most 20 wrong codes a day per address (case/space va
         // (from the owner's own network, which the attacker's limits don't touch)
         const home = { 'cf-connecting-ip': '203.0.113.9' };
         const s = await h.start('victim@x.test', {}, { headers: home });
-        assert.ok(h.db.get('SELECT id FROM login_flows WHERE id = ?', s.body.flow_id));
+        assert.ok(h.db.get(REAL_FLOW, s.body.flow_id));
         const r = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: s.body.flow_id, code: h.codeFor('victim@x.test') }, headers: home });
         assert.equal(r.status, 429);
         assert.ok(r.body.error.retry_after_s > 11 * 3600, 'until the rolling day frees a slot');
@@ -258,13 +261,13 @@ test('M1: an attacker exhausting the per-address start/verify limits from one ne
     for (let i = 0; i < 15; i++) xs.push((await h.start('owner@x.test', {}, { headers: from(X) })).body.flow_id);
     const sent = h.mailer.sent.filter((m) => m.to === 'owner@x.test').length;
     assert.equal(sent, 3, 'X is throttled to 3 mails per 15 min');
-    const real = xs.filter((id) => h.db.get('SELECT id FROM login_flows WHERE id = ?', id));
+    const real = xs.filter((id) => h.db.get(REAL_FLOW, id));
     for (const id of real.slice(0, 2)) for (let i = 0; i < 5; i++) await h.call('POST', '/api/auth/email/verify', { body: { flow_id: id, code: 'zzzzzz' }, headers: from(X) });
     assert.equal((await h.call('POST', '/api/auth/email/verify', { body: { flow_id: real[2], code: '000000' }, headers: from(X) })).status, 429, 'X is throttled');
 
     const mine = await h.start('owner@x.test', {}, { headers: from(Y) });
     assert.equal(mine.status, 200);
-    assert.ok(h.db.get('SELECT id FROM login_flows WHERE id = ?', mine.body.flow_id), 'Y gets a real flow');
+    assert.ok(h.db.get(REAL_FLOW, mine.body.flow_id), 'Y gets a real flow');
     assert.equal(h.mailer.sent.filter((m) => m.to === 'owner@x.test').length, sent + 1, 'and the mail');
     const v = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: mine.body.flow_id, code: h.codeFor('owner@x.test') }, headers: from(Y) });
     assert.equal(v.status, 200, v.text);
@@ -273,7 +276,7 @@ test('M1: an attacker exhausting the per-address start/verify limits from one ne
     let quiet = 0;
     for (let i = 0; i < 60; i++) {
       const r = await h.start('target@x.test', {}, { headers: from(`192.0.${i}.1`) });
-      if (!h.db.get('SELECT id FROM login_flows WHERE id = ?', r.body.flow_id)) quiet++;
+      if (!h.db.get(REAL_FLOW, r.body.flow_id)) quiet++;
     }
     assert.equal(quiet, 20, '40 an hour per address from every network together');
   } finally {
@@ -623,7 +626,7 @@ test('M2: device name and platform in the mail are plain and link-free; a hub-wi
     const quiet = await h.start('q@example.com');
     assert.equal(quiet.status, 200, 'same answer');
     assert.equal(h.mailer.sent.length, n, 'no mail over the cap');
-    assert.equal(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), null);
+    assert.ok(h.db.get('SELECT 1 AS x FROM login_flows WHERE id = ?', quiet.body.flow_id), 'a dud flow, no mail');
     assert.ok(h.db.get("SELECT 1 AS x FROM audit WHERE action = 'auth.code.suppressed' AND detail LIKE '%mail_cap%'"));
     const inv = await h.call('POST', `/api/teams/${h.ids.org}/invites`, { token: alice.body.device_token, headers: { origin: h.base }, body: { email: 'new@example.com', role: 'member' } });
     assert.equal(inv.status, 200, inv.text);

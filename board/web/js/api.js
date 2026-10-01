@@ -60,6 +60,8 @@ export const api = {
   createTeam: (name) => mut('POST', '/api/teams', { name }),
   acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
   createInvite: (teamId, email, role) => mut('POST', `/api/teams/${enc(teamId)}/invites`, { email, role }),
+  listInvites: (teamId) => call('GET', `/api/teams/${enc(teamId)}/invites`),
+  resendInvite: (teamId, id) => mut('POST', `/api/teams/${enc(teamId)}/invites/${enc(id)}/resend`),
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
   devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
   board: (id, { includeArchived = false } = {}) => call('GET', `/api/boards/${enc(id)}${includeArchived ? '?include_archived=1' : ''}`),

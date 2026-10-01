@@ -69,7 +69,6 @@ const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 const rid = (p) => `${p}_${crypto.randomBytes(9).toString('base64url')}`;
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const mask = (email) => `${email.charAt(0)}…@${email.split('@')[1]}`;
 const firstName = (u) => String(u?.display_name ?? 'Someone').split(/\s+/)[0];
 
 function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), quotas = {}, methods = {} } = {}) {
@@ -95,6 +94,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   const members = []; // {id, team_id, user_id, role, joined_at}
   const invites = new Map(); // id → {id, team_id, email, role, tokenHash, codeHash, expires_at, inviter_id, used_by, revoked}
   const inviteCodes = new Map(); // email → last plain invite code (test hook only)
+  const inviteRequests = new Set(); // `${user}|${request_id}` of invite POSTs seen
   const enrolments = []; // {id, enrollment_id, team_id, user_id, device_id, name, tokenHash, runner_device_id, created_at, last_seen_at, revoked, revoked_at}
   const enrolTimes = new Map(); // user id → [enrol times], for the hourly limit
   const runnerSockets = new Map(); // enrolment id → Set<ws>
@@ -240,7 +240,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     // The same user accepting the same invite again gets the same answer.
     if (i.used_by === me.user.id && mine) return ok({ team: teamView(team), member: { member_id: mine.id, role: mine.role } });
     if (!liveInvite(i)) return err(400, 'INVALID_TOKEN', 'invalid invite');
-    if (i.email !== me.user.email || !me.user.email_verified) return err(403, 'WRONG_ACCOUNT', 'invite is for another address', { email_masked: mask(i.email) });
+    if (i.email !== me.user.email || !me.user.email_verified) return err(403, 'WRONG_ACCOUNT', 'invite is for another address');
     if (mine) return err(409, 'ALREADY_MEMBER', 'already a member', { team: { id: team.id, name: team.name } });
     i.used_by = me.user.id;
     const member = { id: rid('mem'), team_id: team.id, user_id: me.user.id, role: i.role, joined_at: iso(now()) };
@@ -501,6 +501,10 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       }
       if (what === 'invites' && !sub && method === 'POST') {
         if (!admin) return onlyAdmins();
+        // The real hub's replay cache: a repeated request_id gets a fixed answer, never the link or code again.
+        const again = typeof body.request_id === 'string' ? `${me.user.id}|${body.request_id}` : null;
+        if (again && inviteRequests.has(again)) return err(409, 'CONFLICT', 'This invite was already made. Resend it to get a new link.', { reason: 'REPLAYED' });
+        if (again) inviteRequests.add(again);
         if (!me.user.email_verified) return err(403, 'EMAIL_UNVERIFIED', 'verify your email first');
         const email = String(body.email ?? '').trim().toLowerCase();
         const role = body.role ?? 'member';
