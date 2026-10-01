@@ -149,8 +149,22 @@ test('dev auth is refused in a packaged build', () => {
 // ── supervisor ─────────────────────────────────────────────────────────────
 
 class FakeChild extends EventEmitter {
-  constructor() { super(); this.pid = 0; this.killed = 0; this.stderr = new (require('node:stream').PassThrough)(); }
-  kill() { this.killed += 1; setImmediate(() => this.emit('exit', 0)); return true; }
+  constructor() { super(); this.pid = 0; this.killed = 0; this.sent = []; this.stderr = new (require('node:stream').PassThrough)(); }
+  // exitOnKill:false models a hub that ignores the request, so only the force-kill ends it.
+  kill() { this.killed += 1; if (this.exitOnKill !== false) setImmediate(() => this.emit('exit', 0)); return true; }
+  postMessage(m) { this.sent.push(m); }
+}
+
+// Fake clock for the supervisor's ready/grace timers: real unref'd timers never
+// fire when nothing else holds the event loop open (Windows CI), so tests fire them.
+function fakeTimers() {
+  const pending = new Set();
+  return {
+    setTimeout: (fn) => { const t = { fn, unref() {} }; pending.add(t); return t; },
+    clearTimeout: (t) => { pending.delete(t); },
+    fire() { for (const t of [...pending]) { pending.delete(t); t.fn(); } },
+    get count() { return pending.size; },
+  };
 }
 
 function harness(overrides = {}) {
@@ -158,6 +172,7 @@ function harness(overrides = {}) {
   const statuses = [];
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-hub-'));
   let t = 0;
+  const timers = fakeTimers();
   const sup = createHubSupervisor({
     fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.opts = opts; children.push(c); return c; },
     hubEntry: '/app/board/hub/server.js',
@@ -165,9 +180,10 @@ function harness(overrides = {}) {
     onStatus: (s) => statuses.push(s),
     now: () => t,
     readyTimeoutMs: 200,
+    timers,
     ...overrides,
   });
-  return { sup, children, statuses, dataDir: path.join(dataDir, 'board'), tick: (ms) => { t += ms; } };
+  return { sup, children, statuses, timers, dataDir: path.join(dataDir, 'board'), tick: (ms) => { t += ms; } };
 }
 
 const SECRET = 'a'.repeat(43);
@@ -179,7 +195,8 @@ test('local mode: ready on board.listening; the secret comes from the port repor
   assert.equal(children.length, 1);
   assert.equal(children[0].opts.env.BOARD_AUTH, 'local');
   assert.equal(children[0].opts.serviceName, 'Plexiform Board Hub');
-  assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
+  // NTFS has no POSIX mode bits.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
   children[0].emit('message', { type: 'board.listening', port: 5123, hub_epoch: 'e1', local_secret: SECRET });
   const info = await p;
   assert.deepEqual({ url: info.url, port: info.port, mode: info.mode, localSecret: info.localSecret }, { url: 'http://127.0.0.1:5123', port: 5123, mode: 'local', localSecret: SECRET });
@@ -210,8 +227,11 @@ test('board.fatal before exit fails the start with the hub message', async () =>
 });
 
 test('no report in time → failed; retry() starts a new child', async () => {
-  const { sup, children } = harness({ readyTimeoutMs: 30 });
-  await assert.rejects(sup.ensure(), /did not report/);
+  const { sup, children, timers } = harness();
+  const first = sup.ensure();
+  await new Promise((r) => setImmediate(r));
+  timers.fire();
+  await assert.rejects(first, /did not report/);
   const p = sup.retry();
   await new Promise((r) => setImmediate(r));
   assert.equal(children.length, 2);
@@ -262,17 +282,73 @@ test('crashes older than the window no longer count', async () => {
   assert.equal(sup.status().state, 'ready');
 });
 
-test('stop() sends SIGTERM (kill) and resolves on exit; no restart after stop', async () => {
-  const { sup, children } = harness();
-  const p = sup.ensure();
+async function readyHub(h) {
+  const p = h.sup.ensure();
   await new Promise((r) => setImmediate(r));
-  children[0].emit('message', { type: 'board.listening', port: 5, local_secret: SECRET });
+  h.children[0].emit('message', { type: 'board.listening', port: 5, local_secret: SECRET });
   await p;
-  await sup.stop({ graceMs: 1000 });
-  assert.equal(children[0].killed, 1);
-  assert.equal(sup.status().state, 'stopped');
+}
+
+test('stop() asks the hub to shut down, sends SIGTERM (kill) and resolves on exit; no restart after stop', async () => {
+  const h = harness({ platform: 'linux' });
+  await readyHub(h);
+  await h.sup.stop({ graceMs: 1000 });
+  assert.deepEqual(h.children[0].sent, [{ type: 'hub.shutdown' }]);
+  assert.equal(h.children[0].killed, 1);
+  assert.equal(h.sup.status().state, 'stopped');
+  assert.equal(h.timers.count, 0);
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(children.length, 1);
+  assert.equal(h.children.length, 1);
+});
+
+test('stop() on win32: message only, no kill while the hub shuts down by itself', async () => {
+  const h = harness({ platform: 'win32' });
+  await readyHub(h);
+  const c = h.children[0];
+  c.exitOnKill = false;
+  let done = false;
+  const stopped = h.sup.stop({ graceMs: 1000 }).then(() => { done = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(c.sent, [{ type: 'hub.shutdown' }]);
+  assert.equal(c.killed, 0);
+  assert.equal(done, false);
+  c.emit('exit', 0); // the hub closed its DB and left
+  await stopped;
+  assert.equal(c.killed, 0);
+  assert.equal(h.sup.status().state, 'stopped');
+  assert.equal(h.timers.count, 0);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.children.length, 1);
+});
+
+test('stop() on win32: a hub that does not exit within the grace is force-killed', async () => {
+  const h = harness({ platform: 'win32' });
+  await readyHub(h);
+  const c = h.children[0];
+  c.exitOnKill = false;
+  const stopped = h.sup.stop({ graceMs: 1000 });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(c.killed, 0);
+  h.timers.fire(); // the grace ran out
+  await stopped;
+  assert.equal(c.killed, 1);
+  assert.equal(h.sup.status().state, 'stopped');
+});
+
+test('stop() off win32: a hub that ignores SIGTERM is SIGKILLed by pid after the grace', async () => {
+  const kills = [];
+  const h = harness({ platform: 'linux', killPid: (pid, sig) => kills.push([pid, sig]) });
+  await readyHub(h);
+  const c = h.children[0];
+  c.pid = 4242;
+  c.exitOnKill = false;
+  const stopped = h.sup.stop({ graceMs: 1000 });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(c.killed, 1);
+  assert.deepEqual(kills, []);
+  h.timers.fire();
+  await stopped;
+  assert.deepEqual(kills, [[4242, 'SIGKILL']]);
 });
 
 test('retry() while a hub is running stops it first: never two hubs on one DB', async () => {
@@ -294,8 +370,10 @@ test('retry() while a hub is running stops it first: never two hubs on one DB', 
 });
 
 test('a failed start kills only its own child', async () => {
-  const { sup, children } = harness({ readyTimeoutMs: 30 });
+  const { sup, children, timers } = harness();
   const first = sup.ensure();
+  await new Promise((r) => setImmediate(r));
+  timers.fire();
   await assert.rejects(first, /did not report/);
   assert.equal(children[0].killed, 1);
   const p = sup.retry();

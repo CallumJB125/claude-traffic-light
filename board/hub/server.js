@@ -70,6 +70,8 @@ async function stop(signal) {
     process.exit(1);
   }
 }
+// Windows has no SIGTERM for a utilityProcess: the desktop app asks over the port instead.
+parent?.on('message', (e) => { if (e?.data?.type === 'hub.shutdown') stop('hub.shutdown'); });
 process.on('SIGTERM', () => stop('SIGTERM'));
 process.on('SIGINT', () => stop('SIGINT'));
 process.on('unhandledRejection', (e) => log.error('unhandled rejection', { err: e }));
