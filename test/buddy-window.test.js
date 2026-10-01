@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -125,8 +125,8 @@ test('connect window: one at a time; a second open while one is open (or still o
   assert.ok(refuse > 0 && pending > 0, 'both guards present');
   assert.ok(Math.max(refuse, pending) < fn.indexOf('bindCookie('), 'refused before any cookie is set');
   assert.ok(!/connectWin\.close\(\)/.test(fn), 'an open window is never closed to make room (its closed handler would remove the new bind cookie)');
-  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie;\n\s+try \{\n/);
-  assert.match(fn, /await ses\.cookies\.set\(cookie\); \/\/ privacy-flow: integration-connect\n\s+\} finally \{ connectOpening = false; \}/);
+  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie, current;\n\s+try \{\n/);
+  assert.match(fn, /current = await connectLife\.setBindCookie\(ses, integrationPartitionFor\(h\.origin\), cookie\);\n\s+\} finally \{ connectOpening = false; \}/);
 });
 
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
@@ -158,7 +158,7 @@ test('connect window wiring: gesture-tracked, guarded, cookie set before the loa
   assert.match(src, /wc\.on\('input-event'/);
   assert.match(src, /connectDecision\(\{ url, frameName, referrer: referrer\?\.url/);
   const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
-  assert.ok(fn.indexOf('await ses.cookies.set(cookie)') < fn.indexOf('w.loadURL(url)'), 'the bind cookie is set before the provider page loads');
+  assert.ok(fn.indexOf('await connectLife.setBindCookie(') < fn.indexOf('w.loadURL(url)'), 'the bind cookie is set before the provider page loads');
   assert.match(fn, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
   assert.match(fn, /integrationPartitionFor\(h\.origin\)/);
   assert.ok(!/preload|installBearer|bearerHeaders/.test(fn), 'no preload, no bearer on the connect partition');
@@ -211,6 +211,279 @@ test('connect window guardrails pinned: hub-view opener only, neutral name, own 
   }
   assert.equal(connectNavOk(undefined, hub), false);
   assert.equal(isConnectCallback(`${hub}/integrations/github/callback`, undefined), false);
+});
+
+// ── GitHub App-manifest POST into the connect window ─────────────────────
+
+const MF_HUB = 'https://app.plexiform.dev';
+const MF_STATE = `${'P'.repeat(40)}.${'m_-'.repeat(14)}`;
+const MF_HOOK = `${MF_HUB}/integrations/0b6f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e/webhook`;
+async function githubForm(config = {}) {
+  const gh = (await import('../board/hub/integrations/github/index.js')).default;
+  return gh.connect.manifestForm({ state: MF_STATE, redirectUri: `${MF_HUB}/integrations/github/callback`, webhookUrl: MF_HOOK, config });
+}
+const formBody = (fields, contentType = 'application/x-www-form-urlencoded') => ({ contentType, data: [{ type: 'rawData', bytes: Buffer.from(new URLSearchParams(Object.entries(fields)).toString()) }] });
+const mfBase = (over = {}) => ({ url: `https://github.com/settings/apps/new?state=${MF_STATE}`, frameName: 'plexiform-connect|github|bnd1', referrer: `${MF_HUB}/?org=t1&view=integrations`, pageUrl: `${MF_HUB}/?org=t1&view=integrations`, hubOrigin: MF_HUB, signedIn: true, gestureAt: 1000, now: 2000, ...over });
+
+test('manifest POST: the GitHub connector’s own form (user and org) is accepted, its body re-encoded from the checked manifest', async () => {
+  for (const config of [{}, { org: 'acme-co' }]) {
+    const f = await githubForm(config);
+    assert.deepEqual(Object.keys(f.fields), ['manifest'], 'the form the hub serves has one field');
+    const c = connectDecision(mfBase({ url: f.action, postBody: formBody(f.fields) }));
+    assert.equal(c.ok, true, JSON.stringify(c));
+    assert.equal(c.provider, 'github');
+    assert.equal(c.post.url, f.action);
+    assert.equal(c.post.extraHeaders, 'Content-Type: application/x-www-form-urlencoded');
+    assert.equal(c.post.postData.length, 1);
+    assert.equal(c.post.postData[0].type, 'rawData');
+    const sent = new URLSearchParams(c.post.postData[0].bytes.toString());
+    assert.deepEqual([...sent.keys()], ['manifest']);
+    assert.deepEqual(JSON.parse(sent.get('manifest')), JSON.parse(f.fields.manifest));
+  }
+  const org = await githubForm({ org: 'acme-co' });
+  assert.match(org.action, /^https:\/\/github\.com\/organizations\/acme-co\/settings\/apps\/new\?state=/);
+});
+
+test('manifest POST: a GET to the same page still takes the GET path (no body, no post)', () => {
+  const c = connectDecision(mfBase());
+  assert.deepEqual(c, { ok: true, provider: 'github', bind: 'bnd1' });
+  assert.deepEqual(connectDecision(mfBase({ postBody: undefined })), { ok: true, provider: 'github', bind: 'bnd1' });
+});
+
+test('manifest POST: only github.com’s two manifest pages over https with a sane state and nothing else; anything else is refused', async () => {
+  const f = await githubForm();
+  const body = formBody(f.fields);
+  const no = (url, why) => assert.deepEqual(connectDecision(mfBase({ url, postBody: body })), { ok: false, reason: why === 'url' ? 'url' : 'post-url' }, url);
+  const q = `?state=${MF_STATE}`;
+  for (const url of [
+    `https://github.com.evil/settings/apps/new${q}`, `https://api.github.com/settings/apps/new${q}`, `https://gist.github.com/settings/apps/new${q}`, `https://evilgithub.com/settings/apps/new${q}`,
+    `https://github.com/settings/apps/new/${q}`, `https://github.com/settings/apps${q}`, `https://github.com/settings/apps/new/x${q}`, `https://github.com/x/settings/apps/new${q}`,
+    `https://github.com/organizations/-acme/settings/apps/new${q}`, `https://github.com/organizations/${'a'.repeat(40)}/settings/apps/new${q}`, `https://github.com/organizations/ac%2Fme/settings/apps/new${q}`, `https://github.com/organizations//settings/apps/new${q}`,
+    `https://github.com/login/oauth/authorize${q}`,
+    'https://github.com/settings/apps/new', 'https://github.com/settings/apps/new?state=', 'https://github.com/settings/apps/new?state=short', `https://github.com/settings/apps/new?state=${'a'.repeat(1025)}`, 'https://github.com/settings/apps/new?state=has%20space%20in%20it%20ok',
+    `https://github.com/settings/apps/new${q}&x=1`, `https://github.com/settings/apps/new${q}&state=${MF_STATE}`, `https://github.com/settings/apps/new?x=1&state=${MF_STATE}`, `https://github.com/settings/apps/new${q}#frag`,
+    `https://github.com:8443/settings/apps/new${q}`,
+  ]) no(url);
+  for (const url of [`http://github.com/settings/apps/new${q}`, `https://u:p@github.com/settings/apps/new${q}`, `https://u@github.com/settings/apps/new${q}`, `https://localhost./settings/apps/new${q}`, `https://github.com./settings/apps/new${q}`, `https://127.0.0.1/settings/apps/new${q}`]) no(url, 'url');
+  // Another provider’s window name never carries a manifest POST.
+  assert.deepEqual(connectDecision(mfBase({ frameName: 'plexiform-connect|slack|b', url: f.action, postBody: body })), { ok: false, reason: 'post-provider' });
+  // The opener rules still come first.
+  for (const [over, reason] of [[{ signedIn: false }, 'signed-out'], [{ gestureAt: 0 }, 'gesture'], [{ pageUrl: `${MF_HUB}/?view=board` }, 'opener'], [{ frameName: 'buddy-connect' }, 'name']]) {
+    assert.deepEqual(connectDecision(mfBase({ url: f.action, postBody: body, ...over })), { ok: false, reason });
+  }
+});
+
+test('manifest POST: the body must be the hub’s form exactly: urlencoded, capped, one manifest field of JSON naming this hub', async () => {
+  const f = await githubForm();
+  const good = JSON.parse(f.fields.manifest);
+  const try_ = (postBody) => connectDecision(mfBase({ url: f.action, postBody }));
+  const bad = (postBody, reason, label) => assert.deepEqual(try_(postBody), { ok: false, reason }, label);
+  const withManifest = (m) => formBody({ manifest: typeof m === 'string' ? m : JSON.stringify(m) });
+  assert.equal(try_(withManifest(good)).ok, true);
+  // shape of the body
+  bad(formBody(f.fields, 'multipart/form-data; boundary=x'), 'post-body', 'multipart');
+  bad(formBody(f.fields, 'text/plain'), 'post-body', 'text/plain');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'file', filePath: '/etc/passwd' }] }, 'post-body', 'file part');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: 'manifest=%7B%7D' }] }, 'post-body', 'bytes not a buffer');
+  bad({ contentType: 'application/x-www-form-urlencoded' }, 'post-body', 'no data');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [] }, 'post-body', 'empty');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.from([0x6d, 0xff, 0xfe]) }] }, 'post-body', 'not utf-8');
+  bad(formBody({ ...f.fields, extra: '1' }), 'post-body', 'extra field');
+  bad(formBody({ manifesto: f.fields.manifest }), 'post-body', 'wrong field');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.from(`${new URLSearchParams(f.fields)}&${new URLSearchParams(f.fields)}`) }] }, 'post-body', 'field twice');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.alloc(64 * 1024 + 1, 0x61) }] }, 'post-body', 'oversize body');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.alloc(40 * 1024, 0x61) }, { type: 'rawData', bytes: Buffer.alloc(40 * 1024, 0x61) }] }, 'post-body', 'oversize across parts');
+  // the manifest itself
+  bad(withManifest('not json'), 'manifest', 'non-JSON');
+  bad(withManifest('[1]'), 'manifest', 'array');
+  bad(withManifest('null'), 'manifest', 'null');
+  bad(withManifest({ ...good, name: 'x'.repeat(20 * 1024) }), 'manifest', 'oversize manifest');
+  for (const extra of ['setup_url', 'description', 'request_oauth_on_install', 'setup_on_update', '__proto__', 'constructor']) {
+    bad(withManifest(`{${JSON.stringify(extra)}:"https://evil.example/x",${JSON.stringify(good).slice(1)}`), 'manifest', `unexpected key ${extra}`);
+  }
+  for (const k of ['name', 'url', 'hook_attributes', 'redirect_url']) { const m = { ...good }; delete m[k]; bad(withManifest(m), 'manifest', `missing ${k}`); }
+  for (const redirect_url of ['https://evil.example/integrations/github/callback', 'https://app.plexiform.dev.evil/integrations/github/callback', 'http://app.plexiform.dev/integrations/github/callback', `${MF_HUB}/integrations/slack/callback`, `${MF_HUB}/integrations/github/callback/`, `${MF_HUB}/integrations/github/callback?x=1`, `${MF_HUB}/`, `https://u@app.plexiform.dev/integrations/github/callback`, `${MF_HUB}:443/integrations/github/callback`]) {
+    bad(withManifest({ ...good, redirect_url }), 'manifest', redirect_url);
+  }
+  bad(withManifest({ ...good, callback_urls: ['https://evil.example/cb'] }), 'manifest', 'callback_urls off hub');
+  bad(withManifest({ ...good, callback_urls: [] }), 'manifest', 'callback_urls empty');
+  for (const url of ['https://evil.example/hook', `${MF_HUB}/integrations/github/callback`, `${MF_HUB}/integrations/not-a-uuid/webhook`, `http://app.plexiform.dev/integrations/0b6f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e/webhook`, `${MF_HOOK}?x=1`, `${MF_HOOK}#x`]) {
+    bad(withManifest({ ...good, hook_attributes: { ...good.hook_attributes, url } }), 'manifest', `hook ${url}`);
+  }
+  bad(withManifest({ ...good, hook_attributes: { ...good.hook_attributes, secret: 'x' } }), 'manifest', 'hook extra key');
+  bad(withManifest({ ...good, public: true }), 'manifest', 'public app');
+  bad(withManifest({ ...good, default_permissions: { ...good.default_permissions, contents: 'write' } }), 'manifest', 'write permission');
+  bad(withManifest({ ...good, default_permissions: { __proto__x: 'read' } }), 'manifest', 'odd permission name');
+  bad(withManifest({ ...good, default_events: ['push', 42] }), 'manifest', 'event not a string');
+  bad(withManifest({ ...good, url: 'http://plexiform.dev' }), 'manifest', 'homepage http');
+  bad(withManifest({ ...good, url: 'https://localhost./' }), 'manifest', 'homepage loopback');
+  bad(withManifest({ ...good, name: '<script>' }), 'manifest', 'name charset');
+  // Duplicate JSON keys: what is checked is what is sent.
+  const dup = `${JSON.stringify(good).slice(0, -1)},"redirect_url":"https://evil.example/cb"}`;
+  bad(withManifest(dup), 'manifest', 'duplicate key, last one wins and is checked');
+  const sent = JSON.parse(new URLSearchParams(try_(withManifest(` ${JSON.stringify(good)} `)).post.postData[0].bytes.toString()).get('manifest'));
+  assert.deepEqual(sent, good, 're-encoded from the parsed manifest, not forwarded');
+});
+
+test('manifest POST: a refusal carries a fixed reason only; nothing from the body or URL reaches the result or the log line', async () => {
+  const f = await githubForm();
+  const marker = ['LEAK', 'MARKER', 'x9'].join('_');
+  const outs = [
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ manifest: `{"name":"${marker}"` }) })),
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ manifest: JSON.stringify({ ...JSON.parse(f.fields.manifest), redirect_url: `https://${marker}.example/` }) }) })),
+    connectDecision(mfBase({ url: `https://github.com/settings/apps/new?state=${marker}${'a'.repeat(20)}&x=${marker}`, postBody: formBody(f.fields) })),
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ [marker]: '1' }) })),
+  ];
+  for (const o of outs) {
+    assert.equal(o.ok, false);
+    assert.deepEqual(Object.keys(o), ['ok', 'reason']);
+    assert.ok(!JSON.stringify(o).includes(marker));
+  }
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const hubView = src.slice(src.indexOf('function makeHubView('), src.indexOf('async function openConnect'));
+  assert.match(hubView, /connectDecision\(\{ url, frameName, referrer: referrer\?\.url \?\? '', postBody,/);
+  assert.match(hubView, /else log\('connect window refused', c\.reason\);/);
+  assert.ok(!/log\([^)]*postBody/.test(src), 'the POST body is never logged');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(fn, /\(post \? w\.loadURL\(post\.url, \{ postData: post\.postData, extraHeaders: post\.extraHeaders \}\) : w\.loadURL\(url\)\)/);
+  assert.match(fn, /const authorizeHost = new URL\(post\?\.url \?\? url\)\.host;/);
+  assert.ok(!/postBody/.test(fn), 'the raw body never reaches the connect window');
+});
+
+// ── connect window lifetime ──────────────────────────────────────────────
+
+const { createConnectLife, CONNECT_LIFETIME_MS } = require('../buddy-window/connect-life');
+function lifeTimers() {
+  const live = new Map();
+  let next = 1;
+  return {
+    live,
+    setTimer: (fn, ms) => { const id = next++; live.set(id, { fn, ms }); return id; },
+    clearTimer: (id) => { live.delete(id); },
+    fire(id) { const t = live.get(id); live.delete(id); t.fn(); },
+  };
+}
+function lifeWin() {
+  const w = new EventEmitter();
+  w.destroyed = false;
+  w.closes = 0;
+  w.isDestroyed = () => w.destroyed;
+  w.close = () => { w.closes += 1; if (!w.destroyed) { w.destroyed = true; w.emit('closed'); } };
+  return w;
+}
+
+test('connect window lifetime: closes itself 10 minutes after it opens, expiry runs before the close, one timer per window', () => {
+  assert.equal(CONNECT_LIFETIME_MS, 10 * 60 * 1000);
+  const t = lifeTimers();
+  const life = createConnectLife({ setTimer: t.setTimer, clearTimer: t.clearTimer });
+  const w = lifeWin();
+  const order = [];
+  w.on('closed', () => order.push('closed'));
+  life.arm(w, () => order.push(`expire:${w.isDestroyed()}`));
+  life.arm(w, () => order.push('second'));
+  assert.equal(t.live.size, 1, 'one timer per window');
+  const [[id, timer]] = [...t.live];
+  assert.equal(timer.ms, CONNECT_LIFETIME_MS);
+  t.fire(id);
+  assert.deepEqual(order, ['expire:false', 'closed']);
+  assert.equal(w.closes, 1);
+  assert.equal(t.live.size, 0);
+});
+
+test('connect window lifetime: a normal close clears the timer; a window already gone is left alone', () => {
+  const t = lifeTimers();
+  const life = createConnectLife({ setTimer: t.setTimer, clearTimer: t.clearTimer });
+  const w = lifeWin();
+  let expired = 0;
+  life.arm(w, () => { expired += 1; });
+  w.close();
+  assert.equal(t.live.size, 0, 'cleared on normal close');
+  const w2 = lifeWin();
+  life.arm(w2, () => { expired += 1; });
+  const [[id]] = [...t.live];
+  w2.destroyed = true; // destroyed without a 'closed' we saw
+  t.fire(id);
+  assert.equal(expired, 0);
+  assert.equal(w2.closes, 0);
+});
+
+test('connect window lifetime wiring: armed on every connect window; an expired one also loses its partition’s storage on close', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(src, /const connectLife = createConnectLife\(\);/);
+  assert.equal(src.split('createConnectLife(').length - 1, 1, 'one life (and so one timer set) for the app');
+  assert.ok(fn.indexOf('connectWin = w;') < fn.indexOf('connectLife.arm(w,') && fn.indexOf('connectLife.arm(w,') < fn.indexOf('w.loadURL'), 'armed as soon as the window exists, before it loads');
+  assert.match(fn, /connectLife\.arm\(w, \(\) => \{ expired = true; log\('connect window closed: 10 minutes passed'\); \}\);/);
+  const closed = fn.slice(fn.indexOf("w.on('closed'"));
+  assert.match(closed, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
+  assert.match(closed, /if \(expired\) connectLife\.clearing\(integrationPartitionFor\(w\.hubOrigin\), \(\) => ses\.clearStorageData\(\)\)\.catch\(\(\) => \{\}\);/);
+});
+
+function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+function lifeSession() {
+  const s = { sets: [], removes: [], pending: [] };
+  s.cookies = {
+    set: (c) => { s.sets.push(c); const d = deferred(); s.pending.push(d); return d.promise; },
+    remove: async (url, name) => { s.removes.push([url, name]); },
+  };
+  return s;
+}
+const LIFE_PART = 'persist:integration-auth-x';
+const LIFE_COOKIE = { url: 'https://app.plexiform.dev/', name: '__Host-board_int_github', value: 'b' };
+
+test('connect sign-out generation: a sign-out or switch while the bind cookie is being set refuses the open and removes the cookie', async () => {
+  const life = createConnectLife({ setTimer: () => 0, clearTimer: () => {} });
+  // nothing happened meanwhile: open
+  let ses = lifeSession();
+  let p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  ses.pending[0].resolve();
+  assert.equal(await p, true);
+  assert.deepEqual(ses.removes, []);
+  // signed out (or switched account / hub) while the set was in flight
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  life.bump();
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  assert.deepEqual(ses.removes, [[LIFE_COOKIE.url, LIFE_COOKIE.name]], 'the cookie it set is removed');
+  // the partition was cleared while the set was in flight
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  const clear = deferred();
+  const cleared = life.clearing(LIFE_PART, () => clear.promise);
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  assert.deepEqual(ses.removes, [[LIFE_COOKIE.url, LIFE_COOKIE.name]]);
+  // and while the clear is still running, no cookie is even set
+  const ses2 = lifeSession();
+  assert.equal(await life.setBindCookie(ses2, LIFE_PART, LIFE_COOKIE), false);
+  assert.deepEqual(ses2.sets, []);
+  clear.resolve();
+  await cleared;
+  // a clear that finished during the set counts too
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  await life.clearing(LIFE_PART, async () => {});
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  // a clear that failed still ends, and a later open works
+  await assert.rejects(life.clearing(LIFE_PART, async () => { throw new Error('x'); }));
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  ses.pending[0].resolve();
+  assert.equal(await p, true);
+});
+
+test('connect sign-out generation wiring: bumped on sign-out, account and hub switch; openConnect refuses before any window exists', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.ok(src.indexOf('const connectLife = createConnectLife();') < src.indexOf('createHubSupervisor({'), 'exists before anything can call forgetHub');
+  assert.match(src, /function forgetHub\(\) \{\n\s+gen \+= 1;\n\s+connectLife\.bump\(\);/);
+  assert.match(src, /if \(!id \|\| !store\.setActive\(id\)\) return;\n\s+connectLife\.bump\(\);/);
+  assert.match(src, /await connectLife\.clearing\(integrationPartitionFor\(origin\), \(\) => clearHubSessions\(origin, \(p\) => session\.fromPartition\(p\)\)\);/);
+  const refuse = fn.indexOf("if (!current) { log('connect window refused', 'signed out or switched while opening'); return; }");
+  assert.ok(refuse > fn.indexOf('connectLife.setBindCookie(') && refuse < fn.indexOf('new BrowserWindow('), 'refused after the cookie set, before the window');
+  assert.ok(!/ses\.cookies\.set\(/.test(fn), 'the cookie is set only through the generation check');
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────

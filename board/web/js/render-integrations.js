@@ -107,7 +107,9 @@ function availableCard(c, m) {
   return h('article', { key: c.id, class: 'integ-card integ-available' },
     h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
     c.scopes?.length ? h('p', { class: 'muted small' }, `Asks for: ${c.scopes.join(', ')}`) : null,
-    !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
+    // The local hub has no accounts, so a provider has no one to call back: integrationsScreen says where to go instead.
+    m.local ? null
+      : !m.canEdit ? h('p', { class: 'muted small' }, 'A team admin can connect this.')
       : !m.vault ? null
       : manifest ? manifestForm(c, manifest)
       : c.connect === 'token'
@@ -153,7 +155,7 @@ export function integrationsScreen(model) {
   const data = m.data;
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
-    nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
+    local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
   };
   const connected = data.connections ?? [];
   const notYet = vm.available.filter((c) => !connected.some((x) => x.provider === c.id));
@@ -169,6 +171,7 @@ export function integrationsScreen(model) {
         : h('p', { class: 'muted' }, 'Nothing connected yet.')),
     h('section', { class: 'integ-group', 'aria-labelledby': 'integ-available' },
       h('h2', { id: 'integ-available' }, 'Add a tool'),
+      vm.local ? h('p', { class: 'integ-local muted' }, 'Connect tools on a team hub: sign in and open your team’s board.') : null,
       notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
         : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')));
 }

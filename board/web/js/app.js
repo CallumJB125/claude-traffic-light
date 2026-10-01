@@ -30,7 +30,7 @@ const perf = () => performance.now();
 
 const state = {
   auth: 'loading', // loading | signed_out | forbidden | ok
-  authMode: null, // /api/health auth: 'dev' | 'access'
+  authMode: null, // /api/health auth: 'dev' | 'access' | 'accounts' | 'local'
   authError: null,
   authBusy: false,
   email: null,
@@ -264,7 +264,7 @@ function buildModel() {
     view: state.view,
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
-    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now() } : null,
+    integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     // Presence ages freeze at the drop, like card ages.
     nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),

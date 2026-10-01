@@ -121,13 +121,110 @@ function openDecision({ url, frameName }, opts) {
   return d === 'allow' ? 'deny' : d;
 }
 
+// GitHub's App-manifest flow is the one connect that starts with a POST: the
+// Integrations page's form (connect.manifestForm in the GitHub connector)
+// posts a single `manifest` field to one of these two pages, with the hub's state.
+const MANIFEST_PATH_RE = /^\/(?:organizations\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/)?settings\/apps\/new$/;
+const MANIFEST_STATE_RE = /^[A-Za-z0-9_.-]{16,1024}$/;
+const MANIFEST_BODY_MAX = 64 * 1024;
+const MANIFEST_JSON_MAX = 16 * 1024;
+const MANIFEST_KEYS = new Set(['name', 'url', 'hook_attributes', 'redirect_url', 'callback_urls', 'public', 'default_permissions', 'default_events']);
+const MANIFEST_REQUIRED = ['name', 'url', 'hook_attributes', 'redirect_url'];
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,33}$/;
+const SLUG_RE = /^[a-z][a-z_]{0,49}$/;
+const WEBHOOK_PATH_RE = /^\/integrations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/webhook$/;
+const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+
+function manifestUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || u.hostname !== 'github.com' || u.hash || !MANIFEST_PATH_RE.test(u.pathname)) return null;
+  const keys = [...u.searchParams.keys()];
+  const state = u.searchParams.get('state');
+  if (keys.length !== 1 || keys[0] !== 'state' || !MANIFEST_STATE_RE.test(state ?? '')) return null;
+  const out = `https://github.com${u.pathname}?state=${state}`;
+  return u.href === out ? out : null;
+}
+
+// The webhook URL the registry mints (webhookFor): the hub's own origin, nothing else in it.
+function hubWebhookOk(v, hubOrigin) {
+  if (typeof v !== 'string' || v.length > 512) return false;
+  let u;
+  try { u = new URL(v); } catch { return false; }
+  return u.origin === hubOrigin && WEBHOOK_PATH_RE.test(u.pathname) && v === `${hubOrigin}${u.pathname}`;
+}
+
+/** The manifest object, rebuilt from checked values only, or null. */
+function cleanManifest(m, { hubOrigin, provider }) {
+  if (!plain(m)) return null;
+  const keys = Object.keys(m);
+  if (keys.some((k) => !MANIFEST_KEYS.has(k)) || MANIFEST_REQUIRED.some((k) => !keys.includes(k))) return null;
+  const redirect = `${hubOrigin}/integrations/${provider}/callback`;
+  const out = {};
+  for (const k of keys) {
+    const v = m[k];
+    let ok = false;
+    if (k === 'name') ok = typeof v === 'string' && NAME_RE.test(v);
+    else if (k === 'url') ok = typeof v === 'string' && v.length <= 2048 && connectUrlOk(v);
+    else if (k === 'redirect_url') ok = v === redirect;
+    else if (k === 'callback_urls') ok = Array.isArray(v) && v.length >= 1 && v.length <= 5 && v.every((x) => x === redirect);
+    else if (k === 'public') ok = v === false;
+    else if (k === 'hook_attributes') ok = plain(v) && Object.keys(v).every((x) => x === 'url' || x === 'active') && hubWebhookOk(v.url, hubOrigin) && (!('active' in v) || typeof v.active === 'boolean');
+    // The GitHub connector asks for read access only, and refuses an app that got more.
+    else if (k === 'default_permissions') ok = plain(v) && Object.keys(v).length <= 50 && Object.entries(v).every(([p, a]) => SLUG_RE.test(p) && a === 'read');
+    else if (k === 'default_events') ok = Array.isArray(v) && v.length <= 50 && v.every((x) => typeof x === 'string' && SLUG_RE.test(x));
+    if (!ok) return null;
+    out[k] = k === 'hook_attributes' ? { ...v } : Array.isArray(v) ? [...v] : plain(v) ? { ...v } : v;
+  }
+  return out;
+}
+
+/**
+ * A form POST from the Integrations page to the connect window: only GitHub's
+ * App-manifest page with the hub's state, and only a urlencoded body holding
+ * one `manifest` field whose JSON names this hub's own callback and webhook.
+ * The body is re-encoded from the checked values, never forwarded as sent.
+ * → {ok:true, url, postData, extraHeaders} or {ok:false, reason}; the reason
+ * is a fixed word, so nothing from the body reaches a log.
+ */
+function manifestPost({ url, postBody, hubOrigin, provider }) {
+  const refuse = (reason) => ({ ok: false, reason });
+  if (provider !== 'github') return refuse('post-provider');
+  const target = manifestUrl(url);
+  if (!target) return refuse('post-url');
+  if (!postBody || typeof postBody !== 'object' || !Array.isArray(postBody.data) || String(postBody.contentType ?? '').trim().toLowerCase() !== 'application/x-www-form-urlencoded') return refuse('post-body');
+  const chunks = [];
+  let size = 0;
+  for (const d of postBody.data) {
+    if (!d || d.type !== 'rawData' || !(d.bytes instanceof Uint8Array)) return refuse('post-body');
+    size += d.bytes.length;
+    if (size > MANIFEST_BODY_MAX) return refuse('post-body');
+    chunks.push(d.bytes);
+  }
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)); } catch { return refuse('post-body'); }
+  if (!/^[\x21-\x7e]+$/.test(text)) return refuse('post-body');
+  const form = new URLSearchParams(text);
+  const names = [...form.keys()];
+  if (names.length !== 1 || names[0] !== 'manifest') return refuse('post-body');
+  const raw = form.get('manifest');
+  if (Buffer.byteLength(raw) > MANIFEST_JSON_MAX) return refuse('manifest');
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return refuse('manifest'); }
+  const manifest = cleanManifest(parsed, { hubOrigin, provider });
+  if (!manifest) return refuse('manifest');
+  const body = new URLSearchParams([['manifest', JSON.stringify(manifest)]]).toString();
+  return { ok: true, url: target, postData: [{ type: 'rawData', bytes: Buffer.from(body) }], extraHeaders: 'Content-Type: application/x-www-form-urlencoded' };
+}
+
 /**
  * Every guard on a connect open, in one place: the hub view's own page (the
  * signed-in account hub's Integrations view, and a referrer, when sent, from
  * that origin), a click or key press on it within GESTURE_MS, and a public
- * https URL. → {ok:true, provider, bind} or {ok:false, reason}.
+ * https URL; a form POST also passes manifestPost.
+ * → {ok:true, provider, bind[, post]} or {ok:false, reason}.
  */
-function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, signedIn, gestureAt = 0, now = Date.now() }) {
+function connectDecision({ url, frameName, referrer = '', postBody = null, pageUrl, hubOrigin, signedIn, gestureAt = 0, now = Date.now() }) {
   const c = parseConnectName(frameName);
   if (!c) return { ok: false, reason: 'name' };
   if (!signedIn) return { ok: false, reason: 'signed-out' };
@@ -138,7 +235,10 @@ function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, si
   if (referrer) { try { if (new URL(referrer).origin !== hubOrigin) return { ok: false, reason: 'opener' }; } catch { return { ok: false, reason: 'opener' }; } }
   if (!(gestureAt > 0 && now - gestureAt >= 0 && now - gestureAt <= GESTURE_MS)) return { ok: false, reason: 'gesture' };
   if (!connectUrlOk(url)) return { ok: false, reason: 'url' };
-  return { ok: true, ...c };
+  if (postBody == null) return { ok: true, ...c };
+  const post = manifestPost({ url, postBody, hubOrigin, provider: c.provider });
+  if (!post.ok) return post;
+  return { ok: true, ...c, post: { url: post.url, postData: post.postData, extraHeaders: post.extraHeaders } };
 }
 
 /**
@@ -185,4 +285,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
