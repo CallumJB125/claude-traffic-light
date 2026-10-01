@@ -35,7 +35,10 @@ members only through a verified link (`external_identities`) or a rule approved 
 
 **Connections** are per team: two teams may connect the same external workspace, each with
 its own secrets and webhook URL (whether the provider allows a second install is up to
-the provider). OAuth `state` is bound to the browser that consents: the callback refuses
+the provider). A provider that delivers a workspace's events to one install only (Slack) declares
+`workspaceUnique: true`: then a second live connection for the same `external_id` in **any** team is
+refused with the very same `CONFLICT` as within a team (it never names the other team) and nothing is
+written; a revoked one doesn't count. OAuth `state` is bound to the browser that consents: the callback refuses
 unless the bind cookie set by `POST …/start` comes back: `__Host-board_int_<provider>` (`Path=/`,
 `Secure`) on an https hub, `board_int_<provider>` (`Path=/integrations/`) on an http dev/local hub.
 Inside the desktop shell only, the web passes the bind in the connect window's name and the app

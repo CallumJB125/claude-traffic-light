@@ -341,3 +341,34 @@ test('F5: ctx.boards() lists this team\'s boards (id, title; by title; at most 1
     for (const id of [foreign, randomUUID(), undefined, null, 7, { id: result.card.id }]) assert.equal(ctx.card(id), null);
   } finally { await h.close(); }
 });
+
+// ── F10 workspaceUnique ───────────────────────────────────────────────────
+
+test('F10: a workspaceUnique connector allows one live connection per external_id across teams; the refusal is the same-team CONFLICT, writes nothing and names no team', async () => {
+  const { h, reg } = await setup();
+  try {
+    const other = addOrg(h, 'Rival Team Name');
+    const first = connect(h, 'f10a', { workspaceUnique: true }, { external_id: 'T-SHARED' });
+    const counts = () => ['connections', 'connection_secrets', 'journal'].map((t) => h.db.get(`SELECT COUNT(*) AS n FROM ${t}`).n);
+    const before = counts();
+    const attempt = (orgId, memberId) => {
+      try { reg.createConnection({ orgId, memberId, provider: 'f10a', external_id: 'T-SHARED' }); } catch (e) { return { code: e.code, message: e.message, extra: e.extra ?? null, keys: Object.keys(e) }; }
+      return null;
+    };
+    const sameTeam = attempt(h.ids.org, h.ids.alice);
+    const otherTeam = attempt(other.org, other.admin);
+    assert.equal(sameTeam.code, 'CONFLICT');
+    assert.deepEqual(otherTeam, sameTeam, 'byte-identical: no oracle for whether another team holds it');
+    assert.ok(!JSON.stringify(otherTeam).includes('Rival') && !JSON.stringify(otherTeam).includes(h.ids.org));
+    assert.deepEqual(counts(), before, 'nothing written: no row, secret or journal entry');
+    // Another workspace is fine; once revoked, another team may connect it.
+    assert.ok(reg.createConnection({ orgId: other.org, memberId: other.admin, provider: 'f10a', external_id: 'T-OTHER' }));
+    reg.revokeConnection(first.id, h.ids.alice);
+    const moved = reg.createConnection({ orgId: other.org, memberId: other.admin, provider: 'f10a', external_id: 'T-SHARED' });
+    assert.equal(reg.orgOf(moved.id), other.org);
+    // Without the flag two teams may still connect one workspace (D41).
+    connect(h, 'f10b', {}, { external_id: 'T-SHARED' });
+    assert.ok(reg.createConnection({ orgId: other.org, memberId: other.admin, provider: 'f10b', external_id: 'T-SHARED' }));
+  } finally { await h.close(); }
+  assert.throws(() => probe('f10c', { workspaceUnique: 'yes' }), /workspaceUnique is a boolean/);
+});

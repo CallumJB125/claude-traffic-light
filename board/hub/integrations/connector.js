@@ -9,6 +9,9 @@
 //   scopes: ['pull_requests:read', …],  // what the consent screen lists; the minimum
 //   secrets: ['app_private_key', 'webhook_secret'],   // kinds this connector seals
 //   hosts: ['api.github.com'],          // exact hostnames ctx.fetch / exchange / verifyToken may reach (https only)
+//   workspaceUnique: false,             // optional: true = one live connection per external_id across ALL teams
+//                                       // (a provider whose events reach one install only, e.g. one Slack app per
+//                                       // workspace); a second is the same generic CONFLICT as within a team
 //
 //   // Connect (in an in-app auth window). Either an OAuth-style redirect
 //   // flow or a manual token. The registry makes and checks `state`.
@@ -159,6 +162,7 @@ export function defineConnector(spec) {
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
+  if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);

@@ -196,8 +196,14 @@ export function createIntegrations({
       if (typeof v !== 'string' || !v || Buffer.byteLength(v) > SECRET_MAX_BYTES) throw new HubError('VALIDATION', `${conn.name} returned a secret this hub will not store`);
     }
     hub.txn(() => {
-      // Unique per org among live rows (partial index); revoked rows stay for their audit history.
-      if (db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext)) {
+      // Unique per org among live rows (partial index); revoked rows stay for
+      // their audit history. A workspaceUnique provider (one install per
+      // workspace) is unique across every org, with the same answer, so the
+      // message never tells another team that workspace is taken elsewhere.
+      const clash = conn.workspaceUnique
+        ? db.get("SELECT id FROM connections WHERE provider = ? AND external_id = ? AND status != 'revoked'", provider, ext)
+        : db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext);
+      if (clash) {
         throw new HubError('CONFLICT', `this ${conn.name} is already connected`);
       }
       db.insert('connections', {
