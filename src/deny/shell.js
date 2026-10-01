@@ -14,6 +14,27 @@ export const GLOB = 1;
 export const TILDE = 2;
 export const BRACE = 4;
 
+// Zero-width, bidi and other format characters (Cf). Inside quoted data only
+// the emoji joiners pass; bidi controls never do, as they make the command
+// on screen differ from the one that runs.
+const FORMAT = /\p{Cf}/gu;
+const BIDI = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/;
+const JOINER = /^[\u200C\u200D\u{E0020}-\u{E007F}]$/u;
+
+// Adds 'bidi' / 'invisible' hazards for format characters in `text`, given the
+// [start, end) ranges that hold quoted data.
+function formatHazards(text, data, hazards) {
+  if (!/\p{Cf}/u.test(text)) return;
+  data.sort((a, b) => a[0] - b[0]);
+  let r = 0;
+  for (const m of text.matchAll(FORMAT)) {
+    if (BIDI.test(m[0])) { hazards.add('bidi'); continue; }
+    while (r < data.length && data[r][1] <= m.index) r++;
+    const inData = r < data.length && data[r][0] <= m.index;
+    if (!(inData && JOINER.test(m[0]))) hazards.add('invisible');
+  }
+}
+
 const atWordStart = (s, j) => j === 0 || /[\s;&|()]/.test(s[j - 1]);
 
 // The delimiter of a here-doc whose `<<` ends just before `k`.
@@ -34,6 +55,7 @@ function heredocDelim(s, k) {
 function skipHeredocs(s, j, docs) {
   for (const h of docs) {
     let body = '';
+    h.start = j;
     for (;;) {
       if (j >= s.length) { h.unterminated = true; break; }
       let e = s.indexOf('\n', j);
@@ -108,6 +130,7 @@ export function tokenize(text) {
   let wq = false; // the current word had quoting (a quoted here-doc delimiter means a literal body)
   let awaitDelim = null;
   let docs = [];
+  const data = []; // [start, end) ranges of quoted data, for formatHazards
   const push = () => {
     if (word !== null) {
       tokens.push(wx ? { t: 'word', v: word, x: wx } : { t: 'word', v: word });
@@ -130,12 +153,22 @@ export function tokenize(text) {
     return end;
   };
   // An unquoted here-doc body still runs $(…) and `…`.
-  const scanBody = (s) => {
+  const scanBody = (s, base) => {
+    let seg = 0;
     for (let j = 0; j < s.length; j++) {
       const c = s[j];
       if (c === '\\') j++;
-      else if (c === '$') { hazards.add('expansion'); if (s[j + 1] === '(') j = readSub(s, j + 2, ')'); }
-      else if (c === '`') j = readSub(s, j + 1, '`');
+      else if (c === '$') {
+        hazards.add('expansion');
+        if (s[j + 1] === '(') { data.push([base + seg, base + j]); j = readSub(s, j + 2, ')'); seg = j + 1; }
+      } else if (c === '`') { data.push([base + seg, base + j]); j = readSub(s, j + 1, '`'); seg = j + 1; }
+    }
+    data.push([base + seg, base + s.length]);
+  };
+  const bodies = (list) => {
+    for (const h of list) {
+      if (h.quoted) data.push([h.start, h.start + h.body.length]);
+      else scanBody(h.body, h.start);
     }
   };
   while (i < n) {
@@ -144,18 +177,22 @@ export function tokenize(text) {
       const j = text.indexOf("'", i + 1);
       const end = j < 0 ? n : j;
       word = (word ?? '') + text.slice(i + 1, end);
+      data.push([i + 1, end]);
       wq = true;
       if (j < 0) hazards.add('unterminated-quote');
       i = end + 1;
     } else if (c === '"') {
-      let j = i + 1, v = '';
+      let j = i + 1, v = '', seg = j;
       for (; j < n && text[j] !== '"'; j++) {
         const d = text[j];
         if (d === '\\' && j + 1 < n) { v += text[++j]; hazards.add('escape'); }
-        else if (d === '$') { hazards.add('expansion'); if (text[j + 1] === '(') j = readSub(text, j + 2, ')'); else v += d; }
-        else if (d === '`') j = readSub(text, j + 1, '`');
+        else if (d === '$') {
+          hazards.add('expansion');
+          if (text[j + 1] === '(') { data.push([seg, j]); j = readSub(text, j + 2, ')'); seg = j + 1; } else v += d;
+        } else if (d === '`') { data.push([seg, j]); j = readSub(text, j + 1, '`'); seg = j + 1; }
         else v += d;
       }
+      data.push([seg, Math.min(j, n)]);
       if (j >= n) hazards.add('unterminated-quote');
       word = (word ?? '') + v;
       wq = true;
@@ -172,7 +209,7 @@ export function tokenize(text) {
       op(';'); i++;
       if (c === '\n' && docs.length) {
         i = skipHeredocs(text, i, docs);
-        for (const h of docs) if (!h.quoted) scanBody(h.body);
+        bodies(docs);
         docs = [];
       }
     } else if (c === '#' && word === null) {
@@ -220,6 +257,7 @@ export function tokenize(text) {
         for (; j < n && text[j] !== "'"; j++) if (text[j] === '\\') j++;
         if (j >= n) hazards.add('unterminated-quote');
         word = (word ?? '') + '$' + text.slice(i + 2, Math.min(j, n));
+        data.push([i + 2, Math.min(j, n)]);
         hazards.add('escape');
         i = j + 1;
       } else { word = (word ?? '') + c; i++; }
@@ -236,7 +274,7 @@ export function tokenize(text) {
     }
   }
   push();
-  for (const h of docs) if (!h.quoted) scanBody(h.body);
+  formatHazards(text, data, hazards);
   return { tokens, hazards, subs };
 }
 

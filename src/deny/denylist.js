@@ -288,13 +288,33 @@ function awkPrograms(a) {
   return out;
 }
 
+// An awk program without its string and regex literals, so a '|' left over is
+// a pipe. A '/' after an operand is division; reading it as a regex instead
+// could only hide a pipe, so the operand test errs that way.
+function awkCode(p) {
+  let out = '';
+  let prev = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '"' || (c === '/' && !/[\w)\]$]/.test(prev))) {
+      for (i++; i < p.length && p[i] !== c; i++) if (p[i] === '\\') i++;
+      out += c + c;
+      prev = 'x';
+      continue;
+    }
+    out += c;
+    if (!/\s/.test(c)) prev = c;
+  }
+  return out;
+}
+
 const EDITORS = /^(vim?|nvim|gvim|mvim|ex|view|vimdiff|nvi|rvim)$/;
 function programOptionReason(c) {
   const a = c.args;
   const has = (re) => a.some((x) => re.test(x));
   const cmd = c.cmd;
   if (/^[gmn]?awk$/.test(cmd) || (cmd === 'busybox' && a[0] === 'awk')) {
-    return awkPrograms(cmd === 'busybox' ? a.slice(1) : a).some((p) => /system\s*\(|\||@load/.test(p)) ? 'awk program runs commands (system, pipes)' : null;
+    return awkPrograms(cmd === 'busybox' ? a.slice(1) : a).some((p) => /system\s*\(|\||@\w/.test(awkCode(p))) ? 'awk program runs commands (system, pipes)' : null;
   }
   if (/^g?sed$/.test(cmd)) return sedScripts(a).some((s) => sedScript(s).exec) ? 'sed e command runs a shell' : null;
   if (EDITORS.test(cmd) && a.some((x, k) => /^(-c|--cmd|-S)$/.test(x) || /^\+[^\d/]/.test(x) || (x === '-u' && !/^(NONE|NORC|DEFAULTS)$/.test(a[k + 1] ?? '')))) return 'editor runs commands from its arguments';
@@ -325,8 +345,6 @@ function inlineCodeReason(c) {
   return null;
 }
 
-// Characters that render as nothing, reorder text, or pass for ASCII.
-const INVISIBLE = /\p{Cf}/u;
 function unicodeReason(c) {
   if (/[^\x21-\x7e]/.test(c.cmd)) return `non-ASCII program name (${JSON.stringify(c.cmd.normalize('NFKC'))})`;
   return c.words.some((w) => !w.startsWith('-') && w.normalize('NFKC').startsWith('-')) ? 'option written with look-alike characters' : null;
@@ -374,8 +392,9 @@ const SHELL_CHECKS = [
 // First finding for one shell command string: { id, reason } or null.
 export function shellFinding(text, only = null) {
   if (/:\s*\(\s*\)\s*\{/.test(text)) return { id: 'fork-bomb', reason: 'fork bomb' };
-  if (!only && INVISIBLE.test(text)) return { id: 'unicode', reason: 'invisible or bidi control characters' };
   const { cmds, hazards } = parseShell(text);
+  if (!only && hazards.has('bidi')) return { id: 'unicode', reason: 'bidi control characters (what is shown is not what runs)' };
+  if (!only && hazards.has('invisible')) return { id: 'unicode', reason: 'invisible characters outside quoted text' };
   if (!only && (hazards.has('substitution') || hazards.has('process-substitution'))
     && cmds.some((c) => SHELLS.has(c.cmd) || c.cmd === 'eval' || c.cmd === 'source' || c.cmd === '.')
     && cmds.some((c) => /^(curl|wget|fetch|http|aria2c)$/.test(c.cmd))) {

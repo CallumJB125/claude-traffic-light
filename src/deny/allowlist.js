@@ -82,7 +82,7 @@ export const TEST_COMMAND_ALLOW = {
   cargo: both(subcommands('test', 'build', 'check'), noArgs(/^--config(=|$)|^-Z/, 'cargo option can run a program')),
 };
 
-const FORBIDDEN_HAZARDS = ['expansion', 'substitution', 'process-substitution', 'redirect', 'subshell', 'group', 'background', 'escape', 'unterminated-quote'];
+const FORBIDDEN_HAZARDS = ['expansion', 'substitution', 'process-substitution', 'redirect', 'subshell', 'group', 'background', 'escape', 'unterminated-quote', 'bidi', 'invisible'];
 // Redirections that only discard or merge output are fine.
 const HARMLESS_REDIRECTS = /(^|\s)(2>&1|[12]?>\s?\/dev\/null)(?=\s|$)/g;
 
@@ -129,7 +129,6 @@ const isSecret = (p) => CREDENTIAL_PATHS.test(p) || SECRET_FILES.test(p);
 function bashReason(command, allow, cwd, realpath) {
   if (typeof command !== 'string' || !command.trim()) return 'no command';
   if (command.length > MAX_COMMAND_CHARS) return 'command too long to review remotely';
-  if (/\p{Cf}/u.test(command)) return 'invisible or bidi control characters are desk-only';
   const { tokens, hazards } = tokenize(command.replace(HARMLESS_REDIRECTS, ' '));
   const bad = FORBIDDEN_HAZARDS.find((h) => hazards.has(h));
   if (bad) return `shell ${bad} is desk-only`;

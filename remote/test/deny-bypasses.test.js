@@ -148,3 +148,26 @@ test('allow-list: sort / uniq / tree that write a file are desk-only', () => {
     assert.equal(remote(c).blocked, true, c);
   }
 });
+
+test('unicode: emoji joiners inside quoted data are fine; bidi controls and Cf in code are not', () => {
+  const zwj = ch(0x200d), rlo = ch(0x202e), tag = String.fromCodePoint(0xe0067);
+  for (const c of [`git commit -m "ship ${String.fromCodePoint(0x1f468)}${zwj}${String.fromCodePoint(0x1f4bb)}"`, `echo 'flag ${String.fromCodePoint(0x1f3f4)}${tag}'`,
+    `cat <<'EOF'\nteam ${zwj} work\nEOF`, `cat <<EOF\nteam ${zwj} work\nEOF`, `git commit -m "a${ch(0x200c)}b"`]) {
+    assert.equal(deny(c).blocked, false, JSON.stringify(c));
+  }
+  for (const c of [`echo "a${rlo}b"`, `echo 'a${ch(0x2066)}b'`, `cat <<'EOF'\na${ch(0x200f)}b\nEOF`, `r${zwj}m x`, `"r${zwj}m" x`, `ls -${zwj}la`, `echo a${zwj}b`,
+    `echo "$(r${zwj}m x)"`, `echo "a${ch(0x200b)}b"`, `ls ${tag}`]) {
+    assert.equal(deny(c).blocked, true, JSON.stringify(c));
+    assert.equal(remote(c).blocked, true, JSON.stringify(c));
+  }
+});
+
+test('awk: | inside regex and string literals is data; pipes and system() are not', () => {
+  for (const c of ["awk '/a|b/ {print}' f", "awk '{print \"a|b\"}' f", "awk -F'|' '{print $1}' f", "awk '$1 ~ /x|y/ {n++} END{print n}' f"]) assert.equal(deny(c).blocked, false, c);
+  for (const c of ["awk '{print | \"sh\"}' f", "awk 'BEGIN{\"id\" | getline x}'", "awk 'BEGIN{system(\"id\")}'", "awk '{print |& \"sh\"}' f", "awk '{print a/2 | \"sh\"}' f",
+    "awk 'BEGIN{f=\"system\"; @f(\"id\")}'", "awk '/x/ {print \"\\\"\" | \"sh\"}' f"]) assert.equal(deny(c).blocked, true, c);
+});
+
+test('awk: a / after a string is division, so it cannot hide a pipe', () => {
+  assert.equal(deny("awk '{print \"a\" / 2 | \"sh\"}' f").blocked, true);
+});
