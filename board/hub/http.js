@@ -12,7 +12,7 @@ import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
 import { isExposed, isLoopback } from './config.js';
 import { publicMember } from './api.js';
-import { LOCAL_ONLY } from './views.js';
+import { LOCAL_ONLY, selectedContext } from './views.js';
 import { BrowserConn } from './ws-board.js';
 import { RunnerConn, authenticateRunner } from './ws-runner.js';
 import { clientIp, failBucketKey, ipKey, limitOrThrow } from './ratelimit.js';
@@ -410,7 +410,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));
   route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
-  route('GET', '/api/boards/:board_id', ({ member, params, query }) => api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }));
+  route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
   route('POST', '/api/boards/:board_id/labels', ({ member, params, body }) => api.createLabel(member, params.board_id, body));
   route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body }) => api.patchLabel(member, params.board_id, params.name, body));
@@ -420,7 +420,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
-  route('GET', '/api/cards/:card_id', ({ member, params }) => api.detail(member, params.card_id));
+  route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
@@ -815,7 +815,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           const hit = hub.cachedResponse(actor, rid);
           if (hit) {
             if ((binding != null || hit.binding != null) && binding !== hit.binding) throw new HubError('CONFLICT', 'request_id reused for a different request');
-            return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });
+            return sendJson(res, hit.status, r.collaboration ? selectedContext(hub, hit.body, communicationOptions(url.searchParams).boardIds) : hit.body, { 'board-replayed': '1' });
           }
         }
         if (actor && r.mutating) {
@@ -833,6 +833,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           out = errorBody(e);
         }
         if (out === undefined) return undefined;
+        if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
         if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };

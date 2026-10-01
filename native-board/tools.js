@@ -63,13 +63,13 @@ async function callTool({ grant, workspace, client }, name, args) {
   if (args.board_id && !allowed.has(args.board_id)) return denied();
   let detail;
   if (args.card_id) {
-    detail = await client.nativeBoard('card', { team, card: args.card_id });
+    detail = await client.nativeBoard('card', { team, card: args.card_id, boardIds: [...allowed] });
     if (!detail.ok) return detail;
     if (!allowed.has(detail.card?.board_id)) return denied();
   }
   switch (name) {
     case 'plexiform_list_cards': {
-      const r = await client.nativeBoard('snapshot', { team, board: args.board_id });
+      const r = await client.nativeBoard('snapshot', { team, board: args.board_id, boardIds: [...allowed] });
       if (!r.ok) return r;
       const q = (args.query ?? '').toLowerCase();
       return { ok: true, board: { id: r.board?.id, name: r.board?.name }, cards: (r.cards ?? []).filter((c) => `${c.key} ${c.title}`.toLowerCase().includes(q)) };
@@ -78,11 +78,11 @@ async function callTool({ grant, workspace, client }, name, args) {
     case 'plexiform_read_handover': return { ok: true, card_id: args.card_id, handover: detail.handover ?? null };
     case 'plexiform_create_card': {
       const { board_id, ...body } = args;
-      return client.nativeBoard('create', { team, board: board_id }, body);
+      return client.nativeBoard('create', { team, board: board_id, boardIds: [...allowed] }, body);
     }
     case 'plexiform_update_card': {
       const { card_id, ...body } = args;
-      return client.nativeBoard('patch', { team, card: card_id }, body);
+      return client.nativeBoard('patch', { team, card: card_id, boardIds: [...allowed] }, body);
     }
     case 'plexiform_add_comment': return client.nativeBoard('comment', { team, card: args.card_id }, { body: args.body, for_agent: false });
     case 'plexiform_read_packet': return client.nativeBoard('readPacket', { team, card: args.card_id, boardIds: [...allowed] });

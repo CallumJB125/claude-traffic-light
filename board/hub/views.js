@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { ACTIVE } from '../shared/states.js';
 import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
-import { json } from './db.js';
+import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
 import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
 
@@ -182,6 +182,18 @@ export function boardSnapshot(hub, boardId, viewerId, { includeArchived = false 
 }
 
 export const labelDef = (r) => ({ id: r.id, name: r.name, color: r.color, description: r.description ?? null });
+
+// Private desktop selection may only narrow ordinary staff projections.
+// Keep ordinary cross-board collaboration intact when there is no selection.
+export function selectedContext(hub, result, boardIds) {
+  if (boardIds == null) return result;
+  if (!Array.isArray(boardIds) || boardIds.length < 1 || boardIds.length > 32 || boardIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(id))) throw new HubError('VALIDATION', 'choose 1–32 boards');
+  const project = view => ({ ...view, ...(view.overlaps ? { overlaps: view.overlaps.filter(peer => {
+    const card = hub.card(peer.other_card_id), board = card && hub.board(card.board_id);
+    return card && board && !card.archived_at && !board.archived_at && boardIds.includes(card.board_id);
+  }) } : {}) });
+  return { ...project(result), ...(result.card ? { card: project(result.card) } : {}), ...(result.cards ? { cards: result.cards.map(project) } : {}) };
+}
 
 export function cardDetail(hub, row, viewerId, feedEventOf) {
   const view = cardView(hub, row, viewerId);
