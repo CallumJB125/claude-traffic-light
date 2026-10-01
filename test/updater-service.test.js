@@ -462,6 +462,16 @@ test('electron-updater: a release with no Windows entry is "no update", and elec
   svc.stop();
 });
 
+test('L1: a release missing this Linux build is an error, never "up to date"', async () => {
+  publish(feed, { privateKey, version: '1.2.0', files: [EXE('1.2.0')] });
+  const { svc } = debRig();
+  await svc.check({ user: true });
+  const s = svc.getState();
+  assert.equal(s.status, 'error');
+  assert.equal(s.error.code, 'server');
+  svc.stop();
+});
+
 test('electron-updater: a matching feed downloads only when asked, then quitAndInstall only on install', async () => {
   const exe = EXE('1.2.0');
   publish(feed, { privateKey, version: '1.2.0', files: [exe] });
