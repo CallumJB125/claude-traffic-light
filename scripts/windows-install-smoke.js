@@ -44,18 +44,52 @@ function execute(exe, args, env, options) {
 }
 
 function verifiedUninstaller(source, root) {
+  const maximum = 32 * 1024 * 1024, chunkSize = 64 * 1024;
   const stamp = st => `${st.dev}/${st.ino}/${st.size}/${st.mtimeMs}/${st.ctimeMs}`;
-  const read = file => {
+  const regular = st => st.isFile() && !st.isSymbolicLink() && Number.isSafeInteger(st.size) && st.size > 0 && st.size <= maximum;
+  // Windows lacks these POSIX open flags. Descriptor checks and bounded bytes
+  // still apply to this trusted fixture; kernel-open deadlines, no-reparse
+  // traversal and atomic verified execution are not established by this helper.
+  const supported = name => Number.isInteger(fs.constants[name]) && fs.constants[name] > 0 ? fs.constants[name] : 0;
+  const read = (file, capture = false) => {
     const before = fs.lstatSync(file);
-    if (!before.isFile() || before.isSymbolicLink() || before.size <= 0 || before.size > 32 * 1024 * 1024) throw new Error('Uninstaller must be a bounded regular file');
-    const bytes = fs.readFileSync(file);
-    if (bytes.length !== before.size || stamp(before) !== stamp(fs.lstatSync(file))) throw new Error('Uninstaller changed during verification');
-    return { hash: crypto.createHash('sha256').update(bytes).digest('hex'), stamp: stamp(before) };
+    if (!regular(before)) throw new Error('Uninstaller must be a bounded regular file');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | supported('O_NOFOLLOW') | supported('O_NONBLOCK'));
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!regular(opened) || stamp(opened) !== stamp(before)) throw new Error('Uninstaller changed before verification');
+      const chunk = Buffer.alloc(Math.min(chunkSize, before.size)), bytes = capture ? Buffer.alloc(before.size) : null;
+      const hash = crypto.createHash('sha256');
+      let offset = 0;
+      while (offset < before.size) {
+        const n = fs.readSync(fd, chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+        if (n === 0) throw new Error('Uninstaller changed during verification');
+        hash.update(chunk.subarray(0, n));
+        if (bytes) chunk.copy(bytes, offset, 0, n);
+        offset += n;
+      }
+      // At the ceiling, the final descriptor size/stamp checks detect growth;
+      // never consume an EOF-probe byte beyond the total maximum.
+      if (before.size < maximum && fs.readSync(fd, chunk, 0, 1, offset) !== 0) throw new Error('Uninstaller changed during verification');
+      const after = fs.fstatSync(fd), named = fs.lstatSync(file);
+      if (!regular(after) || !regular(named) || stamp(after) !== stamp(before) || stamp(named) !== stamp(before)) throw new Error('Uninstaller changed during verification');
+      return { hash: hash.digest('hex'), stamp: stamp(before), bytes };
+    } finally { fs.closeSync(fd); }
   };
-  const original = read(source), dir = path.join(root, 'uninstaller-copy');
+  const original = read(source, true), dir = path.join(root, 'uninstaller-copy');
   fs.mkdirSync(dir); // Exclusive; a collision is never adopted or cleaned up.
   const exe = path.join(dir, 'uninstaller.exe');
-  fs.copyFileSync(source, exe, fs.constants.COPYFILE_EXCL);
+  const fd = fs.openSync(exe, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | supported('O_NOFOLLOW'));
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.size !== 0) throw new Error('Uninstaller copy must be a fresh regular file');
+    let offset = 0;
+    while (offset < original.bytes.length) {
+      const n = fs.writeSync(fd, original.bytes, offset, Math.min(chunkSize, original.bytes.length - offset), offset);
+      if (n === 0) throw new Error('Uninstaller copy write was incomplete');
+      offset += n;
+    }
+  } finally { fs.closeSync(fd); }
   const copied = read(exe), current = read(source);
   if (copied.hash !== original.hash || current.hash !== original.hash || current.stamp !== original.stamp) throw new Error('Uninstaller copy identity mismatch');
   return { exe, hash: original.hash, verify: () => { const now = read(exe); if (now.hash !== copied.hash || now.stamp !== copied.stamp) throw new Error('Copied uninstaller changed before execution'); } };

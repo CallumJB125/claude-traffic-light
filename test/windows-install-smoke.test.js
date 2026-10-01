@@ -139,11 +139,14 @@ test('actual exclusive copy refuses destination-file collision without deleting 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nsis-copy-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, 'source.exe'); fs.writeFileSync(source, Buffer.from([0, 1, 2, 255]));
-  const original = fs.copyFileSync;
+  const original = fs.openSync; let injected = false;
   try {
-    fs.copyFileSync = (src, dst, flags) => { fs.writeFileSync(dst, 'Foreign collision'); return original(src, dst, flags); };
+    fs.openSync = (file, ...args) => {
+      if (!injected && file === path.join(root, 'uninstaller-copy', 'uninstaller.exe')) { injected = true; fs.writeFileSync(file, 'Foreign collision'); }
+      return original(file, ...args);
+    };
     assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /exist/i);
-  } finally { fs.copyFileSync = original; }
+  } finally { fs.openSync = original; }
   assert.deepEqual(fs.readFileSync(source), Buffer.from([0, 1, 2, 255]));
   assert.equal(fs.readFileSync(path.join(root, 'uninstaller-copy', 'uninstaller.exe'), 'utf8'), 'Foreign collision');
 });
@@ -154,6 +157,93 @@ test('copy verification refuses a nonregular installed uninstaller', t => {
   const source = path.join(root, 'source.exe'); fs.mkdirSync(source);
   assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /bounded regular/);
   assert.equal(fs.existsSync(path.join(root, 'uninstaller-copy')), false);
+});
+
+function descriptorFixture(t, size = 4) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nsis-descriptor-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source.exe'); fs.writeFileSync(source, Buffer.alloc(size, 17));
+  return { root, source };
+}
+
+for (const kind of ['directory', 'oversized']) test(`descriptor verification refuses a post-lstat ${kind} replacement before reading bytes`, t => {
+  const { root, source } = descriptorFixture(t), replacement = path.join(root, 'replacement');
+  if (kind === 'directory') fs.mkdirSync(replacement);
+  else { fs.writeFileSync(replacement, 'x'); fs.truncateSync(replacement, 32 * 1024 * 1024 + 1); }
+  const stat = fs.lstatSync, open = fs.openSync, read = fs.readSync, readFile = fs.readFileSync; let swapped = false, fd = null, bytes = 0;
+  try {
+    fs.lstatSync = (file, ...args) => { const st = stat(file, ...args); if (file === source && !swapped) { swapped = true; fs.renameSync(source, path.join(root, 'retained-original')); fs.renameSync(replacement, source); } return st; };
+    fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === source) fd = result; return result; };
+    fs.readSync = (...args) => { const n = read(...args); if (args[0] === fd) bytes += n; return n; };
+    fs.readFileSync = (file, ...args) => { const result = readFile(file, ...args); if (file === source) bytes += result.length; return result; };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root));
+  } finally { fs.lstatSync = stat; fs.openSync = open; fs.readSync = read; fs.readFileSync = readFile; }
+  assert.equal(swapped, true); assert.equal(bytes, 0); assert.equal(fs.existsSync(path.join(root, 'uninstaller-copy')), false);
+  if (fd !== null) assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+});
+
+test('descriptor verification refuses name replacement after open and closes the retained original handle', t => {
+  const { root, source } = descriptorFixture(t), replacement = path.join(root, 'replacement'); fs.writeFileSync(replacement, Buffer.alloc(4, 18));
+  const open = fs.openSync; let fd = null, swapped = false;
+  try {
+    fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === source && !swapped) { fd = result; swapped = true; fs.renameSync(source, path.join(root, 'retained-original')); fs.renameSync(replacement, source); } return result; };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /changed/);
+  } finally { fs.openSync = open; }
+  assert.equal(swapped, true); assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+  assert.deepEqual(fs.readFileSync(path.join(root, 'retained-original')), Buffer.alloc(4, 17));
+});
+
+test('descriptor verification refuses growth at the ceiling without consuming beyond 32 MiB', t => {
+  const maximum = 32 * 1024 * 1024, { root, source } = descriptorFixture(t, maximum);
+  const open = fs.openSync, read = fs.readSync; let fd = null, grew = false, consumed = 0, biggest = 0;
+  try {
+    fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === source && fd === null) fd = result; return result; };
+    fs.readSync = (...args) => { const n = read(...args); if (args[0] === fd) { consumed += n; biggest = Math.max(biggest, args[3]); if (!grew && n) { grew = true; fs.truncateSync(source, maximum + 1); } } return n; };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /changed/);
+  } finally { fs.openSync = open; fs.readSync = read; }
+  assert.equal(grew, true); assert.equal(consumed, maximum); assert.ok(biggest <= 64 * 1024); assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+});
+
+test('descriptor verification refuses truncation during reading without accepting a partial capture', t => {
+  const { root, source } = descriptorFixture(t, 128 * 1024), open = fs.openSync, read = fs.readSync; let fd = null, truncated = false;
+  try {
+    fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === source && fd === null) fd = result; return result; };
+    fs.readSync = (...args) => { const n = read(...args); if (args[0] === fd && !truncated && n) { truncated = true; fs.truncateSync(source, 64 * 1024); } return n; };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root), /changed/);
+  } finally { fs.openSync = open; fs.readSync = read; }
+  assert.equal(truncated, true); assert.equal(fs.existsSync(path.join(root, 'uninstaller-copy')), false); assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+});
+
+test('exclusive capture copy never copies a later oversized source pathname replacement', t => {
+  const { root, source } = descriptorFixture(t), replacement = path.join(root, 'replacement'); fs.writeFileSync(replacement, 'x'); fs.truncateSync(replacement, 32 * 1024 * 1024 + 1);
+  const mkdir = fs.mkdirSync; let swapped = false;
+  try {
+    fs.mkdirSync = (dir, ...args) => { const result = mkdir(dir, ...args); if (dir === path.join(root, 'uninstaller-copy')) { swapped = true; fs.renameSync(replacement, source); } return result; };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root));
+  } finally { fs.mkdirSync = mkdir; }
+  const copied = path.join(root, 'uninstaller-copy', 'uninstaller.exe');
+  assert.equal(swapped, true); assert.equal(fs.statSync(copied).size, 4); assert.deepEqual(fs.readFileSync(copied), Buffer.alloc(4, 17));
+  assert.equal(fs.statSync(source).size, 32 * 1024 * 1024 + 1);
+});
+
+for (const operation of ['read', 'write']) test(`descriptor verification closes owned handles after an injected ${operation} I/O failure`, t => {
+  const { root, source } = descriptorFixture(t), destination = path.join(root, 'uninstaller-copy', 'uninstaller.exe');
+  const open = fs.openSync, io = fs[`${operation}Sync`]; let fd = null;
+  try {
+    fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === (operation === 'read' ? source : destination)) fd = result; return result; };
+    fs[`${operation}Sync`] = (...args) => { if (args[0] === fd) throw Object.assign(new Error('Injected descriptor I/O refusal'), { code: 'EIO' }); return io(...args); };
+    assert.throws(() => Lifecycle.verifiedUninstaller(source, root), { code: 'EIO' });
+  } finally { fs.openSync = open; fs[`${operation}Sync`] = io; }
+  assert.notEqual(fd, null); assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' }); assert.deepEqual(fs.readFileSync(source), Buffer.alloc(4, 17));
+});
+
+test('descriptor capture remains bounded for a trusted regular fixture with optional POSIX flags absent', t => {
+  const { root, source } = descriptorFixture(t), file = path.join(__dirname, '../scripts/windows-install-smoke.js');
+  const real = createRequire(file), module = { exports: {} }, fixtureFs = { ...fs, constants: { ...fs.constants, O_NOFOLLOW: 0, O_NONBLOCK: undefined } };
+  const require = id => id === 'node:fs' ? fixtureFs : real(id);
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { require, module, process, Buffer, __dirname: path.dirname(file), console, setTimeout, clearTimeout });
+  const copy = module.exports.verifiedUninstaller(source, root); copy.verify();
+  assert.deepEqual(fs.readFileSync(copy.exe), Buffer.alloc(4, 17)); assert.deepEqual(fs.readFileSync(source), Buffer.alloc(4, 17));
 });
 
 for (const kind of ['nonzero', 'timeout']) test(`uninstaller ${kind} retains actual app/data and failure metadata without a success stage`, async t => {
