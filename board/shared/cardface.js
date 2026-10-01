@@ -93,9 +93,9 @@ function reasonFor(view, state, live) {
       if (view.queue && view.queue.runner_online === false && view.queue.offline_age_ms != null) {
         return `no runner online for ${view.repo?.short_name ?? 'this repo'} · ${formatAge(view.queue.offline_age_ms)}`;
       }
-      if (view.target?.is_viewer) return 'for your Claude';
+      if (view.target?.is_viewer) return `for your ${view.target.ai_label ?? 'Claude'}`;
       const name = view.target?.name ?? 'your';
-      return `for ${possessive(name)} Claude${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
+      return `for ${possessive(name)} ${view.target?.ai_label ?? 'Claude'}${view.target?.awaiting_confirm ? ` · awaiting ${name}` : ''}`;
     }
     case 'claimed': return `${who} · preparing worktree`;
     case 'running': {

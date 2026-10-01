@@ -171,8 +171,8 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     picked ? h('span', { class: 'sr-only' }, 'Selected') : null,
     h('span', { class: 'card-key num' }, view.key),
     archived ? h('span', { class: 'label archived-badge', title: view.archived.by_name ? `Archived by ${view.archived.by_name}` : 'Archived' }, 'Archived') : null,
-    view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must give it to Claude' }, 'agent-suggested') : null,
-    via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must give it to Claude` }, `via ${via}`) : null,
+    view.agent_suggested ? h('span', { class: 'label agent-suggested', title: 'Created by an agent; a person must assign it to an AI' }, 'agent-suggested') : null,
+    via ? h('span', { class: 'label via-integration', title: `Created by the ${via} integration; a person must assign it to an AI` }, `via ${via}`) : null,
     rb ? h('span', { class: 'card-repo num', title: view.base_ref ? `base ${view.base_ref}` : null }, icon('branch', 'icon-xs'), rb) : null,
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
@@ -187,7 +187,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   labelChips(view, model, labels),
   chipRow(chips),
   archived ? archivedFoot(view, model) : model.readOnly || pending ? null : cardActions(face, view, model.busy),
-  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to give it to Claude') : null);
+  human && !pending && !archived && face.state === 'todo' && !view.target ? h('p', { class: 'card-foot' }, view.repo ? 'on your account' : 'no repo yet · add one to tackle it with AI') : null);
 }
 
 // An archived card is read-only (D94): its one action is Restore.
@@ -255,7 +255,7 @@ function quickAddRow(qa) {
 
 const EMPTY = {
   todo: 'Nothing waiting. New cards land here.',
-  in_progress: 'No one is working on anything. Give a card to Claude to start.',
+  in_progress: 'No one is working on anything. Tackle a card with AI to start.',
   in_review: 'Nothing to review.',
   done: 'Finished work shows up here.',
 };
@@ -267,7 +267,7 @@ export function localCard(model) {
   return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
     h('div', { class: 'localcard-text' },
       h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
-      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their Claude sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
+      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their AI sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
     h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss'));
 }
 
@@ -372,7 +372,7 @@ export function boardScreen(model, body = null) {
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),
     selectionActions(model),
-    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards Claude is not running can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
+    h('p', { id: 'dnd-help', class: 'sr-only' }, 'Cards with no active agent run can be moved. Press Space to pick up, left and right arrows to choose a column, Space to drop, Escape to cancel. Shift-click or Command-click selects several.'),
     h('div', { class: 'sr-only', role: 'status', 'aria-live': 'assertive', 'aria-atomic': 'true' }, model.announce ?? ''));
 }
 

@@ -8,6 +8,7 @@ import { isGreen } from '../shared/liveness.js';
 import { FEED_KINDS } from '../shared/protocol.js';
 import { json } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
+import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -114,7 +115,7 @@ export function cardView(hub, row, viewerId) {
   if (d && (row.run_state === 'queued' || row.run_state == null)) {
     const tid = hub.dispatchTarget(d);
     const dev = [...hub.runners.values()].find((c) => c.member_id === tid && c.repos.has(row.repo_id));
-    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}) };
+    target = { member_id: tid, name: hub.memberName(tid), is_viewer: tid === viewerId, ai: aiOfDispatch(d), ai_label: AI_LABELS[aiOfDispatch(d)], awaiting_confirm: !!d.needs_confirm, ...(dev ? { device_name: dev.device.name } : {}) };
   }
   const h = hub.latestHandover(row.id);
   const doc = h || runRow ? hub.handoverDoc(row.id) : null;
@@ -136,6 +137,7 @@ export function cardView(hub, row, viewerId) {
     queue: row.run_state === 'queued' ? (() => { const online = hub.runnerOnline(row.id); return { runner_online: online, offline_age_ms: online ? null : stateAge }; })() : null,
     run: runRow ? {
       id: runRow.id, backend: runRow.backend, device_name: hub.device(runRow.device_id)?.name ?? null,
+      ai: aiOfDispatch(runRow), ai_label: AI_LABELS[aiOfDispatch(runRow)], budget_usd: runRow.budget_cents == null ? null : runRow.budget_cents / 100,
       owner: person(hub, runRow.on_behalf_of), dispatched_by: person(hub, runRow.dispatched_by),
     } : null,
     live: leaseView(hub, row),

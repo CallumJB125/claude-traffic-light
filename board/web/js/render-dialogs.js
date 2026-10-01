@@ -7,6 +7,7 @@ import { formatAge } from './view.js';
 import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
+import { tackleChoices, readinessText } from './tackle.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -52,16 +53,21 @@ export function giveDialog(dlg, model) {
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
   const busy = dlg.busy;
-  const title = dlg.mode === 'redispatch' ? `Give ${view.key} back to Claude` : `Give ${view.key} to Claude`;
+  const title = `Tackle ${view.key} with AI`;
+  const providers = tackleChoices(dlg.preview?.runners);
+  const ai = providers.find((a) => a.id === dlg.ai) ?? providers.find((a) => a.id === 'codex');
+  const uncapped = ai.budget === 'none' || dlg.budget_mode === 'none';
+  const noBudgetAllowed = isMe || dlg.preview?.can_use_no_budget === true;
+  const waiting = !!dlg.preview?.loading;
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
     h('fieldset', { class: 'field runner-pick' },
-      h('legend', null, 'Whose Claude runs it'),
+      h('legend', null, 'Whose machine runs it'),
       members.map((m) => h('label', { key: m.member_id, class: `runner-opt${target === m.member_id ? ' is-picked' : ''}` },
         h('input', { type: 'radio', name: 'target', value: m.member_id, checked: target === m.member_id, 'data-change': 'give-target' }),
-        h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your Claude' : `${m.name}'s Claude`),
-        h('span', { class: 'runner-note' }, m.member_id === meId ? 'Starts right away' : `${m.name} confirms on their machine first`)))),
+        h('span', { class: 'runner-name' }, m.member_id === meId ? 'Your machine' : `${m.name}'s machine`),
+        h('span', { class: 'runner-note' }, m.member_id === meId ? 'Uses your signed-in AI account' : `${m.name} confirms on their machine first`)))),
     h('div', { class: 'field-row' },
       field('give-repo', 'Repo',
         h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo' },
@@ -69,26 +75,33 @@ export function giveDialog(dlg, model) {
           repos.map((r) => h('option', { key: r.id, value: r.id, selected: dlg.repo_id === r.id }, r.short_name ?? r.canonical_url)))),
       field('give-ref', 'Base branch',
         h('input', { id: 'give-ref', name: 'base_ref', class: 'input num', value: dlg.base_ref ?? '', placeholder: 'main', autocomplete: 'off', spellcheck: 'false' }))),
+    field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
+      providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
+      !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
     h('div', { class: 'field-row' },
-      field('give-budget', 'Budget (USD)',
-        h('input', { id: 'give-budget', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', step: '0.5', value: dlg.budget_usd ?? '', inputmode: 'decimal' }),
-        'The run stops when it reaches this. Soft by one API call.'),
+      ai.budget === 'none'
+        ? h('div', { class: 'field' }, h('p', null, `Dollar and turn caps are unavailable for ${ai.label}.`), h('p', { class: 'hint' }, noBudgetAllowed ? 'Uses the machine owner’s account without a dollar cap. Usage follows their provider plan.' : 'Only the machine owner or a team admin can assign uncapped work.'))
+        : h('fieldset', { class: 'field' }, h('legend', null, 'Budget'),
+          h('label', { class: 'check' }, h('input', { type: 'radio', name: 'budget_mode', value: 'cap', checked: !uncapped, 'data-change': 'give-budget-mode' }), 'Card budget'),
+          h('input', { id: 'give-budget', 'aria-label': 'Card budget in USD', name: 'budget_usd', class: 'input num', type: 'number', min: '0.5', max: '1000', step: '0.5', value: dlg.budget_usd ?? '', disabled: uncapped || null, inputmode: 'decimal', 'data-change': 'give-budget' }),
+          h('label', { class: 'check' }, h('input', { type: 'radio', name: 'budget_mode', value: 'none', checked: uncapped, disabled: !noBudgetAllowed || null, 'data-change': 'give-budget-mode' }), 'No budget'),
+          h('p', { class: 'hint' }, noBudgetAllowed ? 'Counts spend across runs on this card. Claude Code stops at the remaining cap; one step can exceed it. The machine’s own limit still applies.' : 'A budget is required on a teammate’s machine.')),
       h('div', { class: 'field field-check' },
         h('label', { class: 'check' },
           h('input', { type: 'checkbox', name: 'plan_approval', checked: !!dlg.plan_approval }),
           'Ask me to approve the plan first'),
-        h('p', { class: 'hint' }, 'Claude writes a plan and waits for a yes before editing.'))),
+        h('p', { class: 'hint' }, 'The agent writes a plan and waits for approval before editing.'))),
     overlapWarning(dlg.preview, isMe ? null : targetMember?.name),
     h('div', { class: 'sponsor-box', id: 'give-sponsor' },
       pixelClaude({ lamps: { green: true }, cls: 'sponsor-mark' }),
       h('div', null,
-        h('p', { class: 'sponsor-line' }, dlg.preview?.sponsor ?? (isMe ? 'Runs on your machine · your claude account' : `Runs on ${targetMember?.name}'s machine · ${targetMember?.name}'s claude account`)),
+        h('p', { class: 'sponsor-line' }, isMe ? `Runs on your machine · your ${ai.label} account` : `Runs on ${targetMember?.name}'s machine · their ${ai.label} account`),
         h('p', { class: 'hint' }, isMe ? 'Usage comes out of your own plan.' : `This spends ${targetMember?.name}'s plan, so ${targetMember?.name} must confirm before it starts.`))),
     errorLine(dlg),
     h('div', { class: 'modal-foot' },
       h('button', { type: 'button', class: 'btn', 'data-action': 'close-dialog' }, 'Cancel'),
-      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
-        busy ? 'Giving…' : isMe ? 'Give to Claude' : `Ask ${targetMember?.name}'s Claude`))), { wide: true });
+      h('button', { type: 'submit', class: 'btn btn-claude', disabled: busy || waiting || !ai.available || (uncapped && !noBudgetAllowed) || null, 'aria-busy': busy ? 'true' : null, 'aria-describedby': 'give-sponsor' },
+        busy ? 'Queuing…' : isMe ? 'Tackle with AI' : `Ask ${targetMember?.name}`))), { wide: true });
 }
 
 const CONFIRM = {

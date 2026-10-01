@@ -19,6 +19,7 @@ import { applyPatch, mergeHandover, renderMarkdown, syncAges, handoffMemoryText 
 import { computeOverlaps, overlapsFor, teamContextBlock, overlapDelta, kindOf } from '../shared/overlap.js';
 import { applyRestoreBump } from '../shared/migrate.js';
 import { FEED_KINDS, WS_CLOSE } from '../shared/protocol.js';
+import { aiOfDispatch, acceptsAi } from '../shared/ai.js';
 import { HubError, json } from './db.js';
 import { mintRunToken } from './auth.js';
 import { noGitHub, prBound, prNumberOf } from './github.js';
@@ -408,7 +409,8 @@ export class Hub extends EventEmitter {
         this.db.run("UPDATE dispatches SET state = 'superseded' WHERE card_id = ? AND state = 'pending'", cardId);
         this.db.insert('dispatches', {
           request_id: e.request_id, card_id: cardId, dispatched_by: actor, target_member_id: e.target_member_id,
-          backend: event.backend ?? 'claude_cli', needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
+          backend: event.backend ?? 'claude_cli', ai: event.ai ?? null, budget_mode: event.budget_mode ?? null, budget_cents: event.budget_cents ?? null,
+          needs_confirm: e.needs_confirm ? 1 : 0, seed: '{}', state: 'pending', created_at: now,
         });
         break;
       }
@@ -438,6 +440,11 @@ export class Hub extends EventEmitter {
         const runId = env.runId;
         if (!runId) break;
         this.db.run('UPDATE runs SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL', now, e.reason, runId);
+        if (e.reason === 'failed:budget') {
+          const scope = event.budget_scope === 'device' ? 'device' : 'card';
+          this.db.run('UPDATE runs SET terminal_reason = ? WHERE id = ?', scope === 'device' ? 'budget_device' : 'budget', runId);
+          this.journal({ board_id: row.board_id, card_id: cardId, run_id: runId, actor_kind: 'runner', actor_id: env.device?.id ?? null, kind: 'run.budget', payload: { scope, spent_cents: this.cardSpentCents(cardId), cap_cents: row.budget_cents, offered_cents: this.run(runId).budget_cents } });
+        }
         this.db.run("UPDATE asks SET state = 'cancelled' WHERE run_id = ? AND state = 'open' AND ? != 'parked'", runId, e.reason);
         this.db.run("UPDATE permission_requests SET state = ? WHERE run_id = ? AND state = 'open'", e.reason === 'parked' ? 'parked' : 'cancelled', runId);
         this.live.delete(runId);
@@ -532,11 +539,12 @@ export class Hub extends EventEmitter {
     this.db.insert('runs', {
       id, card_id: row.id, fence, device_id: device.id, on_behalf_of: device.member_id, dispatched_by: d.dispatched_by,
       dispatch_request_id: d.request_id, backend: d.backend, repo_id: row.repo_id, base_ref: row.base_ref ?? repo.default_branch,
+      ai: aiOfDispatch(d), budget_cents: this.remainingBudgetCents(row, d),
       branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), started_at: this.iso(),
       seeded_from_handover: seed.handover_version ?? null,
     });
     this.db.run("UPDATE dispatches SET state = 'claimed', run_id = ? WHERE request_id = ?", id, d.request_id);
-    this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id } });
+    this.journal({ board_id: row.board_id, card_id: row.id, run_id: id, actor_kind: 'runner', actor_id: device.id, kind: 'run.create', payload: { fence, device_id: device.id, branch: branchName(row.key, fence), snapshot_ref: snapshotRef(row.key, fence), dispatch_request_id: d.request_id, ai: aiOfDispatch(d), budget_cents: this.run(id).budget_cents } });
     this.db.run('UPDATE cards SET active_run_id = ? WHERE id = ?', id, row.id);
     env.newRunId = id;
     env.runId = id;
@@ -552,7 +560,8 @@ export class Hub extends EventEmitter {
     if (!last) return;
     this.db.insert('dispatches', {
       request_id: randomUUID(), card_id: cardId, dispatched_by: last.dispatched_by, target_member_id: last.target_member_id,
-      backend: last.backend, needs_confirm: last.needs_confirm, seed: '{}', state: 'pending', created_at: this.iso(),
+      backend: last.backend, ai: last.ai, budget_mode: last.budget_mode, budget_cents: last.budget_cents,
+      needs_confirm: last.needs_confirm, seed: '{}', state: 'pending', created_at: this.iso(),
     });
   }
 
@@ -712,7 +721,16 @@ export class Hub extends EventEmitter {
     const d = this.pendingDispatch(cardId);
     if (!row || !d) return [];
     const target = this.dispatchTarget(d);
-    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id));
+    const remaining = this.remainingBudgetCents(row, d);
+    if (remaining != null && remaining < 50) return [];
+    return [...this.runners.values()].filter((c) => c.ready && c.member_id === target && c.repos.has(row.repo_id) && acceptsAi(c, aiOfDispatch(d), remaining == null ? null : remaining / 100));
+  }
+
+  remainingBudgetCents(row, dispatch) {
+    if (dispatch?.budget_mode === 'none') return null;
+    const settings = this.boardSettings(row.board_id);
+    const cap = row.budget_cents ?? (settings.default_budget_usd != null ? Math.round(settings.default_budget_usd * 100) : null);
+    return cap == null ? null : Math.max(0, cap - this.cardSpentCents(row.id));
   }
 
   offerFrame(cardId) {
@@ -736,12 +754,15 @@ export class Hub extends EventEmitter {
     }
     const comments = this.db.all("SELECT id, author_member_id, body, created_at FROM comments WHERE card_id = ? AND for_agent = 1 AND trusted = 1 AND delivered_at IS NULL AND source != 'agent' ORDER BY created_at", cardId);
     if (comments.length) out.comments = comments.map((c) => ({ comment_id: c.id, author_name: this.memberName(c.author_member_id), body: c.body, created_age_ms: this.ageOf(c.created_at) }));
-    const budgetCents = row.budget_cents ?? (settings.default_budget_usd != null ? Math.round(settings.default_budget_usd * 100) : null);
+    const budgetCents = this.remainingBudgetCents(row, d);
+    if (budgetCents != null && budgetCents < 50) return null;
     return {
       type: 'offer', card_id: row.id, key: row.key, title: row.title, body: row.body, repo_id: row.repo_id,
       base_ref: row.base_ref ?? this.repo(row.repo_id)?.default_branch ?? 'main', fence: row.fence, request_id: d.request_id,
       dispatched_by: { member_id: d.dispatched_by, name: this.memberName(d.dispatched_by) }, needs_confirm: !!d.needs_confirm,
-      labels, budget_usd: budgetCents == null ? null : budgetCents / 100, max_turns: settings.default_max_turns ?? null,
+      labels, ...(aiOfDispatch(d) === 'claude' ? {} : { ai: aiOfDispatch(d) }),
+      budget_mode: d.budget_mode ?? null, budget_usd: budgetCents == null ? null : budgetCents / 100,
+      max_turns: aiOfDispatch(d) === 'codex' ? null : settings.default_max_turns ?? null,
       require_plan_approval: labels.includes(PLAN_APPROVAL_LABEL), seed: out,
     };
   }

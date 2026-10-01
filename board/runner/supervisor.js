@@ -244,7 +244,7 @@ export class Supervisor extends EventEmitter {
   }
 
   #aiFrame() {
-    return this.ais ? { ai: this.ais.map(({ id, label, installed, version, signedIn, capabilities }) => ({ id, label, installed, version, signedIn, capabilities })) } : {};
+    return this.ais ? { ai: this.ais.map(({ id, label, installed, version, signedIn, startable, capabilities }) => ({ id, label, installed, version, signedIn, startable: startable !== false, capabilities })) } : this.opts.enabledAis ? { ai: [] } : {};
   }
 
   /** Claude stays as before (the configured bin); another AI needs a startable backend that is installed and not signed out. */

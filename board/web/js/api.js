@@ -84,7 +84,10 @@ export const api = {
   action: (id, action, body) => mut('POST', `/api/cards/${enc(id)}/actions/${enc(action)}`, body),
   answerPermission: (id, decision, scope) => mut('POST', `/api/permission-requests/${enc(id)}/answer`, { decision, ...(scope ? { scope } : {}) }),
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),
-  overlapPreview: (id, target) => call('GET', `/api/cards/${enc(id)}/overlap-preview${target ? `?target_member_id=${enc(target)}` : ''}`),
+  overlapPreview: (id, target, repo) => {
+    const q = new URLSearchParams(); if (target) q.set('target_member_id', target); if (repo) q.set('repo_id', repo);
+    return call('GET', `/api/cards/${enc(id)}/overlap-preview${q.size ? `?${q}` : ''}`);
+  },
   repos: () => call('GET', '/api/repos'),
   // Integrations (team-level; admins connect, configure and disconnect).
   integrations: () => call('GET', '/api/integrations'),

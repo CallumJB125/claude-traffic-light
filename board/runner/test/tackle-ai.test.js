@@ -51,12 +51,12 @@ async function withRunner(scenario, fn, { repoPolicy } = {}) {
   }
 }
 
-test('hello and advertise carry ai:[{id,label,installed,version,signedIn,capabilities}] and no paths', () => withRunner(null, async ({ hub }) => {
+test('hello and advertise carry provider readiness and capabilities without paths', () => withRunner(null, async ({ hub }) => {
   const hello = await waitFor(() => hub.of('hello')[0], { what: 'hello' });
   const adv = await waitFor(() => hub.of('advertise')[0], { what: 'advertise' });
   for (const f of [hello, adv]) {
     assert.deepEqual(f.ai.map((a) => a.id), ['claude', 'codex']);
-    for (const a of f.ai) assert.deepEqual(Object.keys(a).sort(), ['capabilities', 'id', 'installed', 'label', 'signedIn', 'version']);
+    for (const a of f.ai) assert.deepEqual(Object.keys(a).sort(), ['capabilities', 'id', 'installed', 'label', 'signedIn', 'startable', 'version']);
   }
   assert.ok(!hub.raw.some((s) => s.includes('/opt/homebrew') || s.includes('/Users/someone')), 'no bin path on the wire');
 }));

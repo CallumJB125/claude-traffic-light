@@ -1,5 +1,37 @@
 # Board contract (protocol v1)
 
+Provider dispatch extension (migration034): `dispatch`, `retry` and
+`take_over_with_claude` accept closed `ai` values `claude`/`codex`, deriving
+the corresponding backend. Omitted provider preserves older callers;
+Codex requires explicit `budget_usd:null` because it has no native dollar
+or turn cap. The legacy `default_max_turns` setting applies to Claude Code.
+Uncapped teammate work requires the runner owner or a team admin.
+`budget_mode` distinguishes explicit no cap from an omitted legacy default.
+A finite cap is card-wide; each offer receives only the remaining spend.
+Caps range from $0.50 to $1,000, with a configured board maximum for members.
+After spend, only the dispatcher, runner owner or admin can raise/clear it.
+An exhausted card does not re-offer work; device limits cannot be cleared
+by raising a card cap. `run.budget` records the stopped cap and its scope.
+
+Runner `hello`/`advertise` can include up to eight unique closed providers,
+bounded labels/versions, `installed`, `signedIn`, `startable` and budget/
+resume capabilities. Absent capability data preserves legacy Claude
+runners; an explicit empty list advertises no execution provider. Offers
+and claims both require current compatible capabilities and fresh device
+authority. Paid dispatch retries use their durable choice-bound records,
+with live credentials/membership checked after the body and board queue.
+The overlap preview exposes online readiness for the selected board repo,
+never CLI paths or authentication files. Board views identify the chosen AI.
+
+Local Codex desktop chats connect through Plexiform Settings → Native board
+connections → Codex desktop app and CLI → selected team/boards/access →
+Connect boards. Open a new Codex chat and use `/mcp` to inspect
+`plexiform-board`; Codex MCP settings can restart the connection. Keep
+Plexiform open and signed in. Selected-board grants are revocable and
+account-bound; the external config contains only the local launcher and
+private grant-file location. Native collaboration tools do not themselves
+launch an agent or approve completed work.
+
 Status: **LAW** for the four Phase 1 builders (hub, runner, web, board-mcp). 2026-09-30.
 
 Sources, in precedence order:

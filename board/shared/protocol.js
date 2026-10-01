@@ -4,6 +4,8 @@
 //
 // Browser-safe, dependency-free.
 
+import { AI_IDS, aiListError } from './ai.js';
+export { AI_IDS, AI_LABELS, BUDGET_MAX_USD } from './ai.js';
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_HEADER = 'Board-Protocol';
 
@@ -210,8 +212,8 @@ export const SHAPES = Object.freeze({
   },
   // runner → hub
   'runner→hub': {
-    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?' },
-    advertise: { repos: 'array' },
+    hello: { protocol: 'int', device_id: 'string', runner_version: 'string', outbox_head_seq: 'int', runs: 'array', form_factor: 'string?', outbox_id: 'string?', outbox_acked_seq: 'int?', ai: 'array?' },
+    advertise: { repos: 'array', ai: 'array?' },
     claim: { id: 'string', card_id: 'string', request_id: 'string', expected_fence: 'int' },
     decline: { card_id: 'string', request_id: 'string', reason: 'string?' },
     hb: { seq_hb: 'int', mono_ms: 'int', wall_ms: 'int', slept_ms: 'int', runs: 'array' },
@@ -313,6 +315,11 @@ export function validate(channel, msg) {
   if (!msg || typeof msg.type !== 'string' || !(msg.type in table)) return { code: 'VALIDATION', message: `unknown type ${msg?.type}` };
   const e = checkShape(table[msg.type], msg);
   if (e) return e;
+  if (channel === 'runner→hub' && ['hello', 'advertise'].includes(msg.type) && Object.hasOwn(msg, 'ai')) {
+    const error = aiListError(msg.ai);
+    if (error) return { code: 'VALIDATION', message: error };
+  }
+  if (channel === 'hub→runner' && msg.type === 'offer' && msg.ai != null && !AI_IDS.includes(msg.ai)) return { code: 'VALIDATION', message: 'unknown offer AI' };
   if (channel === 'runner→hub' && msg.type === 'presence') {
     if (msg.sessions.length > PRESENCE_MAX_SESSIONS) return { code: 'VALIDATION', message: `presence: over ${PRESENCE_MAX_SESSIONS} sessions` };
     for (const s of msg.sessions) {

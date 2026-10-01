@@ -116,11 +116,11 @@ test('dialog: rows are click targets, the footer teaches ⌘↵, and the give st
   const rows = byAttr(v, 'data-action', 'palette-run');
   assert.ok(rows.length > 3);
   assert.equal(rows[0].props['data-index'], '0');
-  assert.match(textOf(byClass(v, 'pal-foot')[0]), /give card to Claude/);
+  assert.match(textOf(byClass(v, 'pal-foot')[0]), /tackle card with AI/);
   const g = paletteDialog(dlg({ scope: 'give' }), modelFor());
-  assert.match(g.props['aria-label'], /Give a card to Claude/);
+  assert.match(g.props['aria-label'], /Tackle a card with AI/);
   assert.doesNotMatch(textOf(byClass(g, 'pal-foot')[0]), /give card/);
-  assert.match(textOf(paletteDialog(dlg({ scope: 'give', query: 'zzz' }), modelFor())), /No card can be given to Claude right now/);
+  assert.match(textOf(paletteDialog(dlg({ scope: 'give', query: 'zzz' }), modelFor())), /No card can be assigned to an AI right now/);
 });
 
 test('render-dialogs routes the palette kind', () => {

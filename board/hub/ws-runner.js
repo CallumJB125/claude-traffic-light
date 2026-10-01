@@ -12,6 +12,7 @@ import { bearer, sha256hex } from './auth.js';
 import { handleRpc, relPath } from './rpc.js';
 import { BAD_RUNNER_TOKEN, isRunnerToken } from './identity/enrolments.js';
 import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
+import { runnerAis, aiOfDispatch, acceptsAi } from '../shared/ai.js';
 
 const clip = (s, n) => {
   const t = String(s ?? '');
@@ -185,6 +186,7 @@ export class RunnerConn {
     const old = hub.runners.get(this.device_id);
     if (old && old !== this) old.close(WS_CLOSE.REPLACED, 'replaced by a newer connection');
     hub.runners.set(this.device_id, this);
+    this.ai = runnerAis(msg.ai);
     this.syncOutbox(msg);
     this.outSeen = false;
     this.repos = new Map(hub.db.all('SELECT repo_id FROM runner_repos WHERE device_id = ?', this.device_id).map((r) => [r.repo_id, { approvals_from: [], auto_accept_from: [] }]));
@@ -276,6 +278,7 @@ export class RunnerConn {
       for (const repoId of next.keys()) hub.db.insert('runner_repos', { device_id: this.device_id, repo_id: repoId, advertised_at: hub.iso() });
     });
     this.repos = next;
+    if (Object.hasOwn(msg, 'ai')) this.ai = runnerAis(msg.ai);
     hub.sendOffersForDevice(this.device_id);
   }
 
@@ -294,6 +297,9 @@ export class RunnerConn {
     const row0 = this.ownCard(msg.card_id);
     if (!row0) return lost();
     await hub.withBoard(row0.board_id, () => {
+      const device = hub.device(this.device_id);
+      const enrollment = this.enrollmentId && hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', this.enrollmentId);
+      if (this.closed || !this.ready || hub.runners.get(this.device_id) !== this || !device || device.revoked_at || !hub.activeMember(device.member_id) || (this.enrollmentId && hub.enrolments.problem(enrollment))) return lost('POLICY_DENIED', 'this runner is no longer authorized');
       const row = hub.card(msg.card_id);
       const prior = hub.db.get('SELECT * FROM dispatches WHERE request_id = ? AND card_id = ?', msg.request_id, row.id);
       if (prior?.state === 'claimed' && prior.run_id) {
@@ -304,6 +310,8 @@ export class RunnerConn {
       const d = hub.pendingDispatch(row.id);
       if (!d || d.request_id !== msg.request_id) return lost();
       if (hub.dispatchTarget(d) !== this.member_id) return lost('POLICY_DENIED', 'this dispatch is for another member');
+      const frame = hub.offerFrame(row.id);
+      if (!frame || !acceptsAi(this, aiOfDispatch(d), frame.budget_usd)) return lost('POLICY_DENIED', 'this device cannot run the selected AI and budget');
       const ctx = {
         repo_advertised: !!hub.db.get('SELECT 1 AS x FROM runner_repos WHERE device_id = ? AND repo_id = ?', this.device_id, row.repo_id),
         runner_accepts: true,
@@ -489,7 +497,7 @@ export class RunnerConn {
         break;
       case 'run.failed':
         rec('run.failed', { fail_kind: m.fail_kind, ...(Number.isSafeInteger(m.resets_in_ms) && m.resets_in_ms >= 0 ? { resets_in_ms: m.resets_in_ms } : {}) });
-        stepOr({ type: 'run_failed', fail_kind: m.fail_kind, reason: m.reason == null ? null : clip(m.reason, 500) });
+        stepOr({ type: 'run_failed', fail_kind: m.fail_kind, reason: m.reason == null ? null : clip(m.reason, 500), budget_scope: m.budget_scope === 'device' ? 'device' : 'card' });
         break;
       case 'prep.failed':
         rec('prep.failed', { cause: clip(m.cause, 500) });

@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
   workspace.addEventListener('change', boards);
   const action = (fn) => async () => {
     busy = true; buttons();
-    try { const r = await fn(); message(r.error ?? r.warning ?? (r.restartNeeded ? 'Connected. Open a new session in your AI app, or use its Restart option to load the board tools.' : 'Connection removed. This app no longer has board access.')); await refresh(); }
+    try { const r = await fn(); message(r.error ?? r.warning ?? (r.restartNeeded ? app.value === 'codex' ? 'Connected. Open a new chat in Codex. Type /mcp to check that plexiform-board is available; use Restart in Codex MCP settings if needed.' : 'Connected. Open a new session in your AI app, or use its Restart option to load the board tools.' : 'Connection removed. This app no longer has board access.')); await refresh(); }
     catch { message('The connection could not be updated. Try again.'); }
     finally { busy = false; buttons(); }
   };
