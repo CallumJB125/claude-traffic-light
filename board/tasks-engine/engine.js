@@ -15,7 +15,7 @@ import { validate } from '../tasks-api/validate.js';
 import { MessageStore, cleanBody, messageId } from '../tasks-api/mesh.js';
 import {
   TASKS_PROTOCOL_VERSION, RING_EVENTS, REQUEST_CACHE_MS, ACT_CACHE_MS, REMOTE_SOURCES, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
-  AIS, CAPABILITIES,
+  AIS, CAPABILITIES, LOCAL_SOURCES,
 } from '../tasks-api/protocol.js';
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath } from '../shared/scope.js';
@@ -26,7 +26,7 @@ import { startIpcServer } from '../runner/ipc.js';
 import { confine, globBase, realish } from '../runner/paths.js';
 import { checkGitPush } from '../runner/run.js';
 import { runAllowKey } from '../runner/policy.js';
-import { git } from '../runner/git.js';
+import { makeGit, resolveGit } from './git.js';
 import { lstartOf, sameProcess, killTree, commandLines } from '../runner/procs.js';
 import { ensureDir, writeJsonAtomic, writeFileAtomic, clip, RUNNER_VERSION } from '../runner/util.js';
 
@@ -56,8 +56,14 @@ const MAX_TOUCHED = 500;
 const ADDITIONAL_CONTEXT_MAX = 9000;
 const DETECT_EVERY_MS = 24 * 60 * 60 * 1000;
 const RING_MAX_BYTES = 64 * 1024 * 1024;   // the in-memory replay ring is capped by bytes too (older seqs → reset gap)
-// Engine git calls never run repo hooks or an fsmonitor.
-const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+// Folders a local in-place task may never use: $HOME itself, anything above
+// it, and dot-dirs or Library directly under it (~/.ssh, ~/.claude,
+// ~/.local/bin, ~/Library/LaunchAgents…).
+const PROTECTED_IN_PLACE = /^(?:\.|Library$)/;
+// In-place tasks: paths the agent's file tools never touch.
+const PROTECTED_SEGMENTS = new Set(['.git', '.claude']);
+const PROTECTED_NAMES = new Set(['.mcp.json', 'CLAUDE.md', 'AGENTS.md']);
+const PLAN_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 
 export class ApiError extends Error {
   constructor(code, message, details) { super(message); this.code = code; this.details = details; }
@@ -110,6 +116,8 @@ export class TasksEngine extends EventEmitter {
     this.ramGb = ramGb;
     this.limits = { maxParallel: opts.maxParallel ?? defaultMaxParallel(ramGb), maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
     this.messages = new MessageStore(path.join(this.dataDir, 'mesh'));
+    const gitBin = resolveGit(this.env);
+    this.git = gitBin ? makeGit(gitBin, this.env) : () => Promise.reject(Object.assign(new Error('no git'), { code: 'NO_GIT' }));
   }
 
   async init() {
@@ -388,9 +396,13 @@ export class TasksEngine extends EventEmitter {
     if (cwd === data || cwd.startsWith(`${data}${path.sep}`) || data.startsWith(`${cwd}${path.sep}`)) throw new ApiError('VALIDATION', "cwd can't contain or be inside Plexiform's own data folder");
 
     const id = `tsk_${hex(6)}`;
-    const top = await git(cwd, [...SAFE_GIT, 'rev-parse', '--show-toplevel']).then((s) => fs.realpathSync(s.trim()), () => null);
+    const top = await this.git(cwd, ['rev-parse', '--show-toplevel']).then((s) => fs.realpathSync(s.trim()), () => null);
     // A remote sender never gets the user's own checkout: remote tasks in a repo always get a worktree.
-    const workInPlace = !top || (!!spec.workInPlace && !remote);
+    // Only the user on this machine may work in place; every other origin needs a repo and gets a worktree.
+    const local = LOCAL_SOURCES.includes(source);
+    if (!top && !local) throw new ApiError('POLICY_DENIED', `tasks from ${source} need a git repo`);
+    const workInPlace = !top || (!!spec.workInPlace && local);
+    if (workInPlace && this.#protectedFolder(top ?? cwd)) throw new ApiError('POLICY_DENIED', "this folder can't be used for a task in place");
     const root = top ?? cwd;
     let worktree = root;
     let branch = null;
@@ -398,9 +410,9 @@ export class TasksEngine extends EventEmitter {
     let baseBranch = spec.baseBranch ?? null;
     if (top) {
       const ref = spec.baseBranch ?? 'HEAD';
-      baseSha = await git(top, [...SAFE_GIT, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]).then((s) => s.trim(), () => null);
+      baseSha = await this.git(top, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]).then((s) => s.trim(), () => null);
       if (!baseSha) throw new ApiError('VALIDATION', spec.baseBranch ? 'baseBranch not found in this repo' : 'the repo has no commits yet');
-      if (!baseBranch) baseBranch = await git(top, [...SAFE_GIT, 'rev-parse', '--abbrev-ref', 'HEAD']).then((s) => s.trim(), () => 'HEAD');
+      if (!baseBranch) baseBranch = await this.git(top, ['rev-parse', '--abbrev-ref', 'HEAD']).then((s) => s.trim(), () => 'HEAD');
     }
     if (workInPlace) {
       const busy = [...this.tasks.values()].some((t) => t.workInPlace && t.worktree === root && !['done', 'failed'].includes(t.state));
@@ -436,7 +448,7 @@ export class TasksEngine extends EventEmitter {
     this.#setState(task, 'queued');
     if (task.awaitingConfirm) {
       const approvalId = `start_${id}`;
-      const inputSummary = clip(`${spec.sourceMeta?.displayName ?? source} wants to run: ${spec.text}`, 160);
+      const inputSummary = clip(`${spec.sourceMeta?.displayName ?? source} wants to run in ${root}: ${spec.text}`, 400);
       task.openApprovals.push({ approvalId, tool: 'StartTask', inputSummary, at: now });
       this.#emit(task, 'approval', { approvalId, phase: 'requested', tool: 'StartTask', inputSummary, decision: null, scope: null, answeredBy: null });
       this.#setState(task, 'queued');
@@ -444,6 +456,14 @@ export class TasksEngine extends EventEmitter {
       this.#schedule();
     }
     return id;
+  }
+
+  #protectedFolder(dir) {
+    let home;
+    try { home = fs.realpathSync(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
+    if (dir === '/' || dir === home || home.startsWith(`${dir}${path.sep}`)) return true;
+    if (!dir.startsWith(`${home}${path.sep}`)) return false;
+    return PROTECTED_IN_PLACE.test(path.relative(home, dir).split(path.sep)[0]);
   }
 
   // §9.3: the user's words go in only inside the untrusted envelope.
@@ -516,6 +536,7 @@ export class TasksEngine extends EventEmitter {
       if (e.code === 'WORKTREE_MISSING') this.#emit(task, 'error', { code: 'NOT_FOUND', message: 'worktree deleted', fatal: true });
       const why = e.code === 'NOT_AVAILABLE' ? 'this AI is not available yet'
         : e.code === 'SOCKET_PATH_TOO_LONG' ? "the data folder path is too long for the run's socket"
+          : e.code === 'REPO_CONFIG' ? "the repo's own git config defines filters or includes, which could run code; not started"
           : e.code === 'WORKTREE_MISSING' ? 'the worktree was deleted' : 'the task could not start';
       this.#failTask(task, 'error', why);
     }
@@ -528,11 +549,15 @@ export class TasksEngine extends EventEmitter {
       if (!ok) throw Object.assign(new Error('worktree missing'), { code: 'WORKTREE_MISSING' });
       return;
     }
-    await git(task.repo.root, [...SAFE_GIT, 'worktree', 'add', '--quiet', '-b', task.branch, task.worktree, task.baseSha]);
+    // A repo whose own config defines filters or includes could run code on checkout: refuse it.
+    const risky = await this.git(task.repo.root, ['config', '--local', '--name-only', '--get-regexp', '^(filter|include|includeif)\\.']).then((o) => o.trim(), () => '');
+    if (risky) throw Object.assign(new Error('repo config defines filters or includes'), { code: 'REPO_CONFIG' });
+    await this.git(task.repo.root, ['worktree', 'add', '--quiet', '--no-checkout', '-b', task.branch, task.worktree, task.baseSha]);
     task.worktree = fs.realpathSync(task.worktree);
     // Recorded before the agent runs: later git calls on this worktree name it
     // explicitly, so a .git file the agent rewrites can't redirect them.
-    task.gitDir = (await git(task.worktree, [...SAFE_GIT, 'rev-parse', '--absolute-git-dir'])).trim();
+    task.gitDir = (await this.git(task.worktree, ['rev-parse', '--absolute-git-dir'])).trim();
+    await this.git(task.worktree, ['--git-dir', task.gitDir, '--work-tree', task.worktree, 'reset', '--hard', '--quiet', task.baseSha]);
     task.worktreeCreated = true;
     this.#save(task);
   }
@@ -550,7 +575,10 @@ export class TasksEngine extends EventEmitter {
     ensureDir(path.join(runDir, 'shell'));
     const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
-    writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({ worktree: task.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)] }));
+    writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
+      worktree: task.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
+      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel,
+    }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
     writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
   }
@@ -763,7 +791,7 @@ export class TasksEngine extends EventEmitter {
   async #diff(task) {
     const empty = { files: task.touched.length, added: 0, removed: 0, commits: 0 };
     if (task.workInPlace || !task.gitDir || !task.baseSha) return empty;
-    const g = (args) => git(task.worktree, ['--git-dir', task.gitDir, '--work-tree', task.worktree, ...SAFE_GIT, ...args], { timeoutMs: 30000 });
+    const g = (args) => this.git(task.worktree, ['--git-dir', task.gitDir, '--work-tree', task.worktree, ...args], { timeoutMs: 30000 });
     try {
       const num = await g(['diff', '--numstat', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', task.baseSha]);
       const ns = await g(['diff', '--name-status', '--no-ext-diff', '--no-color', '--no-renames', task.baseSha]);
@@ -913,6 +941,8 @@ export class TasksEngine extends EventEmitter {
       case 'pre': {
         if (!ok) return deny('this task is not running');
         const name = String(payload.tool_name ?? '');
+        // Plan first: nothing but reading until the user approves the plan, whatever mode the CLI is in.
+        if (task.planFirst && !task.planApproved && !driving && !PLAN_TOOLS.has(name)) return deny('plan first: only Read, Glob and Grep until the user approves your plan; end your turn with the plan');
         const input = payload.tool_input && typeof payload.tool_input === 'object' ? payload.tool_input : {};
         const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : task.worktree;
         if (FILE_TOOLS.has(name)) {
@@ -924,7 +954,14 @@ export class TasksEngine extends EventEmitter {
             if (name === 'Glob' && input.pattern != null) cands.push(globBase(input.pattern));
             if (name === 'Grep' && input.glob != null && /^[/~]|\.\./.test(input.glob)) cands.push(globBase(input.glob));
           }
-          for (const p of cands) if (!confine(String(p), { cwd, rootReal: task.worktree }).ok) return deny(`${name} outside this task's folder is not allowed`);
+          for (const p of cands) {
+            const c = confine(String(p), { cwd, rootReal: task.worktree });
+            if (!c.ok) return deny(`${name} outside this task's folder is not allowed`);
+            if (task.workInPlace) {
+              const segs = path.relative(task.worktree, c.resolved).split(path.sep);
+              if (segs.some((x) => PROTECTED_SEGMENTS.has(x)) || PROTECTED_NAMES.has(segs.at(-1))) return deny(`${name} on git, agent config or instruction files is not allowed in place`);
+            }
+          }
         }
         // Local tasks never push: the user reviews and merges from Plexiform.
         if (name === 'Bash' && checkGitPush(String(input.command ?? ''), '\u0000')) return deny('git push is not allowed in a local task');
@@ -1179,8 +1216,8 @@ export class TasksEngine extends EventEmitter {
     let real = null;
     try { real = fs.realpathSync(expected); } catch { /* already gone */ }
     if (real && real === task.worktree) fs.rmSync(real, { recursive: true, force: true });
-    await git(task.repo.root, [...SAFE_GIT, 'worktree', 'prune']).catch(() => {});
-    await git(task.repo.root, [...SAFE_GIT, 'branch', '-D', task.branch]).catch(() => {});
+    await this.git(task.repo.root, ['worktree', 'prune']).catch(() => {});
+    await this.git(task.repo.root, ['branch', '-D', task.branch]).catch(() => {});
   }
 
   #recordMessage(task, body) {

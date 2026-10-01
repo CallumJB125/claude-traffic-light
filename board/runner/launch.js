@@ -80,26 +80,38 @@ function hookCmd(node, event, electron) {
  * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
  * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
  */
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], electron = underElectron() }) {
+// Local task permission levels (TASKS-CONTRACT §10). No level = the board profile.
+//   edits: Edit/Write auto-allowed · bash: sandboxed Bash and the git rules auto-allowed
+const LEVELS = Object.freeze({
+  plan: { mode: 'plan', edits: false, bash: false },
+  ask: { mode: 'default', edits: false, bash: false },
+  'auto-edits': { mode: 'acceptEdits', edits: true, bash: false },
+  auto: { mode: 'acceptEdits', edits: true, bash: true },
+});
+const READ_ALLOW = Object.freeze(['Read', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
+
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron() }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
+  const lv = level ? LEVELS[level] ?? LEVELS.ask : null;
+  const bashAllow = [...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))];
   return {
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
     permissions: {
-      defaultMode: 'acceptEdits',
+      defaultMode: lv?.mode ?? 'acceptEdits',
       // The worktree root is a working directory by settings, not --add-dir:
       // settings-file directories grant file access only, while --add-dir
       // also loads plugins/marketplaces from the (agent-editable) worktree's
       // .claude/settings.json (docs/waiting-inputs.md).
       additionalDirectories: [worktree],
-      allow: [...TOOL_ALLOW, ...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))],
+      allow: lv ? [...(lv.edits ? TOOL_ALLOW : READ_ALLOW), ...(lv.bash ? bashAllow : [])] : [...TOOL_ALLOW, ...bashAllow],
     },
     sandbox: {
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: lv ? lv.bash : true,
       allowUnsandboxedCommands: false,
       filesystem: {
-        allowWrite: [worktree, tmpdir, ...CACHE_WRITE, ...(repo.allow_write_extra ?? [])].filter(Boolean),
+        allowWrite: [worktree, tmpdir, ...cacheWrite, ...(repo.allow_write_extra ?? [])].filter(Boolean),
         denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
       },
       network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
@@ -204,15 +216,30 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
 
 // Trusted repo instructions: CLAUDE.md + .claude/rules/*.md from the member's
 // own checkout (policy local_path), never from the agent-editable worktree.
+// Only regular files that really live inside the checkout: no symlink (file or
+// rules dir), opened O_NOFOLLOW, realpath checked against the checkout's.
 export function trustedInstructions(localPath, cap = 20000) {
   if (!localPath) return '';
+  let root;
+  try { root = fs.realpathSync(localPath); } catch { return ''; }
+  const inside = (p) => p.startsWith(`${root}${path.sep}`);
   const parts = [];
   const add = (f) => {
-    try { parts.push(`--- ${path.relative(localPath, f)} ---\n${fs.readFileSync(f, 'utf8')}`); } catch { /* absent */ }
+    let fd;
+    try {
+      const st = fs.lstatSync(f);
+      if (!st.isFile() || !inside(fs.realpathSync(f))) return;
+      fd = fs.openSync(f, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      if (!fs.fstatSync(fd).isFile()) return;
+      parts.push(`--- ${path.relative(localPath, f)} ---\n${fs.readFileSync(fd, 'utf8').slice(0, cap)}`);
+    } catch { /* absent or refused */ } finally { if (fd != null) fs.closeSync(fd); }
   };
   add(path.join(localPath, 'CLAUDE.md'));
   const rules = path.join(localPath, '.claude', 'rules');
-  try { for (const f of fs.readdirSync(rules).filter((n) => n.endsWith('.md')).sort()) add(path.join(rules, f)); } catch { /* none */ }
+  try {
+    const dirOk = [path.join(localPath, '.claude'), rules].every((d) => fs.lstatSync(d).isDirectory());
+    if (dirOk) for (const f of fs.readdirSync(rules).filter((n) => n.endsWith('.md')).sort()) add(path.join(rules, f));
+  } catch { /* none */ }
   const s = parts.join('\n\n');
   return s.length > cap ? s.slice(0, cap) : s;
 }

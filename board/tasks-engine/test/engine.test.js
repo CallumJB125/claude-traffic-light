@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startEngine, makeRepo, waitFor, fakeLog, alive, rm, tmpDir } from './helpers.js';
+import { startEngine, makeRepo, waitFor, fakeLog, alive, rm, tmpDir, ENV } from './helpers.js';
 import { validate } from '../../tasks-api/validate.js';
 import { SCHEMA } from '../../tasks-api/mock-server.js';
 
@@ -326,4 +326,107 @@ test('message in review requests changes on the same session', () => withEngine(
   assert.equal(msgs[0].source, 'live');
   const stdin = fakeLog(runDirOf(m, id)).filter((l) => l.ev === 'stdin').map((l) => l.msg.message?.content?.[0]?.text ?? '');
   assert.ok(stdin.some((t) => t.includes('Please also update the changelog') && /<untrusted_board_content_/.test(t)));
+}));
+
+// ── security review, group A ────────────────────────────────────────────────
+
+test('in place: non-local origins need a git repo; local in place refuses $HOME, its ancestors, dot-dirs and Library under it; the accept shows the folder', async () => {
+  const dir = tmpDir();
+  const home = path.join(dir, 'users', 'me');
+  for (const d of ['proj', '.config/x', '.ssh', 'Library/LaunchAgents', '.local/bin']) fs.mkdirSync(path.join(home, d), { recursive: true });
+  makeRepo(dir);
+  const m = await startEngine({ dir, engineOpts: { env: { ...ENV, HOME: home } }, scenario: { steps: [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 60000 }] } });
+  try {
+    for (const source of ['mcp', 'phone', 'slack', 'board', 'voice']) {
+      await assert.rejects(m.client.createTask({ text: 't', cwd: path.join(home, 'proj'), source }), (e) => e.code === 'POLICY_DENIED', source);
+    }
+    for (const bad of [home, path.join(dir, 'users'), path.join(home, '.config', 'x'), path.join(home, '.ssh'), path.join(home, 'Library', 'LaunchAgents'), path.join(home, '.local', 'bin')]) {
+      await assert.rejects(m.client.createTask({ text: 't', cwd: bad }), (e) => e.code === 'POLICY_DENIED' && !e.message.includes(dir), bad);
+    }
+    const ok = await m.client.createTask({ text: 'tidy', cwd: path.join(home, 'proj') });
+    assert.equal((await m.client.getTask(ok.id)).workInPlace, true);
+    await m.client.act(ok.id, 'stop', {});
+    const r = await m.client.createTask({ text: 'remote job', cwd: path.join(dir, 'app'), source: 'slack' });
+    const d = await m.client.getTask(r.id);
+    assert.ok(d.openApprovals[0].inputSummary.includes(fs.realpathSync(path.join(dir, 'app'))), 'the accept names the resolved folder');
+  } finally { await m.close().catch(() => {}); rm(dir); }
+});
+
+test('in place: file tools may not touch .git/, .claude/, .mcp.json, CLAUDE.md or AGENTS.md', async () => {
+  const dir = tmpDir();
+  const plain = path.join(dir, 'plain');
+  fs.mkdirSync(plain);
+  const steps = ['.git/config', '.claude/settings.json', '.mcp.json', 'CLAUDE.md', 'sub/AGENTS.md', 'ok.txt']
+    .map((p) => ({ tool: 'Write', input: { file_path: p, content: 'x\n' } }));
+  const m = await startEngine({ dir, scenario: { steps: [...steps, { result: 'success' }] } });
+  try {
+    const { id } = await m.client.createTask({ text: 'tidy', cwd: plain });
+    await waitFor(async () => (await stateOf(m.client, id)) === 'in_review', { label: 'in_review' });
+    const denied = fakeLog(runDirOf(m, id)).filter((l) => l.ev === 'denied').length;
+    assert.equal(denied, 5);
+    assert.ok(fs.existsSync(path.join(plain, 'ok.txt')));
+    for (const p of ['.git/config', '.claude/settings.json', '.mcp.json', 'CLAUDE.md', 'sub/AGENTS.md']) assert.equal(fs.existsSync(path.join(plain, p)), false, p);
+  } finally { await m.close().catch(() => {}); rm(dir); }
+});
+
+test('git: repo-local filters refuse the task without running them; repo hooks never run', async () => {
+  const dir = tmpDir();
+  const repo = makeRepo(dir);
+  const marker = path.join(dir, 'pwned');
+  fs.writeFileSync(path.join(repo.checkout, '.gitattributes'), '* filter=evil\n');
+  repo.git('add', '-A');
+  repo.git('commit', '-q', '-m', 'attrs');
+  fs.writeFileSync(path.join(repo.checkout, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch '${marker}-hook'\n`, { mode: 0o755 });
+  const m = await startEngine({ dir });
+  try {
+    const a = await m.client.createTask({ text: 'hooks only', cwd: repo.checkout });
+    await waitFor(async () => (await stateOf(m.client, a.id)) === 'in_review', { label: 'in_review despite a hook' });
+    assert.equal(fs.existsSync(`${marker}-hook`), false, 'post-checkout hook not run');
+    repo.git('config', 'filter.evil.smudge', `touch '${marker}-smudge'; cat`);
+    repo.git('config', 'filter.evil.clean', 'cat');
+    const b = await m.client.createTask({ text: 'with a filter', cwd: repo.checkout });
+    await waitFor(async () => (await stateOf(m.client, b.id)) === 'failed', { label: 'refused' });
+    assert.equal(fs.existsSync(`${marker}-smudge`), false, 'smudge filter not run');
+    assert.equal((await m.client.getTask(b.id)).failKind, 'error');
+  } finally { await m.close().catch(() => {}); rm(dir); }
+});
+
+test('levels differ for real: ask/plan ask for edits and Bash, auto-edits asks for Bash, auto is the board profile; clamps change the settings', () => withEngine({ steps: [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 60000 }] }, async (m) => {
+  await m.client.setLimits({ maxParallel: 8 });
+  const settingsOf = async (spec) => {
+    const { id } = await m.client.createTask({ ...m.spec, ...spec });
+    await waitFor(() => fs.existsSync(path.join(runDirOf(m, id), 'settings.json')), { label: 'settings' });
+    const s = JSON.parse(fs.readFileSync(path.join(runDirOf(m, id), 'settings.json'), 'utf8'));
+    await m.client.act(id, 'stop', {});
+    return s;
+  };
+  const ask = await settingsOf({ permissionLevel: 'ask' });
+  const edits = await settingsOf({ permissionLevel: 'auto-edits' });
+  const auto = await settingsOf({ permissionLevel: 'auto' });
+  const clamped = await settingsOf({ permissionLevel: 'auto', source: 'mcp' });
+  assert.equal(ask.permissions.defaultMode, 'default');
+  assert.ok(!ask.permissions.allow.some((r) => /^(Edit|Write|Bash)/.test(r)));
+  assert.equal(ask.sandbox.autoAllowBashIfSandboxed, false);
+  assert.ok(edits.permissions.allow.includes('Edit') && edits.permissions.allow.includes('Write'));
+  assert.ok(!edits.permissions.allow.some((r) => r.startsWith('Bash')));
+  assert.equal(edits.sandbox.autoAllowBashIfSandboxed, false);
+  assert.equal(auto.sandbox.autoAllowBashIfSandboxed, true);
+  assert.ok(auto.permissions.allow.some((r) => r.startsWith('Bash(git commit')));
+  assert.equal(clamped.sandbox.autoAllowBashIfSandboxed, edits.sandbox.autoAllowBashIfSandboxed);
+  assert.deepEqual([clamped.permissions.defaultMode, clamped.permissions.allow], [edits.permissions.defaultMode, edits.permissions.allow]);
+  assert.ok(!JSON.stringify(auto.sandbox).includes('allowUnixSockets'), 'no unix socket allowance for the engine socket');
+}));
+
+test('plan first: before approval only Read/Glob/Grep run, whatever the CLI mode', () => withEngine({
+  steps: [{ tool: 'Read', input: { file_path: 'README.md' } }, { tool: 'Write', input: { file_path: 'early.txt', content: 'x' } }, { tool: 'Bash', input: { command: 'touch early2' } }, { tool: 'Task', input: {} }, { result: 'success', text: 'plan' }],
+  resume_steps: [{ tool: 'Write', input: { file_path: 'late.txt', content: 'x' } }, { result: 'success' }],
+}, async (m) => {
+  const { id } = await m.client.createTask({ ...m.spec, planFirst: true });
+  const d = await waitFor(async () => { const x = await m.client.getTask(id); return x.blockedKind === 'plan' && x; }, { label: 'plan ask' });
+  const denied = fakeLog(runDirOf(m, id)).filter((l) => l.ev === 'denied').map((l) => l.tool);
+  assert.deepEqual(denied, ['Write', 'Bash', 'Task']);
+  assert.equal(fs.existsSync(path.join(d.worktree, 'early.txt')), false);
+  await m.client.act(id, 'answer', { askId: d.openAsk.askId, answer: 'Approve' });
+  await waitFor(async () => (await stateOf(m.client, id)) === 'in_review', { label: 'in_review' });
+  assert.ok(fs.existsSync(path.join(d.worktree, 'late.txt')), 'writes allowed after approval');
 }));

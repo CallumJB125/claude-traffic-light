@@ -21,11 +21,33 @@ export function probeEnv(env) {
   return out;
 }
 
+const ADMIN_GID = 80;   // macOS admin group: its members can already sudo, so its write bit adds no attacker
+
 /**
- * Absolute real path of `name` on PATH (then known dirs), or {reason}.
- * Refuses anything that is not a regular executable file, and a file or a
- * parent dir anyone else can write (it could be swapped under us).
+ * A binary we may run: a regular executable owned by us or root with no
+ * group/other write bit, and every ancestor directory up to / owned by us or
+ * root and not writable by others (except root-owned sticky dirs like /tmp,
+ * where nobody else can replace our entries) nor by a group other than
+ * root/wheel or (macOS) admin.
  */
+export function safeBinary(real, uid = process.getuid?.() ?? 0, platform = process.platform) {
+  let st;
+  try { st = fs.statSync(real); } catch { return false; }
+  if (!st.isFile() || (st.mode & 0o111) === 0 || (st.mode & 0o022) !== 0 || (st.uid !== uid && st.uid !== 0)) return false;
+  let d = path.dirname(real);
+  for (;;) {
+    let ds;
+    try { ds = fs.statSync(d); } catch { return false; }
+    if (ds.uid !== uid && ds.uid !== 0) return false;
+    if ((ds.mode & 0o002) !== 0 && !((ds.mode & 0o1000) !== 0 && ds.uid === 0)) return false;
+    if ((ds.mode & 0o020) !== 0 && ds.gid !== 0 && !(platform === 'darwin' && ds.gid === ADMIN_GID)) return false;
+    const up = path.dirname(d);
+    if (up === d) return true;
+    d = up;
+  }
+}
+
+/** Absolute real path of `name` on PATH (then known dirs) that passes safeBinary, or {reason}. */
 export function resolveBin(name, env, knownDirs = KNOWN_DIRS(env.HOME)) {
   const dirs = [...String(env.PATH ?? '').split(path.delimiter), ...knownDirs].filter((d) => d && path.isAbsolute(d));
   let unsafe = false;
@@ -36,9 +58,7 @@ export function resolveBin(name, env, knownDirs = KNOWN_DIRS(env.HOME)) {
     let st;
     try { st = fs.statSync(real); } catch { continue; }
     if (!st.isFile() || (st.mode & 0o111) === 0) continue;
-    let parent;
-    try { parent = fs.statSync(path.dirname(real)); } catch { continue; }
-    if ((st.mode & 0o002) !== 0 || ((parent.mode & 0o002) !== 0 && (parent.mode & 0o1000) === 0)) { unsafe = true; continue; }
+    if (!safeBinary(real)) { unsafe = true; continue; }
     return { bin: real };
   }
   return { reason: unsafe ? 'unsafe_bin' : 'not_found' };

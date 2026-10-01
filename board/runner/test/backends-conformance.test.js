@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BACKENDS, NORMALISED_EVENTS, INTERNAL_EVENTS, CAPABILITY_VALUES, describeAll } from '../backends/index.js';
 import { buildEnv } from '../launch.js';
+import { resolveBin, safeBinary } from '../backends/detect.js';
 import { tmpDir, rm, fakeClaudeBin, readFakeLog, waitFor, alive } from './helpers.js';
 
 const IDS = Object.keys(BACKENDS);
@@ -87,6 +88,25 @@ for (const id of IDS) {
     } finally { rm(home); }
   });
 }
+
+test('resolveBin: a group-writable binary or a binary under an other-writable (non-sticky) or foreign-group-writable dir is refused', async () => {
+  const home = tmpDir('bdh-');
+  try {
+    const a = path.join(home, 'a');
+    fs.mkdirSync(a);
+    fakeCli(a, 'claude', { mode: 0o775 });
+    assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'group-writable file');
+    fs.chmodSync(path.join(a, 'claude'), 0o755);
+    assert.equal(resolveBin('claude', { PATH: a }, []).bin, fs.realpathSync(path.join(a, 'claude')));
+    fs.chmodSync(a, 0o777);
+    assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'world-writable non-sticky dir');
+    fs.chmodSync(a, 0o755);
+    fs.chmodSync(home, 0o777);
+    assert.equal(resolveBin('claude', { PATH: a }, []).reason, 'unsafe_bin', 'world-writable ancestor');
+    fs.chmodSync(home, 0o700);
+    assert.ok(safeBinary('/bin/sh'), 'system binaries pass');
+  } finally { fs.chmodSync(home, 0o700); rm(home); }
+});
 
 test('[codex] signed in only when its status command says so (exit 0); otherwise unknown', async () => {
   const home = tmpDir('bdh-');
