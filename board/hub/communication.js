@@ -175,8 +175,10 @@ export class TeamCommunication {
       && !!this.db.get('SELECT 1 x FROM board_repos WHERE board_id = ? AND repo_id = ?', source.board_id, source.repo_id);
   }
   messageProjection(scope, message) {
-    return { id: message.id, thread_id: message.thread_id, card_id: message.card_id, card_key: this.hub.card(message.card_id)?.key,
-      repo_id: message.repo_id, fence: message.fence, kind: message.kind, body: message.body, reply_to: message.reply_to, depth: message.depth,
+    const reply = message.reply_to && this.db.get('SELECT * FROM task_messages WHERE id = ?', message.reply_to);
+    const seed = this.db.get('SELECT m.* FROM task_messages m JOIN task_message_threads t ON t.id = m.thread_id WHERE t.id = ? AND m.card_id = t.seed_card_id AND m.reply_to IS NULL ORDER BY m.rowid LIMIT 1', message.thread_id);
+    return { id: message.id, thread_id: seed && this.visibleMessage(scope, seed) ? message.thread_id : null, card_id: message.card_id, card_key: this.hub.card(message.card_id)?.key,
+      repo_id: message.repo_id, fence: message.fence, kind: message.kind, body: message.body, reply_to: reply && this.visibleMessage(scope, reply) ? message.reply_to : null, depth: message.depth,
       at: message.created_at, author: this.author(message), for_agent: false, auto_resume: false, grants_execution: false,
       deliveries: this.db.all('SELECT * FROM task_message_recipients WHERE message_id = ?', message.id).filter((r) => {
         if (!scope.boardIds) return true;
@@ -210,7 +212,6 @@ export class TeamCommunication {
       recipients, thread: body.thread_id ?? null, reply_to: body.reply_to ?? null });
     const targets = recipients.map((id) => this.recipient(scope, id));
     const prior = this.db.get('SELECT * FROM task_messages WHERE actor_key = ? AND request_id = ?', scope.actor_key, request);
-    if (prior) { if (prior.request_hash !== fingerprint) throw new HubError('CONFLICT', 'request id belongs to another message'); return { message: this.messageProjection(scope, prior) }; }
     if (scope.run && targets.some((r) => r.run.id === scope.run.id)) throw new HubError('VALIDATION', 'send a task message to another run');
     let reply = null, thread = null;
     if (body.reply_to) {
@@ -225,6 +226,7 @@ export class TeamCommunication {
       // thread ID cannot reset its finite conversation budget.
       if (scope.run) thread = this.db.get('SELECT * FROM task_message_threads WHERE seed_run_id = ?', scope.run.id);
     }
+    if (prior) { if (prior.request_hash !== fingerprint) throw new HubError('CONFLICT', 'request id belongs to another message'); return { message: this.messageProjection(scope, prior) }; }
     const depth = reply ? reply.depth + 1 : 0;
     if (depth > 3 || (thread && (this.db.get('SELECT COUNT(*) n FROM task_messages WHERE thread_id = ?', thread.id).n >= 32
       || scope.run && this.db.get('SELECT COUNT(*) n FROM task_messages WHERE thread_id = ? AND author_run_id IS NOT NULL', thread.id).n >= 8))) throw new HubError('QUOTA_EXCEEDED', 'task conversation limit reached; ask a person before continuing');
