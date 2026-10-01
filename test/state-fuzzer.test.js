@@ -169,7 +169,7 @@ function runSequence(seed) {
     const dir = path.join(teamsDir, teamName);
     fs.mkdirSync(dir, { recursive: true });
     const leader = { agentId: 'team-lead@t', name: 'team-lead', agentType: 'team-lead', tmuxPaneId: 'leader', joinedAt: clock.now - 1 };
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: lead.id, members: [leader, ...members.map(({ lastBeat, transcript, activeSince, ...m }) => m)] }));
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ name: teamName, leadSessionId: lead.id, members: [leader, ...members.map(({ lastBeat, transcript, head, activeSince, firstBeatAt, ...m }) => m)] }));
   }
   function touch(m) {
     m.lastBeat = clock.now;
@@ -177,6 +177,10 @@ function runSequence(seed) {
     // plain clock.now / 1000 can land just under clock.now; findTranscript then
     // sees a transcript older than joinedAt and skips it. +1 µs rounds up.
     const secs = (clock.now + 0.001) / 1000;
+    if (!fs.existsSync(m.transcript)) {
+      fs.writeFileSync(m.transcript, m.head);
+      m.firstBeatAt = clock.now;
+    }
     fs.utimesSync(m.transcript, secs, secs);
   }
 
@@ -189,9 +193,12 @@ function runSequence(seed) {
       const proj = path.join(projectsDir, lead.cwd.replace(/[^a-zA-Z0-9]/g, '-'));
       fs.mkdirSync(proj, { recursive: true });
       const transcript = path.join(proj, `${name}-sid.jsonl`);
-      fs.writeFileSync(transcript, `${JSON.stringify({ type: 'user', teamName, agentName: name, cwd: lead.cwd })}\n`);
-      const m = { agentId: `${name}@t`, name, agentType: 'executor', tmuxPaneId: `%${memberSeq}`, joinedAt: clock.now, isActive: rnd() < 0.85 ? true : undefined, transcript, activeSince: clock.now };
-      touch(m);
+      const head = `${JSON.stringify({ type: 'user', teamName, agentName: name, cwd: lead.cwd })}\n`;
+      const m = { agentId: `${name}@t`, name, agentType: 'executor', tmuxPaneId: `%${memberSeq}`, joinedAt: clock.now, isActive: rnd() < 0.85 ? true : undefined, transcript, head, activeSince: clock.now };
+      // Some teammates have written nothing yet: no transcript until their first
+      // beat, and their quiet counts from joinedAt.
+      if (rnd() < 0.2) m.lastBeat = clock.now;
+      else touch(m);
       members.push(m);
       log.push(`team join ${name}`);
     } else if (r < 0.5) {
@@ -249,7 +256,9 @@ function runSequence(seed) {
   function sync() {
     main.syncAgents();
     lastSync = clock.now;
-    for (const m of members) beatAtSync.set(m.agentId, m.lastBeat);
+    // A transcript first written after the join is only found on the watcher's
+    // next minute-spaced retry, until then the member is still timed from joinedAt.
+    for (const m of members) beatAtSync.set(m.agentId, m.firstBeatAt !== undefined && clock.now - m.firstBeatAt < Agents.RESOLVE_RETRY_MS + OMC_POLL_MS ? m.joinedAt : m.lastBeat);
   }
 
   function observe() {

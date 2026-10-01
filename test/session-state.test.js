@@ -25,14 +25,15 @@ const member = (name, extra = {}) => ({ agentId: `${name}@x`, name, agentType: '
 const msg = (agoMs, read = false) => ({ from: 'team-lead', text: 'go', timestamp: new Date(NOW - agoMs).toISOString(), read });
 
 test('teams: isActive drives working/done; a never-started member is dropped', () => {
+  const recent = { joinedAt: NOW - 60000 };
   const r = scanTeam(
     [
-      member('active', { isActive: true }),
-      member('finished', { isActive: false }),
-      member('never', {}),
-      member('fresh', {}),
-      member('noinbox', {}),
-      member('readold', {}),
+      member('active', { isActive: true, ...recent }),
+      member('finished', { isActive: false, ...recent }),
+      member('never', recent),
+      member('fresh', recent),
+      member('noinbox', recent),
+      member('readold', recent),
     ],
     {
       never: [msg(A.NEVER_STARTED_MS + 60000), msg(1000)],
@@ -80,7 +81,7 @@ test('teams: an active member whose transcript went quiet is waiting; fresh or m
   const f = teamFixture([
     member('fresh', { isActive: true }),
     member('idle', { isActive: true }),
-    member('lost', { isActive: true }),
+    member('lost', { isActive: true, joinedAt: NOW - 60000 }),
     member('finished', { isActive: false }),
   ]);
   f.transcript('fresh', 10000);
@@ -103,6 +104,35 @@ test('teams: a member that joined after its transcript last changed is not match
   const [a] = f.scan().agents;
   assert.equal(a.status, 'working');
   assert.equal(a.heartbeat, null);
+});
+
+test('teams: no transcript since join counts quiet from joinedAt, so it turns waiting after IDLE_AFTER_MS', () => {
+  const f = teamFixture([
+    member('never-wrote-old', { isActive: true, joinedAt: NOW - A.IDLE_AFTER_MS - 1 }),
+    member('never-wrote-new', { isActive: true, joinedAt: NOW - A.IDLE_AFTER_MS + 1 }),
+    member('stale-old', { isActive: true, joinedAt: NOW - A.IDLE_AFTER_MS - 1 }),
+    member('stale-new', { isActive: true, joinedAt: NOW - A.IDLE_AFTER_MS + 1 }),
+    member('normal', { isActive: true, joinedAt: NOW - 3600000 }),
+  ]);
+  f.transcript('stale-old', 2 * A.IDLE_AFTER_MS);
+  f.transcript('stale-new', 2 * A.IDLE_AFTER_MS);
+  f.transcript('normal', 10000);
+  const by = Object.fromEntries(f.scan().agents.map((a) => [a.name, a]));
+  assert.equal(by['never-wrote-old'].status, 'waiting');
+  assert.equal(by['never-wrote-new'].status, 'working');
+  assert.equal(by['stale-old'].status, 'waiting');
+  assert.equal(by['stale-new'].status, 'working');
+  assert.equal(by['never-wrote-old'].heartbeat, null);
+  assert.equal(by.normal.status, 'working');
+  assert.equal(by.normal.heartbeat, new Date(NOW - 10000).toISOString());
+});
+
+test('teams: a member with no joinedAt and no transcript is timed from when it was first seen', () => {
+  const f = teamFixture([member('nojoin', { isActive: true, joinedAt: undefined })]);
+  const transcripts = new Map();
+  assert.equal(f.scan({ transcripts }).agents[0].status, 'working');
+  assert.equal(f.scan({ transcripts, now: NOW + A.IDLE_AFTER_MS - 1 }).agents[0].status, 'working');
+  assert.equal(f.scan({ transcripts, now: NOW + A.IDLE_AFTER_MS + 1 }).agents[0].status, 'waiting');
 });
 
 test('teams: transcript path is cached; an unresolved member is rescanned at most once a minute', (t) => {
