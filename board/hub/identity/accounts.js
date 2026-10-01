@@ -96,6 +96,16 @@ export class Accounts {
     this.hub = hub;
     this.db = hub.db;
     this.mailer = mailer;
+    // A send runs in the background after the hub has answered "started", so a broken
+    // mailer is invisible to the person signing in: /api/health carries when one last failed.
+    this.mailLastErrorAt = null;
+    if (mailer && !mailer.tracked) {
+      const send = mailer.send.bind(mailer);
+      mailer.send = async (mail) => {
+        try { return await send(mail); } catch (e) { this.mailLastErrorAt = this.hub.iso(); throw e; }
+      };
+      mailer.tracked = true;
+    }
     const key = (label) => Buffer.from(hkdfSync('sha256', String(hub.secret), Buffer.alloc(0), `board-accounts:${label}`, 32));
     this.kCode = key('email-code');
     this.kCsrf = key('csrf');

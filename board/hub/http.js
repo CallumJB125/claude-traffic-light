@@ -230,7 +230,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay });
   };
 
-  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth }), { auth: 'none' });
+  // `mail` appears only on a hub that can send mail; it says when a send last failed, never to whom or why.
+  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth, ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt } } : {}) }), { auth: 'none' });
   // Registered only in dev mode (design §9.5): elsewhere it is "no such route".
   if (config.auth === 'dev') route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (!isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');
