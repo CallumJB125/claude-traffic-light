@@ -178,6 +178,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // Local hub, started lazily the first time a board page opens.
   const mode = process.env.BUDDY_BOARD_AUTH === 'dev' && isDev ? 'dev' : 'local';
   const localUrl = () => (hubInfo && !hubInfo.team ? hubInfo.url : null);
+  // Before anything that can call forgetHub.
+  const connectLife = createConnectLife();
   const supervisor = createHubSupervisor({
     fork: (entry, args, opts) => utilityProcess.fork(entry, args, opts), // privacy-flow: local-board-hub
     hubEntry: path.join(app.getAppPath(), 'board', 'hub', 'server.js'),
@@ -209,6 +211,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   function forgetHub() {
     gen += 1;
+    connectLife.bump();
     hubLoading = null; // a resolve for the old hub must not be awaited by the new one
     const old = localUrl();
     hubInfo = null;
@@ -342,7 +345,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   async function hubSignedOut(origin) {
     if (hubInfo?.origin === origin) forgetHub();
     if (connectWin && !connectWin.isDestroyed() && connectWin.hubOrigin === origin) connectWin.close();
-    await clearHubSessions(origin, (p) => session.fromPartition(p));
+    await connectLife.clearing(integrationPartitionFor(origin), () => clearHubSessions(origin, (p) => session.fromPartition(p)));
   }
 
   // Dev only: the walk stands in for the system browser (main.js gates it on !app.isPackaged).
@@ -486,19 +489,20 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // and an empty window.name, so the bind in the name never reaches the provider.
   let connectWin = null;
   let connectOpening = false;
-  const connectLife = createConnectLife();
   async function openConnect(url, h, { provider, bind, post = null }) {
     // One at a time: swapping windows would let the old one's close handler remove the new bind cookie.
     if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }
     if (connectOpening) return;
     connectOpening = true;
-    let ses, cookie;
+    let ses, cookie, current;
     try {
       ses = session.fromPartition(integrationPartitionFor(h.origin));
       hardenSession(ses);
       cookie = bindCookie(h.origin, provider, bind);
-      await ses.cookies.set(cookie); // privacy-flow: integration-connect
+      // A sign-out or switch while the cookie was being set: it is removed again and nothing opens.
+      current = await connectLife.setBindCookie(ses, integrationPartitionFor(h.origin), cookie);
     } finally { connectOpening = false; }
+    if (!current) { log('connect window refused', 'signed out or switched while opening'); return; }
     const authorizeHost = new URL(post?.url ?? url).host;
     const w = new BrowserWindow({
       width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
@@ -545,7 +549,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       // The hub's callback clears it too; a window closed early must not leave it behind.
       ses.cookies.remove(cookie.url, cookie.name).catch(() => {}); // privacy-flow: integration-connect
       // A sign-in left open that long is abandoned: drop what the provider stored too.
-      if (expired) ses.clearStorageData().catch(() => {});
+      if (expired) connectLife.clearing(integrationPartitionFor(w.hubOrigin), () => ses.clearStorageData()).catch(() => {});
     });
     // The manifest POST is this window's first and only POST from us: connectDecision rebuilt its URL and body.
     (post ? w.loadURL(post.url, { postData: post.postData, extraHeaders: post.extraHeaders }) : w.loadURL(url)).catch(() => {}); // privacy-flow: integration-connect
@@ -630,6 +634,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   function switchWorkspace(id, { show = true } = {}) {
     const prev = store.active();
     if (!id || !store.setActive(id)) return;
+    connectLife.bump();
     const next = store.active();
     // Another team on the same hub is the same page with a different ?org=.
     if (hubInfo?.bearer && prev.kind === 'team' && next.kind === 'team' && prev.hub === next.hub) { hubInfo.org = next.teamId; viewError = null; } else forgetHub();

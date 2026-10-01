@@ -125,8 +125,8 @@ test('connect window: one at a time; a second open while one is open (or still o
   assert.ok(refuse > 0 && pending > 0, 'both guards present');
   assert.ok(Math.max(refuse, pending) < fn.indexOf('bindCookie('), 'refused before any cookie is set');
   assert.ok(!/connectWin\.close\(\)/.test(fn), 'an open window is never closed to make room (its closed handler would remove the new bind cookie)');
-  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie;\n\s+try \{\n/);
-  assert.match(fn, /await ses\.cookies\.set\(cookie\); \/\/ privacy-flow: integration-connect\n\s+\} finally \{ connectOpening = false; \}/);
+  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie, current;\n\s+try \{\n/);
+  assert.match(fn, /current = await connectLife\.setBindCookie\(ses, integrationPartitionFor\(h\.origin\), cookie\);\n\s+\} finally \{ connectOpening = false; \}/);
 });
 
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
@@ -158,7 +158,7 @@ test('connect window wiring: gesture-tracked, guarded, cookie set before the loa
   assert.match(src, /wc\.on\('input-event'/);
   assert.match(src, /connectDecision\(\{ url, frameName, referrer: referrer\?\.url/);
   const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
-  assert.ok(fn.indexOf('await ses.cookies.set(cookie)') < fn.indexOf('w.loadURL(url)'), 'the bind cookie is set before the provider page loads');
+  assert.ok(fn.indexOf('await connectLife.setBindCookie(') < fn.indexOf('w.loadURL(url)'), 'the bind cookie is set before the provider page loads');
   assert.match(fn, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
   assert.match(fn, /integrationPartitionFor\(h\.origin\)/);
   assert.ok(!/preload|installBearer|bearerHeaders/.test(fn), 'no preload, no bearer on the connect partition');
@@ -416,7 +416,74 @@ test('connect window lifetime wiring: armed on every connect window; an expired 
   assert.match(fn, /connectLife\.arm\(w, \(\) => \{ expired = true; log\('connect window closed: 10 minutes passed'\); \}\);/);
   const closed = fn.slice(fn.indexOf("w.on('closed'"));
   assert.match(closed, /ses\.cookies\.remove\(cookie\.url, cookie\.name\)/);
-  assert.match(closed, /if \(expired\) ses\.clearStorageData\(\)\.catch\(\(\) => \{\}\);/);
+  assert.match(closed, /if \(expired\) connectLife\.clearing\(integrationPartitionFor\(w\.hubOrigin\), \(\) => ses\.clearStorageData\(\)\)\.catch\(\(\) => \{\}\);/);
+});
+
+function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+function lifeSession() {
+  const s = { sets: [], removes: [], pending: [] };
+  s.cookies = {
+    set: (c) => { s.sets.push(c); const d = deferred(); s.pending.push(d); return d.promise; },
+    remove: async (url, name) => { s.removes.push([url, name]); },
+  };
+  return s;
+}
+const LIFE_PART = 'persist:integration-auth-x';
+const LIFE_COOKIE = { url: 'https://app.plexiform.dev/', name: '__Host-board_int_github', value: 'b' };
+
+test('connect sign-out generation: a sign-out or switch while the bind cookie is being set refuses the open and removes the cookie', async () => {
+  const life = createConnectLife({ setTimer: () => 0, clearTimer: () => {} });
+  // nothing happened meanwhile: open
+  let ses = lifeSession();
+  let p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  ses.pending[0].resolve();
+  assert.equal(await p, true);
+  assert.deepEqual(ses.removes, []);
+  // signed out (or switched account / hub) while the set was in flight
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  life.bump();
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  assert.deepEqual(ses.removes, [[LIFE_COOKIE.url, LIFE_COOKIE.name]], 'the cookie it set is removed');
+  // the partition was cleared while the set was in flight
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  const clear = deferred();
+  const cleared = life.clearing(LIFE_PART, () => clear.promise);
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  assert.deepEqual(ses.removes, [[LIFE_COOKIE.url, LIFE_COOKIE.name]]);
+  // and while the clear is still running, no cookie is even set
+  const ses2 = lifeSession();
+  assert.equal(await life.setBindCookie(ses2, LIFE_PART, LIFE_COOKIE), false);
+  assert.deepEqual(ses2.sets, []);
+  clear.resolve();
+  await cleared;
+  // a clear that finished during the set counts too
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  await life.clearing(LIFE_PART, async () => {});
+  ses.pending[0].resolve();
+  assert.equal(await p, false);
+  // a clear that failed still ends, and a later open works
+  await assert.rejects(life.clearing(LIFE_PART, async () => { throw new Error('x'); }));
+  ses = lifeSession();
+  p = life.setBindCookie(ses, LIFE_PART, LIFE_COOKIE);
+  ses.pending[0].resolve();
+  assert.equal(await p, true);
+});
+
+test('connect sign-out generation wiring: bumped on sign-out, account and hub switch; openConnect refuses before any window exists', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.ok(src.indexOf('const connectLife = createConnectLife();') < src.indexOf('createHubSupervisor({'), 'exists before anything can call forgetHub');
+  assert.match(src, /function forgetHub\(\) \{\n\s+gen \+= 1;\n\s+connectLife\.bump\(\);/);
+  assert.match(src, /if \(!id \|\| !store\.setActive\(id\)\) return;\n\s+connectLife\.bump\(\);/);
+  assert.match(src, /await connectLife\.clearing\(integrationPartitionFor\(origin\), \(\) => clearHubSessions\(origin, \(p\) => session\.fromPartition\(p\)\)\);/);
+  const refuse = fn.indexOf("if (!current) { log('connect window refused', 'signed out or switched while opening'); return; }");
+  assert.ok(refuse > fn.indexOf('connectLife.setBindCookie(') && refuse < fn.indexOf('new BrowserWindow('), 'refused after the cookie set, before the window');
+  assert.ok(!/ses\.cookies\.set\(/.test(fn), 'the cookie is set only through the generation check');
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────
