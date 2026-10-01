@@ -911,8 +911,12 @@ async function openAwayItem(i) {
   const item = recap && recap.items[Number(i) || 0];
   if (!item) return { opened: 'none' };
   if (item.cwd) clipboard.writeText(item.cwd);
-  const activated = await activateTerminalApp(item.folder, item.hostApp || undefined);
-  return { opened: activated?.app || 'none-found', folder: item.folder };
+  // The item names its session: jump the way a click on it would, rather
+  // than raising whichever window's title mentions the folder.
+  const target = (aggregateState().sessions || []).find((x) => x.sessionId === item.sessionId);
+  if (!target) return { opened: 'none-found', folder: item.folder };
+  const activated = await jumpToSession(target, item.folder, item.hostApp || undefined);
+  return { opened: activated?.app || 'none-found', folder: item.folder, ...(activated?.cant ? { note: activated.cant, command: activated.command || null } : {}) };
 }
 ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
 ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });

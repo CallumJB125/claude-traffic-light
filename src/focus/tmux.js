@@ -1,10 +1,10 @@
-// tmux: only a session with exactly one client attached is jumped to. The
-// outer terminal tab that client is drawn in is found by its tty and focused
-// first; the pane is selected only once that tab is found, because select-window
-// changes what every client on the session shows. A session with no client
-// (detached), several clients, or a client whose tab can't be found is left
+// tmux: only a session with exactly one client attached is jumped to, because
+// select-window changes what every client on the session shows. That client's
+// outer tab is focused by tty when it can be found; the window and pane are
+// selected either way. A session with no client (detached) or several is left
 // alone: tmux would otherwise pick the most recently used client, which is
-// whichever tmux the user is in now.
+// whichever tmux the user is in now. Never switch-client, never another
+// session's client.
 const os = require('os');
 const path = require('path');
 const Ids = require('./ids.js');
@@ -56,14 +56,16 @@ module.exports = {
     // The outer tab is found by tty alone: the tmux server's environment
     // (ITERM_SESSION_ID and friends) belongs to whichever tab started it.
     const outer = await ctx.focusOuter({ hostApp: s.hostApp, cwd: s.cwd, terminal: { tty: client.tty, env: {} } });
-    if (!outer.ok) {
-      log(`tmux ${pane}: left alone, tab of client ${client.tty} not found (${outer.reason || 'unknown'})`);
-      return { ok: false, reason: `tmux client ${client.tty} left alone; ${outer.reason || 'outer terminal not found'}`, denied: outer.denied, needs: outer.needs };
-    }
+    // The one client already shows this session, so selecting its window and
+    // pane changes nobody else's view, whether or not its tab can be found.
     await tmux('select-window', '-t', pane);
     const sel = await tmux('select-pane', '-t', pane);
     if (!sel.ok) return { ok: false, reason: 'tmux select-pane failed' };
-    log(`tmux ${pane}: selected for client ${client.tty}`);
-    return { ...outer, adapter: `tmux+${outer.adapter}` };
+    if (outer.ok) {
+      log(`tmux ${pane}: selected for client ${client.tty}`);
+      return { ...outer, adapter: `tmux+${outer.adapter}` };
+    }
+    log(`tmux ${pane}: selected for client ${client.tty}; its tab not found (${outer.reason || 'unknown'}), no app activated`);
+    return { ok: false, selected: true, reason: `tmux pane selected; ${outer.reason || 'outer terminal not found'}`, denied: outer.denied, needs: outer.needs };
   },
 };

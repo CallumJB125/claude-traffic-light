@@ -15,7 +15,11 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
   // user is looking at: no app is activated, a note says why instead.
   const NOTE_DETACHED = 'This session is running in tmux with no terminal window open.';
   const NOTE_UNKNOWN = "Can't tell which terminal window this session is in, so nothing was switched.";
-  function cantJump(r) {
+  function cantJump(r, session) {
+    if (r && r.selected) {
+      const app = session && session.hostApp;
+      return { app: null, exact: false, cant: `Switched the tmux window in its terminal. Bring ${app || 'it'} forward to see it.` };
+    }
     if (r && r.detached) {
       return { app: null, exact: false, cant: `${NOTE_DETACHED} Run \`${r.command || 'tmux attach'}\` in a terminal.`, ...(r.command ? { command: r.command } : {}) };
     }
@@ -39,7 +43,7 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
       }
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
-      return cantJump(r);
+      return cantJump(r, session);
     }
     return stale() ? null : activate(folderHint, preferApp);
   }

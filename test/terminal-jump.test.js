@@ -317,20 +317,25 @@ test('tmux: two clients on the session is ambiguous, so nothing is touched', asy
   assert.deepEqual(osaCalls(calls), []);
 });
 
-test('tmux: an attached client whose terminal has no adapter (Ghostty has no tty) leaves tmux alone', async () => {
-  const { calls, exec } = fakeExec(namedAnswers('/dev/ttys009\t$2\t100\n'));
+const selects = (calls) => tmuxMutations(calls).map((c) => c.args[2]);
+
+test('tmux: one client but its terminal has no adapter (Ghostty): the window and pane are selected for that client only, no app is touched', async () => {
+  const { calls, exec } = fakeExec(namedAnswers('/dev/ttys009\t$2\t100\n/dev/ttys003\t$1\t50\n'));
   const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'Ghostty' }), ctxOf({ exec }));
   assert.equal(r.ok, false);
-  assert.match(r.reason, /no adapter/);
-  assert.deepEqual(tmuxMutations(calls), [], 'the session\'s pane was selected although no tab could be focused');
+  assert.equal(r.selected, true);
+  assert.deepEqual(selects(calls), ['select-window', 'select-pane']);
+  assert.ok(!calls.some((c) => c.args.includes('switch-client')));
   assert.deepEqual(osaCalls(calls), []);
 });
 
-test('tmux: an outer tab that is not found leaves tmux alone', async () => {
+test('tmux: one client whose outer tab is not found still selects the pane and touches no app', async () => {
   const { calls, exec } = fakeExec((file, args) => (file === '/usr/bin/osascript' ? { ok: true, stdout: 'no match' } : namedAnswers('/dev/ttys009\t$2\t100\n')(file, args)));
   const r = await Focus.focusSession(sess(TMUX_ENV, { hostApp: 'iTerm2' }), ctxOf({ exec }));
   assert.equal(r.ok, false);
-  assert.deepEqual(tmuxMutations(calls), []);
+  assert.equal(r.selected, true);
+  assert.deepEqual(selects(calls), ['select-window', 'select-pane']);
+  assert.ok(!calls.some((c) => c.file === '/usr/bin/open'));
 });
 
 test('an unknown tty or no recorded terminal: no adapter runs any command', async () => {
@@ -416,7 +421,7 @@ test('tmux: no outer tab found still reports a miss', async () => {
   const { exec } = fakeExec((file, args) => (args.includes('display-message') ? { ok: true, stdout: '$0' } : args.includes('list-clients') ? { ok: true, stdout: '/dev/ttys1\t$0\t1' } : { ok: true }));
   const r = await Focus.focusSession(s, ctxOf({ exec }));
   assert.equal(r.ok, false);
-  assert.match(r.reason, /left alone/);
+  assert.equal(r.selected, true);
 });
 
 test('VS Code: opens the folder the session started in; with none, only activates the app', async () => {
@@ -590,6 +595,16 @@ test('a hit reports the tab; a miss or a refusal never activates the app and say
   await denied.jump({ host: HOST, terminal: { env: {} } }, 'x');
   assert.deepEqual(denied.log.denied, [ITerm.needs]);
   assert.equal(denied.log.activate.length, 0);
+});
+
+test('a selected tmux pane in a terminal that cannot be focused says so and names the app, without activating it', async () => {
+  const { jump, log } = jumperWith({ focusResult: { ok: false, adapter: 'tmux', selected: true } });
+  const r = await jump({ host: HOST, hostApp: 'Ghostty', terminal: { env: { TMUX_PANE: '%1' } } }, 'x', 'Ghostty');
+  assert.equal(r.app, null);
+  assert.equal(r.cant, 'Switched the tmux window in its terminal. Bring Ghostty forward to see it.');
+  assert.equal(log.activate.length, 0);
+  const anon = jumperWith({ focusResult: { ok: false, adapter: 'tmux', selected: true } });
+  assert.equal((await anon.jump({ host: HOST, terminal: { env: {} } }, 'x')).cant, 'Switched the tmux window in its terminal. Bring it forward to see it.');
 });
 
 test('a detached tmux session gets the attach hint and command, and nothing is activated', async () => {
