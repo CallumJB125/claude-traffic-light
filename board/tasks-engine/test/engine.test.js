@@ -291,7 +291,10 @@ test('take over returns the resume command with the same isolation flags; hand b
   assert.equal(r.task.state, 'handed_over');
   const t = r.takeover;
   assert.deepEqual(t.argv.slice(1, 3), ['--resume', d0.sessionId]);
-  for (const f of ['--setting-sources', '--settings', '--strict-mcp-config', '--mcp-config', '--permission-mode']) assert.ok(t.argv.includes(f), f);
+  for (const f of ['--setting-sources', '--settings', '--strict-mcp-config', '--mcp-config', '--permission-mode', '--disallowedTools']) assert.ok(t.argv.includes(f), f);
+  assert.ok(t.argv.includes('Read(~/.ssh/**)'), 'the same deny rules as the background run');
+  assert.ok(t.argv.some((a) => a.startsWith('Read(/') && a.includes(fs.realpathSync(m.dataDir))), 'the data dir stays denied');
+  assert.ok(!JSON.stringify(t).includes('BOARD_RUN_TOKEN'));
   assert.ok(!t.argv.includes('-p') && !t.argv.includes('--permission-prompt-tool'));
   assert.equal(t.cwd, d0.worktree);
   assert.deepEqual(Object.keys(t.env).sort(), ['BOARD_RUN_SOCKET', 'BOARD_SUPERVISOR_LSTART', 'BOARD_SUPERVISOR_PID', 'BUDDY_TASK_ID']);
@@ -431,4 +434,37 @@ test('plan first: before approval only Read/Glob/Grep run, whatever the CLI mode
   await m.client.act(id, 'answer', { askId: d.openAsk.askId, answer: 'Approve' });
   await waitFor(async () => (await stateOf(m.client, id)) === 'in_review', { label: 'in_review' });
   assert.ok(fs.existsSync(path.join(d.worktree, 'late.txt')), 'writes allowed after approval');
+}));
+
+// ── security review, group C ────────────────────────────────────────────────
+
+test('restart recovery kills the dead CLI\'s process group when its leader is already gone', async () => {
+  const dir = tmpDir();
+  const repo = makeRepo(dir);
+  const scenario = { steps: [{ tool: 'Bash', input: { command: 'sleep 300' }, ms: 60000, group_child: true }] };
+  let m = await startEngine({ scenario, dir });
+  try {
+    const { id } = await m.client.createTask({ text: 'Long job', cwd: repo.checkout });
+    const kid = await waitFor(() => fakeLog(runDirOf(m, id)).find((l) => l.ev === 'group_child')?.pid, { label: 'group child' });
+    const pid = fakeLog(runDirOf(m, id)).find((l) => l.ev === 'start').pid;
+    await m.close({ leaveRuns: true });
+    process.kill(pid, 'SIGKILL');                 // the leader dies; its group lives on
+    await waitFor(() => !alive(pid), { label: 'leader gone' });
+    assert.equal(alive(kid), true);
+    m = await startEngine({ scenario, dir });
+    await waitFor(() => !alive(kid), { label: 'group killed on recovery', timeoutMs: 3000 });
+    assert.equal((await m.client.getTask(id)).state, 'orphaned');
+  } finally { await m.close().catch(() => {}); rm(dir); }
+});
+
+test('the task text is stored once: no copy in the task record beside the spec, none in the event log', () => withEngine({ steps: [{ result: 'success' }] }, async (m) => {
+  const text = 'Store check\nZEBRA-unique-words-for-the-store-check please';
+  const { id } = await m.client.createTask({ ...m.spec, text, source: 'slack' });
+  const d = await m.client.getTask(id);
+  assert.equal(d.text, text);
+  assert.ok(d.finalPrompt.includes(text), 'the prompt is rebuilt on demand');
+  const snap = fs.readFileSync(path.join(m.dataDir, 'store', 'tasks.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((r) => r.task.id === id).at(-1);
+  assert.equal(JSON.stringify(snap).split('ZEBRA').length - 1, 1, 'once, in spec.text');
+  assert.ok(!fs.readFileSync(path.join(m.dataDir, 'store', 'events.jsonl'), 'utf8').includes('ZEBRA'));
+  await m.client.act(id, 'deny', { approvalId: d.openApprovals[0].approvalId });
 }));

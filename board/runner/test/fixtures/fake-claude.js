@@ -195,6 +195,11 @@ async function tool(step) {
     out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `denied: ${pre.out?.hookSpecificOutput?.permissionDecisionReason ?? 'hook'}`, is_error: true }] } });
     return;
   }
+  if (step.group_child) {
+    const g = spawn('/bin/sleep', ['300'], { stdio: 'ignore' });
+    g.unref();
+    log({ ev: 'group_child', pid: g.pid });
+  }
   if (step.grandchild) {
     const g = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
     g.unref();

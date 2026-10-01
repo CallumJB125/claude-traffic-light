@@ -2,13 +2,13 @@
 // main process), the `buddy` CLI and the buddy_spin_off MCP tool. Node only
 // (unix socket; a Windows named pipe path works the same through net).
 //
-//   const c = await connect();                   // BOARD_HOME/runner.sock + tasks.token
+//   const c = await connect();                   // BOARD_HOME/tasks.sock + tasks.token
 //   const { id } = await c.createTask({ text, cwd });
 //   const s = await c.subscribe(id, { fromSeq }, (event) => …);
 //   c.isGreen(id)                                // the green lease rule (§6.2); never infer it elsewhere
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import net from 'node:net'; // privacy-flow: tasks-local
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -270,11 +270,12 @@ export async function connect(opts = {}) {
   const socketPath = opts.socketPath ?? d.socketPath;
   const token = opts.token ?? readToken(opts.tokenPath ?? d.tokenPath);
   const sock = await new Promise((resolve, reject) => {
-    const s = net.createConnection(socketPath);
+    const s = net.createConnection(socketPath); // privacy-flow: tasks-local
     s.once('connect', () => { s.off('error', reject); resolve(s); });
     s.once('error', (e) => reject(new TasksError('SUPERVISOR_UNREACHABLE', `Buddy supervisor not reachable at ${socketPath}: ${e.code ?? e.message}`)));
   });
   const c = new TasksClient(sock, token, opts);
-  await c.hello(opts.client);
+  // A failed hello (hung supervisor, refused token) must not leak the socket on the caller's retry.
+  try { await c.hello(opts.client); } catch (e) { c.close(); throw e; }
   return c;
 }

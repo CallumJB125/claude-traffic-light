@@ -20,7 +20,7 @@ startTasksEngine({ dataDir, backends?, log?, now?, env?, maxParallel?, retention
 
 ```
 <dataDir>/              0700, must not be a symlink or another user's dir
-  runner.sock           0600 (refuses to start over a live socket, a non-socket, or another user's socket)
+  tasks.sock            0600 (refuses to start over a live socket, a non-socket, or another user's socket)
   tasks.token           0600 btk_…; reused across restarts, replaced if it was loosened or malformed
   relay-tokens.json     0600, sha256 hashes of the relay tokens and their forced source
   policy.json           optional, written by the UI: {accept_from:[userId], repos:{<path|canonical>:{remote_tasks:true}}}
@@ -50,14 +50,17 @@ Not wired yet. The plan mirrors the embedded hub (`buddy-window/hub-process.js`)
    (restart window, bounded restarts, readiness = the `tasks.listening` message).
    Pass an env built for it (`HOME`, `PATH`, `LANG`, `TMPDIR`): the CLI env
    allowlist is built from it, and it must not carry hub or runner tokens.
-3. `dataDir`: a short private dir in the user data folder, e.g.
-   `<userData>/tasks`. Use a dir of its own until the engine moves into the
-   runner supervisor: the contract puts the Tasks API on the runner's control
-   socket (`BOARD_HOME/runner.sock`, `type` frames vs `method` frames), and two
-   processes can't share one socket path.
+3. `dataDir`: a short private dir of its own in the user data folder, e.g.
+   `<userData>/tasks`. The API is on `tasks.sock` there (TASKS-CONTRACT §3),
+   separate from the runner's control socket.
 4. Add `board/tasks-engine/**` to the package `files` and tag the fork line
    with a `privacy-flow` slug documented in `PRIVACY.md`.
 5. The UI connects with `tasks-api/client.js` (`connect({ socketPath, tokenPath })`).
+
+Pre-release battle test (manual, not in CI): from inside a real sandboxed
+Bash tool of a running task, `nc -U <dataDir>/tasks.sock` (and reading
+`tasks.token`) must fail. The settings tests only assert that the sandbox
+grants no `allowUnixSockets`; the real sandbox is the proof.
 
 A restart of the engine changes `epoch`; clients get `reset {reason:'epoch'}`
 and refetch. Background runs can't be re-adopted (their stdio pipes died with

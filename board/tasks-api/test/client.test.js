@@ -11,7 +11,7 @@ import { connect, readToken, TasksError } from '../client.js';
 import { TASKS_PROTOCOL_VERSION, MAX_FRAME_BYTES } from '../protocol.js';
 import { startMock, startTarget, TARGETS, waitFor, assertValid, tmpDir } from './helpers.js';
 
-function rawExchange(socketPath, lines) {
+function rawExchange(socketPath, lines, { waitMs = 400 } = {}) {
   return new Promise((resolve, reject) => {
     const s = net.createConnection(socketPath);
     let buf = '';
@@ -25,7 +25,7 @@ function rawExchange(socketPath, lines) {
     });
     s.on('close', () => resolve({ out, closed: true }));
     s.on('error', reject);
-    setTimeout(() => { s.destroy(); resolve({ out, closed: false }); }, 400);
+    setTimeout(() => { s.destroy(); resolve({ out, closed: false }); }, waitMs);
   });
 }
 
@@ -79,7 +79,8 @@ for (const target of TARGETS) {
       assert.equal(by.d.error.code, 'UNKNOWN_METHOD');
       assert.ok(r.out.some((o) => o.id === null && o.error.code === 'VALIDATION'));
       for (const o of r.out) assertValid(o.push ? 'Push' : 'Response', o);
-      const big = await rawExchange(m.srv.socketPath, [`{"id":"x","token":"${tok}","pad":"${'a'.repeat(MAX_FRAME_BYTES)}"}`]);
+      // Under a loaded test run the 1 MiB write alone can take a while; the server closes after its reply.
+      const big = await rawExchange(m.srv.socketPath, [`{"id":"x","token":"${tok}","pad":"${'a'.repeat(MAX_FRAME_BYTES)}"}`], { waitMs: 5000 });
       assert.equal(big.out[0].error.code, 'PAYLOAD_TOO_LARGE');
       await assert.rejects(m.client.createTask({ ...m.spec, text: 'x'.repeat(MAX_FRAME_BYTES) }), (e) => e.code === 'PAYLOAD_TOO_LARGE');
     } finally { await m.close(); }
@@ -261,6 +262,20 @@ test('[engine] in review offers only what E1 implements', async () => {
     assert.deepEqual((await m.client.getTask(id)).actions, ['message', 'discard']);
     await assert.rejects(m.client.act(id, 'openPr', {}), (e) => e.code === 'ILLEGAL_TRANSITION' && !e.details.allowed.includes('openPr'));
   } finally { await m.close(); }
+});
+
+test('connect() closes its socket when hello fails (a hung supervisor), so retries leak no fds', async () => {
+  const dir = tmpDir();
+  const sockPath = path.join(dir, 'tasks.sock');
+  let closed = 0;
+  const conns = new Set();
+  // Reads (so it sees the client's EOF) but never answers hello.
+  const srv = net.createServer((c) => { conns.add(c); c.resume(); c.on('close', () => { closed += 1; }); c.on('error', () => {}); });
+  await new Promise((r) => srv.listen(sockPath, r));
+  try {
+    for (let i = 0; i < 3; i++) await assert.rejects(connect({ socketPath: sockPath, token: 'x', timeoutMs: 150 }), (e) => e.code === 'TIMEOUT');
+    await waitFor(() => closed === 3, { label: 'every socket closed' });
+  } finally { for (const c of conns) c.destroy(); await new Promise((r) => srv.close(r)); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('connect() fails cleanly when no supervisor is listening', async () => {

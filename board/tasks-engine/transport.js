@@ -5,7 +5,7 @@
 // and the hb green lease push. Local only: no TCP, no network.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net'; // privacy-flow: local-board-sockets
+import net from 'node:net'; // privacy-flow: tasks-local
 import path from 'node:path';
 import { validate } from '../tasks-api/validate.js';
 import { MAX_FRAME_BYTES, HB_PUSH_MS, BACKPRESSURE_BYTES, SOCKET_NAME, TOKEN_NAME, METHODS } from '../tasks-api/protocol.js';
@@ -36,7 +36,7 @@ async function clearSocketPath(socketPath) {
   if (!st.isSocket()) throw new StartError('SOCKET_IN_USE', 'something other than a socket is at the socket path');
   if (typeof process.getuid === 'function' && st.uid !== process.getuid()) throw new StartError('SOCKET_IN_USE', 'the socket belongs to another user');
   const live = await new Promise((resolve) => {
-    const s = net.createConnection(socketPath); // privacy-flow: local-board-sockets
+    const s = net.createConnection(socketPath); // privacy-flow: tasks-local
     s.once('connect', () => { s.destroy(); resolve(true); });
     s.once('error', () => resolve(false));
   });

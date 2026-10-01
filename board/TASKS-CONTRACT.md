@@ -31,6 +31,7 @@ board/
     mesh.js               task-to-task messaging: addresses, resolution, wrapper, flags, rate limits, loop detector, durable inbox
     client.js             the client library (UI main process, CLI, MCP tools)
     mock-server.js        runnable mock of this API (npm run tasks:mock)
+  tasks-engine/           the real engine behind this API (startTasksEngine; see its README)
     test/                 node --test (npm run test:tasks)
 ```
 
@@ -47,8 +48,8 @@ No new dependencies (CONTRACT.md §1). `face.js`, `protocol.js`, `validate.js` a
 
 | Item | Rule |
 |---|---|
-| Socket | The supervisor's control socket `BOARD_HOME/runner.sock` (default `~/.board/runner.sock`, CONTRACT.md §6.10). `BOARD_HOME` dir 0700, socket 0600 |
-| Coexistence | A frame with a `method` field is a Tasks API request. A frame with a `type` field is the existing runner control protocol (CONTRACT.md §6.10: `status`, `opt_in`, `confirm_offer`, `stop_all`, `host_*`). Both share the socket. (Proposed to the CONTRACT.md owner: token-gate the `type` frames too, §17 P4) |
+| Socket | Its own socket `tasks.sock` (`SOCKET_NAME`) in the Tasks engine's private data dir (`board/tasks-engine`; the desktop gives it a dir of its own, `BOARD_HOME` for CLI use). Dir 0700 (a symlink or another user's dir is refused), socket 0600; the engine refuses to start over a non-socket, another user's socket or a live engine, replaces a dead socket, and refuses a socket path over 103 bytes |
+| Coexistence | The runner's control socket (`runner.sock`, CONTRACT.md §6.10, `type` frames) is a separate socket in the runner's dir. A `type` frame sent to `tasks.sock` is refused (`VALIDATION`). (Proposed to the CONTRACT.md owner: token-gate the `type` frames too, §17 P4) |
 | Framing | NDJSON, UTF-8, one JSON object per line, **≤ 1 MiB per line in both directions**. An oversized request line → `PAYLOAD_TOO_LARGE`, then the server closes the connection. The server never sends a line ≥ 1 MiB: large text is chunked (transcript ≤ 64 KiB/event) or truncated with `truncated:true` (diff patch ≤ 256 KiB) |
 | Token | Per-user token in `BOARD_HOME/tasks.token`, file 0600, owner = the user, created by the supervisor at first start: `btk_` + base64url(32 random bytes). Every request carries it. The supervisor compares sha256 digests with `crypto.timingSafeEqual` (constant time; a prefix of the token is still wrong). Wrong or missing → `{id, error:{code:'UNAUTHENTICATED'}}` and the connection is closed |
 | Relay tokens | Every relay (the `buddy_spin_off` MCP tool, phone bridge, Slack, voice, a teammate's board) gets its own `btr_` + base64url(32) token, created by the UI (`tasks-engine/relay-tokens.js addRelayToken`) and stored only as sha256 hashes in `relay-tokens.json` (0600; a file others could write is ignored). A relay token **forces** its `source` on every task it creates (the spec's `source` is overwritten) and cannot `act approve`, `answer` or `takeover` (so it can't accept a remote start either): `POLICY_DENIED`. Only `tasks.token` (UI, CLI) can |
@@ -157,9 +158,9 @@ A remote task awaiting a local accept (`queued` + `awaitingConfirm`) offers `app
 
 ### 5.4 Take over / hand back
 
-- Claude: `argv = [claude, --resume, <sessionId>, --setting-sources, "", --settings, <run_dir>/settings.json, --strict-mcp-config, --mcp-config, <run_dir>/mcp.json, --permission-mode, <mapped>]`: the **same isolation flags** as the background run (spike 5a), minus `-p`, the stream-json flags and `--permission-prompt-tool` (in a terminal the user answers prompts). Hooks keep reporting, so the lamp and the task view stay truthful while the user drives.
+- Claude: `argv = [<absolute claude path>, --resume, <sessionId>, --setting-sources, "", --settings, <run_dir>/settings.json, --strict-mcp-config, --mcp-config, <run_dir>/mcp.json, --disallowedTools, <the background run's deny rules + the engine data dir>, --permission-mode, <mapped>]`: the background run's isolation (spike 5a), minus `-p`, the stream-json flags, `--permission-prompt-tool` (in a terminal the user answers prompts), the `--tools` allowlist and the budget (the user is driving). Hooks keep reporting, so the lamp and the task view stay truthful while the user drives.
 - Codex: `argv = [codex, resume, <sessionId>]` (verify flags, §15). No resume capability → a new session seeded with the handover, `resumed:false`, and `note` says so (plan §3.2).
-- `env` holds only the variables to add (`BOARD_RUN_SOCKET`, `BOARD_RUN_TOKEN`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`, `BUDDY_TASK_ID`); the terminal keeps the user's own environment (it's the user driving now).
+- `env` holds only the variables to add (`BOARD_RUN_SOCKET`, `BOARD_SUPERVISOR_PID`, `BOARD_SUPERVISOR_LSTART`, `BUDDY_TASK_ID`) and nothing secret: the run token stays in files (the hook shim reads `<run_dir>/hook.token`, board-mcp reads `mcp.json`), never in an env every tool shell would see (D26). The terminal keeps the user's own environment (it's the user driving now).
 - `mode`: `tab` = the UI opens a tab in the user's terminal app; `tmux` = the UI runs `tmux new-session -d -s buddy-<slug> -c <cwd> -- <argv>`; `print` = show the command to copy. The supervisor never opens terminals.
 
 ### 5.5 Error codes
@@ -350,6 +351,8 @@ The same tools route through the hub when the address resolves off-machine. Prop
 ### 9.1 The socket
 
 Only the user's own processes that can read the 0600 token can call the API (§3). The token is never logged, never put in argv (clients read it from the file), never sent over the network. The supervisor logs JSON lines without tokens or task text at `info`.
+
+**What the token is, plainly:** a same-user-process boundary, not an app boundary. It keeps other OS users out. Any process running as this user that can read `tasks.token` (anything the user runs outside a sandbox: a script, an editor plugin, a compromised dev tool) can do everything the UI can: create tasks as `local` in any folder the in-place rules allow, approve and answer, take over and discard. The agent itself can't: the data dir is denied to it (sandbox `denyRead`, `Read/Edit/Write` disallow rules, PreToolUse confinement) and the sandbox grants no unix-socket access. Relays get scoped tokens (§3) so a relay can't act as the user.
 
 ### 9.2 Where a task came from (plan §9)
 

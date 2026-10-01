@@ -39,6 +39,7 @@ test('data dir 0700, socket 0600, token 0600 btk_; the token survives a restart;
     assert.equal(fs.statSync(m.eng.socketPath).mode & 0o777, 0o600);
     assert.equal(fs.statSync(m.eng.tokenPath).mode & 0o777, 0o600);
     assert.match(m.eng.token, /^btk_[A-Za-z0-9_-]{43}$/);
+    assert.equal(path.basename(m.eng.socketPath), 'tasks.sock', 'its own socket, not the runner control socket');
     const tok = m.eng.token;
     await m.close();
     m = await startEngine({ dir });
@@ -64,7 +65,7 @@ test('refuses a symlinked data dir, something else at the socket path, a live so
 
     const d1 = path.join(dir, 'd1');
     fs.mkdirSync(d1, { mode: 0o700 });
-    fs.writeFileSync(path.join(d1, 'runner.sock'), 'not a socket');
+    fs.writeFileSync(path.join(d1, 'tasks.sock'), 'not a socket');
     await assert.rejects(start(d1), (e) => e.code === 'SOCKET_IN_USE' && !e.message.includes(dir));
 
     const d2 = path.join(dir, 'd2');
@@ -75,7 +76,7 @@ test('refuses a symlinked data dir, something else at the socket path, a live so
     // A stale socket file (no listener) left by a crash is replaced.
     const d3 = path.join(dir, 'd3');
     fs.mkdirSync(d3, { mode: 0o700 });
-    const sock = path.join(d3, 'runner.sock');
+    const sock = path.join(d3, 'tasks.sock');
     const ghost = spawn(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(sock)}, () => process.stdout.write('up'))`], { stdio: ['ignore', 'pipe', 'ignore'] });
     await new Promise((r) => ghost.stdout.once('data', r));
     ghost.kill('SIGKILL');

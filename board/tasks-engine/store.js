@@ -115,7 +115,7 @@ function readLines(file) {
 
 // O_APPEND fd, 0600; a torn tail gets a newline first so the next record parses.
 function openAppend(file) {
-  const fd = fs.openSync(file, 'a+', 0o600);
+  const fd = fs.openSync(file, 'a+', 0o600); // privacy-flow: tasks-store
   fs.fchmodSync(fd, 0o600);
   const { size } = fs.fstatSync(fd);
   if (size > 0) {
