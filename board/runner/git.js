@@ -56,6 +56,20 @@ export async function createWorktree({ localPath, wt, key, fence, baseRef, fromS
   return { branch, base_sha: (await git(wt, ['rev-parse', 'HEAD'])).trim(), worktree: fs.realpathSync(wt) };
 }
 
+// Resolve once during preparation. Resumes retain this exact grant; they may
+// never widen it to another branch or the complete shared metadata directory.
+export async function runGitAccess(wt, branch) {
+  const gitRef = `refs/heads/${branch}`;
+  await git(wt, ['check-ref-format', gitRef]);
+  const actual = (await git(wt, ['symbolic-ref', 'HEAD'])).trim();
+  if (actual !== gitRef) throw new Error('run branch does not match its worktree');
+  const gitDir = fs.realpathSync((await git(wt, ['rev-parse', '--absolute-git-dir'])).trim());
+  const common = (await git(wt, ['rev-parse', '--git-common-dir'])).trim();
+  const commonGitDir = fs.realpathSync(path.resolve(wt, common));
+  if (!fs.statSync(gitDir).isDirectory() || !fs.statSync(commonGitDir).isDirectory()) throw new Error('run git metadata unavailable');
+  return Object.freeze({ gitDir, commonGitDir, gitRef });
+}
+
 export async function gitFacts(wt) {
   const branch = await tryGit(wt, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const head = await tryGit(wt, ['rev-parse', 'HEAD']);

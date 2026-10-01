@@ -17,9 +17,9 @@ import { Run } from './run.js';
 import { ClaudeBackend } from './backends/claude.js';
 import { BACKENDS } from './backends/index.js';
 import { startIpcServer } from './ipc.js';
-import { buildSettings, buildMcpConfig, buildEnv, boardBrief, firstPrompt, trustedInstructions, buddyHomeOf, recordBuddyLaunch, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
-import { createWorktree, sessionOf, snapshot as gitSnapshot, git } from './git.js';
-import { decideOffer, advertisable } from './policy.js';
+import { buildSettings, buildMcpConfig, buildEnv, buildCodexEnv, boardBrief, firstPrompt, trustedInstructions, buddyHomeOf, recordBuddyLaunch, MCP_SERVER, HOOK_TOKEN_FILE, API_KEY_FILE } from './launch.js';
+import { createWorktree, sessionOf, runGitAccess, snapshot as gitSnapshot, git } from './git.js';
+import { decideOffer, advertisable, answererAllowed } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
 
@@ -389,6 +389,8 @@ export class Supervisor extends EventEmitter {
   }
 
   async rpc(run, method, params, { timeoutMs = 30000 } = {}) {
+    const current = () => this.runs.get(run.run_id) === run && !run.ended && !run.fenced;
+    if (!current()) throw err(run.fenced ? 'FENCED' : 'RUN_ENDED', 'run is no longer current');
     if (!this.connected) throw err('HUB_UNREACHABLE', 'the board hub is unreachable; try again later');
     const id = crypto.randomUUID();
     const bytes = serializeOutbound({ type: 'rpc', id, method, run_id: run.run_id, card_id: run.card_id, fence: run.fence, repo_id: run.repo_id, run_token: run.run_token, params }, run.scope, { requireRepoId: true });
@@ -402,7 +404,32 @@ export class Supervisor extends EventEmitter {
       if (code === 'FENCED' || code === 'RUN_ENDED') run.onFenced(code);
       throw err(code, res.error?.message ?? code);
     }
+    if (!current()) throw err(run.fenced ? 'FENCED' : 'RUN_ENDED', 'run changed while awaiting the board');
     return res.result ?? {};
+  }
+
+  async publishCommit(run, sha) {
+    const generation = run.generation;
+    const current = () => this.runs.get(run.run_id) === run && run.generation === generation && !run.ending && !run.ended && !run.fenced
+      && run.gateState().open && !run.readOnly && this.connected;
+    const check = () => { if (!current()) throw err(run.fenced ? 'FENCED' : 'GATE_CLOSED', 'commit publication requires a current editable run'); };
+    check();
+    if (!/^[0-9a-f]{40}$/.test(sha) || !run.gitAccess) throw err('VALIDATION', 'commit must be this run’s observed HEAD');
+    const grant = await runGitAccess(run.worktree, run.branch); check();
+    if (Object.keys(grant).some((k) => grant[k] !== run.gitAccess[k])) throw err('FORBIDDEN', 'run Git grant changed');
+    const head = (await git(run.worktree, ['rev-parse', 'HEAD'])).trim(); check();
+    if (head !== sha) throw err('FORBIDDEN', 'only the current run HEAD can be published');
+    const scoped = scopeOf(await sessionOf(run.worktree), { allowlist: this.allowlist, opted_in: [run.repo_id] }); check();
+    if (!scoped || scoped.repo_id !== run.repo_id) throw err('FORBIDDEN', 'origin no longer belongs to this opted-in repo');
+    if (run.offer.require_plan_approval) {
+      const status = await this.rpc(run, 'runner_plan_status', {}); check();
+      if (status.decision !== 'allow' || !answererAllowed(this.policy, run.repo_id, this.memberId, status.answered_by)) throw err('FORBIDDEN', 'recorded human edit authorization is required');
+    }
+    // The trusted host publishes exactly this observed hash to its isolated
+    // fence branch. The model supplies neither the remote nor the refspec.
+    await git(run.worktree, ['-c', 'core.hooksPath=/dev/null', 'push', '--quiet', 'origin', `${sha}:${grant.gitRef}`]);
+    check();
+    return sha;
   }
 
   // ── heartbeat, sleep, gate ────────────────────────────────────────────────
@@ -552,11 +579,13 @@ export class Supervisor extends EventEmitter {
     const over = () => run.ending || run.ended;
     try {
       const w = await (this.opts.createWorktree ?? createWorktree)({ localPath: repo.local_path, wt, key, fence, baseRef: offer.base_ref, fromSnapshot: offer.seed?.from_snapshot });
+      if (w.branch && w.branch !== run.branch) throw new Error('created branch differs from the claimed branch');
       run.worktree = w.worktree;
       run.scope = { repo_id: scope.repo_id, toplevel: w.worktree };
       if (over()) { this.cleanupRun(run); return run; }
       const s2 = scopeOf(await sessionOf(w.worktree), { allowlist: this.allowlist, opted_in: [offer.repo_id] });
       if (!s2 || s2.repo_id !== offer.repo_id) throw new Error('worktree does not scope to the offered repo');
+      if (aiOf(offer) === 'codex') run.gitAccess = await runGitAccess(w.worktree, run.branch);
     } catch (e) {
       this.log.error('prep failed', { card_id: offer.card_id, err: e.message });
       await run.prepFailed(`worktree: ${String(e.stderr || e.message).split('\n')[0]}`);
@@ -580,43 +609,64 @@ export class Supervisor extends EventEmitter {
     return run;
   }
 
-  #spawn(run, { resume }) {
-    if (run.ending || run.ended) return null;
+  #spawn(run, { resume, prompt = null, editable = false }) {
+    if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     const repo = this.policy.repos[run.repo_id] ?? {};
-    const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
+    const ai = aiOf(run.offer) ?? 'claude';
+    const codex = ai === 'codex';
+    const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
+    if (codex && (budget.usd != null || run.offer.max_turns != null)) throw err('NOT_AVAILABLE', 'Codex cannot enforce a native budget or max-turn cap');
+    if (codex && !run.gitAccess) throw err('POLICY_DENIED', 'Codex run Git grant unavailable');
+    const apiKeyFile = !codex && this.env.ANTHROPIC_API_KEY ? path.join(run.runDir, API_KEY_FILE) : null;
     if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     const home = path.resolve(this.l.home);
     const boardHome = home === path.join(this.env.HOME ?? '', '.board') ? null : home;
-    const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome });
-    writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
-    writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
+    if (!codex) {
+      const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome });
+      writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
+      writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
+    }
     writeFileAtomic(path.join(run.runDir, HOOK_TOKEN_FILE), run.run_token);
     // opts.buddyHome: null = don't mark runs as Buddy-owned; undefined = Buddy's own home, if installed.
     const buddyHome = this.opts.buddyHome === undefined ? buddyHomeOf(this.env) : this.opts.buddyHome;
     const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
-    const env = buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
-    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path) });
-    const ai = aiOf(run.offer) ?? 'claude';
+    const cacheDir = path.join(home, 'cache', run.run_id);
+    if (codex) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
+    const env = codex ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned });
+    const systemPrompt = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, ai) });
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
-    const budget = runBudget(run.offer.budget_usd, repo.budget_per_run);
     run.budgetScope = budget.scope;
     run.budgetUsd = budget.usd;
+    run.readOnly = codex && run.offer.require_plan_approval && !editable;
     const backend = new Backend({
       bin: ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
       budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: repo.model,
       log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
+      ...(codex ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
+        denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run')], } : {}),
     });
+    if (codex) backend.oneTurn = true;
     run.attach(backend);
-    backend.start(resume ? 'Board connection restored and your run is still current. Continue where you left off.' : firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }));
+    backend.start(prompt ?? (resume ? 'Board connection restored and your run is still current. Continue where you left off.' : run.initialPrompt(firstPrompt({ key: run.key, title: run.offer.title, nonce: run.nonce }))));
     this.saveLedger(run);
     return backend;
   }
 
   // Same-machine resume: --resume <session_id> with the same isolation flags.
-  resumeRun(run) {
-    if (run.ending || run.fenced) return;
+  async resumeRun(run, prompt = null) {
+    const generation = run.generation;
+    const current = () => this.runs.get(run.run_id) === run && run.generation === generation && !run.ending && !run.ended && !run.fenced && run.gateState().open && !run.backend?.alive();
+    if (!current()) return null;
+    let editable = false;
+    if (aiOf(run.offer) === 'codex' && run.offer.require_plan_approval) {
+      const status = await this.rpc(run, 'runner_plan_status', {});
+      if (!current()) return null;
+      editable = status.required === true && status.decision === 'allow' && status.permission_request_id != null
+        && answererAllowed(this.policy, run.repo_id, this.memberId, status.answered_by);
+    }
+    if (!current()) return null;
     this.log.info('resuming run', { run_id: run.run_id });
-    this.#spawn(run, { resume: true });
+    return this.#spawn(run, { resume: true, prompt, editable });
   }
 
   // A run stopped on its budget: tell the app (app-entry posts it), giver's device only.
@@ -663,6 +713,7 @@ export class Supervisor extends EventEmitter {
       run_id: run.run_id, card_id: run.card_id, key: run.key, fence: run.fence, repo_id: run.repo_id,
       pid: b?.pid ?? null, lstart: b?.lstart ?? null, pgid: b?.pgid ?? null, worktree: run.worktree,
       session_id: run.sessionId, run_dir: run.runDir, scope: run.scope,
+      ...(run.gitAccess ? { git_access: run.gitAccess } : {}),
     };
     writeLedger(this.l, ledger);
   }

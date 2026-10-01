@@ -81,6 +81,8 @@ export class Run {
     // Envelope nonce (D30): content authors never see it, so they cannot forge our closing tag.
     this.nonce = randomBytes(8).toString('hex');
     this.backend = null;
+    this.generation = 0;
+    this.resumePending = null;
     this.localState = 'running';
     this.fenced = false;
     this.endedNormally = false;  // fenced because board_complete/board_release ended it, not a takeover
@@ -194,7 +196,10 @@ export class Run {
     this.log.info('gate reopened', { run_id: this.run_id });
     this.localState = 'running';
     if (this.unpushed) this.#retryPush();
-    if (!this.backend?.alive()) this.sup.resumeRun(this);
+    if (!this.backend?.alive()) {
+      if (this.backend?.oneTurn && this.pending.length) this.#resumePending();
+      else Promise.resolve(this.sup.resumeRun(this)).catch(() => {});
+    }
     else if (!this.backend.turnActive) this.#deliverIdle('Board connection restored and your run is still current. Continue where you left off.', 'system');
   }
 
@@ -276,30 +281,47 @@ export class Run {
   // ── backend wiring ────────────────────────────────────────────────────────
   attach(backend) {
     this.backend = backend;
-    backend.on('init', (e) => {
+    const generation = ++this.generation;
+    this.turnSucceeded = false;
+    this.localState = 'running';
+    const current = () => this.backend === backend && this.generation === generation && !this.ended;
+    const on = (name, fn) => backend.on(name, (...args) => { if (current()) fn(...args); });
+    on('init', (e) => {
       this.sawInit = true;
+      if (backend.oneTurn) { this.sessionStartSeen = true; this.costUsd = null; }
       if (e.session_id) { this.sessionId = e.session_id; this.sup.saveLedger(this); }
       this.fact('session', { session_id: e.session_id ?? this.sessionId, event: 'init' });
       this.activity('init');
     });
-    backend.on('tool_start', (e) => {
-      this.streamTools.set(e.id, { name: e.name, mono: this.clock.mono() });
+    on('tool_start', (e) => {
+      this.streamTools.set(e.id, { name: e.name, input: e.input, mono: this.clock.mono() });
       if (!this.toolInFlight) this.toolInFlight = { name: e.name, summary: this.#summary(e.name, e.input), mono: this.clock.mono() };
       this.activity('tool_start');
     });
-    backend.on('tool_end', (e) => {
+    on('tool_end', (e) => {
+      const start = this.streamTools.get(e.id);
       this.streamTools.delete(e.id);
+      if (!this.streamTools.size) this.toolInFlight = null;
+      if (backend.oneTurn && start) {
+        const duration = Math.max(0, Math.round(this.clock.mono() - start.mono));
+        this.fact('tool_end', { name: start.name, ok: e.ok, duration_ms: duration });
+        if (WRITE_TOOLS.has(start.name)) {
+          const rel = this.#relPath(start.input?.file_path);
+          if (rel) this.fact('file', { path: rel, op: 'write' });
+        }
+        if (start.name === 'Bash') this.#bashFacts(e.input ?? start.input ?? {}, { tool_response: e.output }, e.ok, duration, current).catch(() => {});
+      }
       this.activity('tool_end');
     });
-    backend.on('assistant', (e) => {
+    on('assistant', (e) => {
       this.lastAssistant = e.text;
       this.activity('assistant');
     });
-    backend.on('rate_limit', ({ info }) => {
+    on('rate_limit', ({ info }) => {
       if (info?.status === 'rejected') this.rateLimited = { resetsAt: info.resetsAt ?? null };
     });
-    backend.on('result', (r) => this.#onResult(r));
-    backend.on('exit', (info) => this.#onExit(info));
+    on('result', (r) => this.#onResult(r));
+    on('exit', (info) => this.#onExit(info));
   }
 
   #onResult(r) {
@@ -308,10 +330,11 @@ export class Run {
     this.streamTools.clear();
     if (Number.isFinite(r.total_cost_usd)) this.costUsd = r.total_cost_usd;
     if (Number.isSafeInteger(r.num_turns)) this.numTurns = r.num_turns;
-    this.fact('cost', { cost_usd: this.costUsd, num_turns: this.numTurns });
+    if (Number.isFinite(this.costUsd)) this.fact('cost', { cost_usd: this.costUsd, num_turns: this.numTurns });
     if (this.ending) return;
     if (this.completed || this.released) { this.finish(this.completed ? 'completed' : 'released'); return; }
     if (r.subtype === 'success') {
+      this.turnSucceeded = true;
       this.limitRetries = 0;
       if (this.gateOpen && this.pending.length) this.#flushIdle();
       return;
@@ -345,9 +368,18 @@ export class Run {
     if (this.ended) return;
     if (this.ending) return;   // whoever set `ending` stopped the CLI and finishes the run
     if (this.localState === 'paused_offline' || this.fenced) return;   // killed at gate close; resumed on reopen
+    if (this.backend?.oneTurn && info.code === 0 && !info.signal && info.sawResult && this.turnSucceeded) {
+      this.backend.reap?.();
+      this.localState = this.readOnly ? 'awaiting_plan_approval' : 'idle';
+      this.flushFacts();
+      this.sup.sendHbNow();
+      if (this.pending.length) this.#resumePending();
+      return;
+    }
     // Unexpected death: report before anything slow (exit b: < 1 s).
     this.backend?.reap?.();
-    const why = info.error ? `claude failed to start: ${info.error}` : `claude exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
+    const provider = this.backend?.oneTurn ? 'Codex' : 'claude';
+    const why = info.error ? `${provider} failed to start: ${info.error}` : `${provider} exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
     this.emit({ kind: 'run.failed', fail_kind: 'error', reason: redact(why, this.worktree) });
     this.endReason = 'failed';
     this.ending = true;
@@ -550,10 +582,12 @@ export class Run {
 
   // ── delivery (comments, answers, handover requests) ───────────────────────
   #deliver(text, kind, comment_ids) {
+    if (this.ending || this.ended || this.fenced || this.completed || this.released) return;
     if (this.backend?.alive() && !this.backend.turnActive && this.gateOpen) {
       this.#deliverIdle(text, kind, comment_ids);
     } else {
       this.pending.push({ text, kind, comment_ids });
+      if (this.backend?.oneTurn && !this.backend.alive()) this.#resumePending();
     }
   }
 
@@ -563,12 +597,29 @@ export class Run {
   }
 
   #flushIdle() {
+    if (this.backend?.oneTurn) { if (!this.backend.alive()) this.#resumePending(); return; }
     const items = this.pending;
     this.pending = [];
     if (!items.length) return;
     const ids = items.flatMap((i) => i.comment_ids ?? []);
     if (!this.backend?.send(items.map((i) => i.text).join('\n\n'))) { this.pending = items; return; }
     if (ids.length) this.emit({ kind: 'comment.delivered', comment_ids: ids, via: 'stdin' });
+  }
+
+  #resumePending() {
+    if (this.resumePending || !this.pending.length || this.backend?.alive() || !this.gateState().open || this.ending || this.ended || this.fenced) return;
+    let items;
+    this.resumePending = Promise.resolve().then(() => {
+      items = [...this.pending];
+      return this.sup.resumeRun(this, items.map((i) => i.text).join('\n\n'));
+    }).then((backend) => {
+      if (!backend || this.ending || this.ended || this.fenced) return;
+      this.pending = this.pending.filter((item) => !items.includes(item));
+      const ids = items.flatMap((i) => i.comment_ids ?? []);
+      if (ids.length) this.emit({ kind: 'comment.delivered', comment_ids: ids, via: 'stdin' });
+    }).catch((e) => {
+      this.log.info('resume held', { run_id: this.run_id, code: e.code ?? 'INTERNAL' });
+    }).finally(() => { this.resumePending = null; });
   }
 
   onComments(comments) {
@@ -584,6 +635,13 @@ export class Run {
     if (a.permission_request_id) {
       for (const [k, p] of this.approvals) {
         if (p.prid === a.permission_request_id) { this.answered.add(key); this.approvals.delete(k); p.onAnswer(a); return; }
+      }
+      if (this.backend?.oneTurn && this.offer.require_plan_approval) {
+        // This frame only schedules a fresh authenticated status read. Its
+        // decision/text never changes the sandbox authority itself.
+        if (key) this.answered.add(key);
+        this.#deliver('A plan authorization was answered on the board. Check the recorded board state and continue within your current sandbox.', 'plan');
+        return;
       }
       this.log.info('late permission answer dropped', { run_id: this.run_id });
       return;
@@ -637,6 +695,7 @@ export class Run {
 
   onReconnect() {
     if (this.unpushed && this.gateOpen) this.#retryPush();
+    if (this.backend?.oneTurn && !this.backend.alive() && this.pending.length) this.#resumePending();
   }
 
   #quiescent() {
@@ -827,7 +886,7 @@ export class Run {
     this.fact('plan', { items: [...this.tasks.values()].slice(0, 50).map((t) => ({ text: clip(redact(t.text, this.worktree), 300), status: t.status })) });
   }
 
-  async #bashFacts(input, payload, ok, duration) {
+  async #bashFacts(input, payload, ok, duration, current = () => !this.ended) {
     const cmd = String(input.command ?? '');
     const patterns = (this.sup.policy.repos?.[this.repo_id]?.test_patterns ?? []).map((p) => new RegExp(p));
     if ([...DEFAULT_TEST_PATTERNS, ...patterns].some((re) => re.test(cmd))) {
@@ -839,6 +898,7 @@ export class Run {
     }
     if (/\bgit\b.*\b(commit|push|merge|rebase|reset|checkout|switch)\b/.test(cmd)) {
       const g = await gitFacts(this.worktree);
+      if (!current()) return;
       this.fact('git', g);
     }
   }
@@ -856,7 +916,16 @@ export class Run {
 
   // ── tools (board-mcp) ─────────────────────────────────────────────────────
   hello() {
+    if (this.ended || this.ending || this.completed || this.released) throw err('RUN_ENDED', 'this run has ended');
+    if (this.fenced) throw err('FENCED', 'this run was taken over');
     return { run_id: this.run_id, card_id: this.card_id, key: this.key, fence: this.fence, repo_id: this.repo_id, tools: this.sup.mcpTools };
+  }
+
+  initialPrompt(prompt) {
+    if (this.offer.ai !== 'codex') return prompt;
+    const context = this.#hookStart({ source: 'startup' }).stdout?.hookSpecificOutput?.additionalContext;
+    return [prompt, context, this.offer.require_plan_approval
+      ? 'Your native shell is read-only. Declare your plan and end this turn while its recorded human authorization is pending. Answer text cannot authorize edits; the runner starts a later editable turn only after a recorded allow.' : null].filter(Boolean).join('\n\n');
   }
 
   // Agent text bound for the board. The nonce never leaves: echoed back in a
@@ -905,9 +974,12 @@ export class Run {
   }
 
   async tool(name, args = {}, ctx = {}) {
-    if (this.endedNormally) throw err('RUN_ENDED', 'this run has ended normally');
+    if (this.endedNormally || this.ended || this.ending || this.completed || this.released) throw err('RUN_ENDED', 'this run has ended');
     if (this.fenced) throw err('FENCED', 'this card was taken over');
-    if (name === 'approval') return this.#approval(args, ctx);
+    if (name === 'approval') {
+      if (this.backend?.oneTurn) throw err('NOT_AVAILABLE', 'Codex interactive tool approvals are unavailable');
+      return this.#approval(args, ctx);
+    }
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
     switch (name) {
       case 'board_get_card': return this.#wrapCard(await this.sup.rpc(this, 'board_get_card', args.key ? { key: String(args.key) } : {}));
@@ -920,8 +992,11 @@ export class Run {
         this.turnSignals.ask = true;
         return r;
       }
-      case 'board_attach_evidence':
-        return this.sup.rpc(this, 'board_attach_evidence', { kind: args.kind, ref: this.#text(args.ref, 500), summary: this.#text(args.summary, 1000), ...(args.result ? { result: args.result } : {}) });
+      case 'board_attach_evidence': {
+        const ref = this.#text(args.ref, 500);
+        if (this.backend?.oneTurn && args.kind === 'commit') await this.sup.publishCommit(this, ref);
+        return this.sup.rpc(this, 'board_attach_evidence', { kind: args.kind, ref, summary: this.#text(args.summary, 1000), ...(args.result ? { result: args.result } : {}) });
+      }
       case 'board_complete': {
         const r = await this.sup.rpc(this, 'board_complete', { summary: this.#text(args.summary, 2000), evidence_ids: (args.evidence_ids ?? []).map(String) });
         this.turnSignals.complete = true;

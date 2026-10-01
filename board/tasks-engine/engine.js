@@ -768,7 +768,7 @@ export class TasksEngine extends EventEmitter {
     const remaining = task.cost.budgetUsd != null ? Math.max(0.01, round2(task.cost.budgetUsd - task.cost.usd)) : null;
     const backend = new B({
       bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume,
-      budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: DEFAULT_MAX_TURNS,
+      budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: task.ai.id === 'codex' ? undefined : DEFAULT_MAX_TURNS,
       systemPrompt: this.#brief(task), model: task.ai.model ?? undefined, log: this.log, boardHome: null,
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),

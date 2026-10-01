@@ -8,6 +8,8 @@ import path from 'node:path';
 import { detectCli } from './detect.js';
 import { lstartOf, killTree, processTable, treeGroups, killGroups } from '../procs.js';
 import { writeFileAtomic } from '../util.js';
+import { CODEX_MCP_SERVER, underElectron } from '../launch.js';
+import { CODEX_BOARD_TOOLS } from '../../mcp/codex-run.js';
 
 export class NotAvailableError extends Error {
   constructor(message = 'this AI capability is not available') { super(message); this.code = 'NOT_AVAILABLE'; }
@@ -19,7 +21,7 @@ const ownedRef = (ref) => typeof ref === 'string' && ref.startsWith('refs/heads/
   && ref.split('/').every((p) => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 
 /** Same profile is used for new, resumed and user-owned terminal turns. */
-export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile }) {
+export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile, denyPaths = [], boardRunDir = null }) {
   const filesystem = { ':minimal': 'read', ':workspace_roots': readOnly ? 'read' : 'write' };
   // OS minimal permissions omit common installed tool runtimes. Grant read
   // only (never their caches/configuration or arbitrary home directories).
@@ -49,6 +51,7 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   }
   if (gitDir) for (const n of ['config', 'config.worktree', 'hooks']) filesystem[path.join(gitDir, n)] = 'read';
   if (dataDir) filesystem[dataDir] = 'deny';
+  for (const d of denyPaths) filesystem[d] = 'deny';
   for (const d of [env.CODEX_HOME || (env.HOME && path.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains'].map((n) => env.HOME && path.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
   for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) if (env[k]) shellEnv[k] = env[k];
@@ -60,7 +63,15 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
     'shell_environment_policy.inherit="none"', `shell_environment_policy.set=${table(shellEnv)}`,
     'shell_environment_policy.experimental_use_profile=false',
     `projects.${JSON.stringify(cwd)}.trust_level="untrusted"`,
-    'project_doc_max_bytes=0', 'web_search="disabled"', 'mcp_servers={}', 'hooks={}', 'notify=[]',
+    'project_doc_max_bytes=0', 'web_search="disabled"', 'mcp_servers={}',
+    ...(boardRunDir ? [
+      `mcp_servers.board.command=${JSON.stringify(process.execPath)}`,
+      `mcp_servers.board.args=${JSON.stringify([CODEX_MCP_SERVER, boardRunDir])}`,
+      `mcp_servers.board.env=${table(underElectron() ? { ELECTRON_RUN_AS_NODE: '1' } : {})}`,
+      'mcp_servers.board.env_vars=[]', 'mcp_servers.board.required=true',
+      'mcp_servers.board.startup_timeout_sec=10', 'mcp_servers.board.tool_timeout_sec=60',
+      `mcp_servers.board.enabled_tools=${JSON.stringify(CODEX_BOARD_TOOLS)}`,
+    ] : []), 'hooks={}', 'notify=[]',
     'features.apps=false', 'features.multi_agent=false', 'features.hooks=false',
     ...(instructionsFile ? [`model_instructions_file=${JSON.stringify(instructionsFile)}`] : []),
   ];
@@ -93,6 +104,7 @@ export class CodexBackend extends EventEmitter {
   }
   start(prompt) {
     if (this.budget?.amount != null || this.budgetUsd != null) throw new NotAvailableError('Codex does not offer a native spend cap');
+    if (this.maxTurns != null) throw new NotAvailableError('Codex does not offer a native max-turn cap');
     if (this.permissionMode === 'default') throw new NotAvailableError('Codex exec cannot route interactive approvals');
     if (this.resume && !UUID.test(this.sessionId ?? '')) throw new NotAvailableError('Codex resume requires the task session UUID');
     writeFileAtomic(path.join(this.runDir, 'codex-instructions.md'), this.systemPrompt ?? 'Work only on the user task in the supplied workspace.');
@@ -120,7 +132,8 @@ export class CodexBackend extends EventEmitter {
     else if (e.type === 'item.started' && e.item?.type === 'command_execution') this.emit('tool_start', { id: e.item.id, name: 'Bash', input: { command: e.item.command } });
     else if (e.type === 'item.completed') {
       const i = e.item;
-      if (i?.type === 'command_execution') this.emit('tool_end', { id: i.id, ok: i.exit_code === 0 });
+      if (i?.type === 'command_execution') this.emit('tool_end', { id: i.id, ok: i.exit_code === 0,
+        input: { command: i.command }, output: String(i.aggregated_output ?? '').slice(-16000), exit_code: i.exit_code });
       else if (i?.type === 'agent_message' && typeof i.text === 'string') { this.lastText = i.text; this.emit('assistant', { text: i.text }); }
       else if (i?.type === 'file_change') for (const [n, c] of (i.changes ?? []).entries()) {
         const id = `${i.id}:${n}`; this.emit('tool_start', { id, name: 'Write', input: { file_path: c.path } }); this.emit('tool_end', { id, ok: i.status !== 'failed' });

@@ -3,7 +3,7 @@
 // repo_id = the run's repo). Network work (GitHub) happens before the queue.
 
 import { randomUUID } from 'node:crypto';
-import { RPC_METHODS, TOOL_SCOPES } from '../shared/protocol.js';
+import { RPC_METHODS, TOOL_SCOPES, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
 import { PLAN_APPROVAL_LABEL, POLICY_LABELS } from '../shared/states.js';
 import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
@@ -54,6 +54,15 @@ function runMember(hub, run) {
 
 function brief(hub, row) {
   return { key: row.key, title: row.title, column: row.column_name, run_state: row.run_state ?? 'todo' };
+}
+
+const planPermission = (hub, run) => hub.db.get('SELECT * FROM permission_requests WHERE run_id = ? AND tool = ? ORDER BY created_at, rowid LIMIT 1', run.id, CODEX_PLAN_PERMISSION);
+
+function currentPlanApprover(hub, run, row, memberId) {
+  const member = hub.activeMember(memberId);
+  if (!member || !hub.canWrite(member) || member.org_id !== hub.board(row.board_id)?.org_id) return false;
+  const repoPolicy = hub.runners.get(run.device_id)?.repos.get(run.repo_id);
+  return hub.isAdmin(member) || [run.on_behalf_of, run.dispatched_by, ...hub.assignees(row.id), ...(repoPolicy?.approvals_from ?? [])].includes(member.id);
 }
 
 const METHODS = {
@@ -145,7 +154,35 @@ const METHODS = {
       if (params.summary) hub.feed(row.id, 'plan_declared', { summary: clip(params.summary, 500), paths: paths.slice(0, 20) }, { run });
     });
     hub.recomputeOverlaps(run.repo_id);
-    return { overlaps: hub.overlapViews(hub.card(row.id)) };
+    let permission = planPermission(hub, run);
+    if (run.ai === 'codex' && hub.labels(row).includes(PLAN_APPROVAL_LABEL) && !permission) {
+      const approvers = [...new Set([run.on_behalf_of, run.dispatched_by, ...hub.assignees(row.id), ...(hub.runners.get(run.device_id)?.repos.get(run.repo_id)?.approvals_from ?? [])].filter(Boolean))];
+      const id = randomUUID();
+      const res = hub.apply(row.id, { type: 'block', fence: row.fence, kind: 'permission' }, {
+        pre: () => {
+          hub.db.insert('permission_requests', { id, run_id: run.id, card_id: row.id, tool: CODEX_PLAN_PERMISSION,
+            input_summary: clip(`${params.summary ?? 'Declared plan'}; paths: ${paths.join(', ')}`, 300),
+            state: 'open', approvers: JSON.stringify(approvers), created_at: hub.iso() });
+          hub.journal({ board_id: row.board_id, card_id: row.id, run_id: run.id, actor_kind: 'runner', actor_id: run.device_id,
+            kind: 'permission.create', payload: { permission_request_id: id, tool: CODEX_PLAN_PERMISSION, paths } });
+        },
+      });
+      if (!res.ok) throw new HubError(res.error.code, res.error.message);
+      permission = planPermission(hub, run);
+    }
+    return { overlaps: hub.overlapViews(hub.card(row.id)), ...(permission ? { plan_permission_request_id: permission.id, plan_authorization: permission.state } : {}) };
+  },
+
+  runner_plan_status(hub, { run, row }) {
+    if (run.ai !== 'codex') throw new HubError('NOT_AVAILABLE', 'this run does not use Codex');
+    // Removing the label cannot widen a run launched with a plan gate. A
+    // reserved request, current fence and a live human approver are required.
+    const permission = planPermission(hub, run);
+    const member = permission && hub.activeMember(permission.answered_by);
+    const allowed = permission?.state === 'allowed' && currentPlanApprover(hub, run, row, permission.answered_by);
+    return { required: true, decision: allowed ? 'allow' : permission?.state === 'denied' ? 'deny' : 'pending',
+      permission_request_id: permission?.id ?? null,
+      answered_by: allowed ? { member_id: member.id, name: member.display_name } : null };
   },
 
   board_check_overlap(hub, { run, row }) {
@@ -174,6 +211,7 @@ const METHODS = {
 
   approval(hub, { run, row }, params) {
     if (typeof params.tool_name !== 'string' || !params.tool_name) throw new HubError('VALIDATION', 'tool_name required');
+    if (params.tool_name === CODEX_PLAN_PERMISSION) throw new HubError('FORBIDDEN', 'plan authorization is created only by the declared-plan route');
     const repoPolicy = hub.runners.get(run.device_id)?.repos.get(run.repo_id);
     const approvers = [...new Set([run.on_behalf_of, run.dispatched_by, ...hub.assignees(row.id), ...(repoPolicy?.approvals_from ?? [])].filter(Boolean))];
     const id = randomUUID();
@@ -287,6 +325,7 @@ export const METHOD_SCOPES = Object.freeze({
   approval_cancel: 'permission:ask',
   board_create_card: 'card:create_child',
   board_add_lesson: 'lesson:suggest',
+  runner_plan_status: 'card:read',
 });
 
 async function attachEvidence(hub, device, msg) {
@@ -345,4 +384,3 @@ export async function handleRpc(hub, device, msg) {
     return METHODS[msg.method](hub, c, msg.params ?? {});
   });
 }
-

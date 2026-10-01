@@ -82,10 +82,12 @@ export const OUTBOX_KINDS = Object.freeze([
 export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
-  'approval_cancel', 'board_create_card', 'board_add_lesson',
+  'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
-export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel']);
+export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status']);
+// Only the server may create this permission request after a declared plan.
+export const CODEX_PLAN_PERMISSION = 'Authorize Codex edits for this run';
 
 // board-mcp tools (Phase 1). `approval` is the --permission-prompt-tool target (mcp__board__approval).
 export const MCP_TOOLS = Object.freeze([

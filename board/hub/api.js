@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL, isReservedLabel } from '../shared/states.js';
-import { LABEL_COLORS } from '../shared/protocol.js';
+import { LABEL_COLORS, CODEX_PLAN_PERMISSION } from '../shared/protocol.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
 import { sponsorLine, alertsFor } from '../shared/cardface.js';
 import { HubError, json } from './db.js';
@@ -623,6 +623,7 @@ export class Api {
     if (!['once', 'run'].includes(scope)) throw new HubError('VALIDATION', 'scope must be once or run');
     return this.withWritableBoard(row0.board_id, () => {
       const pr = this.db.get('SELECT * FROM permission_requests WHERE id = ?', prId);
+      if (pr.tool === CODEX_PLAN_PERMISSION && this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'a human must authorize Codex edits');
       if (!['open', 'parked'].includes(pr.state)) {
         throw new HubError('ALREADY_ANSWERED', 'another approver answered first', { answered_by: this.hub.memberName(pr.answered_by), state: pr.state });
       }

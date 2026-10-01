@@ -13,6 +13,7 @@ export const BOARD_DIR = path.resolve(HERE, '..');
 export const onDisk = (p) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
 export const HOOK_SHIM = onDisk(path.join(HERE, 'hook-shim.js'));
 export const MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'server.js'));
+export const CODEX_MCP_SERVER = onDisk(path.join(BOARD_DIR, 'mcp', 'codex-run.js'));
 
 // CLI 2.1.285 has no TodoWrite in -p mode (the init tools list drops it): the
 // task list is TaskCreate/TaskUpdate/TaskList/TaskGet. `Task` is the subagent tool.
@@ -162,6 +163,16 @@ export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorL
   return env;
 }
 
+/** Subscription auth belongs to the CLI; commands use their own empty env. */
+export function buildCodexEnv(parentEnv, cacheDir) {
+  const env = {};
+  for (const k of ENV_KEEP.concat('CODEX_HOME')) if (parentEnv[k]) env[k] = parentEnv[k];
+  for (const [k, v] of Object.entries(parentEnv)) if (/^LC_[A-Z_]+$/.test(k) && v) env[k] = v;
+  return { ...env, TERM: 'dumb', SHELL: '/bin/sh', TMPDIR: path.join(cacheDir, 'tmp'),
+    npm_config_cache: path.join(cacheDir, 'npm'), XDG_CACHE_HOME: cacheDir,
+    PIP_CACHE_DIR: path.join(cacheDir, 'pip'), UV_CACHE_DIR: path.join(cacheDir, 'uv') };
+}
+
 // Plexiform's home, when Plexiform is installed on this machine.
 export function buddyHomeOf(env) {
   return env.CLAUDE_TRAFFIC_LIGHT_HOME || (env.HOME ? path.join(env.HOME, '.claude-traffic-light') : null);
@@ -219,7 +230,7 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
 // own checkout (policy local_path), never from the agent-editable worktree.
 // Only regular files that really live inside the checkout: no symlink (file or
 // rules dir), opened O_NOFOLLOW, realpath checked against the checkout's.
-export function trustedInstructions(localPath, cap = 20000) {
+export function trustedInstructions(localPath, cap = 20000, provider = 'claude') {
   if (!localPath) return '';
   let root;
   try { root = fs.realpathSync(localPath); } catch { return ''; }
@@ -235,6 +246,10 @@ export function trustedInstructions(localPath, cap = 20000) {
       parts.push(`--- ${path.relative(localPath, f)} ---\n${fs.readFileSync(fd, 'utf8').slice(0, cap)}`);
     } catch { /* absent or refused */ } finally { if (fd != null) fs.closeSync(fd); }
   };
+  if (provider === 'codex') {
+    add(path.join(localPath, 'AGENTS.md'));
+    return parts.join('\n\n').slice(0, cap);
+  }
   add(path.join(localPath, 'CLAUDE.md'));
   const rules = path.join(localPath, '.claude', 'rules');
   try {
