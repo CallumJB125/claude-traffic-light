@@ -644,6 +644,24 @@ test('act(…, {subject}): actAs only memberFor(subject) — an unlinked user ca
   } finally { await h.close(); }
 });
 
+test('act() without a subject acts only as created_by: a member linked on the connection is FORBIDDEN (audited failed/forbidden), and with a subject only its linked member', async () => {
+  const { h, reg, beh, bob, conn } = await setup();
+  try {
+    const ctx = reg.ctxFor(conn);
+    const make = (subject, as) => ctx.act('card.create', { subject }, (s) => s.actAs(as).createCard(h.ids.board, { request_id: randomUUID(), title: 'From chat' }));
+    const ub = beh.sub;
+    await link(h, bob, conn);
+    assert.equal(ctx.memberFor(ub), h.ids.bob);
+    await assert.rejects(make(undefined, h.ids.bob), (e) => e.code === 'FORBIDDEN', 'a linked member is not acted as without its subject');
+    assert.deepEqual([reg.audit(conn)[0].decision, reg.audit(conn)[0].error], ['failed', 'forbidden']);
+    await assert.rejects(make(null, h.ids.bob), (e) => e.code === 'FORBIDDEN');
+    assert.equal((await make(undefined, h.ids.alice)).decision, 'auto');
+    assert.equal((await make(ub, h.ids.bob)).decision, 'auto');
+    await assert.rejects(make(ub, h.ids.alice), (e) => e.code === 'FORBIDDEN');
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title = 'From chat'").n, 2);
+  } finally { await h.close(); }
+});
+
 // ── accounts mode: the credential binding ────────────────────────────────
 
 test('accounts: the state names the credential that started it; a callback carrying another user\'s, or another session of the same user, is refused; signed out in between is refused; a desktop start finishes in a cookie-less window', async () => {

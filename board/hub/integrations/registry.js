@@ -357,11 +357,6 @@ export function createIntegrations({
       throw last;
     }
 
-    // Only the member who connected it, or one linked from this workspace by
-    // an explicit identity link (never any writable member of the org).
-    const mayActAs = (memberId) => memberId === c.created_by
-      || !!db.get('SELECT 1 AS x FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId);
-
     // D98: the member a provider user acts as, linked on this connection, of
     // its team and able to write; else null (a viewer acts as nobody).
     function memberFor(subject) {
@@ -380,7 +375,7 @@ export function createIntegrations({
     // Re-read on every call: a handle must not outlive a removal or demotion.
     function actor(memberId) {
       const m = hub.member(memberId);
-      if (!m || m.org_id !== c.org_id || !mayActAs(m.id)) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+      if (!m || m.org_id !== c.org_id) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
       if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable();
       // Admin rights never pass to a tool (Api uses role for "involved" checks).
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
@@ -404,9 +399,11 @@ export function createIntegrations({
 
     function actAs(memberId, { live, action: actName, track, external_ref, subjectKey, subject = null }) {
       // An act() for a provider user acts only as that user's linked member,
-      // checked again on every call: never as whoever connected the tool.
+      // never as whoever connected the tool; one without a subject only as
+      // the member who connected it, never as some other linked member.
+      // Checked again on every call.
       const bound = () => {
-        if (subject != null && memberFor(subject) !== memberId) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+        if (subject != null ? memberFor(subject) !== memberId : memberId !== c.created_by) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
       };
       bound();
       const first = actor(memberId);

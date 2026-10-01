@@ -118,7 +118,8 @@
 //   // ctx.act(action, { subject: '<provider user id>' }, …) limits that
 //   // user's createCard to integration_card_subject (5/h)too, and lets
 //   // actAs only that user's linked member (ctx.memberFor(subject), D98):
-//   // anyone else is FORBIDDEN.
+//   // anyone else is FORBIDDEN. Without a subject actAs takes only
+//   // ctx.connection.created_by, never another linked member.
 //   // createCard(boardId, …) takes a board of the connection's team only
 //   // (else NOT_FOUND, before any rate token) and the card starts in todo.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
