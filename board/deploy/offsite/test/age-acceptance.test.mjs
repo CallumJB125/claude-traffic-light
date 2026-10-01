@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import { AgeCipher } from '../age.mjs';
+import { prepare, upload, retrieve } from '../offsite-lib.mjs';
+import { validateBackup, stageRestore } from '../../pi/backup-lib.mjs';
+import { rig } from './helpers.mjs';
+import { fakeS3 } from './fake-s3.mjs';
+
+const AGE=process.env.OFFSITE_TEST_AGE,KEYGEN=process.env.OFFSITE_TEST_KEYGEN;
+test('genuine age + actual SDK recover off-site WAL/artifact/approval after original local bundle is destroyed',{skip:!AGE||!KEYGEN},async t=>{
+  const r=rig(t),s=await fakeS3(t),identity=path.join(r.root,'recovery-key.txt');
+  execFileSync(KEYGEN,['--output',identity],{stdio:['ignore','ignore','ignore']});fs.chmodSync(identity,0o600);
+  const publicRecipient=execFileSync(KEYGEN,['-y',identity],{encoding:'utf8'}).trim();
+  const encrypt=new AgeCipher({executable:AGE,publicRecipient}),decrypt=new AgeCipher({executable:AGE,identity});
+  const p=await prepare({...r.options,bundle:r.bundle,cipher:encrypt,policy:{chunkBytes:4096}});
+  const options={...r.options,transport:p.transport_id,trustedKeys:r.trustedKeys,store:s.store};
+  await upload(options);
+  assert.ok([...s.bytes.keys()].at(-1).endsWith('/completion.json'));
+  for(const [key,b]of s.bytes)if(key.endsWith('.age'))assert.ok(b.subarray(0,64).toString().startsWith('age-encryption.org/v1'));
+  assert.ok(!Buffer.concat([...s.bytes.values()]).includes(r.bytes));
+  fs.rmSync(r.bundle,{recursive:true});fs.rmSync(r.outbox,{recursive:true});
+  const destination=path.join(r.root,'downloaded');await retrieve({...options,cipher:decrypt,destination});
+  assert.equal(validateBackup(destination).artifacts.length,1);
+  const db=new DatabaseSync(path.join(destination,'board.db'),{readOnly:true});
+  assert.equal(db.prepare('SELECT value FROM state').get().value,'original');
+  assert.equal(db.prepare('SELECT sha256 FROM decisions').get().sha256,r.sha256);db.close();
+  assert.deepEqual(fs.readFileSync(path.join(destination,'client-artifacts',`${r.id}.bin`)),r.bytes);
+  stageRestore({bundle:destination,destination:path.join(r.root,'working')});
+  const wrong=path.join(r.root,'wrong-key.txt');execFileSync(KEYGEN,['--output',wrong],{stdio:['ignore','ignore','ignore']});fs.chmodSync(wrong,0o600);
+  await assert.rejects(retrieve({...options,cipher:new AgeCipher({executable:AGE,identity:wrong}),destination:path.join(r.root,'wrong')}),e=>e.code==='ENCRYPTION');
+  assert.equal(fs.existsSync(path.join(r.root,'wrong')),false);
+  assert.ok(s.calls.every(c=>['PUT','GET'].includes(c.method)));
+});
