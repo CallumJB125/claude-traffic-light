@@ -100,22 +100,40 @@ function findTranscript(dirs, teamName, agentName, since) {
   return null;
 }
 
-// mtime of the member's transcript, or null when it cannot be found. The
-// path is resolved once per member; a miss is retried at most once a minute.
+// Only a member already reading as waiting from a null beat retries sooner:
+// its first write must clear that lamp-visible state quickly, and only those
+// members pay the extra directory scan.
+const NULL_BEAT_RETRY_MS = 10 * 1000;
+
+// The pane is part of the key so a member that leaves and rejoins without a
+// joinedAt is a new member, not one that inherits the old first-seen time.
+function beatKey(m) {
+  return `${m.agentId || m.name}@${m.joinedAt || 0}@${m.tmuxPaneId || ''}`;
+}
+
+// mtime of the member's transcript, or null when it cannot be found; `since`
+// is where a null beat starts counting quiet. The path is resolved once per
+// member; a miss is retried at most once a minute.
 function heartbeat(m, teamName, cwds, projectsDir, cache, now) {
-  const key = `${m.agentId || m.name}@${m.joinedAt || 0}`;
+  const key = beatKey(m);
   let hit = cache.get(key);
-  if (!hit || (!hit.file && now - hit.triedAt >= RESOLVE_RETRY_MS)) {
+  // A transcript older than joinedAt is skipped as someone else's, so a miss
+  // means "nothing written since join"; joinedAt (never earlier than the stale
+  // mtime) is the simplest start for that quiet, and first sight stands in when
+  // the config has no joinedAt.
+  const firstSeen = hit ? hit.firstSeen : now;
+  const since = m.joinedAt || firstSeen;
+  if (!hit || (!hit.file && (now - hit.triedAt >= RESOLVE_RETRY_MS || (now - since > IDLE_AFTER_MS && now - hit.triedAt >= NULL_BEAT_RETRY_MS)))) {
     const dirs = [...new Set(cwds.filter(Boolean))].map((c) => path.join(projectsDir, c.replace(/[^a-zA-Z0-9]/g, '-')));
-    hit = { file: dirs.length ? findTranscript(dirs, teamName, String(m.name || ''), m.joinedAt || 0) : null, triedAt: now };
+    hit = { file: dirs.length ? findTranscript(dirs, teamName, String(m.name || ''), m.joinedAt || 0) : null, triedAt: now, firstSeen };
     cache.set(key, hit);
   }
-  if (!hit.file) return null;
+  if (!hit.file) return { beat: null, since };
   try {
-    return fs.statSync(hit.file).mtimeMs;
+    return { beat: fs.statSync(hit.file).mtimeMs, since };
   } catch {
-    cache.delete(key);
-    return null;
+    cache.set(key, { file: null, triedAt: -Infinity, firstSeen });
+    return { beat: null, since };
   }
 }
 
@@ -201,7 +219,8 @@ function scanAgents(session, opts = {}) {
   // Claude Code's native agent teams: one tmux pane per member. A running
   // member carries isActive:true, a finished one isActive:false; one that
   // never ran has no isActive at all. A live member whose transcript has gone
-  // quiet is idling in its pane: waiting. No transcript found stays working.
+  // quiet is idling in its pane: waiting. No transcript since it joined counts
+  // as quiet from joinedAt.
   // (tmux can't help here: #{window_activity} is per window, not per pane.)
   if (id) {
     const teamDir = path.join(teamsDir, `session-${id.slice(0, 8)}`);
@@ -217,9 +236,11 @@ function scanAgents(session, opts = {}) {
       if (m.isActive !== true && m.isActive !== false && neverStarted(teamDir, m.name, now)) continue;
       let status = 'done';
       let beat = null;
-      if (m.isActive !== false) {
-        beat = heartbeat(m, teamName, [m.cwd, cwd], projectsDir, cache, now);
-        status = beat !== null && now - beat > IDLE_AFTER_MS ? 'waiting' : 'working';
+      if (m.isActive === false) cache.delete(beatKey(m));
+      else {
+        const hb = heartbeat(m, teamName, [m.cwd, cwd], projectsDir, cache, now);
+        beat = hb.beat;
+        status = now - (beat === null ? hb.since : beat) > IDLE_AFTER_MS ? 'waiting' : 'working';
         live += 1;
       }
       add({
@@ -282,4 +303,4 @@ function sweepStaleFiles(dir, maxAgeMs, now = Date.now()) {
   return removed;
 }
 
-module.exports = { scanAgents, mergeAgents, agentStatus, readJson, sweepStaleFiles, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS };
+module.exports = { scanAgents, mergeAgents, agentStatus, readJson, sweepStaleFiles, TEAMS_DIR, PROJECTS_DIR, TEAM_MEMBER_MAX_AGE_MS, NEVER_STARTED_MS, IDLE_AFTER_MS, RESOLVE_RETRY_MS, NULL_BEAT_RETRY_MS };
