@@ -52,7 +52,12 @@ module.exports = {
     target: [{ target: 'nsis', arch: ['x64'] }, { target: 'portable', arch: ['x64'] }],
     icon: 'assets/icon.ico',
   },
-  portable: { artifactName: `${Brand.name}-\${version}-win-\${arch}-portable.exe` },
+  portable: {
+    artifactName: `${Brand.name}-\${version}-win-\${arch}-portable.exe`,
+    // In locked builder 26.16.1, true uses a separate NSIS plugin directory
+    // per launch: a hook can start the launcher while its GUI is still open.
+    unpackDirName: true,
+  },
   nsis: {
     ...base.nsis,
     oneClick: false,
