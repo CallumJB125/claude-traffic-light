@@ -93,6 +93,7 @@ test.describe('widget right-click', () => {
     const h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_MENU_SPY: '1' } });
     try {
       const w = await windowByFile(h.app, 'index.html');
+      await w.waitForLoadState('load');
       await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
       const plexiformWindows = async () => h.app.windows().filter((p) => p.url().endsWith('/sidebar.html')).length;
       await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
@@ -109,8 +110,10 @@ test.describe('widget right-click', () => {
     const h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_MENU_SPY: '1' } });
     try {
       const w = await windowByFile(h.app, 'index.html');
+      await w.waitForLoadState('load');
       await expect.poll(() => trayLabels(h.app).catch(() => []), { timeout: 15000 }).toContain('Open Team…');
       await w.evaluate(() => document.getElementById('app').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true })));
+      await expect.poll(() => h.app.evaluate(() => !!global.__buddyWidgetMenu), { timeout: 10000 }).toBe(true);
       const labels = await h.app.evaluate(() => global.__buddyWidgetMenu.items.map((i) => i.label).filter(Boolean));
       for (const l of ['Open Plexiform…', 'Open Team…', 'Open Integrations…', 'Open Board…', 'Open Tasks… (soon)', 'Open Usage…', 'Open Settings…', 'Open About & Updates…', 'Floating Widget', 'Open at Login', 'Quit']) expect(labels).toContain(l);
       expect(labels).toEqual(await trayLabels(h.app).then((t) => t.filter(Boolean)));
