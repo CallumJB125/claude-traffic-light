@@ -28,8 +28,8 @@ these in a connector:**
 
 **Never** journal or audit secrets, tokens or external message text (D41): ids and short
 labels only. The registry already keeps a card you create out of the journal: its `card.create`
-row holds short sha256 hashes of the title, body and acceptance, never the text, and keyed hashes (HMAC under a per-hub key an
-operator can erase) of your `external_ref`, `base_ref` and `request_id`, never the ids; of its labels only `via:<id>`. **Never** trust identity from a payload field: map external users to
+row holds keyed hashes (HMAC under a per-hub key an operator can erase) of the title, body and
+acceptance, never the text, and of your `external_ref`, `base_ref` and `request_id`, never the ids; of its labels only `via:<id>`. **Never** trust identity from a payload field: map external users to
 members only through a verified link (`external_identities`) or a rule approved in review.
 
 **Connections** are per team: two teams may connect the same external workspace, each with

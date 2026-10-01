@@ -150,9 +150,11 @@ test('M-2: an integration’s card.create journals hashes and ids, never the tit
     const p = JSON.parse(row.payload);
     for (const f of ['title', 'body', 'acceptance']) {
       assert.equal(f in p, false, `${f} is not journaled`);
-      assert.match(p[`${f}_sha256`], /^[0-9a-f]{16}$/);
+      assert.match(p[`${f}_hmac`], /^[0-9a-f]{32}$/);
+      assert.equal(`${f}_sha256` in p, false, 'no unkeyed hash: a short title is guessable from it');
     }
-    assert.equal(p.title_sha256, createHash('sha256').update(secret).digest('hex').slice(0, 16));
+    assert.equal(p.title_hmac, h.hub.refHash(secret), 'keyed (L3)');
+    assert.notEqual(p.title_hmac, createHash('sha256').update(secret).digest('hex').slice(0, 32));
     assert.equal(p.connection_id, conn.id);
     // A keyed hash, never the id itself (hardening M-3b).
     assert.equal('external_ref' in p, false);

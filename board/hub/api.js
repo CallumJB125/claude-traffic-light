@@ -2,7 +2,7 @@
 // change is hub.apply() → states.step() inside the board's queue; the rest are
 // plain row edits that never touch run state.
 
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { normalizeRemoteUrl } from '../shared/scope.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { classifyPair, kindOf } from '../shared/overlap.js';
@@ -160,15 +160,16 @@ export class Api {
         for (const a of new Set(assignees)) this.db.insert('card_assignees', { card_id: id, member_id: a, role: 'collaborator' });
         if (once) this.db.insert('integration_requests', { ...once, card_id: id, created_at: now });
         const c = this.hub.card(id);
-        // An integration's card text is external text: the append-only
-        // journal can never erase it, so it keeps only hashes (D41); the
-        // text lives in `cards`, where replay and the Dashboard read it.
-        // Its external identifiers (the act() external_ref, base_ref, request_id)
-        // go in as keyed hashes (hub.refHash) and its labels only as via:<provider>.
+        // An integration's card text and external identifiers (the act()
+        // external_ref, base_ref, request_id) are external: the append-only
+        // journal can never erase them, so they go in as keyed hashes
+        // (hub.refHash: a plain hash of a short title is guessable) and its
+        // labels only as via:<provider> (D41); the text lives in `cards`,
+        // where replay and the Dashboard read it.
         const common = { key: c.key, repo_id: c.repo_id, budget_cents: c.budget_cents, column_name: c.column_name, assignees: [...new Set(assignees)] };
         const payload = via?.member_id === member.id
           ? {
-            ...common, title_sha256: shortHash(title), body_sha256: shortHash(text), acceptance_sha256: shortHash(acceptance), connection_id: via.connection_id,
+            ...common, title_hmac: this.hub.refHash(title), body_hmac: this.hub.refHash(text), acceptance_hmac: this.hub.refHash(acceptance), connection_id: via.connection_id,
             external_ref_hmac: this.hub.refHash(via.external_ref), base_ref_hmac: this.hub.refHash(baseRef), request_id_hmac: this.hub.refHash(body.request_id),
             labels: JSON.stringify(labels.filter((l) => l.startsWith('via:'))),
           }
@@ -533,7 +534,6 @@ export class Api {
 }
 
 const EXTERNAL_TEXT = new Set(['title', 'body', 'acceptance', 'base_ref', 'labels']);
-const shortHash = (s) => (s == null ? null : createHash('sha256').update(s).digest('hex').slice(0, 16));
 
 function stripErr(e) {
   const { code, message, ...rest } = e;
