@@ -1,0 +1,11 @@
+# Inert execution review
+
+Phase2A adds immutable execution/control previews, not execution commands. Start, Resume, Retry, Pause and Cancel are not registered. No preview dispatches work, creates a run, answers a permission, edits a task or transfers code.
+
+After creating a current039 plan, its human issuer may POST `/api/workflow-plans/:plan_id/execution-preview` with `request_id`, exact `plan_hash`, `purpose:"start"` and `declared_paths`. The array matches every fixed step position, with at most16 unique normalized relative paths per step and200 characters per path. Literal paths and terminal `/**` prefixes are advisory declarations. Empty arrays are allowed for sequential work. Requested concurrency2 remains2 and reports missing/overlapping/unknown parallel scope explicitly. No filesystem lock or knowledge of undeclared edits is implied.
+
+GET `/api/workflow-execution-previews/:execution_preview_id` returns a fresh scoped staff/viewer projection and the exact source, execution-preview and path hashes. Validity is at most24 hours and no later than the source plan's expiry; retry retains IDs/hashes/expiry. Boot, rollback, account/credential/member replacement and stale source require a fresh review. Base references are labelled unverified and require human review; no merge or automatic source transfer is provided.
+
+The separate closed command parser binds future Start to `request_id,plan_hash,execution_preview_id,execution_preview_hash,path_intent_hash,expected_revision:0,confirm:true`. Parsing grants no authority. Future Resume/Retry previews bind a fixed execution revision and reviewed source plan; phase2A can inspect only already-recorded private progress and provides no way to create or authorize an execution. The legacy037/039 schema and hashes remain unchanged.
+
+Migration044 separates private immutable snapshots, future authorization/progress/receipts/proofs and durable owned-intent fencing. Erasing private parents disables the retained request marker before deleting history; it cannot become an ordinary request through a missing/null parent. Boot pauses recorded workflow scheduling metadata. These database hooks do not mutate ordinary cards, runs, dispatches or approvals. The entire guarded lifecycle packet and human UI still require separate source/runtime acceptance.
