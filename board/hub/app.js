@@ -17,7 +17,7 @@ import { Hub, defaultClock } from './hub.js';
 import { Api } from './api.js';
 import { createAccessVerifier } from './auth.js';
 import { createGitHub, noGitHub } from './github.js';
-import { createHttpHandler, createUpgradeHandler, makeAuthenticate } from './http.js';
+import { createHttpHandler, createUpgradeHandler, makeAuthenticate, REQUEST_LIMITS } from './http.js';
 import { createLogger } from './log.js';
 import { seedDev, seedLocal, bootstrapAdmin } from './seed.js';
 import { Accounts } from './identity/accounts.js';
@@ -80,7 +80,10 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.sweepIntegrationsPending = () => integrations.sweepPending();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 }); // privacy-flow: local-board-hub
   const handler = createHttpHandler({ hub, api, config, integrations });
-  const server = createServer(handler);
+  const lim = { ...REQUEST_LIMITS, ...config.requestLimits };
+  const server = createServer({
+    requestTimeout: lim.requestTimeoutMs, headersTimeout: lim.headersTimeoutMs, keepAliveTimeout: lim.keepAliveTimeoutMs, connectionsCheckingInterval: lim.checkIntervalMs,
+  }, handler);
   server.on('upgrade', createUpgradeHandler({ hub, config, wss, authenticate: makeAuthenticate({ hub, config }) }));
 
   if (TIME_SCALE !== 1) log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });

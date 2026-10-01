@@ -6,7 +6,7 @@ The product name is **Plexiform** (`shared/brand.js`). Only user-facing text use
 
 ## Conventions
 
-- JSON in and out. Every response has header `Board-Protocol: 1`. Mutations need `Content-Type: application/json`.
+- JSON in and out. Every response has header `Board-Protocol: 1`. Mutations need `Content-Type: application/json`. A body is read only after the route's credential is checked, is at most 64 KiB on these routes (`413 PAYLOAD_TOO_LARGE`) and must arrive within 20 s (`408 TIMEOUT`) (CONTRACT D105).
 - Errors: `{"error": {"code": "<CODE>", "message": "…", …extra}}`. The HTTP status comes from the code (table at the end). `429` responses also send `Retry-After: <s>` and `error.retry_after_s`.
 - `request_id` (uuid) is optional on the account routes. When present on a mutation, a repeat within 10 minutes replays the first answer (header `Board-Replayed: 1`). Creating or resending an invite is the exception: its answer holds a link and code shown once, so a repeat answers `409 CONFLICT {reason:'REPLAYED'}` "This invite was already made. Resend it to get a new link." and the replay cache never holds them; the apps offer Resend.
 - Timestamps are ISO-8601 UTC strings.
@@ -502,6 +502,8 @@ The app's runner process gets `{"type": "runner.config", "hub_url": "https://…
 | `CONFLICT` | 409 | deleting the only owner of a team with members (`sole_owner_of`); several teams and no `X-Board-Team` on `/api/me`; the last owner (`reason:'LAST_OWNER'`); a taken slug; a second pending invite for one address (`invite_id`) |
 | `ALREADY_MEMBER` | 409 | inviting, or accepting an invite, for someone already in the team (`team`) |
 | `CONFIRM_REQUIRED` | 428 | magic link opened in a different browser (`email_masked`) |
+| `TIMEOUT` | 408 | the request body did not arrive within 20 s (D105) |
+| `PAYLOAD_TOO_LARGE` | 413 | a body over 64 KiB (D105) |
 | `RATE_LIMITED` | 429 | see Rate limits (`retry_after_s`) |
 | `PROVIDER_ERROR` | 502 | Google or GitHub refused the sign-in code |
 | `PROVIDER_UNAVAILABLE` | 503 | Google or GitHub (or Google's signing keys) couldn't be reached |

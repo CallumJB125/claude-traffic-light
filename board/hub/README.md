@@ -107,6 +107,10 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_SHUTDOWN_GRACE_MS` | `5000` | How long a graceful shutdown waits for WS close handshakes and queued writes |
 | `BOARD_WEBHOOK_READ_MS` | `3000` | How long an integration webhook's body may take to arrive before it is cut with 408 (it is read before the signature is checked) |
 
+### Request limits (D105)
+
+Fixed, no environment variable: the whole request within 30 s, its headers within 15 s, keep-alive idle 5 s; on `/api` the credential is checked before any body is read, a body is at most 1 MiB on card routes and 64 KiB elsewhere, and must arrive within 20 s (408). The webhook ingress keeps its own limits (`BOARD_WEBHOOK_READ_MS`). Tests override the numbers through `config.requestLimits` (`hub/http.js` `REQUEST_LIMITS`).
+
 ## Cloudflare Access
 
 - Browsers: the hub verifies `Cf-Access-Jwt-Assertion` on every request and WS
