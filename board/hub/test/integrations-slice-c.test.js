@@ -13,6 +13,7 @@ import { defineConnector } from '../integrations/connector.js';
 import { migrate, loadMigrations } from '../../shared/migrate.js';
 import { startHub } from './helpers.js';
 import { startAccounts } from './accounts-helpers.js';
+import { createLogger } from '../log.js';
 
 // Secret-shaped values are built at runtime.
 const CS = `csec${randomBytes(8).toString('hex')}`;
@@ -730,5 +731,148 @@ test('C2 F-2: a repeat of a request that made its card answers the same whether 
     assert.equal(spent.result.card.id, made.result.card.id);
     assert.deepEqual(Object.keys(spent), Object.keys(full));
     assert.equal(spent.decision, full.decision);
+  } finally { await h.close(); }
+});
+
+// ── C3: per-user command bucket ──────────────────────────────────────────
+
+const cmdConnector = (beh, over = {}) => defineConnector({
+  id: 'ucmd', name: 'Ucmd', scopes: [], secrets: [], hosts: ['api.ucmd.example'],
+  connect: { kind: 'token', verifyToken: async () => ({ external_id: 'W1' }) },
+  verify: ({ headers }) => (headers['x-ok'] === '1' ? { ok: true, dedupe_key: headers['x-id'] } : { ok: false, reason: 'nope' }),
+  ackEarly: true,
+  ackBody: (a) => { beh.acks.push({ ...a }); return a.rateLimited ? { text: 'Slow down a little.' } : undefined; },
+  rateSubject: ({ payload }) => beh.subject ? beh.subject(payload) : payload.user ?? null,
+  async handleWebhook({ payload }) { beh.ran.push(payload.n); },
+  ...over,
+});
+
+async function cmdSetup({ over = {}, hubOpts = {} } = {}) {
+  const lines = [];
+  const h = await startHub({ log: createLogger({ level: 'debug', sink: (l) => lines.push(l) }), ...hubOpts });
+  h.hub.setVaultKey(randomBytes(32));
+  const beh = { ran: [], acks: [] };
+  const reg = h.app.integrations;
+  reg.register(cmdConnector(beh, over));
+  const conn = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'ucmd', external_id: 'W1' });
+  const send = async (payload, id = randomUUID()) => { const r = await reg.webhook(conn.id, { headers: { 'x-ok': '1', 'x-id': id }, rawBody: Buffer.from(JSON.stringify(payload)) }); await h.hub.idle(); return r; };
+  return { h, reg, beh, conn, send, lines };
+}
+const userOf = () => `U${randomBytes(5).toString('hex').toUpperCase()}`;
+const rateAudit = (h, conn) => h.db.all("SELECT decision, error, card_id, external_ref, detail FROM integration_audit WHERE connection_id = ? AND action = 'webhook'", conn.id).map((r) => ({ ...r }));
+
+test('C3 integration_user_cmd: 30 a minute per provider user, then nothing runs and ackBody answers with rateLimited:true; webhook_conn unspent, no dedupe row kept; another user unaffected', async () => {
+  const { h, beh, conn, send } = await cmdSetup();
+  try {
+    const u1 = userOf();
+    const u2 = userOf();
+    for (let n = 0; n < 30; n += 1) assert.equal((await send({ user: u1, n })).status, 200);
+    assert.equal(beh.ran.length, 30);
+    const webhookTokens = h.hub.limiter.buckets.get(`webhook_conn|${conn.id}`).tokens;
+    const id = randomUUID();
+    const over = await send({ user: u1, n: 30 }, id);
+    assert.equal(over.status, 200);
+    assert.equal(over.raw, JSON.stringify({ text: 'Slow down a little.' }));
+    assert.equal(over.type, 'application/json; charset=utf-8');
+    assert.equal(beh.ran.length, 30, 'no handler ran');
+    assert.equal(beh.acks.at(-1).rateLimited, true);
+    assert.deepEqual(beh.acks.at(-1).payload, { user: u1, n: 30 });
+    assert.equal(beh.acks.filter((a) => a.rateLimited === undefined).length, 30, 'a normal early answer has no rateLimited');
+    assert.equal(h.hub.limiter.buckets.get(`webhook_conn|${conn.id}`).tokens, webhookTokens, 'webhook_conn unspent');
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM inbound_dedupe WHERE dedupe_key = ?", `${conn.id}:${id}`).n, 0, 'the lease was released');
+    assert.equal((await send({ user: u2, n: 99 })).status, 200);
+    assert.deepEqual(beh.ran.at(-1), 99, 'another user is unaffected');
+    // The released delivery runs once the user is under the limit again.
+    h.clock.advance(60_000);
+    const later = await send({ user: u1, n: 30 }, id);
+    assert.equal(later.status, 200);
+    assert.equal(beh.ran.at(-1), 30);
+    assert.deepEqual((await send({ user: u1, n: 30 }, id)).body, { ok: true, duplicate: true });
+  } finally { await h.close(); }
+});
+
+test('C3 a replay of a finished delivery (or one in progress) spends no integration_user_cmd', async () => {
+  const { h, conn, send } = await cmdSetup();
+  try {
+    const u = userOf();
+    const id = randomUUID();
+    assert.equal((await send({ user: u, n: 1 }, id)).status, 200);
+    const key = `integration_user_cmd|${conn.id}|${h.hub.refHash(u)}`;
+    const left = h.hub.limiter.buckets.get(key).tokens;
+    for (let i = 0; i < 40; i += 1) assert.deepEqual((await send({ user: u, n: 1 }, id)).body, { ok: true, duplicate: true });
+    assert.equal(h.hub.limiter.buckets.get(key).tokens, left);
+    assert.equal((await send({ user: u, n: 2 })).status, 200, 'the user still has their budget');
+  } finally { await h.close(); }
+});
+
+test('C3 refusals are audited webhook/failed/rate_limited at most 6 a minute per connection, with no ids or text', async () => {
+  const { h, conn, send, beh } = await cmdSetup({ hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 1, per_ms: 60_000 } } } } });
+  try {
+    const u = userOf();
+    for (let n = 0; n < 21; n += 1) await send({ user: u, n });
+    assert.equal(beh.ran.length, 1);
+    const rows = rateAudit(h, conn);
+    assert.equal(rows.length, 6);
+    for (const r of rows) assert.deepEqual(r, { decision: 'failed', error: 'rate_limited', card_id: null, external_ref: null, detail: '{}' });
+  } finally { await h.close(); }
+});
+
+test('C3 rateSubject that throws, or returns \'\', 129 chars, a number, an object or a Promise: no bucket, the delivery runs', async () => {
+  const outs = [() => { throw new Error('no'); }, () => '', () => 'U'.repeat(129), () => 42, () => ({ id: 'U1' }), () => Promise.resolve('U1')];
+  for (const fn of outs) {
+    const { h, beh, conn, send } = await cmdSetup({ hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 1, per_ms: 60_000 } } } } });
+    try {
+      beh.subject = fn;
+      for (let n = 0; n < 3; n += 1) assert.equal((await send({ n })).status, 200);
+      assert.equal(beh.ran.length, 3, String(fn));
+      assert.equal([...h.hub.limiter.buckets.keys()].some((k) => k.startsWith('integration_user_cmd|')), false);
+      assert.equal(rateAudit(h, conn).length, 0);
+    } finally { await h.close(); }
+  }
+  // The same rig with a valid subject is limited: the cases above were not.
+  const { h, beh, send } = await cmdSetup({ hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 1, per_ms: 60_000 } } } } });
+  try {
+    beh.subject = () => 'U'.repeat(128);
+    for (let n = 0; n < 3; n += 1) await send({ n });
+    assert.deepEqual(beh.ran, [0]);
+  } finally { await h.close(); }
+});
+
+test('C3 without ackBody: over the limit is 429 RATE_LIMITED with Retry-After over HTTP; a late connector too', async () => {
+  const { h, beh, conn } = await cmdSetup({ over: { ackEarly: undefined, ackBody: undefined }, hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 1, per_ms: 60_000 } } } } });
+  try {
+    const u = userOf();
+    const post = (n) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'x-ok': '1', 'x-id': randomUUID(), 'content-type': 'application/json' }, body: JSON.stringify({ user: u, n }) });
+    assert.equal((await post(1)).status, 200);
+    const r = await post(2);
+    assert.equal(r.status, 429);
+    assert.ok(Number(r.headers.get('retry-after')) >= 1);
+    const body = await r.json();
+    assert.equal(body.error.code, 'RATE_LIMITED');
+    assert.equal(JSON.stringify(body).includes(u), false);
+    assert.deepEqual(beh.ran, [1]);
+  } finally { await h.close(); }
+});
+
+test('C3 defineConnector: rateSubject is a function, for a connector that takes webhooks', () => {
+  const beh = { ran: [], acks: [] };
+  assert.throws(() => cmdConnector(beh, { rateSubject: 'user_id' }), /rateSubject/);
+  assert.throws(() => defineConnector({ id: 'nohook', name: 'N', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) }, rateSubject: () => null }), /rateSubject/);
+  assert.ok(cmdConnector(beh));
+});
+
+test('C3 the subject is never stored or logged: only its keyed hash is in the bucket key (no DB row, audit, journal or log line holds it)', async () => {
+  const { h, conn, send, lines } = await cmdSetup({ hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 2, per_ms: 60_000 } } } } });
+  try {
+    const u = userOf();
+    for (let n = 0; n < 5; n += 1) await send({ user: u, n });
+    const keys = [...h.hub.limiter.buckets.keys()].filter((k) => k.startsWith('integration_user_cmd|'));
+    assert.deepEqual(keys, [`integration_user_cmd|${conn.id}|${h.hub.refHash(u)}`]);
+    assert.equal(keys.some((k) => k.includes(u)), false);
+    assert.equal(lines.join('\n').includes(u), false, 'no log line');
+    for (const t of ['integration_audit', 'journal', 'inbound_dedupe', 'connections']) {
+      assert.equal(JSON.stringify(h.db.all(`SELECT * FROM ${t}`)).includes(u), false, t);
+    }
+    assert.ok(lines.some((l) => /rate_limited/.test(typeof l === 'string' ? l : JSON.stringify(l))), 'refusals still counted in the log, by code');
   } finally { await h.close(); }
 });
