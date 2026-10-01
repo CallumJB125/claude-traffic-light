@@ -260,6 +260,17 @@ const EMPTY = {
   done: 'Finished work shows up here.',
 };
 
+// Local mode only: the board works alone, and a team is where it is shared. The app's
+// Team page does the signing in (this page has no way to ask for it), so this points there.
+export function localCard(model) {
+  if (!model.localCard || model.view !== 'board') return null;
+  return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
+    h('div', { class: 'localcard-text' },
+      h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
+      h('p', { class: 'localcard-body muted small' }, 'Create a team to collaborate: share one board with teammates and their Claude sessions, and connect tools like GitHub. Open Team in the sidebar to sign in. Teams and integrations live on the team hub.')),
+    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss'));
+}
+
 export function alertsStrip(alerts, model) {
   if (model.conn.status === 'lost') return null;
   if (!alerts.items.length) {
@@ -350,6 +361,7 @@ export function boardScreen(model, body = null) {
     topBar(model, lamps),
     connectionBanner(model.conn),
     alertsStrip(model.alerts, model),
+    localCard(model),
     model.view === 'dashboard' ? null : filterBar(model),
     body ?? h('main', { class: 'board', id: 'board', 'aria-label': 'Board columns' },
       COLUMNS.map((c) => column(c, cols[c], model))),

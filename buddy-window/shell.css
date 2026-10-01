@@ -156,6 +156,12 @@ ul { padding: 0; list-style: none; }
 .acct-row-form { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
 .acct-item-sub { margin-left: 24px; }
 .acct-providers { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+/* Narrow windows get one column; the status is always words, colour only adds to it. */
+.acct-connectors { list-style: none; margin: 10px 0 12px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.acct-connector { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.acct-connector h2 { margin: 0; font-size: var(--text-md, 14px); }
+.acct-connector-status { margin: auto 0 0; font-size: var(--text-sm); font-weight: 600; color: var(--muted); }
+.acct-connector-available .acct-connector-status { color: var(--green); }
 .btn-provider { justify-content: center; min-height: 40px; font-weight: 600; margin-top: 0; }
 .acct-emailcode { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
 .acct-emailcode[hidden] { display: none; }

@@ -10,15 +10,16 @@ const { parseInvite, routeInvite, inviteMailto, INVITE_CODE_RE, SLUG_MISMATCH } 
 const { hostOf, partitionFor, integrationPartitionFor } = require('./workspaces');
 const { startProviderSignIn, PROVIDERS, PROVIDER_NAME } = require('./oauth');
 const BRAND = require('./brand');
+const { connectorRows } = require('./connectors');
 
 // Screens the page itself may ask for; the rest (`confirm`, `code`, `browser`)
 // are reached only through the flow (e.g. `confirm` after an invite link).
-const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites']);
+const PAGE_SCREENS = new Set(['hub', 'email', 'create-team', 'join', 'team', 'thismac', 'account', 'invites', 'integrations']);
 
 // Argument types per action; the IPC layer refuses anything else before it runs.
 const ACCT_ARGS = {
   state: [], go: ['string'], hub: ['string'], confirm: ['boolean'], email: ['string'], code: ['string'], resend: [], createTeam: ['string'],
-  oauth: ['string'], cancelOAuth: [],
+  oauth: ['string'], signInWith: ['string'], cancelOAuth: [],
   invite: ['string', 'string', 'string'], resendInvite: ['string', 'string'], emailInvite: ['string', 'string'], revokeInvite: ['string', 'string'], setRole: ['string', 'string', 'string'], removeMember: ['string', 'string'],
   renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
   teamDeleteStart: ['string', 'string'], teamDeleteCode: ['string', 'string'], teamDeleteResend: ['string'], teamDeleteOAuth: ['string', 'string'], deleteTeam: ['string'],
@@ -372,6 +373,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       const m = hubTrusted(acct.hub) ? await clientFor(acct.hub).methods() : { ok: false, error: 'Start again: enter the team hub address.' };
       return { ...base, forInvite: !!pendingInvite, email: acct.hub ? (userOf(acct.hub)?.email ?? '') : '', methods: m.ok ? { google: m.google, github: m.github, email: m.email } : null, methodsError: m.ok ? null : m.error };
     }
+    if (screen === 'integrations') return { ...base, connectors: connectorRows() };
     if (screen === 'browser') return { ...base, provider: oauthRun?.provider ?? null };
     if (screen === 'code') return { ...base, email: acct.hub ? clientFor(acct.hub).pendingEmail() : null };
     if (screen === 'create-team') {
@@ -486,6 +488,15 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       if (!hubTrusted(origin)) return { ok: false, error: 'Start again: enter the team hub address.' };
       if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
       beginOAuth(origin, provider);
+      return { ok: true };
+    },
+    // The signed-out pages' "Continue with Google/GitHub": reach the default hub exactly as the hub
+    // screen's Continue does, then start the same provider sign-in the email screen's button starts.
+    async signInWith(provider) {
+      if (!PROVIDERS.includes(provider)) return { ok: false, error: 'Pick Google or GitHub.' };
+      const r = await ACCT.hub(BRAND.DEFAULT_HUB);
+      if (!r.ok || acct.screen !== 'email' || !hubTrusted(acct.hub)) return r;
+      beginOAuth(acct.hub, provider);
       return { ok: true };
     },
     async cancelOAuth() {

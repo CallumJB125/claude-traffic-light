@@ -4,6 +4,7 @@
 import { h } from './h.js';
 import { icon } from './icons.js';
 import { formatAge } from './view.js';
+import { CONNECTORS, STATUS_TEXT, connectorStatus } from './connectors.js';
 
 const MODE_LABEL = { auto: 'Automatic', ask: 'Ask first', off: 'Off' };
 const DECISION_LABEL = { attempted: 'In progress', auto: 'Done automatically', failed: 'Failed', asked: 'Waiting for a yes', approved: 'Approved', denied: 'Denied', skipped: 'Skipped (off)' };
@@ -232,6 +233,15 @@ function pendingCard(p, m) {
         : h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'integ-pending-cancel-ask', 'data-pending': p.id }, 'Cancel')));
 }
 
+// The local hub has no accounts: a tool is described, never connectable, and its status is words.
+function localCard(c) {
+  const status = connectorStatus(c.id);
+  return h('article', { key: c.id, class: 'integ-card integ-available', 'data-connector': c.id, 'data-status': status },
+    h('header', { class: 'integ-card-head' }, h('h3', { class: 'integ-name' }, c.name)),
+    h('p', { class: 'muted small' }, c.value),
+    h('p', { class: 'integ-status small' }, STATUS_TEXT[status]));
+}
+
 function availableCard(c, m) {
   const manifest = c.connect === 'app_install' && m.manifest?.provider === c.id && /^https:\/\//.test(m.manifest.action ?? '') ? m.manifest : null;
   const tokenOpen = m.tokenFor === c.id;
@@ -311,7 +321,8 @@ export function integrationsScreen(model) {
       h('div', { class: 'integ-grid' }, pending.map((p) => pendingCard(p, vm)))) : null,
     h('section', { class: 'integ-group', 'aria-labelledby': 'integ-available' },
       h('h2', { id: 'integ-available' }, 'Add a tool'),
-      vm.local ? h('p', { class: 'integ-local muted' }, 'Connect tools on a team hub: sign in and open your team’s board.') : null,
-      notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
+      vm.local ? h('p', { class: 'integ-local muted' }, 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.') : null,
+      vm.local ? h('div', { class: 'integ-grid', 'data-grid': 'local-connectors' }, CONNECTORS.map(localCard))
+        : notYet.length ? h('div', { class: 'integ-grid' }, notYet.map((c) => availableCard(c, vm)))
         : h('p', { class: 'muted' }, vm.available.length ? 'Everything available is connected.' : 'No tools are available on this board yet.')));
 }
