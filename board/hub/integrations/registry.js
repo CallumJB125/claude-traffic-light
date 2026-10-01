@@ -1006,6 +1006,20 @@ export function createIntegrations({
     }
     const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", c.provider, ...keys, lease.until);
     const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', c.provider, ...keys, lease.until);
+    // One provider user's commands (C3): only a fresh lease spends it, so a
+    // replayed capture can't drain a user's bucket; over it nothing runs and
+    // the lease goes, so the same bytes can run once the user is under it.
+    const subject = conn.rateSubject ? rateSubjectOf(conn, payload, headers) : null;
+    if (subject) {
+      const t = hub.limiter.take('integration_user_cmd', `${c.id}|${hub.refHash(subject)}`);
+      if (!t.ok) {
+        release();
+        rateRefused(c);
+        if (conn.ackBody) return { status: 200, ...earlyAck(conn, payload, headers, true) };
+        const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
+        throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
+      }
+    }
     // Spent only by verified deliveries that will run: whoever merely knows
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
@@ -1083,17 +1097,33 @@ export function createIntegrations({
   // The early answer: the default JSON, or the connector's ackBody as an
   // empty body, short text or small JSON. Anything else, over ACK_MAX, or a
   // throw is an empty 200 (the provider only needs the 200 in time).
-  function earlyAck(conn, payload, headers) {
+  function earlyAck(conn, payload, headers, rateLimited = false) {
     if (!conn.ackBody) return { body: { ok: true, accepted: true } };
     const empty = { raw: '', type: 'text/plain; charset=utf-8' };
     let v;
-    try { v = conn.ackBody({ payload, headers }); } catch { return empty; }
+    try { v = conn.ackBody(rateLimited ? { payload, headers, rateLimited: true } : { payload, headers }); } catch { return empty; }
     let out;
     if (typeof v === 'string') out = { raw: v, type: 'text/plain; charset=utf-8' };
     else if (isBareObject(v)) {
       try { out = { raw: JSON.stringify(v), type: 'application/json; charset=utf-8' }; } catch { return empty; }
     } else return empty;
     return typeof out.raw === 'string' && Buffer.byteLength(out.raw) <= ACK_MAX ? out : empty;
+  }
+
+  // rateSubject's answer when it is a usable subject; a throw or anything else is none.
+  function rateSubjectOf(conn, payload, headers) {
+    let s;
+    try { s = conn.rateSubject({ payload, headers }); } catch { return null; }
+    return typeof s === 'string' && s.length >= 1 && s.length <= SUBJECT_MAX ? s : null;
+  }
+
+  // Audited a few times a minute per connection, so a flood is no DB write per
+  // delivery; every refusal is one log line with a code (never the subject).
+  function rateRefused(c) {
+    if (hub.limiter.take('integration_rate_audit_conn', c.id).ok) {
+      db.insert('integration_audit', { id: randomUUID(), connection_id: c.id, action: 'webhook', decision: 'failed', error: 'rate_limited', card_id: null, external_ref: null, detail: '{}', undo: null, at: now() });
+    }
+    log?.info?.('integration webhook refused', { integration: c.provider, connection_id: c.id, code: 'rate_limited' });
   }
 
   // The connector's fixed-text "couldn't do that" (C2): a short code, never the
