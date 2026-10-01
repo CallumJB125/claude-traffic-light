@@ -91,7 +91,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_RESTORE` | off | `1`: apply the restore fence bump (+1000, new epoch) at boot. A `<BOARD_DB>.restored` marker does the same |
 | `BOARD_TUNNEL_PROBE_URL` | — | Public URL of `/api/health`, probed every `BOARD_TUNNEL_PROBE_MS`. It counts as healthy only when the answer has the `Board-Protocol` header, so give `/api/health` an Access **Bypass** policy. While the probe fails, orphaning is suspended. Unset: the tunnel is assumed healthy |
 | `BOARD_TUNNEL_PROBE_MS` | `15000` | Probe interval |
-| `BOARD_GITHUB_TOKEN` | — | Read-only token (fine-grained: Pull requests + Contents read). Enables PR/commit verification and the Done merge poll. Unset: evidence stays `self_reported` and no auto-Done |
+| `BOARD_GITHUB_TOKEN` | — | Read-only token (fine-grained: Pull requests + Contents read). Enables PR/commit verification and the Done merge poll. A PR only counts when it is a same-repo PR from the run branch into the run's base branch (D90); forks and retargeted PRs stay `self_reported` and never move the card. Unset: evidence stays `self_reported` and no auto-Done |
 | `BOARD_GITHUB_API` | `https://api.github.com` | GitHub API base URL |
 | `BOARD_GITHUB_POLL_MS` | `60000` | Merge poll interval for in-review cards |
 | `BOARD_WEB_DIR` | `board/web` | Static web root (`/` → `index.html`, `/web/*`) |

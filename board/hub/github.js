@@ -1,6 +1,7 @@
 // Read-only GitHub access for evidence verification and the Done merge poll.
 // Interface (tests inject a fake with the same shape):
-//   getPull(canonical_url, number) → {number, state:'open'|'closed', merged, merged_by, merged_at, head_ref, html_url} | null
+//   getPull(canonical_url, number) → {number, state:'open'|'closed', merged, merged_by, merged_at, head_ref, head_repo_id, head_repo,
+//     base_repo_id, base_ref, html_url} | null   (head_repo_id is null when the head repo was deleted; D90)
 //   getCommit(canonical_url, sha)  → {sha} | null
 // canonical_url is scope.normalizeRemoteUrl() output ("github.com/owner/repo").
 // Non-GitHub repos resolve to null (evidence then stays self_reported).
@@ -31,6 +32,8 @@ export function createGitHub({ token = null, api = 'https://api.github.com', fet
       return {
         number: p.number, state: p.state, merged: !!p.merged, merged_by: p.merged_by?.login ?? null,
         merged_at: p.merged_at ?? null, head_ref: p.head?.ref ?? null, html_url: p.html_url ?? null,
+        head_repo_id: p.head?.repo?.id ?? null, head_repo: p.head?.repo?.full_name ?? null,
+        base_repo_id: p.base?.repo?.id ?? null, base_ref: p.base?.ref ?? null,
       };
     },
     async getCommit(canonical, sha) {
@@ -49,4 +52,18 @@ export const noGitHub = { enabled: false, async getPull() { return null; }, asyn
 export function prNumberOf(ref) {
   const m = /(?:^#?|\/pull\/)(\d+)\/?$/.exec(String(ref ?? '').trim());
   return m ? Number(m[1]) : null;
+}
+
+// D90: a PR is evidence for a card only when it is the card's own work: the run
+// branch (or a later board/<KEY>-r<n>), head in the same repo as the base (no
+// fork; a deleted head repo is unbound), targeting the base the run was
+// dispatched with. `stored` is the binding recorded at verification, if any.
+export function prBound(pull, { branch, key, baseRef, stored = null }) {
+  if (!pull) return false;
+  const head = String(pull.head_ref ?? '');
+  if (!(head === branch || head.startsWith(`board/${key}-r`))) return false;
+  if (pull.head_repo_id == null || pull.head_repo_id !== pull.base_repo_id) return false;
+  if (pull.base_ref == null || pull.base_ref !== (stored?.base_ref ?? baseRef)) return false;
+  if (stored?.head_repo_id != null && stored.head_repo_id !== pull.head_repo_id) return false;
+  return true;
 }

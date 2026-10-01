@@ -37,7 +37,7 @@ export function fakeGitHub() {
     enabled: true,
     pulls,
     commits,
-    setPull(number, p) { pulls.set(number, { number, state: 'open', merged: false, merged_by: null, merged_at: null, html_url: `https://github.com/acme/app/pull/${number}`, ...p }); },
+    setPull(number, p) { pulls.set(number, { number, state: 'open', merged: false, merged_by: null, merged_at: null, html_url: `https://github.com/acme/app/pull/${number}`, head_repo_id: 100, head_repo: 'acme/app', base_repo_id: 100, base_ref: 'main', ...p }); },
     async getPull(canonical, number) { return canonical === 'github.com/acme/app' ? pulls.get(number) ?? null : null; },
     async getCommit(canonical, sha) { return commits.has(sha) ? { sha } : null; },
   };
