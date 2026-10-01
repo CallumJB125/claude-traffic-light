@@ -109,6 +109,53 @@ test('M-1: in-flight reads are capped per address across connections and per con
   } finally { await h.close(); }
 });
 
+test('F4: replaying a captured signed delivery vets nothing; a vetted sender vouches for its /24; a declared provider range skips the connection cap', async () => {
+  const h = await accessHub({ webhookReads: { perPair: 1, perIp: 2, perConn: 2 } });
+  try {
+    const conn = connect(h, 'f4a', { ingressCidrs: ['192.30.252.0/22'] });
+    const id = randomUUID();
+    const body = JSON.stringify({ n: id });
+    const post = (ip) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'cf-connecting-ip': ip, 'x-ok': '1', 'x-id': id }, body });
+    assert.equal((await post('192.0.2.10')).status, 200, 'the provider delivers');
+    const replay = await post('198.51.100.66');
+    assert.deepEqual([replay.status, (await replay.json()).duplicate], [200, true], 'the attacker replays it');
+    const fill = ['203.0.113.2', '203.0.113.3'].map((ip) => slow(h, conn, ip));
+    await tick(300);
+    assert.deepEqual(fill.map((x) => x.status), [null, null]);
+    assert.equal((await deliver(h, conn, '198.51.100.66')).status, 503, 'a replay did not vet its sender');
+    assert.equal((await deliver(h, conn, '192.0.2.77')).status, 200, 'the provider’s /24 is vetted');
+    assert.equal((await deliver(h, conn, '192.30.253.7')).status, 200, 'a declared provider address, never seen before');
+    assert.equal((await deliver(h, conn, '192.30.0.1')).status, 503, 'outside the range');
+    for (const x of fill) x.req.destroy();
+    assert.equal(h.app.integrations.trustedIngress(conn.id, '::ffff:192.30.255.255'), true);
+    assert.equal(h.app.integrations.trustedIngress(conn.id, 'not-an-ip'), false);
+  } finally { await h.close(); }
+});
+
+test('F4: ingressCidrs must be narrow CIDR ranges on a webhook connector', () => {
+  for (const bad of [['0.0.0.0/0'], ['10.0.0.0/8'], ['::/0'], ['2001:db8::/16'], ['192.30.252.0'], ['192.30.252.0/33'], ['host.example/24'], [7], 'x']) {
+    assert.throws(() => probe('f4b', { ingressCidrs: bad }), /ingressCidrs/, JSON.stringify(bad));
+  }
+  assert.throws(() => probe('f4b', { ingressCidrs: ['192.30.252.0/22'], handleWebhook: undefined, verify: undefined }), /ingressCidrs/);
+  assert.deepEqual(probe('f4b', { ingressCidrs: ['192.30.252.0/22', '2a0a:a440::/32'] }).ingressCidrs, ['192.30.252.0/22', '2a0a:a440::/32']);
+});
+
+test('F4: the pre-signature read deadline is 3 s by default; BOARD_WEBHOOK_READ_MS overrides it', async () => {
+  const { loadConfig } = await import('../config.js');
+  assert.equal(loadConfig({ BOARD_AUTH: 'dev', BOARD_WEBHOOK_READ_MS: '5000' }).webhookReads.deadlineMs, 5000);
+  assert.equal(loadConfig({ BOARD_AUTH: 'dev' }).webhookReads, undefined);
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'f4c');
+    const started = Date.now();
+    const held = slow(h, conn, '203.0.113.40');
+    assert.equal(await Promise.race([held.answered, tick(5000).then(() => 'still reading')]), 408);
+    const took = Date.now() - started;
+    assert.ok(took >= 2500 && took < 4500, `cut after ${took} ms`);
+    held.req.destroy();
+  } finally { await h.close(); }
+});
+
 test('M-1: a body that does not arrive by the deadline is cut with 408 and frees its slot', async () => {
   const h = await accessHub({ webhookReads: { perPair: 1, deadlineMs: 200 } });
   try {

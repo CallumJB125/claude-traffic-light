@@ -97,6 +97,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_WEB_DIR` | `board/web` | Static web root (`/` → `index.html`, `/web/*`) |
 | `BOARD_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
 | `BOARD_SHUTDOWN_GRACE_MS` | `5000` | How long a graceful shutdown waits for WS close handshakes and queued writes |
+| `BOARD_WEBHOOK_READ_MS` | `3000` | How long an integration webhook's body may take to arrive before it is cut with 408 (it is read before the signature is checked) |
 
 ## Cloudflare Access
 

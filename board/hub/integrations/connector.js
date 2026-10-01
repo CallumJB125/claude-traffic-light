@@ -40,6 +40,13 @@
 //   // code) and the lease released, so a manual redelivery runs it.
 //   ackEarly: false,
 //
+//   // Optional: the provider's published webhook source ranges (GitHub's
+//   // `hooks` from https://api.github.com/meta). A delivery from one of them
+//   // skips the per-connection in-flight read cap (it still needs a valid
+//   // signature). The connector owner refreshes the list when the provider
+//   // changes it. IPv4 /16 or narrower, IPv6 /32 or narrower.
+//   ingressCidrs: ['192.30.252.0/22', …],
+//
 //   // Bus consumer: board events (journal rows, CONTRACT §15) this connector reacts to.
 //   consumes: ['card.transition', 'card.notify', …],
 //   async onEvent(row, ctx) → void,
@@ -64,6 +71,8 @@
 //   async health(ctx) → { ok, detail? },
 // })
 
+import { isIP } from 'node:net';
+
 const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
 const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
@@ -84,6 +93,16 @@ export function cleanLinkStatus(v) {
   if (v == null || typeof v !== 'object' || Array.isArray(v)) return out;
   for (const [k, allowed] of Object.entries(LINK_STATUS)) if (Object.hasOwn(v, k) && allowed.includes(v[k])) out[k] = v[k];
   return out;
+}
+
+/** 'a.b.c.d/n' | 'x::/n' → {address, prefix, type: 'ipv4'|'ipv6'} | null; too wide a range is null. */
+export function parseCidr(v) {
+  const m = typeof v === 'string' ? /^([^/\s]+)\/(\d{1,3})$/.exec(v) : null;
+  const family = m ? isIP(m[1]) : 0;
+  if (!family) return null;
+  const prefix = Number(m[2]);
+  const [min, max] = family === 4 ? [16, 32] : [32, 128];
+  return prefix >= min && prefix <= max ? { address: m[1], prefix, type: family === 4 ? 'ipv4' : 'ipv6' } : null;
 }
 
 export function defineConnector(spec) {
@@ -107,6 +126,9 @@ export function defineConnector(spec) {
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
   if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
+  if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
+    errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
+  }
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);
@@ -116,5 +138,5 @@ export function defineConnector(spec) {
     else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
   }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, hosts: Object.freeze([...spec.hosts]) });
+  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
 }

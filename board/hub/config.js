@@ -66,6 +66,7 @@ export function loadConfig(env = process.env) {
     sharedDir: resolve(HERE, '..', 'shared'),
     logLevel: env.BOARD_LOG_LEVEL || 'info',
     shutdownGraceMs: int(env.BOARD_SHUTDOWN_GRACE_MS, 5_000),
+    ...(env.BOARD_WEBHOOK_READ_MS ? { webhookReads: { deadlineMs: int(env.BOARD_WEBHOOK_READ_MS, 3_000) } } : {}),
   };
   delete env.BOARD_LOCAL_SECRET;
   delete env.BOARD_RESEND_API_KEY;

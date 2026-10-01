@@ -60,9 +60,20 @@ const localCookieOk = (hub, req) => {
 // unverified sender can hold is bounded by count and time: in-flight reads
 // per (connection, IP), per IP (over every connection) and per connection,
 // and a deadline for the whole body (slowloris). A pair that delivered a
-// verified webhook recently skips the per-connection cap, so a flood from
-// fresh addresses can't crowd out the provider's own. config.webhookReads overrides.
-const WEBHOOK_READS = Object.freeze({ perPair: 4, perIp: 8, perConn: 16, deadlineMs: 10_000, verifiedMs: 15 * 60_000, verifiedMax: 10_000 });
+// new verified webhook recently (from its /24 or /48: providers send from
+// pools), or an address in the connector's ingressCidrs, skips the
+// per-connection cap, so a flood from fresh addresses can't crowd out the
+// provider's own. A webhook body is small and sent at once, hence the short
+// deadline. config.webhookReads overrides.
+const WEBHOOK_READS = Object.freeze({ perPair: 4, perIp: 8, perConn: 16, deadlineMs: 3_000, verifiedMs: 15 * 60_000, verifiedMax: 10_000 });
+
+// failBucketKey's key → the network a vetted sender vouches for.
+const vetBucketKey = (key) => {
+  const v4 = /^(\d+\.\d+\.\d+)\.\d+$/.exec(key);
+  if (v4) return `${v4[1]}.0/24`;
+  const v6 = /^([^:]+:[^:]+:[^:]+):[^:]+::\/64$/.exec(key);
+  return v6 ? `${v6[1]}::/48` : key;
+};
 
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
@@ -167,7 +178,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   };
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
-  const verifiedPairs = new Map(); // (connection|ip) → hub mono ms until which it skips the per-connection cap
+  const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
   const hsts = (() => { try { return new URL(config.publicUrl).protocol === 'https:'; } catch { return false; } })();
 
@@ -432,10 +443,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         // (per connection + client IP) only turn a later failure's 401 into a
         // 429; before the signature is checked only the in-flight read caps
         // (WEBHOOK_READS) apply, and a refused read is 503 so the provider retries.
-        const ip = failBucketKey(clientIp(req, config));
+        const raw = clientIp(req, config);
+        const ip = failBucketKey(raw);
         const failKey = `${hook[1]}|${ip}`;
+        const vetKey = `${hook[1]}|${vetBucketKey(ip)}`;
         const count = (m, k) => m.get(k) ?? 0;
-        const vetted = (verifiedPairs.get(failKey) ?? -Infinity) > hub.mono();
+        const vetted = integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono();
         // An unread (or half-read) body is not drained at the sender's pace:
         // the socket goes once the answer had a moment to reach the sender.
         const cut = () => res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
@@ -464,8 +477,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         // webhook() spends webhook_conn only once the signature is verified.
         const out = await integrations.webhook(hook[1], { headers: req.headers, rawBody: got.body });
         if (out.verified) {
-          verifiedPairs.delete(failKey);
-          verifiedPairs.set(failKey, hub.mono() + readLimits.verifiedMs);
+          verifiedPairs.delete(vetKey);
+          verifiedPairs.set(vetKey, hub.mono() + readLimits.verifiedMs);
           if (verifiedPairs.size > readLimits.verifiedMax) verifiedPairs.delete(verifiedPairs.keys().next().value);
         }
         if (out.status === 401) return failed(out.status, out.body);

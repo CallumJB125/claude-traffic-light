@@ -17,7 +17,8 @@ import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
-import { AUTONOMY, cleanLinkStatus } from './connector.js';
+import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
+import { BlockList, isIP } from 'node:net';
 import { prNumberOf } from '../github.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -129,6 +130,7 @@ export function createIntegrations({
   handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random,
 }) {
   const connectors = new Map();
+  const ingress = new Map(); // provider → BlockList of its ingressCidrs
   const db = hub.db;
   const now = () => hub.iso();
   const inflight = new Map(); // consumer name → {seq, running}: the onEvent call still running after its timeout
@@ -605,6 +607,14 @@ export function createIntegrations({
     });
   }
 
+  /** A client address inside the connector's declared ingressCidrs (the provider's own senders). */
+  function trustedIngress(connectionId, ip) {
+    const list = ingress.get(row(connectionId)?.provider);
+    const a = String(ip ?? '').replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
+    const family = isIP(a);
+    return !!(list && family && list.check(a, family === 4 ? 'ipv4' : 'ipv6'));
+  }
+
   /** The HTTP layer asks this before reading a body: unknown or inactive → 404 unread. */
   function webhookTarget(connectionId) {
     const c = row(connectionId);
@@ -613,8 +623,8 @@ export function createIntegrations({
 
   /**
    * → {status, body, headers?, verified?}. Never echoes why a signature failed to the
-   * caller. `verified`: the signature checked out (the HTTP layer trusts that
-   * sender's address a little more).
+   * caller. `verified`: the signature checked out and the delivery was new to
+   * this hub (the HTTP layer trusts that sender's network a little more).
    */
   async function webhook(connectionId, { headers, rawBody }) {
     const c = row(connectionId);
@@ -638,7 +648,10 @@ export function createIntegrations({
       log?.warn?.('integration webhook rejected', { integration: c.provider, connection_id: c.id, reason: redact(v?.reason ?? 'no dedupe key') });
       return { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'bad signature' } } };
     }
-    return { ...(await verifiedWebhook(c, conn, { headers, rawBody, v })), verified: true };
+    const out = await verifiedWebhook(c, conn, { headers, rawBody, v });
+    // Only a delivery that took a fresh lease vets its sender: anyone holding
+    // a captured signed request can replay it as a duplicate.
+    return { ...out, verified: !out.body?.duplicate && !out.body?.in_progress };
   }
 
   async function verifiedWebhook(c, conn, { headers, rawBody, v }) {
@@ -877,6 +890,11 @@ export function createIntegrations({
   function register(conn) {
     if (connectors.has(conn.id)) throw new Error(`integration ${conn.id} registered twice`);
     connectors.set(conn.id, conn);
+    if (conn.ingressCidrs?.length) {
+      const list = new BlockList();
+      for (const r of conn.ingressCidrs.map(parseCidr)) if (r) list.addSubnet(r.address, r.prefix, r.type);
+      ingress.set(conn.id, list);
+    }
     for (const c of db.all("SELECT * FROM connections WHERE provider = ? AND status = 'active'", conn.id)) subscribe(c);
   }
 
@@ -917,6 +935,7 @@ export function createIntegrations({
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, error, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC, rowid DESC LIMIT ?', id, Math.min(500, Math.max(1, Number(limit) || 100)))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),
     webhookTarget,
+    trustedIngress,
     webhook,
     sweepDedupe,
     oauthStart,
