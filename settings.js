@@ -377,7 +377,9 @@
     const showAccount = async () => {
       const v = await window.settingsApi.accountView().catch(() => null);
       if (!v) return;
-      document.getElementById('account-line').textContent = v.line;
+      const line = document.getElementById('account-line');
+      line.textContent = v.line;
+      line.title = v.line; // the clamp may hide the tail
       document.getElementById('account-signin').hidden = !v.signIn;
     };
     document.getElementById('account-team').addEventListener('click', () => window.settingsApi.accountOpen('team'));

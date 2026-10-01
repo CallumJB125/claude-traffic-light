@@ -461,7 +461,7 @@ document.getElementById('gear').addEventListener('click', (e) => { e.stopPropaga
 document.getElementById('help').addEventListener('mousedown', (e) => e.stopPropagation());
 document.getElementById('help').addEventListener('click', (e) => { e.stopPropagation(); window.trafficLight.openHelp(); });
 
-// Right-click the widget → Lights editor (on Linux, the tray menu).
+// Right-click the widget → the full app menu (the tray's), on every platform.
 app.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   window.trafficLight.widgetMenu();

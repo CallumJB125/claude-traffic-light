@@ -51,9 +51,7 @@ test.describe('tray and Settings', () => {
     await accountScreen(h.app, 'account');
   });
 
-  // The Plexiform window starts the sign-in flow only where its open() routes
-  // the 'signin' id; until then this checks the button reaches the window, not the screen.
-  test('Sign in… opens the Plexiform window', async () => {
+  test('Sign in… starts the sign-in flow in the Plexiform window', async () => {
     const hh = await launchApp();
     try {
       const widget = await windowByFile(hh.app, 'index.html');
@@ -61,8 +59,27 @@ test.describe('tray and Settings', () => {
       await (await windowByFile(hh.app, 'lights.html')).evaluate(() => window.lightsApi.openPreferences());
       const settings = await windowByFile(hh.app, 'settings.html');
       await settings.locator('#account-signin').click();
-      await windowByFile(hh.app, 'sidebar.html');
+      await accountScreen(hh.app, 'hub'); // the flow's first screen: choose or enter a team hub
     } finally { await hh.cleanup(); }
+  });
+
+  test('a long account line is clamped to the fixed section and keeps its full text in the title', async () => {
+    const widget = await windowByFile(h.app, 'index.html');
+    await widget.evaluate(() => window.trafficLight.openLights());
+    await (await windowByFile(h.app, 'lights.html')).evaluate(() => window.lightsApi.openPreferences());
+    const settings = await windowByFile(h.app, 'settings.html');
+    await settings.waitForLoadState('load');
+    const r = await settings.evaluate((long) => {
+      const l = document.getElementById('account-line');
+      l.textContent = long; l.title = long;
+      const sec = document.getElementById('account-section').getBoundingClientRect().height;
+      const box = l.getBoundingClientRect();
+      return { sec, lineH: box.height, overflow: l.scrollHeight > l.clientHeight, title: l.title.length };
+    }, `Signed in as ${'Alexandria '.repeat(20)}· ${'Platform-Engineering '.repeat(10)}· ${'x'.repeat(120)}.example`);
+    expect(r.sec).toBe(104);
+    expect(r.lineH).toBeLessThan(40);
+    expect(r.overflow).toBe(true);
+    expect(r.title).toBeGreaterThan(300);
   });
 
   test('only the Settings window may use the account IPC', async () => {
