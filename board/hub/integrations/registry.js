@@ -68,6 +68,19 @@ function canonRepo(repo) {
   if (typeof repo !== 'string' || repo.length > 300 || !/^[A-Za-z0-9_./-]+$/.test(repo)) return null;
   return normalizeRemoteUrl(`https://${repo.split('/').length === 2 ? `github.com/${repo}` : repo}`);
 }
+// A pr link whose state is one of these frees the card's PR slot for relink().
+// Both end a PR on GitHub; a closed one can be reopened, and if it is the
+// card's verified PR, relink() takes the slot back for it.
+const PR_ENDED = new Set(['closed', 'merged']);
+// {number, repo: canonical} from an https '<repo>/pull/<n>' URL, else null.
+function prOfUrl(url) {
+  const u = typeof url === 'string' ? url.trim() : '';
+  const at = u.lastIndexOf('/pull/');
+  const number = prNumberOf(u);
+  if (!/^https:\/\//i.test(u) || at === -1 || number == null) return null;
+  const repo = normalizeRemoteUrl(u.slice(0, at));
+  return repo ? { number, repo } : null;
+}
 const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
@@ -442,6 +455,15 @@ export function createIntegrations({
       return null;
     }
 
+    // Once the hub verified the card's PR, its pr slot takes only that PR,
+    // named by `url` (number and repo; the external id is never read, it
+    // could be anything): the one rule for link() and relink().
+    const slotTakes = (cardId, url) => {
+      if (!verifiedPr(cardId)) return true;
+      const pr = prOfUrl(url);
+      return !!pr && !notVerified(cardId, pr.number, pr.repo);
+    };
+
     function link(cardId, kind, externalId, url = null) {
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       // One PR per card per connection: a second one (a decoy from the same
@@ -449,14 +471,46 @@ export function createIntegrations({
       if (String(kind) === 'pr') {
         const have = linkedByCard(cardId, 'pr');
         if (have === String(externalId)) return;
-        // Once the hub verified the card's PR, no other PR takes the slot (the
-        // number comes from the PR url, else the id; no number is a refusal).
-        const v = verifiedPr(cardId);
-        if (v && (prNumberOf(url) ?? prNumberOf(externalId)) !== v.number) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
+        if (!slotTakes(cardId, url)) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
         if (have != null) throw new HubError('CONFLICT', 'this card already has a PR linked from this integration');
       }
       db.run('INSERT OR IGNORE INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         cardId, c.id, String(kind), String(externalId), url == null ? null : String(url).slice(0, 500), now());
+    }
+
+    /**
+     * Swap the card's one pr link from `oldExternalId` to `newExternalId`:
+     * once the card has a verified PR, only to it (slotTakes); before that,
+     * only off a link whose state is one of PR_ENDED. The old row stays, as
+     * kind 'pr_superseded', with its status.
+     */
+    function relink(cardId, kind, oldExternalId, newExternalId, url = null) {
+      if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
+      if (String(kind) !== 'pr') throw new HubError('VALIDATION', 'only a pr link is relinked');
+      const from = String(oldExternalId);
+      const to = String(newExternalId);
+      const changed = hub.txn(() => {
+        const have = linkedByCard(cardId, 'pr');
+        if (have === to) return false;
+        if (have == null) throw new HubError('NOT_FOUND', 'this integration has no PR linked on that card');
+        if (have !== from) throw new HubError('CONFLICT', 'the card\'s PR link is not that one');
+        if (db.get("SELECT 1 AS x FROM external_links WHERE connection_id = ? AND kind = 'pr' AND external_id = ?", c.id, to)) {
+          throw new HubError('CONFLICT', 'that PR is linked to another card');
+        }
+        const old = db.get("SELECT status FROM external_links WHERE connection_id = ? AND kind = 'pr' AND external_id = ? AND card_id = ?", c.id, from, cardId);
+        if (verifiedPr(cardId)) {
+          if (!slotTakes(cardId, url)) throw new HubError('CONFLICT', 'only the card\'s verified PR may be linked');
+        } else if (!PR_ENDED.has(cleanLinkStatus(safeJson(old.status, null)).state)) {
+          throw new HubError('CONFLICT', 'the linked PR has not ended and the card has no verified PR');
+        }
+        // One superseded row per external id: a PR relinked away twice keeps its latest.
+        db.run("DELETE FROM external_links WHERE connection_id = ? AND kind = 'pr_superseded' AND external_id = ?", c.id, from);
+        db.run("UPDATE external_links SET kind = 'pr_superseded' WHERE connection_id = ? AND kind = 'pr' AND external_id = ? AND card_id = ?", c.id, from, cardId);
+        db.run("INSERT INTO external_links (card_id, connection_id, kind, external_id, url, created_at) VALUES (?, ?, 'pr', ?, ?, ?)",
+          cardId, c.id, to, url == null ? null : String(url).slice(0, 500), now());
+        return true;
+      });
+      if (changed) hub.later(() => hub.broadcastCard(cardId));
     }
 
     // Partial updates merge: a PR event knows the state, a check suite the
@@ -486,7 +540,7 @@ export function createIntegrations({
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
-     * ({actAs, link, linkStatus}) and every handle actAs returns work only while run()
+     * ({actAs, link, relink, linkStatus}) and every handle actAs returns work only while run()
      * is running and the handler's signal has not aborted.
      */
     async function act(action, meta, run) {
@@ -508,7 +562,9 @@ export function createIntegrations({
       // so none of them lands on the board after act() returned.
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
-      const scope = { actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), linkStatus: guard(linkStatus) };
+      const scope = {
+        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+      };
       let decision = 'failed';
       let error = 'handler_failed';
       try {
