@@ -210,6 +210,24 @@ export function defineConnector(spec) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.identity !== undefined) {
+    const idn = spec.identity;
+    const onHosts = (u) => {
+      if (typeof u !== 'string') return false;
+      try { const x = new URL(u); return x.protocol === 'https:' && !x.port && !x.username && !x.password && !!spec.hosts?.includes?.(x.hostname); } catch { return false; }
+    };
+    // The hub-wide UNIQUE (provider, workspace_id, subject) is sound only when one live connection owns a workspace.
+    if (spec.workspaceUnique !== true) errs.push('identity needs workspaceUnique: true');
+    if (!idn || typeof idn !== 'object') errs.push('identity is an object');
+    else {
+      if (!onHosts(idn.issuer)) errs.push('identity.issuer is an https URL on hosts');
+      if (!onHosts(idn.jwksUrl)) errs.push('identity.jwksUrl is an https URL on hosts');
+      if (typeof idn.workspaceClaim !== 'string' || !idn.workspaceClaim) errs.push('identity.workspaceClaim names the id_token claim holding the workspace');
+      // g/y make test() stateful (lastIndex): one subject would pass and the next fail.
+      if (!(idn.subjectRe instanceof RegExp) || idn.subjectRe.global || idn.subjectRe.sticky) errs.push('identity.subjectRe is a RegExp without the g or y flag');
+      if (typeof idn.authorizeUrl !== 'function' || typeof idn.exchange !== 'function') errs.push('identity.authorizeUrl and identity.exchange are functions');
+    }
+  }
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);
@@ -221,5 +239,8 @@ export function defineConnector(spec) {
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
   // The registry filters pasted input by prepareInputs: a connector can't widen it later.
   const connect = Array.isArray(cn?.prepareInputs) ? Object.freeze({ ...cn, prepareInputs: Object.freeze([...cn.prepareInputs]) }) : spec.connect;
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
+  return Object.freeze({
+    consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]),
+    ...(spec.identity ? { identity: Object.freeze({ ...spec.identity }) } : {}),
+  });
 }

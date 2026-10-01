@@ -342,7 +342,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // config (channel ids, repo lists, …) is the admins' business.
     const forMember = (member, c) => (hub.isAdmin(member) ? c : { ...c, settings: { autonomy: c.settings?.autonomy ?? {} } });
     route('GET', '/api/integrations', ({ member }) => ({
-      available: integrations.connectors(), connections: integrations.list(member.org_id).map((c) => forMember(member, c)), vault: hub.vault.available,
+      available: integrations.connectors(), vault: hub.vault.available,
+      connections: integrations.list(member.org_id).map((c) => ({ ...forMember(member, c), linked: integrations.isLinked(c.id, member.id) })),
       ...(hub.isAdmin(member) ? { pending: integrations.pendingList(member.org_id) } : {}),
     }));
     route('POST', '/api/integrations/:provider/token', async ({ member, params, body }) => {
@@ -409,6 +410,33 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       own(member, params.id);
       integrations.revokeConnection(params.id, member.id);
       return { ok: true };
+    });
+    // Identity links (D98): a member links, reads and unlinks only their own;
+    // an admin lists and revokes, and never creates one.
+    route('POST', '/api/integrations/:id/identity/start', async ({ member, params, req, res, ident }) => {
+      const out = await integrations.identityStart({ member, connectionId: params.id, cred: ident?.cred ?? null, publicUrl: publicBase(req) });
+      setBind(res, out.cookie);
+      return { url: out.url, bind: out.bind };
+    });
+    route('GET', '/api/integrations/:id/identity', ({ member, params }) => {
+      own(member, params.id);
+      return integrations.identityStatus(params.id, member.id);
+    });
+    route('DELETE', '/api/integrations/:id/identity', ({ member, params }) => {
+      own(member, params.id);
+      return integrations.identityUnlink({ connectionId: params.id, memberId: member.id, by: 'self', actorId: member.id });
+    });
+    route('GET', '/api/integrations/:id/identities', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      return { identities: integrations.identities(params.id) };
+    });
+    route('DELETE', '/api/integrations/:id/identities/:member_id', ({ member, params }) => {
+      api.requireAdmin(member);
+      own(member, params.id);
+      const t = hub.member(params.member_id);
+      if (!t || t.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'member not found');
+      return integrations.identityUnlink({ connectionId: params.id, memberId: t.id, by: 'admin', actorId: member.id });
     });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
       api.requireAdmin(member);
@@ -479,6 +507,33 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear, out.next_url ? { url: out.next_url, name: out.provider_name } : null);
       } catch (e) {
         hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
+        return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
+      }
+    }
+    // D98: the same signed-state + bind-cookie model, for a member's own link.
+    const idcb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/identity\/callback$/.exec(url.pathname) : null;
+    if (idcb) {
+      try {
+        const base = publicBase(req);
+        const ck = integrations.bindCookie(idcb[1], base);
+        let bind = null;
+        try { bind = parseCookies(req.headers.cookie)[ck.name] ?? null; } catch { bind = null; }
+        const ip = clientIp(req, config);
+        let cred = null;
+        let credInvalid = false;
+        if (config.auth === 'accounts') {
+          try {
+            const ident = hub.accounts.authenticate(req, { ip, rotate: false });
+            cred = ident ? { user_id: ident.user.id, kind: ident.cred.kind, id: ident.cred.id } : null;
+          } catch { credInvalid = true; }
+        }
+        const out = await integrations.identityCallback({ provider: idcb[1], query: url.searchParams, publicUrl: base, bindCookie: bind, ip: ipKey(ip), cred, credInvalid });
+        const clear = bind != null ? { 'set-cookie': `${ck.name}=; HttpOnly; SameSite=Lax; Path=${ck.path}; Max-Age=0${ck.secure ? '; Secure' : ''}` } : {};
+        if (!out.ok) return sendConnectPage(res, out.status ?? 400, out.error, 'error', clear);
+        return sendConnectPage(res, 200, `Your ${out.provider_name} account is linked.`, 'ok', clear);
+      } catch {
+        // Never the error itself: it may carry what the provider sent.
+        hub.log.error('integration identity callback failed', { provider: idcb[1] });
         return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');
       }
     }

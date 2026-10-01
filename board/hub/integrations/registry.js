@@ -20,6 +20,7 @@ import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
 import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
+import { createJwks, readCapped, verifyRs256 } from '../jwt.js';
 
 const MAX_BODY = 1024 * 1024;
 const STATE_TTL_MS = 10 * 60_000;
@@ -69,6 +70,15 @@ const MATCH_STR_MAX = 200;
 const CREATE_URL_MAX = 8 * 1024;
 const NOT_ACCEPTED = 'That was not accepted. Check it and try again.';
 const SETUP_EXPIRED = 'This setup has expired. Start again from Buddy.';
+// Identity links (D98).
+const JWKS_TTL_MS = 3_600_000;
+const JWKS_REFETCH_MS = 60_000;
+const JWKS_TIMEOUT_MS = 5_000;
+const JWKS_MAX = 64 * 1024;
+const ID_TOKEN_MAX = 16 * 1024;
+const LINK_INVALID = 'This link is not valid. Start again from Buddy.';
+const LINK_GONE = 'This link can no longer be used. Start again from Buddy.';
+const LINK_FAILED = 'The provider did not confirm your account. Start again from Buddy.';
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -350,7 +360,22 @@ export function createIntegrations({
     // Only the member who connected it, or one linked from this workspace by
     // an explicit identity link (never any writable member of the org).
     const mayActAs = (memberId) => memberId === c.created_by
-      || !!db.get('SELECT 1 AS x FROM external_identities WHERE provider = ? AND workspace_id = ? AND member_id = ?', c.provider, c.external_id, memberId);
+      || !!db.get('SELECT 1 AS x FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId);
+
+    // D98: the member a provider user acts as, linked on this connection, of
+    // its team and able to write; else null (a viewer acts as nobody).
+    function memberFor(subject) {
+      if (typeof subject !== 'string' || !subject || subject.length > SUBJECT_MAX) return null;
+      const l = db.get('SELECT member_id FROM external_identities WHERE connection_id = ? AND subject = ?', c.id, subject);
+      const m = l && hub.member(l.member_id);
+      return m && m.org_id === c.org_id && !m.removed_at && hub.canWrite(m) ? m.id : null;
+    }
+    // …and back, for reaching a member (a viewer too) on the provider.
+    function subjectFor(memberId) {
+      const l = typeof memberId === 'string' ? db.get('SELECT subject FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId) : null;
+      const m = l && hub.member(memberId);
+      return m && m.org_id === c.org_id && !m.removed_at ? l.subject : null;
+    }
 
     // Re-read on every call: a handle must not outlive a removal or demotion.
     function actor(memberId) {
@@ -377,7 +402,13 @@ export function createIntegrations({
       return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey }) {
+    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey, subject = null }) {
+      // An act() for a provider user acts only as that user's linked member,
+      // checked again on every call: never as whoever connected the tool.
+      const bound = () => {
+        if (subject != null && memberFor(subject) !== memberId) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+      };
+      bound();
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
       const call = (body, fn, rules = [], pre = null) => {
@@ -385,6 +416,7 @@ export function createIntegrations({
         return track(callLive(body, fn, rules, pre));
       };
       const callLive = async (body, fn, rules, pre) => {
+        bound();
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -643,7 +675,7 @@ export function createIntegrations({
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey, subject: subject ?? null })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';
@@ -728,6 +760,8 @@ export function createIntegrations({
       // in an act() scope: the handler links what it finds inside act().
       cardForBranch,
       verifiedPr,
+      memberFor,
+      subjectFor,
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
@@ -1332,6 +1366,180 @@ export function createIntegrations({
     });
   }
 
+  // ── identity links (D98) ────────────────────────────────────────────────
+  // A member links their own provider account. The state is MAC'd under its
+  // own domain (a connect state never verifies here, nor the reverse), names
+  // the member, team, connection and the credential that started it, and is
+  // bound to the browser by the D42 bind cookie. The connector only builds the
+  // URL and trades the code for the raw id_token; it is verified here. Nothing
+  // the connector or provider says is ever logged or shown: fixed codes only.
+
+  const idMac = (payload) => createHmac('sha256', hub.secret).update(`integration-identity|${payload}`).digest();
+  const accountsMode = () => hub.config?.auth === 'accounts';
+  const credHash = (cred) => sha(`${cred.kind}:${cred.id}`);
+  // The audience: the client id promotion pinned (D97), never admin-editable config.
+  const pinnedClientId = (c) => { const v = safeJson(c.settings, {})?.pinned?.client_id; return typeof v === 'string' && v ? v : null; };
+  const linkConnection = (c) => Object.freeze({ external_id: c.external_id, settings: Object.freeze(safeJson(c.settings, {})) });
+  const jwksCaches = new Map(); // provider → its JWKS cache
+
+  function jwksFor(conn) {
+    let j = jwksCaches.get(conn.id);
+    if (!j) {
+      const fetchOnce = restrictedFetch(conn);
+      j = createJwks({
+        load: () => {
+          const controller = new AbortController();
+          return withTimeout((async () => {
+            const res = await fetchOnce(conn.identity.jwksUrl, { headers: { accept: 'application/json' }, signal: controller.signal });
+            if (!res.ok) throw new Error('jwks unavailable');
+            return JSON.parse(await readCapped(res, JWKS_MAX));
+          })(), JWKS_TIMEOUT_MS, controller);
+        },
+        now: () => hub.mono(), ttlMs: JWKS_TTL_MS, kidRefetchMs: JWKS_REFETCH_MS, retryMs: JWKS_REFETCH_MS,
+      });
+      jwksCaches.set(conn.id, j);
+    }
+    return j;
+  }
+
+  /** POST /api/integrations/:id/identity/start → {url, bind, cookie}. `cred`: the accounts credential, else null. */
+  async function identityStart({ member, connectionId, cred = null, publicUrl }) {
+    const c = row(connectionId);
+    const conn = c && connectors.get(c.provider);
+    if (!c || !conn || c.status !== 'active' || c.org_id !== member.org_id) throw new HubError('NOT_FOUND', 'no such integration');
+    if (!hub.canWrite(member)) throw new HubError('FORBIDDEN', 'viewers cannot link an account');
+    if (!conn.identity) throw new HubError('POLICY_DENIED', `${conn.name} does not link accounts`);
+    if (!pinnedClientId(c)) throw new HubError('POLICY_DENIED', 'this connection cannot link accounts: connect it again');
+    if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
+    if (accountsMode() && !cred) throw new HubError('UNAUTHENTICATED', 'not signed in');
+    limitOrThrow(hub, 'integration_identity_member', member.id);
+    const bind = randomBytes(24).toString('base64url');
+    const nonce = randomBytes(24).toString('base64url');
+    const payload = b64(JSON.stringify({
+      m: member.id, o: member.org_id, c: c.id, p: c.provider, s: cred ? credHash(cred) : null,
+      n: randomBytes(16).toString('base64url'), k: nonce, e: hub.wallMs() + STATE_TTL_MS, b: sha(bind),
+    }));
+    const state = `${payload}.${idMac(payload).toString('base64url')}`;
+    let url = null;
+    try {
+      url = urlOn(await conn.identity.authorizeUrl({
+        state, nonce, redirectUri: identityRedirectFor(publicUrl, c.provider), connection: linkConnection(c), secrets: secretsOf(c), fetch: restrictedFetch(conn),
+      }), conn.hosts);
+    } catch { url = null; }
+    if (!url) {
+      log?.warn?.('integration identity start refused', { integration: conn.id, connection_id: c.id, err: 'connector_error' });
+      throw new HubError('POLICY_DENIED', `${conn.name} could not start the link`);
+    }
+    return { url: url.href, bind, cookie: { ...bindCookie(c.provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 } };
+  }
+
+  /**
+   * GET /integrations/:provider/identity/callback → {ok:true, provider_name} |
+   * {ok:false, status, error} (error is fixed text). `ip`: the client's
+   * network key; `cred`: the request's own accounts credential
+   * ({user_id, kind, id}) or null; `credInvalid`: it sent one that is not.
+   */
+  async function identityCallback({ provider, query, publicUrl, bindCookie: bindValue = null, ip = null, cred = null, credInvalid = false }) {
+    const failKey = String(ip ?? '');
+    if (!hub.limiter.peek('integration_link_fail_ip', failKey).ok) return { ok: false, status: 429, error: 'Too many attempts. Try again later.' };
+    const refuse = (error, code = null) => {
+      hub.limiter.take('integration_link_fail_ip', failKey);
+      if (code) log?.warn?.('integration identity link refused', { integration: provider, err: code });
+      return { ok: false, status: 400, error };
+    };
+    const conn = connectors.get(provider);
+    if (!conn?.identity) return refuse('Unknown integration.');
+    const parts = String(query.get('state') ?? '').split('.');
+    const [payload, sig] = parts;
+    if (parts.length !== 2 || !payload || !/^[A-Za-z0-9_-]+$/.test(sig ?? '')) return refuse(LINK_INVALID);
+    const got = Buffer.from(sig, 'base64url');
+    const want = idMac(payload);
+    if (got.length !== want.length || !timingSafeEqual(got, want)) return refuse(LINK_INVALID);
+    const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
+    if (!isPlainObject(st) || st.p !== provider || !UUID_RE.test(st.c ?? '') || typeof st.n !== 'string' || typeof st.k !== 'string' || !st.k
+      || typeof st.b !== 'string' || !(hub.wallMs() <= st.e)) return refuse('This link has expired. Start again from Buddy.');
+    // Before the nonce is spent: a browser without the cookie burns nothing.
+    if (typeof bindValue !== 'string' || !safeEq(sha(bindValue), st.b)) return refuse('Open this link in the window Plexiform opened. Start again.');
+    const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('identity_state', ?, ?, 'done')", st.n, now());
+    if (Number(first.changes) !== 1) return refuse('This link was already used. Start again from Buddy.');
+    // The credential that started it still live, and no other one at the callback.
+    const credOk = () => {
+      if (credInvalid) return false;
+      if (!accountsMode()) return st.s == null;
+      const m = hub.member(st.m);
+      if (typeof st.s !== 'string' || !m?.user_id) return false;
+      if (cred && (cred.user_id !== m.user_id || (cred.kind === 'session' && !safeEq(credHash(cred), st.s)))) return false;
+      const creds = [
+        ...db.all('SELECT id FROM sessions WHERE user_id = ?', m.user_id).map((r) => ({ kind: 'session', id: r.id })),
+        ...db.all('SELECT id FROM user_devices WHERE user_id = ? AND revoked_at IS NULL', m.user_id).map((r) => ({ kind: 'device', id: r.id })),
+      ];
+      return creds.some((x) => safeEq(credHash(x), st.s) && hub.accounts.credValid(x));
+    };
+    // The member (live, of the team, able to write) and the connection (active, of the team).
+    const current = () => {
+      const m = hub.member(st.m);
+      const c = row(st.c);
+      if (!m || m.removed_at || m.org_id !== st.o || !hub.canWrite(m)) return null;
+      return c && c.status === 'active' && c.org_id === st.o && c.provider === provider && pinnedClientId(c) ? c : null;
+    };
+    const c = credOk() ? current() : null;
+    if (!c) return refuse(LINK_GONE);
+    if (query.get('error')) return refuse('The link was cancelled.');
+    let idToken = null;
+    try {
+      const v = await conn.identity.exchange({
+        query, state: query.get('state'), redirectUri: identityRedirectFor(publicUrl, provider), connection: linkConnection(c), secrets: secretsOf(c), fetch: restrictedFetch(conn),
+      });
+      idToken = typeof v?.id_token === 'string' && v.id_token && v.id_token.length <= ID_TOKEN_MAX ? v.id_token : null;
+    } catch { idToken = null; }
+    if (!idToken) return refuse(LINK_FAILED, 'exchange_failed');
+    let claims;
+    try {
+      claims = await verifyRs256(idToken, { keyFor: jwksFor(conn).keyFor, issuers: [conn.identity.issuer], audience: pinnedClientId(c), nonce: st.k, nowS: hub.wallMs() / 1000 });
+    } catch { claims = null; }
+    idToken = null;
+    if (!claims) return refuse(LINK_FAILED, 'id_token_refused');
+    if (claims[conn.identity.workspaceClaim] !== c.external_id) return refuse('That account is in another workspace. Sign in to the connected workspace and start again.', 'other_workspace');
+    const sub = claims.sub;
+    if (sub.length > SUBJECT_MAX || !conn.identity.subjectRe.test(sub)) return refuse(LINK_FAILED, 'bad_subject');
+    let out;
+    try {
+      out = hub.txn(() => {
+        const cur = current();
+        if (!cur || cur.id !== c.id) return { error: LINK_GONE };
+        const mine = db.get('SELECT subject FROM external_identities WHERE provider = ? AND workspace_id = ? AND member_id = ?', c.provider, c.external_id, st.m);
+        if (mine) return mine.subject === sub ? { same: true } : { error: 'You already linked another account. Unlink it first.' };
+        if (db.get('SELECT 1 AS x FROM external_identities WHERE provider = ? AND workspace_id = ? AND subject = ?', c.provider, c.external_id, sub)) {
+          return { error: 'That account is already linked to another member. They or an admin can unlink it.' };
+        }
+        db.insert('external_identities', { provider: c.provider, workspace_id: c.external_id, subject: sub, member_id: st.m, connection_id: c.id, verified_via: 'oauth_link', linked_at: now() });
+        hub.journal({ board_id: null, actor_kind: 'member', actor_id: st.m, kind: 'integration.identity_link', payload: { connection_id: c.id, provider: c.provider, member_id: st.m } });
+        db.insert('integration_audit', { id: randomUUID(), connection_id: c.id, action: 'identity.link', decision: 'auto', error: null, card_id: null, external_ref: null, detail: auditJson({ member_id: st.m }), undo: null, at: now() });
+        return { linked: true };
+      });
+    } catch {
+      return refuse('Could not save the link. Start again from Buddy.', 'write_failed');
+    }
+    if (out.error) return refuse(out.error);
+    return { ok: true, provider_name: conn.name };
+  }
+
+  /** A member's link on a connection, removed by themself ('self') or an admin ('admin') → {ok, removed}. */
+  function identityUnlink({ connectionId, memberId, by, actorId }) {
+    const c = row(connectionId);
+    if (!c) throw new HubError('NOT_FOUND', 'no such integration');
+    return hub.txn(() => {
+      const removed = Number(db.run('DELETE FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId).changes) > 0;
+      if (removed) {
+        hub.journal({ board_id: null, actor_kind: 'member', actor_id: actorId, kind: 'integration.identity_unlink', payload: { connection_id: c.id, provider: c.provider, member_id: memberId, by } });
+        db.insert('integration_audit', { id: randomUUID(), connection_id: c.id, action: 'identity.unlink', decision: 'auto', error: null, card_id: null, external_ref: null, detail: auditJson({ member_id: memberId, by }), undo: null, at: now() });
+      }
+      return { ok: true, removed };
+    });
+  }
+
+  const linkOf = (connectionId, memberId) => db.get('SELECT linked_at FROM external_identities WHERE connection_id = ? AND member_id = ?', connectionId, memberId);
+
   // ── the bus: one consumer per connection (a stuck team never stalls another) ──
 
   function subscribe(c) {
@@ -1391,7 +1599,7 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
     orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,
@@ -1403,6 +1611,15 @@ export function createIntegrations({
     sweepPending,
     /** The identity callback URL for a connection (D97 prepare got the same string). */
     identityRedirectUri: (publicUrl, connectionId) => { const c = row(connectionId); return c ? identityRedirectFor(publicUrl, c.provider) : null; },
+    identityStart,
+    identityCallback,
+    identityUnlink,
+    /** The caller's own link: {linked, linked_at}. Never the subject. */
+    identityStatus: (connectionId, memberId) => { const l = linkOf(connectionId, memberId); return { linked: !!l, linked_at: l?.linked_at ?? null }; },
+    isLinked: (connectionId, memberId) => !!linkOf(connectionId, memberId),
+    /** Admin list: who is linked, never the subject. */
+    identities: (connectionId) => db.all(`SELECT e.member_id, m.display_name, e.linked_at FROM external_identities e JOIN members m ON m.id = e.member_id
+      WHERE e.connection_id = ? ORDER BY e.linked_at, e.member_id`, connectionId).map((r) => ({ member_id: r.member_id, display_name: r.display_name, linked_at: r.linked_at })),
     createConnection,
     revokeConnection,
     /** Token-style connect: the connector checks the token with its provider. */

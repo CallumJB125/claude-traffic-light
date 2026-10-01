@@ -72,19 +72,20 @@ test('JWKS: an unknown kid refetches at most once per kidRefetchMs; a flood of r
   await r.verify(jwt());
   assert.equal(r.loads, 1);
   for (let i = 0; i < 200; i += 1) await assert.rejects(r.verify(jwt({}, { kid: randomBytes(6).toString('hex') })), JwtInvalid);
-  assert.equal(r.loads, 2, 'the first unknown kid refetched once; the other 199 did not');
+  assert.equal(r.loads, 1, 'within a minute of the last fetch no unknown kid refetches');
   r.advance(59_000);
   await assert.rejects(r.verify(jwt({}, { kid: 'x1' })), JwtInvalid);
-  assert.equal(r.loads, 2);
+  assert.equal(r.loads, 1);
   r.advance(1_000);
   await assert.rejects(r.verify(jwt({}, { kid: 'x2' })), JwtInvalid);
-  assert.equal(r.loads, 3);
+  await assert.rejects(r.verify(jwt({}, { kid: 'x3' })), JwtInvalid);
+  assert.equal(r.loads, 2, 'one refetch a minute later, then none again');
   // A rotated key appears: picked up on the next allowed refetch.
   const k2 = generateKeyPairSync('rsa', { modulusLength: 2048 });
   r.keys = [JWK, { ...k2.publicKey.export({ format: 'jwk' }), kid: 'k2' }];
   r.advance(60_000);
   assert.equal((await r.verify(jwt({}, { kid: 'k2', privateKey: k2.privateKey }))).sub, 'U123');
-  assert.equal(r.loads, 4);
+  assert.equal(r.loads, 3);
 });
 
 test('JWKS: concurrent first calls share one fetch; a failed fetch is retried no sooner than retryMs, and a cached kid still verifies while the JWKS is down', async () => {

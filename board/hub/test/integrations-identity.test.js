@@ -683,12 +683,12 @@ test('accounts: the state names the credential that started it; a callback carry
     const ws2 = await h.call('POST', `/api/integrations/${conn}/identity/start`, { cookie: w1.cookie, body: { request_id: randomUUID() }, headers: { origin: h.base, 'x-csrf-token': w1.csrf } });
     h.db.run('DELETE FROM sessions WHERE user_id = ?', users.ua.id);
     assert.match((await cb(ws2, bind(ws2))).text, /can no longer be used/);
-    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM external_identities').n, 0);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM external_identities WHERE connection_id = ?', conn).n, 0);
     // The desktop flow, finished in a window with no session, links.
     const d2 = await startAs(users.amember);
     const ok = await cb(d2, bind(d2));
     assert.equal(ok.status, 200, ok.text);
-    assert.equal(h.db.get('SELECT member_id FROM external_identities').member_id, A.member);
+    assert.equal(h.db.get('SELECT member_id FROM external_identities WHERE connection_id = ?', conn).member_id, A.member);
   } finally { await h.close(); }
 });
 
@@ -697,7 +697,7 @@ test('accounts: the state names the credential that started it; a callback carry
 test('defineConnector: identity needs workspaceUnique, an https issuer and jwksUrl on hosts, a string workspaceClaim, a non-global RegExp subjectRe and both hooks', () => {
   const beh = { prepared: [], authorized: [], idExchanged: [] };
   const good = slkConnector(beh);
-  const spec = { ...good, identity: { ...good.identity } };
+  const spec = { ...good, consumes: undefined, identity: { ...good.identity } };
   const bad = (over, top = {}) => () => defineConnector({ ...spec, ...top, identity: { ...spec.identity, ...over } });
   assert.doesNotThrow(bad({}));
   assert.throws(bad({}, { workspaceUnique: false }), /workspaceUnique/);
