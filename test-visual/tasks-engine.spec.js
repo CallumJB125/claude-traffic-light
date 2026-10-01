@@ -45,7 +45,7 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
     await page.locator('#checkpoint-save').click(); await expect(page.locator('#checkpoint-editor')).toHaveCount(0);
     await expect(page.locator('#pane-details')).toContainText('CHECKPOINT-NEXT-ACTION');
     await expect(page.locator('#pane-details')).not.toContainText('x'.repeat(40));
-    const dataDir = await h.app.evaluate(({ app }) => require('node:path').join(app.getPath('userData'), 'tasks'));
+    const dataDir = path.join(await h.app.evaluate(({ app }) => app.getPath('userData')), 'tasks');
     client = await (await import('../board/tasks-api/client.js')).connect({ env: { BOARD_HOME: dataDir } });
     const id = (await client.listTasks())[0].id, saved = (await client.getTask(id)).checkpoint;
     expect(saved.author.kind).toBe('human'); expect(saved.observed.tests).not.toBe('pass');
