@@ -92,7 +92,34 @@ export class Hub extends EventEmitter {
     if (previous != null && (!Buffer.isBuffer(previous) || previous.length !== 32)) throw new Error('previous vault key must be 32 bytes');
     this.vaultPrevKey = previous ? Buffer.from(previous) : null;
     this.vaultKey = Buffer.from(buf);
+    if (this.vaultPrevKey) {
+      // Rows left sealed under the previous key would keep it needed until
+      // each connection happened to be used: re-seal them all now.
+      try { this.resealVault(); } catch (e) { this.log.error('vault re-seal failed; rows re-seal on their next read', { err: e }); }
+    }
     this.emit('vault-key');
+  }
+
+  /**
+   * Seal every connection secret not under the current key again with it, in
+   * one transaction (all or nothing). Idempotent; a row no key opens is left
+   * and counted. Logs counts only. → {resealed, unopened}
+   */
+  resealVault() {
+    const v = this.vault;
+    let resealed = 0;
+    let unopened = 0;
+    this.db.tx(() => {
+      for (const r of this.db.all('SELECT connection_id, kind, key_id, nonce, ciphertext FROM connection_secrets WHERE key_id != ?', v.keyId)) {
+        let plain;
+        try { plain = v.open(r.connection_id, r.kind, r); } catch { unopened += 1; continue; }
+        const s = v.seal(r.connection_id, r.kind, plain);
+        this.db.run('UPDATE connection_secrets SET key_id = ?, nonce = ?, ciphertext = ? WHERE connection_id = ? AND kind = ? AND key_id = ?', s.key_id, s.nonce, s.ciphertext, r.connection_id, r.kind, r.key_id);
+        resealed += 1;
+      }
+    });
+    this.log.info('vault re-sealed under the current key', { resealed, unopened });
+    return { resealed, unopened };
   }
 
   // Sealed connector secrets (D41), built from the key D36 hands in; keyless

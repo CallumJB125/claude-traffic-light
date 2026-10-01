@@ -348,3 +348,56 @@ test('Low-c: a vault that cannot open a connection’s secrets records vault_err
     assert.equal(writes, 2);
   } finally { await h.close(); }
 });
+
+// ── Low-d: re-seal under the current key at startup ───────────────────────
+
+test('Low-d: with BOARD_ENC_KEY_PREVIOUS every vault row is re-sealed at once, in one transaction, idempotently, logging counts only', async () => {
+  const h = await startHub();
+  try {
+    const { keyIdOf } = await import('../vault.js');
+    const oldKey = randomBytes(32);
+    h.hub.setVaultKey(oldKey);
+    const reg = h.app.integrations;
+    reg.register(probe('m5a', { secrets: ['api_token', 'webhook_secret'] }));
+    const conns = ['w1', 'w2'].map((w) => reg.createConnection({
+      orgId: h.ids.org, memberId: h.ids.alice, provider: 'm5a', external_id: w,
+      secrets: { api_token: randomBytes(12).toString('hex'), webhook_secret: randomBytes(12).toString('hex') },
+    }));
+    const plain = (c) => { const ctx = reg.ctxFor(c.id); return { api_token: ctx.secret('api_token'), webhook_secret: ctx.secret('webhook_secret') }; };
+    const before = conns.map(plain);
+    // A row sealed under some third key: nothing opens it.
+    const stray = randomUUID();
+    h.db.run("INSERT INTO connections (id, org_id, provider, external_id, status, settings, created_at) VALUES (?, ?, 'm5a', 'w3', 'revoked', '{}', ?)", stray, h.ids.org, h.hub.iso());
+    h.db.run("INSERT INTO connection_secrets (connection_id, kind, key_id, nonce, ciphertext, created_at) VALUES (?, 'api_token', 'feedfeedfeed', ?, ?, ?)", stray, randomBytes(12), randomBytes(40), h.hub.iso());
+    const keyIds = () => [...new Set(h.db.all('SELECT key_id FROM connection_secrets WHERE connection_id != ?', stray).map((r) => r.key_id))];
+    assert.deepEqual(keyIds(), [keyIdOf(oldKey)]);
+
+    // A restart whose re-seal fails halfway changes nothing (and still starts).
+    const logs = [];
+    h.hub.log = { info: (msg, f) => logs.push(['info', msg, f]), warn() {}, error: (msg, f) => logs.push(['error', msg, f]) };
+    const run = h.db.run.bind(h.db);
+    let updates = 0;
+    h.db.run = (sql, ...args) => { if (/UPDATE connection_secrets/.test(sql) && ++updates === 2) throw new Error('disk full'); return run(sql, ...args); };
+    h.hub.vaultKey = null;
+    h.hub.setVaultKey(randomBytes(32), oldKey);
+    h.db.run = run;
+    assert.deepEqual(keyIds(), [keyIdOf(oldKey)], 'rolled back');
+    assert.equal(logs.at(-1)[0], 'error');
+
+    // The real restart: every row the previous key opens is re-sealed before any delivery.
+    const newKey = randomBytes(32);
+    logs.length = 0;
+    h.hub.vaultKey = null;
+    h.hub.setVaultKey(newKey, oldKey);
+    assert.deepEqual(keyIds(), [keyIdOf(newKey)]);
+    assert.equal(h.db.get('SELECT key_id FROM connection_secrets WHERE connection_id = ?', stray).key_id, 'feedfeedfeed', 'left as it was');
+    assert.deepEqual(logs, [['info', 'vault re-sealed under the current key', { resealed: 4, unopened: 1 }]]);
+    const text = JSON.stringify(logs);
+    for (const c of conns) assert.ok(!text.includes(c.id), 'no ids in the log');
+    // The previous key can go: a restart without it opens everything.
+    h.hub.vaultKey = null;
+    h.hub.setVaultKey(newKey);
+    assert.deepEqual(conns.map(plain), before);
+    assert.deepEqual(h.hub.resealVault(), { resealed: 0, unopened: 1 }, 'idempotent');
+  } finally { await h.close(); }
+});
