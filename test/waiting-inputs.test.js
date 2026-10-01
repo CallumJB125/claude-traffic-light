@@ -271,7 +271,7 @@ test('M2: broad suggestions are never offered — whole-tool Bash/Write/Edit/Mul
     ...['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch'].map((t) => rule(t)),
     rule('Bash', '*'), rule('Bash', ':*'), rule('Bash', ''), rule('Bash', '  '), rule('Read', '*'), rule('WebFetch', ':*'),
     { type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Bash', ruleContent: 'npm test' }, { toolName: 'Bash' }] },
-    dirs('/'), dirs(home), dirs(`${home}/`), dirs(path.dirname(home)), dirs('/Users'), dirs('relative/dir'), dirs('~/work'), dirs(`${home}/work/../..`), dirs('/work', '/'),
+    dirs('/'), dirs(home), dirs(`${home}/`), dirs(path.dirname(home)), dirs('relative/dir'), dirs('~/work'), dirs(`${home}/work/../..`), dirs('/work', '/'),
   ];
   for (const s of broad) assert.deepEqual(I.cleanSuggestions([s]), [], JSON.stringify(s));
   const ok = [rule('Bash', 'npm test:*'), rule('Read'), rule('Edit', '/repo/src/**'), rule('WebFetch', 'domain:example.com'), dirs('/work'), dirs(path.join(home, 'code', 'proj')), { type: 'setMode', mode: 'acceptEdits' }];
@@ -295,7 +295,8 @@ test('L1: all-wildcard rules, odd tool names, shell prefixes and home-equivalent
     ['Read'], ['WebSearch'], ['Task'], ['Glob'], ['mcp__server__tool'], ['mcp__my-server__do_thing']]) {
     assert.equal(kept(rule(t, c)), true, JSON.stringify([t, c]));
   }
-  for (const d of ['/', '/Users', home, `${home}/`, `${home}/.`, home.toUpperCase(), '//' + home.slice(1), home.replace(/\/([^/]+)$/, '//$1'), `${path.dirname(home)}/./${path.basename(home)}`,
+  // Home-equivalent on any OS: built from this machine's home (CI runs Linux, where it is /home/runner).
+  for (const d of ['/', path.dirname(home), home, `${home}/`, `${home}/.`, home.toUpperCase(), '//' + home.slice(1), home.replace(/\/([^/]+)$/, '//$1'), `${path.dirname(home)}/./${path.basename(home)}`,
     `/private/var/../..${home}`, '~', '~/x', 'C:\\', path.join(home, '.claude'), path.join(home, '.claude', 'x'), path.join(home, '.claude-traffic-light'), path.join(home, '.ssh'), path.join(home, '.ssh', 'keys'),
     `/System/Volumes/Data${home}`, '/System/Volumes/Data', `${home}\u0000`]) {
     assert.equal(kept(dirs(d)), false, JSON.stringify(d));

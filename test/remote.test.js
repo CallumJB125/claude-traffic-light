@@ -1097,3 +1097,14 @@ test('wording: notifications and the Help line name the device, and never send y
   assert.equal(h.remote, '2 on devbox');
   assert.equal(Help.explain({ look: {}, sessions: [local] }, []).remote, '');
 });
+
+test('registry: this machine\'s own name is refused even when its hostname is longer than a device name may be', () => {
+  const long = `${'runner-host-'.repeat(5)}abc.local`;
+  const real = os.hostname;
+  os.hostname = () => long;
+  try {
+    const { R } = devices();
+    assert.match(R.pair(long).error, /own name/);
+    assert.match(R.pair(long.split('.')[0].toUpperCase()).error, /own name/);
+  } finally { os.hostname = real; }
+});

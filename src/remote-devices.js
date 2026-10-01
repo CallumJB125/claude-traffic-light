@@ -212,8 +212,11 @@ module.exports = function createRemoteDevices({ rootDir, onChange = () => {}, lo
     if (devices.some((d) => d.name.toLowerCase() === clean.toLowerCase())) return { error: `A device called "${clean}" is already paired.` };
     // A remote session's host is the device name; one equal to this machine's
     // would read as a local session anywhere that compares hosts.
-    const here = os.hostname().toLowerCase();
-    if ([here, here.split('.')[0]].includes(clean.toLowerCase())) return { error: `"${clean}" is this Mac's own name; call the other machine something else.` };
+    // Compared as cleaned names: a hostname over 40 characters (CI runners have
+    // them) is cut by cleanName, so a raw comparison would never match it.
+    const here = os.hostname();
+    const own = [here, here.split('.')[0]].map((h) => (cleanName(h) || '').toLowerCase()).filter(Boolean);
+    if (own.includes(clean.toLowerCase())) return { error: `"${clean}" is this computer's own name; call the other machine something else.` };
     let id;
     do { id = mintId(clean); } while (devices.some((d) => d.id === id));
     const token = crypto.randomBytes(32).toString('hex');
