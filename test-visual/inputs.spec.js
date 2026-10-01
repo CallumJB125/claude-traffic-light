@@ -177,6 +177,9 @@ test('the "make it a rule?" nudge stays hidden while auto-answer is off', async 
   await expect(widget.locator('.ib-item')).toHaveCount(0, { timeout: 10000 });
   await widget.waitForTimeout(500);
   await expect(widget.locator('.ib-nudge')).toHaveCount(0);
+  // Nothing counted, so the keychain-held secret is never read on an answer.
+  expect(fs.existsSync(path.join(h.home, 'approval-counts.json'))).toBe(false);
+  expect(fs.existsSync(path.join(h.home, 'approval-secret.json'))).toBe(false);
   // The rules page still saves only what main allows.
   await widget.evaluate(() => window.trafficLight.openAutoRule({}));
   const lights = await windowByFile(h.app, 'lights.html');

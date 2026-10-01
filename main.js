@@ -388,7 +388,9 @@ const nudgeSecret = require('./src/nudge-secret.js').createSecretStore({
 });
 const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json'), secret: nudgeSecret });
 // The "make it a rule?" card stays hidden while auto-answer is off: a rule
-// that nothing applies would only mislead. Counting carries on.
+// that nothing applies would only mislead. Nothing is counted either: the
+// counter's secret lives in the keychain, and on an ad-hoc-signed build
+// reading it on every answer made macOS ask for the password, blocking main.
 const SHOW_RULE_NUDGE = false;
 // Why a permission request needs a careful look (deny-list or destructive):
 // shown as a warning. enterAllow: Enter may allow it only when nothing is
@@ -402,7 +404,8 @@ function withDanger(inputs, requests) {
     const req = byId.get(i.id);
     let danger;
     try { danger = AutoRules.danger(req); } catch { danger = 'it could not be checked'; }
-    return { ...i, danger, enterAllow: danger === null && EnterAllow.enterBlockedReason(req) === null };
+    const skip = danger === null ? EnterAllow.enterBlockedReason(req) : null;
+    return { ...i, danger, enterAllow: danger === null && skip === null, enterNote: skip === null ? null : EnterAllow.widgetWording(skip) };
   });
 }
 const PaneDialogs = require('./src/pane-dialogs.js');
@@ -3140,9 +3143,10 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!w.ok) return { ok: false, error: w.error };
   // "Allow once" only: a session-wide allow was already a broader choice.
   // The answer is already written: a counter problem must not turn it into an error.
+  if (!SHOW_RULE_NUDGE) return { ok: true };
   let n = null;
   try { n = String(optionId) === 'allow' ? nudger.record(req, loadConfig().autoAnswer.rules) : null; } catch (err) { console.warn('[nudge]', err.message); }
-  if (!SHOW_RULE_NUDGE || !n || !n.nudge) return { ok: true };
+  if (!n || !n.nudge) return { ok: true };
   nudger.offer(n.key);
   return { ok: true, nudge: { key: n.key, count: n.count, tools: n.nudge.tools, command: n.nudge.command || null, path: n.nudge.path || null } };
 });

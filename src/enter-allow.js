@@ -53,4 +53,12 @@ function gestureAllowTarget(pending, inputs, now = Date.now()) {
   return { req };
 }
 
-module.exports = { enterBlockedReason, gestureAllowTarget, available: () => typeof verdict === 'function' };
+// The verdict is worded for phone approvals; in the widget the same rule
+// reads as "needs a click".
+function widgetWording(reason) {
+  return String(reason || '')
+    .replace(/the remote allow-list/g, 'the read-only list')
+    .replace(/\bis desk-only\b/g, 'always needs a click');
+}
+
+module.exports = { enterBlockedReason, gestureAllowTarget, widgetWording, available: () => typeof verdict === 'function' };
