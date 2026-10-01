@@ -6,7 +6,8 @@
 
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize, sep } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import { PROTOCOL_VERSION, PROTOCOL_HEADER, httpStatus, WS_CLOSE, WS_PATHS } from '../shared/protocol.js';
 import { HubError } from './db.js';
 import { devCookieValue, parseCookies, parseDevCookie, safeEqual } from './auth.js';
@@ -69,6 +70,14 @@ const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PROXY_HEADERS.some((h) => req.headers[h] != null);
 // Accounts mode without a public URL or tunnel is a loopback try-out (L-A): the same rule.
 const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
+// Current production assets only. Development mock/test/script directories
+// and arbitrary files below web/ are never public. JavaScript lives in the
+// flat production js/ directory; encoded or case aliases are not accepted.
+const WEB_FILES = new Set([
+  'index.html', 'signin.html', 'invite.html', 'clients.html', 'client-invite.html', 'remote-consent.html', 'remote-grants.html',
+  'app.css', 'signin.css', 'clients.css', 'remote.css', 'favicon.svg', 'google-signin.png',
+]);
+const WEB_JS = /^js\/[a-z][a-z0-9-]*\.js$/;
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
 const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html' };
@@ -637,10 +646,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const shared = /^\/shared\/([a-z]+)\.js$/.exec(pathname);
     if (shared) return SHARED_BROWSER.has(shared[1]) ? join(config.sharedDir, `${shared[1]}.js`) : null;
     if (pathname.startsWith('/web/')) {
-      let rel;
-      try { rel = decodeURIComponent(pathname.slice(5)); } catch { return null; }
-      const full = normalize(join(config.webDir, rel));
-      return full.startsWith(config.webDir + sep) && !rel.includes('\0') ? full : null;
+      const rel = pathname.slice(5);
+      if (WEB_FILES.has(rel)) return join(config.webDir, rel);
+      return WEB_JS.test(rel) && exactCase(config.webDir, rel) ? join(config.webDir, rel) : null;
     }
     return null;
   }
@@ -654,10 +662,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Pipelined behind a request that was answered with Connection: close.
     if (req.socket?.writableEnded) return req.socket.destroy();
     if (req.socket) req.socket[CURRENT] = req;
-    const url = new URL(req.url, 'http://hub');
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('content-security-policy', "frame-ancestors 'none'");
     if (hsts) res.setHeader('strict-transport-security', 'max-age=31536000');
+    let url, rawPath;
+    try {
+      url = new URL(req.url, 'http://hub');
+      rawPath = req.url.split('?')[0];
+      // Validate the original path before URL's dot-segment normalization.
+      decodeURIComponent(rawPath);
+    } catch { return sendJson(res, 400, { error: { code: 'VALIDATION', message: 'bad request path' } }); }
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
     try {
@@ -794,7 +808,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           res.end();
           return undefined;
         }
-        const p = staticPath(url.pathname);
+        const p = staticPath(rawPath);
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);
       }
@@ -921,13 +935,28 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       return await pending;
     } catch (e) {
       if (e instanceof HubError) return sendJson(res, httpStatus(e.code), errorBody(e), retryHeader(e));
-      hub.log.error('http handler failed', { path: url.pathname, err: e });
+      hub.log.error('http handler failed', { path: logPath(url.pathname), err: e });
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
     } finally {
       if (clientUploadSlot) clientUploads--;
       if (setupUploadSlot) setupUploads--;
     }
   }
+}
+
+// Spell every segment exactly even on case-insensitive desktop filesystems.
+function exactCase(dir, rel) {
+  let at = dir;
+  for (const part of rel.split('/')) {
+    try { if (!readdirSync(at).includes(part)) return false; } catch { return false; }
+    at = join(at, part);
+  }
+  return true;
+}
+
+/** Bounded caller-controlled path text for one structured log record. */
+export function logPath(path) {
+  return String(path ?? '').replace(/[\p{C}\u2028\u2029]/gu, '').slice(0, 100);
 }
 
 function normalizeAddr(a) {
@@ -940,8 +969,13 @@ function refuse(socket, status, text) {
 
 export function createUpgradeHandler({ hub, config, wss, authenticate }) {
   return async function onUpgrade(req, socket, head) {
-    const { pathname, searchParams } = new URL(req.url, 'http://hub');
     socket.on('error', () => {});
+    let parsed;
+    try {
+      decodeURIComponent(req.url.split('?')[0]);
+      parsed = new URL(req.url, 'http://hub');
+    } catch { return refuse(socket, 400, 'Bad Request'); }
+    const { pathname, searchParams } = parsed;
     if (loopbackOnly(config) && !devRequestOk(req)) return refuse(socket, 403, 'Forbidden');
     // Runners keep device-token auth; every other upgrade needs the local cookie.
     if (config.auth === 'local' && pathname !== WS_PATHS.runner && !localCookieOk(hub, req)) return refuse(socket, 401, 'Unauthorized');

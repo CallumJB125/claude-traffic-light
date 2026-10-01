@@ -134,7 +134,7 @@ Clocks: the hub judges every timeout on its **own** monotonic clock at receive t
 | Path | Serves |
 |---|---|
 | `GET /` | `web/index.html` |
-| `GET /web/*` | `web/` files |
+| `GET /web/*` | Current production HTML/CSS/icon/image files and flat `web/js/*.js` modules, with exact case and literal paths; never mock/test/scripts, hidden files or encoded/traversal aliases |
 | `GET /signin`, `/auth/email`, `/invite` | accounts mode only, no auth: `web/signin.html` (the first two) and `web/invite.html`. Every static response sends `Referrer-Policy: no-referrer` |
 | `GET /shared/*.js` | `shared/` browser-safe modules only: `states`, `liveness`, `fence`, `scope`, `overlap`, `cardface`, `handover`, `protocol` (never `migrate.js`, never `schema.sql`) |
 

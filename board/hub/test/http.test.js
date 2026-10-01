@@ -26,7 +26,8 @@ test('health, Board-Protocol header, static web + shared whitelist, ETag/304, CS
     const cached = await h.api(null, 'GET', '/', null, { 'if-none-match': etag });
     assert.equal(cached.status, 304);
 
-    const app = await h.api(null, 'GET', '/web/app.js');
+    const app = await h.api(null, 'GET', '/web/js/app.js');
+    assert.equal(app.status, 200);
     assert.match(app.headers.get('content-type'), /text\/javascript/);
     const shared = await h.api(null, 'GET', '/shared/states.js');
     assert.equal(shared.status, 200);
