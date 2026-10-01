@@ -62,3 +62,25 @@ test('contract: unregister removes only user characters, never a built-in, and r
   assert.equal(C.has('claude'), true);
   assert.equal(Characters === C || true, true);
 });
+
+test('loader: a slow older answer cannot undo a newer one (lists resolving out of order)', async () => {
+  const waiting = [];
+  const registry = new Map();
+  const C = { register: (d) => registry.set(d.id, d), unregister: (id) => registry.delete(id) };
+  let change = null;
+  const win = {
+    BuddyCharacters: C,
+    userCharacters: { list: () => new Promise((resolve) => waiting.push(resolve)), onChange: (cb) => { change = cb; } },
+    dispatchEvent() {},
+    console,
+  };
+  vm.runInNewContext(SRC, { window: win, console, Event: class { constructor(t) { this.type = t; } }, Promise });
+  change(); // a second list in flight behind the first
+  assert.equal(waiting.length, 2);
+  waiting[1]([hatched('Otter'), hatched('Pip')]); // the newer answer arrives first
+  await settle();
+  assert.deepEqual([...registry.keys()].sort(), ['u-otter', 'u-pip']);
+  waiting[0]([hatched('Otter')]); // the stale one arrives late
+  await settle();
+  assert.deepEqual([...registry.keys()].sort(), ['u-otter', 'u-pip'], 'the newer list stands');
+});

@@ -5,6 +5,7 @@ const path = require('path');
 const Characters = require('../characters/contract.js');
 const CORE = require('../characters/builtin/core.js');
 const WAVE2 = require('../characters/builtin/wave2.js');
+const WAVE3 = require('../characters/builtin/wave3.js');
 const STARTER = require('../characters/builtin/starter.js');
 const ORIGINAL = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost'];
 const { validateCharacter, sanitizeSvg, checkGeometry } = require('../characters/validate.js');
@@ -17,9 +18,9 @@ const claude = () => clone(Characters.get('claude'));
 // ── registry and anchors ──────────────────────────────────────────────────
 
 test('characters: the built-ins are registered, and rules offers exactly them', () => {
-  assert.deepEqual(Characters.ids(), [...ORIGINAL, 'owl', 'penguin', 'fox', 'bee', 'axolotl', 'mushroom', 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus']);
+  assert.deepEqual(Characters.ids(), [...ORIGINAL, 'owl', 'penguin', 'fox', 'bee', 'axolotl', 'mushroom', 'egg', 'toaster', 'cloud', 'astronaut', 'sloth', 'trex', 'cyclops', 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus']);
   assert.deepEqual(Rules.BODIES, Characters.ids());
-  assert.equal(CORE.length + WAVE2.length + STARTER.length, Characters.ids().length);
+  assert.equal(CORE.length + WAVE2.length + WAVE3.length + STARTER.length, Characters.ids().length);
 });
 
 test('characters: every page that mounts the rig loads the contract, then the built-ins, before rig.js', () => {
@@ -27,8 +28,8 @@ test('characters: every page that mounts the rig loads the contract, then the bu
   for (const page of pages) {
     const src = fs.readFileSync(path.join(ROOT, page), 'utf8');
     const at = (f) => src.search(new RegExp(`<script src="(\\.\\./)*${f.replace(/[./]/g, '\\$&')}"`));
-    const [contract, core, wave2, starter, rig] = ['characters/contract.js', 'characters/builtin/core.js', 'characters/builtin/wave2.js', 'characters/builtin/starter.js', 'rig.js'].map(at);
-    assert.ok(contract > 0 && contract < core && core < wave2 && wave2 < starter && starter < rig, `${page} loads contract < core < wave2 < starter < rig`);
+    const [contract, core, wave2, wave3, starter, rig] = ['characters/contract.js', 'characters/builtin/core.js', 'characters/builtin/wave2.js', 'characters/builtin/wave3.js', 'characters/builtin/starter.js', 'rig.js'].map(at);
+    assert.ok(contract > 0 && contract < core && core < wave2 && wave2 < wave3 && wave3 < starter && starter < rig, `${page} loads contract < core < wave2 < wave3 < starter < rig`);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.ok(pkg.build.files.includes('characters/**/*'), 'characters ship in the app');
