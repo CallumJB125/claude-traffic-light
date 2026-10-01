@@ -175,7 +175,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
     ? `<p><a href="${esc(next.url)}" rel="noopener noreferrer">${esc(next.text)}</a></p>`
     : '<p>You can close this window and go back to Buddy.</p>';
   const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p>${after}</body></html>`;
-  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'cross-origin-opener-policy': 'same-origin', 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
   res.end(body);
 }
 
@@ -471,6 +471,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     const headers = {
       'content-type': TYPES[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-cache', etag: entry.etag,
       'content-security-policy': webCsp(), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
+      // No opener handle on our pages: another site cannot navigate or re-hash a window it opened to us.
+      'cross-origin-opener-policy': 'same-origin',
     };
     if (req.headers['if-none-match'] === entry.etag) { res.writeHead(304, headers); res.end(); return undefined; }
     res.writeHead(200, headers);

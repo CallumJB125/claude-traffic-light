@@ -319,6 +319,8 @@ test('web: magic link in the fragment; a scanner GET consumes nothing; another b
     assert.equal(page.status, 200);
     assert.match(await page.text(), /signin\.js/);
     assert.equal(page.headers.get('referrer-policy'), 'no-referrer');
+    // An opener (another site that window.open()ed this page) must not keep a handle to it: double-clickjacking via hashchange.
+    assert.equal(page.headers.get('cross-origin-opener-policy'), 'same-origin');
     assert.equal(h.db.get('SELECT consumed_at FROM login_flows WHERE id = ?', s.body.flow_id).consumed_at, null);
     // Another browser (no flow cookie): confirm first; this costs no attempt.
     const other = await h.call('POST', '/api/auth/email/verify', { body: { flow_id: link[2], code: link[3], via: 'link' } });
