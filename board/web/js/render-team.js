@@ -118,6 +118,35 @@ function needsYou(rows, model) {
       s.summary ? h('span', { class: 'team-needs-summary' }, String(s.summary).slice(0, 120)) : null))));
 }
 
+// Accounts mode: owners and admins invite from here (POST /api/teams/:id/invites).
+// The link and code are shown once, from memory: the hub keeps only their hashes.
+export const CAN_INVITE = new Set(['owner', 'admin']);
+const INVITE_ROLES = [['member', 'Member'], ['admin', 'Admin'], ['viewer', 'Viewer']];
+
+export function invitePanel(model) {
+  if (!model.accounts || !CAN_INVITE.has(model.me?.member?.role)) return null;
+  const inv = model.invite ?? {};
+  const made = inv.made;
+  return h('section', { class: 'team-invite', 'aria-labelledby': 'team-invite-h' },
+    h('h2', { class: 'team-needs-h', id: 'team-invite-h' }, icon('person', 'icon-xs'), 'Invite people'),
+    h('p', { class: 'hint' }, 'Only the address you invite can join with the link or the code.'),
+    h('form', { class: 'signin-row', 'data-form': 'team-invite' },
+      h('label', { class: 'sr-only', for: 'invite-email' }, 'Email to invite'),
+      h('input', { id: 'invite-email', name: 'email', type: 'email', class: 'input', placeholder: 'name@example.com', autocomplete: 'off', required: true }),
+      h('label', { class: 'sr-only', for: 'invite-role' }, 'Role'),
+      h('select', { id: 'invite-role', name: 'role', class: 'input' }, INVITE_ROLES.map(([v, label]) => h('option', { key: v, value: v }, label))),
+      h('button', { type: 'submit', class: 'btn btn-primary', disabled: inv.busy || null }, 'Create invite')),
+    inv.error ? h('p', { class: 'form-error', role: 'alert' }, inv.error) : null,
+    made ? h('div', { class: 'team-invite-made', role: 'status' },
+      h('p', null, made.mailed ? `We emailed ${made.email} the link and the code.` : `Nothing was emailed: send ${made.email} the link or the code yourself.`, ' They show only this once.'),
+      h('div', { class: 'signin-row' },
+        h('input', { class: 'input num', readonly: true, value: made.link, 'aria-label': 'Invite link' }),
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-invite', 'data-what': 'link' }, 'Copy link')),
+      h('div', { class: 'signin-row' },
+        h('code', { class: 'team-invite-code num', 'aria-label': 'Invite code' }, made.code),
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'copy-invite', 'data-what': 'code' }, 'Copy code'))) : null);
+}
+
 export function teamScreen(model) {
   const p = model.presence ?? { members: [], loaded: false, stale: false };
   const rows = teamRows(model);
@@ -132,6 +161,7 @@ export function teamScreen(model) {
       h('details', { class: 'team-scope' },
         h('summary', null, 'How sessions are counted'),
         h('p', null, SCOPE_RULE))),
+    invitePanel(model),
     p.loaded ? needsYou(rows, model) : null,
     h('div', { class: 'team-grid' }, rows.map((m) => memberCard(m, model, p.loaded))));
 }

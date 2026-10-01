@@ -54,6 +54,12 @@ const mut = (method, path, body = {}) => call(method, path, { request_id: reques
 export const api = {
   health: () => call('GET', '/api/health'),
   me: () => call('GET', '/api/me'),
+  // Accounts mode (ACCOUNTS-API.md): which sign-ins the hub offers, a first team, joining one.
+  methods: () => call('GET', '/api/auth/methods'),
+  signout: () => mut('POST', '/api/auth/signout'),
+  createTeam: (name) => mut('POST', '/api/teams', { name }),
+  acceptInvite: (body) => mut('POST', '/api/invites/accept', body),
+  createInvite: (teamId, email, role) => mut('POST', `/api/teams/${enc(teamId)}/invites`, { email, role }),
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
   devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
   board: (id, { includeArchived = false } = {}) => call('GET', `/api/boards/${enc(id)}${includeArchived ? '?include_archived=1' : ''}`),
