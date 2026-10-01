@@ -98,10 +98,12 @@ jobs:
       # blocking packaging and the smoke test. Bounded, so a hung test can't
       # eat the job. The ICS tests assume SAST, and Electron-based tests need
       # a display and no sandbox on Linux runners.
-      # The first release is macOS-first: the Windows suite only reports.
-      # It becomes blocking before the first Windows installer is promoted,
-      # once main's fix/windows-tests and the hub-supervisor fixes land
-      # (docs/RELEASING.md checklist).
+      # The first release is macOS-first: the Windows suite only reports, and
+      # the stage and promote jobs drop every Windows file unless the repo
+      # variable WINDOWS_RELEASE is 'true' (scripts/release-sign.js). To ship
+      # Windows, once its suite is green, do both together: set
+      # WINDOWS_RELEASE=true AND remove `|| matrix.platform == 'win'` below
+      # (docs/RELEASING.md).
       - name: Unit tests
         shell: bash
         timeout-minutes: 20
@@ -158,6 +160,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      WINDOWS_RELEASE: ${{ vars.WINDOWS_RELEASE }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -168,6 +172,11 @@ jobs:
           pattern: installers-*
           path: out
           merge-multiple: true
+
+      # Windows ships only with WINDOWS_RELEASE=true: before the checksums and
+      # every upload, so neither the draft nor R2 holds a Windows file.
+      - name: Drop Windows unless it ships
+        run: node scripts/release-sign.js prune out
 
       - name: Check the installers and feed files
         run: node scripts/release-sign.js check out --channel stable --version "${GITHUB_REF_NAME#v}"
@@ -203,6 +212,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      WINDOWS_RELEASE: ${{ vars.WINDOWS_RELEASE }}
     steps:
       # The scripts come from this workflow's own commit; only the built
       # artifacts come from the ref that was built.
@@ -216,6 +227,11 @@ jobs:
           pattern: installers-*
           path: out
           merge-multiple: true
+
+      # Windows ships only with WINDOWS_RELEASE=true: before the checksums and
+      # every upload, so neither the draft nor R2 holds a Windows file.
+      - name: Drop Windows unless it ships
+        run: node scripts/release-sign.js prune out
 
       - name: Version and check
         id: v

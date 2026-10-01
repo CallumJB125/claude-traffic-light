@@ -36,7 +36,7 @@ test('every platform builds what it can update from, and nothing that cannot', (
 });
 
 test('R2 staging puts the feed files last; only names with a version are cached', () => {
-  const plan = R2.stagePlan('1.2.0', ['latest-mac.yml', 'Plexiform-1.2.0-mac-arm64.dmg', 'latest.yml', 'Plexiform-1.2.0-win-x64.exe', 'SHA256SUMS.txt', '.DS_Store']);
+  const plan = R2.stagePlan('1.2.0', ['latest-mac.yml', 'Plexiform-1.2.0-mac-arm64.dmg', 'latest.yml', 'Plexiform-1.2.0-win-x64.exe', 'SHA256SUMS.txt', '.DS_Store'], '', true);
   assert.deepEqual(plan.map((p) => p.key), ['1.2.0/Plexiform-1.2.0-mac-arm64.dmg', '1.2.0/Plexiform-1.2.0-win-x64.exe', '1.2.0/SHA256SUMS.txt', '1.2.0/latest-mac.yml', '1.2.0/latest.yml']);
   for (const feed of ['latest-linux.yml', 'beta.yml', 'beta-mac.yml', 'release.json', 'release.json.sig', 'SHA256SUMS.txt']) assert.equal(R2.cacheControl(feed), 'no-cache, max-age=0', feed);
   assert.match(R2.cacheControl('Plexiform-1.2.0-linux-x86_64.AppImage'), /immutable/);
@@ -53,10 +53,10 @@ test('R2 beta staging goes under beta/ only', () => {
 
 test('R2 promote plan: installers, then the feed files (latest*.yml or beta*.yml); never a staged manifest', () => {
   const names = ['release.json.sig', 'release.json', 'Plexiform-1.2.0-mac-arm64.zip', 'latest-mac.yml', 'Plexiform-1.2.0-win-x64.exe', 'latest.yml', 'nested/x'];
-  const plan = R2.promotePlan('1.2.0', names);
+  const plan = R2.promotePlan('1.2.0', names, '', true);
   assert.deepEqual(plan.map((p) => p.to), ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-win-x64.exe', 'latest-mac.yml', 'latest.yml']);
-  assert.throws(() => R2.promotePlan('1.3.0', ['Plexiform-1.3.0-win-x64.exe']), /no feed file/);
-  const beta = R2.promotePlan('1.2.0-beta.3', ['Plexiform-1.2.0-beta.3-win-x64.exe', 'beta.yml'], 'beta/');
+  assert.throws(() => R2.promotePlan('1.3.0', ['Plexiform-1.3.0-win-x64.exe'], '', true), /no feed file/);
+  const beta = R2.promotePlan('1.2.0-beta.3', ['Plexiform-1.2.0-beta.3-win-x64.exe', 'beta.yml'], 'beta/', true);
   assert.deepEqual(beta.map((p) => p.to), ['beta/Plexiform-1.2.0-beta.3-win-x64.exe', 'beta/beta.yml']);
 });
 
@@ -84,6 +84,57 @@ function fakeAws(bucket) {
   return { run, calls };
 }
 const R2_ENV = { R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_ACCOUNT_ID: 'acc', R2_RELEASES_BUCKET: 'bk' };
+const R2_WIN = { ...R2_ENV, WINDOWS_RELEASE: 'true' };
+
+// N2 (security re-review): Windows tests only report, so nothing Windows ships
+// unless the repo variable WINDOWS_RELEASE is 'true'.
+const WIN_NAMES = ['Plexiform-1.2.0-win-x64.exe', 'Plexiform-1.2.0-win-x64.exe.blockmap', 'latest.yml'];
+const OTHER_NAMES = ['Plexiform-1.2.0-mac-arm64.zip', 'Plexiform-1.2.0-linux-x86_64.AppImage', 'latest-mac.yml', 'latest-linux.yml', 'SHA256SUMS.txt'];
+test('N2: without WINDOWS_RELEASE no Windows file or latest.yml is staged, fetched or promoted; with it they are', () => {
+  const names = [...OTHER_NAMES, ...WIN_NAMES];
+  const base = (p) => p.map((x) => x.name).sort();
+  assert.deepEqual(base(R2.stagePlan('1.2.0', names)), [...OTHER_NAMES].sort());
+  assert.deepEqual(base(R2.stagePlan('1.2.0', names, '', true)), [...names].sort());
+  assert.deepEqual(base(R2.promotePlan('1.2.0', names)), [...OTHER_NAMES].sort());
+  assert.deepEqual(base(R2.promotePlan('1.2.0', names, '', true)), [...names].sort());
+  // beta.yml is the Windows beta feed; beta-mac.yml and beta-linux.yml stay
+  assert.deepEqual(base(R2.stagePlan('1.2.0-beta.1', ['beta.yml', 'beta-mac.yml', 'beta-linux.yml', 'Plexiform-1.2.0-beta.1-win-x64.exe'], 'beta/')), ['beta-linux.yml', 'beta-mac.yml']);
+  // a Windows-only staging has nothing to promote
+  assert.throws(() => R2.promotePlan('1.2.0', WIN_NAMES), /no feed file/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-win-'));
+  for (const n of names) fs.writeFileSync(path.join(dir, n), n);
+  const off = fakeAws(new Map());
+  R2.main(['stage', '1.2.0', dir], off.run, () => {}, R2_ENV);
+  const keys = (b) => [...b.calls].filter((c) => c[0] === 'cp').map((c) => c[2].replace('s3://bk/', ''));
+  assert.deepEqual(keys(off).sort(), OTHER_NAMES.map((n) => `1.2.0/${n}`).sort());
+  const on = fakeAws(new Map());
+  R2.main(['stage', '1.2.0', dir], on.run, () => {}, R2_WIN);
+  assert.deepEqual(keys(on).sort(), names.map((n) => `1.2.0/${n}`).sort());
+
+  const bucket = () => new Map(names.map((n) => [`1.2.0/${n}`, n]));
+  const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-win-'));
+  fs.writeFileSync(path.join(signed, 'release.json'), 'm');
+  fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
+  const roots = (b) => [...b.keys()].filter((k) => !k.includes('/')).sort();
+  const pOff = bucket();
+  R2.main(['promote', '1.2.0', '--manifest-dir', signed], fakeAws(pOff).run, () => {}, R2_ENV);
+  assert.deepEqual(roots(pOff), [...OTHER_NAMES, 'release.json', 'release.json.sig'].sort());
+  const pOn = bucket();
+  R2.main(['promote', '1.2.0', '--manifest-dir', signed], fakeAws(pOn).run, () => {}, R2_WIN);
+  assert.deepEqual(roots(pOn), [...names, 'release.json', 'release.json.sig'].sort());
+
+  const fOff = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  R2.main(['fetch-staged', '1.2.0', fOff], fakeAws(bucket()).run, () => {}, R2_ENV);
+  assert.deepEqual(fs.readdirSync(fOff).sort(), [...OTHER_NAMES].sort());
+  const fOn = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-win-'));
+  R2.main(['fetch-staged', '1.2.0', fOn], fakeAws(bucket()).run, () => {}, R2_WIN);
+  assert.deepEqual(fs.readdirSync(fOn).sort(), [...names].sort());
+  // only the exact string 'true' turns it on
+  const Sign = require('../scripts/release-sign.js');
+  assert.equal(Sign.windowsEnabled({ WINDOWS_RELEASE: '1' }), false);
+  assert.equal(Sign.windowsEnabled({}), false);
+});
 
 // H4 (code review): R2 first, the manifest signed at promote time last, to both <version>/ and the root.
 test('R2 promote copies the staged files, then uploads the manifest signed now: <version>/ first, the root last', () => {
@@ -92,7 +143,7 @@ test('R2 promote copies the staged files, then uploads the manifest signed now: 
   const signed = fs.mkdtempSync(path.join(os.tmpdir(), 'signed-'));
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
-  R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_ENV);
+  R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_WIN);
   const copies = calls.filter((c) => c[0] === 'cp').map((c) => [c[1].startsWith(signed) ? `signed/${path.basename(c[1])}` : c[1], c[2]]);
   assert.deepEqual(copies, [
     ['s3://bk/1.1.0/Plexiform-1.1.0-win-x64.exe', 's3://bk/Plexiform-1.1.0-win-x64.exe'],
@@ -104,7 +155,7 @@ test('R2 promote copies the staged files, then uploads the manifest signed now: 
   ]);
   // L8: every copy says its content type
   for (const c of calls.filter((x) => x[0] === 'cp')) assert.ok(c.includes('--content-type'), c.join(' '));
-  assert.throws(() => R2.main(['promote', '1.1.0'], run, () => {}, R2_ENV), /needs --manifest-dir/);
+  assert.throws(() => R2.main(['promote', '1.1.0'], run, () => {}, R2_WIN), /needs --manifest-dir/);
 });
 
 // M7 (code review): re-running a tag must not change a release that is live.
@@ -112,9 +163,9 @@ test('R2 stage refuses a version that was already promoted', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage-'));
   fs.writeFileSync(path.join(dir, 'latest.yml'), 'y');
   const { run } = fakeAws(new Map([['1.2.0/release.json', 'm'], ['1.2.0/latest.yml', 'y']]));
-  assert.throws(() => R2.main(['stage', '1.2.0', dir], run, () => {}, R2_ENV), /already promoted/);
+  assert.throws(() => R2.main(['stage', '1.2.0', dir], run, () => {}, R2_WIN), /already promoted/);
   const fresh = fakeAws(new Map());
-  R2.main(['stage', '1.3.0', dir], fresh.run, () => {}, R2_ENV);
+  R2.main(['stage', '1.3.0', dir], fresh.run, () => {}, R2_WIN);
   assert.deepEqual(fresh.calls.filter((x) => x[0] === 'cp').map((x) => x[2]), ['s3://bk/1.3.0/latest.yml']);
 });
 
@@ -141,7 +192,7 @@ test('R2 fetch-live and fetch-staged download what is there, and nothing when no
   R2.main(['fetch-live', out, '--beta'], run, () => {}, R2_ENV);
   assert.deepEqual(fs.readdirSync(out).sort(), ['release.json', 'release.json.sig']);
   const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'staged-'));
-  R2.main(['fetch-staged', '1.0.0-beta.2', staged, '--beta'], run, () => {}, R2_ENV);
+  R2.main(['fetch-staged', '1.0.0-beta.2', staged, '--beta'], run, () => {}, R2_WIN);
   assert.deepEqual(fs.readdirSync(staged), ['beta.yml'], 'the staged files, never a manifest');
 });
 
@@ -224,6 +275,13 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
   assert.equal((coe.match(/matrix\.platform == '(\w+)'/g) || []).join(), "matrix.platform == 'win'");
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
+  // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
+  for (const j of ['stage', 'stage-beta']) {
+    assert.match(jobs[j], /\n {4}env:\n {6}WINDOWS_RELEASE: \$\{\{ vars\.WINDOWS_RELEASE \}\}\n/, j);
+    const prune = jobs[j].indexOf('release-sign.js prune out');
+    assert.ok(prune > jobs[j].indexOf('download-artifact'), j);
+    for (const later of ['release-sign.js check out', 'sha256sum', 'gh release upload', 'release-r2.js stage']) assert.ok(jobs[j].indexOf(later) > prune, `${j}: ${later}`);
+  }
   // stage-beta runs its scripts from this workflow's own commit
   assert.match(jobs['stage-beta'], /ref: \$\{\{ github\.sha \}\}/);
 });
@@ -241,6 +299,7 @@ test('release-promote.yml: the release environment, both keys only there, signed
   assert.ok(at.every((i) => i > 0), JSON.stringify(at));
   assert.deepEqual([...at].sort((a, b) => a - b), at, 'download, live, sign, check R2, promote R2, then publish on GitHub');
   assert.ok(!/resign/.test(jobs.promote), 'never re-signs what R2 serves');
+  assert.match(jobs.promote, /\n {6}WINDOWS_RELEASE: \$\{\{ vars\.WINDOWS_RELEASE \}\}\n/, 'N2: sign and promote read the repo variable');
 });
 
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.

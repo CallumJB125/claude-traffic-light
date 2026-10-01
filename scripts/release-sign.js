@@ -25,6 +25,14 @@
 //   verify-files <release.json> <dir>
 //       every file the (signed) manifest names is in <dir> with its size and
 //       sha512 (the promote job's check of what R2 staged)
+//   prune <dir>
+//       delete the Windows files from <dir> unless Windows ships (below)
+//
+// Windows ships only when WINDOWS_RELEASE=true (the repo variable): until its
+// unit tests block a tag build, its installers (*-win-*) and its feed files
+// (latest.yml, beta.yml: electron-builder's mac and Linux feeds carry -mac
+// and -linux) are left out of every check, manifest and copy here and in
+// release-r2.js, so nothing signs or stages them.
 //
 // The keys are PLEXIFORM_UPDATE_SIGNING_KEY (stable) and
 // PLEXIFORM_UPDATE_SIGNING_KEY_BETA (beta): Ed25519 PKCS8 PEMs, base64,
@@ -42,6 +50,9 @@ const KIND = { exe: 'nsis', AppImage: 'appimage', deb: 'deb', zip: 'mac-zip', dm
 // electron-builder names the feed after the version's prerelease tag:
 // latest*.yml for 1.2.0, beta*.yml for 1.2.0-beta.3 (app-builder-lib).
 const FEED = /^(?:latest|beta|alpha)(?:-mac|-linux(?:-arm64|-arm)?)?\.yml$/;
+const WINDOWS_ONLY = /-win-|^(?:latest|beta|alpha)\.yml$/;
+const windowsEnabled = (env = process.env) => env.WINDOWS_RELEASE === 'true';
+const releaseNames = (names, windows) => (windows ? names : names.filter((n) => !WINDOWS_ONLY.test(n)));
 const KEY_ENV = { stable: 'PLEXIFORM_UPDATE_SIGNING_KEY', beta: 'PLEXIFORM_UPDATE_SIGNING_KEY_BETA' };
 const EXPIRES_DAYS = 30;
 
@@ -78,10 +89,10 @@ function listVersions(s) {
   return out;
 }
 
-function buildManifest({ dir, channel, version, notes = '', issuedAt = new Date().toISOString(), rollback = false, rollbackFrom = [], product = Verify.PRODUCT }) {
+function buildManifest({ dir, channel, version, notes = '', issuedAt = new Date().toISOString(), rollback = false, rollbackFrom = [], product = Verify.PRODUCT, windows = false }) {
   if (!Verify.CHANNELS.includes(channel)) throw new Error(`--channel must be one of ${Verify.CHANNELS.join(', ')}`);
   if (!Verify.parseVersion(version)) throw new Error(`--version must be a version (got ${JSON.stringify(version)})`);
-  const names = fs.readdirSync(dir).sort();
+  const names = releaseNames(fs.readdirSync(dir).sort(), windows);
   const files = [];
   for (const name of names) {
     const m = INSTALLER.exec(name);
@@ -208,7 +219,7 @@ function main(argv, env = process.env, log = console, keyring = null) {
     return 0;
   }
   if (cmd === 'check') {
-    const m = buildManifest({ dir: target, channel: a.channel, version: a.version });
+    const m = buildManifest({ dir: target, channel: a.channel, version: a.version, windows: windowsEnabled(env) });
     log.log(`release files: ${m.channel} ${m.version}, ${m.files.length} installers, feed files match`);
     return 0;
   }
@@ -217,7 +228,7 @@ function main(argv, env = process.env, log = console, keyring = null) {
     const live = a.live ? openFile(path.join(a.live, 'release.json'), { channel: a.channel, keyring: ring() }) : null;
     const rollbackFrom = promoteCheck({ live, version: a.version, rollback: !!a.rollback, rollbackFrom: listVersions(a['rollback-from']) });
     const notes = a['notes-file'] ? fs.readFileSync(a['notes-file'], 'utf8') : '';
-    const manifest = buildManifest({ dir: target, channel: a.channel, version: a.version, notes, rollback: !!a.rollback, rollbackFrom });
+    const manifest = buildManifest({ dir: target, channel: a.channel, version: a.version, notes, rollback: !!a.rollback, rollbackFrom, windows: windowsEnabled(env) });
     write(a.out || target, sign(manifest, key));
     log.log(`release.json: ${manifest.product} ${manifest.channel} ${manifest.version}${manifest.rollback ? ` (rollback from ${manifest.rollbackFrom.join(', ')})` : ''}, ${manifest.files.length} files, signed, issued ${manifest.issuedAt}`);
     return 0;
@@ -233,6 +244,15 @@ function main(argv, env = process.env, log = console, keyring = null) {
     log.log(`release.json: ${manifest.version} re-signed${manifest.rollback ? ' as a rollback' : ''}, issued ${manifest.issuedAt}`);
     return 0;
   }
+  if (cmd === 'prune') {
+    const names = fs.readdirSync(target);
+    const keep = new Set(releaseNames(names, windowsEnabled(env)));
+    for (const n of names.filter((x) => !keep.has(x))) {
+      fs.rmSync(path.join(target, n));
+      log.log(`dropped ${n} (Windows ships only with WINDOWS_RELEASE=true)`);
+    }
+    return 0;
+  }
   if (cmd === 'verify-files') {
     const m = openFile(target, { channel: a.channel, keyring: ring() });
     if (!m) throw new Error(`${target} does not exist`);
@@ -240,11 +260,11 @@ function main(argv, env = process.env, log = console, keyring = null) {
     log.log(`${m.files.length} files in ${a._[2]} match release.json ${m.version}`);
     return 0;
   }
-  throw new Error('usage: release-sign.js check|build <dir> --channel stable|beta --version v [...] | resign <release.json> --channel c --version v [...] | verify-files <release.json> <dir> --channel c');
+  throw new Error('usage: release-sign.js check|build <dir> --channel stable|beta --version v [...] | resign <release.json> --channel c --version v [...] | verify-files <release.json> <dir> --channel c | prune <dir>');
 }
 
 if (require.main === module) {
   try { process.exit(main(process.argv.slice(2))); } catch (err) { console.error(`release-sign: ${err.message}`); process.exit(1); }
 }
 
-module.exports = { buildManifest, parseFeed, sign, resign, keyFromEnv, promoteCheck, verifyFiles, openFile, main, FEED, KEY_ENV, EXPIRES_DAYS };
+module.exports = { buildManifest, parseFeed, sign, resign, keyFromEnv, promoteCheck, verifyFiles, openFile, main, releaseNames, windowsEnabled, FEED, WINDOWS_ONLY, KEY_ENV, EXPIRES_DAYS };

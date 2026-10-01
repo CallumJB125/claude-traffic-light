@@ -34,7 +34,8 @@ To try the build without staging anything: Actions → Release → Run workflow
 
 ## Release checklist
 
-- Before promoting the first Windows installer: remove `continue-on-error` from the Windows Unit tests step; the Windows suite must be green. (The first release is macOS-first, so that step only reports on Windows; Mac and Linux block.)
+- Windows does not ship yet. The first release is macOS-first: the Windows Unit tests step only reports (Mac and Linux block), and the stage and promote jobs drop every Windows file (`*-win-*`, `latest.yml`, `beta.yml`) unless the repo variable `WINDOWS_RELEASE` is `true`, so no Windows installer is staged, signed, listed in `release.json` or promoted. Installed Windows apps see such a release as "no update".
+- To ship Windows, only once the Windows suite is green on a tag build, do both together: set the repo variable `WINDOWS_RELEASE=true` (Settings → Secrets and variables → Actions → Variables) AND remove `|| matrix.platform == 'win'` from the Unit tests step's `continue-on-error` in release.yml. One without the other either ships Windows untested or blocks it for nothing.
 
 ## 2. Promote (make it live, and sign it)
 

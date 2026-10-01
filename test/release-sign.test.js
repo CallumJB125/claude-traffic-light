@@ -12,7 +12,8 @@ const V = require('../src/updater/verify.js');
 const stable = crypto.generateKeyPairSync('ed25519');
 const beta = crypto.generateKeyPairSync('ed25519');
 const b64 = (k) => Buffer.from(k.privateKey.export({ type: 'pkcs8', format: 'pem' })).toString('base64');
-const env = { PLEXIFORM_UPDATE_SIGNING_KEY: b64(stable), PLEXIFORM_UPDATE_SIGNING_KEY_BETA: b64(beta) };
+// Windows on, so the fixtures exercise every platform (N2's test turns it off).
+const env = { PLEXIFORM_UPDATE_SIGNING_KEY: b64(stable), PLEXIFORM_UPDATE_SIGNING_KEY_BETA: b64(beta), WINDOWS_RELEASE: 'true' };
 const keys = V.loadKeyring({ stable: [stable.publicKey.export({ type: 'spki', format: 'pem' })], beta: [beta.publicKey.export({ type: 'spki', format: 'pem' })] });
 const sha = (b) => crypto.createHash('sha512').update(b).digest('base64');
 const quiet = { log() {} };
@@ -74,7 +75,7 @@ test('beta: beta*.yml feed files, signed with the beta key only, opened only on 
   assert.throws(() => readSigned(dir, 'stable'), (e) => e.code === 'signature');
   // the feed check reads beta*.yml too
   fs.writeFileSync(path.join(dir, 'Plexiform-1.2.0-beta.4-win-x64.exe'), 'rebuilt');
-  assert.throws(() => Sign.buildManifest({ dir, channel: 'beta', version: '1.2.0-beta.4' }), /beta\.yml: .* checksum differs/);
+  assert.throws(() => Sign.buildManifest({ dir, channel: 'beta', version: '1.2.0-beta.4', windows: true }), /beta\.yml: .* checksum differs/);
   for (const n of ['latest.yml', 'latest-mac.yml', 'latest-linux.yml', 'latest-linux-arm64.yml', 'beta.yml', 'beta-mac.yml', 'beta-linux.yml', 'alpha.yml']) assert.ok(Sign.FEED.test(n), n);
   assert.ok(!Sign.FEED.test('builder-debug.yml'));
   fs.rmSync(dir, { recursive: true, force: true });
@@ -83,7 +84,7 @@ test('beta: beta*.yml feed files, signed with the beta key only, opened only on 
 test('check and version: the stage job\'s early checks, which need no key', () => {
   const dir = dist();
   const logs = [];
-  assert.equal(Sign.main(['check', dir, '--channel', 'stable', '--version', '1.2.0'], {}, { log: (s) => logs.push(s) }, keys), 0);
+  assert.equal(Sign.main(['check', dir, '--channel', 'stable', '--version', '1.2.0'], { WINDOWS_RELEASE: 'true' }, { log: (s) => logs.push(s) }, keys), 0);
   assert.match(logs[0], /5 installers/);
   assert.ok(!fs.existsSync(path.join(dir, 'release.json')));
   logs.length = 0;
@@ -94,13 +95,47 @@ test('check and version: the stage job\'s early checks, which need no key', () =
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// N2 (security re-review): the Windows suite only reports, so nothing Windows
+// is checked, signed or listed unless WINDOWS_RELEASE is 'true'.
+test('N2: without WINDOWS_RELEASE no Windows installer or latest.yml is signed, listed or kept; with it they are', () => {
+  const off = { ...env, WINDOWS_RELEASE: undefined };
+  const dir = dist();
+  // latest.yml is not even read: a stale one doesn't block a mac/linux release
+  fs.writeFileSync(path.join(dir, 'Plexiform-1.2.0-win-x64.exe'), 'rebuilt');
+  run(['build', dir, '--channel', 'stable', '--version', '1.2.0'], off);
+  const m = readSigned(dir);
+  assert.deepEqual(m.files.map((f) => f.platform).sort(), ['darwin', 'darwin', 'linux', 'linux']);
+  assert.ok(m.files.every((f) => !/-win-/.test(f.name)));
+  const logs = [];
+  Sign.main(['check', dir, '--channel', 'stable', '--version', '1.2.0'], {}, { log: (s) => logs.push(s) }, keys);
+  assert.match(logs[0], /4 installers/);
+  assert.throws(() => run(['build', dir, '--channel', 'stable', '--version', '1.2.0']), /latest\.yml: .* checksum differs/, 'with it, latest.yml and the .exe are checked');
+
+  const on = dist();
+  run(['build', on, '--channel', 'stable', '--version', '1.2.0']);
+  assert.ok(readSigned(on).files.some((f) => f.platform === 'win32' && f.kind === 'nsis'));
+
+  // prune: what the stage jobs run before the checksums and every upload
+  const p = dist();
+  const before = fs.readdirSync(p).sort();
+  run(['prune', p], off);
+  const winOnly = ['Plexiform-1.2.0-win-x64.exe', 'Plexiform-1.2.0-win-x64.exe.blockmap', 'latest.yml'];
+  assert.deepEqual(fs.readdirSync(p).sort(), before.filter((n) => !winOnly.includes(n)));
+  assert.ok(fs.existsSync(path.join(p, 'latest-mac.yml')), 'the mac feed stays');
+  const q = dist();
+  run(['prune', q]);
+  assert.deepEqual(fs.readdirSync(q).sort(), before);
+  for (const n of ['latest.yml', 'beta.yml', 'Plexiform-1.2.0-win-arm64.exe']) assert.ok(Sign.WINDOWS_ONLY.test(n), n);
+  for (const n of ['latest-mac.yml', 'latest-linux.yml', 'latest-linux-arm64.yml', 'beta-mac.yml', 'Plexiform-1.2.0-mac-arm64.zip', 'SHA256SUMS.txt']) assert.ok(!Sign.WINDOWS_ONLY.test(n), n);
+});
+
 test('build refuses a feed file that disagrees with the installers, or another version', () => {
   const dir = dist();
   fs.writeFileSync(path.join(dir, 'Plexiform-1.2.0-win-x64.exe'), 'rebuilt');
-  assert.throws(() => Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0' }), /latest\.yml: .* checksum differs/);
+  assert.throws(() => Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0', windows: true }), /latest\.yml: .* checksum differs/);
   fs.writeFileSync(path.join(dir, 'latest.yml'), 'version: 1.2.0\n');
   fs.writeFileSync(path.join(dir, 'Plexiform-1.3.0-win-x64.exe'), 'x');
-  assert.throws(() => Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0' }), /is version 1\.3\.0, not 1\.2\.0/);
+  assert.throws(() => Sign.buildManifest({ dir, channel: 'stable', version: '1.2.0', windows: true }), /is version 1\.3\.0, not 1\.2\.0/);
   assert.throws(() => Sign.buildManifest({ dir, channel: 'nightly', version: '1.2.0' }), /--channel/);
   assert.throws(() => Sign.buildManifest({ dir, channel: 'stable', version: '$(id)' }), /--version/);
   fs.rmSync(dir, { recursive: true, force: true });

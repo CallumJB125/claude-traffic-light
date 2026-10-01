@@ -447,6 +447,21 @@ test('electron-updater: a feed whose sha512 differs from the signed release is r
   assert.equal(au.downloads, 0);
 });
 
+// N2 (security re-review): a release without Windows (WINDOWS_RELEASE unset) is no update on Windows.
+test('electron-updater: a release with no Windows entry is "no update", and electron-updater is never asked', async () => {
+  publish(feed, { privateKey, version: '1.2.0', files: [DEB('1.2.0')] });
+  const au = fakeUpdater({ info: () => assert.fail('the feed is never read') });
+  const svc = euRig(au);
+  assert.deepEqual(await svc.check({ user: true }), { ok: true });
+  const s = svc.getState();
+  assert.equal(s.status, 'idle');
+  assert.equal(s.error, null);
+  assert.equal(s.available, null);
+  assert.deepEqual(au.feeds, []);
+  assert.equal(feed.requests.filter((r) => r.path.endsWith('.yml') || r.path.endsWith('.exe')).length, 0);
+  svc.stop();
+});
+
 test('electron-updater: a matching feed downloads only when asked, then quitAndInstall only on install', async () => {
   const exe = EXE('1.2.0');
   publish(feed, { privateKey, version: '1.2.0', files: [exe] });

@@ -25,12 +25,16 @@
 // release to the root never overwrites another one; only the feed files and
 // the manifest change.
 //
+// Windows files (*-win-*, latest.yml, beta.yml) are staged, fetched and
+// promoted only with WINDOWS_RELEASE=true (release-sign.js says why).
+//
 // Uses the aws CLI (on every GitHub runner) against R2's S3 endpoint. Only
 // staging tolerates missing R2 secrets (it says so and exits 0, so the
 // GitHub Release still stages); every other command fails without them.
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { releaseNames, windowsEnabled } = require('./release-sign.js');
 
 const FEED = /^(?:latest|beta|alpha)(?:-mac|-linux(?:-arm64|-arm)?)?\.yml$/;
 const MANIFEST = ['release.json', 'release.json.sig'];
@@ -64,19 +68,19 @@ function aws(cfg, args, run = execFileSync) {
 
 const checkVersion = (version) => { if (!VERSION.test(version || '')) throw new Error(`not a version: ${version}`); };
 
-function stagePlan(version, files, prefix = '') {
+function stagePlan(version, files, prefix = '', windows = false) {
   checkVersion(version);
   const signed = files.filter((f) => MANIFEST.includes(f));
   if (signed.length) throw new Error(`${signed.join(', ')} in the staging folder: manifests are signed at promote time, never staged`);
-  return files.filter((f) => !f.startsWith('.')).sort((a, b) => rank(a) - rank(b)).map((name) => ({ name, key: `${prefix}${version}/${name}`, cache: cacheControl(name) }));
+  return releaseNames(files, windows).filter((f) => !f.startsWith('.')).sort((a, b) => rank(a) - rank(b)).map((name) => ({ name, key: `${prefix}${version}/${name}`, cache: cacheControl(name) }));
 }
 
 // names: what `aws s3 ls <prefix><version>/` listed. Installers, then feed
 // files; the manifest is uploaded separately (it is signed at promote time).
-function promotePlan(version, names, prefix = '') {
+function promotePlan(version, names, prefix = '', windows = false) {
   checkVersion(version);
   const from = `${prefix}${version}/`;
-  const files = names.filter((n) => n && !n.includes('/') && !MANIFEST.includes(n));
+  const files = releaseNames(names, windows).filter((n) => n && !n.includes('/') && !MANIFEST.includes(n));
   if (!files.some((n) => FEED.test(n))) throw new Error(`${from} has no feed file (latest*.yml or beta*.yml) staged; stage it first`);
   return files.sort((a, b) => rank(a) - rank(b)).map((name) => ({ from: `${from}${name}`, to: `${prefix}${name}`, name, cache: cacheControl(name) }));
 }
@@ -102,10 +106,11 @@ function main(argv, run, log = console.log, env = process.env) {
     }
     throw new Error(`${cfg.missing.join(', ')} not set: ${cmd} needs R2`);
   }
+  const windows = windowsEnabled(env);
   const prefix = cmd === 'stage-beta' || cmd === 'promote-beta' || argv.includes('--beta') ? 'beta/' : '';
   const put = (file, key, name) => aws(cfg, ['cp', file, `s3://${cfg.bucket}/${key}`, '--cache-control', cacheControl(name), '--content-type', contentType(name), '--only-show-errors'], run);
   if (cmd === 'stage' || cmd === 'stage-beta') {
-    const plan = stagePlan(version, fs.readdirSync(dir), prefix);
+    const plan = stagePlan(version, fs.readdirSync(dir), prefix, windows);
     if (listNames(cfg, `${prefix}${version}/`, run).includes('release.json')) throw new Error(`${prefix}${version}/ was already promoted; a published release is never staged again (bump the version)`);
     for (const f of plan) {
       log(`R2: ${f.key}`);
@@ -115,7 +120,7 @@ function main(argv, run, log = console.log, env = process.env) {
     const local = flag(argv, '--manifest-dir');
     if (typeof local !== 'string') throw new Error('promote needs --manifest-dir <dir> with the release.json signed for this promote');
     for (const n of MANIFEST) if (!fs.existsSync(path.join(local, n))) throw new Error(`${path.join(local, n)} is missing`);
-    for (const c of promotePlan(version, listNames(cfg, `${prefix}${version}/`, run), prefix)) {
+    for (const c of promotePlan(version, listNames(cfg, `${prefix}${version}/`, run), prefix, windows)) {
       log(`R2: ${c.from} → ${c.to}`);
       aws(cfg, ['cp', `s3://${cfg.bucket}/${c.from}`, `s3://${cfg.bucket}/${c.to}`, '--cache-control', c.cache, '--content-type', contentType(c.name), '--metadata-directive', 'REPLACE', '--only-show-errors'], run);
     }
@@ -134,7 +139,7 @@ function main(argv, run, log = console.log, env = process.env) {
   } else if (cmd === 'fetch-staged') {
     checkVersion(version);
     fs.mkdirSync(dir, { recursive: true });
-    for (const n of listNames(cfg, `${prefix}${version}/`, run)) {
+    for (const n of releaseNames(listNames(cfg, `${prefix}${version}/`, run), windows)) {
       if (MANIFEST.includes(n)) continue;
       aws(cfg, ['cp', `s3://${cfg.bucket}/${prefix}${version}/${n}`, path.join(dir, n), '--only-show-errors'], run);
     }

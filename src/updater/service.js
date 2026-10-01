@@ -181,6 +181,9 @@ function createService(opts) {
     if (!d.update) return { update: false, expired: d.expired, manifest: m };
     if (!backend) throw new V.UpdateError('unknown', 'This build cannot install updates (a development run).');
     const entry = V.pickFile(m, { platform, arch, kind: backend.fileKind });
+    // A release that doesn't ship this platform (Windows until WINDOWS_RELEASE)
+    // is no update for it; a revert asked for that version, so it is an error.
+    if (!entry && !revertTo) return { update: false, expired: d.expired, manifest: m };
     if (!entry) throw new V.UpdateError('server', `Release ${m.version} has no ${backend.fileKind} for ${platform} ${arch}.`);
     const url = new URL(entry.name, manifestUrl).href;
     await backend.prepare?.({ manifest: m, entry, manifestUrl, url, rollback: d.rollback });
