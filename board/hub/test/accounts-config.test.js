@@ -194,7 +194,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 16]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
