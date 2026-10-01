@@ -16,7 +16,8 @@ export function validateRpc(body, protocol) {
     || Object.hasOwn(body, 'id') && !(Number.isSafeInteger(body.id) || typeof body.id === 'string' && body.id.length <= 128
       && !/[\x00-\x1f\x7f]/.test(body.id) && redact(body.id, null) === body.id)) throw invalid();
   if (body.method !== 'initialize' && !PROTOCOLS.includes(protocol)) throw invalid();
-  if (body.method === 'initialize' && protocol != null && !PROTOCOLS.includes(protocol)) throw invalid();
+  if (body.method === 'initialize' && (!PROTOCOLS.includes(body.params?.protocolVersion)
+    || protocol != null && !PROTOCOLS.includes(protocol))) throw invalid();
   if (body.method === 'notifications/initialized' ? Object.hasOwn(body, 'id') : !Object.hasOwn(body, 'id')) throw invalid();
 }
 export async function serveMcp({ req, res, body, token, actions, signal, state }) {

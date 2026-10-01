@@ -94,11 +94,46 @@ export function createRemoteHttp(hub) {
     if (!browserOrigin(ctx.req, authority.issuer()) || !hub.accounts.csrfOk(ctx.ident, ctx.req.headers['x-csrf-token'])) throw new HubError('FORBIDDEN', 'browser confirmation required');
     authority.session(ctx.ident.user, ctx.ident.cred);
   };
+  // Only this module can bind a successful management result to the actor
+  // captured before the handler's final HTTP await. JSON cannot supply proof.
+  const responses = new WeakMap();
+  const changedResponse = () => new HubError('CONFLICT',
+    'Connection response changed; reload Your connections. A change may already have been saved.');
+  const managed = (operation, fn) => ctx => {
+    if (operation !== 'list') refreshSession(ctx);
+    const current = authority.credential(ctx.member, ctx.ident?.cred);
+    const proof = { operation, actor: Object.freeze({ id: current.id, user_id: current.user_id, org_id: current.org_id, role: current.role }),
+      credential: Object.freeze({ kind: ctx.ident.cred.kind, id: ctx.ident.cred.id }), epoch: authority.epoch() };
+    const result = fn(ctx);
+    if (!result || typeof result !== 'object' || result.then) throw changedResponse();
+    if (operation === 'create') proof.grantChoice = JSON.stringify(result.grant);
+    responses.set(result, Object.freeze(proof)); return result;
+  };
+  const managementResponse = (_ctx, out) => {
+    const proof = responses.get(out);
+    if (!proof) throw changedResponse(); responses.delete(out);
+    const current = authority.credential(proof.actor, proof.credential);
+    if (current.role !== proof.actor.role || authority.epoch() !== proof.epoch) throw changedResponse();
+    if (proof.operation === 'list') {
+      // Return current metadata, including revoked history, rather than the
+      // list captured before a grant's scope/name/revocation changed.
+      out.grants = authority.list(current, proof.credential).grants;
+    } else if (proof.operation === 'create') {
+      const scope = authority.authenticate(out.token, 'integration', out.grant?.mode === 'collaborate');
+      if (scope.member.id !== proof.actor.id || scope.member.user_id !== proof.actor.user_id || scope.member.org_id !== proof.actor.org_id
+        || JSON.stringify(authority.projection(scope.grant)) !== proof.grantChoice) throw changedResponse();
+    } else if (proof.operation === 'gesture') {
+      const row = hub.db.get('SELECT * FROM remote_gestures WHERE id=?', out.gesture_id);
+      if (!row || row.user_id !== proof.actor.user_id || row.org_id !== proof.actor.org_id || row.cred_id !== proof.credential.id
+        || row.session_epoch !== proof.epoch || row.consumed_at || row.expires_at <= hub.iso()) throw changedResponse();
+    }
+  };
   const management = (route) => {
-    route('GET', '/api/teams/:team_id/remote-grants', ({ member, ident }) => authority.list(member, ident.cred), { replay: false });
-    route('POST', '/api/teams/:team_id/remote-grants/gesture', ctx => { refreshSession(ctx); return authority.gesture(ctx.member, ctx.ident.cred, ctx.body); }, { replay: false, strictBody: true });
-    route('POST', '/api/teams/:team_id/remote-grants', ctx => { refreshSession(ctx); return authority.create(ctx.member, ctx.ident.cred, ctx.body); }, { replay: false, strictBody: true });
-    route('DELETE', '/api/teams/:team_id/remote-grants/:grant_id', ctx => { refreshSession(ctx); return authority.revoke(ctx.member, ctx.ident.cred, ctx.params.grant_id, ctx.body); }, { replay: false, strictBody: true });
+    const guarded = { replay: false, responseGuard: managementResponse };
+    route('GET', '/api/teams/:team_id/remote-grants', managed('list', ({ member, ident }) => authority.list(member, ident.cred)), guarded);
+    route('POST', '/api/teams/:team_id/remote-grants/gesture', managed('gesture', ctx => { return authority.gesture(ctx.member, ctx.ident.cred, ctx.body); }), { ...guarded, strictBody: true });
+    route('POST', '/api/teams/:team_id/remote-grants', managed('create', ctx => { return authority.create(ctx.member, ctx.ident.cred, ctx.body); }), { ...guarded, strictBody: true });
+    route('DELETE', '/api/teams/:team_id/remote-grants/:grant_id', managed('revoke', ctx => { return authority.revoke(ctx.member, ctx.ident.cred, ctx.params.grant_id, ctx.body); }), { ...guarded, strictBody: true });
   };
   const guardManagement = (req, url) => {
     if (!hub.config.publicUrl || !GRANT_PATH.test(url.pathname)) return;

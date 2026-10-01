@@ -294,10 +294,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false, responseGuard = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, responseGuard, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -878,6 +878,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         }
         if (out === undefined) return undefined;
         if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
+        if (status === 200 && r.responseGuard) {
+          const guarded = r.responseGuard({ req, res, member, params, body, query: url.searchParams, ident, ip }, out);
+          if (guarded?.then) throw new HubError('INTERNAL', 'response authority must be synchronous');
+        }
         if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };
