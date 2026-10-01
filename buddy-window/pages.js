@@ -146,7 +146,11 @@ function connectDecision({ url, frameName, referrer = '', pageUrl, hubOrigin, si
  * one on /integrations/. Both HttpOnly, SameSite=Lax, 10 minutes.
  */
 function bindCookie(hubOrigin, provider, bind, nowMs = Date.now()) {
-  const secure = new URL(hubOrigin).protocol === 'https:';
+  // Checked again here, not only in parseConnectName: this is the one place a cookie is minted.
+  let o = null;
+  try { o = new URL(hubOrigin); } catch { /* refused below */ }
+  if (!o || !/^https?:$/.test(o.protocol) || o.origin !== hubOrigin || typeof provider !== 'string' || typeof bind !== 'string' || !PROVIDER_RE.test(provider) || !BIND_RE.test(bind)) throw new Error('bad bind cookie');
+  const secure = o.protocol === 'https:';
   const name = secure ? `__Host-board_int_${provider}` : `board_int_${provider}`;
   const cookiePath = secure ? '/' : '/integrations/';
   return { url: `${hubOrigin}${cookiePath}`, name, value: bind, path: cookiePath, secure, httpOnly: true, sameSite: 'lax', expirationDate: Math.floor(nowMs / 1000) + BIND_COOKIE_S };

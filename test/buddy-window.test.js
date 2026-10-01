@@ -138,6 +138,14 @@ test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /
   assert.deepEqual(dev, { url: 'http://127.0.0.1:4100/integrations/', name: 'board_int_slack', value: 'b2', path: '/integrations/', secure: false, httpOnly: true, sameSite: 'lax', expirationDate: now / 1000 + 600 });
 });
 
+test('bind cookie fails closed: only an exact http(s) hub origin, a valid provider and bind', () => {
+  for (const [origin, provider, bind] of [
+    ['https://app.plexiform.dev/', 'github', 'b'], ['https://app.plexiform.dev/x', 'github', 'b'], ['https://u:p@app.plexiform.dev', 'github', 'b'],
+    ['file:///tmp', 'github', 'b'], ['not a url', 'github', 'b'], [undefined, 'github', 'b'],
+    ['https://app.plexiform.dev', 'git;hub', 'b'], ['https://app.plexiform.dev', 'GitHub', 'b'], ['https://app.plexiform.dev', 'github', 'b;Domain=evil.com'], ['https://app.plexiform.dev', 'github', ''], ['https://app.plexiform.dev', 'github', 'b'.repeat(65)], ['https://app.plexiform.dev', undefined, 'b'], ['https://app.plexiform.dev', 'github', undefined],
+  ]) assert.throws(() => bindCookie(origin, provider, bind), /bind cookie/, JSON.stringify([origin, provider, bind]));
+});
+
 test('user agent: the hub view appends Plexiform/<version> once, never replacing the browser’s', () => {
   const ua = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140 Electron/44 Safari/537.36';
   assert.equal(appUserAgent(ua, '2.4.0'), `${ua} Plexiform/2.4.0`);
