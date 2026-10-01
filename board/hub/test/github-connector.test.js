@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import github, { apply, manifest } from '../integrations/github/index.js';
 import { factsOf } from '../integrations/github/webhook.js';
 
+const SHA = 'a'.repeat(40);
 const repo = { id: 501, full_name: 'acme/app', default_branch: 'main' };
 const pr = (over = {}) => ({ id: 991, number: 42, state: 'open', html_url: 'https://github.com/acme/app/pull/42', draft: false, merged: false,
   head: { ref: 'board/BDL-12-r3', sha: 'a'.repeat(40), repo }, base: { ref: 'main', repo }, requested_reviewers: [], ...over });
@@ -60,7 +61,7 @@ const statuses = (ctx) => ctx.calls.filter((c) => c[0] === 'status').map((c) => 
 test('a PR from a board branch is linked to its card and gets a status', async () => {
   const ctx = stubCtx();
   await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ draft: true }), repository: repo });
-  assert.deepEqual(ctx.calls, [['act', 'pr.link', '991'], ['link', 'card-12', '991', 'https://github.com/acme/app/pull/42'], ['status', 'card-12', '991', { state: 'draft' }]]);
+  assert.deepEqual(ctx.calls, [['act', 'pr.link', '991'], ['link', 'card-12', '991', 'https://github.com/acme/app/pull/42'], ['status', 'card-12', '991', { state: 'draft', head_sha: SHA }]]);
 });
 
 test('merging a linked PR raises pr_merged for its card (the state machine moves it to Done)', async () => {
@@ -190,10 +191,10 @@ test('M1: a dismissed review clears the review; a push resets checks and leaves 
   await run(ctx, 'pull_request', { action: 'synchronize', pull_request: pr({ requested_reviewers: [{ login: 'other' }] }), repository: repo });
   await run(ctx, 'pull_request', { action: 'edited', pull_request: pr({ requested_reviewers: [{ login: 'other' }] }), repository: repo });
   await run(ctx, 'pull_request_review', review('dismissed', 5, 'dismissed'));
-  assert.deepEqual(statuses(ctx), [{ review: 'approved' }, { state: 'open', checks: 'pending' }, { state: 'open' }, { review: 'none' }]);
+  assert.deepEqual(statuses(ctx), [{ review: 'approved' }, { state: 'open', head_sha: SHA, checks: 'pending' }, { state: 'open', head_sha: SHA }, { review: 'none' }]);
   ctx.calls.length = 0;
   await run(ctx, 'pull_request', { action: 'review_requested', pull_request: pr({ requested_reviewers: [{ login: 'other' }] }), repository: repo });
-  assert.deepEqual(statuses(ctx), [{ state: 'open', review: 'requested' }]);
+  assert.deepEqual(statuses(ctx), [{ state: 'open', head_sha: SHA, review: 'requested' }]);
 });
 
 test('M2: neutral, skipped and stale suites leave checks alone; cancelled fails; a rerun is pending', async () => {
@@ -228,7 +229,11 @@ test('every status the connector writes is allowed by the registry', async () =>
   await run(ctx, 'pull_request', { action: 'synchronize', pull_request: pr(), repository: repo });
   await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ merged: true }), repository: repo });
   assert.ok(statuses.length >= 5);
-  for (const st of statuses) assert.deepEqual(cleanLinkStatus(st), st, JSON.stringify(st));
+  // head_sha is the one key outside the card face's allowlist; the registry keeps it when it is 40 lowercase hex.
+  for (const { head_sha: h, ...st } of statuses) {
+    assert.deepEqual(cleanLinkStatus(st), st, JSON.stringify(st));
+    if (h !== undefined) assert.match(h, /^[0-9a-f]{40}$/);
+  }
 });
 
 test('the connector declares only facts, all automatic, and reads GitHub only', () => {
@@ -386,4 +391,18 @@ test('N1: CONFLICT, NOT_FOUND and VALIDATION from s.relink are answers, other er
     if (code === 'INTERNAL') await assert.rejects(p, /INTERNAL/);
     else await assert.doesNotReject(p, code);
   }
+});
+
+test('N4: a push stores the new head; a late suite for the old head is dropped, one for the new head counts', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  assert.equal(ctx.linkStatusFor('card-12', 'pr').head_sha, SHA);
+  const next = 'b'.repeat(40);
+  await run(ctx, 'pull_request', { action: 'synchronize', pull_request: pr({ head: { ref: 'board/BDL-12-r3', sha: next, repo } }), repository: repo });
+  assert.deepEqual(ctx.linkStatusFor('card-12', 'pr'), { external_id: '991', state: 'open', head_sha: next, checks: 'pending' });
+  ctx.calls.length = 0;
+  await run(ctx, 'check_suite', suite('success'));
+  assert.deepEqual(ctx.calls, [], 'the old head\'s suite');
+  await run(ctx, 'check_suite', suite('failure', next));
+  assert.deepEqual(statuses(ctx), [{ checks: 'failing' }]);
 });

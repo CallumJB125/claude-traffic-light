@@ -17,6 +17,7 @@ const FIXTURES = new URL('./fixtures/github/', import.meta.url);
 const raw = (name) => readFileSync(new URL(name, FIXTURES));
 const fixture = (name) => JSON.parse(raw(name).toString('utf8'));
 const KEY = 'BDL-9001';
+const HEAD = '3f1c2a9b8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a';
 const PR_URL = 'https://github.com/acme/app/pull/12';
 
 async function setup() {
@@ -69,13 +70,13 @@ test('e2e: the board PR links on open, carries review and checks, and merging it
     verify();
     const opened = await send('pull_request', raw('pull_request.opened.json'));
     assert.equal(opened.status, 200);
-    assert.deepEqual(links(), [{ card_id: cardId, external_id: '2100000012', status: { state: 'open' } }]);
+    assert.deepEqual(links(), [{ card_id: cardId, external_id: '2100000012', status: { state: 'open', head_sha: HEAD } }]);
     assert.equal(column(), 'in_review');
     assert.equal((await send('pull_request', raw('pull_request.opened.json'))).body.duplicate, true, 'a redelivery is a duplicate');
 
     assert.equal((await send('pull_request_review', raw('pull_request_review.submitted.json'))).status, 200);
     assert.equal((await send('check_suite', raw('check_suite.completed.json'))).status, 200);
-    assert.deepEqual(links()[0].status, { state: 'open', review: 'approved', checks: 'passing' });
+    assert.deepEqual(links()[0].status, { state: 'open', head_sha: HEAD, review: 'approved', checks: 'passing' });
 
     const merged = await send('pull_request', raw('pull_request.closed.json'));
     assert.equal(merged.status, 200);
@@ -90,7 +91,7 @@ test('e2e: a review by someone without write access does not change the card', a
     await send('pull_request', raw('pull_request.opened.json'));
     const p = fixture('pull_request_review.submitted.json');
     await send('pull_request_review', { ...p, review: { ...p.review, id: 3300000002, author_association: 'NONE', user: { ...p.review.user, login: 'drive-by' } } });
-    assert.deepEqual(links()[0].status, { state: 'open' });
+    assert.deepEqual(links()[0].status, { state: 'open', head_sha: HEAD });
   } finally { await h.close(); }
 });
 
@@ -266,5 +267,22 @@ test('e2e N3: with bare #12 evidence, a mirror\'s #12 cannot relink the card awa
     assert.equal((await send('pull_request', onMirror(fixture('pull_request.closed.json')))).status, 200);
     assert.deepEqual(kinds(h, conn), ['pr:2100000012']);
     assert.equal(column(), 'in_review');
+  } finally { await h.close(); }
+});
+
+test('e2e N4: a suite that finishes for the old head after a push is dropped; checks stay pending', async () => {
+  const { h, send, links } = await setup();
+  try {
+    await send('pull_request', raw('pull_request.opened.json'));
+    const next = 'e'.repeat(40);
+    const head = fixture('pull_request.opened.json').pull_request.head;
+    assert.equal((await send('pull_request', variant('pull_request.opened.json', { head: { ...head, sha: next }, updated_at: '2026-10-01T12:05:00Z' }, { action: 'synchronize' }))).status, 200);
+    assert.deepEqual(links()[0].status, { state: 'open', head_sha: next, checks: 'pending' });
+    assert.equal((await send('check_suite', raw('check_suite.completed.json'))).status, 200);
+    assert.deepEqual(links()[0].status, { state: 'open', head_sha: next, checks: 'pending' });
+    const cs = fixture('check_suite.completed.json');
+    const fresh = { ...cs.check_suite, id: cs.check_suite.id + 1, head_sha: next, pull_requests: cs.check_suite.pull_requests.map((x) => ({ ...x, head: { ...x.head, sha: next } })) };
+    assert.equal((await send('check_suite', { ...cs, check_suite: fresh })).status, 200);
+    assert.equal(links()[0].status.checks, 'passing');
   } finally { await h.close(); }
 });

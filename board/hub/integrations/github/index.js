@@ -50,6 +50,7 @@ function checkApp(app) {
 // What the card face shows, in the registry's allowlisted words.
 // A PR's own state wins: an `edited` event on a merged PR must not show it as open again.
 const STATE = (f) => (f.kind === 'pr.merged' || f.merged ? 'merged' : f.kind === 'pr.closed' || f.open === false ? 'closed' : f.draft ? 'draft' : 'open');
+const HEAD_SHA = /^[0-9a-f]{40}$/;
 const CHECKS = { success: 'passing', failure: 'failing', pending: 'pending' };
 const REVIEW = { approved: 'approved', changes_requested: 'changes_requested', dismissed: 'none', commented: null };
 
@@ -127,7 +128,12 @@ export async function apply(ctx, facts) {
     switch (f.kind) {
       case 'pr.opened':
       case 'pr.updated':
-        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}) }, f.open === true);
+        // head_sha is kept for the connector only (the card never shows it),
+        // so a check suite for an older head can be told apart below.
+        await linkAndStatus(ctx, f, {
+          state: STATE(f), ...(HEAD_SHA.test(f.head_sha ?? '') ? { head_sha: f.head_sha } : {}),
+          ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}),
+        }, f.open === true);
         break;
       case 'pr.review': {
         const review = REVIEW[f.review];
@@ -149,7 +155,14 @@ export async function apply(ctx, facts) {
         break;
       }
       case 'pr.checks':
-        for (const pr of f.prs) await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
+        for (const pr of f.prs) {
+          // GitHub delivers out of order: a suite that finishes after a push
+          // describes the old head, and must not mark the new one passing.
+          const card = typeof ctx.linkStatusFor === 'function' ? ctx.linked('pr', pr.pr_id) : null;
+          const head = card ? ctx.linkStatusFor(card, 'pr')?.head_sha : null;
+          if (head && head !== f.head_sha) continue;
+          await linkAndStatus(ctx, { ...pr, repo: f.repo }, { checks: CHECKS[f.checks] });
+        }
         break;
       default:
     }
