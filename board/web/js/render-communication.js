@@ -4,6 +4,8 @@ const field = (name, label, value, maxLength, rows = 3) => h('div', { class: 'fi
   h('label', { for: `packet-${name}` }, label),
   h('textarea', { id: `packet-${name}`, name, class: 'input', rows, maxlength: maxLength, value }));
 const hidden = (name, value) => h('input', { type: 'hidden', name, value });
+const authorSource = author => author.identity_source === 'remote_grant'
+  ? `via ${author.application ?? 'Remote application'} · unverified application` : author.provider ?? 'Team member';
 const writable = (detail, model) => ['owner', 'admin', 'member'].includes(model.me?.member?.role)
   && !detail.data.card.archived && !model.board?.archived_at;
 
@@ -18,7 +20,7 @@ export function packetPanel(detail, model) {
     reportedChecks: (d?.reportedChecks ?? []).join('\n'), expected_version: p?.version ?? 0, expected_fence: detail.data.card.fence,
     evidence: (d?.artifacts ?? []).filter((a) => a.kind === 'evidence') };
   return h('div', { class: 'task-packet' }, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'communication-reload' }, 'Refresh context'),
-    p ? h('p', { class: 'muted small' }, `Version ${p.version} · ${p.author.name} · ${p.author.provider ?? 'Team member'}`)
+    p ? h('p', { class: 'muted small' }, `Version ${p.version} · ${p.author.name} · ${authorSource(p.author)}`)
       : h('p', { class: 'muted' }, 'Save a brief, decisions and next action so another teammate can pick this up.'),
     p?.evidence?.length ? h('ul', { class: 'md-list' }, p.evidence.map((e) => h('li', { key: e.id }, `${e.kind ?? 'Evidence'} · ${e.verification} · ${e.summary ?? ''}`))) : null,
     writable(detail, model) ? h('form', { 'data-form': 'task-packet', 'data-card': detail.cardId },
@@ -43,7 +45,7 @@ export function messagePanel(detail, model) {
   const history = detail.messages?.messages ?? [], peers = detail.messages?.peers ?? [], draft = detail.messageDraft ?? {};
   return h('div', null, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'communication-reload' }, 'Refresh messages'),
     history.length ? h('ul', { class: 'comments task-messages' }, history.map((m) => h('li', { key: m.id, class: 'comment' },
-      h('div', { class: 'comment-head' }, h('strong', null, m.author.name), h('span', { class: 'muted small' }, `${m.author.provider ?? 'Team member'} · ${m.kind} · ${m.card_key}`)),
+      h('div', { class: 'comment-head' }, h('strong', null, m.author.name), h('span', { class: 'muted small' }, `${authorSource(m.author)} · ${m.kind} · ${m.card_key}`)),
       h('p', { class: 'comment-body' }, m.body), h('p', { class: 'muted small' }, m.deliveries.map((r) => `${r.recipient_name ?? 'Teammate'}’s ${r.provider ?? 'agent'}: ${r.state === 'acknowledged' ? 'Acknowledged (agent reported)' : r.state === 'received' ? 'Received by host' : r.state === 'superseded' ? 'Previous run' : 'Pending'}`).join(' · ')))))
       : h('p', { class: 'muted' }, 'No task messages yet.'),
     detail.messages?.truncated ? h('p', { class: 'muted small' }, 'Showing the latest 50 messages.') : null,

@@ -22,6 +22,22 @@ import { sign } from '../../integrations/fake/index.js';
 // team with B's sub-resource ids (also 404); `headers(fx)` names team B where
 // the path's id is not a tenant resource (an integration provider).
 const MATRIX = {
+  'GET /.well-known/oauth-protected-resource': { kind: 'public', reason: 'fixed public resource metadata; remote-http.test.js' },
+  'GET /.well-known/oauth-protected-resource/api/mcp': { kind: 'public', reason: 'fixed public resource metadata; remote-http.test.js' },
+  'GET /.well-known/oauth-authorization-server': { kind: 'public', reason: 'fixed public authorization metadata; remote-http.test.js' },
+  'GET /oauth/authorize': { kind: 'public', reason: 'bounded registered public client intent; never issues a grant' },
+  'POST /oauth/register': { kind: 'public', reason: 'bounded public DCR; never issues a grant' },
+  'POST /oauth/token': { kind: 'public', reason: 'one-use PKCE code or rotating family is the credential; remote-http.test.js' },
+  'POST /oauth/revoke': { kind: 'public', reason: 'client-bound token revocation; remote-http.test.js' },
+  'GET /oauth/consent': { kind: 'public', reason: 'browser-bound preview; dedicated SESSION binding tests' },
+  'POST /oauth/consent': { kind: 'public', reason: 'dedicated current SESSION, CSRF and bound-browser consent tests; ordinary bearer refused' },
+  'POST /api/mcp': { kind: 'public', reason: 'distinct audience-bound bearer plus selected-board/current authority; remote-http.test.js' },
+  'GET /api/mcp': { kind: 'public', reason: 'authenticated stateless405; dedicated tests' },
+  'DELETE /api/mcp': { kind: 'public', reason: 'authenticated stateless405; dedicated tests' },
+  'GET /api/teams/:team_id/remote-grants': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants` },
+  'POST /api/teams/:team_id/remote-grants/gesture': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants/gesture`, body: { purpose: 'create' } },
+  'POST /api/teams/:team_id/remote-grants': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants`, body: f => ({ gesture_id: randomUUID(), name: 'pwned', board_ids: [f.B.board], mode: 'read', expires_days: 1 }) },
+  'DELETE /api/teams/:team_id/remote-grants/:grant_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/remote-grants/${randomUUID()}`, body: { gesture_id: randomUUID() } },
   'GET /api/health': { kind: 'public', reason: 'liveness probe; no team data' },
   'GET /api/auth/methods': { kind: 'public', reason: 'the sign-in page asks before anyone is signed in' },
   'POST /api/auth/email/start': { kind: 'public', reason: 'starts a sign-in' },

@@ -268,6 +268,7 @@ export class Hub extends EventEmitter {
     this.db.run('DELETE FROM connection_secrets WHERE connection_id IN (SELECT c.id FROM connections c JOIN orgs o ON o.id = c.org_id WHERE o.deleted_at IS NOT NULL)');
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
     this.db.run('DELETE FROM integration_pending WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
+    this.remoteAuthority?.cleanupDeleted(now);
   }
   // Only its creator, still an owner/admin, can finish a pending connection
   // (D97): one who is removed, demoted or deleted loses it at once, with its

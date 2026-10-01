@@ -8,6 +8,9 @@ import { HubError } from './db.js';
 
 // {capacity, per_ms}: at most `capacity` at once, refilled at capacity/per_ms.
 export const DEFAULT_LIMITS = Object.freeze({
+  remote_public_ip: { capacity: 60, per_ms: 60_000 },
+  remote_request_ip: { capacity: 120, per_ms: 60_000 },
+  remote_request_grant: { capacity: 120, per_ms: 60_000 },
   client_feedback_guest: { capacity: 10, per_ms: 3_600_000 }, // new client tasks; persistent retries do not spend it
   login_ip: { capacity: 10, per_ms: 60_000 },
   mutate_ip: { capacity: 300, per_ms: 60_000 },

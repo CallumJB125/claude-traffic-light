@@ -167,6 +167,7 @@ function tabPanel(tab, detail, model, elapsed) {
       list.length ? h('ul', { class: 'comments' }, list.map((c) => h('li', { key: c.id, class: `comment${c.source === 'agent' ? ' is-agent' : ''}` },
         h('div', { class: 'comment-head' },
           h('span', { class: 'comment-author' }, c.author_name ?? (c.source === 'agent' ? 'Claude' : 'Someone')),
+          c.identity_source === 'remote_grant' ? h('span', { class: 'muted small' }, `via ${c.application ?? 'Remote application'} · unverified application`) : null,
           c.for_agent ? h('span', { class: 'label' }, '@claude') : null,
           h('span', { class: 'num muted' }, ago(add(c.created_age_ms, elapsed)))),
         h('p', { class: 'comment-body' }, c.body),

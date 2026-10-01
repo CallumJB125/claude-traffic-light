@@ -56,7 +56,10 @@ CREATE INDEX remote_gestures_expiry ON remote_gestures(expires_at);
 -- A capability cannot inherit a replacement principal, client or token family.
 CREATE TRIGGER remote_grants_identity_fixed BEFORE UPDATE ON remote_grants
 WHEN NEW.id != OLD.id OR NEW.user_id != OLD.user_id OR NEW.member_id != OLD.member_id
-  OR NEW.org_id != OLD.org_id OR NEW.application != OLD.application OR NEW.audience != OLD.audience
+  OR NEW.org_id != OLD.org_id OR NEW.audience != OLD.audience
+  OR (NEW.application != OLD.application AND NOT (NEW.application = 'Deleted connection' AND NEW.revoked_at IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id AND deleted_at IS NOT NULL)
+      OR EXISTS (SELECT 1 FROM orgs WHERE id = OLD.org_id AND deleted_at IS NOT NULL))))
   OR NEW.client_id IS NOT OLD.client_id OR NEW.family_id IS NOT OLD.family_id
   OR NEW.session_epoch != OLD.session_epoch OR NEW.created_at != OLD.created_at
   OR NEW.expires_at > OLD.expires_at OR (OLD.mode = 'read' AND NEW.mode != 'read')

@@ -206,6 +206,7 @@ export function teamScreen(model) {
         h('span', { class: 'teamview-count num', role: 'status' }, p.loaded ? `${online} online` : 'Checking…'),
         p.stale ? h('span', { class: 'teamview-stale' }, icon('sync', 'icon-xs'), 'Presence may be out of date') : null),
       h('p', { class: 'teamview-line' }, 'Work, blockers and reviews across your team. Shared live sessions below count for the current board.'),
+      model.accounts ? h('a', { href: '/connections', target: '_blank', rel: 'noopener noreferrer', class: 'btn btn-sm' }, 'Your connections') : null,
       h('details', { class: 'team-scope' },
         h('summary', null, 'How sessions are counted'),
         h('p', null, SCOPE_RULE))),
