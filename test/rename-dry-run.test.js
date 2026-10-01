@@ -181,3 +181,18 @@ test('main.js handles --rename-dry-run first, before anything makes the userData
   const glue = fs.readFileSync(path.join(__dirname, '..', 'src', 'rename-dry-run.js'), 'utf8');
   assert.doesNotMatch(glue, /getPath\('userData'\)|crashReporter|requestSingleInstanceLock|writeFileSync|mkdirSync|HookPaths\.forApp|HookPaths\.resolve/);
 });
+
+test('dry run: the settings.json diff shows only the swapped command lines', () => {
+  const f = fixture();
+  const { plan, text } = run(f);
+  const c = plan.hooks.configs.find((x) => x.id === 'claude');
+  const diff = M.unifiedDiff(c.before, c.after).split('\n');
+  const minus = diff.filter((l) => /^-(?!--)/.test(l));
+  const plus = diff.filter((l) => /^\+(?!\+\+)/.test(l));
+  assert.equal(minus.length, Claude.HOOK_EVENTS.length);
+  assert.equal(plus.length, minus.length);
+  assert.ok(minus.every((l) => /^-\s+"command": ".*Claude Buddy\.app/.test(l)), minus[0]);
+  assert.ok(plus.every((l) => /^\+\s+"command": ".*Plexiform\.app/.test(l)), plus[0]);
+  assert.doesNotMatch(text, /no final newline/);
+  fs.rmSync(f.home, { recursive: true, force: true });
+});

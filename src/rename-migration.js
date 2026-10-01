@@ -394,8 +394,25 @@ function rewriteConfigText(adapter, text, { runtime, askFromWidget = false, home
   const next = adapter.apply(data, runtime, { ...opts, strip });
   const had = new Set(entries.map((e) => `${e.where}\n${e.command}`));
   const added = hookEntries(next.hooks).filter((e) => current.has(e.command) && !had.has(`${e.where}\n${e.command}`));
-  const after = JSON.stringify(next, null, 2);
+  const after = swappedText(text, next, removed, added) ?? Runtime.jsonTextLike(text, next);
   return { after: after === text ? null : after, removed, added, leftAlone, data, next };
+}
+
+// A re-point that only swaps commands is made on the text itself, so every
+// other byte of the file stays as the person (or their agent) wrote it; null
+// when the result wouldn't be exactly `next` (entries dropped or appended, a
+// deny rule added, an escape spelt differently), for jsonTextLike instead.
+function swappedText(text, next, removed, added) {
+  const pool = added.slice();
+  let out = String(text);
+  for (const r of removed) {
+    const i = pool.findIndex((a) => a.where === r.where);
+    const from = JSON.stringify(r.command);
+    if (i < 0 || !out.includes(from)) return null;
+    const to = JSON.stringify(pool.splice(i, 1)[0].command);
+    out = out.replace(from, () => to);
+  }
+  try { return JSON.stringify(Runtime.parseJsonConfig(out, '')) === JSON.stringify(next) ? out : null; } catch { return null; }
 }
 
 // Codex runs exactly one notify command: replaced only when it is ours and runs the old app.
@@ -408,7 +425,7 @@ function rewriteCodexText(adapter, text, runtime, isOld) {
   if (!adapter.isOurs(lines[at])) return { ...none, leftAlone: [{ ...entry, reason: 'not Plexiform\'s (Codex runs one notify command)' }] };
   const line = adapter.notifyLine(runtime);
   if (!isOld(lines[at])) return { ...none, leftAlone: [{ ...entry, reason: entry.command === line ? 'already runs this app' : 'Plexiform\'s notify, but not the old app\'s (a dev checkout?)' }] };
-  lines[at] = line;
+  lines[at] = line + (lines[at].endsWith('\r') ? '\r' : '');
   return { after: lines.join('\n'), removed: [entry], added: [{ where: 'notify', command: line }], leftAlone: [] };
 }
 

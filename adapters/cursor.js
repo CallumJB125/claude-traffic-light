@@ -44,10 +44,29 @@ function strip(hooksJson, ours = isOurs) {
   return out;
 }
 
-// opts.strip: which of ours go first (default all of them).
+// opts.strip: which of ours are replaced, where they stand (the rename's
+// re-point: each event's first one becomes the current entry, the rest go);
+// without it every one of ours goes and the current set is appended.
 function apply(hooksJson, runtime, opts = {}) {
-  const out = strip(hooksJson, opts.strip);
-  for (const ev of EVENTS) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
+  if (!opts.strip) {
+    const out = strip(hooksJson);
+    for (const ev of EVENTS) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
+    return out;
+  }
+  const out = hooksJson && typeof hooksJson === 'object' ? { ...hooksJson } : {};
+  out.version = out.version || 1;
+  out.hooks = {};
+  const done = new Set();
+  for (const [ev, list] of Object.entries((hooksJson && hooksJson.hooks) || {})) {
+    const kept = (Array.isArray(list) ? list : []).flatMap((h) => {
+      if (!opts.strip(h && h.command)) return [h];
+      if (!EVENTS.includes(ev) || done.has(ev)) return [];
+      done.add(ev);
+      return [{ command: commandFor(ev, runtime) }];
+    });
+    if (kept.length) out.hooks[ev] = kept;
+  }
+  for (const ev of EVENTS) if (!done.has(ev)) out.hooks[ev] = (out.hooks[ev] || []).concat([{ command: commandFor(ev, runtime) }]);
   return out;
 }
 

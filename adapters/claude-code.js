@@ -184,15 +184,21 @@ const eventsFor = (opts = {}) => (opts.askFromWidget ? HOOK_EVENTS.concat(OPTION
 
 // Pure: settings object in, settings object out, with exactly one current set
 // of our hooks and every foreign one kept. opts.strip narrows which of ours
-// go first (the rename re-points only the old app's).
+// are replaced (the rename re-points only the old app's), and replaces them
+// where they stand so the file's order stays.
 function apply(settings, runtime, opts = {}) {
   const out = withDenyRules(settings, rulesOf({ ...opts, runtime }));
-  out.hooks = Runtime.stripMatcherHooks(out.hooks, opts.strip || isOurs);
-  for (const [event, , timeout] of eventsFor(opts)) {
+  const wanted = eventsFor(opts).map(([event, , timeout]) => {
     const hook = { type: 'command', command: commandFor(event, runtime) };
     if (timeout) hook.timeout = timeout;
-    out.hooks[event] = (out.hooks[event] || []).concat([{ matcher: '', hooks: [hook] }]);
+    return [event, hook];
+  });
+  if (opts.strip) {
+    out.hooks = Runtime.repointMatcherHooks(out.hooks, opts.strip, wanted);
+    return out;
   }
+  out.hooks = Runtime.stripMatcherHooks(out.hooks, isOurs);
+  for (const [event, hook] of wanted) out.hooks[event] = (out.hooks[event] || []).concat([{ matcher: '', hooks: [hook] }]);
   return out;
 }
 

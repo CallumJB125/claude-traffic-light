@@ -105,9 +105,12 @@ function readJsonConfig(file, fsImpl = fs) {
   return parseJsonConfig(text, file);
 }
 
+const BOM = '\ufeff';
+
 function parseJsonConfig(text, file) {
-  if (!String(text).trim()) return {};
-  const data = JSON.parse(text);
+  const body = String(text).startsWith(BOM) ? String(text).slice(1) : String(text);
+  if (!body.trim()) return {};
+  const data = JSON.parse(body);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${file} is not a JSON object`);
   return data;
 }
@@ -143,6 +146,16 @@ function writeJsonConfig(link, data, fsImpl = fs, readAt) {
   return writeTextAtomic(link, JSON.stringify(data, null, 2), fsImpl, readAt);
 }
 
+// data as JSON in the style of `original`: its indentation (tabs or N
+// spaces), line endings, BOM and final newline (or its absence).
+function jsonTextLike(original, data) {
+  const s = String(original || '');
+  const ind = s.match(/^([ \t]+)\S/m);
+  const eol = s.includes('\r\n') ? '\r\n' : '\n';
+  const body = JSON.stringify(data, null, ind ? (ind[1][0] === '\t' ? '\t' : ind[1].length) : 2).replace(/\n/g, eol);
+  return (s.startsWith(BOM) ? BOM : '') + body + (/\n$/.test(s) ? eol : '');
+}
+
 // `<file>.buddy-backup`, once: never replaced, so it stays the file as it was
 // before Buddy first changed it.
 function backupOnce(file, fsImpl = fs) {
@@ -163,4 +176,27 @@ function stripMatcherHooks(hooks, isOurs) {
   return out;
 }
 
-module.exports = { stripMatcherHooks, readJsonConfig, parseJsonConfig, writeJsonConfig, writeTextAtomic, mtimeOf, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };
+// The rename's re-point of the same shape: each event's first entry `isOurs`
+// claims becomes that event's wanted hook where it stands, the rest of ours
+// go, and an event with none of ours gets its wanted hook appended. Events,
+// groups and foreign hooks keep their order. wanted: [[event, hook]].
+function repointMatcherHooks(hooks, isOurs, wanted) {
+  const want = new Map(wanted);
+  const done = new Set();
+  const out = {};
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    const kept = (Array.isArray(groups) ? groups : [])
+      .map((h) => ({ ...h, hooks: (h.hooks || []).flatMap((hh) => {
+        if (!isOurs(hh.command)) return [hh];
+        if (!want.has(event) || done.has(event)) return [];
+        done.add(event);
+        return [want.get(event)];
+      }) }))
+      .filter((h) => h.hooks.length > 0);
+    if (kept.length) out[event] = kept;
+  }
+  for (const [event, hook] of want) if (!done.has(event)) out[event] = (out[event] || []).concat([{ matcher: '', hooks: [hook] }]);
+  return out;
+}
+
+module.exports = { stripMatcherHooks, repointMatcherHooks, jsonTextLike, readJsonConfig, parseJsonConfig, writeJsonConfig, writeTextAtomic, mtimeOf, backupOnce, make, script, wrapperPath, wrapperText, ensureWrapper, shellNeedsWrapper, argvNeedsWrapper, wrapperPresent, shellCommand, argvCommand, runsScript, pathFor };

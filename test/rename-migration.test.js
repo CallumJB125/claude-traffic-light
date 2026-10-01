@@ -933,3 +933,134 @@ test('main.js: the quit check on later launches does not wait for the old app, a
   assert.match(src, /powerMonitor\.on\('resume', quitOldAppIfInstalled\)/);
   assert.match(src, /powerMonitor\.on\('unlock-screen', quitOldAppIfInstalled\)/);
 });
+
+// The rename's rewrite is a swap in place: diffing the file before and after
+// shows only the changed command lines, whatever the file's own formatting.
+const isOldApp = (c) => String(c || '').includes(OLD_APP);
+const rewriteCtx = (dataDir, extra = {}) => ({ runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, home: path.dirname(dataDir), isOld: isOldApp, ...extra });
+const changedLines = (a, b) => {
+  const A = a.split('\n');
+  const B = b.split('\n');
+  assert.equal(A.length, B.length, 'same number of lines');
+  return A.map((l, i) => (l === B[i] ? null : [l, B[i]])).filter(Boolean);
+};
+const isCommandSwap = ([was, now]) => was.includes(OLD_APP) && now.includes(NEW_APP) && was.replace(/^\s*/, '').startsWith('"command": ') && was.match(/^\s*/)[0] === now.match(/^\s*/)[0];
+
+// Old hooks, with a foreign hook before AND after ours in the same events, other events and top-level keys around them.
+function interleavedSettings(dataDir) {
+  const s = Claude.apply({ model: 'opus', permissions: { allow: ['Bash(npm test)'] }, hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'say before' }] }], PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'guard-before.sh' }] }] } }, runtimeAt(OLD_APP, dataDir), { askFromWidget: true, home: path.dirname(dataDir) });
+  s.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: 'say after' }] });
+  s.hooks.PreToolUse.push({ matcher: 'Edit', hooks: [{ type: 'command', command: 'guard-after.sh' }] });
+  s.hooks = { CustomEvent: [{ matcher: '', hooks: [{ type: 'command', command: 'mine.sh' }] }], ...s.hooks };
+  return { statusLine: { type: 'command', command: 'line.sh' }, ...s, zLast: true };
+}
+
+test('hooks: a re-point swaps each old entry in place; key, event and group order stay, and only the command lines differ', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const text = `${JSON.stringify(interleavedSettings(dataDir), null, 2)}\n`;
+  const r = M.rewriteConfigText(Claude, text, rewriteCtx(dataDir));
+  const diff = changedLines(text, r.after);
+  assert.equal(diff.length, Claude.HOOK_EVENTS.length + Claude.OPTIONAL_EVENTS.length);
+  assert.ok(diff.every(isCommandSwap), JSON.stringify(diff[0]));
+  const a = JSON.parse(text);
+  const b = JSON.parse(r.after);
+  assert.deepEqual(Object.keys(b), Object.keys(a));
+  assert.deepEqual(Object.keys(b.hooks), Object.keys(a.hooks));
+  assert.deepEqual(b.hooks.Stop.map((g) => g.hooks[0].command.includes('Plexiform') ? 'ours' : g.hooks[0].command), ['say before', 'ours', 'say after']);
+  assert.deepEqual(b.hooks.PreToolUse.map((g) => g.matcher), ['Bash', '', 'Edit']);
+  assert.ok(r.after.endsWith('}\n'));
+  assert.equal(M.rewriteConfigText(Claude, r.after, rewriteCtx(dataDir)).after, null, 'a second run changes nothing');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: the final newline is kept when there was one and not added when there was none', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const body = JSON.stringify(interleavedSettings(dataDir), null, 2);
+  for (const ctx of [rewriteCtx(dataDir), rewriteCtx(dataDir, { askFromWidget: false })]) {
+    assert.ok(!M.rewriteConfigText(Claude, body, ctx).after.endsWith('\n'));
+    assert.ok(/}\n$/.test(M.rewriteConfigText(Claude, `${body}\n`, ctx).after));
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: a CRLF file stays CRLF with only the command lines changed; tabs, 4 spaces and a BOM are kept', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const s = interleavedSettings(dataDir);
+  const crlf = `${JSON.stringify(s, null, 2).replace(/\n/g, '\r\n')}\r\n`;
+  const r = M.rewriteConfigText(Claude, crlf, rewriteCtx(dataDir));
+  assert.equal(r.after.replace(/\r\n/g, '').includes('\n'), false, 'no bare LF');
+  assert.ok(r.after.endsWith('}\r\n'));
+  assert.ok(changedLines(crlf, r.after).every(isCommandSwap));
+  for (const indent of ['\t', 4]) {
+    const text = `${JSON.stringify(s, null, indent)}\n`;
+    const swap = M.rewriteConfigText(Claude, text, rewriteCtx(dataDir));
+    assert.ok(changedLines(text, swap.after).every(isCommandSwap), `indent ${JSON.stringify(indent)}`);
+    // Dropping the opt-in events (askFromWidget now off) rewrites the file in its own style.
+    const drop = M.rewriteConfigText(Claude, text, rewriteCtx(dataDir, { askFromWidget: false })).after;
+    assert.equal(drop, `${JSON.stringify(JSON.parse(drop), null, indent)}\n`, `indent ${JSON.stringify(indent)}`);
+    const dropCrlf = M.rewriteConfigText(Claude, text.replace(/\n/g, '\r\n'), rewriteCtx(dataDir, { askFromWidget: false })).after;
+    assert.equal(dropCrlf, drop.replace(/\n/g, '\r\n'));
+  }
+  const bom = `﻿${JSON.stringify(s, null, 2)}\n`;
+  for (const ctx of [rewriteCtx(dataDir), rewriteCtx(dataDir, { askFromWidget: false })]) {
+    const after = M.rewriteConfigText(Claude, bom, ctx).after;
+    assert.ok(after.startsWith('﻿{'), 'the BOM stays');
+    assert.equal(after.indexOf('﻿', 1), -1);
+  }
+  assert.ok(changedLines(bom, M.rewriteConfigText(Claude, bom, rewriteCtx(dataDir)).after).every(isCommandSwap));
+  assert.deepEqual(Runtime.parseJsonConfig(bom, 'x'), s, 'a BOM file parses');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: a hand-formatted file keeps every byte but the swapped commands', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const s = interleavedSettings(dataDir);
+  const text = JSON.stringify(s, null, 2).replace('"allow": [\n      "Bash(npm test)"\n    ]', '"allow": ["Bash(npm test)"]').replace('"model": "opus"', '"model":   "opus"');
+  assert.notEqual(text, JSON.stringify(s, null, 2));
+  const after = M.rewriteConfigText(Claude, text, rewriteCtx(dataDir)).after;
+  assert.ok(changedLines(text, after).every(isCommandSwap));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: Cursor and Gemini entries are swapped in place too', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const oldRt = runtimeAt(OLD_APP, dataDir);
+  const Cursor = Adapters.get('cursor');
+  const Gemini = Adapters.get('gemini');
+  const c = Cursor.apply({ version: 1, hooks: { stop: [{ command: 'before-stop' }] } }, oldRt);
+  c.hooks.stop.push({ command: 'after-stop' });
+  c.hooks = { afterShellExecution: [{ command: 'x' }], ...c.hooks };
+  const cText = JSON.stringify(c, null, 2);
+  const cAfter = M.rewriteConfigText(Cursor, cText, rewriteCtx(dataDir)).after;
+  assert.equal(changedLines(cText, cAfter).length, Cursor.EVENTS.length);
+  assert.ok(changedLines(cText, cAfter).every(isCommandSwap));
+  assert.deepEqual(JSON.parse(cAfter).hooks.stop.map((h) => (h.command.includes(NEW_APP) ? 'ours' : h.command)), ['before-stop', 'ours', 'after-stop']);
+  const g = Gemini.apply({ theme: 'dark', hooks: { AfterAgent: [{ matcher: '', hooks: [{ type: 'command', command: 'before' }] }] } }, oldRt);
+  g.hooks.AfterAgent.push({ matcher: '', hooks: [{ type: 'command', command: 'after' }] });
+  const gText = `${JSON.stringify(g, null, '\t')}\n`;
+  const gAfter = M.rewriteConfigText(Gemini, gText, rewriteCtx(dataDir)).after;
+  assert.equal(changedLines(gText, gAfter).length, Gemini.EVENTS.length);
+  assert.ok(changedLines(gText, gAfter).every(isCommandSwap));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('hooks: Codex\'s notify swap touches only that line, keeping CRLF and the final newline (or its absence)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const Codex = Adapters.get('codex');
+  const old = Codex.notifyLine(runtimeAt(OLD_APP, dataDir));
+  const now = Codex.notifyLine(runtimeAt(NEW_APP, dataDir));
+  for (const eol of ['\n', '\r\n']) {
+    for (const end of [eol, '']) {
+      const text = ['model = "o3"', old, '', '[mcp_servers.x]', 'command = "npx"'].join(eol) + end;
+      const after = M.rewriteConfigText(Codex, text, rewriteCtx(dataDir)).after;
+      assert.equal(after, ['model = "o3"', now, '', '[mcp_servers.x]', 'command = "npx"'].join(eol) + end, JSON.stringify({ eol, end }));
+    }
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
