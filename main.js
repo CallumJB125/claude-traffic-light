@@ -1515,6 +1515,15 @@ function getBuddy() {
 }
 // Optional, like the work-scope module: only a Plexiform window that offers it says who is signed in.
 const accountSummary = () => { try { return typeof buddyWin?.accountSummary === 'function' ? buddyWin.accountSummary() : null; } catch { return null; } };
+const MyDay = require('./src/my-day-service.js').createMyDayService({
+  work: () => buddyWin?.myDay() ?? Promise.resolve({ status: 'partial', sources: [] }),
+  sessions: () => localSessions(aggregateState().sessions || []),
+  busy: () => BusyWatch.status(),
+  open: handle => buddyWin?.openMyDayCard(handle) ?? false,
+});
+const myDaySender = e => !!e.sender && e.sender === buddyWin?.pageWebContents('myday') && e.senderFrame === e.sender.mainFrame;
+ipcMain.handle('myday:state', e => myDaySender(e) ? MyDay.snapshot() : null);
+ipcMain.handle('myday:open', (e, handle) => myDaySender(e) && typeof handle === 'string' && handle.length <= 100 ? MyDay.open(handle) : false);
 function openBuddy(page = null) {
   if (!devMockReady) return;
   getBuddy();

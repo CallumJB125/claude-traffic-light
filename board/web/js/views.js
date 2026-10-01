@@ -3,6 +3,8 @@
 export const VIEWS = [
   { id: 'board', label: 'Board', icon: 'columns' },
   { id: 'table', label: 'Table', icon: 'rows' },
+  { id: 'calendar', label: 'Calendar', icon: 'calendar' },
+  { id: 'timeline', label: 'Timeline', icon: 'rows' },
   { id: 'dashboard', label: 'Dashboard', icon: 'chart' },
   // Team pages the app window's sidebar opens; not board views, so not in the switcher.
   { id: 'integrations', label: 'Integrations', icon: 'plug', switcher: false },

@@ -3,7 +3,7 @@
 // clocks, network and DOM events.
 import { h, render } from './h.js';
 import { tacklePreference, rememberTackle } from './tackle.js';
-import { api, errorText, setOrg, currentOrg, setCsrf } from './api.js';
+import { api, errorText, setOrg, currentOrg, setCsrf, requestId } from './api.js';
 import { connectBoard } from './socket.js';
 import { displayFace, alertsForViewer, agedView } from './view.js';
 import { planMoves, moveSummary, dragModel, toggleSelection, pruneSelection, idsToDrag, kbdStart, kbdKey, announcement } from './dnd.js';
@@ -15,6 +15,9 @@ import { paletteResults } from './palette.js';
 import { starterWorkflow } from './render-workflows.js';
 import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
+import { planningScreen } from './render-planning.js';
+import { nextAnchor, movedDates, scheduledOn } from './calendar.js';
+import { validDay, validZone, todayIn, shiftDay } from '../../shared/planning.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
 import { dashboardScreen } from './render-dashboard.js';
 import { integrationsScreen, connectWindowTarget, takeInput } from './render-integrations.js';
@@ -80,6 +83,56 @@ const state = {
 
 let socket = null;
 let boardGeneration = 0;
+let plannerKey = null;
+let planner = null;
+function plannerState() {
+  const key = `board-planning:${state.me?.member?.id}:${state.boardId}`;
+  if (plannerKey !== key) {
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(key)); } catch { /* unavailable */ }
+    const zone = validZone(saved?.zone) ? saved.zone : Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+    planner = { anchor: validDay(saved?.anchor) ? saved.anchor : todayIn(zone), zone, period: saved?.period === 'week' ? 'week' : 'month', edit: null, busy: false, error: null, draft: null };
+    plannerKey = key;
+  }
+  return planner;
+}
+function savePlanner() {
+  const p = plannerState();
+  try { localStorage.setItem(plannerKey, JSON.stringify({ anchor: p.anchor, zone: p.zone, period: p.period })); } catch { /* unavailable */ }
+  update();
+}
+function editPlan(id) {
+  if (boardReadOnly() || viewOf(id)?.archived || viewOf(id)?.planning_in_scope === false) return;
+  plannerState(); planner.edit = id; planner.draft = null; planner.error = null;
+  if (state.detail) closeDrawer();
+  if (state.view !== 'calendar' && state.view !== 'timeline') setView('calendar');
+  update(); queueMicrotask(() => root.querySelector('.planning-editor input')?.focus());
+}
+async function savePlan(id, fields) {
+  const card = viewOf(id), generation = boardGeneration, member = state.me?.member?.id, p = plannerState();
+  if (!card || card.archived || card.planning_in_scope === false || boardReadOnly() || p.busy) return;
+  const current = () => generation === boardGeneration && member === state.me?.member?.id && planner === p;
+  const choice = JSON.stringify({ id, fields });
+  if (p.pending?.choice !== choice) p.pending = { choice, body: { request_id: requestId(), version: card.version, ...fields } };
+  p.busy = true; p.error = null; update();
+  try {
+    const result = await api.planCard(id, p.pending.body);
+    if (!current()) return;
+    applyCard(result); p.pending = null; p.draft = null; p.edit = null; say(`Saved ${card.key} planning dates and dependencies.`);
+  } catch (err) {
+    if (!current()) return;
+    p.error = errorText(err); toast(p.error, 'error');
+    if (err.code !== 'NETWORK') p.pending = null;
+    if (err.code === 'VERSION_CONFLICT') { try { const fresh = await api.card(id); if (current()) applyCard(fresh); } catch { /* next refresh can retry */ } }
+    if (err.code === 'UNAUTHENTICATED') boot();
+  } finally { if (current()) { p.busy = false; update(); } }
+}
+function movePlan(id, direction, destination = null) {
+  const card = viewOf(id); if (!card) return;
+  const date = destination ?? shiftDay(scheduledOn(card), direction);
+  const fields = movedDates(card, date);
+  if (!fields) { toast('That move exceeds the supported calendar dates.', 'error'); return; }
+  void savePlan(id, fields);
+}
 const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
 
 // ── theme ────────────────────────────────────────────────────────────────────
@@ -351,6 +404,7 @@ function buildModel() {
     readOnly: boardReadOnly(),
     view: state.view,
     table: state.table,
+    planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     localCard: state.authMode === 'local' && !state.localCardDismissed,
     accounts: state.authMode === 'accounts',
@@ -455,7 +509,7 @@ function screen() {
   if (state.conn.status === 'upgrade') return loadingScreen('This page is older than the board. Reload to get the new version.');
   if (!state.board) return h('div', { class: 'app-shell' }, loadingScreen(state.conn.status === 'connecting' && state.conn.retryAt ? 'Can’t reach the board yet. Retrying…' : 'Loading the board…'), toasts());
   const model = buildModel();
-  const body = model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
+  const body = model.view === 'calendar' || model.view === 'timeline' ? planningScreen(model) : model.view === 'table' ? tableScreen(model) : model.view === 'dashboard' ? dashboardScreen(model) : model.view === 'integrations' ? integrationsScreen(model) : model.view === 'team' ? teamScreen(model) : null;
   return h('div', { class: 'app-shell' }, boardScreen(model, body), drawer(model), dialog(model), toasts());
 }
 
@@ -1675,6 +1729,14 @@ function onClick(e) {
   const action = el.dataset.action;
   const cardId = el.dataset.card;
   switch (action) {
+    case 'planning-edit': editPlan(cardId); return;
+    case 'planning-close': plannerState(); planner.edit = null; planner.draft = null; update(); return;
+    case 'planning-clear': void savePlan(cardId, { start_date: null, due_date: null }); return;
+    case 'planning-move': movePlan(cardId, Number(el.dataset.direction)); return;
+    case 'planning-nav': {
+      const p = plannerState(); p.anchor = nextAnchor(p.anchor, Number(el.dataset.direction), state.view === 'timeline' ? 'timeline' : p.period) ?? p.anchor; savePlanner(); return;
+    }
+    case 'planning-today': plannerState(); planner.anchor = todayIn(planner.zone); savePlanner(); return;
     case 'manage-boards': manageBoards(); return;
     case 'new-board': state.dialog = { kind: 'new-board' }; update(); return;
     case 'rename-board': case 'archive-board': {
@@ -1813,6 +1875,16 @@ function onSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form) return;
   e.preventDefault();
+  if (form.dataset.form === 'planning-zone') {
+    const zone = String(new FormData(form).get('zone') ?? '').trim();
+    if (!validZone(zone)) { toast('Use an IANA timezone such as Europe/London or Africa/Johannesburg.', 'error'); return; }
+    plannerState(); planner.zone = zone; savePlanner(); return;
+  }
+  if (form.dataset.form === 'planning-card') {
+    const fd = new FormData(form), fields = { start_date: String(fd.get('start') ?? '') || null, due_date: String(fd.get('due') ?? '') || null, depends_on: fd.getAll('dependencies').map(String) };
+    plannerState(); planner.draft = { start: fields.start_date ?? '', due: fields.due_date ?? '', dependencies: fields.depends_on };
+    void savePlan(form.dataset.card, fields); return;
+  }
   submitDialogForm(form, e.submitter);
 }
 
@@ -1836,6 +1908,7 @@ function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el) return;
   const what = el.dataset.change;
+  if (what === 'planning-period' && ['month', 'week'].includes(el.value)) { plannerState(); planner.period = el.value; savePlanner(); return; }
   if (what === 'workflow-version' && state.dialog?.kind === 'workflows') {
     const fd = new FormData(root.querySelector('[data-form="workflow-apply"]'));
     state.dialog = { ...state.dialog, previewVersion: Number(el.value), request_id: crypto.randomUUID(), context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') }; update(); return;
@@ -1933,6 +2006,10 @@ function themeMenuKey(e) {
 }
 
 function onKeydown(e) {
+  const planned = e.target.closest?.('[data-planning-card]');
+  if (planned && e.altKey && !e.ctrlKey && !e.metaKey && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    e.preventDefault(); movePlan(planned.dataset.planningCard, e.key === 'ArrowLeft' ? -1 : 1); return;
+  }
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); togglePalette(); return; }
   if (e.target.dataset?.input === 'palette-q') { paletteKeydown(e); return; }
   if (kbdKeydown(e)) return;
@@ -2000,6 +2077,20 @@ document.addEventListener('keyup', onKeyup);
 document.addEventListener('paste', onPaste);
 document.addEventListener('focusout', onFocusout);
 document.addEventListener('error', onImgError, true);
+let planningDrag = null;
+root.addEventListener('dragstart', e => {
+  const card = e.target.closest?.('[data-planning-card]');
+  if (!card || boardReadOnly()) return;
+  planningDrag = card.dataset.planningCard; e.dataTransfer?.setData('text/plain', 'planning-card');
+});
+root.addEventListener('dragover', e => { if (planningDrag && e.target.closest?.('[data-planning-day]') && !boardReadOnly()) e.preventDefault(); });
+root.addEventListener('drop', e => {
+  const target = e.target.closest?.('[data-planning-day]');
+  if (!planningDrag || !target) return;
+  e.preventDefault(); const id = planningDrag; planningDrag = null;
+  movePlan(id, 0, target.dataset.planningDay);
+});
+root.addEventListener('dragend', () => { planningDrag = null; });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => update());
 
 // Ages advance between pushes (§5.1): re-derive every face once a second.

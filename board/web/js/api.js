@@ -92,6 +92,7 @@ export const api = {
   sendMessage: (id, body) => mut('POST', `/api/cards/${enc(id)}/messages`, body),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
   patchCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}`, body),
+  planCard: (id, body) => mut('PATCH', `/api/cards/${enc(id)}/planning`, body),
   action: (id, action, body) => mut('POST', `/api/cards/${enc(id)}/actions/${enc(action)}`, body),
   answerPermission: (id, decision, scope) => mut('POST', `/api/permission-requests/${enc(id)}/answer`, { decision, ...(scope ? { scope } : {}) }),
   comment: (id, body, for_agent) => mut('POST', `/api/cards/${enc(id)}/comments`, { body, for_agent }),

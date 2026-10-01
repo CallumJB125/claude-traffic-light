@@ -21,11 +21,11 @@ const PAGES = [
     children: [
       { id: 'board:table', title: 'Table', kind: 'hub', view: 'table' },
       { id: 'board:dashboard', title: 'Dashboard', kind: 'hub', view: 'dashboard' },
-      { id: 'board:calendar', title: 'Calendar', kind: 'soon' },
-      { id: 'board:timeline', title: 'Timeline', kind: 'soon' },
+      { id: 'board:calendar', title: 'Calendar', kind: 'hub', view: 'calendar' },
+      { id: 'board:timeline', title: 'Timeline', kind: 'hub', view: 'timeline' },
     ] },
   { id: 'waiting', title: 'Waiting on you', icon: 'bell', kind: 'local', file: 'waiting.html', preload: 'waiting-preload.js', query: { embedded: '1' }, group: 'work' },
-  { id: 'myday', title: 'My day', icon: 'sun', kind: 'soon', group: 'work', blurb: 'Your cards, what is waiting on you, your agents and your calendar in one place.' },
+  { id: 'myday', title: 'My day', icon: 'sun', kind: 'local', file: 'myday.html', preload: 'myday-preload.js', group: 'work' },
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
