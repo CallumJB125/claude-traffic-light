@@ -81,7 +81,7 @@ function hookCmd(node, event, electron) {
  * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
  * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
  */
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, electron = underElectron() }) {
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], electron = underElectron() }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
   return {
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
@@ -101,7 +101,7 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: [worktree, tmpdir, ...CACHE_WRITE, ...(repo.allow_write_extra ?? [])].filter(Boolean),
-        denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead],
+        denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
       },
       network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
     },
@@ -179,8 +179,11 @@ export function recordBuddyLaunch(buddyHome, { cwd, now = Date.now(), claimWindo
   }
 }
 
+// Modes a caller may pick; bypassPermissions is never one of them.
+const PERMISSION_MODES = new Set(['acceptEdits', 'default', 'plan']);
+
 /** argv after the binary. Resume keeps every isolation flag (spike 5a). */
-export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model, boardHome = null }) {
+export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTurns, systemPrompt, model, boardHome = null, permissionMode = 'acceptEdits', extraDisallowed = [] }) {
   const argv = ['-p',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
@@ -188,8 +191,8 @@ export function buildArgv({ runDir, sessionId, resume = false, budgetUsd, maxTur
     '--settings', path.join(runDir, 'settings.json'),
     '--strict-mcp-config', '--mcp-config', path.join(runDir, 'mcp.json'),
     '--tools', TOOLS,
-    '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed,
-    '--permission-mode', 'acceptEdits',
+    '--disallowedTools', ...DISALLOWED_TOOLS, ...boardHomeRules(boardHome).disallowed, ...extraDisallowed,
+    '--permission-mode', PERMISSION_MODES.has(permissionMode) ? permissionMode : 'acceptEdits',
     '--permission-prompt-tool', 'mcp__board__approval',
     '--max-budget-usd', String(budgetUsd ?? DEFAULT_BUDGET_USD),
     '--max-turns', String(maxTurns ?? DEFAULT_MAX_TURNS),

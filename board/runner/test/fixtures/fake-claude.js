@@ -227,7 +227,7 @@ async function runSteps(steps) {
     else if (step.exit != null) { log({ ev: 'exit', code: step.exit }); process.exit(step.exit); }
     else if (step.result) {
       cost += step.cost ?? 0.001;
-      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [] });
+      out({ type: 'result', subtype: step.result, is_error: step.result !== 'success', total_cost_usd: cost, num_turns: 1, result: step.text ?? '', terminal_reason: step.terminal_reason ?? null, permission_denials: [], usage: { input_tokens: 10, output_tokens: 5 } });
       return 'result';
     }
   }
