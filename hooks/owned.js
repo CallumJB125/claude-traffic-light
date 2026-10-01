@@ -29,10 +29,13 @@ function ensureDir(dir) {
   try { fs.chmodSync(dir, 0o700); } catch {}
 }
 
-// Only this user's own files, not writable by anyone else, count.
+// Only this user's own files, not writable by anyone else, count. Windows has
+// no uid and reports every file as 0666, so there the per-user profile ACLs
+// stand in and only the regular-file check applies.
 function ownFile(file) {
   const st = fs.lstatSync(file);
   if (!st.isFile()) return false;
+  if (process.platform === 'win32') return true;
   if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return false;
   return (st.mode & 0o022) === 0;
 }
@@ -58,7 +61,11 @@ function recordLaunch(root, { launcher, cwd, tmux = null, claimWindowMs = CLAIM_
   return { launchId, record, env: { BUDDY_OWNED: launchId } };
 }
 
-const under = (child, parent) => child === parent || child.startsWith(parent.endsWith('/') ? parent : `${parent}/`);
+const under = (child, parent) => {
+  if (!path.isAbsolute(child)) return false;
+  const rel = path.relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+};
 
 // { owned: true, launchId, launcher, since } | { owned: false, reason }.
 // Claims the record on first use, so the check has a side effect.

@@ -15,8 +15,10 @@ test('a launch record is 0600 in a 0700 dir and yields BUDDY_OWNED', () => {
   assert.match(launchId, O.LAUNCH_ID_RE);
   assert.deepEqual(env, { BUDDY_OWNED: launchId });
   assert.deepEqual(record.tmux, { pane: '%3', socket: '/tmp/s', serverPid: null });
-  assert.equal(fs.statSync(O.dirOf(root)).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.join(O.dirOf(root), `${launchId}.json`)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') { // POSIX modes only: Windows reports 0666/0777
+    assert.equal(fs.statSync(O.dirOf(root)).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(O.dirOf(root), `${launchId}.json`)).mode & 0o777, 0o600);
+  }
   assert.throws(() => O.recordLaunch(root, { cwd: 'relative' }));
 });
 
@@ -39,8 +41,26 @@ test('refused: bad ids, unknown ids, other folders, expired windows, tampered re
   assert.equal(O.checkOwned(root, launchId, { ...q, cwd: '/wtx' }).reason, 'cwd outside the launch folder');
   assert.equal(O.checkOwned(root, launchId, { ...q, now: now + O.CLAIM_WINDOW_MS + 1 }).reason, 'launch record expired');
   const file = path.join(O.dirOf(root), `${launchId}.json`);
+  if (process.platform !== 'win32') { // a world-writable record is a POSIX notion; Windows has no such mode
+    fs.chmodSync(file, 0o666);
+    assert.equal(O.checkOwned(root, launchId, q).reason, 'no launch record', 'a world-writable record is not trusted');
+  }
+});
+
+test('win32: no uid and no POSIX modes, so a 0666 record still counts; the cwd and claim checks stay', (t) => {
+  const root = tmp();
+  const { launchId } = O.recordLaunch(root, { cwd: '/wt' });
+  const file = path.join(O.dirOf(root), `${launchId}.json`);
   fs.chmodSync(file, 0o666);
-  assert.equal(O.checkOwned(root, launchId, q).reason, 'no launch record', 'a world-writable record is not trusted');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const getuid = process.getuid;
+  t.after(() => { Object.defineProperty(process, 'platform', platform); process.getuid = getuid; });
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  process.getuid = undefined;
+  const q = { sessionId: 's', claudePid: 1, cwd: '/wt' };
+  assert.equal(O.checkOwned(root, launchId, { ...q, cwd: '/wtx' }).reason, 'cwd outside the launch folder');
+  assert.equal(O.checkOwned(root, launchId, q).owned, true);
+  assert.equal(O.checkOwned(root, launchId, { ...q, sessionId: 'other', claudePid: 2 }).reason, 'claimed by another session');
 });
 
 test('unclaimed launches are listed until claimed or expired', () => {

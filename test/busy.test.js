@@ -11,6 +11,8 @@ const Help = require('../help.js');
 
 const H = 3600000;
 const at = (iso) => Date.parse(iso);
+// The module joins with path.join, so the mock file keys must too (backslashes on Windows).
+const buddy = (name) => path.join('/buddy', name);
 
 // ── rules.js ────────────────────────────────────────────────────────────────
 test('busy, free and back-from-busy are virtual signals Lights can offer', () => {
@@ -109,7 +111,7 @@ test('ICS: UTC, TZID, floating times, DURATION and folded lines', () => {
 });
 
 test('ICS: an unknown TZID (Outlook names) falls back to local time instead of vanishing', () => {
-  const out = expand(ics(['UID:w', 'DTSTART;TZID=South Africa Standard Time:20260930T090000', 'DTEND;TZID=South Africa Standard Time:20260930T100000']), '2026-09-29T00:00:00Z', '2026-10-02T00:00:00Z');
+  const out = expand(ics(['UID:w', 'DTSTART;TZID=Outlook Custom Zone:20260930T090000', 'DTEND;TZID=Outlook Custom Zone:20260930T100000']), '2026-09-29T00:00:00Z', '2026-10-02T00:00:00Z');
   assert.equal(out.length, 1);
   assert.equal(out[0].start, new Date(2026, 8, 30, 9).getTime());
 });
@@ -307,7 +309,7 @@ test('watch: ICS feed is fetched, cached and survives a failed refresh', async (
   });
   await r.w.tick();
   assert.equal(r.w.env().busy, true);
-  const cache = JSON.parse(r.files.get('/buddy/busy-ics-cache.json'));
+  const cache = JSON.parse(r.files.get(buddy('busy-ics-cache.json')));
   assert.deepEqual(Object.keys(cache).sort(), ['events', 'key', 'titles', 'v']);
   assert.equal(cache.key, require('crypto').createHash('sha256').update('https://cal.example/private.ics').digest('hex'));
   fail = true;
@@ -365,14 +367,14 @@ test('watch: the recap arrives once when a busy spell ends, then back-from-busy 
   assert.equal(recap.held, 1);
   assert.deepEqual(recap.heldPings, [{ rule: 'Task finished', signal: 'stop', count: 1 }]);
   assert.equal(r.w.observe(s('stop')), null, 'only once');
-  assert.equal(JSON.parse(r.files.get('/buddy/away.json')).headline, recap.headline);
+  assert.equal(JSON.parse(r.files.get(buddy('away.json'))).headline, recap.headline);
   assert.equal(r.w.recap().headline, recap.headline);
   assert.equal(r.w.env().backFromBusy, true);
   r.advance(busyWatch.BACK_MS);
   assert.equal(r.w.env().backFromBusy, false);
   r.w.dismiss();
   assert.equal(r.w.recap(), null);
-  assert.ok(!r.files.has('/buddy/away.json'), 'dismissed means gone from disk too');
+  assert.ok(!r.files.has(buddy('away.json')), 'dismissed means gone from disk too');
 });
 
 test('watch: with holding off, busy is still a rule condition but nothing is logged or held', async () => {
@@ -440,16 +442,16 @@ test('watch: the ICS cache holds busy fields only, keyed by a hash of the URL', 
   const feed = ics(['UID:m', 'DTSTART:20260930T100000Z', 'DTEND:20260930T110000Z', 'SUMMARY:Board meeting', 'DESCRIPTION:pin 4242', 'LOCATION:HQ']);
   const r = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/secret-abc123.ics' }, fetch: async () => ({ ok: true, text: async () => feed }) });
   await r.w.tick();
-  const raw = r.files.get('/buddy/busy-ics-cache.json');
+  const raw = r.files.get(buddy('busy-ics-cache.json'));
   for (const leak of ['secret-abc123', 'Board meeting', 'pin 4242', 'HQ', 'BEGIN:VCALENDAR']) assert.ok(!raw.includes(leak), leak);
   r.setConfig({ busyCalendarTitles: true });
   await r.w.tick();
-  assert.match(r.files.get('/buddy/busy-ics-cache.json'), /Board meeting/, 'titles only once opted in');
-  const legacy = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/x.ics' }, files: [['/buddy/busy-ics-cache.json', JSON.stringify({ url: 'https://cal.example/x.ics', text: feed })]] });
+  assert.match(r.files.get(buddy('busy-ics-cache.json')), /Board meeting/, 'titles only once opted in');
+  const legacy = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/x.ics' }, files: [[buddy('busy-ics-cache.json'), JSON.stringify({ url: 'https://cal.example/x.ics', text: feed })]] });
   await legacy.w.tick();
-  assert.ok(!legacy.files.has('/buddy/busy-ics-cache.json'), 'the old raw-feed cache is deleted, not read');
+  assert.ok(!legacy.files.has(buddy('busy-ics-cache.json')), 'the old raw-feed cache is deleted, not read');
   // A fresh start (same URL, no network) reads the cache back.
-  const again = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/secret-abc123.ics' }, files: [['/buddy/busy-ics-cache.json', raw]] });
+  const again = rig({ config: { busyCalendar: false, busyIcsUrl: 'https://cal.example/secret-abc123.ics' }, files: [[buddy('busy-ics-cache.json'), raw]] });
   await again.w.tick();
   assert.equal(again.w.env().busy, true);
 });
@@ -525,7 +527,7 @@ test('watch: one failed Focus poll keeps the last reading; the third in a row dr
 test('watch: a calendar grant that macOS forgot is reported as a reset, with a reconnect path', async () => {
   const r = rig({ helper: { status: 'fullAccess', events: [meeting] } });
   await r.w.tick();
-  assert.ok(r.files.has('/buddy/.calendar-granted'));
+  assert.ok(r.files.has(buddy('.calendar-granted')));
   assert.equal(r.w.status().calendar.reset, false);
   r.helperState.status = 'notDetermined'; // e.g. an ad-hoc signed update
   r.advance(2 * 60000);
@@ -569,10 +571,10 @@ test('watch: an undismissed recap expires and takes away.json with it', async ()
   r.advance(H);
   await r.w.tick();
   r.w.observe([]);
-  assert.ok(r.files.has('/buddy/away.json'));
+  assert.ok(r.files.has(buddy('away.json')));
   r.advance(61 * 60000);
   assert.equal(r.w.recap(), null);
-  assert.ok(!r.files.has('/buddy/away.json'));
+  assert.ok(!r.files.has(buddy('away.json')));
 });
 
 test('packaging: the calendar helper is signed with calendars-only entitlements', () => {
@@ -587,7 +589,7 @@ test('packaging: the calendar helper is signed with calendars-only entitlements'
 });
 
 test('main: the pending-permission look also gets the busy signals', () => {
-  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   const resolves = main.slice(main.indexOf('function computeState'), main.indexOf('// The tool of the most recently updated session')).match(/Rules\.resolve\(config\.rules, (?!synthetic)[^\n]*/g);
   assert.equal(resolves.length, 2);
   // Both share one env (offline, busy, F2 git, F1 spend).
@@ -608,7 +610,7 @@ test('busy holds F1 spend and F2 git pings by their default rules: red through, 
 });
 
 test('main: git rule sounds and spend notifications go through the busy gate', () => {
-  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   const sound = main.slice(main.indexOf('function maybePlayAlertSound'), main.indexOf('lastSoundKey = key;', main.indexOf('function maybePlayAlertSound')));
   assert.match(sound, /GitSignals\.soundKey\(/);
   assert.match(sound, /!restored && pingAllowed\(owned\.sound, \{ lamp: look\.lamp \}\)\) playSound/);

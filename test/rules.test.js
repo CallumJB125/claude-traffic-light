@@ -584,13 +584,13 @@ test('set-status: permission-request blocks until answered, then prints the deci
     while (Date.now() < deadline && !req) {
       const f = fs.existsSync(reqDir) ? fs.readdirSync(reqDir).find((x) => x.endsWith('.json')) : null;
       if (f) req = JSON.parse(fs.readFileSync(path.join(reqDir, f), 'utf8'));
-      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+      else await new Promise((resolve) => setTimeout(resolve, 30)); // async: a sync wait starves the hook's stdin pipe write on Windows
     }
     assert.ok(req, 'request file appears while the hook waits');
     assert.equal(req.tool, 'Bash');
     assert.equal(req.summary, 'git push origin main');
     assert.deepEqual(req.toolInput, { command: 'git push origin main' }, 'the full input is recorded');
-    assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(reqDir, `${req.id}.json`)).mode & 0o777, 0o600, 'POSIX modes only');
     assert.deepEqual(require('../hooks/answer-file.js').writeAnswer(reqDir, req.id, 'allow', { key: app.keyFor(req.id) }).ok, true);
     const code = await exited;
     assert.equal(code, 0);
@@ -833,7 +833,7 @@ test('install: file-level install into a temp home never clobbers an unparsable 
   assert.equal(Codex.install({ home: codexHome, runtime: rt }).ok, true);
   const wrapper = Runtime.wrapperPath(rt);
   assert.equal(fs.readFileSync(wrapper, 'utf8'), Runtime.wrapperText(rt));
-  assert.equal(fs.statSync(wrapper).mode & 0o111, 0o111, 'the wrapper is executable');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(wrapper).mode & 0o111, 0o111, 'the wrapper is executable (no exec bit on Windows)');
   assert.equal(Codex.isInstalled({ home: codexHome, runtime: rt }), true);
   assert.equal(Codex.uninstall({ home: codexHome }).changed, true);
   assert.equal(Codex.isInstalled({ home: codexHome, runtime: rt }), false);

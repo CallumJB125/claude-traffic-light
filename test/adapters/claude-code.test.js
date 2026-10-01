@@ -74,7 +74,7 @@ test('L1: answerRequest answers allow/deny for a tool permission only, never a p
 test('H1: the port file is 0600; /request-key/challenge proves the token for this port without revealing it', async () => {
   const { home } = await realServer();
   const portFile = path.join(home, 'port');
-  assert.equal(fs.statSync(portFile).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(portFile).mode & 0o777, 0o600, 'POSIX modes only: Windows has no 0600');
   assert.deepEqual(fs.readdirSync(home).filter((f) => f.includes('.tmp.')), [], 'no temp file left');
   const port = Number(fs.readFileSync(portFile, 'utf8'));
   const nonce = 'ab'.repeat(32);
@@ -123,7 +123,7 @@ test('installer: adds Edit(~/.claude-traffic-light/**) to permissions.deny, keep
   const original = { permissions: { allow: ['Bash(npm test)'], deny: ['Read(./.env)'] }, model: 'x' };
   fs.writeFileSync(file, JSON.stringify(original));
   // The checkout installer, with HOME pointed at the temp dir.
-  const r = spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'hooks', 'install.js')], { env: { ...process.env, HOME: home } });
+  const r = spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'hooks', 'install.js')], { env: { ...process.env, HOME: home, USERPROFILE: home } });
   assert.equal(r.status, 0, r.stderr.toString());
   let s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(Claude.DENY_RULES, ['Edit(~/.claude-traffic-light/**)']);
@@ -168,16 +168,16 @@ test('L3: the deny rule follows the state dir; uninstall removes only a rule Bud
   assert.deepEqual(Claude.denyRulesFor(h, rt(h)), ['Edit(~/.claude-traffic-light/**)']);
   assert.deepEqual(Claude.denyRulesFor(h, rt(h, path.join(h, 'state', 'buddy'))), ['Edit(~/state/buddy/**)']);
   const outside = tmp();
-  assert.deepEqual(Claude.denyRulesFor(h, rt(h, outside)), [`Edit(/${path.resolve(outside)}/**)`]);
+  assert.deepEqual(Claude.denyRulesFor(h, rt(h, outside)), [`Edit(/${path.resolve(outside).split(path.sep).join('/')}/**)`]);
   Claude.install({ home: h, runtime: rt(h, outside) });
-  assert.deepEqual(settingsOf(h).permissions.deny, [`Edit(/${path.resolve(outside)}/**)`]);
+  assert.deepEqual(settingsOf(h).permissions.deny, [`Edit(/${path.resolve(outside).split(path.sep).join('/')}/**)`]);
   assert.equal(Claude.isInstalled({ home: h, runtime: rt(h, outside) }), true);
 
   // The person's own identical rule, there before Buddy: kept on uninstall, with a note.
   const mine = tmp();
   writeSettings(mine, { permissions: { deny: ['Edit(~/.claude-traffic-light/**)'] } }, 0o600);
   Claude.install({ home: mine, runtime: rt(mine) });
-  assert.equal(fs.statSync(path.join(mine, '.claude', 'settings.json')).mode & 0o777, 0o600, 'atomic write keeps the mode');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(mine, '.claude', 'settings.json')).mode & 0o777, 0o600, 'atomic write keeps the mode (POSIX modes only)');
   assert.deepEqual(fs.readdirSync(path.join(mine, '.claude')).filter((f) => f.includes('buddy-tmp')), [], 'no temp file left');
   Claude.uninstall({ home: mine });
   assert.deepEqual(settingsOf(mine).permissions, { deny: ['Edit(~/.claude-traffic-light/**)'] });

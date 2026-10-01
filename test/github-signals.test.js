@@ -11,7 +11,8 @@ const Help = require('../help.js');
 const M = require('../mcp-server.js');
 
 const FIX = path.join(__dirname, 'fixtures', 'github');
-const raw = (name) => fs.readFileSync(path.join(FIX, name), 'utf8');
+// path.resolve: an absolute name passes through (a temp dir can be on another drive than the checkout).
+const raw = (name) => fs.readFileSync(path.resolve(FIX, name), 'utf8');
 const NOW = Date.parse('2026-09-30T12:00:00Z');
 const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-git-')));
 
@@ -204,13 +205,13 @@ test('poll: with a full page of PRs a missing review request is not taken as wit
   const fullNoReq = raw('pulls.200.txt').replace(/\r\n\r\n[\s\S]*$/, `\r\n\r\n${JSON.stringify(pulls.filter((x) => x.number !== 7).concat(filler, [{ ...pulls[2], number: 3000 }]))}`);
   fs.writeFileSync(path.join(dir, 'full.txt'), full);
   fs.writeFileSync(path.join(dir, 'full-no-req.txt'), fullNoReq);
-  const { p, gh, advance } = poller({ routes: { 'repos/acme/widget/pulls': path.relative(FIX, path.join(dir, 'full.txt')) } });
+  const { p, gh, advance } = poller({ routes: { 'repos/acme/widget/pulls': path.join(dir, 'full.txt') } });
   await p.tick({ sessions: SESSIONS, config: {} });
-  gh.fixed['repos/acme/widget/pulls'] = path.relative(FIX, path.join(dir, 'full-no-req.txt'));
+  gh.fixed['repos/acme/widget/pulls'] = path.join(dir, 'full-no-req.txt');
   gh.change('repos/acme/widget/pulls');
   advance(G.ACTIVE_MS);
   await p.tick({ sessions: SESSIONS, config: {} });
-  gh.fixed['repos/acme/widget/pulls'] = path.relative(FIX, path.join(dir, 'full.txt'));
+  gh.fixed['repos/acme/widget/pulls'] = path.join(dir, 'full.txt');
   gh.change('repos/acme/widget/pulls');
   advance(G.ACTIVE_MS);
   assert.deepEqual(await p.tick({ sessions: SESSIONS, config: {} }), [], 'still seen: #7 may just have dropped off the page');
@@ -231,7 +232,7 @@ test('poll: a review request that goes away and comes back fires again', async (
   fs.writeFileSync(path.join(dir, 'pulls-no-request.txt'), withoutReq);
   const reRequested = raw('pulls.200.txt').replace(/"2026-09-30T11:50:00Z"/, `"${new Date(NOW + 5 * 60000).toISOString()}"`);
   fs.writeFileSync(path.join(dir, 'pulls-re-requested.txt'), reRequested);
-  const use = (file) => { gh.fixed['repos/acme/widget/pulls'] = path.relative(FIX, path.join(dir, file)); gh.change('repos/acme/widget/pulls'); };
+  const use = (file) => { gh.fixed['repos/acme/widget/pulls'] = path.join(dir, file); gh.change('repos/acme/widget/pulls'); };
   use('pulls-no-request.txt');
   advance(G.ACTIVE_MS);
   assert.deepEqual(await p.tick({ sessions: SESSIONS, config: {} }), []);
@@ -322,7 +323,7 @@ test('poll: a 403 on user is a failure that escalates the backoff', async () => 
   const forbidden = raw('not-found.404.txt').replace('404 Not Found', '403 Forbidden');
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'user-403.txt'), forbidden);
-  const q = poller({ routes: { user: path.relative(FIX, path.join(dir, 'user-403.txt')) } });
+  const q = poller({ routes: { user: path.join(dir, 'user-403.txt') } });
   const delays = [];
   for (let i = 0; i < 3; i += 1) {
     await q.p.tick({ sessions: SESSIONS, config: {} });
@@ -395,7 +396,7 @@ test('the state file is only rewritten when something in it changed (or every 10
 test('no login from gh → no repo is polled (no actor filter without one), and it backs off', async () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'user-empty.txt'), raw('user.200.txt').replace(/\r\n\r\n[\s\S]*$/, '\r\n\r\n{"id":1}'));
-  const { p, gh } = poller({ routes: { user: path.relative(FIX, path.join(dir, 'user-empty.txt')) } });
+  const { p, gh } = poller({ routes: { user: path.join(dir, 'user-empty.txt') } });
   assert.deepEqual(await p.tick({ sessions: SESSIONS, config: {} }), []);
   assert.deepEqual(gh.calls.map((c) => c.apiPath), ['user']);
   assert.equal(p.status().state, 'backoff');
