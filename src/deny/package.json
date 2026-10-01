@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "The deny-list and its shell tokeniser, shared by the app (src/auto-rules.js) and the phone security core (remote/)."
+}
