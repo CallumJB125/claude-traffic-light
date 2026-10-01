@@ -133,13 +133,19 @@ function scan({ home, platform = process.platform, fsApi = fs, exec = defaultExe
     return { st, real: cur };
   }
 
-  // Read through a no-follow descriptor, and only the file that was checked.
+  // A checked regular file can become a FIFO before open. Nonblocking open lets
+  // fstat reject the actual type without waiting for an external FIFO writer.
+  // Missing protection flags make this platform unavailable, never a fallback.
   function readChecked(real, st, max) {
-    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    const noFollow = fs.constants.O_NOFOLLOW, nonblock = fs.constants.O_NONBLOCK;
+    if (!Number.isInteger(noFollow) || noFollow <= 0 || !Number.isInteger(nonblock) || nonblock <= 0) {
+      return { why: 'safe nonblocking file reads are unavailable on this platform' };
+    }
+    const flags = fs.constants.O_RDONLY | noFollow | nonblock;
     const fd = fsApi.openSync(real, flags);
     try {
       const fst = fsApi.fstatSync(fd);
-      if (fst.dev !== st.dev || fst.ino !== st.ino || !fst.isFile()) return { why: 'changed while it was being read' };
+      if (!fst.isFile() || fst.dev !== st.dev || fst.ino !== st.ino) return { why: 'changed while it was being read' };
       if (fst.nlink > 1) return { why: 'has other hard links' };
       if (fst.size > max) return { big: true };
       const buf = Buffer.alloc(fst.size);
