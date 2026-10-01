@@ -69,7 +69,7 @@ test('Tasks desktop starts its real helper, edits durable checkpoints, restarts 
     const prompt = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse).filter((x) => x.kind === 'prompt').at(-1).prompt;
     expect(prompt).toContain('SHARED-LOCAL-NEXT-ACTION'); expect(prompt).toContain('A portable fixture brief');
     expect(prompt).not.toContain('UNSAVED-DRAFT'); expect(prompt).not.toContain('x'.repeat(40));
-    const record = fs.readFileSync(path.join(dataDir, 'tasks.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter((x) => x.task.id === id).at(-1).task;
+    const record = fs.readFileSync(path.join(dataDir, 'store', 'tasks.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter((x) => x.task.id === id).at(-1).task;
     expect(record.checkpoint.schemaVersion).toBe(1); expect(record.checkpoint.nextAction).toBe('SHARED-LOCAL-NEXT-ACTION');
     // Open the same real engine from the ordinary main window/sidebar.
     await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => /Open Plexiform/.test(i.label)).click());
