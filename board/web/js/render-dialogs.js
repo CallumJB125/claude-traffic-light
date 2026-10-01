@@ -5,6 +5,7 @@ import { h } from './h.js';
 import { icon, pixelClaude } from './icons.js';
 import { formatAge } from './view.js';
 import { paletteDialog } from './render-palette.js';
+import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -172,6 +173,53 @@ export function newCardDialog(dlg) {
       h('button', { type: 'submit', class: 'btn btn-primary', disabled: dlg.busy || null }, dlg.busy ? 'Creating…' : 'Create card'))), { wide: true });
 }
 
+// The board's label registry (D91): members create and recolour, admins and
+// owners rename and delete (with a confirm), viewers only read. Labels already
+// on cards but not coloured are listed after the registry, ready to colour.
+export function labelsDialog(dlg, model) {
+  const role = model.me?.member?.role;
+  const canWrite = !model.readOnly && role !== 'viewer';
+  const canManage = role === 'owner' || role === 'admin';
+  const cardLabels = model.entries.flatMap((e) => e.view.labels ?? []);
+  const rows = managerRows(model.board?.labels, cardLabels);
+  const colorSelect = (row) => h('select', {
+    class: 'input input-sm', 'data-change': 'label-color', 'data-label': row.name, 'data-registered': row.registered ? '1' : null,
+    'aria-label': `Colour of ${row.name}`, disabled: !canWrite || dlg.busy || null,
+  },
+  row.registered ? null : h('option', { value: '', selected: true }, 'No colour'),
+  LABEL_COLORS.map((c) => h('option', { key: c, value: c, selected: row.color === c }, c)));
+  const item = (row) => {
+    const confirming = dlg.confirmDelete === row.name;
+    const renaming = dlg.rename === row.name;
+    return h('li', { key: `${row.registered ? 'r' : 'u'}:${row.name}`, class: 'labels-row' },
+      h('span', { class: labelClass(row.name, row.color) }, row.name),
+      colorSelect(row),
+      canManage && row.registered && !confirming && !renaming ? [
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-rename-ask', 'data-label': row.name }, 'Rename'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'label-delete-ask', 'data-label': row.name }, 'Delete'),
+      ] : null,
+      renaming ? h('form', { class: 'labels-rename', 'data-form': 'label-rename', 'data-label': row.name },
+        h('label', { class: 'sr-only', for: 'label-rename-input' }, `New name for ${row.name}`),
+        h('input', { id: 'label-rename-input', name: 'name', class: 'input input-sm', value: row.name, maxlength: '50', required: true, autocomplete: 'off', autofocus: true }),
+        h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: dlg.busy || null }, 'Rename'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-cancel' }, 'Cancel'),
+        h('p', { class: 'hint' }, 'Every card with this label gets the new name.')) : null,
+      confirming ? h('div', { class: 'labels-confirm', role: 'alert' },
+        h('span', null, `Delete ${row.name}?`),
+        h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'label-delete', 'data-label': row.name, disabled: dlg.busy || null }, 'Remove the colour only'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-danger', 'data-action': 'label-delete', 'data-label': row.name, 'data-strip': '1', disabled: dlg.busy || null }, 'Also remove it from every card'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'label-cancel' }, 'Keep it')) : null);
+  };
+  return shell('labels', 'Labels', h('div', { class: 'modal-body' },
+    rows.length ? h('ul', { class: 'labels-list' }, rows.map(item)) : h('p', { class: 'muted' }, 'No labels yet.'),
+    canWrite ? h('form', { class: 'labels-new', 'data-form': 'label-create' },
+      field('label-new-name', 'New label', h('input', { id: 'label-new-name', name: 'name', class: 'input input-sm', maxlength: '50', required: true, autocomplete: 'off', placeholder: 'bug' })),
+      field('label-new-color', 'Colour', h('select', { id: 'label-new-color', name: 'color', class: 'input input-sm' }, LABEL_COLORS.map((c) => h('option', { key: c, value: c }, c)))),
+      h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: dlg.busy || null }, 'Add label')) : null,
+    canWrite && !canManage ? h('p', { class: 'hint' }, 'Admins can rename or delete a label.') : null,
+    errorLine(dlg)));
+}
+
 export function dialog(model) {
   const d = model.dialog;
   if (!d) return null;
@@ -182,6 +230,7 @@ export function dialog(model) {
     case 'changes': return changesDialog(d, model);
     case 'new': return newCardDialog(d, model);
     case 'palette': return paletteDialog(d, model);
+    case 'labels': return labelsDialog(d, model);
     default: return null;
   }
 }

@@ -56,7 +56,13 @@ export const api = {
   me: () => call('GET', '/api/me'),
   // The hub prints a per-process dev secret at startup (never behind a proxy/tunnel).
   devLogin: (github_login, secret) => call('POST', '/api/dev/login', { github_login }, { headers: { 'Board-Dev-Secret': secret ?? '' } }),
-  board: (id) => call('GET', `/api/boards/${enc(id)}`),
+  board: (id, { includeArchived = false } = {}) => call('GET', `/api/boards/${enc(id)}${includeArchived ? '?include_archived=1' : ''}`),
+  labels: (boardId) => call('GET', `/api/boards/${enc(boardId)}/labels`),
+  createLabel: (boardId, name, color) => mut('POST', `/api/boards/${enc(boardId)}/labels`, { name, color }),
+  patchLabel: (boardId, name, patch) => mut('PATCH', `/api/boards/${enc(boardId)}/labels/${enc(name)}`, patch),
+  deleteLabel: (boardId, name, strip) => mut('DELETE', `/api/boards/${enc(boardId)}/labels/${enc(name)}`, { strip: !!strip }),
+  archiveCard: (id) => mut('POST', `/api/cards/${enc(id)}/archive`),
+  restoreCard: (id) => mut('POST', `/api/cards/${enc(id)}/restore`),
   presence: (boardId) => call('GET', `/api/boards/${enc(boardId)}/presence`),
   card: (id) => call('GET', `/api/cards/${enc(id)}`),
   createCard: (boardId, body) => mut('POST', `/api/boards/${enc(boardId)}/cards`, body),
@@ -92,7 +98,12 @@ export function errorText(err) {
   switch (err?.code) {
     case 'ALREADY_ANSWERED': return `Already answered by ${err.extra?.answered_by?.name ?? err.extra?.answered_by ?? 'a teammate'}.`;
     case 'VERSION_CONFLICT': return 'Someone changed this card a moment ago. It has been refreshed; try again.';
-    case 'CONFLICT': return 'That clashes with the card’s current run.';
+    case 'CONFLICT':
+      if (err.extra?.reason === 'ARCHIVED') return 'This card is archived. Restore it first.';
+      if (err.extra?.reason === 'RUN_ACTIVE') return 'Stop, cancel or finish the run before archiving.';
+      if (err.extra?.reason === 'TOO_MANY_CARDS') return 'That label is on too many cards to change at once.';
+      return err.message && /label/.test(err.message) ? err.message : 'That clashes with the card’s current run.';
+    case 'QUOTA_EXCEEDED': return err.message ?? 'Your plan’s limit is reached.';
     case 'ILLEGAL_TRANSITION': return 'The card moved on before that landed. Check its state and try again.';
     case 'FORBIDDEN': return err.message && !/^guard /.test(err.message) ? err.message : 'You’re not allowed to do that on this card.';
     case 'POLICY_DENIED': return `Blocked by policy${err.message ? `: ${err.message}` : ''}.`;

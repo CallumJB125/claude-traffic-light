@@ -20,6 +20,7 @@ import { teamScreen } from './render-team.js';
 import { emptyFold, pullJournal, windowMetrics, cardMetrics } from './metrics.js';
 import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
+import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
 import { signinScreen } from './render-signin.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
@@ -60,6 +61,9 @@ const state = {
   kbd: null, // keyboard pick-up: {ids, from, over}
   announce: '',
   quickAdd: null, // inline add-a-card: {open, seed, confirm: titles|null, keep}
+  // Archived cards (D94) are not in the snapshot: "Show archived" fetches them into their own map.
+  showArchived: false,
+  archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
 };
@@ -224,7 +228,7 @@ function buildModel() {
   const lost = state.conn.status === 'lost';
   // While disconnected the board shows states as of the drop; ages freeze.
   const clockNow = lost && state.conn.lostPerf != null ? state.conn.lostPerf : now;
-  const entries = [...state.cards.values()].map(({ view, rx }) => {
+  const entries = [...state.cards.values(), ...(state.showArchived && state.archived ? state.archived.values() : [])].map(({ view, rx }) => {
     const elapsed_ms = Math.max(0, clockNow - rx);
     return { view, elapsed_ms, face: displayFace(view, { elapsed_ms, connection_lost: lost }) };
   });
@@ -235,8 +239,10 @@ function buildModel() {
     const data = d.data ? { ...d.data, feed: (d.data.feed ?? []).map((ev) => ({ ...ev, at_age_ms: ev.at_age_ms == null ? null : ev.at_age_ms + Math.max(0, clockNow - (ev._rx ?? d.rx)) })) } : null;
     detail = { ...d, data, elapsed_ms };
   }
-  const fctx = { viewerId: state.me?.member?.id, members: state.members };
+  const labelColors = Array.isArray(state.board?.labels) ? colorMap(state.board.labels) : null;
+  const fctx = { viewerId: state.me?.member?.id, members: state.members, labelColors };
   const filtered = applyFilters(entries, state.filters, fctx);
+  const live = entries.filter((e) => !e.view.archived);
   return {
     me: state.me,
     board: state.board,
@@ -244,8 +250,10 @@ function buildModel() {
     entries,
     visible: filtered.entries,
     filters: state.filters,
-    filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx) },
-    alerts: alertsForViewer(state.me?.member?.id, entries),
+    filterInfo: { total: filtered.total, shown: filtered.shown, options: filterOptions(entries, fctx), archived: state.archived?.size ?? null },
+    labelColors,
+    showArchived: state.showArchived,
+    alerts: alertsForViewer(state.me?.member?.id, live),
     conn: { ...state.conn, retryInMs: state.conn.retryAt != null ? state.conn.retryAt - Date.now() : null },
     detail,
     dialog: state.dialog,
@@ -263,7 +271,7 @@ function buildModel() {
     readOnly: state.me?.member?.role === 'viewer',
     view: state.view,
     table: state.table,
-    dashboard: state.view === 'dashboard' ? dashboardModel(entries) : null,
+    dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     // Presence ages freeze at the drop, like card ages.
@@ -459,6 +467,7 @@ function onMessage(msg) {
       state.cards = new Map(msg.cards.map((c) => [c.id, { view: c, rx: now }]));
       state.cardsRev += 1;
       state.selection = pruneSelection(state.selection, state.cards.keys());
+      if (state.showArchived) loadArchived();
       if (state.detail) refreshDetail(state.detail.cardId);
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
@@ -471,6 +480,7 @@ function onMessage(msg) {
     case 'card.upsert': {
       if (msg.board_id !== state.boardId) return;
       state.cards.set(msg.card.id, { view: msg.card, rx: now });
+      state.archived?.delete(msg.card.id);
       state.cardsRev += 1;
       if (state.detail?.cardId === msg.card.id) refreshDetailSoon(msg.card.id);
       dashboardSoon();
@@ -479,10 +489,17 @@ function onMessage(msg) {
     case 'card.remove': {
       state.cards.delete(msg.card_id);
       state.cardsRev += 1;
-      state.selection = pruneSelection(state.selection, state.cards.keys());
-      if (state.detail?.cardId === msg.card_id) closeDrawer();
+      if (state.showArchived) loadArchived();
+      else {
+        state.selection = pruneSelection(state.selection, state.cards.keys());
+        if (state.detail?.cardId === msg.card_id) closeDrawer();
+      }
       break;
     }
+    case 'board.labels':
+      if (msg.board_id !== state.boardId || !state.board) return;
+      state.board = { ...state.board, labels: msg.labels };
+      break;
     case 'lease.tick': {
       const c = state.cards.get(msg.card_id);
       if (!c) return;
@@ -522,8 +539,87 @@ function presenceFallbackSoon() {
 
 // ── detail drawer ────────────────────────────────────────────────────────────
 
+// ── archive (D94) and labels (D91) ──────────────────────────────────────────
+
+async function loadArchived() {
+  const boardId = state.boardId;
+  try {
+    const snap = await api.board(boardId, { includeArchived: true });
+    if (!state.showArchived || state.boardId !== boardId) return;
+    const rx = perf();
+    state.archived = new Map(snap.cards.filter((c) => c.archived && !state.cards.has(c.id)).map((c) => [c.id, { view: c, rx }]));
+  } catch (err) {
+    toast(errorText(err), 'error');
+  }
+  update();
+}
+
+function setShowArchived(on) {
+  state.showArchived = on;
+  if (on) loadArchived();
+  else {
+    state.archived = null;
+    state.selection = pruneSelection(state.selection, state.cards.keys());
+    if (state.detail && !state.cards.has(state.detail.cardId)) closeDrawer();
+  }
+  update();
+}
+
+async function archiveCards(ids) {
+  for (const id of ids) {
+    const res = await withBusy(`${id}:archive`, () => api.archiveCard(id));
+    if (!res?.card) continue;
+    state.cards.delete(id);
+    if (state.showArchived) state.archived?.set(id, { view: res.card, rx: perf() });
+    state.cardsRev += 1;
+    if (!state.showArchived && state.detail?.cardId === id) closeDrawer();
+    toast(`${res.card.key} archived. Show archived to restore it.`);
+  }
+  if (!state.showArchived) state.selection = pruneSelection(state.selection, state.cards.keys());
+  update();
+}
+
+async function restoreCards(ids) {
+  for (const id of ids) {
+    const res = await withBusy(`${id}:restore`, () => api.restoreCard(id));
+    if (!res?.card) continue;
+    state.archived?.delete(id);
+    applyCard(res);
+    toast(`${res.card.key} restored.`);
+    if (state.detail?.cardId === id) refreshDetailSoon(id);
+  }
+  update();
+}
+
+async function setCover(cardId, token) {
+  const v = viewOf(cardId);
+  if (!v) return;
+  const res = await withBusy(`${cardId}:cover`, () => api.patchCard(cardId, { version: v.version, cover: token || null }));
+  if (res) applyCard(res);
+}
+
+// Registry changes also arrive as board.labels; the answer is applied at once
+// so the manager never waits on the socket.
+async function labelCall(fn) {
+  const d = state.dialog;
+  if (d?.kind === 'labels') { state.dialog = { ...d, busy: true, error: null }; update(); }
+  try {
+    await fn();
+    const res = await api.labels(state.boardId);
+    if (state.board) state.board = { ...state.board, labels: res.labels };
+    if (state.dialog?.kind === 'labels') state.dialog = { kind: 'labels', busy: false, error: null };
+    return true;
+  } catch (err) {
+    if (state.dialog?.kind === 'labels') state.dialog = { ...state.dialog, busy: false, error: errorText(err) };
+    else toast(errorText(err), 'error');
+    return false;
+  } finally {
+    update();
+  }
+}
+
 async function openDetail(cardId, section = null) {
-  if (!state.cards.has(cardId)) return;
+  if (!state.cards.has(cardId) && !state.archived?.has(cardId)) return;
   const tab = section === 'handover' || section === 'comments' ? section : (state.detail?.cardId === cardId ? state.detail.tab : 'activity');
   state.detail = { cardId, data: state.detail?.cardId === cardId ? state.detail.data : null, rx: state.detail?.rx ?? null, tab, scrollTo: ['asks', 'overlaps'].includes(section) ? section : null, error: null };
   try { history.replaceState(null, '', `#card=${encodeURIComponent(cardId)}`); } catch { /* sandboxed */ }
@@ -609,11 +705,12 @@ function refreshBoardCard() {
 
 function applyCard(res) {
   if (!res?.card) return;
-  state.cards.set(res.card.id, { view: res.card, rx: perf() });
+  if (res.card.archived) state.archived?.set(res.card.id, { view: res.card, rx: perf() });
+  else state.cards.set(res.card.id, { view: res.card, rx: perf() });
   state.cardsRev += 1;
 }
 
-const viewOf = (id) => state.cards.get(id)?.view;
+const viewOf = (id) => (state.cards.get(id) ?? state.archived?.get(id))?.view;
 const keyOf = (id) => viewOf(id)?.key ?? 'Card';
 
 async function doAction(cardId, action, body = {}, done) {
@@ -730,6 +827,19 @@ async function submitGive(form) {
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
   if (kind === 'integ-token') return submitIntegrationToken(form);
+  if (kind === 'label-create') {
+    const fd0 = new FormData(form);
+    const name = String(fd0.get('name') ?? '').trim();
+    if (name && await labelCall(() => api.createLabel(state.boardId, name, String(fd0.get('color') ?? 'grey')))) form.reset();
+    return undefined;
+  }
+  if (kind === 'label-rename') {
+    const to = String(new FormData(form).get('name') ?? '').trim();
+    const from = form.dataset.label;
+    if (!to || to === from) { state.dialog = { ...state.dialog, rename: null }; update(); return undefined; }
+    if (await labelCall(() => api.patchLabel(state.boardId, from, { name: to }))) toast(`Renamed ${from} to ${to} on every card.`);
+    return undefined;
+  }
   const d = state.dialog;
   const cardId = form.dataset.card;
   const fd = new FormData(form);
@@ -1083,6 +1193,22 @@ function onClick(e) {
     case 'filter-label-off': setFilters({ ...state.filters, labels: state.filters.labels.filter((l) => l !== el.dataset.label) }); return;
     case 'filter-clear': setFilters(emptyFilters()); return;
     case 'toggle-done': state.showAllDone = !state.showAllDone; update(); return;
+    case 'toggle-archived': setShowArchived(!state.showArchived); return;
+    case 'archive': archiveCards([cardId]); return;
+    case 'restore': restoreCards([cardId]); return;
+    case 'bulk-archive': archiveCards([...state.selection].filter((id) => state.cards.has(id))); return;
+    case 'bulk-restore': restoreCards([...state.selection].filter((id) => state.archived?.has(id))); return;
+    case 'set-cover': setCover(cardId, el.dataset.cover); return;
+    case 'labels-open': state.dialog = { kind: 'labels', busy: false, error: null }; update(); return;
+    case 'label-rename-ask': state.dialog = { ...state.dialog, rename: el.dataset.label, confirmDelete: null }; update(); return;
+    case 'label-delete-ask': state.dialog = { ...state.dialog, confirmDelete: el.dataset.label, rename: null }; update(); return;
+    case 'label-cancel': state.dialog = { ...state.dialog, confirmDelete: null, rename: null }; update(); return;
+    case 'label-delete': {
+      const name = el.dataset.label;
+      const strip = el.dataset.strip === '1';
+      labelCall(() => api.deleteLabel(state.boardId, name, strip)).then((ok) => { if (ok) toast(strip ? `Removed ${name} from every card.` : `${name} has no colour now.`); });
+      return;
+    }
     case 'view': setView(el.dataset.view); return;
     case 'integ-reload': loadIntegrations(); return;
     case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
@@ -1128,6 +1254,10 @@ function onChange(e) {
   if (what === 'filter-assignee') setFilters({ ...state.filters, assignee: el.value || null });
   if (what === 'bulk-move' && el.value) { moveCards([...state.selection], el.value); el.value = ''; }
   if (what === 'integ-autonomy') setAutonomy(el.dataset.conn, el.dataset.actionId, el.value);
+  if (what === 'label-color' && el.value) {
+    const name = el.dataset.label;
+    labelCall(() => (el.dataset.registered ? api.patchLabel(state.boardId, name, { color: el.value }) : api.createLabel(state.boardId, name, el.value)));
+  }
 }
 
 // Dialog close (Escape, backdrop, close buttons) is the one path back to state.

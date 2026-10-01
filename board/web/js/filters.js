@@ -93,7 +93,10 @@ export function filterOptions(entries, ctx) {
   }
   return {
     counts,
-    labels: [...labels].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([label, n]) => ({ label, n })),
+    labels: [...labels].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([label, n]) => {
+      const color = ctx.labelColors?.get(label.toLowerCase());
+      return color ? { label, n, color } : { label, n };
+    }),
     people: [...people].map(([id, m]) => ({ id, name: m.name ?? m.login })).sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
