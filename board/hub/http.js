@@ -724,7 +724,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         member = await authMember(req, pick);
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
-      const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      // Bind retries to the effective operation, whether strip came from
+      // JSON or the existing query option. Equivalent forms remain a retry.
+      if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
       const refreshWrite = () => {
         if (ident && r.mutating && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
         if (member && r.auth === 'member' && r.mutating) member = api.currentMember(member, ident?.cred ?? null);
@@ -734,6 +737,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           if (r.writeScope === 'labelManage' || (r.writeScope === 'label' && typeof body.name === 'string' && body.name.trim() !== params.name)) api.requireLabel(member, 'label.manage');
         }
         if (r.collaboration || r.writeScope === 'card') member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
+        if (r.writeScope === 'card') api.requireActionRepo(api.cardFor(member, params.card_id), params.action);
+        if (r.collaboration && body.repo_id != null) {
+          const boardId = params.board_id ?? api.cardFor(member, params.card_id).board_id;
+          if (!hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', boardId, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+        }
         if (r.writeScope === 'permission') {
           const pr = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
           if (!pr) throw new HubError('NOT_FOUND', 'permission request not found');

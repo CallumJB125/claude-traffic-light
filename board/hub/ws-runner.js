@@ -303,7 +303,9 @@ export class RunnerConn {
     if (!row0) return lost();
     await hub.withBoard(row0.board_id, () => {
       if (runnerConnectionProblem(hub, this)) return lost('POLICY_DENIED', 'this runner is no longer authorized');
-      const row = hub.card(msg.card_id);
+      const row = this.ownCard(msg.card_id);
+      if (!row || row.board_id !== row0.board_id) return lost();
+      if (!row.repo_id || !hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) return lost('POLICY_DENIED', 'this repository is no longer enabled on the board');
       const prior = hub.db.get('SELECT * FROM dispatches WHERE request_id = ? AND card_id = ?', msg.request_id, row.id);
       if (prior?.state === 'claimed' && prior.run_id) {
         const run = hub.run(prior.run_id);

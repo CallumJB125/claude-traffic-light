@@ -538,10 +538,14 @@ export class Api {
     return this.withWritableBoard(row0.board_id, (current) => {
       const row = this.cardFor(current, cardId);
       if (row.board_id !== row0.board_id) throw new HubError('CONFLICT', 'card moved while waiting');
-      if (['dispatch', 'retry', 'take_over_with_claude', 'request_changes'].includes(action) && row.repo_id != null
-        && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+      this.requireActionRepo(row, action);
       return this.actionLocked(current, cardId, action, type, body);
     }, { member, cred });
+  }
+
+  requireActionRepo(row, action) {
+    if (['dispatch', 'retry', 'take_over_with_claude', 'request_changes'].includes(action) && row.repo_id != null
+      && !this.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', row.board_id, row.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
   }
 
   actionLocked(member, cardId, action, type, body) {
