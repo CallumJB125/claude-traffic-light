@@ -358,9 +358,11 @@ export function createIntegrations({
     }
 
     // D98: the member a provider user acts as, linked on this connection, of
-    // its team and able to write; else null (a viewer acts as nobody).
+    // its team and able to write; else null (a viewer acts as nobody). Only
+    // while the connection is active, re-read: a ctx can outlive a pause.
     function memberFor(subject) {
       if (typeof subject !== 'string' || !subject || subject.length > SUBJECT_MAX) return null;
+      if (db.get('SELECT status FROM connections WHERE id = ?', c.id)?.status !== 'active') return null;
       const l = db.get('SELECT member_id FROM external_identities WHERE connection_id = ? AND subject = ?', c.id, subject);
       const m = l && hub.member(l.member_id);
       return m && m.org_id === c.org_id && !m.removed_at && hub.canWrite(m) ? m.id : null;

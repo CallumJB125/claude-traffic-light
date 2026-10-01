@@ -662,6 +662,34 @@ test('act() without a subject acts only as created_by: a member linked on the co
   } finally { await h.close(); }
 });
 
+test('a paused or error connection resolves no member and refuses a subject-bound act(), checked live on a ctx built while active; active again, both work', async () => {
+  const { h, reg, beh, bob, conn } = await setup();
+  try {
+    const ub = beh.sub;
+    await link(h, bob, conn);
+    const ctx = reg.ctxFor(conn);
+    const make = (c) => c.act('card.create', { subject: ub }, (s) => s.actAs(h.ids.bob).createCard(h.ids.board, { request_id: randomUUID(), title: 'From chat' }));
+    for (const status of ['paused', 'error']) {
+      h.db.run('UPDATE connections SET status = ? WHERE id = ?', status, conn);
+      assert.equal(ctx.memberFor(ub), null, status);
+      assert.equal(reg.ctxFor(conn).memberFor(ub), null, `${status}: a ctx built now`);
+      await assert.rejects(make(ctx), (e) => e.code === 'FORBIDDEN', status);
+      assert.deepEqual([reg.audit(conn)[0].decision, reg.audit(conn)[0].error], ['failed', 'forbidden']);
+      // A handle taken while active stops once the connection is paused.
+      h.db.run("UPDATE connections SET status = 'active' WHERE id = ?", conn);
+      await assert.rejects(ctx.act('card.create', { subject: ub }, async (s) => {
+        const as = s.actAs(h.ids.bob);
+        h.db.run('UPDATE connections SET status = ? WHERE id = ?', status, conn);
+        await as.createCard(h.ids.board, { request_id: randomUUID(), title: 'late' });
+      }), (e) => e.code === 'FORBIDDEN', `${status}: a live handle`);
+      h.db.run("UPDATE connections SET status = 'active' WHERE id = ?", conn);
+    }
+    assert.equal(ctx.memberFor(ub), h.ids.bob);
+    assert.equal((await make(ctx)).decision, 'auto');
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM cards WHERE title = 'late'").n, 0);
+  } finally { await h.close(); }
+});
+
 // ── accounts mode: the credential binding ────────────────────────────────
 
 test('accounts: the state names the credential that started it; a callback carrying another user\'s, or another session of the same user, is refused; signed out in between is refused; a desktop start finishes in a cookie-less window', async () => {
