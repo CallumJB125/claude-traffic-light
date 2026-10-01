@@ -380,25 +380,12 @@ function withScope(sessions) {
 }
 const AutoRules = require('./src/auto-rules.js');
 const ApprovalNudge = require('./src/approval-nudge.js');
-// The counter's keys are HMACs under a per-install secret, kept encrypted by
-// safeStorage (the OS keychain) where it can be; otherwise a random salt in
-// a 0600 file. A secret that can't be read is replaced: the counts restart.
-function nudgeSecret() {
-  const { safeStorage } = require('electron');
-  const f = path.join(ROOT_DIR, 'approval-secret.json');
-  const sealable = (() => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } })();
-  try {
-    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
-    const hex = d.sealed ? safeStorage.decryptString(Buffer.from(d.data, 'base64')) : d.data;
-    if (/^[0-9a-f]{64}$/.test(hex)) return Buffer.from(hex, 'hex');
-  } catch { /* none yet, or unreadable */ }
-  const hex = require('crypto').randomBytes(32).toString('hex');
-  const d = sealable ? { v: 1, sealed: true, data: safeStorage.encryptString(hex).toString('base64') } : { v: 1, sealed: false, data: hex };
-  fs.mkdirSync(ROOT_DIR, { recursive: true });
-  fs.writeFileSync(f, JSON.stringify(d), { mode: 0o600 });
-  fs.chmodSync(f, 0o600);
-  return Buffer.from(hex, 'hex');
-}
+// The counter's keys are HMACs under a per-install secret (src/nudge-secret.js).
+const nudgeSecret = require('./src/nudge-secret.js').createSecretStore({
+  file: path.join(ROOT_DIR, 'approval-secret.json'),
+  safeStorage: require('electron').safeStorage,
+  log: (m) => console.warn('[nudge]', m),
+});
 const nudger = ApprovalNudge.createNudgeCounter({ file: path.join(ROOT_DIR, 'approval-counts.json'), secret: nudgeSecret });
 // The "make it a rule?" card stays hidden while auto-answer is off: a rule
 // that nothing applies would only mislead. Counting carries on.
@@ -2952,8 +2939,12 @@ async function runAction(action, st) {
     }
     case 'allow': case 'deny': {
       // Tool permissions only: a plan, question or elicitation is answered
-      // from its own options, never by a gesture.
-      const req = st.pending && st.pending[0];
+      // from its own options, never by a gesture. A gesture can't see what it
+      // approves, so it allows only what Enter could: exactly one waiting
+      // permission, allow-listed and unflagged. Anything else: go and look.
+      const pick = action.type === 'allow' ? EnterAllow.gestureAllowTarget(st.pending, st.inputs) : { req: st.pending && st.pending[0] };
+      if (pick.why) { if (win && !win.isVisible()) win.showInactive(); return { feedback: pick.why }; }
+      const req = pick.req;
       if (!req) return { feedback: 'nothing to answer' };
       if (req.kind && req.kind !== 'permission') return { feedback: 'open it to answer' };
       const ok = answerRequest(req.id, action.type);
@@ -3121,12 +3112,6 @@ ipcMain.handle('voice-status', () => ({
   hotkeyTaken: voiceHotkeyTaken,
 }));
 
-// allow | deny for a tool permission only (answerRequest checks both).
-ipcMain.handle('answer-request', (e, id, decision) => {
-  const ok = answerRequest(String(id), String(decision));
-  setTimeout(broadcastStatus, 250);
-  return ok;
-});
 
 // A click on a PendingInput option: the renderer sends the input id and the
 // option id (plus free-text answers, form content or a deny message); the
@@ -3269,17 +3254,29 @@ let bubblePx = 0;
 let stripAway = false;
 ipcMain.on('set-bubble-height', (e, px) => {
   if (!win || e.sender !== win.webContents) return;
-  bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, Math.round(Number(px) || 0)));
+  bubbleAsked = Math.round(Number(px) || 0);
+  bubbleAcked = null;
+  bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, bubbleAsked));
   applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
 });
 // The widget's size is the base (src/widget-strip.js); the strip adds the
 // bubble's or the recap's height, and width for the bubble. Computed from the
 // base every time, so a clamp can't make the widget creep, and saved bounds
 // never include it.
+// The widget hears when the bubble really has its room: until then its body
+// may be clipped (a roam or the garden defers the resize), so nothing in it
+// counts as seen and it can't be answered.
+let bubbleAsked = 0;
+let bubbleAcked = null;
+function ackStrip() {
+  if (strip.kind !== 'bubble' || bubbleAcked === bubbleAsked || !win || win.isDestroyed()) return;
+  bubbleAcked = bubbleAsked;
+  win.webContents.send('strip-applied', bubbleAsked);
+}
 function applyStrip(asking, away = false, update = false) {
   if (!win) return;
   const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
-  if (WidgetStrip.sameStrip(strip, next)) return;
+  if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
   // The garden or a roam is moving the widget's own rect: grow once it's home
   // (the next broadcast tries again).
   if (gardenRun || roamState.busy) return;
@@ -3295,6 +3292,7 @@ function applyStrip(asking, away = false, update = false) {
     if (!r.strip.px) { win.setMaximumSize(MAX_WIDTH, maxH); win.setAspectRatio(WIDGET_ASPECT); }
   } finally { applyingStrip = false; }
   saveBounds();
+  ackStrip();
 }
 
 ipcMain.handle('preview-sound', (e, name) => playSound(name));

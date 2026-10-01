@@ -95,3 +95,15 @@ test('an MCP tool that deletes or publishes is never suggested as a rule', () =>
   assert.equal(c.record({ kind: 'permission', tool: 'mcp__github__delete_repository', toolInput: {} }).nudge, null);
   assert.ok(c.record({ kind: 'permission', tool: 'mcp__linear__list_issues', toolInput: {} }).nudge);
 });
+
+test('a v1 counter file (plain hashes) is dropped on load', () => {
+  const file = tmpFile();
+  const plain = require('crypto').createHash('sha256').update(JSON.stringify(['Bash', 'npm test', null])).digest('hex').slice(0, 32);
+  fs.writeFileSync(file, JSON.stringify({ v: 1, counts: { [plain]: { n: 4, at: Date.now() } }, muted: { [plain]: true } }));
+  const c = counter({ file });
+  assert.equal(c.count(plain), 0);
+  assert.equal(c.record(bash('npm test')).count, 1, 'counting starts again under the keyed scheme');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(saved.v, 2);
+  assert.ok(!(plain in saved.counts) && !(plain in saved.muted));
+});

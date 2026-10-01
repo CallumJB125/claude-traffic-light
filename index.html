@@ -226,7 +226,11 @@
         setRepoScope: (url, mode) => window.trafficLight.setRepoScope(url, mode),
       },
       onLayout: () => reportBubble(),
+      onScreen: () => stripAck === bubblePx,
     });
+    // The height main last confirmed it made room for.
+    let stripAck = -1;
+    window.trafficLight.onStripApplied((px) => { stripAck = px; if (px === bubblePx) bubble.revealed(); });
     // Also on resize: widening the window rewraps the text, so the height changes.
     function reportBubble() {
       const on = bubbleEl.classList.contains('has-items');

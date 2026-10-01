@@ -201,3 +201,16 @@ for (const command of PENDING_PROBES) {
   // enable after fix/deny-list-bypasses
   test(`Enter needs a click: ${command}`, { todo: 'enable after fix/deny-list-bypasses' }, () => assert.equal(enterOk('Bash', { command }), false));
 }
+
+test('N5: a gesture or click-rule "allow" answers only one allow-listed, unflagged permission', () => {
+  const req = { id: 'r1', kind: 'permission' };
+  const input = (over) => ({ id: 'r1', kind: 'permission', danger: null, enterAllow: true, ...over });
+  assert.deepEqual(E.gestureAllowTarget([req], [input()]), { req });
+  assert.deepEqual(E.gestureAllowTarget([], []), { req: null });
+  assert.match(E.gestureAllowTarget([req, { id: 'r2', kind: 'permission' }], [input(), input({ id: 'r2' })]).why, /2 waiting/);
+  for (const over of [{ danger: 'recursive delete' }, { danger: undefined }, { enterAllow: false }, { enterAllow: undefined }]) {
+    assert.ok(E.gestureAllowTarget([req], [input(over)]).why, JSON.stringify(over));
+  }
+  assert.ok(E.gestureAllowTarget([req], []).why, 'no checked input for it');
+  assert.equal(E.gestureAllowTarget([{ id: 'p', kind: 'plan' }], []).why, 'open it to answer');
+});

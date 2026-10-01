@@ -21,4 +21,19 @@ function enterBlockedReason(req) {
   }
 }
 
-module.exports = { enterBlockedReason, available: () => typeof allowListReason === 'function' };
+// A click-rule or gesture "allow" can't show what it approves, so it may
+// answer only what Enter could: exactly one waiting request, a permission,
+// with main's danger === null and enterAllow === true.
+// → { req } to allow, or { why } (go and look instead).
+function gestureAllowTarget(pending, inputs) {
+  const reqs = Array.isArray(pending) ? pending : [];
+  if (!reqs.length) return { req: null };
+  if (reqs.length !== 1) return { why: `${reqs.length} waiting: answer from the bubble` };
+  const req = reqs[0];
+  if (req.kind && req.kind !== 'permission') return { why: 'open it to answer' };
+  const input = (Array.isArray(inputs) ? inputs : []).find((i) => i && i.id === req.id);
+  if (!input || input.danger !== null || input.enterAllow !== true) return { why: 'look at it first: answer from the bubble' };
+  return { req };
+}
+
+module.exports = { enterBlockedReason, gestureAllowTarget, available: () => typeof allowListReason === 'function' };

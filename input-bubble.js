@@ -59,6 +59,9 @@
     const maxRows = mode === 'page' ? Infinity : (opts.maxRows || 2);
     const now = opts.now || (() => Date.now());
     const onLayout = opts.onLayout || (() => {});
+    // Is the bubble fully on screen? (The widget asks main; until main has
+    // grown the window the body may be clipped, so it isn't "seen" yet.)
+    const onScreen = opts.onScreen || (() => true);
 
     let inputs = [];
     let scopes = {}; // sessionId → work scope (contract §C2); none = show nothing
@@ -94,7 +97,7 @@
     const live_ = () => inputs.filter((i) => !answered.has(i.id));
     // Only the expanded, drawn input: the keyboard never acts on one you can't see.
     const current = () => (expanded && lastBody === expanded ? live_().find((i) => i.id === expanded) || null : null);
-    const settled = (id) => now() - (shownAt.has(id) ? shownAt.get(id) : -Infinity) >= SETTLE_MS;
+    const settled = (id) => onScreen() && now() - (shownAt.has(id) ? shownAt.get(id) : -Infinity) >= SETTLE_MS;
 
     function setError(id, msg) { if (msg) errors.set(id, msg); else errors.delete(id); render(); }
 
@@ -224,8 +227,8 @@
       const row = el('div', 'ib-opts');
       const sendBtn = el('button', 'ib-opt tone-yes', 'Send answer');
       sendBtn.type = 'button';
-      sendBtn.disabled = sending.has(input.id);
-      sendBtn.addEventListener('click', (e) => { e.stopPropagation(); submitQuestion(input); });
+      sendBtn.disabled = sending.has(input.id) || !settled(input.id);
+      sendBtn.addEventListener('click', (e) => { e.stopPropagation(); if (!settled(input.id)) return; submitQuestion(input); });
       if (!single || input.freeText) row.appendChild(sendBtn);
       const deny = (input.options || []).find((o) => o.id === 'deny');
       if (deny) row.appendChild(optionButton(input, deny));
@@ -428,6 +431,8 @@
         // A body that has just appeared, or whose input changed, settles before it can be answered.
         const k = itemKey(input);
         if (lastBody !== input.id || shownKey.get(input.id) !== k) {
+          // Picks and typing were for what it said before.
+          if (shownKey.has(input.id) && shownKey.get(input.id) !== k) { picked.delete(input.id); typed.delete(input.id); formValues.delete(input.id); }
           shownAt.set(input.id, t);
           shownKey.set(input.id, k);
           clearTimeout(settleTimer);
@@ -572,8 +577,17 @@
       }
     }
 
+    // Now fully on screen: what is open starts its settle from here.
+    function revealed() {
+      const t = now();
+      for (const id of shownAt.keys()) shownAt.set(id, t);
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(render, SETTLE_MS + 20);
+      render();
+    }
+
     return {
-      update, keydown, tick,
+      update, keydown, tick, revealed,
       showNudge,
       get count() { return live_().length; },
     };

@@ -42,10 +42,12 @@ function createNudgeCounter({ file, secret, threshold = THRESHOLD, now = () => D
     if (!key || !key.length) throw new Error('no counter secret');
     return crypto.createHmac('sha256', key).update(basis).digest('hex').slice(0, 32);
   };
-  let data = { v: 1, counts: {}, muted: {} };
+  // v2: keys are HMACs. A v1 file's keys were plain hashes of the command:
+  // they are dropped, not carried over.
+  let data = { v: 2, counts: {}, muted: {} };
   try {
     const d = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (d && typeof d === 'object') data = { v: 1, counts: d.counts && typeof d.counts === 'object' ? d.counts : {}, muted: d.muted && typeof d.muted === 'object' ? d.muted : {} };
+    if (d && typeof d === 'object' && d.v === 2) data = { v: 2, counts: d.counts && typeof d.counts === 'object' ? d.counts : {}, muted: d.muted && typeof d.muted === 'object' ? d.muted : {} };
   } catch { /* first run */ }
   const offered = new Set(); // this run: ask once per key, not after every approval
   const pending = new Map(); // key → suggested rule (memory only)

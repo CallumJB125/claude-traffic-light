@@ -135,7 +135,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
   }
 
   // First answer wins (desk or phone); see hooks/answer-file.js. The bare
-  // allow/deny path (gestures, the old answerRequest IPC) answers tool
+  // allow/deny path (the click and gesture actions) answers tool
   // permissions only: a plan, question or elicitation needs its own option
   // (answerInput), never a blind "allow".
   function answerRequest(id, decision) {

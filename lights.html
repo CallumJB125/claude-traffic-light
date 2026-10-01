@@ -1260,14 +1260,14 @@
           <label class="flbl" for="auto-command">Command</label>
           <div>
             <input type="text" id="auto-command" placeholder="npm test *" spellcheck="false" />
-            <div class="hint">One plain command. A trailing <code>*</code> allows any arguments after it.</div>
+            <div class="hint">One plain command. A trailing <code>*</code> allows any arguments after it; inside a word <code>*</code> is any run of characters and <code>?</code> exactly one.</div>
           </div>
         </div>
         <div class="frow" id="auto-path-row">
           <label class="flbl" for="auto-path">Path</label>
           <div>
             <input type="text" id="auto-path" placeholder="~/Development/my-app/**" spellcheck="false" />
-            <div class="hint"><code>*</code> is one folder level, <code>**</code> any depth. Starts with <code>/</code> or <code>~/</code>.</div>
+            <div class="hint"><code>*</code> is one folder level, <code>**</code> any depth, <code>?</code> exactly one character. Starts with <code>/</code> or <code>~/</code>.</div>
           </div>
         </div>
         <div class="frow">

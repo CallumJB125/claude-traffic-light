@@ -24,7 +24,7 @@ function setup(opts = {}) {
     setRepoScope: async (url, mode) => { calls.scope.push(['repo', url, mode]); return { ok: true }; },
   };
   const root = dom.window.document.getElementById('b');
-  const bubble = require('../input-bubble.js').create(root, { api, mode: opts.mode || 'widget', now: () => clock });
+  const bubble = require('../input-bubble.js').create(root, { api, mode: opts.mode || 'widget', now: () => clock, ...(opts.onScreen ? { onScreen: opts.onScreen } : {}) });
   const $ = (sel) => root.querySelector(sel);
   const $$ = (sel) => [...root.querySelectorAll(sel)];
   const key = (k, extra = {}) => bubble.keydown(new dom.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...extra }));
@@ -365,4 +365,41 @@ test('work scope: Not team work marks the session; Undo puts it back; the repo c
   await tick();
   assert.deepEqual(t.calls.scope, [['session', 's1', 'personal'], ['repo', 'https://github.com/acme/api', 'personal'], ['session', 's1', 'auto']]);
   assert.equal(t.calls.answer.length, 0, 'scope actions never answer the input');
+});
+
+test('N4: until main confirms the bubble has its room, nothing in it can be answered; then it settles from that moment', async () => {
+  let room = false;
+  const t = setup({ onScreen: () => room });
+  t.show([perm()]);
+  assert.equal(t.$('[data-option="allow"]').disabled, true, 'possibly clipped: not seen');
+  t.key('Enter');
+  await tick();
+  assert.equal(t.calls.answer.length, 0);
+  room = true;
+  t.bubble.revealed();
+  assert.equal(t.$('[data-option="allow"]').disabled, true, 'settles from the reveal, not from when it was drawn');
+  t.settle();
+  t.key('Enter');
+  await tick();
+  assert.deepEqual(t.calls.answer.map((c) => c[1]), ['allow']);
+});
+
+test('N3: a question’s Send answer is settle-gated, and picks are dropped when the question changes', async () => {
+  const q = (question) => ({ v: 1, id: 'rq', kind: 'question', source: 'hook', tool: 'AskUserQuestion', cwd: '/w/app', title: 'Pick', text: question,
+    questions: [{ id: 'q0', question, header: '', multiSelect: true, options: [{ id: 'q0o0', label: 'A' }, { id: 'q0o1', label: 'B' }] }],
+    options: [{ id: 'deny', label: 'Decline to answer' }], created_at: ago(1), expires_at: later(20), answerable: true, actions: ['answer', 'open'] });
+  const t = setup();
+  t.update([q('Which ones?')]);
+  const send = () => t.$$('.ib-opt').find((b) => b.textContent === 'Send answer');
+  assert.equal(send().disabled, true, 'just appeared');
+  t.settle();
+  t.$$('.ib-opt').find((b) => b.textContent === 'A').click();
+  t.update([q('Which ones should be deleted?')]);
+  assert.equal(send().disabled, true, 'changed: settles again');
+  t.settle();
+  assert.equal(t.$$('.ib-opt[aria-pressed="true"]').length, 0, 'the earlier pick is gone');
+  send().click();
+  await tick();
+  assert.equal(t.calls.answer.length, 0, 'nothing picked for the new question');
+  assert.match(t.$('.ib-err').textContent, /Answer/);
 });

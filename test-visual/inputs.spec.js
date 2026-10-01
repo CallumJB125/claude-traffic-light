@@ -61,6 +61,7 @@ test('keyboard: Enter never allows a deny-listed or off-list command; ⌘. denie
   await widget.waitForTimeout(700);
   await widget.keyboard.press('Enter');
   await expect(widget.locator('.ib-err')).toContainText('Enter only allows');
+  await widget.waitForTimeout(900); // the message made the bubble taller: it settles again
   await widget.keyboard.press('Meta+Period');
   const { out } = await hook.done;
   expect(JSON.parse(out).hookSpecificOutput.decision.behavior).toBe('deny');

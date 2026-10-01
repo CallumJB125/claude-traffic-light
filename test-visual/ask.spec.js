@@ -37,7 +37,7 @@ test('a long command shows in full behind "Show full"', async () => {
   await expect(widget.locator('.ib-text.full')).toBeVisible();
   await expect(widget.locator('.ib-text')).toContainText('| sh');
   await expect(widget.locator('.ib-warn')).toContainText('pipes content into an interpreter');
-  await widget.waitForTimeout(400);
+  await widget.waitForTimeout(900); // taller now: it settles again once main has made room
   await expect(widget).toHaveScreenshot('widget-ask-long-command-open.png', SHOT);
   await widget.locator('.ib-link').click();
   await expect(widget.locator('.ib-text.full')).toHaveCount(0);
