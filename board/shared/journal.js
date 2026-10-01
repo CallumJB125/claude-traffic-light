@@ -12,6 +12,7 @@ export const JOURNAL_KINDS = Object.freeze([
   'permission.create',  // {permission_request_id, tool}
   'permission.answer',  // {permission_request_id, decision, scope}
   'permission.cancel',  // {permission_request_id}
+  'packet.version',      // {packet_id, version, content_hmac}; participant context, no grant
   'handover.version',   // {version, written_by, provenance}
   'evidence.create',    // {evidence_id, kind, ref, verification, result}
   'plan.declare',       // {paths}

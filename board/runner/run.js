@@ -986,6 +986,16 @@ export class Run {
     }
     if (MCP_OUTBOX_TOOLS[name]) return this.#outboxTool(name, args);
     switch (name) {
+      case 'board_read_packet':
+        return this.#wrapPacket(await this.sup.rpc(this, name, args));
+      case 'board_write_packet': {
+        const p = args.data ?? {};
+        const data = { ...p, brief: this.#text(p.brief, 4000), progress: this.#text(p.progress, 4000), nextAction: this.#text(p.nextAction, 2000),
+          decisions: Array.isArray(p.decisions) ? p.decisions.map((s) => this.#text(s, 500)) : p.decisions,
+          reportedChecks: Array.isArray(p.reportedChecks) ? p.reportedChecks.map((s) => this.#text(s, 500)) : p.reportedChecks,
+          artifacts: Array.isArray(p.artifacts) ? p.artifacts.map((a) => a?.kind === 'path' ? { ...a, path: this.#text(a.path, 1024) } : a) : p.artifacts };
+        return this.#wrapPacket(await this.sup.rpc(this, name, { ...args, data }));
+      }
       case 'board_get_card': return this.#wrapCard(await this.sup.rpc(this, 'board_get_card', args.key ? { key: String(args.key) } : {}));
       case 'board_list_cards': {
         const r = await this.sup.rpc(this, 'board_list_cards', { ...(args.column ? { column: String(args.column) } : {}), ...(args.mine != null ? { mine: !!args.mine } : {}) });
@@ -1040,6 +1050,17 @@ export class Run {
       default:
         throw err('VALIDATION', `unknown tool ${name}`);
     }
+  }
+
+  #wrapPacket(result) {
+    const p = result.packet;
+    if (!p) return result;
+    const w = (label, s) => typeof s === 'string' ? this.#wrap(`packet:${p.version} ${label}`, s) : s;
+    return { ...result, packet: { ...p, author: { ...p.author, name: w('author', p.author.name) },
+      data: { ...p.data, brief: w('brief', p.data.brief), progress: w('progress', p.data.progress), nextAction: w('next action', p.data.nextAction),
+        decisions: p.data.decisions.map((s) => w('decision', s)), reportedChecks: p.data.reportedChecks.map((s) => w('reported check', s)),
+        artifacts: p.data.artifacts.map((a) => a.kind === 'path' ? { ...a, path: w('reported path', a.path) } : a) },
+      evidence: p.evidence.map((e) => ({ ...e, summary: w('evidence summary', e.summary), ref: w('evidence ref', e.ref) })) } };
   }
 
   async #outboxTool(name, args) {

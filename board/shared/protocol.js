@@ -84,7 +84,7 @@ export const OUTBOX_KINDS = Object.freeze([
 export const RPC_METHODS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_ask_human', 'board_attach_evidence', 'board_complete',
   'board_release', 'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'team_context',
-  'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status',
+  'approval_cancel', 'board_create_card', 'board_add_lesson', 'runner_plan_status', 'board_read_packet', 'board_write_packet',
 ]);
 // RPC methods that are runner plumbing, not board-mcp tools.
 export const RUNNER_ONLY_RPC = Object.freeze(['team_context', 'approval_cancel', 'runner_plan_status']);
@@ -95,7 +95,7 @@ export const CODEX_PLAN_PERMISSION = 'Authorize Codex edits for this run';
 export const MCP_TOOLS = Object.freeze([
   'board_get_card', 'board_list_cards', 'board_update_status', 'board_append_progress', 'board_write_handover',
   'board_ask_human', 'board_comment', 'board_attach_evidence', 'board_complete', 'board_release',
-  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson',
+  'board_declare_plan', 'board_check_overlap', 'board_recall', 'approval', 'board_create_card', 'board_add_lesson', 'board_read_packet', 'board_write_packet',
 ]);
 
 // Least-privilege scope of each board-mcp tool (CONTRACT §7.3). Every tool is
@@ -111,6 +111,8 @@ export const TOOL_SCOPES = Object.freeze({
 });
 export const MCP_TOOL_SCOPES = Object.freeze({
   board_get_card: 'card:read',
+  board_read_packet: 'card:read',
+  board_write_packet: 'card:write',
   board_list_cards: 'repo:read',
   board_update_status: 'card:write',
   board_append_progress: 'card:write',

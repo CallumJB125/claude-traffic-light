@@ -23,6 +23,7 @@ import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 import { searchWork } from './search.js';
 import { teamOverview } from './team-overview.js';
 import { Workflows } from './workflows.js';
+import { TeamCommunication } from './communication.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -227,6 +228,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 
 export function createHttpHandler({ hub, api, config, integrations = null }) {
   const workflows = new Workflows(hub);
+  const communication = new TeamCommunication(hub);
   // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
   const publicBase = (req) => {
     if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
@@ -420,6 +422,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
   route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
+  route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred));
+  route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred), { replay: false });
   route('POST', '/api/cards/:card_id/comments', ({ member, params, body, ident }) => api.comment(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('GET', '/api/cards/:card_id/handover', ({ member, params, query, res }) => {
     const h = api.handover(member, params.card_id);

@@ -27,10 +27,13 @@ describe('tool schemas', () => {
 
   test('read-only tools carry readOnlyHint, writers do not', () => {
     const ro = Object.entries(TOOLS).filter(([, d]) => d.annotations?.readOnlyHint).map(([n]) => n).sort();
-    assert.deepEqual(ro, ['board_check_overlap', 'board_get_card', 'board_list_cards', 'board_recall']);
+    assert.deepEqual(ro, ['board_check_overlap', 'board_get_card', 'board_list_cards', 'board_read_packet', 'board_recall']);
   });
 
+  const packet = { brief:'brief', decisions:[], progress:'progress', nextAction:'review', artifacts:[], reportedChecks:[] };
   const accept = {
+    board_read_packet: [{}, {version:1}],
+    board_write_packet: [{request_id:'00000000-0000-4000-8000-000000000001', expected_version:0, data:packet}],
     board_get_card: [{}, { key: 'DEV-12' }],
     board_list_cards: [{}, { column: 'in_review', mine: true }],
     board_update_status: [{ summary: 'Tracing the submit payload' }],
@@ -49,6 +52,8 @@ describe('tool schemas', () => {
     approval: [{ tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' }, { tool_name: 'Bash', input: {} }],
   };
   const reject = {
+    board_read_packet: [{version:0}, {run_id:'other'}],
+    board_write_packet: [{}, {request_id:'not-uuid', expected_version:0, data:packet}, {request_id:'00000000-0000-4000-8000-000000000001', expected_version:0, data:{...packet, approval:'allow'}}],
     board_get_card: [{ key: '' }, { key: 5 }, { other: 1 }],
     board_list_cards: [{ column: 'doing' }, { mine: 'yes' }],
     board_update_status: [{}, { summary: '' }, { summary: 'x'.repeat(141) }],

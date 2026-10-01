@@ -27,6 +27,21 @@ async function withRun(key, fn) {
   }
 }
 
+test('shared packet narrative, author names, reported paths and evidence return as untrusted data; own nonce never leaves', async () => {
+  await withRun('APP-93', async (run, hub) => {
+    const data = { brief: EVIL[0], decisions: [EVIL[1]], progress: EVIL[2], nextAction: EVIL[0], artifacts: [{ kind: 'path', path: 'src/a.js' }], reportedChecks: [EVIL[1]] };
+    hub.rpcReply = () => ({ ok: true, result: { packet: { version: 1, author: { name: EVIL[2] }, data,
+      evidence: [{ id: 'e1', summary: EVIL[0], ref: EVIL[1], verification: 'self_reported' }] } } });
+    const r = await run.tool('board_read_packet');
+    const strings = [r.packet.author.name, r.packet.data.brief, ...r.packet.data.decisions, r.packet.data.progress, r.packet.data.nextAction,
+      r.packet.data.artifacts[0].path, ...r.packet.data.reportedChecks, r.packet.evidence[0].summary, r.packet.evidence[0].ref];
+    for (const s of strings) { assert.ok(s.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(s), 1); }
+    await run.tool('board_write_packet', { request_id: '00000000-0000-4000-8000-000000000001', expected_version: 0,
+      data: { ...data, brief: run.nonce, artifacts: [{ kind: 'path', path: `src/${run.nonce}.js` }] } });
+    const sent = hub.of('rpc').find((f) => f.method === 'board_write_packet'); assert.ok(!JSON.stringify(sent.params).includes(run.nonce));
+  });
+});
+
 test('board_get_card: a card an integration created says so in its envelope source', async () => {
   await withRun('APP-91', async (run, hub) => {
     hub.rpcReply = (f) => (f.method === 'board_get_card' ? { ok: true, result: {

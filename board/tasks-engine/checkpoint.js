@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { redact, filterPath } from '../shared/scope.js';
 import { realish } from '../runner/paths.js';
+import { cleanPacketText } from '../shared/packet-text.js';
 
 export const PACKET_SCHEMA = 1;
 export const PACKET_MAX_BYTES = 64 * 1024;
@@ -18,24 +19,7 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const keys = (v, allowed) => object(v) && Object.keys(v).every((k) => allowed.includes(k));
 
 function text(value, max, root) {
-  if (typeof value !== 'string' || value.length > max) invalid('Checkpoint text is too long or invalid.');
-  // Strip control characters and URL credentials/query strings before durable
-  // storage. A copied signed URL is not an artifact access grant.
-  let s = value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
-  s = s.replace(/\bhttps?:\/\/[^\s<>"'`]+/gi, (url) => {
-    try { const u = new URL(url); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return u.href; }
-    catch { return '<url>'; }
-  });
-  s = redact(s, root);
-  s = s.replace(/\bfile:\/\/[^\s"'`<>]+|(?<![\w])(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>),;\]}]+/g, '<path>');
-  s = s.replace(/\b(?:btk|btr)_[A-Za-z0-9_-]{43}\b/g, '<redacted:task_token>');
-  // Free text can otherwise include an entire private key after its header was
-  // redacted. Remove the complete block, including malformed unterminated keys.
-  s = s.replace(/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|<redacted:private_key>)[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<redacted:private_key>');
-  // Scope's normal path redactor covers user paths; packets also exclude any
-  // other absolute filesystem references, including server paths.
-  s = s.replace(/(?<![\w.:/-])\/(?!\/)[^\s"'`<>),;\]}]+/g, '<path>');
-  return s.slice(0, max);
+  try { return cleanPacketText(value, max, root); } catch { invalid('Checkpoint text is too long or invalid.'); }
 }
 
 function artifact(a, ctx) {

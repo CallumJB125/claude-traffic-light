@@ -10,6 +10,7 @@ import { parseRunToken } from './auth.js';
 import { prBound, prNumberOf } from './github.js';
 import { limitOrThrow } from './ratelimit.js';
 import { runnerConnectionProblem } from './runner-authority.js';
+import { TeamCommunication } from './communication.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
 const clip = (s, n) => {
@@ -41,7 +42,7 @@ export function verifyRun(hub, device, msg, connection = null) {
   if (run.ended_at) throw new HubError('RUN_ENDED', 'run has ended');
   if (row.active_run_id !== run.id) throw new HubError('FENCED', 'run is no longer the active run');
   if (row.archived_at) throw new HubError('CONFLICT', 'this card is archived', { reason: 'ARCHIVED' });
-  return { run, row };
+  return { run, row, connection };
 }
 
 const optText = (v, max, what) => {
@@ -71,6 +72,8 @@ function currentPlanApprover(hub, run, row, memberId) {
 }
 
 const METHODS = {
+  board_read_packet(hub, ctx, params) { return new TeamCommunication(hub).runnerReadPacket(ctx, params); },
+  board_write_packet(hub, ctx, params) { return new TeamCommunication(hub).runnerWritePacket(ctx, params); },
   board_get_card(hub, { run, row }, params) {
     let target = row;
     if (params.key != null) {
@@ -331,6 +334,8 @@ export const METHOD_SCOPES = Object.freeze({
   board_create_card: 'card:create_child',
   board_add_lesson: 'lesson:suggest',
   runner_plan_status: 'card:read',
+  board_read_packet: 'card:read',
+  board_write_packet: 'card:write',
 });
 
 async function attachEvidence(hub, device, msg, connection) {
