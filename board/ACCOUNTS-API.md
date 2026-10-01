@@ -34,6 +34,8 @@ Who may make a **new** account. `BOARD_SIGNUP=allowlist` (the default in account
 - **Verify** re-checks when it would make the account (the list or the invite may have changed since the start): `403 SIGNUP_CLOSED`, the account is not made and the flow is spent.
 - **Google / GitHub** for a new user who may not sign up: `403 SIGNUP_CLOSED`, no account, identity or token.
 
+**Invited accounts don't spread.** A new account records what let it in (`users.signup_via`: `allowlist`, `member_row`, `invite`, or `open` when `BOARD_SIGNUP=open`; accounts from before this are `NULL` and count as `allowlist`). It is set when the account is made and never changes. While `BOARD_SIGNUP=allowlist`, an account that only an invite let in (`invite`) may accept invites and be in any number of teams, but `POST /api/teams` answers it `403 FORBIDDEN` "Only team owners invited by the hub administrator can create teams while sign-up is invite-only", so it never owns a team it could invite more newcomers into. With `open` everyone may create teams.
+
 `SIGNUP_CLOSED`'s message is always "Sign-up is invite-only right now. Ask a team owner for an invite.": it names the mode, never the list. The list is never in an answer, a log line or the database. Audit: `auth.signup.refused` (`method`; `email_ref` or `subject_ref`, keyed hashes).
 
 ## Credentials
@@ -340,7 +342,7 @@ The **last owner** can't be demoted or removed, and can't leave (`409 CONFLICT {
 
 ### `POST /api/teams`
 
-Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise).
+Bearer or cookie + CSRF. The user's email must be verified (`403 EMAIL_UNVERIFIED` otherwise). While sign-up is `allowlist`, an account an invite let in (`signup_via` `invite`, see Sign-up control) gets `403 FORBIDDEN` "Only team owners invited by the hub administrator can create teams while sign-up is invite-only".
 
 ```json
 { "name": "Acme Rockets", "slug": "acme" }

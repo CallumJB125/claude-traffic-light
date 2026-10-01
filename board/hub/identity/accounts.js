@@ -151,25 +151,37 @@ export class Accounts {
   }
 
   /**
-   * May a NEW account be made for this verified address (D104)? Open mode:
-   * always. Allowlist: the exact address or its exact domain is listed, or the
-   * address holds a usable pending invite, or an unlinked live member row an
-   * admin or BOARD_BOOTSTRAP made for it. `eligible` false (a Google address
-   * Google is not authoritative for) never qualifies.
+   * May a NEW account be made for this verified address (D104), and on what
+   * grounds (users.signup_via)? Open mode: always ('open'). Allowlist: the
+   * exact address or its exact domain is listed ('allowlist'), or an unlinked
+   * live member row an admin or BOARD_BOOTSTRAP made for it ('member_row'),
+   * or a usable pending invite to it ('invite'); else null. `eligible` false
+   * (a Google address Google is not authoritative for) never qualifies.
    */
-  signupAllowed(email, { eligible = true } = {}) {
+  signupVia(email, { eligible = true } = {}) {
     const p = this.signup;
-    if (p.mode === 'open') return true;
-    if (!eligible) return false;
-    if (p.emails.has(email) || p.domains.has(email.slice(email.lastIndexOf('@') + 1))) return true;
-    const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
-    if (invites.some((inv) => this.hub.invites?.usable(inv))) return true;
-    return this.db.all(`SELECT m.email FROM members m JOIN orgs o ON o.id = m.org_id
+    if (p.mode === 'open') return 'open';
+    if (!eligible) return null;
+    if (p.emails.has(email) || p.domains.has(email.slice(email.lastIndexOf('@') + 1))) return 'allowlist';
+    const row = this.db.all(`SELECT m.email FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
+    if (row) return 'member_row';
+    const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
+    return invites.some((inv) => this.hub.invites?.usable(inv)) ? 'invite' : null;
   }
 
+  signupAllowed(email, opts) { return this.signupVia(email, opts) != null; }
+
+  /** → the new account's signup_via, or SIGNUP_CLOSED. */
   requireSignup(email, opts) {
-    if (!this.signupAllowed(email, opts)) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    const via = this.signupVia(email, opts);
+    if (!via) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    return via;
+  }
+
+  /** Allowlist mode: an account only an invite let in joins teams but never creates one (so never invites further). */
+  mayCreateTeam(user) {
+    return this.signup.mode !== 'allowlist' || user.signup_via !== 'invite';
   }
 
   now() { return this.hub.iso(); }
@@ -424,7 +436,7 @@ export class Accounts {
     const now = this.now();
     const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
     let user = byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
-    if (!user || (!byIdentity && !authoritativeVia(user))) this.requireSignup(email);
+    const signupVia = !user || (!byIdentity && !authoritativeVia(user)) ? this.requireSignup(email) : null;
     // An address a GitHub (or non-authoritative Google) sign-in put there is
     // not proof that its holder owns the mailbox: the code just proved it, so
     // the address moves to a new account, never into that one (D83).
@@ -433,7 +445,7 @@ export class Accounts {
       user = null;
     }
     if (!user) {
-      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null };
+      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null, signup_via: signupVia };
       this.db.insert('users', user);
       this.audit('user.create', { user: user.id, detail: { method: 'email' }, ip });
     } else if (!user.primary_email_verified_at && user.primary_email === email) {

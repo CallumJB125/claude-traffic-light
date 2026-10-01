@@ -196,6 +196,16 @@ The same transaction as `DELETE /api/account` / `DELETE /api/teams/:id`, without
 step-up (audit `by: "operator"`). It opens the database directly: stop the hub
 first, or rely on its 5 s `busy_timeout`.
 
+## Accounts an invite let in (sign-up `allowlist`)
+
+While `BOARD_SIGNUP=allowlist`, an account that only an invite let in may join teams but
+not create one (D104, `users.signup_via = 'invite'`); it stays that way (nothing promotes
+it). To see who they are:
+
+```sh
+sqlite3 /var/lib/buddy-hub/board.db "SELECT primary_email, created_at FROM users WHERE signup_via = 'invite' AND deleted_at IS NULL"
+```
+
 ## Cutover to `BOARD_AUTH=accounts`: runner credentials
 
 In accounts mode runners connect only with an enrolment's runner token (`brt_…`,

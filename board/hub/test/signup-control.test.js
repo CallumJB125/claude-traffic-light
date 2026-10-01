@@ -313,3 +313,93 @@ test('privacy: the list is in no response, log line or stored row, whatever was 
     for (const d of LISTED) assert.ok(!all.includes(d), d);
   } finally { await r.h.close(); }
 });
+
+// Invite-only spread (production cutover review): users.signup_via records
+// what let a new account in; while sign-up is allowlist, an account an invite
+// let in may join teams but never create one (so it can't invite further).
+const NO_CREATE_TEXT = 'Only team owners invited by the hub administrator can create teams while sign-up is invite-only';
+
+test('allowlist: an invited newcomer joins teams but cannot create one; allowlisted, member-row, legacy and open-mode accounts can', async () => {
+  const r = await rig({ limits: { ...ROOMY, invite_user: { capacity: 2, per_ms: 86_400_000 } } });
+  try {
+    const team = (tok, name) => r.h.call('POST', '/api/teams', { token: tok, body: { name } });
+    const invite = (tok, org, email) => r.h.call('POST', `/api/teams/${org}/invites`, { token: tok, body: { email, role: 'member' } });
+    const acceptAll = async (tok) => {
+      for (const p of (await r.h.call('GET', '/api/account', { token: tok })).body.pending_invites) {
+        const a = await r.h.call('POST', `/api/account/invites/${p.id}/accept`, { token: tok, body: {} });
+        assert.equal(a.status, 200, a.text);
+      }
+    };
+    const via = (email) => r.userBy(email).signup_via;
+
+    // Allowlisted: creates and invites as today.
+    const owner = await r.emailSignIn('owner@allowed.test');
+    assert.equal(owner.v.status, 200, owner.v.text);
+    assert.equal(via('owner@allowed.test'), 'allowlist');
+    const otok = owner.v.body.device_token;
+    const t1 = await team(otok, 'Owner Team');
+    assert.equal(t1.status, 200, t1.text);
+    assert.equal((await invite(otok, t1.body.team.id, 'newbie@outside.test')).status, 200);
+
+    // Invited newcomer (email code): joins, then may not create a team.
+    const nb = await r.emailSignIn('newbie@outside.test');
+    assert.equal(nb.v.status, 200, nb.v.text);
+    assert.equal(via('newbie@outside.test'), 'invite');
+    const ntok = nb.v.body.device_token;
+    await acceptAll(ntok);
+    const refused = await team(ntok, 'Spread');
+    assert.equal(refused.status, 403, refused.text);
+    assert.deepEqual(refused.body.error, { code: 'FORBIDDEN', message: NO_CREATE_TEXT });
+    assert.equal(r.h.db.get("SELECT COUNT(*) AS n FROM orgs WHERE name = 'Spread'").n, 0);
+
+    // A member-row account (alice@dev.local, an unlinked Access-era row) creates, and her invite lets the newcomer join a second team.
+    const alice = await r.emailSignIn('alice@dev.local');
+    assert.equal(alice.v.status, 200, alice.v.text);
+    assert.equal(via('alice@dev.local'), 'member_row');
+    const atok = alice.v.body.device_token;
+    const t2 = await team(atok, 'Alice Team');
+    assert.equal(t2.status, 200, t2.text);
+    assert.equal((await invite(atok, t2.body.team.id, 'newbie@outside.test')).status, 200);
+    await acceptAll(ntok);
+    const teams = (await r.h.call('GET', '/api/account', { token: ntok })).body.teams.map((t) => t.name).sort();
+    assert.deepEqual(teams, ['Alice Team', 'Owner Team']);
+    assert.equal((await team(ntok, 'Spread')).status, 403, 'still no');
+
+    // GitHub through an invite: the same.
+    assert.equal((await invite(atok, t2.body.team.id, 'gh@outside.test')).status, 200);
+    const gh = await r.oauth('github', { id: 611, login: 'o611', email: 'gh@outside.test' });
+    assert.equal(gh.status, 200, gh.text);
+    assert.equal(r.h.db.get("SELECT u.signup_via FROM users u JOIN identities i ON i.user_id = u.id WHERE i.provider = 'github' AND i.subject = '611'").signup_via, 'invite');
+    assert.equal((await team(gh.body.device_token, 'GH Spread')).status, 403);
+
+    // The per-user caps still apply to those who may: invites (2 here), then team creation (3 a day).
+    const third = await invite(atok, t2.body.team.id, 'third@outside.test');
+    assert.equal(third.status, 429, third.text);
+    assert.equal((await team(atok, 'Alice Two')).status, 200);
+    assert.equal((await team(atok, 'Alice Three')).status, 200);
+    assert.equal((await team(atok, 'Alice Four')).status, 429);
+
+    // An account from before the column (NULL) is unaffected.
+    r.h.db.run("UPDATE users SET signup_via = NULL WHERE primary_email = 'newbie@outside.test'");
+    assert.equal((await team(ntok, 'Legacy')).status, 200);
+
+    // Open mode: anyone may create, whatever let them in.
+    r.h.db.run("UPDATE users SET signup_via = 'invite' WHERE primary_email = 'newbie@outside.test'");
+    r.setPolicy('open', '');
+    assert.equal((await team(ntok, 'Opened')).status, 200);
+    const anyone = await r.emailSignIn('anyone@nope.test');
+    assert.equal(anyone.v.status, 200, anyone.v.text);
+    assert.equal(via('anyone@nope.test'), 'open');
+    assert.equal((await team(anyone.v.body.device_token, 'Anyone')).status, 200);
+  } finally { await r.h.close(); }
+});
+
+test('signup_via takes only allowlist, invite, member_row, open (or NULL)', async () => {
+  const r = await rig();
+  try {
+    const u = await r.emailSignIn('v@allowed.test');
+    assert.equal(u.v.status, 200);
+    assert.throws(() => r.h.db.run("UPDATE users SET signup_via = 'admin' WHERE primary_email = 'v@allowed.test'"), /CHECK/);
+    for (const v of ['allowlist', 'invite', 'member_row', 'open', null]) r.h.db.run('UPDATE users SET signup_via = ? WHERE primary_email = ?', v, 'v@allowed.test');
+  } finally { await r.h.close(); }
+});
