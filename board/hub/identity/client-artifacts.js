@@ -7,6 +7,7 @@ import { HubError } from '../db.js';
 import { sha256hex } from '../auth.js';
 import { can } from '../permissions.js';
 import { clientOnly as only, clientText as text, clientMissing as missing } from './clients.js';
+import { requireCredentialOwner } from './credential-owner.js';
 
 export const CLIENT_FILE_MAX = 8 * 1024 * 1024;
 export const CLIENT_UPLOAD_BODY_MAX = Math.ceil(CLIENT_FILE_MAX / 3) * 4 + 4096;
@@ -50,7 +51,7 @@ export class ClientArtifacts {
     }
   }
   now() { return this.hub.iso(); }
-  credential(cred) { if (cred && !this.hub.accounts.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again'); }
+  credential(cred, user) { requireCredentialOwner(this.hub, cred, user?.id); }
   item(id) { return this.db.get('SELECT i.*, p.workspace_id, p.board_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', id); }
   staff(member, id, cred, write = false) {
     this.clients.staff(member, 'team.settings', cred);
@@ -59,7 +60,7 @@ export class ClientArtifacts {
     return item;
   }
   access(user, id, scope = 'artifacts.read', cred = null) {
-    this.credential(cred);
+    this.credential(cred, user);
     const item = this.item(id); if (!item || item.unpublished_at) throw missing();
     const allowed = this.clients.projects(user, item.workspace_id).projects.find((p) => p.id === item.project_id && p.scopes.includes(scope));
     if (!allowed) throw missing(); return item;
@@ -179,7 +180,7 @@ export class ClientArtifacts {
       return { approval: this.approvalView({ id: member.user_id }, a) };
     }));
   }
-  approval(user, id, cred) { this.credential(cred); const a = this.db.get('SELECT * FROM client_approval_requests WHERE id = ?', id); if (!a) throw missing(); return { approval: this.approvalView(user, a) }; }
+  approval(user, id, cred) { this.credential(cred, user); const a = this.db.get('SELECT * FROM client_approval_requests WHERE id = ?', id); if (!a) throw missing(); return { approval: this.approvalView(user, a) }; }
   decide(user, id, body, { ip, cred = null }) {
     only(body, ['request_id', 'decision', 'comment', 'artifact_version_id', 'sha256']);
     const a = this.db.get('SELECT * FROM client_approval_requests WHERE id = ?', id); if (!a) throw missing();

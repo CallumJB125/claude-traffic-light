@@ -30,7 +30,7 @@ export class TeamCommunication {
   staff(member, cred, write = false) {
     if (cred && !this.hub.accounts?.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
     const m = this.hub.activeMember(member?.id);
-    if (!m || m.org_id !== member.org_id || !this.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', m.org_id)
+    if (!m || m.org_id !== member.org_id || m.user_id !== member.user_id || !this.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', m.org_id)
       || (m.user_id && !this.db.get('SELECT id FROM users WHERE id = ? AND deleted_at IS NULL', m.user_id))) throw missing();
     if (cred) {
       const principal = cred.kind === 'device' ? this.db.get('SELECT user_id FROM user_devices WHERE id = ?', cred.id)

@@ -4,6 +4,7 @@ import { can } from './permissions.js';
 import { insertCardRecord } from './card-record.js';
 import { PLAN_APPROVAL_LABEL } from '../shared/states.js';
 import { limitOrThrow } from './ratelimit.js';
+import { requireCredentialOwner } from './identity/credential-owner.js';
 
 const missing = () => new HubError('NOT_FOUND', 'workflow not found');
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -30,9 +31,9 @@ const requestId = (value) => text(value, 100, true);
 export class Workflows {
   constructor(hub) { this.hub = hub; this.db = hub.db; }
   staff(member, cred, write = false) {
-    if (cred && !this.hub.accounts?.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+    requireCredentialOwner(this.hub, cred, member?.user_id);
     const m = this.hub.activeMember(member?.id);
-    if (!m || m.org_id !== member.org_id || !this.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', m.org_id)
+    if (!m || m.org_id !== member.org_id || m.user_id !== member.user_id || !this.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', m.org_id)
       || (m.user_id && !this.db.get('SELECT id FROM users WHERE id = ? AND deleted_at IS NULL', m.user_id))) throw missing();
     if (!can(m, write ? 'card.write' : 'board.read')) throw new HubError('FORBIDDEN', 'workflow is read only');
     return m;

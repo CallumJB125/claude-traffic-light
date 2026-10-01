@@ -9,6 +9,7 @@ import { teamName, quotaFor } from './teams.js';
 import { normalizeEmail, mailName } from './accounts.js';
 import { INVITE_TTL_MS, firstName } from './invites.js';
 import { BRAND } from '../../shared/brand.js';
+import { requireCredentialOwner } from './credential-owner.js';
 
 export const CLIENT_SCOPES = Object.freeze(['status.read', 'artifacts.read', 'feedback.create', 'approvals.decide']);
 const TOKEN_RE = /^clinv_[A-Za-z0-9_-]{43}$/;
@@ -32,9 +33,9 @@ export class Clients {
   workspace(id) { return this.db.get('SELECT c.*, o.name, o.plan FROM client_workspaces c JOIN orgs o ON o.id = c.org_id WHERE c.org_id = ? AND o.deleted_at IS NULL', id); }
   publicWorkspace(w) { return { id: w.org_id, name: w.name }; }
   staff(member, action = 'invite.create', cred = null) {
-    if (cred && !this.hub.accounts.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+    requireCredentialOwner(this.hub, cred, member?.user_id);
     const live = this.hub.activeMember(member?.id);
-    if (!live || !this.hub.accounts.liveUser(live.user_id) || live.org_id !== member.org_id || !this.workspace(member.org_id)) throw missing();
+    if (!live || live.user_id !== member.user_id || !this.hub.accounts.liveUser(live.user_id) || live.org_id !== member.org_id || !this.workspace(member.org_id)) throw missing();
     if (!can(live, action)) throw new HubError('FORBIDDEN', 'client workspace admin required');
     return live;
   }

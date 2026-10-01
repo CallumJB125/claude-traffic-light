@@ -5,15 +5,15 @@ import { can } from '../permissions.js';
 import { insertCardRecord } from '../card-record.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { clientOnly as only, clientText as text, clientMissing as missing } from './clients.js';
+import { requireCredentialOwner } from './credential-owner.js';
 
 const paused = () => new HubError('CONFLICT', 'your team has paused feedback intake; contact them to resume it', { reason: 'CLIENT_INTAKE_PAUSED' });
 export class ClientFeedback {
   constructor(hub) { this.hub = hub; this.db = hub.db; this.clients = hub.clients; }
   project(boardId) { const p = this.db.get('SELECT * FROM client_projects WHERE board_id = ?', boardId); if (!p || !this.clients.workspace(p.workspace_id)) throw missing(); return p; }
-  credential(cred) { if (cred && !this.hub.accounts.credValid(cred)) throw new HubError('UNAUTHENTICATED', 'sign in again'); }
   staff(member, boardId, cred, admin = false) {
-    this.credential(cred); const p = this.project(boardId), live = this.hub.activeMember(member?.id);
-    if (!live || !this.hub.accounts.liveUser(live.user_id) || live.org_id !== p.workspace_id || member.org_id !== p.workspace_id) throw missing();
+    requireCredentialOwner(this.hub, cred, member?.user_id); const p = this.project(boardId), live = this.hub.activeMember(member?.id);
+    if (!live || live.user_id !== member.user_id || !this.hub.accounts.liveUser(live.user_id) || live.org_id !== p.workspace_id || member.org_id !== p.workspace_id) throw missing();
     if (!can(live, admin ? 'team.settings' : 'board.read')) throw new HubError('FORBIDDEN', 'client workspace admin required'); return p;
   }
   active(p) {
