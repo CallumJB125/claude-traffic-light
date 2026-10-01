@@ -1,0 +1,5 @@
+# Shell scripts and the NSIS include run as written on Linux/macOS and are compared byte-wise in tests:
+# a Windows checkout must not turn their line endings into CRLF.
+*.sh text eol=lf
+*.nsh text eol=lf
+build/linux/* text eol=lf

@@ -236,8 +236,8 @@ test('stdio: the server starts, lists eleven tools and answers buddy_status and 
 const entry = McpInstall.launch({ packaged: true, execPath: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', appPath: '/Applications/Claude Buddy.app/Contents/Resources/app.asar', dir: '/x' });
 
 test('mcp-install: launch runs the packaged app as node, or plain node in dev', () => {
-  assert.deepEqual(entry, { type: 'stdio', command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', args: ['/Applications/Claude Buddy.app/Contents/Resources/app.asar/mcp-server.js'], env: { ELECTRON_RUN_AS_NODE: '1' } });
-  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }), { type: 'stdio', command: 'node', args: ['/repo/mcp-server.js'], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
+  assert.deepEqual(entry, { type: 'stdio', command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', args: [path.join('/Applications/Claude Buddy.app/Contents/Resources/app.asar', 'mcp-server.js')], env: { ELECTRON_RUN_AS_NODE: '1' } });
+  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }), { type: 'stdio', command: 'node', args: [path.join('/repo', 'mcp-server.js')], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
 });
 
 test('mcp-install: idempotent install/uninstall that keeps every other key and server', () => {

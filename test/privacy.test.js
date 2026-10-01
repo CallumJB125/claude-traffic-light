@@ -86,7 +86,8 @@ function unpackaged(dir = ROOT, out = []) {
   }
   return out;
 }
-const rel = (f) => path.relative(ROOT, f);
+// PRIVACY.md names files with '/', on every OS.
+const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/');
 const blank = (m) => m.replace(/[^\n]/g, ' ');
 // Raw lines (markers live in trailing comments) and code-only lines (no comments).
 function linesOf(text) {

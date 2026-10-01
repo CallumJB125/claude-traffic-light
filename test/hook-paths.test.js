@@ -10,22 +10,22 @@ const base = { execPath: '/x/Plexiform', resourcesPath: '/x/resources', appDir: 
 test('hook paths: macOS and Windows keep the app binary and its Resources, AppImage or not', () => {
   for (const platform of ['darwin', 'win32']) {
     const r = HookPaths.choose({ ...base, packaged: true, platform, env: { APPIMAGE: '/ignored' } });
-    assert.deepEqual(r, { execPath: '/x/Plexiform', hooksDir: '/x/resources/hooks', mcpAppPath: '/x/resources/app.asar', stableDir: null, copyFrom: null });
+    assert.deepEqual(r, { execPath: '/x/Plexiform', hooksDir: path.join('/x/resources', 'hooks'), mcpAppPath: '/x/resources/app.asar', stableDir: null, copyFrom: null });
   }
 });
 
 test('hook paths: a Linux .deb (no $APPIMAGE) uses the installed binary', () => {
   const r = HookPaths.choose({ ...base, packaged: true, platform: 'linux', env: {} });
   assert.equal(r.execPath, '/x/Plexiform');
-  assert.equal(r.hooksDir, '/x/resources/hooks');
+  assert.equal(r.hooksDir, path.join('/x/resources', 'hooks'));
   assert.equal(r.copyFrom, null);
 });
 
 test('hook paths: an AppImage points at $APPIMAGE and a per-version copy in the data folder', () => {
   const r = HookPaths.choose({ ...base, packaged: true, platform: 'linux', env: { APPIMAGE: '/home/u/Apps/Plexiform.AppImage' } });
   assert.equal(r.execPath, '/home/u/Apps/Plexiform.AppImage');
-  assert.equal(r.stableDir, '/home/u/.claude-traffic-light/hooks-1.2.3');
-  assert.equal(r.hooksDir, '/home/u/.claude-traffic-light/hooks-1.2.3/hooks');
+  assert.equal(r.stableDir, path.join('/home/u/.claude-traffic-light', 'hooks-1.2.3'));
+  assert.equal(r.hooksDir, path.join('/home/u/.claude-traffic-light', 'hooks-1.2.3', 'hooks'));
   assert.equal(r.mcpAppPath, r.stableDir, 'the MCP entry runs the stub, not a path into the mount');
   assert.equal(r.copyFrom, '/x/resources');
 });
@@ -33,7 +33,7 @@ test('hook paths: an AppImage points at $APPIMAGE and a per-version copy in the 
 test('hook paths: a dev run is plain node against the checkout', () => {
   const r = HookPaths.choose({ ...base, packaged: false, platform: 'linux', env: { APPIMAGE: '/a' } });
   assert.equal(r.execPath, null);
-  assert.equal(r.hooksDir, '/src/hooks');
+  assert.equal(r.hooksDir, path.join('/src', 'hooks'));
 });
 
 test('hook paths: materialize copies hooks and adapters, writes the MCP stub; prune (after the lock) drops older versions only', () => {
@@ -60,7 +60,7 @@ test('hook paths: materialize copies hooks and adapters, writes the MCP stub; pr
 test('hook paths: a failed copy falls back to the mounted paths rather than pointing at nothing', () => {
   const logs = [];
   const r = HookPaths.resolve({ ...base, packaged: true, platform: 'linux', env: { APPIMAGE: '/a.AppImage' } }, { readFileSync() { throw new Error('ENOENT'); }, rmSync() {}, cpSync() { throw new Error('EACCES'); } }, (m) => logs.push(m));
-  assert.equal(r.hooksDir, '/x/resources/hooks');
+  assert.equal(r.hooksDir, path.join('/x/resources', 'hooks'));
   assert.equal(r.execPath, '/x/Plexiform');
   assert.match(logs[0], /EACCES/);
 });

@@ -93,7 +93,7 @@ test('R2 promote copies the staged files, then uploads the manifest signed now: 
   fs.writeFileSync(path.join(signed, 'release.json'), 'm');
   fs.writeFileSync(path.join(signed, 'release.json.sig'), 's');
   R2.main(['promote', '1.1.0', '--manifest-dir', signed], run, () => {}, R2_ENV);
-  const copies = calls.filter((c) => c[0] === 'cp').map((c) => [c[1].replace(signed, 'signed'), c[2]]);
+  const copies = calls.filter((c) => c[0] === 'cp').map((c) => [c[1].startsWith(signed) ? `signed/${path.basename(c[1])}` : c[1], c[2]]);
   assert.deepEqual(copies, [
     ['s3://bk/1.1.0/Plexiform-1.1.0-win-x64.exe', 's3://bk/Plexiform-1.1.0-win-x64.exe'],
     ['s3://bk/1.1.0/latest.yml', 's3://bk/latest.yml'],
@@ -168,7 +168,8 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.match(prerm, /remove\|purge\) ;;\n\s*\*\) exit 0 ;;/, 'an upgrade leaves the hooks alone');
   assert.match(prerm, /runuser -u "\$user" -- env HOME="\$home" ELECTRON_RUN_AS_NODE=1 "\$APP" "\$SCRIPT"/);
   assert.match(prerm, new RegExp(`/usr/bin/${config.linux.executableName}\\b`));
-  assert.ok(fs.statSync(config.deb.fpm[at + 1]).mode & 0o111, 'prerm is executable');
+  // Windows has no exec bit; the git mode is what the Linux runner builds from
+  if (process.platform !== 'win32') assert.ok(fs.statSync(config.deb.fpm[at + 1]).mode & 0o111, 'prerm is executable');
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')), 'shipped in extraResources hooks/');
 });
 
