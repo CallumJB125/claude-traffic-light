@@ -244,6 +244,7 @@ export class Teams {
     if (this.lastOwner(t)) throw new HubError('CONFLICT', 'a team needs an owner: make someone else owner first', { reason: 'LAST_OWNER' });
     this.hub.txn(() => {
       this.db.run('UPDATE members SET role = ? WHERE id = ?', role, t.id);
+      if (role !== 'owner' && role !== 'admin') this.hub.dropMemberPending(t.id);
       this.audit('member.role', member, { ip, target: t.id, detail: { from: t.role, to: role } });
       this.hub.later(() => this.hub.memberChanged(t.id));
     });
@@ -269,6 +270,7 @@ export class Teams {
     const devices = this.db.all('SELECT id FROM devices WHERE member_id = ? AND revoked_at IS NULL', t.id);
     this.hub.txn(() => {
       this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, t.id);
+      this.hub.dropMemberPending(t.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, t.id);
       this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'member_removed', token_hash = NULL WHERE member_id = ? AND revoked_at IS NULL", now, t.id);
       this.hub.invites.revokeWhere('created_by', t.id, 'inviter_removed');

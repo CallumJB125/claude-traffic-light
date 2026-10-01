@@ -107,11 +107,17 @@ const inputLabel = (k) => INPUT_LABEL[k] ?? k.replace(/_/g, ' ').replace(/^./, (
 // Ids are shown as typed; anything else (secrets, tokens) stays masked.
 const inputType = (k) => (/_id$/.test(k) ? 'text' : 'password');
 
+// Browsers ignore autocomplete=off on password fields and password managers
+// offer to save (and sync) them: new-password plus the 1Password/LastPass
+// opt-outs keep a one-shot token out of every vault.
+const NO_MANAGER = { 'data-1p-ignore': '', 'data-lpignore': 'true' };
+
 // Uncontrolled inputs: a value never enters the model, so it can't be
 // re-rendered, stored or logged; takeInput empties them on submit.
 function inputField(k, autofocus = false) {
+  const type = inputType(k);
   return h('label', { key: k, class: 'field' }, h('span', null, inputLabel(k)),
-    h('input', { class: 'input', name: k, type: inputType(k), autocomplete: 'off', spellcheck: 'false', required: true, autofocus: autofocus || null }));
+    h('input', { class: 'input', name: k, type, autocomplete: type === 'password' ? 'new-password' : 'off', ...NO_MANAGER, spellcheck: 'false', required: true, autofocus: autofocus || null }));
 }
 
 /** The named inputs of a prepare form, trimmed, non-empty; every input is cleared at once. */
@@ -182,7 +188,7 @@ function availableCard(c, m) {
         ? (tokenOpen
           ? h('form', { class: 'integ-token', 'data-form': 'integ-token', 'data-provider': c.id },
             h('label', { class: 'field' }, h('span', null, `${c.name} token`),
-              h('input', { class: 'input', name: 'token', type: 'password', autocomplete: 'off', required: true, autofocus: true, spellcheck: 'false' })),
+              h('input', { class: 'input', name: 'token', type: 'password', autocomplete: 'new-password', ...NO_MANAGER, required: true, autofocus: true, spellcheck: 'false' })),
             h('div', { class: 'integ-card-actions' },
               h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: busy || null, 'aria-busy': busy ? 'true' : null }, 'Connect'),
               h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'integ-token-cancel' }, 'Cancel')))

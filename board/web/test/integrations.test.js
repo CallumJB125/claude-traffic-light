@@ -171,7 +171,6 @@ test('a prepare connector: admins get a password field for the configuration tok
   const [token] = inputs(f[0]);
   assert.equal(token.props.name, 'config_token');
   assert.equal(token.props.type, 'password');
-  assert.equal(token.props.autocomplete, 'off');
   assert.equal(token.props.value, undefined);
   assert.match(textOf(f[0]), /App configuration token/);
   assert.match(textOf(f[0]), /Create the Pend app/);
@@ -215,4 +214,16 @@ test('takeInput reads the form\'s named inputs and clears them at once', () => {
   const form = { querySelectorAll: () => els };
   assert.deepEqual(integ.takeInput(form), { config_token: 'tok-value' });
   assert.deepEqual(els.map((e) => e.value), ['', '']);
+});
+
+test('password managers keep out of secret fields: the configuration token, pasted secrets and the token connector field', () => {
+  const pinned = (i) => [i.props.autocomplete, i.props['data-1p-ignore'], i.props['data-lpignore']];
+  const [token] = inputs(byAttr(integrationsScreen(pm()), 'data-form', 'integ-prepare')[0]);
+  assert.deepEqual(pinned(token), ['new-password', '', 'true']);
+  const needs = { p1: { fields: ['app_id', 'client_secret'], create_url: 'https://pend.example/apps?new_app=1' } };
+  const paste = inputs(byAttr(integrationsScreen(pm({ data: { available: [pend], connections: [], vault: true, pending: [row({ ready: false })] }, needs })), 'data-form', 'integ-prepare')[0]);
+  assert.deepEqual(paste.map(pinned), [['off', '', 'true'], ['new-password', '', 'true']]);
+  const [tok] = inputs(byAttr(integrationsScreen(m({ tokenFor: 'fake' })), 'data-form', 'integ-token')[0]);
+  assert.equal(tok.props.name, 'token');
+  assert.deepEqual(pinned(tok), ['new-password', '', 'true']);
 });

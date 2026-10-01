@@ -48,11 +48,18 @@ CREATE TRIGGER integration_pending_fixed BEFORE UPDATE OF id, org_id, provider, 
   WHEN NEW.id IS NOT OLD.id OR NEW.org_id IS NOT OLD.org_id OR NEW.provider IS NOT OLD.provider OR NEW.created_by IS NOT OLD.created_by
     OR NEW.created_at IS NOT OLD.created_at OR NEW.expires_at IS NOT OLD.expires_at
   BEGIN SELECT RAISE(ABORT, 'a pending connection is fixed once created'); END;
+-- The prepare answer is written once, over the '{}' default (no answer yet):
+-- once a row is ready, the app it is bound to never changes under it.
+CREATE TRIGGER integration_pending_answer_once BEFORE UPDATE OF match, settings, external_id ON integration_pending
+  WHEN OLD.match != '{}'
+  BEGIN SELECT RAISE(ABORT, 'a ready pending connection is fixed'); END;
 CREATE TRIGGER integration_pending_secrets_purge BEFORE DELETE ON integration_pending
   BEGIN DELETE FROM integration_pending_secrets WHERE pending_id = OLD.id; END;
 
 -- An id is pending or a connection, never both. Promotion deletes the pending
--- row first, in the same transaction, then inserts the connection.
+-- row first, in the same transaction, then inserts the connection. A later
+-- migration that rebuilds `connections` drops its triggers with the table: it
+-- must re-create connection_id_not_pending and connections_pinned_fixed.
 CREATE TRIGGER pending_id_not_connection BEFORE INSERT ON integration_pending
   WHEN EXISTS (SELECT 1 FROM connections WHERE id = NEW.id)
   BEGIN SELECT RAISE(ABORT, 'that id is a connection'); END;

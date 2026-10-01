@@ -627,6 +627,7 @@ export class Accounts {
       this.db.run(`UPDATE invites SET email = 'deleted:' || id WHERE accepted_by_user = ? OR email IN ${inAddresses}`, user.id, ...addresses);
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
+      for (const m of members) this.hub.dropMemberPending(m.id);
       // Teams where they were the only member are soft-deleted with them (a
       // team needs an owner, D59); the purge after 7 days is P5.
       this.db.run(`UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE deleted_at IS NULL AND id IN (

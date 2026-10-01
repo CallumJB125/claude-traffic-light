@@ -69,11 +69,13 @@ the second `POST /api/integrations/<pending id>/prepare` calls you again with th
 will keep; `webhookUrl` already names it, and `identityRedirectUri` is the exact identity callback (put both
 redirect URIs in your manifest). The row lives one hour, claims no workspace and receives no webhooks (a pending id
 is the unknown-connection 404). `authorizeUrl` and `exchange` then get `config` overlaid with your pending
-`settings`, and `exchange` gets the pending `secrets`; it must return `match` with exactly the same keys and values
+`settings`, and `exchange` gets the pending `secrets` (the app's client secret: throw fixed text only, never the
+provider's answer or your arguments, and don't count on the log's redaction); it must return `match` with exactly the same keys and values
 (Slack: `app_id` from the `oauth.v2.access` answer and `client_id`), and the recorded `external_id` if you gave one,
 else the app is refused and the row stays. It may add secret kinds (the bot token), never replace a pending one.
 Promotion keeps the id and copies the sealed secrets unchanged; `settings.pinned` = `match`, fixed for good. The
-hub never deletes the app it made at the provider: the admin is told to.
+hub never deletes the app it made at the provider: the admin is told to. Such a connector has no plain
+`/start` flow (404); only the pending row's callback connects it.
 
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,

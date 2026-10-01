@@ -262,6 +262,15 @@ export class Hub extends EventEmitter {
     this.db.run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE status != 'revoked' AND org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)", now);
     this.db.run('DELETE FROM integration_pending WHERE org_id IN (SELECT id FROM orgs WHERE deleted_at IS NOT NULL)');
   }
+  // Only its creator, still an owner/admin, can finish a pending connection
+  // (D97): one who is removed, demoted or deleted loses it at once, with its
+  // sealed secrets (trigger), inside the caller's transaction.
+  dropMemberPending(memberId) {
+    for (const p of this.db.all('SELECT id, provider FROM integration_pending WHERE created_by = ?', memberId)) {
+      this.db.run('DELETE FROM integration_pending WHERE id = ?', p.id);
+      this.journal({ board_id: null, actor_kind: 'system', actor_id: null, kind: 'integration.prepare_cancel', payload: { pending_id: p.id, provider: p.provider } });
+    }
+  }
   // … and its label registry goes at once (member-written names; nothing reads it again). Cards wait for the P5 purge.
   dropDeletedTeamLabels() {
     this.db.run('DELETE FROM board_labels WHERE board_id IN (SELECT b.id FROM boards b JOIN orgs o ON o.id = b.org_id WHERE o.deleted_at IS NOT NULL)');

@@ -214,6 +214,9 @@ export function createIntegrations({
       if (pending) {
         const p = livePending(id);
         if (!p || p.id !== pending.id || p.org_id !== orgId || p.provider !== provider || p.created_by !== memberId) throw new HubError('NOT_FOUND', SETUP_EXPIRED);
+        // The callback checked the role before exchange() ran; it may have changed since.
+        const m = db.get('SELECT org_id, role, removed_at FROM members WHERE id = ?', memberId);
+        if (!m || m.removed_at || m.org_id !== orgId || !['owner', 'admin'].includes(m.role)) throw new HubError('NOT_FOUND', SETUP_EXPIRED);
         copied = db.all('SELECT kind, key_id, nonce, ciphertext FROM integration_pending_secrets WHERE pending_id = ?', id);
         if (copied.some((r) => Object.hasOwn(secrets, r.kind))) throw new HubError('VALIDATION', 'Could not save the connection.');
       }
@@ -996,7 +999,9 @@ export function createIntegrations({
 
   function oauthStart({ member, provider, publicUrl }) {
     const conn = connectors.get(provider);
-    if (!conn || conn.connect.kind === 'token') throw new HubError('NOT_FOUND', 'no such integration');
+    // A prepare connector connects only through its pending row (D97): the
+    // plain flow would skip the match check and never pin the app.
+    if (!conn || conn.connect.kind === 'token' || conn.connect.prepare) throw new HubError('NOT_FOUND', 'no such integration');
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
     // The connection id is minted now: a manifest must name its webhook URL
     // before the app (and so the connection) exists.
@@ -1020,6 +1025,8 @@ export function createIntegrations({
     if (got.length !== want.length || !timingSafeEqual(got, want)) return invalid;
     const st = safeJson(Buffer.from(payload, 'base64url').toString('utf8'), null);
     if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
+    // A state from before the connector declared prepare, or minted by /start.
+    if (conn.connect.prepare && st.pd !== 1) return invalid;
     // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
     if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
@@ -1094,7 +1101,7 @@ export function createIntegrations({
   const pendingConfig = (p) => ({ ...configFor(p.org_id, p.provider), ...safeJson(p.settings, {}) });
   const notAccepted = () => new HubError('VALIDATION', NOT_ACCEPTED);
   const pendingNotFound = () => new HubError('NOT_FOUND', 'no such integration');
-  const preparing = new Set(); // pending ids whose second step is at the provider
+  const preparing = new Set(); // pending ids whose prepare (first or second step) is at the provider
   let lastSweep = -Infinity;
 
   function pendingSecretsOf(id) {
@@ -1212,21 +1219,33 @@ export function createIntegrations({
     return { url, bind, cookie };
   }
 
-  // Seals the answer on the row (still live and still this member's).
+  // Seals the answer on the row (still live and still this member's). Once the
+  // provider made an app, failing to keep it here orphans it there: the row
+  // goes and the admin is told, in fixed text, to delete that app.
   function finishPrepare(conn, member, id, answer, publicUrl) {
-    const p = hub.txn(() => {
-      const cur = livePending(id);
-      if (!cur || cur.created_by !== member.id || cur.match !== '{}') return null;
-      if (!answer.needs) {
-        db.run('UPDATE integration_pending SET match = ?, settings = ?, external_id = ? WHERE id = ?', JSON.stringify(answer.match), JSON.stringify(answer.settings), answer.external_id, id);
-        for (const [kind, value] of Object.entries(answer.secrets)) {
-          const s = hub.vault.seal(id, kind, value);
-          db.insert('integration_pending_secrets', { pending_id: id, kind, key_id: s.key_id, nonce: s.nonce, ciphertext: s.ciphertext, created_at: now() });
+    let p = null;
+    try {
+      p = hub.txn(() => {
+        const cur = livePending(id);
+        if (!cur || cur.created_by !== member.id || cur.match !== '{}') return null;
+        if (!answer.needs) {
+          db.run('UPDATE integration_pending SET match = ?, settings = ?, external_id = ? WHERE id = ?', JSON.stringify(answer.match), JSON.stringify(answer.settings), answer.external_id, id);
+          for (const [kind, value] of Object.entries(answer.secrets)) {
+            const s = hub.vault.seal(id, kind, value);
+            db.insert('integration_pending_secrets', { pending_id: id, kind, key_id: s.key_id, nonce: s.nonce, ciphertext: s.ciphertext, created_at: now() });
+          }
         }
-      }
-      hub.journal({ board_id: null, actor_kind: 'member', actor_id: member.id, kind: 'integration.prepare', payload: { pending_id: id, provider: conn.id } });
-      return livePending(id);
-    });
+        hub.journal({ board_id: null, actor_kind: 'member', actor_id: member.id, kind: 'integration.prepare', payload: { pending_id: id, provider: conn.id } });
+        return livePending(id);
+      });
+    } catch (e) {
+      if (answer.needs) throw e;
+      log?.warn?.('integration prepare could not be saved', { integration: conn.id, err: 'save_failed' });
+    }
+    if (!p && !answer.needs) {
+      hub.txn(() => dropPending(db.all("SELECT id, provider FROM integration_pending WHERE id = ? AND match = '{}'", id), 'integration.prepare_cancel', member.id));
+      throw new HubError('CONFLICT', `Could not save this setup. Delete the app it created on ${conn.name}.`);
+    }
     if (!p) throw pendingNotFound();
     if (answer.needs) return { pending: publicPending(p), needs: answer.needs };
     return { pending: publicPending(p), ...authorizeFor(conn, p, member, publicUrl) };
@@ -1250,14 +1269,21 @@ export function createIntegrations({
       limitOrThrow(hub, 'integration_prepare_org', member.org_id);
       db.insert('integration_pending', { id, org_id: member.org_id, provider, created_by: member.id, created_at: t, expires_at: new Date(hub.wallMs() + PENDING_TTL_MS).toISOString() });
     });
-    let answer;
+    // A second step for this row must wait: it would make a second app, and
+    // this call's cleanup below would delete the row it finished.
+    preparing.add(id);
     try {
-      answer = await callPrepare(conn, prepareArgs(member.org_id, provider, id, clean, publicUrl));
-    } catch (e) {
-      db.run('DELETE FROM integration_pending WHERE id = ?', id);
-      throw e;
+      let answer;
+      try {
+        answer = await callPrepare(conn, prepareArgs(member.org_id, provider, id, clean, publicUrl));
+      } catch (e) {
+        db.run('DELETE FROM integration_pending WHERE id = ?', id);
+        throw e;
+      }
+      return finishPrepare(conn, member, id, answer, publicUrl);
+    } finally {
+      preparing.delete(id);
     }
-    return finishPrepare(conn, member, id, answer, publicUrl);
   }
 
   /** POST /api/integrations/:id/prepare: the pasted fields for a row with no secrets yet (its creator only). */

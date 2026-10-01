@@ -737,3 +737,180 @@ test('defineConnector refuses prepare without prepareInputs (and back), on a tok
   assert.throws(() => defineConnector({ ...base, connect: { kind: 'token', verifyToken: async () => ({}), prepare, prepareInputs: ['a'] } }), /prepare/);
   assert.throws(() => defineConnector({ ...base, connect: { kind: 'app_install', exchange: async () => ({}), formHost: 'p.example', manifestForm: () => ({}), prepare, prepareInputs: ['a'] } }), /prepare/);
 });
+
+// ── review follow-ups ─────────────────────────────────────────────────────
+
+function plainConnector(beh) {
+  return defineConnector({
+    id: 'plain', name: 'Plain', scopes: [], secrets: ['bot_token'], hosts: ['plain.example'],
+    connect: {
+      kind: 'oauth',
+      authorizeUrl: ({ state }) => `https://plain.example/authorize?state=${encodeURIComponent(state)}`,
+      async exchange() { beh.plain += 1; return { external_id: 'P1', display_name: 'Plain', scopes: [], secrets: { bot_token: BOT } }; },
+    },
+    verify: () => ({ ok: true, dedupe_key: randomUUID() }),
+    handleWebhook: async () => {},
+  });
+}
+
+test('a prepare connector can\'t be finished without its pending step: /start is 404, a hub-signed state without pd is the invalid link and exchange never runs; a plain connector is unchanged', async () => {
+  const { h, reg, beh, alice } = await setup();
+  try {
+    const start = await h.api(alice, 'POST', '/api/integrations/pend/start', { request_id: randomUUID() });
+    assert.equal(start.status, 404, start.text);
+    const p = await ready(h, alice);
+    const bind = randomBytes(24).toString('base64url');
+    for (const i of [p.id, randomUUID()]) {
+      const st = { m: h.ids.alice, o: h.ids.org, p: 'pend', n: randomBytes(16).toString('base64url'), e: Date.now() + 600_000, b: sha(bind), i };
+      const out = await callback(h, forge(h, st), `board_int_pend=${bind}`);
+      assert.equal(out.status, 400);
+      assert.match(out.text, /This link is not valid/);
+      assert.equal(h.db.get("SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = 'oauth_state' AND dedupe_key = ?", st.n).n, 0, 'refused before the nonce is spent');
+    }
+    assert.equal(beh.exchanged.length, 0, 'exchange never ran');
+    assert.equal(reg.list(h.ids.org).length, 0);
+    assert.ok(pendingRow(h, p.id));
+    beh.plain = 0;
+    reg.register(plainConnector(beh));
+    const s = await h.api(alice, 'POST', '/api/integrations/plain/start', { request_id: randomUUID() });
+    assert.equal(s.status, 200, s.text);
+    const out = await callback(h, new URL(s.body.url).searchParams.get('state'), cookieOf(s), 'plain');
+    assert.equal(out.status, 200, out.text);
+    assert.equal(beh.plain, 1);
+    assert.equal(reg.list(h.ids.org).filter((c) => c.provider === 'plain').length, 1);
+  } finally { await h.close(); }
+});
+
+test('the creator demoted or removed while exchange runs: the promotion transaction refuses (setup expired), no connection; the row stays until it expires', async () => {
+  const { h, reg, beh } = await setup();
+  try {
+    h.db.run("UPDATE members SET role = 'admin' WHERE id = ?", h.ids.bob);
+    const bob = await h.login('bob');
+    const p = await ready(h, bob);
+    const ok = (args) => ({ external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.config.app_id, client_id: args.config.client_id } });
+    for (const change of ["UPDATE members SET role = 'member' WHERE id = ?", "UPDATE members SET removed_at = '2026-09-30T10:00:00.000Z' WHERE id = ?"]) {
+      h.db.run("UPDATE members SET role = 'admin', removed_at = NULL WHERE id = ?", h.ids.bob);
+      beh.exchange = (args) => { h.db.run(change, h.ids.bob); return ok(args); };
+      const a = await authorize(h, bob, p.id);
+      assert.equal(a.status, 200, a.text);
+      const out = await callback(h, stateOf(a), cookieOf(a));
+      assert.equal(out.status, 400, change);
+      assert.match(out.text, /This setup has expired/, change);
+      assert.equal(reg.list(h.ids.org).length, 0, change);
+      assert.equal(h.db.get('SELECT COUNT(*) AS n FROM connection_secrets WHERE connection_id = ?', p.id).n, 0);
+      assert.ok(pendingRow(h, p.id), 'the row stays');
+      assert.equal(pendingSecrets(h, p.id).length, 2);
+    }
+  } finally { await h.close(); }
+});
+
+test('a second step can\'t run beside the first: the reserved row is busy until the first prepare returns', async () => {
+  const { h, alice, beh } = await setup({ config: ROOMY });
+  try {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    beh.fetch = async () => { await gate; return new Response(JSON.stringify({ ok: true, ...APP, client_secret: CS, signing_secret: SS }), { status: 200, headers: { 'content-type': 'application/json' } }); };
+    const first = prep(h, alice, 'pend', { config_token: configToken() });
+    let row;
+    for (let i = 0; i < 200 && !row; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+      row = h.db.get('SELECT * FROM integration_pending');
+    }
+    assert.ok(row, 'the first prepare reserved its row');
+    const second = await prep(h, alice, row.id, { app_id: 'A0SECOND', client_id: '9.9', client_secret: 'x1', signing_secret: 'x2' });
+    assert.equal(second.status, 409, second.text);
+    assert.equal(second.body.error.reason, 'PENDING_BUSY');
+    release();
+    const r = await first;
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.pending.id, row.id);
+    assert.equal(JSON.parse(pendingRow(h, row.id).match).app_id, APP.app_id);
+  } finally { await h.close(); }
+});
+
+test('the provider made the app but the hub could not save it: the row goes and the answer is a fixed CONFLICT naming the provider', async () => {
+  const { h, alice } = await setup({ config: ROOMY });
+  try {
+    const want = { error: { code: 'CONFLICT', message: 'Could not save this setup. Delete the app it created on Pend.' } };
+    h.db.exec("CREATE TEMP TRIGGER pend_fail BEFORE INSERT ON main.integration_pending_secrets BEGIN SELECT RAISE(ABORT, 'boom-provider-text'); END");
+    const r = await prep(h, alice, 'pend', { config_token: configToken() });
+    assert.equal(r.status, 409, r.text);
+    assert.deepEqual(r.body, want);
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM integration_pending').n, 0);
+    // The second step too.
+    h.db.exec('DROP TRIGGER temp.pend_fail');
+    const n = await prep(h, alice, 'pend', {});
+    assert.equal(n.status, 200, n.text);
+    const id = n.body.pending.id;
+    h.db.exec("CREATE TEMP TRIGGER pend_fail BEFORE INSERT ON main.integration_pending_secrets BEGIN SELECT RAISE(ABORT, 'boom-provider-text'); END");
+    const s = await prep(h, alice, id, { app_id: APP.app_id, client_id: APP.client_id, client_secret: CS, signing_secret: SS });
+    assert.equal(s.status, 409, s.text);
+    assert.deepEqual(s.body, want);
+    assert.ok(!s.text.includes('boom') && !s.text.includes(CS));
+    assert.equal(pendingRow(h, id), null);
+    assert.equal(pendingSecrets(h, id).length, 0);
+    h.db.exec('DROP TRIGGER temp.pend_fail');
+  } finally { await h.close(); }
+});
+
+test('trigger: a ready pending row\'s match, settings and external_id never change; the first answer and the authorize count still do', async () => {
+  const { h } = await setup();
+  try {
+    const id = randomUUID();
+    const exp = new Date(h.hub.wallMs() + 3_600_000).toISOString();
+    h.db.run('INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)', id, h.ids.org, 'pend', h.ids.alice, h.hub.iso(), exp);
+    assert.equal(pendingRow(h, id).match, '{}', 'the unset value');
+    h.db.run('UPDATE integration_pending SET external_id = ? WHERE id = ?', 'T0', id);
+    h.db.run('UPDATE integration_pending SET match = ?, settings = ?, external_id = ? WHERE id = ?', '{"app_id":"A1"}', '{"app_id":"A1"}', 'T1', id);
+    for (const sql of [`UPDATE integration_pending SET match = '{"app_id":"A2"}'`, "UPDATE integration_pending SET match = '{}'", `UPDATE integration_pending SET settings = '{"app_id":"A2"}'`, "UPDATE integration_pending SET external_id = 'T2'", 'UPDATE integration_pending SET external_id = NULL']) {
+      assert.throws(() => h.db.exec(`${sql} WHERE id = '${id}'`), /a ready pending connection is fixed/, sql);
+    }
+    h.db.run('UPDATE integration_pending SET authorize_count = authorize_count + 1 WHERE id = ?', id);
+    assert.deepEqual([pendingRow(h, id).match, pendingRow(h, id).authorize_count], ['{"app_id":"A1"}', 1]);
+    h.db.run('DELETE FROM integration_pending WHERE id = ?', id);
+  } finally { await h.close(); }
+});
+
+test('fresh DB after every migration: the id-exclusivity and pinned triggers exist', async () => {
+  const { h } = await setup();
+  try {
+    const names = h.db.all("SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger'").map((r) => `${r.tbl_name}.${r.name}`);
+    for (const t of ['connections.connection_id_not_pending', 'integration_pending.pending_id_not_connection', 'connections.connections_pinned_fixed', 'integration_pending.integration_pending_answer_once']) {
+      assert.ok(names.includes(t), t);
+    }
+  } finally { await h.close(); }
+});
+
+// Member lifecycle: whoever can no longer finish a pending row loses it at once.
+const seedPending = (h, memberId, provider, orgId = h.ids.org) => {
+  const id = randomUUID();
+  h.db.run('INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)', id, orgId, provider, memberId, h.hub.iso(), new Date(h.hub.wallMs() + 3_600_000).toISOString());
+  h.db.run("INSERT INTO integration_pending_secrets (pending_id, kind, key_id, nonce, ciphertext, created_at) VALUES (?, 'client_secret', 'k', x'00', x'00', ?)", id, h.hub.iso());
+  return id;
+};
+const cancels = (h, id) => journal(h, 'integration.prepare_cancel').filter((j) => j.payload.pending_id === id);
+const assertPurged = (h, id, provider) => {
+  assert.equal(pendingRow(h, id), null);
+  assert.equal(pendingSecrets(h, id).length, 0);
+  const j = cancels(h, id);
+  assert.equal(j.length, 1);
+  assert.deepEqual([j[0].actor_kind, j[0].actor_id, j[0].board_id, j[0].payload], ['system', null, null, { pending_id: id, provider }]);
+};
+const assertKept = (h, id) => {
+  assert.ok(pendingRow(h, id));
+  assert.equal(pendingSecrets(h, id).length, 1);
+  assert.equal(cancels(h, id).length, 0);
+};
+
+test('legacy member removal (DELETE /api/members/:id) purges that member\'s pending rows and secrets in the same transaction, journaled once', async () => {
+  const { h, alice } = await setup();
+  try {
+    const carol = await addMember(h, 'carol', 'admin');
+    const mine = seedPending(h, carol.id, 'p1');
+    const other = seedPending(h, h.ids.alice, 'p2');
+    const r = await h.api(alice, 'DELETE', `/api/members/${carol.id}`, { request_id: randomUUID() });
+    assert.equal(r.status, 200, r.text);
+    assertPurged(h, mine, 'p1');
+    assertKept(h, other);
+  } finally { await h.close(); }
+});
