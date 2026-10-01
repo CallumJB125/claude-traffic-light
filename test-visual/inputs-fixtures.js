@@ -64,15 +64,23 @@ function tmuxDialog(fixture) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-tmux-'));
   const sock = path.join(dir, 's');
   const text = path.join(__dirname, '..', 'test', 'fixtures', 'panes', fixture);
-  const tmux = (...a) => execFileSync('tmux', ['-S', sock, ...a], { encoding: 'utf8' }).trim(); // exec: a private tmux server for this spec only
-  tmux('new-session', '-d', '-x', '100', '-y', '30', `cat '${text}'; sleep 600`);
-  let pane = '';
-  for (let i = 0; i < 20 && !pane; i++) { try { pane = tmux('display-message', '-p', '#{pane_id}'); } catch { /* starting */ } }
-  const pid = tmux('display-message', '-p', '#{pid}');
-  return {
-    env: { TMUX: `${sock},${pid},0`, TMUX_PANE: pane },
-    kill() { try { tmux('kill-server'); } catch { /* gone */ } fs.rmSync(dir, { recursive: true, force: true }); },
-  };
+  // A private socket still loads ~/.tmux.conf unless -f is supplied. Session
+  // restore plugins can replace this pane before the app's first capture.
+  const tmux = (...a) => execFileSync('tmux', ['-f', '/dev/null', '-S', sock, ...a], { encoding: 'utf8', timeout: 5000 }).trim(); // exec: a private tmux server for this spec only
+  const kill = () => { try { tmux('kill-server'); } catch { /* gone */ } fs.rmSync(dir, { recursive: true, force: true }); };
+  try {
+    // Direct argv and /bin/sh avoid user shell startup hooks. Signal readiness
+    // after cat completes, so the fixture exists before SessionStart records it.
+    tmux('new-session', '-d', '-s', 'plexiform-dialog', '-x', '100', '-y', '30',
+      '/bin/sh', '-c', '/bin/cat "$1"; tmux -S "$2" wait-for -S dialog-ready; exec /bin/sleep 600', 'plexiform-fixture', text, sock);
+    tmux('wait-for', 'dialog-ready');
+    const pane = tmux('display-message', '-p', '-t', 'plexiform-dialog', '#{pane_id}');
+    const pid = tmux('display-message', '-p', '#{pid}');
+    return { env: { TMUX: `${sock},${pid},0`, TMUX_PANE: pane }, kill };
+  } catch (e) {
+    kill();
+    throw e;
+  }
 }
 
 module.exports = { HOST, blockingHook, hookSync, staleRequest, clearRequests, clearSessions, ageSession, tmuxDialog };
