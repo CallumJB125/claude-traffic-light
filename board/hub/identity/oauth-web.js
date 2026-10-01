@@ -20,8 +20,8 @@ const closed = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && O
 
 function invitation(v) {
   if (v == null) return null;
-  if (!closed(v, ['kind', 'token']) || !['team', 'client'].includes(v.kind) || typeof v.token !== 'string'
-    || !(v.kind === 'team' ? /^inv_[A-Za-z0-9_-]{43}$/ : /^clinv_[A-Za-z0-9_-]{43}$/).test(v.token)) {
+  if (!closed(v, ['kind', 'token']) || v.kind !== 'team' || typeof v.token !== 'string'
+    || !/^inv_[A-Za-z0-9_-]{43}$/.test(v.token)) {
     throw new HubError('VALIDATION', 'invalid invitation');
   }
   return { kind: v.kind, token: v.token };

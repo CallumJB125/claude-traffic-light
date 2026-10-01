@@ -5,7 +5,7 @@ const { test, expect, chromium } = require('@playwright/test');
 const { randomBytes, randomUUID } = require('node:crypto');
 const path = require('node:path');
 
-test('browser Google/GitHub sign-in, team/client invitations and provider-only status are real round trips', async () => {
+test('browser Google/GitHub sign-in, team invitations and provider-only status are real round trips', async () => {
   const { startAccounts } = await import('../board/hub/test/accounts-helpers.js');
   const { fakeClients, fakeProviders, s256 } = await import('../board/hub/test/fake-oauth.js');
   const { fakeClock } = await import('../board/hub/test/helpers.js');
@@ -24,11 +24,6 @@ test('browser Google/GitHub sign-in, team/client invitations and provider-only s
     expect(owner.status, owner.text).toBe(200);
     const staff = async (method, url, body) => { const r = await hub.call(method, url, { token: owner.body.device_token, body }); expect(r.status, r.text).toBe(200); return r.body; };
     const ordinary = await staff('POST', `/api/teams/${hub.ids.org}/invites`, { email: 'member@gmail.com', role: 'member', request_id: randomUUID() });
-    const made = await staff('POST', '/api/client-workspaces', { name: 'Browser client', request_id: randomUUID() });
-    const project = made.projects[0];
-    const card = await staff('POST', `/api/boards/${project.board_id}/cards`, { title: 'Private staff repository details' });
-    await staff('POST', `/api/boards/${project.board_id}/client-items`, { card_id: card.card.id, title: 'Browser delivery', summary: 'Ready for review', status: 'review' });
-    const invite = await staff('POST', `/api/teams/${made.workspace.id}/client-invites`, { email: 'client@gmail.com', grants: [{ project_id: project.id, scopes: ['status.read'] }], request_id: randomUUID() });
     const deviceCount = hub.db.get('SELECT COUNT(*) n FROM user_devices').n;
     browser = await chromium.launch({ channel: 'chrome' });
     const signin = async (provider, who, fragment = '') => {
@@ -64,31 +59,9 @@ test('browser Google/GitHub sign-in, team/client invitations and provider-only s
     expect(member.account.teams.map(t => t.id)).toContain(hub.ids.org);
     expect(new URL(member.page.url()).searchParams.get('org')).toBe(hub.ids.org);
     await member.context.close();
-    const guest = await signin('google', { sub: 'browser-guest', email: 'client@gmail.com', name: 'Client' }, `#client_invite=${invite.link.split('#')[1]}`);
-    await expect(guest.page).toHaveURL(new RegExp(`/clients\\?workspace=${made.workspace.id}`));
-    await expect(guest.page.locator('.client-item')).toContainText('Browser delivery');
-    await expect(guest.page.locator('body')).not.toContainText('Private staff repository details');
-    expect(guest.account.teams).toHaveLength(0);
-    expect(hub.db.get('SELECT COUNT(*) n FROM members WHERE user_id = ?', guest.account.user.id).n).toBe(0);
-    await guest.context.close();
-    const returning = await signin('google', { sub: 'browser-guest', email: 'client@gmail.com', name: 'Client' });
-    await expect(returning.page).toHaveURL(new RegExp(`/clients\\?workspace=${made.workspace.id}`));
-    await expect(returning.page.locator('.client-item')).toContainText('Browser delivery');
-    await returning.context.close();
     const octo = await signin('github', { id: 96543, login: 'web-octo', email: 'octo@example.test', name: 'Octo' });
     expect(octo.account.identities).toContainEqual({ provider: 'github' });
     await octo.context.close();
-    const wrong = await staff('POST', `/api/teams/${made.workspace.id}/client-invites`, { email: 'wrong-target@gmail.com', grants: [{ project_id: project.id, scopes: ['status.read'] }], request_id: randomUUID() });
-    const beforeWrong = hub.db.get('SELECT COUNT(*) n FROM orgs').n;
-    const recovery = await signin('google', { sub: 'browser-wrong', email: 'other-client@gmail.com', name: 'Other client' }, `#client_invite=${wrong.link.split('#')[1]}`);
-    await expect(recovery.page).toHaveURL(`${hub.base}/client-invite`);
-    await expect(recovery.page.getByRole('heading')).toHaveText('Join Browser client');
-    await recovery.page.getByRole('button', { name: 'Accept invitation' }).click();
-    await expect(recovery.page.locator('#client-invite-lead')).toContainText('sign in with the invited address');
-    expect(hub.db.get('SELECT accepted_at FROM client_invites WHERE id = ?', wrong.invite.id).accepted_at).toBeNull();
-    expect(recovery.account.teams).toHaveLength(0);
-    expect(hub.db.get('SELECT COUNT(*) n FROM orgs').n).toBe(beforeWrong);
-    await recovery.context.close();
     // With one web client absent, its button remains hidden even though the
     // shared .btn rule assigns display and native credentials still exist.
     hub.hub.config.githubWebClientSecret = null;
