@@ -473,3 +473,19 @@ test('mac: ad-hoc identity until a certificate is given, so build/sign.js runs o
   assert.equal(load({}), '-');
   assert.equal(load({ CSC_LINK: 'cert.p12' }), undefined);
 });
+
+// GitHub refuses a workflow file that isn't valid YAML, and then shows a failed
+// run on every push while no tag or dispatch can start it. The regex checks
+// above read the text, so they can't catch that. js-yaml comes with
+// electron-builder.
+test('every workflow file is valid YAML with jobs and an on: trigger', () => {
+  const yaml = require('js-yaml');
+  const dir = path.join(__dirname, '..', '.github', 'workflows');
+  const files = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  assert.ok(files.length >= 2, files.join(','));
+  for (const f of files) {
+    const doc = yaml.load(fs.readFileSync(path.join(dir, f), 'utf8'));
+    assert.ok(doc && typeof doc === 'object' && doc.jobs && Object.keys(doc.jobs).length, `${f}: no jobs`);
+    assert.ok('on' in doc || true in doc, `${f}: no on: trigger`);
+  }
+});
