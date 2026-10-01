@@ -1,6 +1,7 @@
 // Durable participant context. Authority comes from the current socket or
 // staff credential, never the packet/message, provider label or receipt.
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { remoteScope, remoteMutation } from './remote/context.js';
 import { HubError } from './db.js';
 import { can } from './permissions.js';
 import { runnerConnectionProblem } from './runner-authority.js';
@@ -60,18 +61,21 @@ export class TeamCommunication {
     return { row, member: m, run, connection, provider, actor_key: `run:${run.id}:${run.fence}` };
   }
   human(member, cardId, cred, write = false, options = {}) {
-    if (this.hub.config.auth === 'accounts' && !cred) throw new HubError('UNAUTHENTICATED', 'staff credential required');
+    const remote = options.remote == null ? null : remoteScope(options.remote, member, write);
+    if (this.hub.config.auth === 'accounts' && !cred && !remote) throw new HubError('UNAUTHENTICATED', 'staff credential required');
     const m = this.staff(member, cred, write);
-    const row = this.card(cardId, m), boardIds = options.boardIds;
+    const row = this.card(cardId, m), boardIds = remote?.boardIds ?? options.boardIds;
     if (boardIds != null && (!Array.isArray(boardIds) || boardIds.length < 1 || boardIds.length > 32
       || boardIds.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(id)))) throw new HubError('VALIDATION', 'choose 1–32 boards');
     if (boardIds && !boardIds.includes(row.board_id)) throw missing();
-    return { row, member: m, run: null, connection: null, provider: null, actor_key: `member:${m.id}`, boardIds };
+    return { row, member: m, run: null, connection: null, provider: null, actor_key: remote?.actor_key ?? `member:${m.id}`, boardIds };
   }
   author(record) {
+    const remote = record.actor_key?.startsWith('remote:');
+    const application = remote ? this.hub.remoteAuthority?.application(record.actor_key.slice(7)) : null;
     return { kind: record.author_run_id ? 'run' : 'member', member_id: record.author_member_id, account_id: record.author_user_id,
       name: text(this.hub.memberName(record.author_member_id), 200), run_id: record.author_run_id, device_id: record.author_device_id,
-      provider: record.provider, identity_source: record.author_run_id ? 'hub_run' : 'staff_credential' };
+      provider: record.provider, identity_source: record.author_run_id ? 'hub_run' : remote ? 'remote_grant' : 'staff_credential', ...(remote ? { application, application_verified: false } : {}) };
   }
   cleanData(value, scope) {
     only(value, FIELDS, FIELDS);
@@ -149,6 +153,7 @@ export class TeamCommunication {
     return this.hub.withBoard(initial.row.board_id, () => {
       const scope = this.human(member, cardId, cred, true, options);
       if (scope.row.fence !== expected_fence) throw new HubError('FENCED', 'task ownership changed; reload before saving');
+      if (options.remote != null) return this.hub.txn(() => remoteMutation(options.remote, member, () => this.writePacket(scope, data)));
       return this.writePacket(scope, data);
     });
   }
@@ -355,6 +360,7 @@ export class TeamCommunication {
     return this.hub.withBoard(initial.row.board_id, () => {
       const scope = this.human(member, cardId, cred, true, options);
       if (scope.row.fence !== expected_fence) throw new HubError('FENCED', 'task ownership changed; reload before sending');
+      if (options.remote != null) return this.hub.txn(() => remoteMutation(options.remote, member, () => this.sendMessage(scope, params)));
       return this.sendMessage(scope, params);
     });
   }

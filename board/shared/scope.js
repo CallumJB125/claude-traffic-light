@@ -135,6 +135,7 @@ export function filterPath(p, toplevel) {
 
 // Credential shapes that must never appear in a hub-bound byte (exit j).
 export const CREDENTIAL_PATTERNS = Object.freeze([
+  ['integration_token', /\b(?:pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/],
   ['message_receipt', /bmr1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}/],
   ['anthropic_key', /sk-ant-[A-Za-z0-9_-]{8,}/],
   ['openai_key', /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/],
