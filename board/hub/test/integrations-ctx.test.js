@@ -330,6 +330,42 @@ test('L4: once the card has a verified PR, s.link(…, \'pr\', …) accepts only
   } finally { await h.close(); }
 });
 
+test('system.event: evidence with no repo binds to the card\'s own repo, never an alias (a mirror\'s #12 does not move the card)', async () => {
+  const { h, reg } = await setup();
+  try {
+    // An alias that is another GitHub repo: anyone who can open a PR there gets a #12.
+    h.db.run('UPDATE repos SET aliases = ? WHERE id = ?', JSON.stringify(['github.com/acme/app-mirror']), h.ids.repo);
+    const { ctx, cardId, branch, column } = await inReview(h, reg, 'BDL-65');
+    assert.equal(ctx.cardForBranch('acme/app-mirror', branch).card_id, cardId, 'the mirror maps to the card');
+    // The mirror's PR took the slot before the hub verified anything.
+    await ctx.act('link.pr', {}, async (s) => s.link(cardId, 'pr', 'gh-mirror-12'));
+    addEvidence(h, cardId, '#12');
+    const ev = (repo) => ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-mirror-12', pr: 12, repo, by: 'mallory' });
+    for (const repo of ['acme/app-mirror', 'github.com/acme/app-mirror', 'evil/app', null]) {
+      assert.deepEqual(await ev(repo), { done: false, reason: 'not_the_verified_pr' }, String(repo));
+    }
+    assert.equal(column(), 'in_review');
+    assert.deepEqual(ctx.verifiedPr(cardId), { number: 12, repo: 'acme/app', url: 'https://github.com/acme/app/pull/12' }, 'the card\'s repo row, never the alias');
+    assert.equal((await ev('Acme/App')).done, true, 'the card\'s own repo #12 is the verified PR');
+    assert.equal(column(), 'done');
+
+    // Evidence that names the repo binds the same way.
+    const named = await inReview(h, reg, 'BDL-66');
+    await named.ctx.act('link.pr', {}, async (s) => s.link(named.cardId, 'pr', 'gh-13'));
+    addEvidence(h, named.cardId, 'https://github.com/acme/app/pull/13');
+    assert.equal((await named.ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app-mirror' })).reason, 'not_the_verified_pr');
+    assert.equal((await named.ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-13', pr: 13, repo: 'acme/app' })).done, true);
+
+    // A card with no repo (so never in a run state either): a bare '#12' binds to nothing.
+    const t = h.hub.iso();
+    const bare = randomUUID();
+    h.db.run("INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at) VALUES (?, ?, 'BDL-67', 'T', ?, ?, ?)", bare, h.ids.board, h.ids.alice, t, t);
+    addEvidence(h, bare, '#12');
+    await ctx.act('link.pr', {}, async (s) => s.link(bare, 'pr', 'gh-bare-12'));
+    assert.deepEqual(await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'gh-bare-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'no_verified_pr' });
+  } finally { await h.close(); }
+});
+
 test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo, url} from the card\'s repo on the hub); null without one or for another org\'s card', async () => {
   const { h, reg, conn } = await setup();
   try {

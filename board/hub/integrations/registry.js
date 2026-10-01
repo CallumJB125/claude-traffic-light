@@ -430,6 +430,18 @@ export function createIntegrations({
       return { number, repo: shortRepo(canon), url: `https://${canon}/pull/${number}` };
     }
 
+    // Why PR `prN` in `repo` is not the card's verified PR, or null when it is.
+    function notVerified(cardId, prN, repo) {
+      const v = verifiedPr(cardId);
+      if (!v) return 'no_verified_pr';
+      if (prN !== v.number) return 'not_the_verified_pr';
+      // v.repo is the card's own repo row, never one of its aliases (an alias
+      // may be another GitHub repo, a mirror where anyone can open a PR #12).
+      const want = canonRepo(v.repo);
+      if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
+      return null;
+    }
+
     function link(cardId, kind, externalId, url = null) {
       if (!cardInOrg(cardId)) throw new HubError('NOT_FOUND', 'card not found');
       // One PR per card per connection: a second one (a decoy from the same
@@ -543,16 +555,7 @@ export function createIntegrations({
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
       // the card's review.
-      const refusal = () => {
-        const v = verifiedPr(card.id);
-        if (!v) return 'no_verified_pr';
-        if (prN !== v.number) return 'not_the_verified_pr';
-        if (v.repo) {
-          const want = canonRepo(v.repo);
-          if (!want || canonRepo(repo) !== want) return 'not_the_verified_pr';
-        }
-        return null;
-      };
+      const refusal = () => notVerified(card.id, prN, repo);
       const refused = refusal();
       if (refused) { audit('failed', refused); return { done: false, reason: refused }; }
       if (mode !== 'auto') { audit(mode === 'ask' ? 'asked' : 'skipped'); return { done: false, decision: mode === 'ask' ? 'asked' : 'skipped' }; }
