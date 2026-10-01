@@ -19,6 +19,7 @@ function fixture(t) {
   let userId = 'user-one';
   let delay = null;
   const client = {
+    user: () => userId ? { id: userId } : null,
     me: async () => ({ ok: true, teams: [{ id: 'team-one', role: 'owner', boards: [{ id: 'board-one', name: 'Selected' }, { id: 'board-two', name: 'Private' }] }] }),
     nativeBoard: async (op, params, body) => {
       if (delay) await delay;
@@ -74,6 +75,38 @@ test('Undo revokes old capability immediately, including a read already in fligh
   assert.equal((await reading).code, 'UNAUTHENTICATED');
   assert.equal((await f.broker.dispatch(token, { name: 'plexiform_list_boards' })).code, 'UNAUTHENTICATED');
   assert.ok(!fs.existsSync(f.broker.grantPath('codex')));
+});
+
+test('pending card preflight cannot start a write after Undo, a narrower replacement or account change', async (t) => {
+  for (const change of ['undo', 'downgrade', 'reconnect', 'account']) {
+    const f = fixture(t); await f.broker.connect({ ...f.input, mode: 'collaborate' });
+    const token = readGrant(f.broker.grantPath('codex')).token;
+    let resume; f.delay(new Promise((r) => { resume = r; }));
+    const pending = f.broker.dispatch(token, { name: change === 'account' ? 'plexiform_add_comment' : 'plexiform_update_card', args: change === 'account' ? { card_id: 'card-one', body: 'Late comment' } : { card_id: 'card-one', version: 2, body: 'Late edit' } });
+    await new Promise((r) => setImmediate(r));
+    if (change === 'undo') f.broker.revoke('codex');
+    else if (change === 'account') f.changeUser('different-user');
+    else await f.broker.connect({ ...f.input, mode: change === 'downgrade' ? 'read' : 'collaborate', boardIds: ['board-two'] });
+    resume();
+    assert.equal((await pending).code, 'UNAUTHENTICATED', change);
+    assert.equal(f.writes.length, 0, change);
+  }
+});
+
+test('a pending initial workspace lookup cannot create a card after authority withdrawal', async (t) => {
+  for (const change of ['undo', 'account']) {
+    const f = fixture(t); let hold = false, resume;
+    const pause = new Promise((r) => { resume = r; });
+    const broker = createBroker({ ...f.opts, dir: path.join(f.root, `pending-${change}`), resolveWorkspace: async (id) => { const ctx = f.opts.resolveWorkspace(id); if (hold) await pause; return ctx; } });
+    t.after(() => broker.stop()); await broker.connect({ ...f.input, mode: 'collaborate' });
+    const token = readGrant(broker.grantPath('codex')).token; hold = true;
+    const pending = broker.dispatch(token, { name: 'plexiform_create_card', args: { board_id: 'board-one', title: 'Late task' } });
+    await new Promise((r) => setImmediate(r));
+    if (change === 'undo') broker.revoke('codex'); else f.changeUser('different-user');
+    resume();
+    assert.equal((await pending).code, 'UNAUTHENTICATED', change);
+    assert.equal(f.writes.length, 0, change);
+  }
 });
 
 test('saved scoped permissions survive restart but the old local token does not', async (t) => {

@@ -58,12 +58,25 @@ function createBroker({ dir, seal, unseal, resolveWorkspace }) {
   async function dispatch(token, request) {
     const g = authorized(token);
     if (!g) return { ok: false, code: 'UNAUTHENTICATED', error: 'Connection removed. Reconnect it in Plexiform.' };
-    const ctx = await resolveWorkspace(g.workspaceId);
-    if (!ctx || ctx.userId !== g.userId) return { ok: false, code: 'UNAUTHENTICATED', error: 'Sign in with the account that connected this app.' };
-    const r = await callTool({ grant: g, ...ctx }, request.name, request.args ?? {});
-    // A sign-out or Undo while a read was in flight must not return its data.
-    const current = await resolveWorkspace(g.workspaceId);
-    if (grants.get(g.target) !== g || current?.userId !== g.userId) return { ok: false, code: 'UNAUTHENTICATED', error: 'Connection removed or account changed.' };
+    const denied = () => ({ ok: false, code: 'UNAUTHENTICATED', error: 'Connection removed or account changed.' });
+    // Account clients expose the live cached identity synchronously. Check it
+    // in the same turn as starting each request: an earlier async workspace
+    // lookup or card preflight is never authority to begin a later write.
+    const live = (ctx) => grants.get(g.target) === g && ctx?.userId === g.userId && ctx.client?.user?.()?.id === g.userId;
+    const context = async () => {
+      if (grants.get(g.target) !== g) return null;
+      const ctx = await resolveWorkspace(g.workspaceId);
+      return live(ctx) ? ctx : null;
+    };
+    const ctx = await context();
+    if (!live(ctx)) return denied();
+    const client = {
+      me: async () => { const c = await context(); return live(c) ? c.client.me() : denied(); },
+      nativeBoard: async (...args) => { const c = await context(); return live(c) ? c.client.nativeBoard(...args) : denied(); },
+    };
+    const r = await callTool({ grant: g, ...ctx, client }, request.name, request.args ?? {});
+    // Also suppress data returning after a sign-out, Undo or grant replacement.
+    if (!live(await context())) return denied();
     return r;
   }
   async function start() {
