@@ -34,6 +34,8 @@ const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const REQUEST_ID_MAX = 200;
+const SUBJECT_MAX = 128;
+const BOARDS_MAX = 100;
 const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
 const AUDIT_REF_MAX = 80;
 // An id (PR number, issue key, branch, sha, slug): never free text, which a
@@ -53,10 +55,15 @@ const ASK_GATED_ACTIONS = new Set(['approve_done']);
 const LINK_STATUS_MAX = 512;
 const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
+const ACK_MAX = 4096;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+// parseBody's result: a literal-like object only (a Promise, Map or class
+// instance is refused, so a forgotten `async` can't slip through).
+const isBareObject = (v) => isPlainObject(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+const POISON_KEYS = ['__proto__', 'constructor', 'prototype'];
 // An https URL on one of `hosts`, no port or credentials; else null.
 function urlOn(u, hosts) {
   let url;
@@ -189,8 +196,14 @@ export function createIntegrations({
       if (typeof v !== 'string' || !v || Buffer.byteLength(v) > SECRET_MAX_BYTES) throw new HubError('VALIDATION', `${conn.name} returned a secret this hub will not store`);
     }
     hub.txn(() => {
-      // Unique per org among live rows (partial index); revoked rows stay for their audit history.
-      if (db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext)) {
+      // Unique per org among live rows (partial index); revoked rows stay for
+      // their audit history. A workspaceUnique provider (one install per
+      // workspace) is unique across every org, with the same answer, so the
+      // message never tells another team that workspace is taken elsewhere.
+      const clash = conn.workspaceUnique
+        ? db.get("SELECT id FROM connections WHERE provider = ? AND external_id = ? AND status != 'revoked'", provider, ext)
+        : db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext);
+      if (clash) {
         throw new HubError('CONFLICT', `this ${conn.name} is already connected`);
       }
       db.insert('connections', {
@@ -332,17 +345,18 @@ export function createIntegrations({
     const cardBody = (body) => {
       const via = `via:${conn.id}`;
       const labels = Array.isArray(body.labels) ? [...body.labels.filter((l) => !(typeof l === 'string' && l.startsWith('via:'))), via] : (body.labels ?? [via]);
-      return { ...body, budget_usd: undefined, labels };
+      // Nor a column: a card from outside starts in todo, like a person's.
+      return { ...body, budget_usd: undefined, column: undefined, column_name: undefined, labels };
     };
 
-    function actAs(memberId, { live, action: actName, track, external_ref }) {
+    function actAs(memberId, { live, action: actName, track, external_ref, subjectKey }) {
       const first = actor(memberId);
       const via = { connection_id: c.id, member_id: first.id, name: conn.name, external_ref };
-      const call = (body, fn, rule = null) => {
+      const call = (body, fn, rules = [], pre = null) => {
         if (!live()) return Promise.reject(new Error('this act() scope has ended'));
-        return track(callLive(body, fn, rule));
+        return track(callLive(body, fn, rules, pre));
       };
-      const callLive = async (body, fn, rule) => {
+      const callLive = async (body, fn, rules, pre) => {
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
@@ -355,25 +369,35 @@ export function createIntegrations({
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
           return hit.body;
         }
+        const cacheError = (e) => { if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } }); };
+        try { pre?.(); } catch (e) { cacheError(e); throw e; }
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        if (rule) limitOrThrow(hub, rule, c.id);
+        for (const [rule, key] of rules) limitOrThrow(hub, rule, key);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
         } catch (e) {
-          if (e instanceof HubError) hub.cacheResponse(member.id, rid, httpStatus(e.code), { error: { code: e.code, message: e.message, ...(e.extra ?? {}) } });
+          cacheError(e);
           throw e;
         }
         hub.cacheResponse(member.id, rid, 200, out);
         return out;
       };
+      // A board of another team (or none) is the Api's own NOT_FOUND, but
+      // before any rate token: probing board ids must not drain the budget.
+      // The provider user's bucket first: one past it spends none of the
+      // connection's, so a single user can't use up everyone's cards.
+      const cardRules = [...(subjectKey ? [['integration_card_subject', subjectKey]] : []), ['integration_card_conn', c.id]];
+      const boardOfOrg = (boardId) => () => {
+        if (typeof boardId !== 'string' || hub.board(boardId)?.org_id !== c.org_id) throw new HubError('NOT_FOUND', 'board not found');
+      };
       return {
         member: { id: first.id, role: first.role },
         // A D8 replay answers with the first card whatever board it names: the
         // same request on another board is a conflict, not that card.
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn').then((out) => {
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), cardRules, boardOfOrg(boardId)).then((out) => {
           const on = hub.card(out?.card?.id)?.board_id;
           if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
           return out;
@@ -555,7 +579,7 @@ export function createIntegrations({
     }
 
     /**
-     * act(action, {card_id?, external_ref?, detail?, undo?}, run(scope)) — the
+     * act(action, {card_id?, external_ref?, detail?, undo?, subject?}, run(scope)) — the
      * autonomy gate and the only way to act. 'auto' writes an 'attempted'
      * audit row, runs, then marks it 'auto' or 'failed' (+ code); 'ask'
      * records a suggestion and does not run; 'off' skips. `scope`
@@ -564,6 +588,12 @@ export function createIntegrations({
      */
     async function act(action, meta, run) {
       if (signal?.aborted) throw handlerEnded();
+      const subject = meta?.subject;
+      if (subject != null && (typeof subject !== 'string' || !subject || subject.length > SUBJECT_MAX)) {
+        throw new HubError('VALIDATION', `subject is a provider user id of at most ${SUBJECT_MAX} characters`);
+      }
+      // Keyed hash only (hub.refHash): the provider user id is never kept or logged.
+      const subjectKey = subject ? `${c.id}|${hub.refHash(subject)}` : null;
       const mode = autonomyOf(action);
       const base = {
         connection_id: c.id, action, card_id: cardInOrg(meta?.card_id)?.id ?? null,
@@ -585,7 +615,7 @@ export function createIntegrations({
       const pending = new Set();
       const track = (p) => { pending.add(p); return p; };
       const scope = {
-        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
+        actAs: guard((memberId) => actAs(memberId, { live, action, track, external_ref: base.external_ref, subjectKey })), link: guard(link), relink: guard(relink), linkStatus: guard(linkStatus),
       };
       let decision = 'failed';
       let error = 'handler_failed';
@@ -674,6 +704,15 @@ export function createIntegrations({
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
+      // What a chat picker shows: never settings, repos or anything secret.
+      boards: () => db.all(`SELECT b.id, b.name FROM boards b JOIN orgs o ON o.id = b.org_id
+        WHERE b.org_id = ? AND o.deleted_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
+      // A card's face only: never its body, acceptance, labels or budget,
+      // which a connector would otherwise echo into a shared channel.
+      card: (cardId) => {
+        const card = typeof cardId === 'string' ? cardInOrg(cardId) : null;
+        return card ? { id: card.id, key: card.key, title: card.title, board_id: card.board_id, column_name: card.column_name } : null;
+      },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
   }
@@ -755,12 +794,19 @@ export function createIntegrations({
   }
 
   async function verifiedWebhook(c, conn, { headers, rawBody, v }) {
-    let payload;
-    try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
     // The connector's key alone may rest on an unsigned delivery header: the
     // hash of the signed body is a second key, so a captured request replayed
-    // under a new delivery id is still a duplicate.
+    // under a new delivery id is still a duplicate. Taken before parseBody,
+    // which then can't change it.
     const keys = [`${c.id}:${String(v.dedupe_key).slice(0, 200)}`, `${c.id}:body:${createHash('sha256').update(rawBody).digest('hex')}`];
+    let payload;
+    if (conn.parseBody) {
+      // Connector code sees only a body whose signature verify() checked.
+      try { payload = conn.parseBody({ rawBody, headers }); } catch { payload = undefined; }
+      if (!isBareObject(payload) || POISON_KEYS.some((k) => Object.hasOwn(payload, k))) return { status: 400, body: { error: { code: 'VALIDATION', message: 'body could not be read' } } };
+    } else {
+      try { payload = JSON.parse(rawBody.toString('utf8')); } catch { return { status: 400, body: { error: { code: 'VALIDATION', message: 'body must be JSON' } } }; }
+    }
     const lease = reserve(c.provider, keys);
     if (lease.dup === 'done') return { status: 200, body: { ok: true, duplicate: true } };
     // Never 200: the first attempt may still fail and release the delivery,
@@ -775,6 +821,9 @@ export function createIntegrations({
     // Spent only by verified deliveries that will run: whoever merely knows
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
+    // Before the handler starts, so it can't see what the handler did to payload.
+    const early = conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
+    const ack = early ? earlyAck(conn, payload, headers) : null;
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
@@ -784,7 +833,7 @@ export function createIntegrations({
       try {
         await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
-        if (conn.ackEarly) deadLetter(c, e);
+        if (early) deadLetter(c, e);
         if (e?.code === 'TIMEOUT') {
           // The handler may still be running: the lease stays (a retry answers
           // in_progress) and the row settles when it really ends, or the lease
@@ -812,13 +861,35 @@ export function createIntegrations({
       setHealth(c.id, true);
       return { status: 200, body: { ok: true } };
     };
-    if (!conn.ackEarly) return settle();
+    if (!early) return settle();
     // Acknowledged before the handler runs (a provider that needs an answer
     // within seconds); the hub waits for it on shutdown like a board queue.
     const bg = settle().catch((e) => warn('integration webhook settle failed', c, e));
     hub.inflight.add(bg);
     bg.finally(() => hub.inflight.delete(bg));
-    return { status: 200, body: { ok: true, accepted: true } };
+    return { status: 200, ...ack };
+  }
+
+  // Only a plain `true` is early: a throw or a Promise answers late, which
+  // keeps the provider's retry.
+  function askEarly(conn, payload, headers) {
+    try { return conn.ackEarly({ payload, headers }) === true; } catch { return false; }
+  }
+
+  // The early answer: the default JSON, or the connector's ackBody as an
+  // empty body, short text or small JSON. Anything else, over ACK_MAX, or a
+  // throw is an empty 200 (the provider only needs the 200 in time).
+  function earlyAck(conn, payload, headers) {
+    if (!conn.ackBody) return { body: { ok: true, accepted: true } };
+    const empty = { raw: '', type: 'text/plain; charset=utf-8' };
+    let v;
+    try { v = conn.ackBody({ payload, headers }); } catch { return empty; }
+    let out;
+    if (typeof v === 'string') out = { raw: v, type: 'text/plain; charset=utf-8' };
+    else if (isBareObject(v)) {
+      try { out = { raw: JSON.stringify(v), type: 'application/json; charset=utf-8' }; } catch { return empty; }
+    } else return empty;
+    return typeof out.raw === 'string' && Buffer.byteLength(out.raw) <= ACK_MAX ? out : empty;
   }
 
   // A delivery acknowledged early whose handler failed: no provider retry is

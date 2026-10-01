@@ -9,6 +9,9 @@
 //   scopes: ['pull_requests:read', …],  // what the consent screen lists; the minimum
 //   secrets: ['app_private_key', 'webhook_secret'],   // kinds this connector seals
 //   hosts: ['api.github.com'],          // exact hostnames ctx.fetch / exchange / verifyToken may reach (https only)
+//   workspaceUnique: false,             // optional: true = one live connection per external_id across ALL teams
+//                                       // (a provider whose events reach one install only, e.g. one Slack app per
+//                                       // workspace); a second is the same generic CONFLICT as within a team
 //
 //   // Connect (in an in-app auth window). Either an OAuth-style redirect
 //   // flow or a manual token. The registry makes and checks `state`.
@@ -33,6 +36,14 @@
 //   // and return a dedupe key (delivery id) for replay protection.
 //   verify({ headers, rawBody, secrets, now }) → { ok: true, dedupe_key } | { ok: false, reason },
 //   async handleWebhook({ headers, payload, ctx }) → void,
+//   // Optional: turn the raw body into `payload` (default: JSON.parse). Called
+//   // only after verify() passed over those bytes, synchronously, on a body
+//   // ≤ 1 MiB. A throw, or anything but a plain object (an array, a Promise,
+//   // a class instance) or an object with an own top-level `__proto__`,
+//   // `constructor` or `prototype` key, is a 400 VALIDATION with a fixed
+//   // message. Dedupe keys never depend on it. (Slack: form-encoded bodies
+//   // whose `payload=` field is JSON.)
+//   parseBody({ rawBody, headers }) → { … },
 //   // Optional, default false: answer 200 once the delivery is verified and
 //   // leased, then run handleWebhook (same lease, timeout and ctx). For a
 //   // provider that needs an answer within seconds (Slack: 3 s). A failure then
@@ -40,6 +51,17 @@
 //   // code) and the lease released, so a manual redelivery runs it. A hub
 //   // crash mid-handler loses the event until such a manual redelivery.
 //   ackEarly: false,
+//   // …or per delivery: ackEarly({ payload, headers }) → boolean, called
+//   // synchronously after verify() and parseBody; only `true` is early, a
+//   // throw (or anything else) answers late (Slack: early for commands and
+//   // interactions, late for retried events).
+//   // Optional, only with ackEarly: the early answer's body (default
+//   // {"ok":true,"accepted":true}). undefined → an empty 200; a string →
+//   // text/plain; a plain object → JSON; over 4 KiB, unserialisable, any other
+//   // type or a throw → an empty 200. Synchronous; runs before the handler.
+//   // Never reflect request data in it, except a verified url_verification
+//   // `challenge` string.
+//   ackBody({ payload, headers }) → undefined | string | { … },
 //
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
@@ -61,6 +83,10 @@
 //   // side effect runs inside ctx.act(action, meta, (s) => s.actAs(member)…);
 //   // card actions are limited to cancel/stop/approve_done (approve_done only
 //   // under an action declared 'ask'), comments are never for the agent.
+//   // ctx.act(action, { subject: '<provider user id>' }, …) limits that
+//   // user's createCard to integration_card_subject (5/h) too.
+//   // createCard(boardId, …) takes a board of the connection's team only
+//   // (else NOT_FOUND, before any rate token) and the card starts in todo.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
 //
 //   // State-machine facts it may raise (a subset of SYSTEM_EVENTS), each
@@ -70,6 +96,10 @@
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
 //   async health(ctx) → { ok, detail? },
+//
+//   // Pure reads a handler may use (org-scoped, nothing secret):
+//   // ctx.boards() → [{id, title}] (≤ 100, by title); ctx.card(id) →
+//   // {id, key, title, board_id, column_name} | null (never body or labels).
 // })
 
 import { isIP } from 'node:net'; // privacy-flow: hub-server
@@ -126,10 +156,13 @@ export function defineConnector(spec) {
     } else if (typeof cn.authorizeUrl !== 'function') errs.push('connect.authorizeUrl (or, for app_install, manifestForm) is required for oauth/app_install');
   }
   if (spec?.handleWebhook && typeof spec.verify !== 'function') errs.push('a connector that takes webhooks must implement verify() (signature check)');
-  if (spec?.ackEarly !== undefined && (typeof spec.ackEarly !== 'boolean' || !spec.handleWebhook)) errs.push('ackEarly is a boolean, for a connector that takes webhooks');
+  if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
+  if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
+  if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
+  if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);
