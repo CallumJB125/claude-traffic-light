@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { textOf, byAttr } from '../js/h.js';
 import { feedbackDialog } from '../js/render-dialogs.js';
-import { decodeFeedback, sendFeedback, FRAGMENT_PREFIX, NO_BOARD_TEXT, FAILED_TEXT, SENT_TEXT, VIEWER_TEXT } from '../js/feedback-send.js';
+import { decodeFeedback, sendFeedback, canSend, ARM_MS, FRAGMENT_PREFIX, NO_BOARD_TEXT, FAILED_TEXT, SENT_TEXT, VIEWER_TEXT } from '../js/feedback-send.js';
 import { model } from './fixtures.js';
 
 const RID = '123e4567-e89b-42d3-a456-426614174000';
@@ -29,7 +29,7 @@ test('bad input is rejected', () => {
   for (const h of bad) assert.equal(decodeFeedback(h), null, String(h).slice(0, 40));
 });
 
-const view = (extra, dlg = {}) => feedbackDialog({ kind: 'feedback', payload: decodeFeedback(frag(good)), busy: false, result: null, ...dlg }, model([], { me: { member: { id: 'a', role: 'member' }, org: { name: 'Acme' } }, ...extra }));
+const view = (extra, dlg = {}) => feedbackDialog({ kind: 'feedback', payload: decodeFeedback(frag(good)), busy: false, result: null, armed: true, ...dlg }, model([], { me: { member: { id: 'a', role: 'member' }, org: { name: 'Acme' } }, ...extra }));
 const sendBtn = (d) => byAttr(d, 'data-action', 'feedback-send')[0];
 
 test('the dialog shows the exact title and body as text, the team line, and Cancel + Send', () => {
@@ -81,4 +81,27 @@ test('app.js clears the fragment before it opens the dialog and never auto-sends
   assert.ok(fn.indexOf('history.replaceState') > fn.indexOf('decodeFeedback'));
   assert.ok(!/sendFeedback|submitFeedback/.test(fn));
   assert.match(src, /addEventListener\('hashchange', takeFeedbackFromHash\)/);
+});
+
+test('Send is disabled until armed, and a submit needs the arming time, focus and a visible page', () => {
+  assert.ok(sendBtn(view({}, { armed: false })).props.disabled);
+  assert.ok(!sendBtn(view({}, { armed: true })).props.disabled);
+  const ok = { armedAt: 1000, now: 1000, focused: true, visible: 'visible' };
+  assert.equal(canSend(ok), true);
+  assert.equal(canSend({ ...ok, now: 999 }), false);
+  assert.equal(canSend({ ...ok, focused: false }), false);
+  assert.equal(canSend({ ...ok, visible: 'hidden' }), false);
+  assert.ok(ARM_MS >= 800);
+});
+
+test('a new payload re-arms, the click is the only caller of submitFeedback, and submit checks canSend', () => {
+  const src = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const open = src.slice(src.indexOf('function openPendingFeedback'), src.indexOf('async function submitFeedback'));
+  assert.match(open, /armedAt = performance\.now\(\) \+ ARM_MS/);
+  assert.match(open, /armed: false/);
+  assert.equal([...src.matchAll(/submitFeedback\(/g)].length, 2); // its definition and the one click case
+  assert.match(src, /case 'feedback-send': submitFeedback\(\)/);
+  const submit = src.slice(src.indexOf('async function submitFeedback'));
+  assert.ok(submit.indexOf('canSend(') < submit.indexOf('sendFeedback('));
+  assert.match(submit, /document\.hasFocus\(\)[^]*document\.visibilityState/);
 });

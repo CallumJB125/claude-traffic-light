@@ -103,7 +103,7 @@ test('board payload: v1, mapped kind, title, the saved text plus diagnostics, re
 
 test('a screenshot only adds a note; its bytes are never in the payload', () => {
   const { payload } = F.buildBoardFragment({ report: rep('x'), screenshot: true, requestId: RID });
-  assert.match(payload.body, /A screenshot was saved on the reporter's Mac; ask for it if needed\.$/);
+  assert.match(payload.body, /A screenshot was saved on the reporter's computer; ask for it if needed\.$/);
   assert.equal(F.buildBoardFragment({ report: rep('x'), requestId: RID }).payload.body.includes('screenshot'), false);
 });
 
@@ -112,7 +112,7 @@ test('a huge diagnostics block is cut with a marker and the fragment stays withi
     const { payload, fragment } = F.buildBoardFragment({ report: rep('x'), diagnostics, screenshot: true, requestId: RID });
     assert.ok(fragment.length <= 32 * 1024, String(fragment.length));
     assert.ok(payload.body.length <= 20_000);
-    assert.match(payload.body, /\(truncated; full report saved on the reporter's Mac\)/);
+    assert.match(payload.body, /\(truncated; full report saved on the reporter's computer\)/);
     assert.match(payload.body, /A screenshot was saved/);
   }
 });
@@ -131,7 +131,7 @@ test('sending: no openWithFragment or no-team shows the join-a-team message; oth
   const last = { folder, report: rep('x'), diagnostics: '', shot: false };
   assert.equal((await F.sendToBoard({ last, buddyWin: {} })).message, F.MSG.noTeam);
   assert.equal((await F.sendToBoard({ last, buddyWin: null })).message, F.MSG.noTeam);
-  assert.match(F.MSG.noTeam, /^Join a team to send feedback to its board\. Your report is saved on this Mac\.$/);
+  assert.match(F.MSG.noTeam, /^Join a team to send feedback to its board\. Your report is saved on this computer\.$/);
   const seen = [];
   const win = (r) => ({ openWithFragment: async (page, f) => { seen.push([page, f]); if (r instanceof Error) throw r; return r; } });
   assert.equal((await F.sendToBoard({ last, buddyWin: win({ ok: false, why: 'no-team' }) })).message, F.MSG.noTeam);

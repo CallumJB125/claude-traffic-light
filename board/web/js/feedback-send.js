@@ -7,10 +7,15 @@ export const MAX_FRAGMENT = 32 * 1024;
 export const MAX_TITLE = 200;
 export const MAX_BODY = 20_000;
 
+// A page that opened this one could swap the fragment just before a second
+// click (double-clickjacking), so Send waits, and only works in a focused, visible page.
+export const ARM_MS = 800;
+export const canSend = ({ armedAt, now, focused, visible }) => now >= armedAt && !!focused && visible === 'visible';
+
 export const SENT_TEXT = 'Sent. Thanks!';
 export const NO_BOARD_TEXT = 'This team has no “Plexiform feedback” board yet. Ask an admin to create one.';
-export const FAILED_TEXT = 'Couldn’t send. It’s saved on the reporter’s Mac.';
-export const VIEWER_TEXT = 'Viewers can’t add cards. Your report is saved on the reporter’s Mac.';
+export const FAILED_TEXT = 'Couldn’t send. It’s saved on the reporter’s computer.';
+export const VIEWER_TEXT = 'Viewers can’t add cards. Your report is saved on the reporter’s computer.';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

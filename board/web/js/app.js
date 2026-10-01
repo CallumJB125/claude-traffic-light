@@ -22,7 +22,7 @@ import { VIEWS } from './views.js';
 import { drawer } from './render-drawer.js';
 import { colorMap } from './labels.js';
 import { dialog } from './render-dialogs.js';
-import { decodeFeedback, sendFeedback, FRAGMENT_PREFIX } from './feedback-send.js';
+import { decodeFeedback, sendFeedback, canSend, ARM_MS, FRAGMENT_PREFIX } from './feedback-send.js';
 import { signinScreen, noTeamScreen } from './render-signin.js';
 import { accountErrorText, parseJoin } from './account-text.js';
 import { PLAN_APPROVAL_LABEL } from '../../shared/states.js';
@@ -847,14 +847,19 @@ function takeFeedbackFromHash() {
 
 function openPendingFeedback() {
   if (!pendingFeedback || state.auth !== 'ok' || !state.board) return;
-  state.dialog = { kind: 'feedback', payload: pendingFeedback, busy: false, result: null };
+  const armedAt = performance.now() + ARM_MS;
+  state.dialog = { kind: 'feedback', payload: pendingFeedback, busy: false, result: null, armed: false, armedAt };
   pendingFeedback = null;
   update();
+  setTimeout(() => {
+    if (state.dialog?.kind === 'feedback' && state.dialog.armedAt === armedAt) { state.dialog = { ...state.dialog, armed: true }; update(); }
+  }, ARM_MS);
 }
 
 async function submitFeedback() {
   const d = state.dialog;
   if (d?.kind !== 'feedback' || d.busy || d.result?.ok || state.me?.member?.role === 'viewer') return;
+  if (!canSend({ armedAt: d.armedAt, now: performance.now(), focused: document.hasFocus(), visible: document.visibilityState })) return;
   state.dialog = { ...d, busy: true, result: null };
   update();
   const result = await sendFeedback({ api, boards: state.me?.boards, payload: d.payload });

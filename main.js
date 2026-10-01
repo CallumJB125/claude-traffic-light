@@ -1122,9 +1122,11 @@ function createFeedbackWindow() {
   feedbackWin = new BrowserWindow({
     width: 440, height: 720, useContentSize: true, minimizable: false, maximizable: false,
     title: 'Send feedback',
-    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'feedback-preload.js'), contextIsolation: true },
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'feedback-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   feedbackWin.setMenuBarVisibility(false);
+  feedbackWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  feedbackWin.webContents.on('will-navigate', (e) => e.preventDefault());
   feedbackWin.loadFile('feedback.html');
   showDock();
   feedbackWin.on('closed', () => {
@@ -1137,7 +1139,6 @@ function createFeedbackWindow() {
 function feedbackTargets() {
   const all = [
     { id: 'widget', label: 'the widget', w: win },
-    { id: 'plexiform', label: 'the Plexiform window', w: buddyWin?.getWindow?.() },
     { id: 'lights', label: 'Lights', w: lightsWin },
     { id: 'settings', label: 'Settings', w: settingsWin },
   ];
@@ -1153,7 +1154,7 @@ function feedbackDraft(d) {
   });
 }
 
-ipcMain.handle('open-feedback', createFeedbackWindow);
+ipcMain.handle('open-feedback', (e) => { if (settingsOnly(e)) createFeedbackWindow(); });
 ipcMain.handle('feedback-info', (e) => {
   if (!feedbackSenderOk(e)) return null;
   const t = feedbackTargets();

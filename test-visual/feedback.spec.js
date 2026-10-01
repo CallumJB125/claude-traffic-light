@@ -80,6 +80,6 @@ test('saving writes report.md (scrubbed), diagnostics.txt and a real PNG', async
 
 test('"Send to your team\'s board" with no team says to join one and keeps the report', async () => {
   await form.locator('#board').click();
-  await expect(form.locator('#status')).toHaveText('Join a team to send feedback to its board. Your report is saved on this Mac.');
+  await expect(form.locator('#status')).toHaveText('Join a team to send feedback to its board. Your report is saved on this computer.');
   await expect(form.locator('#copy')).toBeVisible();
 });

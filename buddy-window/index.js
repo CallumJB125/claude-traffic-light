@@ -370,7 +370,6 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       forgetHub: () => forgetHub(),
       hubSignedOut,
       isOpen: () => !!win,
-      getWindow: () => win,
       onHubPage: () => isHubPage(selected),
       // Only a mailto: the flow built itself from an invite it minted; nothing a page passed.
       openMail: (url) => { if (typeof url === 'string' && url.startsWith('mailto:')) shell.openExternal(url); }, // privacy-flow: open-link-in-browser

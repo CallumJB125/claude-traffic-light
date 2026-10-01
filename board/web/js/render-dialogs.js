@@ -236,7 +236,7 @@ export function feedbackDialog(dlg, model) {
     viewer ? h('p', { class: 'hint' }, VIEWER_TEXT) : null,
     h('div', { class: 'modal-actions' },
       h('button', { type: 'button', class: 'btn btn-ghost', 'data-action': 'close-dialog' }, sent ? 'Close' : 'Cancel'),
-      sent ? null : h('button', { type: 'button', class: 'btn btn-primary', 'data-action': 'feedback-send', disabled: dlg.busy || viewer || null }, 'Send to the Plexiform feedback board'))));
+      sent ? null : h('button', { type: 'button', class: 'btn btn-primary', 'data-action': 'feedback-send', disabled: dlg.busy || viewer || !dlg.armed || null }, 'Send to the Plexiform feedback board'))));
 }
 
 export function dialog(model) {

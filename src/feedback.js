@@ -103,8 +103,8 @@ const MAX_TITLE = 200;
 const MAX_BODY = 20000;
 const MAX_FRAGMENT = 32000;
 const FRAGMENT_KEY = 'plexiform-feedback=';
-const CUT_MARK = "\n\n…(truncated; full report saved on the reporter's Mac)";
-const SHOT_NOTE = "\n\nA screenshot was saved on the reporter's Mac; ask for it if needed.";
+const CUT_MARK = "\n\n…(truncated; full report saved on the reporter's computer)";
+const SHOT_NOTE = "\n\nA screenshot was saved on the reporter's computer; ask for it if needed.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Stored beside the report so a retry (or a second click) reuses the id and the hub dedupes.
@@ -141,9 +141,9 @@ function buildBoardFragment({ report, diagnostics = '', screenshot = false, requ
 }
 
 const MSG = {
-  noTeam: 'Join a team to send feedback to its board. Your report is saved on this Mac.',
-  invalid: "Couldn't prepare the report for sending. It's saved on this Mac.",
-  unavailable: "The team board isn't reachable right now. Your report is saved on this Mac.",
+  noTeam: 'Join a team to send feedback to its board. Your report is saved on this computer.',
+  invalid: "Couldn't prepare the report for sending. It's saved on this computer.",
+  unavailable: "The team board isn't reachable right now. Your report is saved on this computer.",
   opened: "Opened your team's board. Check the text there, then click Send.",
 };
 
