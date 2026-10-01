@@ -71,9 +71,9 @@ const sameText = (a, b) => {
 
 /**
  * → the claims of a valid token, else throws JwtInvalid (a key-set failure
- * from keyFor propagates as it is). Only RS256 with a kid; `iss` one of
- * `issuers`; `aud` (string or array) includes `audience`, and with several
- * audiences `azp` equals it; `exp > now − skew`; `iat ≤ now + skew`;
+ * from keyFor propagates as it is). Only RS256 with a kid and no `crit`;
+ * `iss` one of `issuers`; `aud` (string or array) includes `audience`, and
+ * `azp`, when present or with several audiences, equals it; `exp > now − skew`; `iat ≤ now + skew`;
  * `nonce` equal (constant time) to a non-empty expected nonce; `sub` a string
  * of 1–255 chars.
  */
@@ -87,12 +87,14 @@ export async function verifyRs256(token, { keyFor, issuers, audience, nonce, now
     claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
   } catch { throw new JwtInvalid(); }
   if (header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims || typeof claims !== 'object') throw new JwtInvalid();
+  // We implement no JWS extension, and a crit we ignored could change what was signed.
+  if (Object.hasOwn(header, 'crit')) throw new JwtInvalid();
   const key = await keyFor(header.kid);
   if (!key) throw new JwtInvalid();
   if (!cryptoVerify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], 'base64url'))) throw new JwtInvalid();
   const auds = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!issuers.includes(claims.iss) || typeof audience !== 'string' || !audience || !auds.includes(audience)) throw new JwtInvalid();
-  if (auds.length > 1 && claims.azp !== audience) throw new JwtInvalid();
+  if ((auds.length > 1 || Object.hasOwn(claims, 'azp')) && claims.azp !== audience) throw new JwtInvalid();
   if (typeof claims.exp !== 'number' || claims.exp + skewS <= nowS) throw new JwtInvalid();
   if (typeof claims.iat !== 'number' || claims.iat - skewS > nowS) throw new JwtInvalid();
   if (typeof claims.nonce !== 'string' || typeof nonce !== 'string' || !nonce || !sameText(claims.nonce, nonce)) throw new JwtInvalid();
