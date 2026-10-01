@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as text from '../js/account-text.js';
+import { CLIENT_TOKEN_RE } from '../js/client-api.js';
 
 const SRC = readFileSync(new URL('../js/signin.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
 const TOKEN = `inv_${'A'.repeat(43)}`;
@@ -24,9 +25,9 @@ function page({ hash = '', routes = {}, now = () => 1_000_000 } = {}) {
     return { ok: out.status < 400, status: out.status, json: async () => out.body };
   };
   const ctx = {
-    ...text, console, URLSearchParams, JSON, Promise, Map, String,
+    ...text, CLIENT_TOKEN_RE, console, URL, URLSearchParams, JSON, Promise, Map, String,
     Date: { now },
-    location: { hash, pathname: '/signin', replace: (u) => replaced.push(u) },
+    location: { hash, pathname: '/signin', replace: (u) => replaced.push(u), assign: (u) => replaced.push(u) },
     history: { replaceState() {} },
     document: { getElementById: el },
     fetch,
@@ -107,6 +108,51 @@ test('a hub with no mailer: the email form is hidden and the page says to use th
   await settle();
   assert.equal(p.els['email-form'].hidden, true);
   assert.equal(p.els['signin-lead'].textContent, text.EMAIL_OFF);
+});
+
+test('browser provider availability shows only its own configured buttons, independent of desktop methods', async () => {
+  const p = page({ routes: { '/api/auth/methods': { status: 200, body: { google: false, github: true, email: false, web: { google: true, github: false } } } } });
+  await settle(); await settle();
+  assert.equal(p.els['email-form'].hidden, true);
+  assert.equal(p.els['oauth-options'].hidden, false);
+  assert.equal(p.els['google-signin'].hidden, false);
+  assert.equal(p.els['github-signin'].hidden, true);
+  assert.equal(p.els['signin-lead'].textContent, 'Choose how to sign in.');
+});
+
+test('OAuth start carries only strict invitation context and refuses poisoned provider URLs', async () => {
+  const p = page({ hash: `#invite=${TOKEN}`, routes: { '/api/auth/oauth/web/start': { status: 200, body: { url: 'https://accounts.google.com/o/oauth2/v2/auth?state=random', expires_in: 600 } } } });
+  await p.click('google-signin');
+  assert.deepEqual(p.calls.find(c => c.path === '/api/auth/oauth/web/start').body, { provider: 'google', invitation: { kind: 'team', token: TOKEN } });
+  assert.deepEqual(p.replaced, ['https://accounts.google.com/o/oauth2/v2/auth?state=random']);
+  const bad = page({ routes: { '/api/auth/oauth/web/start': { status: 200, body: { url: 'https://evil.test/steal', expires_in: 600 } } } });
+  await bad.click('google-signin'); assert.deepEqual(bad.replaced, []);
+  assert.match(bad.els['signin-error'].textContent, /Sign-in didn’t finish/);
+});
+
+test('OAuth result obtains fresh normal CSRF and resumes explicit client acceptance; failed provider keeps invite for email retry', async () => {
+  const token = `clinv_${'B'.repeat(43)}`;
+  const p = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 200, body: { user: { id: 'guest' }, teams: [], csrf_token: 'normal-csrf', client_workspaces: [] } },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: true, invitation: { kind: 'client', token } } },
+    '/api/client-invites/accept': { status: 200, body: { workspace: { id: 'client-workspace' } } },
+  } });
+  await settle(); await settle(); await settle();
+  assert.deepEqual(p.replaced, ['/clients?workspace=client-workspace']);
+  assert.equal(p.calls.find(c => c.path === '/api/auth/oauth/web/result').headers['X-CSRF-Token'], 'normal-csrf');
+  assert.equal(p.calls.find(c => c.path === '/api/client-invites/accept').body.t, token);
+  const retry = page({ hash: '#oauth=web', routes: { ...start,
+    '/api/account': { status: 401, body: {} },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error: { code: 'PROVIDER_UNAVAILABLE' }, invitation: { kind: 'team', token: TOKEN } } },
+    '/api/auth/methods': { status: 200, body: { email: true, web: { google: true, github: true } } },
+    '/api/auth/email/verify': { status: 200, body: { user: {}, csrf_token: 'email-csrf' } },
+    '/api/invites/accept': { status: 200, body: { team: { id: 'team-1' } } },
+  } });
+  await settle(); await settle(); await settle();
+  assert.equal(retry.els['email-form'].hidden, false);
+  assert.match(retry.els['signin-error'].textContent, /couldn’t reach/);
+  retry.els.email.value = 'jo@example.com'; await retry.submit('email-form'); retry.els.code.value = '123456'; await retry.submit('code-form');
+  assert.deepEqual(retry.replaced, ['/?org=team-1']);
 });
 
 test('an explicit invite joins after sign-in with CSRF; a malformed one is ignored', async () => {

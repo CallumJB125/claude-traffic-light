@@ -294,6 +294,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Google / GitHub through the desktop app's loopback listener (D76–D78).
     route('POST', '/api/auth/oauth/start', ({ body, ip, ident }) => hub.oauth.start(body, { ip, ident }), { auth: 'optional' });
     route('POST', '/api/auth/oauth/exchange', ({ body, ip, ident }) => hub.oauth.exchange(body, { ip, ident }), { auth: 'optional' });
+    const browserOrigin = (req) => { if (!strictOrigin(req, config.publicUrl)) throw new HubError('FORBIDDEN', 'cross-origin browser sign-in'); };
+    route('POST', '/api/auth/oauth/web/start', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.start(ctx.body, ctx); }, { auth: 'none' });
+    for (const provider of ['google', 'github']) route('GET', `/api/auth/oauth/web/${provider}/callback`, ({ query, ...ctx }) => hub.oauthWeb.callback(provider, query, ctx), { auth: 'none' });
+    route('POST', '/api/auth/oauth/web/result', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.result(ctx.body, ctx); }, { auth: 'optional', replay: false });
     route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
     route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });

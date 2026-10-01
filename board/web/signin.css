@@ -1,0 +1,7 @@
+/* Google's pre-approved Android/Web light rectangular PNG, unchanged.
+   https://developers.google.com/identity/branding-guidelines */
+.signin [hidden] { display: none !important; }
+.google-signin { border: 0; padding: 0; background: transparent; cursor: pointer; border-radius: 4px; }
+.google-signin img { display: block; }
+.google-signin:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.oauth-options .btn { min-height: 40px; min-width: 180px; font-size: 14px; }
