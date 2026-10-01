@@ -309,8 +309,9 @@ test('L-3: members see connections and their autonomy, never settings.config; ad
     assert.equal(asMember.health, null);
     const asAdmin = await list('alice');
     assert.deepEqual(asAdmin.settings, { autonomy: { 'card.create': 'ask' }, config: { channel: 'C123', repos: ['acme/secret'] } });
-    // The audit log stays member-readable (it holds ids and codes only).
-    assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
+    // The audit log is admin-only (F2).
+    assert.equal((await h.api(await h.login('bob'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 403);
+    assert.equal((await h.api(await h.login('alice'), 'GET', `/api/integrations/${conn.id}/audit`)).status, 200);
   } finally { await h.close(); }
 });
 

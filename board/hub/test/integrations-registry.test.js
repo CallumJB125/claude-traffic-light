@@ -209,7 +209,8 @@ test('HTTP: members list (no secrets), admins connect by token / configure / dis
     assert.equal(h.db.all("SELECT id FROM cards WHERE title = 'From the webhook'").length, 1);
     const cfg = await h.api(admin, 'PATCH', `/api/integrations/${conn.id}`, { request_id: randomUUID(), autonomy: { 'card.create': 'ask' } });
     assert.equal(cfg.body.connection.settings.autonomy['card.create'], 'ask');
-    const audit = await h.api(other, 'GET', `/api/integrations/${conn.id}/audit`);
+    assert.equal((await h.api(other, 'GET', `/api/integrations/${conn.id}/audit`)).status, 403);
+    const audit = await h.api(admin, 'GET', `/api/integrations/${conn.id}/audit`);
     assert.equal(audit.body.entries[0].action, 'card.create');
     assert.equal((await h.api(admin, 'DELETE', `/api/integrations/${conn.id}`, { request_id: randomUUID() })).status, 200);
     assert.equal((await hook(sign('whsec_abcdef123456', Buffer.from(raw)))).status, 404);

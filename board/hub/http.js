@@ -351,6 +351,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       return { ok: true };
     });
     route('GET', '/api/integrations/:id/audit', ({ member, params, query }) => {
+      api.requireAdmin(member);
       own(member, params.id);
       return { entries: integrations.audit(params.id, { limit: Number(query.get('limit') ?? 100) }) };
     });

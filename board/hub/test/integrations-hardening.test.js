@@ -329,6 +329,39 @@ test('F1: a person editing a card an integration created journals its text field
   } finally { await h.close(); }
 });
 
+test('F2: the audit log is admin-only, keeps id-shaped strings only, a short clean external_ref, and 90 days', async () => {
+  const h = await startHub();
+  try {
+    h.hub.setVaultKey(randomBytes(32));
+    const conn = connect(h, 'f2a');
+    const reg = h.app.integrations;
+    const ctx = reg.ctxFor(conn.id);
+    const snippet = ['please', 'refund', 'my', 'order'].join(' ');
+    const rlo = String.fromCodePoint(0x202e);
+    await ctx.act('card.create', {
+      external_ref: `PR-7${rlo}\u0000\u2028${'9'.repeat(200)}`,
+      detail: { pr: 7, branch: 'board/BDL-1-r1', sha: 'abc123', repo: 'acme/web', said: snippet, html: '<b>x</b>', nl: 'a\nb' },
+      undo: { card_id: 'c1', note: snippet },
+    }, async () => {});
+    const bob = await h.login('bob');
+    assert.equal((await h.api(bob, 'GET', `/api/integrations/${conn.id}/audit`)).status, 403, 'a member');
+    const res = await h.api(await h.login('alice'), 'GET', `/api/integrations/${conn.id}/audit`);
+    assert.equal(res.status, 200);
+    const [a] = res.body.entries;
+    assert.deepEqual(a.detail, { pr: 7, branch: 'board/BDL-1-r1', sha: 'abc123', repo: 'acme/web' }, 'free text is dropped');
+    assert.deepEqual(a.undo, { card_id: 'c1' });
+    assert.equal(a.external_ref, `PR-7${'9'.repeat(76)}`);
+    // Retention: the sweeper drops rows older than 90 days, keeps newer ones.
+    const old = (days) => new Date(h.hub.wallMs() - days * 24 * 3600_000).toISOString();
+    const [d91, d90, d89] = [old(91), old(90), old(89)];
+    h.db.run('UPDATE integration_audit SET at = ?', d91);
+    await ctx.act('card.create', {}, async () => {});
+    h.db.run('UPDATE integration_audit SET at = ? WHERE at > ?', d89, d90);
+    reg.sweepDedupe();
+    assert.deepEqual(h.db.all('SELECT at FROM integration_audit').map((r) => r.at), [d89]);
+  } finally { await h.close(); }
+});
+
 // ── Low-a: migration 008's guard ────────────────────────────────────────
 
 test('Low-a: 008 aborts, changing nothing, for a trigger written ON JOURNAL / ON Comments, or a known name with another definition', async () => {

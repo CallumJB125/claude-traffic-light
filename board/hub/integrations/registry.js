@@ -32,6 +32,11 @@ const CONFIG_MAX_BYTES = 8 * 1024;
 const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
+const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
+const AUDIT_REF_MAX = 80;
+// An id (PR number, issue key, branch, sha, slug): never free text, which a
+// connector could pass by mistake and admins would then read as ours.
+const AUDIT_ID = /^[\w.:#\/@-]{1,128}$/;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
 const BRANCH_MAX = 255;
 // Unicode spaces, controls and invisible format characters: never in a board branch.
@@ -105,10 +110,18 @@ function auditJson(v) {
   for (const [k, x] of Object.entries(v)) {
     if (k.length > 64) continue;
     if ((typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean' || x === null) out[k] = x;
-    else if (typeof x === 'string' && x.length <= AUDIT_STR_MAX) out[k] = x;
+    else if (typeof x === 'string' && x.length <= AUDIT_STR_MAX && AUDIT_ID.test(x)) out[k] = x;
   }
   const s = JSON.stringify(out);
   return Buffer.byteLength(s) <= AUDIT_JSON_MAX ? s : JSON.stringify({ truncated: true });
+}
+
+// external_ref as the Activity list shows it: control, format (bidi) and
+// line-separator characters can't reorder or hide what an admin reads.
+function auditRef(v) {
+  if (v == null) return null;
+  const t = String(v).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').slice(0, AUDIT_REF_MAX);
+  return t || null;
 }
 
 export function createIntegrations({
@@ -456,7 +469,7 @@ export function createIntegrations({
       const mode = autonomyOf(action);
       const base = {
         connection_id: c.id, action, card_id: cardInOrg(meta?.card_id)?.id ?? null,
-        external_ref: meta?.external_ref == null ? null : String(meta.external_ref).slice(0, 200),
+        external_ref: auditRef(meta?.external_ref),
         detail: auditJson(meta?.detail) ?? '{}', undo: auditJson(meta?.undo),
       };
       const audit = (decision) => { const id = randomUUID(); db.insert('integration_audit', { id, ...base, decision, at: now() }); return id; };
@@ -512,7 +525,7 @@ export function createIntegrations({
       const mode = autonomyOf(action);
       const audit = (decision, error = null) => db.insert('integration_audit', {
         id: randomUUID(), connection_id: c.id, action, decision, error, card_id: card.id,
-        external_ref: String(external_ref ?? external_id).slice(0, 200), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
+        external_ref: auditRef(external_ref ?? external_id), detail: JSON.stringify({ pr: prN }), undo: null, at: now(),
       });
       // Bound to the PR the hub verified, like the merge poll: any other PR
       // from the card's branch (another base, a decoy closed unmerged) is not
@@ -567,6 +580,7 @@ export function createIntegrations({
 
   function sweepDedupe() {
     db.run('DELETE FROM inbound_dedupe WHERE received_at < ?', new Date(hub.wallMs() - DEDUPE_KEEP_MS).toISOString());
+    db.run('DELETE FROM integration_audit WHERE at < ?', new Date(hub.wallMs() - AUDIT_KEEP_MS).toISOString());
   }
 
   /**
