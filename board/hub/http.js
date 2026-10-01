@@ -360,8 +360,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         hub.log.warn('integration token check failed', { integration: params.provider, err: redact(e?.message ?? e) });
         throw new HubError('VALIDATION', 'That token was not accepted. Check it and try again.');
       }
-      // A connection id is the hub's to mint, never the connector's.
-      return { connection: integrations.createConnection({ ...v, id: undefined, orgId: member.org_id, memberId: member.id, provider: params.provider }) };
+      // Named fields only: the id is the hub's to mint, and the connector's settings are provider facts (D42 addendum C1).
+      return {
+        connection: integrations.createConnection({
+          external_id: v.external_id, display_name: v.display_name, scopes: v.scopes, secrets: v.secrets, settings: v.settings, orgId: member.org_id, memberId: member.id, provider: params.provider,
+        }),
+      };
     });
     // OAuth / app install (D42): the callback needs this cookie back. A
     // browser tab has it already; the desktop app's connect window (its own
@@ -404,7 +408,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       const patch = {};
       if (body.autonomy !== undefined) patch.autonomy = body.autonomy;
       if (body.config !== undefined) patch.config = body.config;
-      return { connection: integrations.setSettings(params.id, patch) };
+      return { connection: integrations.setSettings(params.id, patch, { memberId: member.id }) };
     });
     route('DELETE', '/api/integrations/:id', ({ member, params }) => {
       api.requireAdmin(member);

@@ -17,7 +17,8 @@ import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
-import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
+import { AUTONOMY, cleanLinkStatus, parseCidr, configKeyOk } from './connector.js';
+import { isLoopback } from '../config.js';
 import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
 import { createJwks, readCapped, verifyRs256 } from '../jwt.js';
@@ -31,6 +32,9 @@ const FETCH_TRIES = 4;
 const HANDLER_TIMEOUT_MS = 60_000;
 const DEDUPE_KEEP_MS = 30 * 24 * 3600_000;
 const CONFIG_MAX_BYTES = 8 * 1024;
+const CONFIG_DEPTH = 4;
+const PROVIDER_MAX = 4096; // exchange ⊕ prepare (≤ 2 KB) plus the pinned match and hub_url
+const SETTINGS_NAMESPACES = ['autonomy', 'config', 'provider', 'pinned'];
 const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
@@ -128,6 +132,27 @@ function cleanStatus(v) {
   return out;
 }
 const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
+// ctx.hubUrl (D42 addendum C1): BOARD_PUBLIC_URL's origin when it is nothing
+// more than an https origin (http only on loopback for a dev/local hub); else null.
+function hubUrlOf(v, devHub) {
+  if (typeof v !== 'string' || /[?#]/.test(v)) return null;
+  let u;
+  try { u = new URL(v); } catch { return null; }
+  if (u.username || u.password || u.pathname !== '/') return null;
+  if (u.protocol === 'https:' || (u.protocol === 'http:' && devHub && isLoopback(u.hostname.replace(/^\[|\]$/g, '')))) return u.origin;
+  return null;
+}
+
+// An admin's settings.config value: JSON scalars, or lists and objects of
+// them a few levels deep, never a prototype key.
+function configValue(v, depth = 0) {
+  if (typeof v === 'string' || typeof v === 'boolean') return true;
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (depth >= CONFIG_DEPTH) return false;
+  if (Array.isArray(v)) return v.every((x) => x === null || configValue(x, depth + 1));
+  return isBareObject(v) && Object.entries(v).every(([k, x]) => !POISON_KEYS.includes(k) && (x === null || configValue(x, depth + 1)));
+}
+
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
@@ -187,8 +212,10 @@ function auditRef(v) {
 
 export function createIntegrations({
   hub, api, bus = null, log, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), // privacy-flow: integrations-hub
-  handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random,
+  handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random, publicUrl = null,
 }) {
+  // Read once: no setting, payload or request can move where links point.
+  const hubUrl = hubUrlOf(publicUrl, ['dev', 'local'].includes(hub.config?.auth));
   const connectors = new Map();
   const ingress = new Map(); // provider → BlockList of its ingressCidrs
   const db = hub.db;
@@ -219,6 +246,16 @@ export function createIntegrations({
     const ext = String(external_id ?? '');
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
+    if (Object.entries(settings).some(([k, v]) => !SETTINGS_NAMESPACES.includes(k) || !isPlainObject(v))) throw new HubError('VALIDATION', 'bad connection settings');
+    const stored = { ...settings };
+    // provider (D42 addendum C1): what the provider said, every pinned key, and
+    // the hub's own origin; written here, in the insert, and never again (026).
+    if (settings.provider !== undefined || settings.pinned !== undefined) {
+      const facts = exchangeConfig(Object.fromEntries(Object.entries(settings.provider ?? {}).filter(([k]) => k !== 'hub_url')));
+      if (facts === null) throw new HubError('VALIDATION', `${conn.name} returned settings this hub will not store`);
+      stored.provider = { ...facts, ...(settings.pinned ?? {}), ...(hubUrl ? { hub_url: hubUrl } : {}) };
+      if (Buffer.byteLength(JSON.stringify(stored.provider)) > PROVIDER_MAX) throw new HubError('VALIDATION', `${conn.name} returned settings this hub will not store`);
+    }
     for (const k of Object.keys(secrets)) if (!conn.secrets.includes(k)) throw new HubError('VALIDATION', `${provider} does not declare secret ${k}`);
     // Anything else would be sealed as its String() ("[object Object]"); the
     // message never carries the value, and nothing is written.
@@ -250,7 +287,7 @@ export function createIntegrations({
       if (pending) db.run('DELETE FROM integration_pending WHERE id = ?', id);
       db.insert('connections', {
         id, org_id: orgId, provider, external_id: ext, display_name: display_name == null ? null : String(display_name).slice(0, 200),
-        scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(settings), created_by: memberId, created_at: now(),
+        scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(stored), created_by: memberId, created_at: now(),
       });
       // Their AAD is `<id>|<kind>|<key_id>` already: they open here and nowhere else.
       for (const r of copied) db.insert('connection_secrets', { connection_id: id, kind: r.kind, key_id: r.key_id, nonce: r.nonce, ciphertext: r.ciphertext, created_at: now() });
@@ -753,7 +790,7 @@ export function createIntegrations({
       })));
     }
 
-    return {
+    const ctx = {
       connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by },
       system: conn.systemEvents.length ? { event: systemEvent } : null,
       secret: (kind) => secrets()[kind] ?? null,
@@ -782,6 +819,9 @@ export function createIntegrations({
       },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
+    // The only base for a link to the hub; a handler can't repoint it for later calls.
+    Object.defineProperty(ctx, 'hubUrl', { value: hubUrl, enumerable: true, writable: false, configurable: false });
+    return ctx;
   }
 
   // ── inbound webhooks ────────────────────────────────────────────────────
@@ -1026,10 +1066,11 @@ export function createIntegrations({
   // The one place the identity callback URL is made (D97 prepare now, D98's identity flow later).
   const identityRedirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/identity/callback`;
   // A reconnect hands the connector what it stored last time (app id, slug…):
-  // the non-secret config of the org's newest active connection of that provider.
+  // the org's newest active connection of that provider, its provider facts
+  // over an admin's config (a row from before 026 has config only).
   const configFor = (orgId, provider) => {
-    const cfg = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {})?.config;
-    return isPlainObject(cfg) ? cfg : {};
+    const s = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {});
+    return { ...(isPlainObject(s?.config) ? s.config : {}), ...(isPlainObject(s?.provider) ? s.provider : {}) };
   };
 
   // The web posts this form as a real <form>: its action may only be the
@@ -1047,7 +1088,7 @@ export function createIntegrations({
     return { action: url.href, fields };
   }
 
-  // exchange() may keep non-secret scalars (app id, slug) as settings.config;
+  // exchange() may keep non-secret scalars (app id, slug) as settings.provider;
   // never autonomy, which stays an admin's. null: over the cap.
   function exchangeConfig(v) {
     const out = {};
@@ -1140,18 +1181,17 @@ export function createIntegrations({
       }
       if (isPlainObject(v?.secrets) && Object.keys(v.secrets).some((k) => Object.hasOwn(held, k))) return { ok: false, error: 'Could not save the connection.' };
     }
-    let config = v?.settings === undefined ? null : exchangeConfig(v.settings);
-    if (config === null && v?.settings !== undefined) return { ok: false, error: 'Could not save the connection.' };
+    let facts = v?.settings === undefined ? {} : exchangeConfig(v.settings);
     // The pending settings win: exchange can't move the app it was pinned to.
-    if (pending) config = exchangeConfig({ ...(config ?? {}), ...safeJson(pending.settings, {}) });
-    if (pending && config === null) return { ok: false, error: 'Could not save the connection.' };
+    if (pending && facts) facts = exchangeConfig({ ...facts, ...safeJson(pending.settings, {}) });
+    if (facts === null) return { ok: false, error: 'Could not save the connection.' };
     const next = v?.next_url == null ? null : urlOn(v.next_url, conn.hosts);
     if (v?.next_url != null && !next) warn('integration next_url refused', conn, 'not https on a declared host');
     try {
       // Named fields only: exchange() can't pick the id, org, member or autonomy.
       const connection = createConnection({
         external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {},
-        settings: { ...(config ? { config } : {}), ...(pending ? { pinned: safeJson(pending.match, {}) } : {}) },
+        settings: { provider: facts, ...(pending ? { pinned: safeJson(pending.match, {}) } : {}) },
         id: st.i, orgId: member.org_id, memberId: member.id, provider, pending,
       });
       return { ok: true, connection, provider_name: conn.name, next_url: next?.href ?? null };
@@ -1223,7 +1263,8 @@ export function createIntegrations({
     if (!isPlainObject(m)) return null;
     const entries = Object.entries(m);
     if (!entries.length || entries.length > MATCH_MAX) return null;
-    const ok = ([k, x]) => MATCH_KEY.test(k) && ((typeof x === 'string' && x.length <= MATCH_STR_MAX) || (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean');
+    // hub_url is the registry's own provider key: a pinned one could not be copied there.
+    const ok = ([k, x]) => MATCH_KEY.test(k) && k !== 'hub_url' && ((typeof x === 'string' && x.length <= MATCH_STR_MAX) || (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean');
     return entries.every(ok) ? Object.fromEntries(entries) : null;
   }
 
@@ -1421,7 +1462,12 @@ export function createIntegrations({
   const credHash = (cred) => sha(`${cred.kind}:${cred.id}`);
   // The audience: the client id promotion pinned (D97), never admin-editable config.
   const pinnedClientId = (c) => { const v = safeJson(c.settings, {})?.pinned?.client_id; return typeof v === 'string' && v ? v : null; };
-  const linkConnection = (c) => Object.freeze({ external_id: c.external_id, settings: Object.freeze(safeJson(c.settings, {})) });
+  // Fixed namespaces only (their values are scalars, so a shallow freeze is deep): never config.
+  const linkConnection = (c) => {
+    const s = safeJson(c.settings, {}) ?? {};
+    const fixed = (v) => (isPlainObject(v) ? Object.freeze({ ...v }) : undefined);
+    return Object.freeze({ external_id: c.external_id, settings: Object.freeze({ pinned: fixed(s.pinned), provider: fixed(s.provider) }) });
+  };
   const jwksCaches = new Map(); // provider → its JWKS cache
 
   function jwksFor(conn) {
@@ -1679,27 +1725,66 @@ export function createIntegrations({
     async verifyToken(provider, token) {
       const c = connectors.get(provider);
       if (!c || c.connect.kind !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
-      return c.connect.verifyToken({ token, fetch: restrictedFetch(c) });
+      const v = await c.connect.verifyToken({ token, fetch: restrictedFetch(c) });
+      // Named fields only; its settings are provider facts, never autonomy, config or pinned.
+      const facts = v?.settings === undefined ? {} : exchangeConfig(v.settings);
+      if (facts === null) throw new Error('verifyToken settings over the cap');
+      return { external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {}, settings: { provider: facts } };
     },
-    setSettings(id, patch) {
-      const c = row(id);
-      if (!c || c.status === 'revoked') throw new HubError('NOT_FOUND', 'no such integration');
-      const conn = connectors.get(c.provider);
-      if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
+    /**
+     * PATCH (D42 addendum C1): `autonomy` and `config` merged key by key in one
+     * transaction (null deletes); provider and pinned are never reachable. One
+     * journal row names the changed keys, never a value.
+     */
+    setSettings(id, patch, { memberId = null } = {}) {
+      if (!isPlainObject(patch) || Object.keys(patch).some((k) => k !== 'autonomy' && k !== 'config')) throw new HubError('VALIDATION', 'settings take autonomy and config only');
       if (patch.autonomy !== undefined && !isPlainObject(patch.autonomy)) throw new HubError('VALIDATION', 'autonomy must be an object');
-      if (patch.config !== undefined) {
-        if (!isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
-        if (Buffer.byteLength(JSON.stringify(patch.config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
-      }
-      const cur = safeJson(c.settings, {});
-      // pinned names the app a pending connection was promoted for (D97): never patched.
-      const next = { ...cur, ...patch, pinned: cur.pinned };
-      for (const [a, m] of Object.entries(next.autonomy ?? {})) {
-        if (!Object.hasOwn(conn.actions, a)) throw new HubError('VALIDATION', `${conn.name} has no action ${a}`);
-        if (!AUTONOMY.includes(m)) throw new HubError('VALIDATION', 'autonomy must be auto, ask or off');
-      }
-      db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
-      return publicConnection(row(id));
+      if (patch.config !== undefined && !isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
+      return hub.txn(() => {
+        const c = row(id);
+        if (!c || c.status === 'revoked') throw new HubError('NOT_FOUND', 'no such integration');
+        const conn = connectors.get(c.provider);
+        if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
+        const cur = safeJson(c.settings, {}) ?? {};
+        const changed = { autonomy: [], config: [] };
+        const autonomy = isPlainObject(cur.autonomy) ? { ...cur.autonomy } : {};
+        for (const [a, m] of Object.entries(patch.autonomy ?? {})) {
+          if (POISON_KEYS.includes(a)) throw new HubError('VALIDATION', `${conn.name} has no such action`);
+          // Undeclared and null: nothing to reset, and no answer that differs from {}.
+          if (!Object.hasOwn(conn.actions, a)) {
+            if (m === null) continue;
+            throw new HubError('VALIDATION', `${conn.name} has no action ${a}`);
+          }
+          if (m === null) {
+            if (Object.hasOwn(autonomy, a)) { delete autonomy[a]; changed.autonomy.push(a); }
+            continue;
+          }
+          if (!AUTONOMY.includes(m)) throw new HubError('VALIDATION', 'autonomy must be auto, ask or off');
+          if (autonomy[a] !== m) { autonomy[a] = m; changed.autonomy.push(a); }
+        }
+        const config = isPlainObject(cur.config) ? { ...cur.config } : {};
+        const held = new Set(Object.keys(isPlainObject(cur.provider) ? cur.provider : {}).map((k) => k.toLowerCase()));
+        for (const [k, v] of Object.entries(patch.config ?? {})) {
+          if (!configKeyOk(k)) throw new HubError('VALIDATION', 'a config key is 1–64 letters, digits, _ or -, starting with a letter, and not a settings namespace');
+          if (held.has(k.toLowerCase())) throw new HubError('VALIDATION', `that value comes from ${conn.name} and can't be changed here`);
+          if (conn.configKeys && !conn.configKeys.includes(k)) {
+            if (v === null) continue;
+            throw new HubError('VALIDATION', `${conn.name} has no setting ${k}`);
+          }
+          if (v === null) {
+            if (Object.hasOwn(config, k)) { delete config[k]; changed.config.push(k); }
+            continue;
+          }
+          if (!configValue(v)) throw new HubError('VALIDATION', 'a config value is text, a number, true or false, or a list or object of those');
+          if (JSON.stringify(config[k]) !== JSON.stringify(v)) { config[k] = v; changed.config.push(k); }
+        }
+        if (patch.config !== undefined && Buffer.byteLength(JSON.stringify(config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
+        if (!changed.autonomy.length && !changed.config.length) return publicConnection(c);
+        const next = { ...cur, ...(changed.autonomy.length ? { autonomy } : {}), ...(changed.config.length ? { config } : {}) };
+        db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
+        hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind: 'integration.settings', payload: { connection_id: c.id, provider: c.provider, changed } });
+        return publicConnection(row(id));
+      });
     },
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, error, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC, rowid DESC LIMIT ?', id, Math.min(500, Math.max(1, Number(limit) || 100)))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),

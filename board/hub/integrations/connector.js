@@ -163,6 +163,12 @@ const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9]
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
 const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const PREPARE_INPUTS_MAX = 8;
+const CONFIG_KEYS_MAX = 32;
+// A settings.config key an admin may write (D42 addendum C1): never a path, a
+// prototype key or the name of another settings namespace, in any case.
+export const CONFIG_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+export const RESERVED_CONFIG_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype', 'provider', 'pinned', 'autonomy', 'config']);
+export const configKeyOk = (k) => typeof k === 'string' && CONFIG_KEY_RE.test(k) && !RESERVED_CONFIG_KEYS.includes(k.toLowerCase());
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // The only state-machine events an integration may raise as the system (D42):
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
@@ -231,6 +237,12 @@ export function defineConnector(spec) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.configKeys !== undefined) {
+    const k = spec.configKeys;
+    if (!Array.isArray(k) || !k.length || k.length > CONFIG_KEYS_MAX || new Set(k).size !== k.length || !k.every(configKeyOk)) {
+      errs.push(`configKeys lists 1–${CONFIG_KEYS_MAX} distinct config key names (^[A-Za-z][A-Za-z0-9_-]{0,63}$, not a prototype key or a settings namespace)`);
+    }
+  }
   if (spec?.identity !== undefined) {
     const idn = spec.identity;
     const onHosts = (u) => {
@@ -263,5 +275,6 @@ export function defineConnector(spec) {
   return Object.freeze({
     consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]),
     ...(spec.identity ? { identity: Object.freeze({ ...spec.identity }) } : {}),
+    ...(spec.configKeys ? { configKeys: Object.freeze([...spec.configKeys]) } : {}),
   });
 }

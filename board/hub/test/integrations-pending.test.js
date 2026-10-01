@@ -665,8 +665,10 @@ test('settings.pinned: PATCH and setSettings can\'t write it; a raw update that 
     assert.equal((await h.api(alice, 'PATCH', `/api/integrations/${p.id}`, { request_id: randomUUID(), config: { pinned: 'cfg' } })).status, 400);
     assert.throws(() => reg.setSettings(p.id, { pinned: { app_id: 'EVIL' } }), (e) => e.code === 'VALIDATION');
     assert.deepEqual(JSON.parse(h.db.get('SELECT settings FROM connections WHERE id = ?', p.id).settings).pinned, pinned);
-    assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ pinned: { app_id: 'EVIL' } }), p.id), /pinned/);
-    assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({}), p.id), /pinned/);
+    // provider stays as stored (026 guards it on its own): only pinned changes here.
+    const { pinned: _p, ...rest } = JSON.parse(h.db.get('SELECT settings FROM connections WHERE id = ?', p.id).settings);
+    assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ ...rest, pinned: { app_id: 'EVIL' } }), p.id), /pinned/);
+    assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(rest), p.id), /pinned/);
     // A connection without pinned can't gain one either.
     const c = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'pend', external_id: 'T7' });
     assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ pinned: { a: 1 } }), c.id), /pinned/);

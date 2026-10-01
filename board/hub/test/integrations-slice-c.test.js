@@ -44,7 +44,7 @@ function slackish(beh, id = 'slackish') {
         return {
           external_id: beh.team ?? 'T1', display_name: 'Workspace', scopes: ['commands'], secrets: { bot_token: BOT },
           settings: { team_id: beh.teamInSettings ?? beh.team ?? 'T1', bot_user_id: 'UB1', app_id: 'EXCHANGE-SAYS', hub_url: EVIL, ...beh.exchangeSettings },
-          match: { app_id: args.config.app_id, client_id: args.config.client_id },
+          match: { app_id: args.config.app_id, client_id: args.config.client_id, ...beh.match },
         };
       },
     },
@@ -227,7 +227,8 @@ test('C1 PATCH config merges key by key: provider and every other config key sta
 test('C1 PATCH: a config key provider holds is refused in any letter case, and nothing is written', async () => {
   const { h, reg, alice } = await setup();
   try {
-    const c = withProvider(h, reg, { team_id: 'T1', app_id: 'A1', hub_url: 'https://plex.example' }, { channel: 'C1' });
+    const c = withProvider(h, registryWith(h, 'https://plex.example', newBeh()), { team_id: 'T1', app_id: 'A1' }, { channel: 'C1' });
+    assert.equal(stored(h, c.id).provider.hub_url, 'https://plex.example');
     const before = h.db.get('SELECT settings FROM connections WHERE id = ?', c.id).settings;
     for (const config of [{ team_id: 'T0OTHER' }, { TEAM_ID: 'T0OTHER' }, { App_Id: 'A9' }, { hub_url: EVIL }, { team_id: null }, { channel: 'C2', team_id: 'T0OTHER' }]) {
       const r = await patch(h, alice, c.id, { config });
