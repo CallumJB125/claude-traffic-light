@@ -356,9 +356,37 @@ test('promotion input validation accepts an omitted rollback list and rejects ma
   }
 });
 
+// Local reusable workflows come from the same reviewed workflow commit.
+// They must be real, flat files in the fixed workflow directory, callable
+// by a workflow; external actions still require an immutable commit SHA.
+function assertWorkflowUsePinned(use, caller) {
+  const label = `${caller}: ${use}`;
+  if (!use.startsWith('./')) {
+    assert.match(use, /@[0-9a-f]{40}$/, label);
+    return;
+  }
+  assert.match(use, /^\.\/\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9_-]*\.ya?ml$/, label);
+  const relative = use.slice(2);
+  assert.ok(fs.lstatSync(path.join(ROOT, relative)).isFile(), label);
+  const trigger = require('js-yaml').load(readText(relative)).on;
+  assert.ok(trigger && typeof trigger === 'object' && Object.hasOwn(trigger, 'workflow_call'), label);
+}
+
+test('workflow pin policy allows checked local reusable files and refuses paths and mutable external actions', () => {
+  const sha = '34e114876b0b11c390a56381ad16ebd13914f8d5';
+  assertWorkflowUsePinned(`actions/checkout@${sha}`, 'synthetic');
+  assertWorkflowUsePinned('./.github/workflows/windows-native.yml', 'synthetic');
+  for (const use of [
+    'actions/checkout@main', 'actions/checkout@v4', 'actions/checkout',
+    './.github/workflows/../windows-native.yml', './scripts/build.yml',
+    './.github/workflows/windows-native.yml@main', './.github/workflows/missing.yml',
+    './.github/workflows/release-promote.yml', './.github/workflows/release.yml',
+  ]) assert.throws(() => assertWorkflowUsePinned(use, 'synthetic'), undefined, use);
+});
+
 // M4 / #6 (reviews): workflow inputs reach the shell only through env.
 test('workflows: inputs never interpolated into a run script; every action pinned to a commit', () => {
-  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml']) {
+  for (const f of ['.github/workflows/release.yml', '.github/workflows/release-promote.yml', '.github/workflows/windows-native.yml']) {
     const yml = readText(f);
     for (const line of yml.split('\n')) {
       if (!/\$\{\{[^}]*inputs\./.test(line)) continue;
@@ -368,7 +396,7 @@ test('workflows: inputs never interpolated into a run script; every action pinne
     for (const [name, body] of Object.entries(jobsOf(yml))) {
       if (/SIGNING_KEY/.test(body)) assert.match(body, /\n {4}environment: release\n/, `${f} ${name}`);
     }
-    for (const m of yml.matchAll(/uses: (\S+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, `${f}: ${m[1]}`);
+    for (const m of yml.matchAll(/uses: (\S+)/g)) assertWorkflowUsePinned(m[1], f);
   }
 });
 
