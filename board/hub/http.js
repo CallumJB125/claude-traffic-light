@@ -24,6 +24,7 @@ import { searchWork } from './search.js';
 import { teamOverview } from './team-overview.js';
 import { Workflows } from './workflows.js';
 import { TeamCommunication } from './communication.js';
+import { WorkCapture } from './work-capture.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -229,6 +230,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 export function createHttpHandler({ hub, api, config, integrations = null }) {
   const workflows = new Workflows(hub);
   const communication = new TeamCommunication(hub);
+  const workCapture = new WorkCapture(hub);
   // This query can only narrow current staff access. Desktop grants derive it
   // privately in main; remote grants additionally require their own guard.
   const communicationOptions = (query) => query.has('board_id') ? { boardIds: Object.freeze(query.getAll('board_id')) } : {};
@@ -319,6 +321,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/auth/oauth/web/result', (ctx) => { browserOrigin(ctx.req); return hub.oauthWeb.result(ctx.body, ctx); }, { auth: 'optional', replay: false });
     route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
     route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
+    route('GET', '/api/work-capture/routes', ({ ident }) => workCapture.routes(ident.user.id, ident.cred), { auth: 'user', replay: false });
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/account/devices', ({ ident }) => acc.listDevices(ident), { auth: 'user' });
     route('DELETE', '/api/account/devices/:id', ({ ident, params, ip }) => acc.revokeDevice(ident, params.id, { ip }), { auth: 'user' });
@@ -418,9 +421,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
+  route('POST', '/api/boards/:board_id/work-capture', ({ member, params, body, ident }) => workCapture.observe(member, params.board_id, body, ident?.cred), { replay: false, maxBody: 12 * 1024 });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
   route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
+  route('POST', '/api/cards/:card_id/work-capture/stop', ({ member, params, body, ident }) => workCapture.stop(member, params.card_id, body, ident?.cred), { replay: false, maxBody: 1024 });
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
   route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));

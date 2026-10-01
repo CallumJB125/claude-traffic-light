@@ -9,6 +9,7 @@ import { FEED_KINDS } from '../shared/protocol.js';
 import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
 import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
+import { workCaptureView } from './work-capture-view.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -133,6 +134,7 @@ export function cardView(hub, row, viewerId) {
   const budgetCap = row.budget_cents;
   const stateAge = hub.ageOf(row.state_since);
   const clientFeedback = hub.clientFeedback?.cardProvenance(row.id);
+  const capture = workCaptureView(hub, row.id);
   return {
     id: row.id, board_id: row.board_id, key: row.key, title: row.title, labels, column: row.column_name, version: row.version,
     label_colors: labels.map((l) => colors.get(String(l).toLowerCase()) ?? null),
@@ -140,6 +142,7 @@ export function cardView(hub, row, viewerId) {
     archived: row.archived_at ? { at_age_ms: Math.round(hub.ageOf(row.archived_at)), by_name: hub.memberName(row.archived_by) } : null,
     agent_suggested: !!row.created_by_run_id, parent_card_id: row.parent_card_id ?? null,
     ...(clientFeedback ? { client_feedback: clientFeedback } : {}),
+    ...(capture ? { capture } : {}),
     run_state: row.run_state ?? 'todo',
     blocked_kind: row.blocked_kind, fail_kind: row.fail_kind, fail_reason: row.fail_reason, resume_to: row.resume_to, fence: row.fence,
     repo: repo ? { id: repo.id, short_name: repo.short_name } : null, base_ref: row.base_ref, branch: runRow?.branch ?? null,

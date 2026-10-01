@@ -34,6 +34,7 @@ const MATRIX = {
   'POST /api/auth/oauth/web/result': { kind: 'public', reason: 'browser-bound result; success exact live self session plus CSRF, failures no account credential' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
+  'GET /api/work-capture/routes': { kind: 'self' },
   'POST /api/account/setup': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
@@ -124,6 +125,7 @@ const MATRIX = {
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
   'GET /api/boards/:board_id/presence': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/presence` },
   'POST /api/boards/:board_id/cards': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/cards`, body: { title: 'pwned' } },
+  'POST /api/boards/:board_id/work-capture': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/work-capture`, body: (fx) => ({ install_id: randomUUID(), provider: 'codex', session_id: 'foreign-session', repo_id: fx.B.repo, title: 'Foreign capture', status: 'working' }) },
   // Label registry and archive (D91, D94): B's board, label name and card, also named from A's board.
   'GET /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels` },
   'POST /api/boards/:board_id/labels': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/labels`, body: { name: 'pwned', color: 'red' } },
@@ -139,6 +141,7 @@ const MATRIX = {
   'POST /api/cards/:card_id/restore': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/restore` },
   'POST /api/boards/:board_id/repos': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/repos`, body: (fx) => ({ repo_id: fx.B.repo }) },
   'GET /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}` },
+  'POST /api/cards/:card_id/work-capture/stop': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/work-capture/stop`, body: {} },
   'PATCH /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}`, body: { title: 'pwned', version: 0 } },
   'POST /api/cards/:card_id/actions/:action': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/actions/stop`, body: {} },
   'POST /api/cards/:card_id/comments': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/comments`, body: { body: 'pwned' } },

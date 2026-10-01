@@ -19,6 +19,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   search_member: { capacity: 60, per_ms: 60_000 },     // bounded staff search, including invalid queries
   overview_member: { capacity: 30, per_ms: 60_000 },   // bounded selected-team overview
   workflow_member: { capacity: 20, per_ms: 3_600_000 }, // new definitions/versions/task sets
+  capture_routes_user: { capacity: 30, per_ms: 60_000 },
+  capture_report_user: { capacity: 120, per_ms: 60_000 }, // across all of this user's memberships
   label_rewrite_board: { capacity: 10, per_ms: 3_600_000 },  // label rename / delete with strip: each rewrites up to 2,000 cards (D91), per board
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
