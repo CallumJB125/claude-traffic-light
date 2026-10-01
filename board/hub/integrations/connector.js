@@ -21,12 +21,28 @@
 //     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
 //     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
 //     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
-//     async exchange({ query, redirectUri, webhookUrl, config, fetch }) →   // oauth/app_install callback
+//     async exchange({ query, redirectUri, webhookUrl, config, secrets, fetch }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
 //         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored as settings.config),
-//         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link) },
+//         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
+//         match?: {k: scalar} (required after prepare: exactly the pending match, D97) },
 //     (`webhookUrl` is this connection's future webhook URL; `config` is the
-//     stored settings.config of the org's active connection of this provider, else {})
+//     stored settings.config of the org's active connection of this provider, else {},
+//     overlaid with the pending settings after prepare; `secrets` is the pending
+//     row's unsealed secrets after prepare, else {}; exchange may add kinds, never replace one)
+//
+//     // Optional, oauth/app_install without manifestForm (D97): the app is
+//     // made from input an admin pastes (Slack: a configuration token).
+//     prepareInputs: ['config_token', 'app_id', …],  // 1–8 key names; only these keys of `input` reach prepare
+//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, config, fetch }) →
+//       { needs: { fields: [key of prepareInputs], create_url: 'https://<one of hosts>/…' } }   // ask for a paste
+//       | { secrets: {kind: string}, settings?: {k: scalar}, match: {k: scalar} (1–8), external_id? },
+//     (`input` values are strings of 1–4096 bytes, held only for this call: never
+//     put them in an error, a log line, secrets or settings. Any throw becomes a
+//     fixed VALIDATION and is logged as a code only. `fetch` is the restricted
+//     fetch without retries; its errors are fixed text with no `cause`.
+//     `webhookUrl` names the pending id the connection keeps; `identityRedirectUri`
+//     is exactly the redirectUri D98's identity flow will use.)
 //     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },

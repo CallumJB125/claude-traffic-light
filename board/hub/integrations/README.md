@@ -57,6 +57,24 @@ your team's active connection of this provider, for a reconnect; else `{}`). `ex
 the success page's single "Continue on <name>" link, e.g. installing the app). Anything else it returns, such
 as an id or org, is ignored.
 
+**Pending connections (D97).** A provider whose app must be created first (Slack, from a configuration
+token) declares `connect.prepareInputs: [...]` and `connect.prepare({input, webhookUrl, redirectUri,
+identityRedirectUri, config, fetch})`. The admin's `POST /api/integrations/<id>/prepare {input}` reaches it with
+only the declared keys (strings of 1–4096 bytes). The input lives only in that call: **never** put it in an error
+message, a log line, `secrets` or `settings`; the registry turns any throw into a fixed `VALIDATION` and logs a code
+only, and the `fetch` you get (declared `hosts`, 10 s, no retries) throws fixed text with no `cause`. Answer either
+`{needs:{fields, create_url}}` (the admin creates the app at `create_url`, https on `hosts`, and pastes `fields`;
+the second `POST /api/integrations/<pending id>/prepare` calls you again with them, and must not answer `needs`) or
+`{secrets, settings?, match, external_id?}`. The secrets are sealed on a pending row under the id the connection
+will keep; `webhookUrl` already names it, and `identityRedirectUri` is the exact identity callback (put both
+redirect URIs in your manifest). The row lives one hour, claims no workspace and receives no webhooks (a pending id
+is the unknown-connection 404). `authorizeUrl` and `exchange` then get `config` overlaid with your pending
+`settings`, and `exchange` gets the pending `secrets`; it must return `match` with exactly the same keys and values
+(Slack: `app_id` from the `oauth.v2.access` answer and `client_id`), and the recorded `external_id` if you gave one,
+else the app is refused and the row stays. It may add secret kinds (the bot token), never replace a pending one.
+Promotion keeps the id and copies the sealed secrets unchanged; `settings.pinned` = `match`, fixed for good. The
+hub never deletes the app it made at the provider: the admin is told to.
+
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,
 a stale-timestamp test where the provider signs one, and recorded-fixture tests for each
