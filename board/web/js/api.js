@@ -83,6 +83,11 @@ export const api = {
   disconnectIntegration: (id) => mut('DELETE', `/api/integrations/${enc(id)}`),
   // Admins only (D42): members get 403, so the page shows them no Activity.
   integrationAudit: (id) => call('GET', `/api/integrations/${enc(id)}/audit?limit=50`),
+  // D98: a member links and unlinks only their own account; admins list and revoke.
+  startIdentityLink: (id) => mut('POST', `/api/integrations/${enc(id)}/identity/start`),
+  unlinkIdentity: (id) => mut('DELETE', `/api/integrations/${enc(id)}/identity`),
+  linkedMembers: (id) => call('GET', `/api/integrations/${enc(id)}/identities`),
+  revokeIdentity: (id, memberId) => mut('DELETE', `/api/integrations/${enc(id)}/identities/${enc(memberId)}`),
   // Also returns offset_ms (hub clock − ours, from the Date header): journal
   // times are hub times. A page gets 30 s before it counts as unreachable.
   journal: async (boardId, afterSeq = 0, limit = 1000) => {

@@ -175,9 +175,10 @@ test('M-1: acts only as the connecting member or one linked by external identity
       assert.throws(() => s.actAs(h.ids.bob), (e) => e.code === 'FORBIDDEN');
       assert.equal(s.actAs(h.ids.alice).member.role, 'member', 'an owner is capped at member');
     });
-    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, verified_via, linked_at) VALUES ('fake', 'other-ws', 'U1', ?, 'oauth_link', ?)", h.ids.bob, h.hub.iso());
+    // D98: a link names its connection, and one in another workspace can't even be written.
+    assert.throws(() => h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('fake', 'other-ws', 'U1', ?, ?, 'oauth_link', ?)", h.ids.bob, conn.id, h.hub.iso()), /cross-team reference/);
     await ctx.act('card.create', {}, async (s) => { assert.throws(() => s.actAs(h.ids.bob), (e) => e.code === 'FORBIDDEN', 'a link in another workspace does not count'); });
-    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, verified_via, linked_at) VALUES ('fake', ?, 'U2', ?, 'oauth_link', ?)", conn.external_id, h.ids.bob, h.hub.iso());
+    h.db.run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('fake', ?, 'U2', ?, ?, 'oauth_link', ?)", conn.external_id, h.ids.bob, conn.id, h.hub.iso());
     await ctx.act('card.create', {}, async (s) => { assert.equal(s.actAs(h.ids.bob).member.id, h.ids.bob); });
     // What the Api sees is the capped member.
     let seen;

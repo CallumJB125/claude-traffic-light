@@ -227,3 +227,37 @@ test('password managers keep out of secret fields: the configuration token, past
   assert.equal(tok.props.name, 'token');
   assert.deepEqual(pinned(tok), ['new-password', '', 'true']);
 });
+
+// ── identity links (D98) ────────────────────────────────────────────────────
+
+const slk = { id: 'slack', name: 'Slack', scopes: [], connect: 'oauth', actions: {}, prepare: null, identity: true };
+const slkConn = (linked) => ({ id: 'c9', provider: 'slack', display_name: 'ws', status: 'active', health: null, settings: {}, linked });
+const mi = (linked, role, over = {}) => m({ data: { available: [...available, slk], connections: [slkConn(linked)], vault: true }, ...over }, role);
+
+test('identity: a member gets "Link my Slack account"; once linked, "Unlink"; a viewer can\'t link; a connector without identity shows nothing', () => {
+  const v = integrationsScreen(mi(false, 'member'));
+  const link = byAttr(v, 'data-action', 'integ-link');
+  assert.equal(link.length, 1);
+  assert.equal(link[0].props['data-conn'], 'c9');
+  assert.equal(link[0].props['data-provider'], 'slack');
+  assert.match(textOf(v), /Link my Slack account/);
+  assert.equal(byAttr(v, 'data-action', 'integ-linked').length, 0, 'the linked-members list is for admins');
+  const linked = integrationsScreen(mi(true, 'member'));
+  assert.equal(byAttr(linked, 'data-action', 'integ-unlink').length, 1);
+  assert.equal(byAttr(linked, 'data-action', 'integ-link').length, 0);
+  const viewer = integrationsScreen(mi(false, 'viewer'));
+  assert.equal(byAttr(viewer, 'data-action', 'integ-link').length, 0);
+  assert.match(textOf(viewer), /Viewers can’t link an account/);
+  assert.equal(byAttr(integrationsScreen(mi(true, 'viewer')), 'data-action', 'integ-unlink').length, 1, 'a viewer may still unlink');
+  assert.equal(byAttr(integrationsScreen(m()), 'data-action', 'integ-link').length, 0);
+});
+
+test('identity: admins list linked members by name, plain text, with Revoke per member; never a provider id', () => {
+  const v = integrationsScreen(mi(false, 'admin', { linked: { c9: [{ member_id: 'mb', display_name: '<b>Bob</b>', linked_at: '2026-09-30T19:00:00Z' }] } }));
+  assert.equal(byAttr(v, 'data-action', 'integ-linked')[0].props['aria-expanded'], 'true');
+  const revoke = byAttr(v, 'data-action', 'integ-revoke');
+  assert.deepEqual(revoke.map((b) => [b.props['data-conn'], b.props['data-member']]), [['c9', 'mb']]);
+  assert.match(textOf(v), /<b>Bob<\/b>/, 'names are text');
+  assert.equal(findAll(v, (n) => n.tag === 'b').length, 0);
+  assert.match(textOf(integrationsScreen(mi(false, 'admin', { linked: { c9: [] } }))), /Nobody has linked an account yet/);
+});

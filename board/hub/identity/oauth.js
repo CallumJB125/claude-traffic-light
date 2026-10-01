@@ -7,13 +7,14 @@
 // read (never stored, logged or audited), and the result is the same device
 // token an email code gives, or (purpose 'delete') a 5-minute step-up.
 
-import { createHash, createPublicKey, hkdfSync, randomBytes, randomUUID, verify as cryptoVerify } from 'node:crypto';
+import { createHash, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { HubError } from '../db.js';
 import { safeEqual, sha256hex } from '../auth.js';
 import { oauthProviders } from '../config.js';
 import { ipKey, limitOrThrow } from '../ratelimit.js';
 import { authoritativeVia, canonEmail, ipPrefix, publicUser, STEP_UP_MS } from './accounts.js';
 import { BRAND } from '../../shared/brand.js';
+import { createJwks, JwtInvalid, readCapped, verifyRs256 } from '../jwt.js';
 
 export const OAUTH_FLOW_TTL_MS = 10 * 60_000;
 export const OPEN_FLOWS_PER_CLIENT = 10;
@@ -94,7 +95,14 @@ export class OAuth {
     // No failure lockout (M1): flows are single use, behind 256-bit state +
     // PKCE; oauth_exchange_ip (30/h per /64) bounds the attempts.
     this.sweptAt = -Infinity;
-    this.jwks = { keys: new Map(), fetchedAt: -Infinity, triedAt: -Infinity };
+    this.jwks = createJwks({
+      load: async () => {
+        const r = await this.call(GOOGLE.jwks, { headers: { accept: 'application/json' } });
+        if (!r.ok || !Array.isArray(r.json?.keys)) throw unavailable();
+        return r.json;
+      },
+      now: () => this.hub.mono(), ttlMs: JWKS_TTL_MS, kidRefetchMs: KID_REFETCH_MIN_MS,
+    });
   }
 
   configured(provider) { return oauthProviders(this.hub.config).includes(provider); }
@@ -266,54 +274,13 @@ export class OAuth {
 
   // ── Google id_token (RS256 against Google's JWKS, cached) ─────────────────
 
-  async refreshJwks() {
-    this.jwks.triedAt = this.hub.mono();
-    const r = await this.call(GOOGLE.jwks, { headers: { accept: 'application/json' } });
-    if (!r.ok || !Array.isArray(r.json?.keys)) throw unavailable();
-    const next = new Map();
-    for (const jwk of r.json.keys) {
-      if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string') continue;
-      try { next.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' })); } catch { /* skip a bad key */ }
-    }
-    this.jwks = { keys: next, fetchedAt: this.hub.mono(), triedAt: this.jwks.triedAt };
-  }
-
-  async keyFor(kid) {
-    const now = this.hub.mono();
-    const stale = now - this.jwks.fetchedAt >= JWKS_TTL_MS;
-    const unknown = !this.jwks.keys.has(kid);
-    if (stale || (unknown && now - this.jwks.triedAt >= KID_REFETCH_MIN_MS)) {
-      try { await this.refreshJwks(); } catch (e) {
-        // A stale cache that still knows the kid is better than no answer.
-        if (!this.jwks.keys.has(kid) || !Number.isFinite(this.jwks.fetchedAt)) throw e;
-      }
-    }
-    return this.jwks.keys.get(kid) ?? null;
-  }
-
   async verifyIdToken(token, f) {
-    const parts = token.split('.');
-    if (parts.length !== 3) throw invalid();
-    let header;
-    let claims;
     try {
-      header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
-      claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-    } catch { throw invalid(); }
-    if (header?.alg !== 'RS256' || typeof header.kid !== 'string' || !claims || typeof claims !== 'object') throw invalid();
-    const key = await this.keyFor(header.kid);
-    if (!key) throw invalid();
-    if (!cryptoVerify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], 'base64url'))) throw invalid();
-    const t = this.hub.wallMs() / 1000;
-    const auds = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!GOOGLE.issuers.includes(claims.iss) || !auds.includes(this.clientId('google'))) throw invalid();
-    // Several audiences: only when we are the authorized party (L2).
-    if (auds.length > 1 && claims.azp !== this.clientId('google')) throw invalid();
-    if (typeof claims.exp !== 'number' || claims.exp + SKEW_S <= t) throw invalid();
-    if (typeof claims.iat !== 'number' || claims.iat - SKEW_S > t) throw invalid();
-    if (typeof claims.nonce !== 'string' || !f.nonce || !safeEqual(claims.nonce, f.nonce)) throw invalid();
-    if (typeof claims.sub !== 'string' || !claims.sub || claims.sub.length > 255) throw invalid();
-    return claims;
+      return await verifyRs256(token, { keyFor: this.jwks.keyFor, issuers: GOOGLE.issuers, audience: this.clientId('google'), nonce: f.nonce, nowS: this.hub.wallMs() / 1000, skewS: SKEW_S });
+    } catch (e) {
+      if (e instanceof JwtInvalid) throw invalid();
+      throw e;
+    }
   }
 
   // ── accounts ──────────────────────────────────────────────────────────────
@@ -426,22 +393,4 @@ export class OAuth {
     this.sweptAt = now;
     this.db.run('DELETE FROM oauth_flows WHERE expires_at < ? AND (stepup_until IS NULL OR stepup_until < ?)', this.accounts.at(-KEEP_FLOWS_MS), this.accounts.now());
   }
-}
-
-/** A response body as text, refusing more than `max` bytes. */
-async function readCapped(res, max) {
-  const len = Number(res.headers?.get?.('content-length'));
-  if (Number.isFinite(len) && len > max) throw new Error('provider answer too large');
-  if (!res.body?.getReader) return (await res.text()).slice(0, max);
-  const reader = res.body.getReader();
-  const chunks = [];
-  let n = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    n += value.byteLength;
-    if (n > max) { reader.cancel().catch(() => {}); throw new Error('provider answer too large'); }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }

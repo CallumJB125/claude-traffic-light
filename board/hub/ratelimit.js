@@ -47,6 +47,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_card_subject: { capacity: 5, per_ms: 3_600_000 }, // … and per (connection, provider user) when act() names meta.subject
   integration_prepare_member: { capacity: 5, per_ms: 3_600_000 },  // POST /api/integrations/:target/prepare (D97), per admin
   integration_prepare_org: { capacity: 10, per_ms: 86_400_000 },    // … per team
+  integration_identity_member: { capacity: 10, per_ms: 3_600_000 }, // POST /api/integrations/:id/identity/start (D98), per member
+  integration_link_fail_ip: { capacity: 30, per_ms: 10 * 60_000 },  // failed identity callbacks, per client network (/64)
   webhook_fail_ip: { capacity: 30, per_ms: 60_000 },        // failed webhook deliveries, per connection + client IP (/64)
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
   ws_browser: { capacity: 60, per_ms: 10_000 },

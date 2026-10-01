@@ -66,6 +66,28 @@ function activity(entries) {
     h('time', { class: 'integ-act-at muted', datetime: e.at }, new Date(e.at).toLocaleString()))));
 }
 
+// D98: a member's own link to their account at the tool (never anyone else's),
+// and for admins who is linked, with Revoke. Names only, never the provider id.
+function identitySection(conn, name, m) {
+  const busy = m.busy.has(`integ-link:${conn.id}`);
+  const list = m.linked?.[conn.id];
+  return h('section', { class: 'integ-section', 'aria-label': `Your ${name} account` },
+    h('h4', null, `Your ${name} account`),
+    conn.linked
+      ? h('p', { class: 'small' }, `Linked: what you do in ${name} acts as you here. `,
+        h('button', { type: 'button', class: 'link small', 'data-action': 'integ-unlink', 'data-conn': conn.id, disabled: busy || null }, 'Unlink'))
+      : m.canWrite
+        ? h('p', { class: 'small' },
+          h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-link', 'data-conn': conn.id, 'data-provider': conn.provider, disabled: busy || null, 'aria-busy': busy ? 'true' : null }, `Link my ${name} account`))
+        : h('p', { class: 'muted small' }, 'Viewers can’t link an account.'),
+    m.canEdit ? h('button', { type: 'button', class: 'link small', 'data-action': 'integ-linked', 'data-conn': conn.id, 'aria-expanded': list ? 'true' : 'false' }, list ? 'Hide linked members' : 'Linked members') : null,
+    m.canEdit && list ? (list.length
+      ? h('ul', { class: 'integ-linked' }, list.map((x) => h('li', { key: x.member_id },
+        h('span', null, x.display_name ?? 'A member'), ' ',
+        h('button', { type: 'button', class: 'btn btn-sm btn-quiet-danger', 'data-action': 'integ-revoke', 'data-conn': conn.id, 'data-member': x.member_id, disabled: busy || null }, 'Revoke'))))
+      : h('p', { class: 'muted small' }, 'Nobody has linked an account yet.')) : null);
+}
+
 function connectedCard(conn, m) {
   const connector = m.available.find((c) => c.id === conn.provider);
   const hl = health(conn, m.nowMs);
@@ -80,6 +102,7 @@ function connectedCard(conn, m) {
     h('section', { class: 'integ-section', 'aria-label': 'What it may do on its own' },
       h('h4', null, 'On its own'),
       autonomyRows(conn, connector, m.canEdit, m.busy.has(`integ:${conn.id}`))),
+    connector?.identity ? identitySection(conn, connector.name ?? conn.provider, m) : null,
     h('div', { class: 'integ-card-actions' },
       m.canEdit ? h('button', { type: 'button', class: 'btn btn-sm', 'data-action': 'integ-activity', 'data-conn': conn.id, 'aria-expanded': open ? 'true' : 'false' }, open ? 'Hide activity' : 'Activity') : null,
       m.canEdit ? (confirming
@@ -227,6 +250,7 @@ export function integrationsScreen(model) {
   const data = m.data;
   const vm = {
     available: data.available ?? [], vault: !!data.vault, canEdit: ['owner', 'admin'].includes(model.me?.member?.role),
+    canWrite: ['owner', 'admin', 'member'].includes(model.me?.member?.role), linked: m.linked ?? {},
     local: !!m.local, nowMs: m.nowMs ?? Date.now(), open: m.open, audit: m.audit ?? {}, tokenFor: m.tokenFor, manifest: m.manifest, confirmDisconnect: m.confirmDisconnect, busy: model.busy,
     meId: model.me?.member?.id, needs: m.needs ?? {}, confirmCancel: m.confirmCancel,
   };

@@ -47,6 +47,22 @@
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
 //
+//   // Optional, workspaceUnique connectors only (D98): a member links their own
+//   // provider account by OpenID Connect (scope openid). The registry makes and
+//   // checks state and nonce and verifies the id_token (RS256 against jwksUrl,
+//   // iss, aud = settings.pinned.client_id, exp/iat, nonce, workspaceClaim =
+//   // external_id, sub ~ subjectRe); the connector only builds the URL and
+//   // trades the code. `connection` is {external_id, settings} (take the client
+//   // id from settings.pinned, never settings.config); `redirectUri` is the
+//   // identityRedirectUri prepare got. Throw fixed text only: `secrets` holds
+//   // the app's client secret.
+//   identity: {
+//     issuer: 'https://slack.com', jwksUrl: 'https://slack.com/openid/connect/keys',   // https on hosts
+//     workspaceClaim: 'https://slack.com/team_id', subjectRe: /^[UW][A-Z0-9]{2,20}$/,
+//     authorizeUrl({ state, nonce, redirectUri, connection, secrets, fetch }) → 'https://<one of hosts>/…',
+//     async exchange({ query, state, redirectUri, connection, secrets, fetch }) → { id_token },
+//   },
+//
 //   // Inbound webhooks at POST /integrations/<connection id>/webhook.
 //   // MUST verify the provider signature over the raw body, in constant time,
 //   // and return a dedupe key (delivery id) for replay protection.
@@ -100,7 +116,9 @@
 //   // card actions are limited to cancel/stop/approve_done (approve_done only
 //   // under an action declared 'ask'), comments are never for the agent.
 //   // ctx.act(action, { subject: '<provider user id>' }, …) limits that
-//   // user's createCard to integration_card_subject (5/h) too.
+//   // user's createCard to integration_card_subject (5/h)too, and lets
+//   // actAs only that user's linked member (ctx.memberFor(subject), D98):
+//   // anyone else is FORBIDDEN.
 //   // createCard(boardId, …) takes a board of the connection's team only
 //   // (else NOT_FOUND, before any rate token) and the card starts in todo.
 //   actions: { 'card.move': { default: 'auto', reversible: true }, 'github.comment': { default: 'ask' }, … },
@@ -116,6 +134,8 @@
 //   // Pure reads a handler may use (org-scoped, nothing secret):
 //   // ctx.boards() → [{id, title}] (≤ 100, by title); ctx.card(id) →
 //   // {id, key, title, board_id, column_name} | null (never body or labels).
+//   // ctx.memberFor(subject) → member_id | null (linked on this connection and
+//   // able to write); ctx.subjectFor(member_id) → subject | null (a viewer's too).
 // })
 
 import { isIP } from 'node:net'; // privacy-flow: hub-server
@@ -190,6 +210,24 @@ export function defineConnector(spec) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.identity !== undefined) {
+    const idn = spec.identity;
+    const onHosts = (u) => {
+      if (typeof u !== 'string') return false;
+      try { const x = new URL(u); return x.protocol === 'https:' && !x.port && !x.username && !x.password && !!spec.hosts?.includes?.(x.hostname); } catch { return false; }
+    };
+    // The hub-wide UNIQUE (provider, workspace_id, subject) is sound only when one live connection owns a workspace.
+    if (spec.workspaceUnique !== true) errs.push('identity needs workspaceUnique: true');
+    if (!idn || typeof idn !== 'object') errs.push('identity is an object');
+    else {
+      if (!onHosts(idn.issuer)) errs.push('identity.issuer is an https URL on hosts');
+      if (!onHosts(idn.jwksUrl)) errs.push('identity.jwksUrl is an https URL on hosts');
+      if (typeof idn.workspaceClaim !== 'string' || !idn.workspaceClaim) errs.push('identity.workspaceClaim names the id_token claim holding the workspace');
+      // g/y make test() stateful (lastIndex): one subject would pass and the next fail.
+      if (!(idn.subjectRe instanceof RegExp) || idn.subjectRe.global || idn.subjectRe.sticky) errs.push('identity.subjectRe is a RegExp without the g or y flag');
+      if (typeof idn.authorizeUrl !== 'function' || typeof idn.exchange !== 'function') errs.push('identity.authorizeUrl and identity.exchange are functions');
+    }
+  }
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {
     if (!AUTONOMY.includes(a?.default)) errs.push(`action ${name}: default must be auto|ask|off`);
@@ -201,5 +239,8 @@ export function defineConnector(spec) {
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
   // The registry filters pasted input by prepareInputs: a connector can't widen it later.
   const connect = Array.isArray(cn?.prepareInputs) ? Object.freeze({ ...cn, prepareInputs: Object.freeze([...cn.prepareInputs]) }) : spec.connect;
-  return Object.freeze({ consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]) });
+  return Object.freeze({
+    consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]),
+    ...(spec.identity ? { identity: Object.freeze({ ...spec.identity }) } : {}),
+  });
 }
