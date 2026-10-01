@@ -789,6 +789,8 @@ function cameosChanged() {
   return cameoListing();
 }
 
+const budgetView = () => budgetNotices.list().map((n) => ({ runId: n.runId, text: BudgetNotice.text(n) }));
+
 function computeState(opts = {}) {
   const config = loadConfig();
   const requests = readRequests();
@@ -800,7 +802,7 @@ function computeState(opts = {}) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
   if (travelLook && !opts.ignoreTravel) {
-    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap() };
+    return { look: { ...travelLook, tasks }, reason: 'travel', sessions, fired: [], pending, inputs, tasks, away: BusyWatch.recap(), budget: null };
   }
   const override = readManualOverride();
   if (override) {
@@ -823,7 +825,7 @@ function computeState(opts = {}) {
   }
   const minions = config.showAgents ? Rules.filterAgentKinds(Rules.liveAgents(sessions), config.agentKinds).slice(0, 32) : [];
   const sNote = spendNote(config.rules, fired, sessions, spend);
-  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), busy: BusyWatch.holding() };
+  return { look: { ...withNumber(look, sessions, tasks), tasks, minions, agentRoster: config.agentRoster !== false, agentChipSize: config.agentChipSize }, reason: sessions.length ? 'session' : 'idle', sessions, fired, owned, firedNames: Rules.firedNames(config.rules, fired, owned), tool: currentTool(sessions), agentCount, pending, inputs, tasks, minions, spend, spendNote: sNote, paceLine: config.paceTooltip !== false && spend && spend.pace && spend.pace.noteworthy && !sNote ? spend.pace.text : null, away: BusyWatch.recap(), budget: budgetView(), busy: BusyWatch.holding() };
 }
 
 // The tool of the most recently updated session that is using one.
@@ -922,6 +924,57 @@ async function openAwayItem(i) {
 }
 ipcMain.handle('away-open', (_e, i) => openAwayItem(i));
 ipcMain.handle('away-dismiss', () => { BusyWatch.dismiss(); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
+// ── Budget notice (src/budget-notice.js) ───────────────────────────────────
+// A Give-to-Claude run stopped at its budget. Any such event is for the
+// signed-in person (runs execute only on their runner). The widget row, the
+// tray item and one notification all open the board card through the Plexiform
+// window's fragment; this process never reads the hub token or calls the hub.
+const BudgetNotice = require('./src/budget-notice.js');
+const budgetNotices = BudgetNotice.createNotices();
+const budgetNotified = new Set();
+const BUDGET_TRAY_ITEMS = 3;
+const budgetChanged = () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); };
+function handleBudgetEvent(ev) {
+  const r = budgetNotices.handle(ev);
+  if (!r.changed) return;
+  if (r.added && !budgetNotified.has(r.notice.runId)) {
+    budgetNotified.add(r.notice.runId);
+    notifyBudget(r.notice);
+  }
+  budgetChanged();
+}
+function notifyBudget(n) {
+  console.log(`[budget] ${n.runId} — ${BudgetNotice.text(n)}`);
+  if (IS_DEV_RUN || loadConfig().notifyOnStates === false || !Notification.isSupported()) return;
+  const note = new Notification({ title: 'Run reached its budget', body: BudgetNotice.text(n), silent: true });
+  liveNotifications.add(note);
+  note.on('click', () => { liveNotifications.delete(note); openBudgetNotice(n.runId); });
+  note.on('close', () => liveNotifications.delete(note));
+  note.show();
+}
+// The Plexiform window may not offer a fragment opener yet (and a dev spec can
+// stand one in): then the answer is {ok:false} and the widget says where to go.
+async function openBudgetNotice(runId) {
+  const n = budgetNotices.get(runId);
+  if (!n) return { ok: false };
+  const spy = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1' ? global.__budgetOpenWithFragment : null;
+  try {
+    const open = spy || (devMockReady ? getBuddy()[BudgetNotice.CONTRACT.openMethod]?.bind(getBuddy()) : null);
+    if (typeof open !== 'function') return { ok: false };
+    showDock();
+    const r = await open(BudgetNotice.CONTRACT.boardPage, BudgetNotice.fragment(n));
+    return { ok: !(r && r.ok === false) };
+  } catch (err) { console.warn('[budget] open failed:', err.message); return { ok: false }; }
+}
+ipcMain.handle('budget-notice', (e, msg) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return { ok: false };
+  const runId = msg && typeof msg.runId === 'string' ? msg.runId : '';
+  if (msg && msg.action === 'dismiss') { budgetNotices.dismiss(runId); budgetChanged(); return { ok: true }; }
+  if (msg && msg.action === 'board') { openBuddy(BudgetNotice.CONTRACT.boardPage); return { ok: true }; }
+  if (msg && msg.action === 'open') return openBudgetNotice(runId);
+  return { ok: false };
+});
+if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1') global.__budgetInject = handleBudgetEvent;
 ipcMain.handle('busy-status', () => BusyWatch.status());
 // Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
 ipcMain.handle('busy-reconnect-calendar', async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
@@ -1374,6 +1427,10 @@ function getBuddy() {
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
     });
+    if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
+      const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
+      if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
+    }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => settingsWin?.webContents.send('account-changed'));
   }
   return buddyWin;
@@ -2280,7 +2337,8 @@ function broadcastStatus() {
     const tk = JSON.stringify(WorkScopeView.trayItem(localSessions(st.sessions || []), { available: typeof WorkScope?.setSessionScope === 'function' }));
     if (tk !== trayScopeKey) { trayScopeKey = tk; refreshTrayMenu(); }
     stripAway = !!st.away && !travelLook;
-    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+    stripBudget = budgetNotices.list().length > 0;
+    applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
     updateGarden(st);
     maybeRoam(st);
     maybeRandomEvent(st);
@@ -2545,7 +2603,12 @@ function createTray() {
       click: () => { if (!item.sessionId) return; WorkScope.setSessionScope(item.sessionId, item.checked ? 'auto' : 'personal'); scopeChanged(); },
     }, { type: 'separator' }];
   };
+  const budgetItems = () => {
+    const shown = budgetNotices.list().slice(0, BUDGET_TRAY_ITEMS).map((n) => ({ label: `${BudgetNotice.text(n).replace(/ \(\$.*$/, '')}…`, click: () => { openBudgetNotice(n.runId).then((r) => { if (!r.ok) openBuddy(BudgetNotice.CONTRACT.boardPage); }); } }));
+    return shown.length ? [...shown, { type: 'separator' }] : [];
+  };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
+    ...budgetItems(),
     ...scopeItem(),
     ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
@@ -3542,6 +3605,7 @@ ipcMain.handle('open-input', async (e, id) => {
 const AWAY_PX = 64;
 const UPDATE_PX = 72;
 const BUBBLE_MAX_PX = 300;
+const BUDGET_PX = 64;
 const BUBBLE_MIN_W = 230;
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
@@ -3554,12 +3618,13 @@ ipcMain.on('update-row', (e, on) => {
 });
 let bubblePx = 0;
 let stripAway = false;
+let stripBudget = false;
 ipcMain.on('set-bubble-height', (e, px) => {
   if (!win || e.sender !== win.webContents) return;
   bubbleAsked = Math.round(Number(px) || 0);
   bubbleAcked = null;
   bubblePx = Math.max(0, Math.min(BUBBLE_MAX_PX, bubbleAsked));
-  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook);
+  applyStrip(travelLook ? 0 : bubblePx, stripAway, updateRowShown && !travelLook, stripBudget && !travelLook);
 });
 // The widget's size is the base (src/widget-strip.js); the strip adds the
 // bubble's or the recap's height, and width for the bubble. Computed from the
@@ -3575,9 +3640,9 @@ function ackStrip() {
   bubbleAcked = bubbleAsked;
   win.webContents.send('strip-applied', bubbleAsked);
 }
-function applyStrip(asking, away = false, update = false) {
+function applyStrip(asking, away = false, update = false, budget = false) {
   if (!win) return;
-  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
+  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : budget ? { kind: 'budget', px: BUDGET_PX, minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
   if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
   // The garden or a roam is moving the widget's own rect: grow once it's home
   // (the next broadcast tries again).

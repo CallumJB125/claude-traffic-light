@@ -106,6 +106,7 @@ function applyStatus(data) {
   // A preview carries no inputs: keep what is showing rather than flicker.
   if (data.reason === 'travel') bubble.update([]);
   else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
+  renderBudget(data.reason === 'travel' ? null : data.budget);
   renderAway(data.reason === 'travel' ? null : data.away);
   idleNow = data.reason === 'idle' && !(data.inputs && data.inputs.length);
   if (idleNow && !hintAsked) { hintAsked = true; window.trafficLight.teamHint().then((h) => { hintOffer = h; paintRow(); }).catch(() => {}); }
@@ -176,7 +177,7 @@ function hintDone(open) {
   paintRow();
 }
 function paintRow() {
-  const wantHint = !updateRow && !!hintOffer && idleNow && !document.body.classList.contains('asking') && !document.body.classList.contains('away');
+  const wantHint = !updateRow && !!hintOffer && idleNow && !document.body.classList.contains('asking') && !document.body.classList.contains('away') && !document.body.classList.contains('budget');
   if (wantHint && !hintOn) hintTimer = setTimeout(() => hintDone(false), HINT_MS);
   if (!wantHint && hintOn) clearTimeout(hintTimer);
   hintOn = wantHint;
@@ -218,6 +219,39 @@ document.getElementById('update-later').addEventListener('click', (e) => {
 });
 window.trafficLight.onUpdaterState(renderUpdate);
 window.trafficLight.getUpdaterState().then((s) => { if (s && s.status) renderUpdate(s); }).catch(() => {});
+
+// A run stopped at its budget: both buttons open the card on the board (main
+// builds the fragment from the run id; this page never sees it). With no way
+// to open it, say where to go and offer the board itself.
+const BUDGET_FALLBACK = 'Open the card on your board to raise the budget or stop the run.';
+let budgetShown = null;
+let budgetFailed = false;
+function budgetButton(label, quiet, onClick) {
+  const b = document.createElement('button');
+  if (quiet) b.className = 'quiet';
+  b.textContent = label;
+  b.addEventListener('mousedown', stop);
+  b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+function renderBudget(list) {
+  const first = list && list[0];
+  document.body.classList.toggle('budget', !!first);
+  if (!first) { budgetShown = null; budgetFailed = false; return; }
+  if (first.runId !== budgetShown) { budgetShown = first.runId; budgetFailed = false; }
+  const more = list.length > 1 ? ` (+${list.length - 1} more)` : '';
+  document.getElementById('budget-text').textContent = budgetFailed ? BUDGET_FALLBACK : `${first.text}${more}`;
+  document.getElementById('budget-text').title = first.text;
+  const open = async () => {
+    const r = await window.trafficLight.budgetNotice('open', first.runId).catch(() => null);
+    if (!r || r.ok === false) { budgetFailed = true; renderBudget(list); }
+  };
+  document.getElementById('budget-acts').replaceChildren(...(budgetFailed
+    ? [budgetButton('Open board', false, () => window.trafficLight.budgetNotice('board', first.runId))]
+    : [budgetButton('Increase budget & continue…', false, open), budgetButton('Stop', true, open)]));
+}
+document.getElementById('budget-x').addEventListener('mousedown', stop);
+document.getElementById('budget-x').addEventListener('click', (e) => { e.stopPropagation(); if (budgetShown) window.trafficLight.budgetNotice('dismiss', budgetShown); });
 
 // The recap: needs-you first, then failures, then finished. Three lines
 // fit under the heading; past three items the last becomes "+N more".
@@ -338,7 +372,7 @@ let clickThrough = null;
 const solidAt = (x, y) => {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
-  if (el.closest('#gear, #help, #bubble, #away, #update, .minion')) return true;
+  if (el.closest('#gear, #help, #bubble, #budget, #away, #update, .minion')) return true;
   return rig.solidAt(x, y);
 };
 const hitTest = (x, y) => {
