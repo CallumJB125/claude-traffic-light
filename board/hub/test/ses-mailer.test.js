@@ -127,7 +127,8 @@ test('SES region: the host is built from the region as given; opt-in regions are
     assert.equal(m.kind, 'ses', region);
     assert.doesNotThrow(() => validateConfig(sesBase({ sesRegion: region })), region);
   }
-  for (const region of ['US-EAST-1', 'us-east-1.evil.example', 'us-east-1/', 'useast1', 'us-east-10', 'af-south-1\n', 'evil.example#us-east-1', '', 'u-east-1']) {
+  assert.throws(() => sesMailer({ region: '', ...creds(), from: FROM, fetchImpl: async () => { throw new Error('no'); }, now: CLOCK }), /^Error: SES mailer: bad region$/);
+  for (const region of ['US-EAST-1', 'us-east-1.evil.example', 'us-east-1/', 'useast1', 'us-east-10', 'af-south-1\n', 'evil.example#us-east-1', 'u-east-1']) {
     assert.throws(() => sesMailer({ region, ...creds(), from: FROM, fetchImpl: async () => { throw new Error('no'); }, now: CLOCK }), /^Error: SES mailer: bad region$/, JSON.stringify(region));
     assert.throws(() => validateConfig(sesBase({ sesRegion: region })), /^Error: BOARD_SES_REGION must look like af-south-1$/, JSON.stringify(region));
   }

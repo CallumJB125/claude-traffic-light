@@ -48,7 +48,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.localMemberId = config.auth === 'local' ? seedLocal(hub, config.bootstrapBoard) : null;
   // Accounts mode (D51): its own sign-in; the BOARD_BOOTSTRAP owner is linked
   // to whoever first proves that email address.
-  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl }) }) : null;
+  hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl, now: () => new Date(clock.wall()) }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
