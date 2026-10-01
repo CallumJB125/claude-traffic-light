@@ -124,19 +124,19 @@ const MIN_WIDTH = 80;
 const MAX_WIDTH = 320;
 
 function resizeBy(factor) {
-  // The bubble or the recap has grown the window past the widget's shape.
-  if (!win || strip.px) return;
-  const [x, y, w, h] = [...win.getPosition(), ...win.getSize()];
-  const newWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w * factor)));
-  const newHeight = Math.round(newWidth / WIDGET_ASPECT);
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  win.setBounds({
-    x: Math.round(cx - newWidth / 2),
-    y: Math.round(cy - newHeight / 2),
-    width: newWidth,
-    height: newHeight,
-  });
+  // The bubble or the recap has grown the window past the widget's shape; the
+  // update row just rides along under the resized widget.
+  if (!win || WidgetStrip.blocksTravel(strip)) return;
+  const cur = win.getBounds();
+  const r = WidgetStrip.resizeBase(cur, strip, factor, { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH, aspect: WIDGET_ASPECT }, screen.getDisplayMatching(cur).workArea);
+  if (!strip.kind) { win.setBounds(r.bounds); return; }
+  applyingStrip = true;
+  strip = r.strip;
+  try {
+    win.setMaximumSize(Math.max(MAX_WIDTH, r.bounds.width), Math.round(MAX_WIDTH / WIDGET_ASPECT) + r.strip.px);
+    win.setBounds(r.bounds);
+  } finally { applyingStrip = false; }
+  saveBounds();
 }
 
 const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir(), '.claude-traffic-light');
@@ -1755,7 +1755,7 @@ function overlayGarden(payload) {
 }
 
 async function runGarden(base) {
-  if (strip.px) return; // the garden walks the widget's own rect, not the grown one
+  if (WidgetStrip.blocksTravel(strip)) return; // the garden walks the widget's own rect, not one grown by the bubble or recap
   console.log('[garden] start');
   // `run` is declared before anything that can throw: the finally block below
   // reads it, and a throw from gardenGeometry() used to hit the temporal dead
@@ -2097,7 +2097,7 @@ async function roamAndKnock(st, { force = false } = {}) {
   if (!win) return { ok: false, why: 'no widget' };
   if (roamState.busy) return { ok: false, why: 'already roaming' };
   // Roaming moves the grown window as if it were the widget: wait for the bubble to go.
-  if (strip.px) return { ok: false, why: 'something is showing under the widget' };
+  if (WidgetStrip.blocksTravel(strip)) return { ok: false, why: 'something is showing under the widget' };
   if (gardenRun) return { ok: false, why: 'gardening' };
   // busy goes up BEFORE the first await. Deciding whether to knock costs three
   // osascript calls, and claiming the flag only afterwards is what let every
@@ -2167,7 +2167,7 @@ async function knockNow() {
 
 function maybeRoam(st) {
   const config = loadConfig();
-  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun || strip.px) return;
+  if (!IS_MAC || !config.roam || reducedMotion || !win || !win.isVisible() || widgetMotion.paused || roamState.busy || previewLook || gardenRun || WidgetStrip.blocksTravel(strip)) return;
   const waiting = st.pending?.length || localSessions(st.sessions).some((s) => WAITING_SIGNALS.has(s.signal));
   if (!waiting) { roamState.waitingSince = null; roamProbe.reset(); return; }
   if (!roamState.waitingSince) roamState.waitingSince = Date.now();
@@ -2276,7 +2276,7 @@ function createTray() {
     { label: BRAND.OPEN_MENU_LABEL, accelerator: 'CmdOrCtrl+B', click: () => openBuddy() },
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
-    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); } },
+    { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
     {
       label: 'Floating Widget',
       type: 'checkbox',
@@ -2384,7 +2384,7 @@ function stopGlide() { glideTimer = stopTimer(glideTimer); }
 
 function glideFrom(vx, vy) {
   stopGlide();
-  if (!win || win.isDestroyed() || gardenRun || roamState.busy || strip.px) return false;
+  if (!win || win.isDestroyed() || gardenRun || roamState.busy || WidgetStrip.blocksTravel(strip)) return false;
   const G = Motion.MOTION.glide;
   const E = Motion.MOTION.edge;
   const speed = Math.hypot(vx, vy);

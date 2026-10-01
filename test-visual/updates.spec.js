@@ -195,6 +195,31 @@ test('a waiting input takes the strip; the update row comes back after it, solid
   await expect.poll(bodyH).toBe(200);
 });
 
+test('resizing with the update row showing resizes the widget and keeps the row, clickable; saved bounds stay the widget’s own', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  await push(fresh('ready-restart'));
+  await expect.poll(bodyH).toBe(200 + 72);
+  const w0 = await widget.evaluate(() => innerWidth);
+  await widget.evaluate(() => window.trafficLight.resizeWindowBy(1.25));
+  await expect.poll(() => widget.evaluate(() => innerWidth)).toBe(Math.round(w0 * 1.25));
+  const h1 = await bodyH();
+  const w1 = await widget.evaluate(() => innerWidth);
+  expect(h1).toBe(Math.round(w1 / (64 / 82)) + 72);
+  await expect(widget.locator('#update')).toBeVisible();
+  const box = await widget.locator('#update-btn').boundingBox();
+  expect(await widget.evaluate(([px, py]) => solidAt(px, py), [box.x + box.width / 2, box.y + box.height / 2])).toBe(true);
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(h.home, 'window-bounds.json'), 'utf8')).height).toBe(h1 - 72);
+  await widget.evaluate(() => window.trafficLight.resizeWindowBy(0.8));
+  await expect.poll(() => widget.evaluate(() => innerWidth)).toBe(w0);
+  await push(fresh('idle-up-to-date'));
+  // A resize keeps the widget's shape, so it ends at the shape's height, not
+  // the fixture's square 200 x 200: put the fixture back for the next test.
+  await expect.poll(bodyH).toBe(Math.round(w0 / (64 / 82)));
+  await h.app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().split('?')[0].endsWith('index.html')); const b = w.getBounds(); w.setAspectRatio(0); w.setBounds({ ...b, width: 200, height: 200 }); });
+  await expect.poll(bodyH).toBe(200);
+});
+
 test('"Later" hides the row until the state changes', async () => {
   await push(fresh('ready-restart'));
   await expect.poll(bodyH).toBe(200 + 72);

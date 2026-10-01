@@ -49,3 +49,26 @@ test('a widget already wider than the bubble needs no extra width', () => {
   const r = W.stripBounds(wide, W.NONE, { kind: 'bubble', px: 100, minWidth: 230 }, wa);
   assert.deepEqual(r.bounds, { x: 100, y: 100, width: 300, height: 484 });
 });
+
+test('only the bubble and the recap hold roam, glide, the garden and resizing; the update row rides along', () => {
+  assert.equal(W.blocksTravel(W.NONE), false);
+  const of = (next) => W.stripBounds(base, W.NONE, next, wa).strip;
+  assert.equal(W.blocksTravel(of({ kind: 'bubble', px: 100, minWidth: 230 })), true);
+  assert.equal(W.blocksTravel(of({ kind: 'away', px: 64 })), true);
+  assert.equal(W.blocksTravel(of({ kind: 'update', px: 72 })), false);
+});
+
+test('resizing with the update row showing resizes the widget and keeps the row under it', () => {
+  const limits = { minWidth: 80, maxWidth: 320, aspect: 64 / 82 };
+  const up = W.stripBounds(base, W.NONE, { kind: 'update', px: 72 }, wa);
+  const r = W.resizeBase(up.bounds, up.strip, 1.25, limits, wa);
+  const b = W.baseOf(r.bounds, r.strip);
+  assert.equal(b.width, 125);
+  assert.equal(b.height, Math.round(125 / limits.aspect));
+  assert.equal(r.strip.kind, 'update');
+  assert.equal(r.bounds.height, b.height + 72, 'the row keeps its height');
+  assert.ok(Math.abs(b.x + b.width / 2 - (base.x + base.width / 2)) <= 0.5, 'same centre (to the pixel)');
+  const none = W.resizeBase(base, W.NONE, 0.8, limits, wa);
+  assert.deepEqual(none.strip, W.NONE);
+  assert.equal(none.bounds.width, 80);
+});

@@ -33,4 +33,22 @@ function stripBounds(current, strip = NONE, next = {}, workArea = null) {
 // Whether `next` asks for something other than what is applied.
 const sameStrip = (strip, next) => (strip.kind || null) === (next.kind || null) && strip.px === (next.kind ? Math.round(next.px || 0) : 0) && (strip.minWidth || 0) === (next.minWidth || 0);
 
-module.exports = { NONE, baseOf, stripBounds, sameStrip };
+// Whether roam, glide, the garden and resizing must wait. The bubble and the
+// recap change the window's width or hang a lot under Claude, so moving or
+// resizing the grown rect would carry them along wrongly; the quiet update
+// row (no extra width, no offset of its own) can ride along.
+const blocksTravel = (strip) => !!strip && (strip.kind === 'bubble' || strip.kind === 'away');
+
+// Resize the widget's own rect by `factor` about its centre, keeping its
+// shape and limits, then hang the same strip under it again.
+// limits: { minWidth, maxWidth, aspect }. → { bounds, strip }
+function resizeBase(current, strip = NONE, factor, limits, workArea = null) {
+  const base = baseOf(current, strip);
+  const width = Math.round(Math.min(limits.maxWidth, Math.max(limits.minWidth, base.width * factor)));
+  const height = Math.round(width / limits.aspect);
+  const next = { x: Math.round(base.x + base.width / 2 - width / 2), y: Math.round(base.y + base.height / 2 - height / 2), width, height };
+  if (!strip.kind) return { bounds: next, strip: NONE };
+  return stripBounds(next, NONE, { kind: strip.kind, px: strip.px, minWidth: strip.minWidth }, workArea);
+}
+
+module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase };
