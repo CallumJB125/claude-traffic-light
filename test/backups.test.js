@@ -367,6 +367,8 @@ test('main wiring: every destructive action snapshots first, every backups IPC c
     assert.ok(at > 0, channel);
     assert.match(main.slice(at, at + 400), /backupFirst\(\)/, `${channel} must take a backup first`);
   }
+  const at = main.indexOf('function commitConfig(');
+  assert.match(main.slice(at, at + 900), /partial\.rules[\s\S]*partial\.presets[\s\S]*backupFirst\(\)[\s\S]*saveConfig\(partial\)/, 'a template, preset load or reset (a replaced rules list) must back up before saving');
   const handlers = [...main.matchAll(/ipcMain\.handle\('(backups-[a-z-]+)'[^\n]*\n([^\n]*\n){0,2}/g)];
   assert.equal(handlers.length, 5);
   for (const m of handlers) assert.match(m[0], /backupsSenderOk\(e\)/, `${m[1]} must check its sender`);

@@ -128,7 +128,6 @@
   $('backups-folder').addEventListener('click', () => api.backupsOpenFolder());
   $('backups-recheck').addEventListener('click', () => refresh());
 
-  let ran = false;
-  new IntersectionObserver((entries) => { if (!ran && entries.some((e) => e.isIntersecting)) { ran = true; refresh(); } }).observe($('backups'));
-  api.onShowSection((id) => { if (id === 'backups') { refresh(); $('backups').scrollIntoView({ block: 'start' }); } });
+  $('backups').addEventListener('toggle', () => { if ($('backups').open) refresh(); });
+  api.onShowSection((id) => { if (id === 'backups') { $('backups').open = true; $('backups').scrollIntoView({ block: 'start' }); } });
 })();

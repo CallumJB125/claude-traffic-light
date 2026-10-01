@@ -46,7 +46,7 @@ test.afterAll(async () => { await h?.cleanup(); });
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(h.home, 'config.json'), 'utf8'));
 
 test('Backups: lists snapshots in plain words, damaged ones flagged and not restorable', async () => {
-  await settings.locator('#backups-recheck').click();
+  await settings.locator('#backups > summary').click();
   const items = settings.locator('#backups-list .bk-item');
   await expect(items).toHaveCount(3);
   await expect(items.nth(0).locator('.bk-title')).toHaveText('Restore your settings from 30 Sep, 18:40');
@@ -56,7 +56,7 @@ test('Backups: lists snapshots in plain words, damaged ones flagged and not rest
   await expect(bad.locator('.bk-title')).toHaveText('Damaged backup from 29 Sep, 10:00');
   await expect(bad.locator('button')).toHaveCount(0);
   await expect(settings.locator('#backups-summary')).toHaveText('2 backups, 1 damaged. Latest: 30 Sep, 18:40.');
-  await settings.evaluate(() => { document.body.scrollTop = 1e6; document.documentElement.scrollTop = 1e6; });
+  await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
   await expect(settings.locator('#backups')).toHaveScreenshot('backups-list.png');
 });

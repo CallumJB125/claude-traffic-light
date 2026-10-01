@@ -187,8 +187,14 @@
   #health-fine[open] summary .toggle::before { content: "(hide)"; }
   #health-fine .checks { margin-top: 8px; }
   #health-copy-hint:empty { display: none; }
-  #backups { display: flex; flex-direction: column; gap: 10px; }
-  #backups h2 { margin-bottom: 0; }
+  /* Closed by default at a whole-pixel height, so the Health panel below keeps its place. */
+  #backups > summary { box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); height: 36px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); cursor: pointer; list-style: none; }
+  #backups > summary h2 { margin: 0; padding: 0; border: 0; }
+  #backups > summary::-webkit-details-marker { display: none; }
+  #backups .toggle { font-size: var(--text-xs); color: var(--muted); }
+  #backups .toggle::before { content: "(show)"; }
+  #backups[open] .toggle::before { content: "(hide)"; }
+  #backups-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
   #backups-summary { font-weight: 600; }
   #backups-status { font-size: var(--text-xs); color: var(--muted); }
   #backups-status:empty { display: none; }
@@ -475,6 +481,22 @@
       <div id="privacy-body" class="pv"></div>
     </details>
   </div>
+  <details id="backups">
+    <summary><h2 id="backups-title">Backups</h2><span class="toggle" aria-hidden="true"></span></summary>
+    <div id="backups-body">
+    <div class="hint">Your settings, rules, faces and usage history are copied to a folder outside Plexiform's data folder, so deleting that folder doesn't lose them. Secrets and live session state are never copied.</div>
+    <div id="backups-summary" role="status" aria-live="polite"></div>
+    <div class="row wrap">
+      <button type="button" class="secondary" id="backups-now">Back up now</button>
+      <button type="button" class="secondary" id="backups-recheck">Refresh</button>
+      <button type="button" class="secondary" id="backups-folder">Show backup folder</button>
+    </div>
+    <div id="backups-status" role="status" aria-live="polite"></div>
+    <ul id="backups-list"></ul>
+    <div class="row"><button type="button" class="secondary" id="backups-more" hidden></button></div>
+    </div>
+  </details>
+
   <section id="health" aria-labelledby="health-title">
     <h2 id="health-title">Health</h2>
     <div id="health-summary" role="status" aria-live="polite"></div>
@@ -488,20 +510,6 @@
       <button type="button" class="secondary" id="health-copy" aria-describedby="health-copy-hint" title="For a bug report: checks, versions and recent errors, with home paths, folder names and tokens scrubbed. Never prompts or transcripts.">Copy diagnostics</button>
     </div>
     <div class="hint" id="health-copy-hint" role="status" aria-live="polite"></div>
-  </section>
-
-  <section id="backups" aria-labelledby="backups-title">
-    <h2 id="backups-title">Backups</h2>
-    <div class="hint">Your settings, rules, faces and usage history are copied to a folder outside Plexiform's data folder, so deleting that folder doesn't lose them. Secrets and live session state are never copied.</div>
-    <div id="backups-summary" role="status" aria-live="polite"></div>
-    <div class="row wrap">
-      <button type="button" class="secondary" id="backups-now">Back up now</button>
-      <button type="button" class="secondary" id="backups-recheck">Refresh</button>
-      <button type="button" class="secondary" id="backups-folder">Show backup folder</button>
-    </div>
-    <div id="backups-status" role="status" aria-live="polite"></div>
-    <ul id="backups-list"></ul>
-    <div class="row"><button type="button" class="secondary" id="backups-more" hidden></button></div>
   </section>
 
   <div class="actions">

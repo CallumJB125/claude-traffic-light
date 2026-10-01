@@ -2563,6 +2563,11 @@ ipcMain.handle('save-config', (e, partial) => {
 // saveConfig plus everything a changed setting has to reach outside config.json.
 function commitConfig(partial) {
   const prev = loadConfig();
+  // A template, a preset load and "reset to defaults" all arrive as a whole new
+  // rules list (or a shorter preset list); keep what is being replaced first.
+  const ids = (rs) => (rs || []).map((r) => r.id).join();
+  if ((partial.rules && (ids(partial.rules) !== ids(prev.rules) || (partial.template ?? null) !== (prev.template ?? null)))
+    || (partial.presets && partial.presets.length < prev.presets.length)) backupFirst();
   const before = prev.askFromWidget;
   const next = saveConfig(partial);
   if ('askFromWidget' in partial && !!partial.askFromWidget !== !!before) installHooks();
