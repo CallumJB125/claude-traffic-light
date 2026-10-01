@@ -164,3 +164,78 @@ test('card routes keep the 1 MiB cap; other authenticated routes are capped at 6
     assert.equal(label.status, 413, 'a label is not a card route');
   } finally { await h.close(); }
 });
+
+// One raw keep-alive connection: write, wait for N answers (or the close), write again.
+function conn(base) {
+  const { hostname, port } = new URL(base);
+  const sock = connect(Number(port), hostname);
+  const st = { data: '', closed: false };
+  sock.on('data', (c) => { st.data += c.toString('latin1'); });
+  sock.on('close', () => { st.closed = true; });
+  sock.on('error', () => {});
+  const ready = new Promise((r) => sock.once('connect', r));
+  const answers = () => (st.data.match(/^HTTP\/1\.1 \d{3}/gm) ?? []).length;
+  const until = async (pred, ms = 3000) => {
+    const end = Date.now() + ms;
+    while (!pred() && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+    return pred();
+  };
+  return { sock, st, ready, answers, until, write: (s) => { if (!sock.destroyed) sock.write(s); }, end: () => sock.destroy() };
+}
+
+test('an early answer to a request whose body is unread says Connection: close, and nothing else is served on that socket', async () => {
+  const h = await startHub();
+  try {
+    const c = conn(h.base);
+    await c.ready;
+    // Half the declared body, then a 401 (auth comes before the body, D105).
+    c.write(reqHead(h.base, 'POST', `/api/boards/${h.ids.board}/cards`, { 'content-type': 'application/json', 'content-length': '200000' }));
+    c.write('{"title":"');
+    assert.ok(await c.until(() => c.answers() === 1), c.st.data);
+    assert.match(c.st.data, /^HTTP\/1\.1 401/);
+    assert.match(c.st.data, /\r\nconnection: close\r\n/i);
+    // A proxy that reused this socket anyway: its next request is never half-served.
+    c.write(`${'x'.repeat(100)}${reqHead(h.base, 'GET', '/api/health')}`);
+    assert.ok(await c.until(() => c.st.closed), 'the server closes the connection');
+    assert.equal(c.answers(), 1, 'one answer only');
+    c.end();
+  } finally { await h.close(); }
+});
+
+test('a webhook early answer (body too large) says Connection: close too', async () => {
+  const h = await startHub();
+  try {
+    const c = conn(h.base);
+    await c.ready;
+    c.write(reqHead(h.base, 'POST', `/integrations/${randomUUID()}/webhook`, { 'content-type': 'application/json', 'content-length': String(2 * 1024 * KIB) }));
+    c.write('{"a":');
+    assert.ok(await c.until(() => c.answers() === 1), c.st.data);
+    assert.match(c.st.data, /^HTTP\/1\.1 413/);
+    assert.match(c.st.data, /\r\nconnection: close\r\n/i);
+    assert.ok(await c.until(() => c.st.closed), 'closed');
+    c.end();
+  } finally { await h.close(); }
+});
+
+test('a request whose body was read (or that has none) keeps its keep-alive connection past the 1 s cut', async () => {
+  const h = await startHub();
+  try {
+    const c = conn(h.base);
+    await c.ready;
+    const body = '{"github_login":';
+    c.write(`${reqHead(h.base, 'POST', '/api/dev/login', { 'content-type': 'application/json', 'content-length': String(body.length), ...h.devHeaders })}${body}`);
+    assert.ok(await c.until(() => c.answers() === 1), c.st.data);
+    assert.match(c.st.data, /^HTTP\/1\.1 400/, 'refused after the body was read');
+    assert.doesNotMatch(c.st.data, /connection: close/i);
+    // No body: an answer written before the parser saw the end is still a whole request.
+    c.write(reqHead(h.base, 'GET', `/api/boards/${h.ids.board}`));
+    assert.ok(await c.until(() => c.answers() === 2), c.st.data);
+    assert.doesNotMatch(c.st.data, /connection: close/i);
+    await new Promise((r) => setTimeout(r, 1300));
+    assert.equal(c.st.closed, false, 'still open after the cut delay');
+    c.write(reqHead(h.base, 'GET', '/api/health'));
+    assert.ok(await c.until(() => c.answers() === 3), 'and serves the next request');
+    assert.match(c.st.data.slice(c.st.data.lastIndexOf('HTTP/1.1')), /^HTTP\/1\.1 200/);
+    c.end();
+  } finally { await h.close(); }
+});

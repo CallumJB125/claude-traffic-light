@@ -93,8 +93,33 @@ const vetBucketKey = (key) => {
   return v6 ? `${v6[1]}::/48` : key;
 };
 
+// A body still on the wire when the answer goes out: the answer says
+// Connection: close, so a proxy that pools origin connections (cloudflared)
+// never sends another request down a socket that is about to be cut.
+function closeIfUnread(res) {
+  const req = res.req;
+  if (req && !req.complete && (req.headers['transfer-encoding'] != null || Number(req.headers['content-length'] ?? 0) > 0)) res.shouldKeepAlive = false;
+}
+
+// An answer given before the body was read (refused, too large, too slow) is
+// not followed by draining the rest at the sender's pace: the socket goes a
+// moment later. Node would close a Connection: close socket the moment the
+// answer is out, which resets a sender still writing its body before it
+// reads the answer (cloudflared then shows a 502): our side is ended, the
+// rest drained for that moment, then cut.
+const CURRENT = Symbol('current request');
+function cutIfUnread(req, res) {
+  const sock = req.socket;
+  res.once('finish', () => {
+    if (req.complete || !sock) return;
+    if (!res.shouldKeepAlive) sock.removeListener('finish', sock.destroy);
+    setTimeout(() => { if (!res.shouldKeepAlive || (!req.complete && sock[CURRENT] === req)) sock.destroy(); }, 1000).unref();
+  });
+}
+
 function sendJson(res, status, body, headers = {}) {
   const data = JSON.stringify(body);
+  closeIfUnread(res);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers });
   res.end(data);
 }
@@ -102,6 +127,7 @@ function sendJson(res, status, body, headers = {}) {
 // A connector's early webhook ack (text or pre-serialised JSON, ≤ 4 KiB):
 // never rendered as a page, never framed.
 function sendRaw(res, status, type, data, headers = {}) {
+  closeIfUnread(res);
   res.writeHead(status, {
     'content-type': type, 'content-length': String(Buffer.byteLength(data)), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'", [PROTOCOL_HEADER]: String(PROTOCOL_VERSION), ...headers,
@@ -509,6 +535,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   return handle;
 
   async function handle(req, res) {
+    // Pipelined behind a request that was answered with Connection: close.
+    if (req.socket?.writableEnded) return req.socket.destroy();
+    if (req.socket) req.socket[CURRENT] = req;
     const url = new URL(req.url, 'http://hub');
     res.setHeader('x-frame-options', 'DENY');
     res.setHeader('content-security-policy', "frame-ancestors 'none'");
@@ -582,9 +611,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         const vetKey = `${hook[1]}|${vetBucketKey(ip)}`;
         const count = (m, k) => m.get(k) ?? 0;
         const vetted = live && (integrations.trustedIngress(hook[1], raw) || (verifiedPairs.get(vetKey) ?? -Infinity) > hub.mono());
-        // An unread (or half-read) body is not drained at the sender's pace:
-        // the socket goes once the answer had a moment to reach the sender.
-        const cut = () => res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
+        const cut = () => cutIfUnread(req, res);
         if (count(reading.pair, failKey) >= readLimits.perPair || count(reading.ip, ip) >= readLimits.perIp || (!vetted && count(reading.conn, connKey) >= (live ? readLimits.perConn : readLimits.perUnknown))) {
           cut();
           return sendJson(res, 503, { error: { code: 'UNAVAILABLE', message: 'too many deliveries in flight; retry' } }, { 'retry-after': '1' });
@@ -646,9 +673,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (!p) return sendJson(res, 404, { error: { code: 'NOT_FOUND', message: 'not found' } });
         return await serveFile(req, res, p);
       }
-      // An answer given before the body was read (refused, too large, too slow) is not
-      // followed by draining the rest at the sender's pace: the socket goes a moment later.
-      res.once('finish', () => { if (!req.complete) setTimeout(() => req.socket?.destroy(), 1000).unref(); });
+      cutIfUnread(req, res);
       let match = null;
       for (const r of routes) {
         if (r.method !== req.method) continue;
