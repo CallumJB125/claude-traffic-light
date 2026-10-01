@@ -46,12 +46,14 @@ test('a pasted share code shows its commands and loads nothing until confirmed',
   await lights.click('#rules-choice [data-rules=load]');
   // A code from before rulesVersion migrates like an old config: v5 slots in
   // its "session open" rule, v7 the six Git and CI accents and v8 the spend
-  // rules (runaway above the rest, the budget rules above "session open").
-  await expect(lights.locator('#rule-list li')).toHaveCount(11);
+  // rules (runaway above the rest, the budget rules above "session open"),
+  // and v9 the red "Needs your decision" for a blocked call, under runaway.
+  await expect(lights.locator('#rule-list li')).toHaveCount(12);
   await expect(lights.locator('#rule-list li').first()).toContainText('Runaway session');
-  await expect(lights.locator('#rule-list li').nth(1)).toContainText('CI failed');
-  await expect(lights.locator('#rule-list li').nth(7)).toContainText('Looks harmless');
-  await expect(lights.locator('#rule-list li').nth(10)).toContainText('Session open');
+  await expect(lights.locator('#rule-list li').nth(1)).toContainText('Needs your decision');
+  await expect(lights.locator('#rule-list li').nth(2)).toContainText('CI failed');
+  await expect(lights.locator('#rule-list li').nth(8)).toContainText('Looks harmless');
+  await expect(lights.locator('#rule-list li').nth(11)).toContainText('Session open');
 });
 
 test('a share code stamped with the current rulesVersion loads exactly as shared', async () => {

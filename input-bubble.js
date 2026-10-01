@@ -6,9 +6,9 @@
 // A click sends an option id; main rebuilds the answer from the request
 // file. One answer per input: its buttons lock the moment one is clicked.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./src/input-view.js'));
-  else root.InputBubble = factory(root.InputView);
-})(typeof self !== 'undefined' ? self : this, function (V) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./src/input-view.js'), require('./src/work-scope-view.js'));
+  else root.InputBubble = factory(root.InputView, root.WorkScopeView);
+})(typeof self !== 'undefined' ? self : this, function (V, W) {
   const SVGNS = 'http://www.w3.org/2000/svg';
   const ICONS = {
     permission: 'M8 1.8l5 2v3.6c0 3.1-2.1 5.7-5 6.8-2.9-1.1-5-3.7-5-6.8V3.8z',
@@ -37,7 +37,7 @@
     svg.appendChild(p);
     return svg;
   }
-  const keyOf = (inputs) => inputs.map((i) => `${i.id}|${i.created_at}|${i.expires_at}|${i.danger || ''}|${i.text && i.text.length}|${i.title}`).join('\n');
+  const keyOf = (inputs, scopes = {}) => inputs.map((i) => `${i.id}|${i.created_at}|${i.expires_at}|${i.danger || ''}|${i.text && i.text.length}|${i.title}|${(scopes[i.session] && scopes[i.session].state) || ''}`).join('\n');
 
   function create(container, opts = {}) {
     const api = opts.api || {};
@@ -47,6 +47,8 @@
     const onLayout = opts.onLayout || (() => {});
 
     let inputs = [];
+    let scopes = {}; // sessionId → work scope (contract §C2); none = show nothing
+    const scopeMore = new Set(); // ids whose "more scope options" are open
     let lastKey = null;
     let expanded = null;
     let collapsedByUser = false;
@@ -287,11 +289,38 @@
       body.appendChild(list);
     }
 
+    async function setScope(input, call, arg, mode) {
+      let r;
+      try { r = await call(arg, mode); } catch { r = { ok: false, error: 'Could not change it.' }; }
+      if (!r || !r.ok) setError(input.id, (r && r.error) || 'Could not change it.');
+    }
+
+    // Work scope: a small badge, "Not team work" (this session) and, tucked
+    // behind "⋯", the repo-wide choice. Undo for a session marked personal.
+    function scopeLine(input) {
+      const v = W.scopeView(scopes[input.session]);
+      if (!v || !input.session) return null;
+      const line = el('div', `ib-scope-line tone-${v.tone}`);
+      line.appendChild(el('span', `ib-scope tone-${v.tone}`, v.label));
+      const link = (label, aria, fn) => { const b = el('button', 'ib-link', label); b.type = 'button'; b.setAttribute('aria-label', aria); b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
+      if (v.markPersonal && api.setSessionScope) line.appendChild(link('Not team work', `Not team work: don’t track this ${V.project(input)} session`, () => setScope(input, api.setSessionScope, input.session, 'personal')));
+      if (v.undo && api.setSessionScope) line.appendChild(link('Undo', `Undo personal: track this ${V.project(input)} session again if it counts`, () => setScope(input, api.setSessionScope, input.session, 'auto')));
+      if (v.repoUrl && api.setRepoScope) {
+        const more = link('⋯', 'More work-scope choices', () => { if (scopeMore.has(input.id)) scopeMore.delete(input.id); else scopeMore.add(input.id); render(); });
+        more.setAttribute('aria-expanded', String(scopeMore.has(input.id)));
+        line.appendChild(more);
+        if (scopeMore.has(input.id)) line.appendChild(link('Always treat this repo as personal', `Always treat ${v.repoUrl} as personal`, () => { scopeMore.delete(input.id); setScope(input, api.setRepoScope, v.repoUrl, 'personal'); }));
+      }
+      return line;
+    }
+
     function itemBody(input) {
       const t = now();
       const body = el('div', 'ib-body');
       body.id = `ib-body-${input.id}`;
       if (input.title && input.kind !== 'question') body.appendChild(el('div', 'ib-title', input.title));
+      const sl = scopeLine(input);
+      if (sl) body.appendChild(sl);
       if (input.danger) {
         const w = el('div', 'ib-warn', `Needs a careful look: ${input.danger}. Enter won’t allow it.`);
         w.setAttribute('role', 'note');
@@ -342,6 +371,8 @@
       row.setAttribute('aria-label', V.rowLabel(input, t));
       row.appendChild(icon(input.kind));
       row.appendChild(el('span', 'ib-proj', V.project(input)));
+      const sv = W.scopeView(scopes[input.session]);
+      if (sv) row.appendChild(el('span', `ib-scope tone-${sv.tone}`, sv.label));
       row.appendChild(el('span', 'ib-head', V.headline(input)));
       row.appendChild(el('span', 'ib-age', V.expired(input, t) ? 'answer in terminal' : V.ageText(input, t)));
       row.addEventListener('click', (e) => {
@@ -374,7 +405,7 @@
       const active = document.activeElement;
       const focusKey = active && container.contains(active) ? active.dataset.focusKey : null;
       const list = live_();
-      const key = keyOf(list);
+      const key = keyOf(list, scopes);
       const kids = [];
       if (nudge) kids.push(nudgeCard());
       if (list.length && dismissedKey === key && mode === 'widget') {
@@ -408,17 +439,18 @@
       onLayout();
     }
 
-    function update(next) {
+    function update(next, extra = {}) {
       inputs = Array.isArray(next) ? next.filter((i) => i && typeof i.id === 'string') : [];
+      scopes = extra.scopes && typeof extra.scopes === 'object' ? extra.scopes : {};
       const ids = new Set(inputs.map((i) => i.id));
-      for (const s of [answered, sending, full]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
+      for (const s of [answered, sending, full, scopeMore]) for (const id of [...s]) if (!ids.has(id)) s.delete(id);
       for (const m of [errors, notes, picked, typed, formValues, reasons]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
       const list = live_();
       if (expanded && !list.some((i) => i.id === expanded)) expanded = null;
       // One waiting input opens straight away, like the old Allow/Deny strip.
       if (!expanded && !collapsedByUser && list.length === 1 && mode === 'widget') expanded = list[0].id;
       if (mode === 'page' && !expanded && list.length && !collapsedByUser) expanded = list[0].id;
-      const key = keyOf(list);
+      const key = keyOf(list, scopes);
       if (key !== lastKey) {
         if (lastKey !== null && list.length > (lastKey ? lastKey.split('\n').length : 0)) live.textContent = `${list.length} waiting on you`;
         lastKey = key;
@@ -443,7 +475,7 @@
       if (e.key === 'Escape') {
         e.preventDefault();
         if (typing && e.target.blur) e.target.blur();
-        if (expanded) { expanded = null; collapsedByUser = true; } else if (mode === 'widget') dismissedKey = keyOf(live_());
+        if (expanded) { expanded = null; collapsedByUser = true; } else if (mode === 'widget') dismissedKey = keyOf(live_(), scopes);
         render();
         return true;
       }

@@ -68,7 +68,7 @@ function cleanExtra(extra) {
   return out;
 }
 
-// RFC 8785 canonical JSON; must stay byte-identical to remote/src/canonical.js
+// RFC 8785 canonical JSON; must stay byte-identical to src/deny/canonical.js (remote/ re-exports it)
 // (remote/test checks both on the same inputs).
 function canonicalize(v, depth = 0) {
   if (depth > 64) throw new Error('too deeply nested');

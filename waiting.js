@@ -16,6 +16,8 @@
       openAutoRule: (id) => api.openAutoRule({ inputId: id }),
       nudgeRule: (key) => api.openAutoRule({ nudgeKey: key }),
       nudgeMute: (key) => api.nudgeMute(key),
+      setSessionScope: (id, mode) => api.setSessionScope(id, mode),
+      setRepoScope: (url, mode) => api.setRepoScope(url, mode),
     },
   });
   let seq = 0;
@@ -26,7 +28,7 @@
     if (my !== seq || !r) return;
     const inputs = Array.isArray(r.inputs) ? r.inputs : [];
     document.body.classList.toggle('answering-off', !r.askFromWidget);
-    list.update(inputs);
+    list.update(inputs, { scopes: r.scopes || {} });
     const late = inputs.filter((i) => V.escalated(i)).length;
     sub.textContent = inputs.length
       ? `${inputs.length} waiting${late ? ` · ${late} for 5 min or more` : ''}`

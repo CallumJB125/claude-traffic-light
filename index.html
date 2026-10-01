@@ -146,6 +146,7 @@
   <script src="characters/builtin/core.js"></script>
   <script src="rig.js"></script>
   <script src="src/input-view.js"></script>
+  <script src="src/work-scope-view.js"></script>
   <script src="input-bubble.js"></script>
   <script>
     // ambient: the idle loops tick on a slow clock, not every display frame
@@ -221,17 +222,22 @@
         openWaiting: () => window.trafficLight.openWaiting(),
         nudgeRule: (key) => window.trafficLight.openAutoRule({ nudgeKey: key }),
         nudgeMute: (key) => window.trafficLight.nudgeMute(key),
+        setSessionScope: (id, mode) => window.trafficLight.setSessionScope(id, mode),
+        setRepoScope: (url, mode) => window.trafficLight.setRepoScope(url, mode),
       },
-      onLayout: () => {
-        const on = bubbleEl.classList.contains('has-items');
-        document.body.classList.toggle('asking', on);
-        const px = on ? Math.ceil(bubbleEl.getBoundingClientRect().height) + 8 : 0;
-        if (px === bubblePx) return;
-        bubblePx = px;
-        document.body.style.setProperty('--bubble-h', `${px}px`);
-        window.trafficLight.setBubbleHeight(px);
-      },
+      onLayout: () => reportBubble(),
     });
+    // Also on resize: widening the window rewraps the text, so the height changes.
+    function reportBubble() {
+      const on = bubbleEl.classList.contains('has-items');
+      document.body.classList.toggle('asking', on);
+      const px = on ? Math.ceil(bubbleEl.getBoundingClientRect().height) + 8 : 0;
+      if (px === bubblePx) return;
+      bubblePx = px;
+      document.body.style.setProperty('--bubble-h', `${px}px`);
+      window.trafficLight.setBubbleHeight(px);
+    }
+    window.addEventListener('resize', reportBubble);
     document.addEventListener('keydown', (e) => { bubble.keydown(e); });
     setInterval(() => { if (!motionPaused) bubble.tick(); }, 15000);
 
@@ -244,7 +250,7 @@
       rig.setLook(look);
       // A preview carries no inputs: keep what is showing rather than flicker.
       if (data.reason === 'travel') bubble.update([]);
-      else if (Array.isArray(data.inputs)) bubble.update(data.inputs);
+      else if (Array.isArray(data.inputs)) bubble.update(data.inputs, { scopes: window.WorkScopeView.scopesBySession(data.sessions) });
       renderAway(data.reason === 'travel' ? null : data.away);
       // Confetti fires on entering a celebrating state, then again every 10s
       // for as long as that state holds.

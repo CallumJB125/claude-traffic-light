@@ -1,7 +1,18 @@
 // Auto-answer rules (P3+): "allow Bash `npm test *`", "allow Read under
 // ~/Development/**", "deny WebFetch". Stored in config.json as
-// `autoAnswer: { v: 1, rules: [...] }` (the shape is proposed to the hook
-// core's owner; nothing evaluates these yet, see docs/waiting-inputs.md).
+// `autoAnswer: { v: 1, sealed: null, rules: [...] }`. The storage is final;
+// nothing evaluates the rules yet (not on for go-live).
+//
+// Agreed design for the evaluator (with the hook core's owner, 2026-10-01):
+//   - main evaluates when a request appears and answers through writeAnswer
+//     with that request's key; the hook path is unchanged
+//   - deny rules first; an allow only when the LIVE evaluateDenyList and the
+//     destructive check pass; permission kind only; paths realpath'd; Bash
+//     must be one plain command (matchRule below is the reference)
+//   - the rules are HMAC-sealed with a key held in safeStorage (`sealed`); a
+//     seal that fails to verify ignores ALL rules and warns in Settings
+//   - every auto-answer shows as "Auto-allowed: <tool> (rule: <note>)" with
+//     Undo/pause, goes to a local log, and the tray has a kill switch
 //
 // Two jobs, both main-side:
 //   refusal(rule)          why an allow rule may NOT be saved: it could ever
@@ -10,14 +21,14 @@
 //   matchRule(rules, req)  the reference evaluator for the hook side: deny
 //                          rules first; an allow only when the ACTUAL request
 //                          also passes the deny-list and destructive checks.
-// The deny-list is the phone path's (remote/src/denylist.js), so there is one
+// The deny-list is the phone path's (src/deny/denylist.js, shared with remote/), so there is one
 // list of dangerous shapes.
 'use strict';
 
 const os = require('os');
 const path = require('path');
-const { shellFinding, evaluateDenyList, compileRules, DEFAULT_RULES, CREDENTIAL_PATHS, RUNS_CODE_LATER } = require('../remote/src/denylist.js');
-const { parseShell } = require('../remote/src/shell.js');
+const { shellFinding, evaluateDenyList, compileRules, DEFAULT_RULES, CREDENTIAL_PATHS, RUNS_CODE_LATER } = require('./deny/denylist.js');
+const { parseShell } = require('./deny/shell.js');
 const { broadRule } = require('../hooks/pending-input.js');
 
 const MAX_RULES = 100;

@@ -80,3 +80,10 @@ test('a session-derived input keeps its id but a changed text or time still reac
   assert.notEqual(q('Which framework?', '2026-10-01T10:05:00Z'), first, 'asked again later');
   assert.equal(statusPushWanted(true, q('Which database?', '2026-10-01T10:00:00Z'), first), true);
 });
+
+test('a work-scope change on a waiting session reaches a paused widget', () => {
+  const st = (state) => askKey({ inputs: [{ id: 'r1' }], sessions: [{ sessionId: 's1', scope: state ? { state } : null }] });
+  assert.notEqual(st('counting'), st('personal'));
+  assert.notEqual(st(null), st('counting'));
+  assert.equal(st('counting'), st('counting'));
+});

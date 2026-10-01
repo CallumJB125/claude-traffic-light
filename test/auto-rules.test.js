@@ -133,3 +133,11 @@ test('danger: what stops Enter from allowing a live request', () => {
   assert.equal(A.danger(req('Edit', { file_path: '/w/app/a.js', old_string: 'a', new_string: 'b' })), null);
   assert.equal(A.danger(null), null);
 });
+
+test('the shared deny-list ships in src/deny as ES modules: loads with no module-type warning', () => {
+  const root = path.join(__dirname, '..');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'src', 'deny', 'package.json'), 'utf8')).type, 'module');
+  const r = require('child_process').spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(root, 'src', 'auto-rules.js'))}); console.log('ok')`], { encoding: 'utf8' }); // exec: node itself, loading the module under test
+  assert.equal(r.stdout.trim(), 'ok');
+  assert.doesNotMatch(r.stderr, /MODULE_TYPELESS_PACKAGE_JSON|Reparsing as ES module/);
+});

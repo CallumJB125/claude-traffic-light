@@ -18,6 +18,8 @@ function setup(opts = {}) {
     openInput: async (id) => { calls.open.push(id); return { ok: true }; },
     openAutoRule: (id) => calls.rule.push(id),
     openWaiting: () => { calls.waiting++; },
+    setSessionScope: async (id, mode) => { calls.scope = (calls.scope || []).concat([['session', id, mode]]); return { ok: true }; },
+    setRepoScope: async (url, mode) => { calls.scope = (calls.scope || []).concat([['repo', url, mode]]); return { ok: true }; },
   };
   const root = dom.window.document.getElementById('b');
   const bubble = require('../input-bubble.js').create(root, { api, mode: opts.mode || 'widget', now: () => opts.now || NOW });
@@ -208,4 +210,59 @@ test('an approval that earns a nudge shows it with a prefilled rule', async () =
   await tick();
   assert.match(t.$('.ib-nudge-q').textContent, /approved this 5 times — make it a rule\?/);
   assert.equal(t.$('.ib-nudge-rule').textContent, 'Bash: npm test');
+});
+
+test('Enter can never allow an input with danger set, in the bubble or on the Waiting page, whatever has focus', async () => {
+  for (const mode of ['widget', 'page']) {
+    for (const danger of ['recursive delete', 'it could not be checked', ' ']) {
+      const t = setup({ mode });
+      t.bubble.update([perm({ danger })]);
+      t.key('Enter');
+      t.root.querySelector('.ib-title').focus?.();
+      t.key('Enter');
+      await tick();
+      assert.equal(t.calls.answer.length, 0, `${mode}: ${JSON.stringify(danger)}`);
+    }
+    const ok = setup({ mode });
+    ok.bubble.update([perm({ danger: null })]);
+    ok.key('Enter');
+    await tick();
+    assert.deepEqual(ok.calls.answer.map((c) => c[1]), ['allow'], `${mode}: no danger, Enter allows once`);
+  }
+});
+
+const scoped = (state, extra = {}) => ({ r: perm({ session: 's1' }), scopes: { s1: { state, board: { id: 'b', name: 'Platform' }, repo: { short: 'acme/api', canonicalUrl: 'https://github.com/acme/api' }, ...extra } } });
+test('work scope: nothing without a scope or when outside; muted watching; counting names the board', () => {
+  for (const scopes of [{}, { s1: null }, { s1: { state: 'outside', board: null, repo: null } }]) {
+    const t = setup();
+    t.bubble.update([perm({ session: 's1' })], { scopes });
+    assert.equal(t.$('.ib-scope'), null);
+    assert.equal(t.$('.ib-scope-line'), null);
+  }
+  const w = setup();
+  w.bubble.update([scoped('watching').r], { scopes: scoped('watching').scopes });
+  assert.equal(w.$('.ib-row .ib-scope').textContent, 'watching locally');
+  assert.ok(w.$('.ib-row .ib-scope').classList.contains('tone-muted'));
+  const c = setup();
+  c.bubble.update([scoped('counting').r], { scopes: scoped('counting').scopes });
+  assert.equal(c.$('.ib-row .ib-scope').textContent, 'counting for Platform');
+});
+
+test('work scope: Not team work marks the session; Undo puts it back; the repo choice sits behind ⋯', async () => {
+  const t = setup();
+  const { r, scopes } = scoped('counting');
+  t.bubble.update([r], { scopes });
+  const btn = (label) => t.$$('.ib-scope-line button').find((b) => b.textContent === label);
+  assert.equal(btn('Always treat this repo as personal'), undefined, 'secondary: hidden until ⋯');
+  btn('Not team work').click();
+  await tick();
+  btn('⋯').click();
+  btn('Always treat this repo as personal').click();
+  await tick();
+  t.bubble.update([r], { scopes: { s1: { state: 'personal', board: null, repo: null } } });
+  assert.equal(t.$('.ib-row .ib-scope').textContent, 'personal');
+  btn('Undo').click();
+  await tick();
+  assert.deepEqual(t.calls.scope, [['session', 's1', 'personal'], ['repo', 'https://github.com/acme/api', 'personal'], ['session', 's1', 'auto']]);
+  assert.equal(t.calls.answer.length, 0, 'scope actions never answer the input');
 });

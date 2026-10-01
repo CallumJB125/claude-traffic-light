@@ -143,6 +143,41 @@
   }
   // ── end F1 spend ──────────────────────────────────────────────────────────
 
+  // ── Blocked (v9) ──────────────────────────────────────────────────────────
+  // Auto mode's classifier refused a call (PermissionDenied). Not a prompt:
+  // the turn carries on, but a person has to decide (run it, switch mode, add
+  // a rule), so it is red like any other "needs your decision". Kept as long
+  // as the bubble shows it: until the next prompt, at most 30 minutes
+  // (src/pending-inputs.js BLOCKED_KEEP_MS).
+  const BLOCKED_KEEP_MS = 30 * 60 * 1000;
+  SIGNALS.splice(SIGNALS.findIndex((s) => s.id === 'idle'), 0,
+    { id: 'blocked', label: 'A call needs your decision (auto mode refused it)', hook: null, kind: 'virtual' });
+  // Lamp only: the bubble carries the words, so no sound, banner or pose.
+  const BLOCKED_RULE = { id: 'blocked', name: 'Needs your decision', enabled: true, when: { signal: ['blocked'] }, then: { lamp: 'red' } };
+  function blockedSessions(sessions, now) {
+    const out = [];
+    for (const s of sessions) {
+      const b = s && s.blocked && typeof s.blocked === 'object' ? s.blocked : null;
+      const at = b ? Date.parse(b.at) : NaN;
+      if (Number.isFinite(at) && now - at < BLOCKED_KEEP_MS) out.push({ signal: 'blocked', cwd: s.cwd, virtual: true, sessionId: s.sessionId });
+    }
+    return out;
+  }
+  // At the foot of the red block: under "Runaway session" / "No network" /
+  // "Needs your input", whichever comes last of those the set has, so it
+  // outranks every green and amber rule; otherwise above the first unlocked
+  // rule. A set that already has a rule for the signal (the user's own) is
+  // left alone. Idempotent.
+  function placeBlockedRule(list, rule = BLOCKED_RULE) {
+    const out = list.slice();
+    if (!rule || out.some((r) => r.id === 'blocked' || (r.when && Array.isArray(r.when.signal) && r.when.signal.includes('blocked')))) return out;
+    const after = ['runaway', 'offline', 'permission'].map((id) => out.findIndex((r) => r.id === id)).find((i) => i >= 0);
+    const at = after !== undefined ? after + 1 : out.findIndex((r) => !r.locked);
+    out.splice(at < 0 ? out.length : at, 0, JSON.parse(JSON.stringify(rule)));
+    return out;
+  }
+  // ── end blocked ───────────────────────────────────────────────────────────
+
   // Virtual signals are derived from the live session set rather than a hook.
   const LONG_RUNNING_MS = 10 * 60 * 1000;
   // Signal sets, owned by the state machine: WAITING (blocked on you),
@@ -225,6 +260,7 @@
     }
     if (agentTotal >= 3) out.push({ signal: 'agents-many', virtual: true, agents: agentTotal });
     out.push(...spendSessions(sessions, env)); // F1 spend
+    out.push(...blockedSessions(sessions, now)); // v9 blocked
     return out;
   }
   // "Ignored" means you haven't touched *any* Claude, not just this one: a
@@ -364,7 +400,7 @@
   // blocked until you act (a permission ask, a limit, no network). Off:
   // nothing running.
   function defaultRules() {
-    return placeSpendRules([ // F1 spend
+    return placeBlockedRule(placeSpendRules([ // F1 spend
       {
         id: 'limit', name: 'Out of tokens', locked: true, enabled: true,
         when: { signal: ['limit-hit'] },
@@ -446,13 +482,13 @@
         when: { signal: ['idle'] },
         then: { lamp: 'off', pose: 'none' },
       },
-    ]);
+    ]));
   }
 
   // Rules added to the defaults after people already had saved configs. Each
   // is slotted in once, keyed by the saved rulesVersion, so deleting one
   // afterwards sticks.
-  const RULES_VERSION = 8;
+  const RULES_VERSION = 9;
   // v4 recoloured four default lamps (see defaultRules). A saved rule that
   // still has the old default colour, and no custom lampColor, follows.
   const V4_LAMPS = { permission: ['amber', 'red'], done: ['green', 'amber'], nudge: ['green', 'amber'], idle: ['amber', 'off'] };
@@ -513,6 +549,8 @@
     if (version < 7) addGitRules(add, out); // F2 git/ci
     // v8 (F1 spend): runaway and budget rules.
     if (version < 8) out.splice(0, out.length, ...placeSpendRules(out, SPEND_RULES.map(normalizeRule).map((r) => fitForTemplate(template, r)).filter(Boolean)));
+    // v9: a classifier denial ("blocked: needs your decision") is red.
+    if (version < 9) out.splice(0, out.length, ...placeBlockedRule(out, fitForTemplate(template, normalizeRule(BLOCKED_RULE))));
     return out;
   }
 
@@ -819,5 +857,5 @@
     };
   }
 
-  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, ...F5_EXPORTS };
+  return { AGENT_KINDS, AGENT_STATUSES, MODES, normalizeAgent, liveAgents, filterAgentKinds, sessionMode, ralphIteration, fillText, seasonalCostume, seasonalEffect, ACTIONS, GESTURES, DEFAULT_CLICKS, SIGNALS, TOOL_SUGGESTIONS, LAMPS, LAMP_FX, SIGNS, LAMP_SHAPES, SIGN_FX, NUMBERS, SCREEN_FX, POSES, COSTUMES, CAMEOS, CAMEO_ID, BODIES, EYE_MOODS, EFFECTS, PETS, AGENT_STYLES, SOUNDS, WAITING_ON_YOU, TURN_END, effectiveSignal, presentSignal, TRANSIENT_ASK_MS, AGENT_KEEPALIVE_MS: Machine.AGENT_KEEPALIVE_MS, classifySession: Machine.classify, LONG_RUNNING_MS, defaultRules, RULES_VERSION, LEGACY_RULES_VERSION, rulesVersionOf, migrateRules, templatePrefs, shareFile, templates, applyTemplate, normalizeRule, clickCommands, orderedRules, ruleMatches, toolMatches, cwdMatches, folderOf, resolve, firedNames, previewLook, sessionSignal, virtualSessions, uid, GIT_SIGNALS, gitDefaultRules, gitSessions, SPEND_RULES, placeSpendRules, spendSessions, BLOCKED_RULE, BLOCKED_KEEP_MS, placeBlockedRule, ...F5_EXPORTS };
 });

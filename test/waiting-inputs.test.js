@@ -328,3 +328,18 @@ test('L3: with askFromWidget on, AskUserQuestion waits in PreToolUse for 20 s at
     assert.equal(JSON.parse((await h.done).out).hookSpecificOutput.permissionDecision, 'deny');
   } finally { app.close(); }
 });
+
+test('blocked: the command is kept up to 1000 characters, and the input shows all of it', () => {
+  const home = tmp();
+  const command = `node scripts/migrate.js ${'--table orders '.repeat(50)}`.trim();
+  runSync('permission-denied', home, { session_id: 's', cwd: '/x', tool_name: 'Bash', tool_input: { command }, reason: '[Irreversible Local Destruction]' });
+  const s = session(home);
+  assert.ok(command.length > 300 && command.length <= 1000);
+  assert.equal(s.blocked.summary, command);
+  const PI = require('../src/pending-inputs.js');
+  assert.equal(PI.BLOCKED_SUMMARY_CHARS, 1000);
+  const [b] = PI.fromSession({ ...s, sessionId: 's', host: 'h', blocked: { ...s.blocked, at: new Date().toISOString() } });
+  assert.ok(b.text.startsWith(command));
+  runSync('permission-denied', home, { session_id: 's2', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'x'.repeat(1500) }, reason: 'r' });
+  assert.equal(session(home, 's2').blocked.summary.length, 1000, 'still capped');
+});

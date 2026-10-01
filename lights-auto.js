@@ -36,6 +36,7 @@
       command: shell ? $('auto-command').value.trim() || null : null,
       path: file ? $('auto-path').value.trim() || null : null,
       cwd: $('auto-cwd').value.trim() || null,
+      note: $('auto-note').value.trim(),
       enabled: true,
     };
   }
@@ -77,6 +78,7 @@
     $('auto-command').value = r.command || '';
     $('auto-path').value = r.path || '';
     $('auto-cwd').value = r.cwd || '';
+    $('auto-note').value = r.note || '';
     setAction(r.action === 'deny' ? 'deny' : 'allow');
   }
 
@@ -99,7 +101,7 @@
       const what = document.createElement('span');
       what.className = 'what';
       what.textContent = `${r.tools.join(', ')}: ${describe(r)}`;
-      what.title = what.textContent;
+      what.title = r.note ? `${what.textContent} — ${r.note}` : what.textContent;
       const where = document.createElement('span');
       where.className = 'where';
       where.textContent = r.cwd ? `in ${r.cwd}` : 'any project';

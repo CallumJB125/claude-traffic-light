@@ -42,7 +42,9 @@ function fingerprint(i) {
   return h.toString(36);
 }
 function askKey(st) {
-  const ids = [...(st?.pending || []).map((p) => `r:${p.id}`), ...(st?.inputs || []).map((i) => `i:${i.id}:${fingerprint(i)}`)];
+  const ids = [...(st?.pending || []).map((p) => `r:${p.id}`), ...(st?.inputs || []).map((i) => `i:${i.id}:${fingerprint(i)}`),
+    // A row's work-scope badge (personal, counting…) changes without the input changing.
+    ...(st?.sessions || []).filter((s) => s && s.scope && typeof s.scope.state === 'string').map((s) => `s:${s.sessionId}:${s.scope.state}`)];
   return ids.sort().join('|');
 }
 function statusPushWanted(paused, key, lastKey) {

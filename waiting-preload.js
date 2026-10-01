@@ -9,5 +9,7 @@ contextBridge.exposeInMainWorld('waitingApi', {
   openInput: (id) => ipcRenderer.invoke('open-input', id),
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),
+  setSessionScope: (sessionId, mode) => ipcRenderer.invoke('set-session-scope', sessionId, mode),
+  setRepoScope: (canonicalUrl, mode) => ipcRenderer.invoke('set-repo-scope', canonicalUrl, mode),
   onStatusChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
 });

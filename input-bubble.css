@@ -68,3 +68,11 @@
 .ib-page .ib-opt { min-height: 28px; padding: 3px 12px; font-size: var(--text-sm); flex: 0 1 auto; }
 .ib-page .ib-more, .ib-page .ib-pill, .ib-page .ib-nudge { font-size: var(--text-sm); }
 .ib-page .ib-nudge-rule { font-size: var(--text-xs); }
+
+/* Work scope (contract §C2): small and quiet; personal reads as a tag. */
+.ib-scope { flex: none; padding: 0 4px; border-radius: var(--radius-pill); font-size: 8px; font-weight: 600; white-space: nowrap; background: rgba(255, 255, 255, 0.07); color: var(--muted); max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.ib-scope.tone-count { background: rgba(218, 119, 86, 0.18); color: var(--accent); }
+.ib-scope.tone-personal { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+.ib-scope-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.ib-scope-line .ib-scope { max-width: none; }
+.ib-page .ib-scope { font-size: var(--text-xs); padding: 1px 8px; }
