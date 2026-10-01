@@ -54,6 +54,20 @@ test('buddy_status: compares against the running app when it answers', async () 
   assert.equal(other.app.agrees, false);
 });
 
+test('buddy_status: an unusable local status response still returns observed disk state', async () => {
+  const root = fixture({ config: base, sessions: { a: session('a') } });
+  try {
+    for (const live of [{}, { look: null }, { look: [] }]) {
+      const status = await M.buddyStatus({ root, now: NOW, online: true, live });
+      assert.equal(status.reason, 'session');
+      assert.equal(status.sessionCount, 1);
+      assert.equal(status.currentTool, 'Bash');
+      assert.equal(status.look.lamp, 'green');
+      assert.equal(status.app.running, false);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('buddy_status: a pending permission request forces the ask when answering from the widget is on', async () => {
   const req = { id: 'h-a-1', sessionId: 'a', cwd: '/w/a', tool: 'Bash', summary: 'rm -rf x', createdAt: iso(2000) };
   const root = fixture({ config: { ...base, askFromWidget: true }, sessions: { a: session('a') }, requests: [req] });

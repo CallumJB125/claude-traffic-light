@@ -21,6 +21,9 @@ const artifact = (ext) => `${Brand.name}-\${version}-\${os}-\${arch}.${ext}`;
 
 module.exports = {
   ...base,
+  // The board launcher runs unpacked ESM under Electron's Node mode. ESM
+  // package lookup cannot cross back into app.asar for SDK transitives, so
+  // the entire shipped production dependency closure must stay beside it.
   artifactName: artifact('${ext}'),
   // Written into app-update.yml. The updater never reads it (src/updater/
   // points electron-updater at each signed release's own folder); it is

@@ -288,10 +288,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -415,9 +415,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('POST', '/api/boards/:board_id/restore', ({ member, params }) => api.setBoardArchived(member, params.board_id, false));
   route('GET', '/api/boards/:board_id', ({ member, params, query }) => selectedContext(hub, api.snapshot(member, params.board_id, { includeArchived: query.get('include_archived') === '1' }), communicationOptions(query).boardIds));
   route('GET', '/api/boards/:board_id/labels', ({ member, params }) => api.listLabels(member, params.board_id));
-  route('POST', '/api/boards/:board_id/labels', ({ member, params, body }) => api.createLabel(member, params.board_id, body));
-  route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body }) => api.patchLabel(member, params.board_id, params.name, body));
-  route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }));
+  route('POST', '/api/boards/:board_id/labels', ({ member, params, body, ident }) => api.createLabel(member, params.board_id, body, { cred: ident?.cred ?? null }), { writeScope: 'board' });
+  route('PATCH', '/api/boards/:board_id/labels/:name', ({ member, params, body, ident }) => api.patchLabel(member, params.board_id, params.name, body, { cred: ident?.cred ?? null }), { writeScope: 'label' });
+  route('DELETE', '/api/boards/:board_id/labels/:name', ({ member, params, body, query, ident }) => api.deleteLabel(member, params.board_id, params.name, { ...body, strip: body.strip === true || query.get('strip') === '1' }, { cred: ident?.cred ?? null }), { writeScope: 'labelManage' });
   route('GET', '/api/boards/:board_id/alerts', ({ member, params }) => api.alerts(member, params.board_id));
   route('GET', '/api/boards/:board_id/journal', ({ member, params, query }) => api.journalPage(member, params.board_id, { after_seq: query.get('after_seq') ?? 0, limit: query.get('limit') ?? 200 }));
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
@@ -427,9 +427,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
   route('POST', '/api/cards/:card_id/work-capture/stop', ({ member, params, body, ident }) => workCapture.stop(member, params.card_id, body, ident?.cred), { replay: false, maxBody: 1024 });
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
-  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }));
-  route('POST', '/api/cards/:card_id/archive', ({ member, params, body }) => api.archive(member, params.card_id, body));
-  route('POST', '/api/cards/:card_id/restore', ({ member, params, body }) => api.restore(member, params.card_id, body));
+  route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
+  route('POST', '/api/cards/:card_id/archive', ({ member, params, body, ident }) => api.archive(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
+  route('POST', '/api/cards/:card_id/restore', ({ member, params, body, ident }) => api.restore(member, params.card_id, body, { cred: ident?.cred ?? null }), { writeScope: 'archive' });
   route('GET', '/api/cards/:card_id/packet', ({ member, params, query, ident }) => communication.staffReadPacket(member, params.card_id, query.has('version') ? { version: Number(query.get('version')) } : {}, ident?.cred, communicationOptions(query)));
   route('POST', '/api/cards/:card_id/packet', ({ member, params, body, ident, query }) => communication.staffWritePacket(member, params.card_id, body, ident?.cred, communicationOptions(query)), { replay: false });
   route('GET', '/api/cards/:card_id/messages', ({ member, params, ident, query }) => communication.staffListMessages(member, params.card_id, ident?.cred, communicationOptions(query)), { limit: 'communication_read_member' });
@@ -445,7 +445,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return h;
   });
   route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id'), query.get('repo_id')));
-  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body, ident }) => api.answerPermission(member, params.id, body, { cred: ident?.cred ?? null }));
+  route('POST', '/api/permission-requests/:id/answer', ({ member, params, body, ident }) => api.answerPermission(member, params.id, body, { cred: ident?.cred ?? null }), { writeScope: 'permission' });
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
   // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
   if (config.auth !== 'accounts') route('POST', '/api/devices', ({ member, body }) => api.createDevice(member, body));
@@ -802,10 +802,32 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         clientUploads++; clientUploadSlot = true;
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
-      const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      // Bind retries to the effective operation, whether strip came from
+      // JSON or the existing query option. Equivalent forms remain a retry.
+      if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
+      const refreshWrite = () => {
+        if (ident && r.mutating && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
+        if (member && r.auth === 'member' && r.mutating) member = api.currentMember(member, ident?.cred ?? null);
+        if (r.writeScope === 'archive') member = api.collaborationScope(member, { cardId: params.card_id, allowArchived: true }, ident?.cred ?? null);
+        if (['board', 'label', 'labelManage'].includes(r.writeScope)) {
+          member = api.collaborationScope(member, { boardId: params.board_id }, ident?.cred ?? null);
+          if (r.writeScope === 'labelManage' || (r.writeScope === 'label' && typeof body.name === 'string' && body.name.trim() !== params.name)) api.requireLabel(member, 'label.manage');
+        }
+        if (r.collaboration || r.writeScope === 'card') member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
+        if (r.writeScope === 'card') api.requireActionRepo(api.cardFor(member, params.card_id), params.action);
+        if (r.collaboration && body.repo_id != null) {
+          const boardId = params.board_id ?? api.cardFor(member, params.card_id).board_id;
+          if (!hub.db.get('SELECT 1 AS x FROM board_repos WHERE board_id = ? AND repo_id = ?', boardId, body.repo_id)) throw new HubError('NOT_FOUND', 'repo not on this board');
+        }
+        if (r.writeScope === 'permission') {
+          const pr = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
+          if (!pr) throw new HubError('NOT_FOUND', 'permission request not found');
+          member = api.collaborationScope(member, { cardId: pr.card_id }, ident?.cred ?? null);
+        }
+      };
+      refreshWrite();
       const paidAction = DISPATCH_ACTIONS.has(params.action);
-      if (ident && (r.replay === false || paidAction) && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
-      if (r.collaboration) member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
       // Client operations always pass through their live grant/role checks.
       // Workspace creation and acceptance have durable transactional retries;
@@ -813,9 +835,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       // Paid dispatches use their durable, choice-bound row instead of a
       // generic response cache that could replay a different AI/budget.
       const rid = r.replay !== false && !paidAction && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
-      const binding = rid && r.collaboration ? requestBinding(r, params, body) : null;
+      const binding = rid && (r.collaboration || r.writeScope) ? requestBinding(r, params, body) : null;
       const runRequest = async () => {
-        if (r.collaboration) member = api.collaborationScope(member, { boardId: params.board_id, cardId: params.card_id }, ident?.cred ?? null);
+        refreshWrite();
         if (rid) {
           const hit = hub.cachedResponse(actor, rid);
           if (hit) {
