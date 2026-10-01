@@ -277,8 +277,9 @@ test('system.event: a decoy closed unmerged does not send the card back to To do
     assert.deepEqual(await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 12, repo: 'acme/app' }), { done: false, reason: 'not_the_verified_pr' });
     assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12' })).reason, 'not_the_verified_pr', 'no pr number is never the verified one');
     assert.equal(column(), 'in_review');
-    // Evidence '#10' names no repo: the number alone binds it.
-    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10 })).done, true);
+    // Evidence '#10' names no repo: the card's repo on the hub binds it, so the event must name it.
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10 })).reason, 'not_the_verified_pr');
+    assert.equal((await ctx.system.event('pr_closed', { kind: 'pr', external_id: 'gh-12', pr: 10, repo: 'acme/app' })).done, true);
     assert.equal(column(), 'todo');
   } finally { await h.close(); }
 });
@@ -307,7 +308,7 @@ test('system.event: a card with no hub_verified PR evidence is never moved by an
   } finally { await h.close(); }
 });
 
-test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo?, url?}); null without one or for another org\'s card', async () => {
+test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo, url} from the card\'s repo on the hub); null without one or for another org\'s card', async () => {
   const { h, reg, conn } = await setup();
   try {
     const ctx = reg.ctxFor(conn.id);
@@ -316,13 +317,18 @@ test('verifiedPr: the card\'s newest hub_verified PR evidence ({number, repo?, u
     addEvidence(h, r.cardId, '#7', { verification: 'self_reported' });
     assert.equal(ctx.verifiedPr(r.cardId), null);
     addEvidence(h, r.cardId, '7');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 7 });
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 7, repo: 'acme/app', url: 'https://github.com/acme/app/pull/7' });
     addEvidence(h, r.cardId, 'https://github.com/Acme/App/pull/9');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 9, repo: 'acme/app', url: 'https://github.com/Acme/App/pull/9' });
-    addEvidence(h, r.cardId, 'https://ghe.example.com/acme/app/pull/12/');
-    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 12, repo: 'ghe.example.com/acme/app', url: 'https://ghe.example.com/acme/app/pull/12/' });
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 9, repo: 'acme/app', url: 'https://github.com/acme/app/pull/9' });
+    // A (legacy) ref naming another host or repo: only its number is read.
+    addEvidence(h, r.cardId, 'https://ghe.example.com/evil/app/pull/12/');
+    assert.deepEqual(ctx.verifiedPr(r.cardId), { number: 12, repo: 'acme/app', url: 'https://github.com/acme/app/pull/12' });
     addEvidence(h, r.cardId, 'not a pr');
     assert.equal(ctx.verifiedPr(r.cardId), null, 'the newest is unreadable: nothing, not an older one');
+    const loose = addRun(h, { key: 'BDL-65', fence: 1 });
+    addEvidence(h, loose.cardId, '#4');
+    h.db.run('UPDATE cards SET repo_id = NULL WHERE id = ?', loose.cardId);
+    assert.equal(ctx.verifiedPr(loose.cardId), null, 'no repo on the hub: binds to nothing');
     const o = addOrg(h);
     const theirs = addRun(h, { boardId: o.board, repoId: o.repo, member: o.admin, key: 'OTH-9', fence: 1 });
     addEvidence(h, theirs.cardId, '#3');

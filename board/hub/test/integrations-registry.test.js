@@ -229,15 +229,16 @@ test('ctx.system: only declared facts, only for a card linked to this connection
     await assert.rejects(ctx.system.event('pr_closed', { kind: 'pr', external_id: 'PR-1' }), /may not raise/);
     assert.equal(ctx.link, undefined, 'links only through the act() scope');
     await ctx.act('card.create', {}, async (s) => s.link(cardId, 'pr', 'PR-1'));
-    // Only the PR the hub verified may move the card.
+    // Only the PR the hub verified may move the card (its repo is the card's, on the hub).
+    h.db.run('UPDATE cards SET repo_id = ? WHERE id = ?', h.ids.repo, cardId);
     h.db.run("INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, 'pr', '#7', 'hub_verified', ?, ?)", randomUUID(), cardId, h.hub.iso(), h.hub.iso());
     // The card is in To do, so the state machine refuses pr_merged: applied exactly like the merge poll.
-    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 });
+    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7, repo: 'acme/app' });
     assert.equal(r.done, false);
     assert.equal(r.reason, 'ILLEGAL_TRANSITION');
     // Autonomy applies to facts too.
     reg.setSettings(conn.id, { autonomy: { 'system.pr_merged': 'off' } });
-    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7 })).decision, 'skipped');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-1', pr: 7, repo: 'acme/app' })).decision, 'skipped');
     // A connector that declares no system events gets no ctx.system.
     assert.throws(() => defineConnector({ id: 'chatty', name: 'Chat', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['card_delete'] }), /not an allowed system event/);
     assert.throws(() => defineConnector({ id: 'gh2', name: 'G', scopes: [], secrets: [], hosts: [], connect: { kind: 'token', verifyToken: async () => ({}) }, systemEvents: ['pr_merged'] }), /declare the action system.pr_merged/);

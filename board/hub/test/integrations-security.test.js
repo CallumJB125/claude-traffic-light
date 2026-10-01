@@ -75,7 +75,7 @@ test('H1: a linked pr_merged moves an in_review card to done and flushes the aft
     h.db.run("INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, 'pr', '#77', 'hub_verified', ?, ?)", randomUUID(), cardId, h.hub.iso(), h.hub.iso());
     let journalEvents = 0;
     h.hub.on('journal', () => { journalEvents += 1; });
-    const r = await post(reg, conn, { event: 'pr.merged', pr: { id: 'PR-77', number: 77, merged_by: 'octo-cat' } });
+    const r = await post(reg, conn, { event: 'pr.merged', pr: { id: 'PR-77', number: 77, merged_by: 'octo-cat', repo: 'acme/app' } });
     assert.equal(r.status, 200);
     const card = h.db.get('SELECT run_state, column_name FROM cards WHERE id = ?', cardId);
     assert.equal(card.column_name, 'done');
@@ -336,9 +336,9 @@ test('M4: link only to this org’s cards; pr and by are validated before they r
     h.db.run("UPDATE cards SET repo_id = ?, run_state = 'in_review', column_name = 'in_review' WHERE id = ?", h.ids.repo, cardId);
     h.db.run("INSERT INTO evidence (id, card_id, kind, ref, verification, verified_at, created_at) VALUES (?, ?, 'pr', '#5', 'hub_verified', ?, ?)", randomUUID(), cardId, h.hub.iso(), h.hub.iso());
     // A pr that is not an integer is dropped, so it is never the verified PR.
-    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5.5 })).reason, 'not_the_verified_pr');
+    assert.equal((await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5.5, repo: 'acme/app' })).reason, 'not_the_verified_pr');
     assert.deepEqual(reg.audit(conn.id).find((a) => a.action === 'system.pr_merged').detail, { pr: null });
-    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5, by: '<img src=x onerror=alert(1)>' });
+    const r = await ctx.system.event('pr_merged', { kind: 'pr', external_id: 'PR-M4', pr: 5, repo: 'acme/app', by: '<img src=x onerror=alert(1)>' });
     assert.equal(r.done, true);
     assert.deepEqual(JSON.parse(h.db.get("SELECT payload FROM events WHERE card_id = ? AND kind = 'merged'", cardId).payload), { pr: 5, by: null });
   } finally { await h.close(); }

@@ -407,20 +407,18 @@ export function createIntegrations({
 
     /**
      * The card's newest hub_verified PR evidence (what the merge poll acts
-     * on): {number, repo?, url?} | null. `repo` ('owner/name' on github.com,
-     * else 'host/owner/name') only when the evidence ref names one.
+     * on): {number, repo, url} | null. The number is the one the hub checked;
+     * `repo` ('owner/name' on github.com, else 'host/owner/name') and `url`
+     * come from the card's repo on the hub, never from the runner's text.
      */
     function verifiedPr(cardId) {
-      if (!cardInOrg(cardId)) return null;
+      const card = cardInOrg(cardId);
+      if (!card) return null;
       const ref = String(db.get("SELECT ref FROM evidence WHERE card_id = ? AND kind = 'pr' AND verification = 'hub_verified' ORDER BY created_at DESC, rowid DESC LIMIT 1", cardId)?.ref ?? '').trim();
       const number = prNumberOf(ref);
-      if (number == null) return null;
-      const at = ref.lastIndexOf('/pull/');
-      if (at === -1) return { number };
-      const canon = normalizeRemoteUrl(ref.slice(0, at));
-      // A ref that names a repo we cannot read binds to nothing.
-      if (!canon) return null;
-      return { number, repo: shortRepo(canon), ...(/^https:\/\//i.test(ref) ? { url: ref } : {}) };
+      const canon = hub.repo(card.repo_id)?.canonical_url;
+      if (number == null || !canon) return null;
+      return { number, repo: shortRepo(canon), url: `https://${canon}/pull/${number}` };
     }
 
     function link(cardId, kind, externalId, url = null) {
