@@ -24,7 +24,7 @@
 // '.git/./hooks' is still '.git/hooks'.
 // The deny-list (denylist.js) still runs first, as defence in depth.
 import { tokenize, commands, SHELLS, INTERPRETERS, GLOB, TILDE, BRACE } from './shell.js';
-import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList, cleanPath } from './denylist.js';
+import { CREDENTIAL_PATHS, RUNS_CODE_LATER, SHELL_TOOLS, DESK_MESSAGE, evaluateDenyList, cleanPath, pathForms, patchPaths, stringsIn } from './denylist.js';
 
 const READ_TOOLS = /^(Read|Grep|Glob|LS|NotebookRead)$/;
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
@@ -137,12 +137,6 @@ function homesOf(home, realpath) {
   return homes;
 }
 
-// The raw path, cleaned, and (for a relative path) cleaned against the session directory.
-function pathForms(p, dir) {
-  const out = [p, cleanPath(p)];
-  if (!p.startsWith('/') && typeof dir === 'string' && dir.startsWith('/')) out.push(cleanPath(`${dir}/${p}`));
-  return out;
-}
 const isSecret = (p) => CREDENTIAL_PATHS.test(p) || SECRET_FILES.test(p);
 const secretForms = (p, dir) => pathForms(p, dir).some(isSecret);
 const runsCodeForms = (p, dir) => pathForms(p, dir).some((x) => RUNS_CODE_LATER.test(x));
@@ -224,12 +218,13 @@ export function allowListReason({ toolName, toolInput, cwd }, { bashAllow = DEFA
     return null;
   }
   if (SHELL_TOOLS.test(name)) return bashReason(input.command, trustTestCommands ? { ...bashAllow, ...TEST_COMMAND_ALLOW } : bashAllow, cwd, realpath);
+  if (stringsIn(input).flatMap(patchPaths).some((p) => secretForms(p, dir) || runsCodeForms(p, dir))) return 'protected path (named in a patch)';
   return `${name || 'this tool'} is desk-only`;
 }
 
 // The full remote check: deny-list first (specific reasons), then the allow-list.
 export function remoteVerdict(compiled, { toolName, toolInput, repoLabels = [], cwd = null }, opts = {}) {
-  const deny = evaluateDenyList(compiled, { toolName, toolInput, repoLabels });
+  const deny = evaluateDenyList(compiled, { toolName, toolInput, repoLabels, cwd });
   if (deny.blocked) return deny;
   const why = allowListReason({ toolName, toolInput, cwd }, opts);
   return why ? { blocked: true, ruleId: 'not-on-remote-allow-list', reason: why, message: DESK_MESSAGE } : { blocked: false };
