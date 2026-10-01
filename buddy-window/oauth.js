@@ -138,7 +138,11 @@ function startProviderSignIn({ client, provider, purpose = 'signin', device = {}
     const { verifier, challenge } = pkcePair();
     try { listener = await listenOnce({ brand, timeoutMs, confirming: purpose === 'delete' }); } catch { return { ok: false, error: `${brand} couldn’t get ready for the browser sign-in. Try again.` }; }
     if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
-    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose });
+    // The hub refuses an exchange from another network than its start, once and for good: both go out
+    // over one resolved address (so one address family), or both over the usual fetch.
+    const transport = (await client.oauthTransport?.()) ?? null;
+    if (cancelled) { listener.close(); return { ok: false, cancelled: true }; }
+    const start = await client.startOAuth(provider, { challenge, redirectUri: listener.redirectUri }, device, { purpose, transport });
     if (cancelled || !start.ok) { listener.close(); return cancelled ? { ok: false, cancelled: true } : start; }
     // The hub's state: the loopback callback must carry exactly this, and the exchange sends it back.
     listener.expect(start.state);
@@ -156,7 +160,7 @@ function startProviderSignIn({ client, provider, purpose = 'signin', device = {}
     }
     if (cancelled) return { ok: false, cancelled: true };
     // Cancel can land while the exchange is in flight: the hub may still mint a token, which must not outlive this run.
-    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider, purpose }, device, { keep: () => !cancelled });
+    return client.exchangeOAuth({ flowId: start.flow_id, code: cb.code, state: start.state, verifier, provider, purpose }, device, { keep: () => !cancelled, transport });
   })();
   return {
     done,

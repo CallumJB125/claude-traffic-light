@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   deleteOAuth: (provider) => call('deleteOAuth', str(provider)),
   cancelDeleteOAuth: () => call('cancelDeleteOAuth'),
   runner: (id, on) => call('runner', str(id), !!on),
+  revokeRunner: (team, id) => call('revokeRunner', str(team), str(id)),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
