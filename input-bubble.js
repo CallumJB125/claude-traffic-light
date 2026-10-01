@@ -235,6 +235,7 @@
       body.appendChild(row);
     }
     function submitQuestion(input) {
+      if (!settled(input.id)) return; // every path (button, Enter in a field) waits for the question to settle on screen
       const r = V.questionAnswer(input, picked.get(input.id) || {}, typed.get(input.id) || {});
       if (r.error) { setError(input.id, r.error); return; }
       send(input, r.optionId, r.answers ? { answers: r.answers } : undefined);
@@ -432,7 +433,7 @@
         const k = itemKey(input);
         if (lastBody !== input.id || shownKey.get(input.id) !== k) {
           // Picks and typing were for what it said before.
-          if (shownKey.has(input.id) && shownKey.get(input.id) !== k) { picked.delete(input.id); typed.delete(input.id); formValues.delete(input.id); }
+          if (shownKey.has(input.id) && shownKey.get(input.id) !== k) { picked.delete(input.id); typed.delete(input.id); formValues.delete(input.id); reasons.delete(input.id); }
           shownAt.set(input.id, t);
           shownKey.set(input.id, k);
           clearTimeout(settleTimer);

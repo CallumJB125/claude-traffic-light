@@ -212,6 +212,8 @@
     // Every waiting input, answerable or not (docs/waiting-inputs.md).
     const bubbleEl = document.getElementById('bubble');
     let bubblePx = -1;
+    // The height main last confirmed it made room for.
+    let stripAck = -1;
     const bubble = window.InputBubble.create(bubbleEl, {
       mode: 'widget',
       maxRows: 2,
@@ -228,8 +230,6 @@
       onLayout: () => reportBubble(),
       onScreen: () => stripAck === bubblePx,
     });
-    // The height main last confirmed it made room for.
-    let stripAck = -1;
     window.trafficLight.onStripApplied((px) => { stripAck = px; if (px === bubblePx) bubble.revealed(); });
     // Also on resize: widening the window rewraps the text, so the height changes.
     function reportBubble() {
@@ -239,6 +239,7 @@
       if (px === bubblePx) return;
       bubblePx = px;
       document.body.style.setProperty('--bubble-h', `${px}px`);
+      stripAck = -1; // an ack for an earlier height must not vouch for this one
       window.trafficLight.setBubbleHeight(px);
     }
     window.addEventListener('resize', reportBubble);

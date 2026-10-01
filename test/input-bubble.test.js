@@ -403,3 +403,49 @@ test('N3: a question’s Send answer is settle-gated, and picks are dropped when
   assert.equal(t.calls.answer.length, 0, 'nothing picked for the new question');
   assert.match(t.$('.ib-err').textContent, /Answer/);
 });
+
+test('N3: Enter in a question’s own-answer field waits for the question to settle and be on screen too', async () => {
+  const q = (question) => ({ v: 1, id: 'rq', kind: 'question', source: 'hook', tool: 'AskUserQuestion', cwd: '/w/app', title: 'Ask', text: question, freeText: true,
+    questions: [{ id: 'q0', question, header: '', multiSelect: false, options: [{ id: 'q0o0', label: 'Yes' }] }],
+    options: [{ id: 'q0o0', label: 'Yes' }, { id: 'deny', label: 'Decline to answer' }], created_at: ago(1), expires_at: later(20), answerable: true, actions: ['answer', 'open'] });
+  let room = true;
+  const t = setup({ onScreen: () => room });
+  const enterIn = (text) => {
+    const f = t.$('.ib-q .ib-field');
+    f.value = text;
+    f.dispatchEvent(new t.dom.window.Event('input'));
+    f.dispatchEvent(new t.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  };
+  t.show([q('Which framework?')]);
+  t.update([q('Delete prod DB?')]);
+  t.advance(50);
+  enterIn('yes');
+  await tick();
+  assert.equal(t.calls.answer.length, 0, 'the question just changed under the cursor');
+  t.settle();
+  room = false;
+  t.bubble.update([q('Delete prod DB?')]);
+  enterIn('yes');
+  await tick();
+  assert.equal(t.calls.answer.length, 0, 'possibly clipped: not seen');
+  room = true;
+  t.bubble.revealed();
+  t.settle();
+  enterIn('no');
+  await tick();
+  assert.deepEqual(t.calls.answer, [['rq', 'answers', { answers: { 'Delete prod DB?': 'no' } }]]);
+});
+
+test('a deny reason typed for what the input said before is dropped when it changes', async () => {
+  const t = setup();
+  t.show([perm()]);
+  t.$('[data-option="deny"]').click();
+  const r = t.$('.ib-reason');
+  assert.ok(r, 'Deny first shows the reason field');
+  r.value = 'not that one';
+  r.dispatchEvent(new t.dom.window.Event('input'));
+  t.update([perm({ text: 'rm -rf build', headline: 'rm -rf build' })]);
+  t.settle();
+  const r2 = t.$('.ib-reason');
+  assert.ok(!r2 || r2.value === '', 'the old reason is not offered for the new content');
+});

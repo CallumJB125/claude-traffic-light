@@ -28,7 +28,10 @@ function createSecretStore({ file, safeStorage, log = () => {} }) {
     const hex = crypto.randomBytes(32).toString('hex');
     const out = sealable ? { v: 1, sealed: true, data: safeStorage.encryptString(hex).toString('base64') } : { v: 1, sealed: false, data: hex };
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(out), { mode: 0o600 });
+    // A temp file then rename: a crash mid-write can't leave invalid JSON (which would reset the counts), and the secret is never readable at another mode.
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(out), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, file);
     fs.chmodSync(file, 0o600);
     return Buffer.from(hex, 'hex');
   };
