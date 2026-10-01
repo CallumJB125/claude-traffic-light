@@ -120,3 +120,26 @@ test('JWKS: Google\'s settings (retryMs 0) refetch a stale or failed set on the 
   await assert.rejects(r.verify(jwt({}, { kid: 'nope3' })), JwtInvalid);
   assert.equal(r.loads, 3);
 });
+
+test('JWKS: a key under 2048 bits, or one whose use is set but not sig, or whose alg is set but not RS256, is skipped; 2048-bit sig/RS256 keys and keys without use/alg verify', async () => {
+  const mk = (bits) => generateKeyPairSync('rsa', { modulusLength: bits });
+  const k1024 = mk(1024);
+  const k2048 = mk(2048);
+  const jwkOf = (k, extra) => ({ ...k.publicKey.export({ format: 'jwk' }), ...extra });
+  const r = rig({
+    keys: [
+      jwkOf(k1024, { kid: 'small', alg: 'RS256', use: 'sig' }),
+      jwkOf(k2048, { kid: 'enc', use: 'enc' }),
+      jwkOf(k2048, { kid: 'rs512', alg: 'RS512' }),
+      jwkOf(k2048, { kid: 'oaep', alg: 'RSA-OAEP' }),
+      jwkOf(k2048, { kid: 'empty-use', use: '' }),
+      jwkOf(k2048, { kid: 'sig', alg: 'RS256', use: 'sig' }),
+      jwkOf(k2048, { kid: 'bare' }),
+    ],
+  });
+  for (const kid of ['small', 'enc', 'rs512', 'oaep', 'empty-use']) {
+    await assert.rejects(r.verify(jwt({}, { kid, privateKey: kid === 'small' ? k1024.privateKey : k2048.privateKey })), JwtInvalid, kid);
+  }
+  for (const kid of ['sig', 'bare']) assert.equal((await r.verify(jwt({}, { kid, privateKey: k2048.privateKey }))).sub, 'U123', kid);
+  assert.equal(r.loads, 1, 'a skipped kid is unknown: within kidRefetchMs it never refetches');
+});

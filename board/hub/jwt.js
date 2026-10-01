@@ -11,6 +11,7 @@ export class JwtInvalid extends Error {
 }
 
 const SUB_MAX = 255;
+const MIN_RSA_BITS = 2048;
 
 /**
  * A JWKS cache. `load()` → the parsed key set ({keys:[jwk]}), throwing when
@@ -18,7 +19,8 @@ const SUB_MAX = 255;
  * the last attempt); an unknown kid refetches at most once per kidRefetchMs,
  * so tokens with made-up kids can't make every call a fetch. Concurrent
  * callers share one fetch. A stale set that still knows the kid answers when
- * the refetch fails.
+ * the refetch fails. Only RSA keys of at least 2048 bits whose `use` (when
+ * set) is `sig` and `alg` (when set) is `RS256` are kept.
  */
 export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
   let keys = new Map();
@@ -33,7 +35,12 @@ export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
     const next = new Map();
     for (const jwk of doc.keys) {
       if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string') continue;
-      try { next.set(jwk.kid, createPublicKey({ key: jwk, format: 'jwk' })); } catch { /* skip a bad key */ }
+      // An encryption key or one meant for another alg is never a signing key here.
+      if (('use' in jwk && jwk.use !== 'sig') || ('alg' in jwk && jwk.alg !== 'RS256')) continue;
+      let key;
+      try { key = createPublicKey({ key: jwk, format: 'jwk' }); } catch { continue; }
+      if (!(key.asymmetricKeyDetails?.modulusLength >= MIN_RSA_BITS)) continue;
+      next.set(jwk.kid, key);
     }
     keys = next;
     fetchedAt = now();
