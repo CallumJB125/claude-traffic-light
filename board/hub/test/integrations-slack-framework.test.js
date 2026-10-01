@@ -283,8 +283,14 @@ test('F8: act() meta.subject caps createCard at 5/h per (connection, provider us
     const ctx = reg.ctxFor(conn.id);
     // Built at runtime: a distinctive provider user id to search for.
     const [u1, u2, u3] = ['A', 'B', 'C'].map((x) => `U${x}${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`);
+    // Each user is linked (D98): act(…, {subject}) acts only as that user's member.
+    const carol = randomUUID();
+    h.db.insert('members', { id: carol, org_id: h.ids.org, github_id: -77, github_login: 'carol', email: 'carol@dev.local', display_name: 'carol', role: 'member', created_at: h.hub.iso() });
+    for (const [u, m] of [[u1, h.ids.alice], [u2, h.ids.bob], [u3, carol]]) {
+      h.db.insert('external_identities', { provider: conn.provider, workspace_id: conn.external_id, subject: u, member_id: m, connection_id: conn.id, verified_via: 'oauth_link', linked_at: h.hub.iso() });
+    }
     h.hub.limiter.limits.integration_card_conn = { capacity: 12, per_ms: 3_600_000 };
-    const make = (subject, rid) => ctx.act('card.create', { subject, external_ref: rid }, (s) => s.actAs(ctx.connection.created_by).createCard(h.ids.board, { request_id: rid, title: `Card ${rid}` }));
+    const make = (subject, rid) => ctx.act('card.create', { subject, external_ref: rid }, (s) => s.actAs(subject ? ctx.memberFor(subject) : ctx.connection.created_by).createCard(h.ids.board, { request_id: rid, title: `Card ${rid}` }));
     for (let i = 0; i < 5; i += 1) assert.equal((await make(u1, `u1-${i}`)).decision, 'auto');
     await assert.rejects(make(u1, 'u1-5'), (e) => e.code === 'RATE_LIMITED');
     assert.deepEqual([reg.audit(conn.id)[0].decision, reg.audit(conn.id)[0].error], ['failed', 'rate_limited']);
@@ -304,8 +310,8 @@ test('F8: act() meta.subject caps createCard at 5/h per (connection, provider us
     for (const bad of ['', 'x'.repeat(129), 42, { id: u1 }]) await assert.rejects(make(bad, 'bad'), (e) => e.code === 'VALIDATION');
     assert.equal(reg.audit(conn.id).length, before);
     await assert.rejects(make(null, 'null-ok'), (e) => e.code === 'RATE_LIMITED', 'null is no subject: it reaches the connection cap, not VALIDATION');
-    // Never stored or logged raw: every table, the limiter's keys and the logs.
-    const tables = h.db.all("SELECT name FROM sqlite_master WHERE type = 'table'").map((t) => t.name);
+    // Never stored or logged raw: every table but the identity links (which hold it by design, D98), the limiter's keys and the logs.
+    const tables = h.db.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'external_identities'").map((t) => t.name);
     const dump = JSON.stringify([tables.map((t) => h.db.all(`SELECT * FROM "${t}"`)), [...h.hub.limiter.buckets.keys()], logs]);
     for (const u of [u1, u2, u3]) assert.ok(!dump.includes(u), 'no raw subject anywhere');
     assert.ok([...h.hub.limiter.buckets.keys()].some((k) => k.startsWith(`integration_card_subject|${conn.id}|`)));

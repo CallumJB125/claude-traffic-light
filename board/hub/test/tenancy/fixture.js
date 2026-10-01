@@ -95,7 +95,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   h.hub.setVaultKey(randomBytes(32));
   h.app.integrations.register(fake);
   const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
-  B.connection = h.app.integrations.createConnection({ ...v, display_name: `${MARK} workspace`, orgId: B.team, memberId: B.owner, provider: 'fake' }).id;
+  const bc = h.app.integrations.createConnection({ ...v, display_name: `${MARK} workspace`, orgId: B.team, memberId: B.owner, provider: 'fake' });
+  B.connection = bc.id;
+  // S's B membership is linked to a user of B's workspace (D98).
+  db.insert('external_identities', { provider: 'fake', workspace_id: bc.external_id, subject: `${MARK}-U1`, member_id: B.s, connection_id: B.connection, verified_via: 'oauth_link', linked_at: now });
   // A pending connection of B's (D97), as the prepare route leaves it.
   B.pending = randomUUID();
   db.run('INSERT INTO integration_pending (id, org_id, provider, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)', B.pending, B.team, 'fake', B.owner, now, new Date(Date.parse(now) + 3_600_000).toISOString());
@@ -122,6 +125,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM connections WHERE org_id = ?', B.team),
       q('SELECT * FROM connection_secrets WHERE connection_id = ?', B.connection),
       q('SELECT * FROM integration_pending WHERE org_id = ?', B.team),
+      q('SELECT * FROM external_identities WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
     ].join('\n');

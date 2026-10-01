@@ -115,6 +115,15 @@ const MATRIX = {
   'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} }, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, alt: (fx) => [`/api/integrations/${fx.B.pending}`] },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
+  // Identity links (D98): B's connection (and B's member) from team A or no team.
+  'POST /api/integrations/:id/identity/start': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identity/start` },
+  'GET /api/integrations/:id/identity': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identity` },
+  'DELETE /api/integrations/:id/identity': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identity` },
+  'GET /api/integrations/:id/identities': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identities` },
+  'DELETE /api/integrations/:id/identities/:member_id': {
+    kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/identities/${fx.B.s}`,
+    alt: (fx) => [`/api/integrations/${fx.B.pending}/identities/${fx.B.owner}`],
+  },
 };
 
 // Not registered in accounts mode at all (a plain 404 "no such route"), with why.
@@ -127,6 +136,7 @@ const REFUSED = {
 const PRE_ROUTE = {
   'POST /integrations/:id/webhook': 'the provider signs every delivery; the signature (the connection\'s own secret) is the auth',
   'GET /integrations/:provider/callback': 'the provider redirects here; the signed OAuth state plus the bind cookie are the auth',
+  'GET /integrations/:provider/identity/callback': 'the provider redirects a linking member here (D98); the signed identity state plus the bind cookie are the auth, and the member and credential it names are re-checked',
 };
 
 const key = (r) => `${r.method} ${r.pattern}`;
