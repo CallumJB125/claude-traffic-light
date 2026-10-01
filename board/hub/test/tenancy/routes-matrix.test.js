@@ -6,7 +6,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import { canonical } from '../../../shared/workflow-execution.js';
 import { tenancy, MARK } from './fixture.js';
 import { sign } from '../../integrations/fake/index.js';
 import { validatePayload } from '../../../shared/setups.js';
@@ -149,6 +150,9 @@ const MATRIX = {
   'POST /api/boards/:board_id/workflows/:workflow_id/apply': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`, alt: (fx) => [`/api/boards/${fx.A.board}/workflows/${fx.B.workflow}/apply`], body: (fx) => ({ version: 1, content_hash: fx.B.workflowHash }) },
   'POST /api/workflow-instances/:instance_id/preview': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/preview`,body:fx=>fx.B.workflowPreview},
   'GET /api/workflow-plans/:plan_id': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}`},
+  'POST /api/workflow-plans/:plan_id/execution-preview': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,body:fx=>fx.B.executionPreviewInput},
+  'POST /api/workflow-executions/:execution_id/preview': {kind:'cross',path:fx=>`/api/workflow-executions/${fx.B.execution}/preview`,body:fx=>({...fx.B.executionPreviewInput,source_plan_id:fx.B.workflowPlan,purpose:'resume',expected_revision:0})},
+  'GET /api/workflow-execution-previews/:execution_preview_id': {kind:'cross',path:fx=>`/api/workflow-execution-previews/${fx.B.executionPreview}`},
   'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
   'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
   'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
@@ -258,6 +262,13 @@ async function sweep(fx, caller) {
   fx.B.workflowPreview={request_id:randomUUID(),board_id:fx.B.board,repo_id:fx.B.repo,recipe_version:1,content_hash:fx.B.workflowHash,concurrency:1,
    steps:[{position:0,card_id:current.id,version:current.version,fence:current.fence,ai:'codex',target_member_id:fx.B.owner,budget_usd:null,plan_approval:true}]};
   const preview=await fx.as(fx.users.ub,'POST',`/api/workflow-instances/${fx.B.workflowInstance}/preview`,fx.B.workflowPreview);assert.equal(preview.status,200,preview.text);fx.B.workflowPlan=preview.body.plan.id;
+  fx.B.executionPreviewInput={request_id:randomUUID(),plan_hash:preview.body.plan.hash,purpose:'start',declared_paths:[{position:0,paths:[]}]};
+  const control=await fx.as(fx.users.ub,'POST',`/api/workflow-plans/${fx.B.workflowPlan}/execution-preview`,fx.B.executionPreviewInput);assert.equal(control.status,200,control.text);fx.B.executionPreview=control.body.execution_preview.id;
+  const planSnapshot=JSON.parse(fx.db.get('SELECT snapshot FROM workflow_execution_plans WHERE id=?',fx.B.workflowPlan).snapshot);
+  const fixed={schema:1,content_hash:planSnapshot.options.content_hash,repository_hmac:planSnapshot.repository_hmac,dependencies:planSnapshot.options.dependencies,card_ids:planSnapshot.steps.map(s=>s.card_id)};
+  const digest=v=>createHash('sha256').update(canonical(v)).digest('hex');fx.B.execution=randomUUID();
+  fx.db.insert('workflow_executions',{id:fx.B.execution,org_id:fx.B.team,instance_id:fx.B.workflowInstance,board_id:fx.B.board,repo_id:fx.B.repo,source_plan_id:fx.B.workflowPlan,source_hash:digest(fixed),revision:0,state:'planned',created_epoch:fx.h.hub.epoch,created_ms:fx.h.hub.wallMs(),snapshot:canonical(fixed)});
+  fx.db.insert('workflow_execution_steps',{execution_id:fx.B.execution,position:0,card_id:current.id,source_hash:digest(planSnapshot.steps[0]),version:current.version,fence:current.fence,state:'pending'});
   const payload={schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:MARK};
   const checked=validatePayload(payload);
   const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
