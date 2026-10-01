@@ -237,7 +237,7 @@ The design's WS ticket and `Sec-WebSocket-Protocol` options are not built: the i
 
 | Path | What |
 |---|---|
-| `GET /signin` | minimal email → code sign-in page (client `web`) |
+| `GET /signin` | minimal email → code sign-in page (client `web`); `#invite=<token>` returns to `/invite#<token>` once signed in. Signed in with no team, the board (`/`) offers Create a team, Join with a code or invite link, and any `pending_invites` |
 | `GET /auth/email` | the same page; handles `#f=<flow_id>&c=<code>` magic links |
 | `GET /invite` | the invite landing page (see Invites) |
 | `GET /download` | `302` to `BOARD_DOWNLOAD_URL` (the app download), or `404` when none is configured |
