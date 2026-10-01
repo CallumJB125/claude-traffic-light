@@ -20,6 +20,9 @@ const OWNER = ['owner'];
 // checks every row for every role).
 export const MATRIX = Object.freeze({
   'team.read': ALL,              // team, its boards, the member list (names)
+  'setups.read': ALL,
+  'setups.publish': WRITERS,
+  'setups.baseline': ADMINS,
   'board.read': ALL,             // board, cards, card detail, handover, feed, journal
   'members.emails': ADMINS,      // member emails in the member list
   'card.write': WRITERS,         // create / edit / move cards, labels, assignees

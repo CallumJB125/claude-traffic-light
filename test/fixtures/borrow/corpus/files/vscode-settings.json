@@ -1,0 +1,40 @@
+{
+  // Editor
+  "editor.fontSize": 14,
+  "editor.fontFamily": "JetBrains Mono, Menlo, monospace",
+  "editor.formatOnSave": true,
+  "workbench.colorTheme": "Catppuccin Mocha",
+  "terminal.integrated.defaultProfile.osx": "fish",
+  "terminal.integrated.env.osx": {
+    "GITHUB_TOKEN": "@@SEED:github_token@@",
+    "PATH": "${env:PATH}:@@HOME@@/go/bin"
+  },
+  "http.proxy": "http://@@USER@@:@@SEED:url_credentials@@@proxy.@@INTHOST@@:3128",
+  "python.defaultInterpreterPath": "@@HOME@@/.venv/bin/python",
+  "sqltools.connections": [
+    {
+      "name": "local",
+      "driver": "PostgreSQL",
+      "server": "localhost",
+      "port": 5432,
+      "database": "app",
+      "username": "@@USER@@",
+      "password": "@@SEED:keyed@@"
+    }
+  ],
+  "rest-client.environmentVariables": {
+    "$shared": { "apiToken": "@@SEED:jwt@@", "host": "https://api.acme.co.za" }
+  },
+  "github.copilot.enable": { "*": true, "markdown": false },
+  "mcp": {
+    "servers": {
+      "sentry": {
+        "type": "http",
+        "url": "https://mcp.sentry.dev/mcp",
+        "headers": { "Authorization": "Bearer @@SEED:sentry_token@@" }
+      }
+    }
+  },
+  "files.exclude": { "**/.DS_Store": true },
+  "window.zoomLevel": 0, // trailing comment
+}

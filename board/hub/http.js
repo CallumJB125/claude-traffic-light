@@ -26,6 +26,8 @@ import { Workflows } from './workflows.js';
 import { TeamCommunication } from './communication.js';
 import { WorkCapture } from './work-capture.js';
 import { Planning } from './planning.js';
+import { Setups } from './setups.js';
+import { SETUP_BODY_MAX } from '../shared/setups.js';
 import { myDay } from './my-day.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -234,6 +236,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const communication = new TeamCommunication(hub);
   const workCapture = new WorkCapture(hub);
   const planning = new Planning(api);
+  const setups = hub.setups = new Setups(api);
   // This query can only narrow current staff access. Desktop grants derive it
   // privately in main; remote grants additionally require their own guard.
   const communicationOptions = (query) => query.has('board_id') ? { boardIds: Object.freeze(query.getAll('board_id')) } : {};
@@ -255,6 +258,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const readLimits = { ...WEBHOOK_READS, ...config.webhookReads };
   const limits = { ...REQUEST_LIMITS, ...config.requestLimits };
   let clientUploads = 0; // reading, decoding or waiting for the board queue
+  let setupUploads = 0;
   const reading = { pair: new Map(), ip: new Map(), conn: new Map() }; // key → webhook body reads in flight
   const verifiedPairs = new Map(); // (connection|/24 or /48) → hub mono ms until which it skips the per-connection cap
   // Never framed (the desktop app's view is a window, not an iframe); HSTS once served over https.
@@ -269,6 +273,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const resourceOrg = (r, params) => {
     const boardOrg = (boardId) => hub.board(boardId)?.org_id ?? null;
     if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
+    if (params.profile_id) return hub.db.get('SELECT p.org_id FROM setup_profiles p JOIN orgs o ON o.id=p.org_id WHERE p.id=? AND o.deleted_at IS NULL', params.profile_id)?.org_id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
     if (params.workflow_id) return hub.db.get('SELECT r.org_id FROM workflow_recipes r JOIN orgs o ON o.id = r.org_id WHERE r.id = ? AND o.deleted_at IS NULL', params.workflow_id)?.org_id ?? null;
@@ -291,10 +296,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, responseGuard = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, responseGuard, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -430,6 +435,18 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/my-day', ({ member, ident }) => myDay(hub, ident ? { userId: ident.user.id, cred: ident.cred } : { member }), { auth: config.auth === 'accounts' ? 'user' : 'member', replay: false });
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
   route('PATCH', '/api/cards/:card_id/planning', ({ member, params, body, ident }) => planning.patch(member, params.card_id, body, ident?.cred ?? null), { replay: false, maxBody: 4096 });
+  if(config.auth === 'accounts') {
+    const guarded = { replay:false, responseGuard:({member,params,ident,req},out)=>setups.guard(member,params,out,ident.cred,req.method) };
+    route('GET','/api/teams/:team_id/setups',({member,params,ident})=>setups.list(member,params.team_id,ident.cred),guarded);
+    route('POST','/api/teams/:team_id/setups',({member,params,body,ident})=>setups.publish(member,params.team_id,body,ident.cred),{...guarded,maxBody:SETUP_BODY_MAX});
+    route('GET','/api/setup-profiles/:profile_id',({member,params,ident})=>setups.read(member,params.profile_id,null,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/versions/:version_id',({member,params,ident})=>setups.read(member,params.profile_id,params.version_id,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/export',({member,params,ident})=>setups.read(member,params.profile_id,null,ident.cred,true),guarded);
+    route('DELETE','/api/setup-profiles/:profile_id',({member,params,body,ident})=>setups.unpublish(member,params.profile_id,body,ident.cred),guarded);
+    route('GET','/api/setup-profiles/:profile_id/activity',({member,params,ident})=>setups.activity(member,params.profile_id,ident.cred),guarded);
+    route('PUT','/api/teams/:team_id/setup-baseline',({member,params,body,ident})=>setups.baseline(member,params.team_id,body,ident.cred),guarded);
+    route('POST','/api/setup-profiles/:profile_id/borrow-receipts',({member,params,body,ident})=>setups.receipt(member,params.profile_id,body,ident.cred),guarded);
+  }
   route('POST', '/api/cards/:card_id/work-capture/stop', ({ member, params, body, ident }) => workCapture.stop(member, params.card_id, body, ident?.cred), { replay: false, maxBody: 1024 });
   route('PATCH', '/api/cards/:card_id', ({ member, params, body, ident }) => api.patchCard(member, params.card_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/cards/:card_id/actions/:action', ({ member, params, body, ident }) => api.action(member, params.card_id, params.action, body, { cred: ident?.cred ?? null }), { writeScope: 'card' });
@@ -752,6 +769,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
     }
     let clientUploadSlot = false;
+    let setupUploadSlot = false;
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/')) {
         // The invite page's "Download" button (accounts): the configured app download.
@@ -801,10 +819,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       } else if (r.auth === 'member') {
         member = await authMember(req, pick);
       }
+      if(r.responseGuard && (req.headers['x-plexiform-account']!==ident?.user.id || req.headers['x-plexiform-member']!==member?.id)) throw new HubError('UNAUTHENTICATED','Setups account or membership changed; refresh your sign-in');
       if (r.pattern === '/api/client-items/:item_id/artifacts') {
         hub.clientArtifacts.staff(member, params.item_id, ident.cred, true);
         if (clientUploads >= 4) throw new HubError('RATE_LIMITED', 'deliverable uploads are busy; try again shortly', { retry_after_s: 1 });
         clientUploads++; clientUploadSlot = true;
+      }
+      if(r.method === 'POST' && r.pattern === '/api/teams/:team_id/setups') {
+        setups.scope(member,params.team_id,ident.cred,'setups.publish');
+        if(setupUploads>=4) throw new HubError('RATE_LIMITED','Setups uploads are busy; try again shortly',{retry_after_s:1});
+        setupUploads++; setupUploadSlot=true;
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
@@ -865,6 +889,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           out = errorBody(e);
         }
         if (out === undefined) return undefined;
+        if(status===200 && r.responseGuard) r.responseGuard({member,params,ident,req},out);
         if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
         if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
@@ -883,6 +908,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'internal error' } });
     } finally {
       if (clientUploadSlot) clientUploads--;
+      if (setupUploadSlot) setupUploads--;
     }
   }
 }

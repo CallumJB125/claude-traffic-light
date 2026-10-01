@@ -14,6 +14,9 @@ const V = m('viewer');
 // action → [owner, admin, member, viewer]
 const EXPECTED = {
   'team.read': [1, 1, 1, 1],
+  'setups.read': [1,1,1,1],
+  'setups.publish': [1,1,1,0],
+  'setups.baseline': [1,1,0,0],
   'board.read': [1, 1, 1, 1],
   'members.emails': [1, 1, 0, 0],
   'card.write': [1, 1, 1, 0],

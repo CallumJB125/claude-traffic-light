@@ -1,0 +1,104 @@
+{
+  "numStartups": 412,
+  "installMethod": "native",
+  "autoUpdates": false,
+  "userID": "@@SEED:hex_secret@@",
+  "firstStartTime": "2026-01-14T08:12:44.201Z",
+  "oauthAccount": {
+    "emailAddress": "@@EMAIL@@",
+    "displayName": "@@NAME@@",
+    "organizationName": "Acme"
+  },
+  "projects": {
+    "@@HOME@@/dev/acme-api": {
+      "allowedTools": [],
+      "hasTrustDialogAccepted": true,
+      "mcpContextUris": [],
+      "history": []
+    }
+  },
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer @@SEED:github_token@@" }
+    },
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"],
+      "env": { "LINEAR_API_KEY": "@@SEED:linear_key@@" }
+    },
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": {
+        "OPENAPI_MCP_HEADERS": "{\"Authorization\": \"Bearer @@SEED:notion_token@@\", \"Notion-Version\": \"2022-06-28\"}"
+      }
+    },
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio", "--token", "@@SEED:cli_secret_arg@@"],
+      "env": { "FIGMA_API_KEY": "@@SEED:figma_token@@" }
+    },
+    "supabase": {
+      "command": "npx",
+      "args": ["-y", "@supabase/mcp-server-supabase@latest", "--access-token", "@@SEED:supabase_key@@"]
+    },
+    "sentry": {
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server"],
+      "env": { "SENTRY_ACCESS_TOKEN": "@@SEED:sentry_token@@" }
+    },
+    "grafana": {
+      "command": "mcp-grafana",
+      "env": {
+        "GRAFANA_URL": "https://grafana.@@INTHOST@@",
+        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "@@SEED:grafana_token@@"
+      }
+    },
+    "postman": {
+      "type": "http",
+      "url": "https://mcp.postman.com/mcp",
+      "headers": { "X-Api-Key": "@@SEED:postman_key@@" }
+    },
+    "airtable": {
+      "command": "npx",
+      "args": ["-y", "airtable-mcp-server"],
+      "env": { "AIRTABLE_API_KEY": "@@SEED:airtable_token@@" }
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "CONTEXT7_API_KEY": "@@SEED:keyed@@" }
+    },
+    "atlassian": {
+      "command": "uvx",
+      "args": ["mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "https://acme.atlassian.net",
+        "JIRA_API_TOKEN": "@@SEED:atlassian_token@@"
+      }
+    },
+    "db": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": { "DATABASE_URL": "postgres://app:@@SEED:url_credentials@@@db.@@INTHOST@@:5432/app" }
+    },
+    "internal": {
+      "type": "http",
+      "url": "https://tools.@@INTHOST@@/mcp",
+      "headers": {
+        "CF-Access-Client-Id": "abc123.access",
+        "CF-Access-Client-Secret": "@@SEED:cf_access_secret@@"
+      }
+    },
+    "onepassword": {
+      "command": "op-mcp",
+      "env": { "OP_SERVICE_ACCOUNT_TOKEN": "@@SEED:onepassword_service_token@@" }
+    },
+    "databricks": {
+      "command": "databricks-mcp",
+      "env": { "DATABRICKS_TOKEN": "@@SEED:databricks_token@@" }
+    }
+  }
+}

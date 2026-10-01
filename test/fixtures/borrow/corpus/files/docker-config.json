@@ -1,0 +1,13 @@
+{
+  "auths": {
+    "ghcr.io": { "auth": "@@SEED:basic_auth@@" },
+    "https://index.docker.io/v1/": { "auth": "@@SEED:basic_auth@@", "email": "@@EMAIL@@" },
+    "registry.@@INTHOST@@": { "auth": "@@SEED:basic_auth@@", "identitytoken": "@@SEED:jwt@@" }
+  },
+  "credsStore": "osxkeychain",
+  "currentContext": "desktop-linux",
+  "plugins": { "-x-cli-hints": { "enabled": "true" } },
+  "proxies": {
+    "default": { "httpProxy": "http://@@USER@@:@@SEED:url_credentials@@@@@IP@@:3128" }
+  }
+}

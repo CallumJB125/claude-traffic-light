@@ -1,0 +1,481 @@
+{
+  "about": "Zero-leak corpus. Each file under files/ holds @@SEED:<kind>@@ slots (filled with fresh fake secrets per run) and @@HOME@@ @@USER@@ @@HOST@@ @@HOSTSHORT@@ @@HOSTLOCAL@@ @@EMAIL@@ @@EMAIL2@@ @@NAME@@ @@IP@@ @@IP2@@ @@TSHOST@@ @@TSHOST2@@ @@INTHOST@@ machine slots. path is the ~ path the scanner would report. mustKeep strings must survive verbatim in an 'ok' result; mustKeepMatching are regexes whose every match in the filled input must survive; trimFinalNewline drops the last newline so a secret ends the file. expected 'ok-or-blocked' marks pure credential stores (docker auths, rclone, .pypirc) where refusing to share the file is as acceptable as scrubbing it; if it comes back ok every leak and must-keep check applies.",
+  "files": [
+    {
+      "file": "zshrc",
+      "path": "~/.zshrc",
+      "expected": "ok",
+      "mustKeep": [
+        "ZSH_THEME=\"powerlevel10k/powerlevel10k\"",
+        "plugins=(git z fzf zsh-autosuggestions zsh-syntax-highlighting docker kubectl)",
+        "source $ZSH/oh-my-zsh.sh",
+        "[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh",
+        "export EDITOR=\"nvim\"",
+        "export NVM_DIR=\"$HOME/.nvm\"",
+        "export OPENAI_API_KEY=\"$(security find-generic-password -s openai -w)\"",
+        "export GITHUB_TOKEN=$(security find-generic-password -s x -w)",
+        "$(security find-generic-password -s x -w)",
+        "op://Private/x/credential",
+        "export AIDER_OPENAI_API_KEY=\"$OPENAI_API_KEY\"",
+        "$OPENAI_API_KEY",
+        "alias gs='git status'",
+        "alias ll='ls -lah'",
+        "alias k=kubectl",
+        "alias dcu='docker compose up -d'",
+        "https://api.github.com",
+        "-H \"Accept: application/vnd.github+json\"",
+        "gh-notify()",
+        "mkcd() { mkdir -p \"$1\" && cd \"$1\"; }"
+      ]
+    },
+    {
+      "file": "zprofile",
+      "path": "~/.zprofile",
+      "expected": "ok",
+      "mustKeep": [
+        "eval \"$(/opt/homebrew/bin/brew shellenv)\"",
+        "export PATH=\"$HOME/.local/bin:$PATH\"",
+        "export JAVA_HOME=$(/usr/libexec/java_home -v 21)",
+        "export HOMEBREW_NO_ANALYTICS=1",
+        "[[ -f \"$HOME/.cargo/env\" ]] && . \"$HOME/.cargo/env\""
+      ]
+    },
+    {
+      "file": "bashrc",
+      "path": "~/.bashrc",
+      "expected": "ok",
+      "trimFinalNewline": true,
+      "mustKeep": [
+        "HISTCONTROL=ignoreboth",
+        "shopt -s histappend checkwinsize",
+        "alias ls='ls --color=auto'",
+        "alias ..='cd ..'",
+        "export EDITOR=vim",
+        "api_call() {",
+        "https://api.acme.co.za"
+      ]
+    },
+    {
+      "file": "config.fish",
+      "path": "~/.config/fish/config.fish",
+      "expected": "ok",
+      "mustKeep": [
+        "fish_add_path $HOME/.local/bin /opt/homebrew/bin",
+        "abbr -a gs git status",
+        "set -gx EDITOR nvim",
+        "set -gx GOPATH $HOME/go",
+        "(security find-generic-password -s x -w)",
+        "function gh-notify",
+        "alias k kubectl",
+        "starship init fish | source"
+      ]
+    },
+    {
+      "file": "claude-settings.json",
+      "path": "~/.claude/settings.json",
+      "expected": "ok",
+      "mustKeep": [
+        "\"$schema\": \"https://json.schemastore.org/claude-code-settings.json\"",
+        "\"MAX_THINKING_TOKENS\": \"31999\"",
+        "\"Bash(git status:*)\"",
+        "\"WebFetch(domain:github.com)\"",
+        "\"defaultMode\": \"acceptEdits\"",
+        "\"apiKeyHelper\": \"~/.claude/get-key.sh\"",
+        "\"matcher\": \"Bash\"",
+        "\"type\": \"command\"",
+        "\"frontend-design@claude-plugins-official\": true"
+      ]
+    },
+    {
+      "file": "claude.json",
+      "path": "~/.claude.json",
+      "expected": "ok",
+      "mustKeep": [
+        "\"numStartups\": 412",
+        "\"installMethod\": \"native\"",
+        "\"hasTrustDialogAccepted\": true",
+        "\"url\": \"https://api.githubcopilot.com/mcp/\"",
+        "\"https://mcp.linear.app/sse\"",
+        "\"@notionhq/notion-mcp-server\"",
+        "\"@supabase/mcp-server-supabase@latest\"",
+        "\"--access-token\"",
+        "\"https://mcp.context7.com/mcp\"",
+        "\"command\": \"npx\""
+      ]
+    },
+    {
+      "file": "codex-config.toml",
+      "path": "~/.codex/config.toml",
+      "expected": "ok",
+      "mustKeep": [
+        "model = \"gpt-5-codex\"",
+        "approval_policy = \"on-request\"",
+        "trust_level = \"trusted\"",
+        "bearer_token_env_var = \"GITHUB_PAT\"",
+        "env_key = \"AZURE_OPENAI_API_KEY\"",
+        "base_url = \"https://acme.openai.azure.com/openai\"",
+        "[mcp_servers.stripe.env]"
+      ]
+    },
+    {
+      "file": "gitconfig",
+      "path": "~/.gitconfig",
+      "expected": "ok",
+      "mustKeep": [
+        "signingkey = ~/.ssh/id_ed25519.pub",
+        "format = ssh",
+        "gpgsign = true",
+        "helper = osxkeychain",
+        "defaultBranch = main",
+        "insteadOf = https://github.com/",
+        "insteadOf = gh:",
+        "path = ~/.gitconfig-work",
+        "st = status -sb",
+        "rebase = true"
+      ]
+    },
+    {
+      "file": "npmrc",
+      "path": "~/.npmrc",
+      "expected": "ok",
+      "trimFinalNewline": true,
+      "mustKeep": [
+        "registry=https://registry.npmjs.org/",
+        "@acme:registry=https://npm.pkg.github.com",
+        "save-exact=true",
+        "fund=false"
+      ]
+    },
+    {
+      "file": "pypirc",
+      "path": "~/.pypirc",
+      "expected": "ok-or-blocked",
+      "mustKeep": [
+        "[distutils]",
+        "index-servers =",
+        "username = __token__",
+        "repository = https://test.pypi.org/legacy/"
+      ]
+    },
+    {
+      "file": "gh-hosts.yml",
+      "path": "~/.config/gh/hosts.yml",
+      "expected": "ok",
+      "mustKeep": [
+        "github.com:",
+        "git_protocol: ssh",
+        "git_protocol: https"
+      ]
+    },
+    {
+      "file": "ssh-config",
+      "path": "~/.ssh/config",
+      "expected": "ok",
+      "mustKeep": [
+        "Include ~/.orbstack/ssh/config",
+        "AddKeysToAgent yes",
+        "IdentityFile ~/.ssh/id_ed25519",
+        "Host github.com",
+        "HostName github.com",
+        "User git",
+        "IdentitiesOnly yes",
+        "Port 2222",
+        "ProxyJump prod"
+      ]
+    },
+    {
+      "file": "tmux.conf",
+      "path": "~/.tmux.conf",
+      "expected": "ok",
+      "mustKeep": [
+        "set -g prefix C-a",
+        "set -g mouse on",
+        "set -g @plugin 'tmux-plugins/tpm'",
+        "set -g @plugin 'christoomey/vim-tmux-navigator'",
+        "set -g status-right '#(whoami)@#H | %H:%M'",
+        "run '~/.tmux/plugins/tpm/tpm'"
+      ]
+    },
+    {
+      "file": "ghostty-config",
+      "path": "~/.config/ghostty/config",
+      "expected": "ok",
+      "mustKeep": [
+        "font-family = JetBrains Mono",
+        "theme = catppuccin-mocha",
+        "macos-option-as-alt = true",
+        "keybind = cmd+d=new_split:right",
+        "command = /opt/homebrew/bin/fish"
+      ]
+    },
+    {
+      "file": "wezterm.lua",
+      "path": "~/.config/wezterm/wezterm.lua",
+      "expected": "ok",
+      "mustKeep": [
+        "local wezterm = require 'wezterm'",
+        "config.color_scheme = 'Catppuccin Mocha'",
+        "config.font_size = 14.0",
+        "PATH = '/opt/homebrew/bin:' .. os.getenv('PATH'),",
+        "action = wezterm.action.CloseCurrentPane { confirm = true }",
+        "return config"
+      ]
+    },
+    {
+      "file": "kitty.conf",
+      "path": "~/.config/kitty/kitty.conf",
+      "expected": "ok",
+      "mustKeep": [
+        "font_family      JetBrains Mono",
+        "shell_integration enabled",
+        "macos_option_as_alt yes",
+        "background_opacity 0.95"
+      ]
+    },
+    {
+      "file": "alacritty.toml",
+      "path": "~/.config/alacritty/alacritty.toml",
+      "expected": "ok",
+      "mustKeep": [
+        "import = [\"~/.config/alacritty/themes/catppuccin_mocha.toml\"]",
+        "decorations = \"buttonless\"",
+        "normal = { family = \"JetBrains Mono\", style = \"Regular\" }",
+        "program = \"/opt/homebrew/bin/fish\"",
+        "action = \"CreateNewWindow\""
+      ]
+    },
+    {
+      "file": "starship.toml",
+      "path": "~/.config/starship.toml",
+      "expected": "ok",
+      "mustKeep": [
+        "add_newline = false",
+        "truncation_length = 3",
+        "ssh_only = false",
+        "show_always = true",
+        "success_symbol = \"[➜](bold green)\"",
+        "when = true"
+      ]
+    },
+    {
+      "file": "init.lua",
+      "path": "~/.config/nvim/init.lua",
+      "expected": "ok",
+      "mustKeep": [
+        "vim.g.mapleader = \" \"",
+        "https://github.com/folke/lazy.nvim.git",
+        "vim.env.TAVILY_API_KEY = os.getenv(\"TAVILY_API_KEY\")",
+        "\"nvim-treesitter/nvim-treesitter\"",
+        "api_key_name = \"ANTHROPIC_API_KEY\"",
+        "vim.opt.number = true",
+        "vim.opt.shiftwidth = 2",
+        "vim.cmd([[colorscheme tokyonight]])"
+      ]
+    },
+    {
+      "file": "lazy-lock.json",
+      "path": "~/.config/nvim/lazy-lock.json",
+      "expected": "ok",
+      "mustKeep": [
+        "\"lazy.nvim\": { \"branch\": \"main\""
+      ],
+      "mustKeepMatching": [
+        "(?<=\"commit\": \")[0-9a-f]{40}"
+      ]
+    },
+    {
+      "file": "nvim-pins.lua",
+      "path": "~/.config/nvim/lua/plugins/pins.lua",
+      "expected": "ok",
+      "mustKeep": [
+        "\"github/copilot.vim\", branch = \"release\"",
+        "\"nvim-telescope/telescope.nvim\""
+      ],
+      "mustKeepMatching": [
+        "(?<=commit = \")[0-9a-f]{40}",
+        "(?<=rev = \")[0-9a-f]{40}"
+      ]
+    },
+    {
+      "file": "vscode-settings.json",
+      "path": "~/Library/Application Support/Code/User/settings.json",
+      "expected": "ok",
+      "mustKeep": [
+        "// Editor",
+        "\"editor.fontSize\": 14",
+        "\"editor.formatOnSave\": true",
+        "\"workbench.colorTheme\": \"Catppuccin Mocha\"",
+        "\"terminal.integrated.defaultProfile.osx\": \"fish\"",
+        "\"host\": \"https://api.acme.co.za\"",
+        "\"github.copilot.enable\": { \"*\": true, \"markdown\": false }",
+        "\"**/.DS_Store\": true",
+        "\"url\": \"https://mcp.sentry.dev/mcp\"",
+        "// trailing comment"
+      ]
+    },
+    {
+      "file": "vscode-keybindings.json",
+      "path": "~/Library/Application Support/Code/User/keybindings.json",
+      "expected": "ok",
+      "mustKeep": [
+        "// Place your key bindings in this file to override the defaults",
+        "{ \"key\": \"cmd+shift+p\", \"command\": \"workbench.action.showCommands\" }",
+        "\"command\": \"workbench.action.terminal.toggleTerminal\"",
+        "\"when\": \"editorTextFocus\""
+      ]
+    },
+    {
+      "file": "tool-versions",
+      "path": "~/.tool-versions",
+      "expected": "ok",
+      "mustKeep": [
+        "nodejs 22.11.0",
+        "python 3.12.4",
+        "golang 1.23.2",
+        "ruby 3.3.5",
+        "rust stable",
+        "terraform 1.9.8"
+      ]
+    },
+    {
+      "file": "Brewfile",
+      "path": "~/Brewfile",
+      "expected": "ok",
+      "mustKeep": [
+        "tap \"homebrew/bundle\"",
+        "brew \"git\"",
+        "brew \"neovim\"",
+        "cask \"ghostty\"",
+        "cask \"1password-cli\"",
+        "mas \"Xcode\", id: 497799835",
+        "vscode \"ms-python.python\""
+      ]
+    },
+    {
+      "file": "docker-config.json",
+      "path": "~/.docker/config.json",
+      "expected": "ok-or-blocked",
+      "mustKeep": [
+        "\"ghcr.io\"",
+        "\"https://index.docker.io/v1/\"",
+        "\"credsStore\": \"osxkeychain\"",
+        "\"currentContext\": \"desktop-linux\"",
+        "\"-x-cli-hints\": { \"enabled\": \"true\" }"
+      ]
+    },
+    {
+      "file": "rclone.conf",
+      "path": "~/.config/rclone/rclone.conf",
+      "expected": "ok-or-blocked",
+      "mustKeep": [
+        "type = s3",
+        "provider = AWS",
+        "region = af-south-1",
+        "scope = drive",
+        "client_id = 123456789012-abcdefg.apps.googleusercontent.com",
+        "type = sftp"
+      ]
+    },
+    {
+      "file": "mise-config.toml",
+      "path": "~/.config/mise/config.toml",
+      "expected": "ok",
+      "mustKeep": [
+        "node = \"22\"",
+        "experimental = true"
+      ]
+    },
+    {
+      "file": "aider.conf.yml",
+      "path": "~/.aider.conf.yml",
+      "expected": "ok",
+      "trimFinalNewline": true,
+      "mustKeep": [
+        "model: sonnet",
+        "dark-mode: true",
+        "auto-commits: false",
+        "read: ~/CONVENTIONS.md",
+        "AZURE_API_BASE=https://acme.openai.azure.com",
+        "Prefer small diffs."
+      ]
+    },
+    {
+      "file": "lazygit-config.yml",
+      "path": "~/.config/lazygit/config.yml",
+      "expected": "ok",
+      "mustKeep": [
+        "showIcons: true",
+        "colorArg: always",
+        "pager: delta --dark --paging=never",
+        "https://slack.com/api/chat.postMessage",
+        "{{.SelectedLocalBranch.Name}}",
+        "description: 'notify slack'"
+      ]
+    },
+    {
+      "file": "m2-settings.xml",
+      "path": "~/.m2/settings.xml",
+      "expected": "ok",
+      "mustKeep": [
+        "<id>github</id>",
+        "<mirrorOf>central</mirrorOf>",
+        "<url>https://repo.maven.apache.org/maven2</url>",
+        "<id>central-mirror</id>"
+      ]
+    },
+    {
+      "file": "zshrc-sources-secrets",
+      "path": "~/.zshrc",
+      "expected": "ok",
+      "mustKeep": [
+        "export ZSH=\"$HOME/.oh-my-zsh\"",
+        "plugins=(git)",
+        "[ -f ~/.secrets ] && source ~/.secrets",
+        "[ -f \"$HOME/.config/secrets/env.sh\" ] && source \"$HOME/.config/secrets/env.sh\"",
+        "[[ -r ~/.zsh_private ]] && . ~/.zsh_private",
+        "eval \"$(direnv hook zsh)\""
+      ]
+    },
+    {
+      "file": "zshrc-heredoc-pem",
+      "path": "~/.zshrc",
+      "expected": "ok",
+      "mustKeep": [
+        "cat > ~/.ssh/deploy_key <<'EOF'",
+        "chmod 600 ~/.ssh/deploy_key",
+        "export GIT_SSH_COMMAND=\"ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes\"",
+        "setup_deploy_key() {"
+      ]
+    },
+    {
+      "file": "dotenv",
+      "path": "~/.env",
+      "expected": "blocked"
+    },
+    {
+      "file": "netrc",
+      "path": "~/.netrc",
+      "expected": "blocked"
+    },
+    {
+      "file": "kubeconfig",
+      "path": "~/.kube/config",
+      "expected": "blocked"
+    },
+    {
+      "file": "id_ed25519",
+      "path": "~/.ssh/id_ed25519",
+      "expected": "blocked"
+    },
+    {
+      "file": "aws-credentials",
+      "path": "~/.aws/credentials",
+      "expected": "blocked"
+    },
+    {
+      "file": "id_rsa-harmless",
+      "path": "~/.ssh/id_rsa",
+      "expected": "blocked"
+    }
+  ]
+}

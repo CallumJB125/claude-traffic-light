@@ -1,0 +1,6 @@
+NODE_ENV=development
+DATABASE_URL=postgres://app:@@SEED:url_credentials@@@localhost:5432/app
+STRIPE_SECRET_KEY=@@SEED:stripe_key@@
+OPENAI_API_KEY=@@SEED:openai_key@@
+JWT_SECRET=@@SEED:keyed@@
+ADMIN_EMAIL=@@EMAIL@@
