@@ -123,6 +123,10 @@ export class CodexBackend extends EventEmitter {
     child.stderr.on('data', () => {});
     child.on('error', () => { this.error = 'Codex could not start'; this.exit(null, null); });
     child.on('exit', (code, signal) => this.exit(code, signal));
+    if (!child.pid) {
+      this.exited = true; this.turnActive = false;
+      throw new NotAvailableError('Codex could not start');
+    }
     child.stdin.end(String(prompt ?? ''));
     return this;
   }

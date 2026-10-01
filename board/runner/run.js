@@ -618,6 +618,10 @@ export class Run {
       const ids = items.flatMap((i) => i.comment_ids ?? []);
       if (ids.length) this.emit({ kind: 'comment.delivered', comment_ids: ids, via: 'stdin' });
     }).catch((e) => {
+      if (!this.ending && !this.ended && !this.fenced && !this.backend?.alive() && this.gateState().open) {
+        this.localState = this.readOnly ? 'awaiting_plan_approval' : 'idle';
+        this.sup.sendHbNow();
+      }
       this.log.info('resume held', { run_id: this.run_id, code: e.code ?? 'INTERNAL' });
     }).finally(() => { this.resumePending = null; });
   }
