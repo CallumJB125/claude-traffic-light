@@ -8,7 +8,7 @@ const { _electron: electron, test, expect } = require('@playwright/test');
 
 const PAGE = pathToFileURL(path.join(__dirname, 'matrix', 'matrix.html')).href;
 const AXES = ['costume', 'cameo', 'eyes', 'pose', 'mouth', 'sign', 'routine'];
-const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost', 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus'];
+const BODIES = ['claude', 'dog', 'cat', 'frog', 'robot', 'ghost', 'duck', 'octopus', 'crt', 'blob', 'capybara', 'cactus', 'owl', 'penguin', 'fox', 'bee', 'axolotl', 'mushroom'];
 // test-only shapes (matrix/probes.js) that push the contract's edges
 const PROBES = ['u-probe-tall', 'u-probe-blob', 'u-probe-wide', 'u-probe-screen'];
 
@@ -78,6 +78,6 @@ for (const body of [...BODIES, ...PROBES]) {
     expect(g.hit.face).toBe(true);
     expect(g.hit.corner).toBe(false);
     // invisible parts (unworn costumes, props at rest) never catch the mouse
-    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'octopus', 'crt', 'blob', 'capybara', 'u-probe-wide'].includes(body));
+    expect(g.hit.arm).toBe(['claude', 'dog', 'cat', 'frog', 'robot', 'octopus', 'crt', 'blob', 'capybara', 'fox', 'u-probe-wide'].includes(body));
   });
 }

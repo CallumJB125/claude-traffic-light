@@ -143,5 +143,33 @@
     return `<g class="${cls}"${fill}>${inner}</g>`;
   }
 
-  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, USER_PREFIX, register, sealBuiltins, isBuiltin, revision, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
+  // Pixel art from rows of letters: one pixel = 2 units, horizontal runs merged
+  // into rects. '.' is empty; a palette entry is a colour, or [colour, class]
+  // for a part the rig animates (a leg, a tentacle). The drawing is centred on
+  // x = 32 unless `at` gives its left edge.
+  function px(rows, pal, oy, at, cols = rows[0].length) {
+    const U = 2;
+    const ox = Number.isFinite(at) ? at : 32 - (cols * U) / 2;
+    const out = [];
+    rows.forEach((row, r) => {
+      if (row.length !== cols) throw new Error(`pixel row ${r} is ${row.length} wide, expected ${cols}: ${row}`);
+      let c = 0;
+      while (c < cols) {
+        const ch = row[c];
+        if (ch === '.') { c += 1; continue; }
+        let e = c;
+        while (e < cols && row[e] === ch) e += 1;
+        const p = pal[ch];
+        if (!p) throw new Error(`no colour for "${ch}" in row ${r}`);
+        const [fill, cls] = Array.isArray(p) ? p : [p];
+        out.push(`<rect x="${ox + c * U}" y="${oy + r * U}" width="${(e - c) * U}" height="${U}" fill="${fill}"${cls ? ` class="${cls}"` : ''} />`);
+        c = e;
+      }
+    });
+    return `<g shape-rendering="crispEdges">${out.join('')}</g>`;
+  }
+  // a row from [letter, count] runs, so wide rows are not counted by eye
+  const run = (...segs) => segs.map(([c, n]) => c.repeat(n)).join('');
+
+  return { CONTRACT_VERSION, VIEWBOX, LAYERS, REF, px, run, USER_PREFIX, register, sealBuiltins, isBuiltin, revision, get, has, ids, list, eyeMode, capabilities, anchorVars, layerClass, layerMarkup };
 });

@@ -288,6 +288,16 @@
 .rig .body-default, .rig .sign-assembly > rect:last-child, .rig .thumbs-up, .rig .arms-crossed { fill: var(--body-color, #da7756); }
 .rig.body-ghost .body-ghost { animation: rig-float 2.4s ease-in-out infinite; }
 @keyframes rig-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+/* wave 2: a fox's tail flicks, a bee hovers and buzzes, an axolotl's tail sways */
+.rig.body-fox .fox-tail { transform-box: fill-box; transform-origin: 0% 100%; animation: rig-fox-flick 1.8s ease-in-out infinite alternate; }
+@keyframes rig-fox-flick { 0% { transform: rotate(-6deg); } 100% { transform: rotate(10deg); } }
+.rig.body-bee .bee-hover { animation: rig-float 1.2s ease-in-out infinite; }
+.rig.body-bee .bee-wing { transform-box: fill-box; animation: rig-bee-buzz 0.1s linear infinite alternate; }
+.rig.body-bee .bee-wing-l { transform-origin: 100% 100%; }
+.rig.body-bee .bee-wing-r { transform-origin: 0% 100%; --dir: -1; animation-name: rig-bee-buzz-r; }
+@keyframes rig-bee-buzz { 0% { transform: rotate(-12deg); } 100% { transform: rotate(8deg); } }
+@keyframes rig-bee-buzz-r { 0% { transform: rotate(12deg); } 100% { transform: rotate(-8deg); } }
+.rig.body-axolotl .axo-tail { transform-box: fill-box; transform-origin: 0% 50%; animation: rig-fox-flick 2.4s ease-in-out infinite alternate; }
 /* the blob squashes and stretches, anchored at the ground */
 .rig.body-blob .body-blob { transform-box: fill-box; transform-origin: 50% 100%; animation: rig-squish 2.6s ease-in-out infinite; }
 @keyframes rig-squish { 0%, 100% { transform: scale(1, 1); } 45% { transform: scale(1.04, 0.95); } 70% { transform: scale(0.98, 1.03); } }
@@ -1015,6 +1025,7 @@
   .rig .hp-led, .rig .tassel, .rig .propeller, .rig .pom,
   .rig .twinkle, .rig .bubble, .rig .leaf, .rig .glyph, .rig .floatheart, .rig .firefly, .rig .petal,
   .rig .spin-eye, .rig .scanbar, .rig .glow-eye, .rig .cheer-arms,
+  .rig .fox-tail, .rig .bee-hover, .rig .bee-wing, .rig .axo-tail,
   .rig.body-blob .body-blob,
   .rig .char-back *, .rig .char-body *, .rig .char-front *, .rig .char-face *, .rig .cp-leg-a, .rig .cp-leg-b {
     animation: none !important;
