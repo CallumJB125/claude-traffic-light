@@ -249,7 +249,8 @@ module.exports = {
   resolveSignal,
   normalize,
   answer,
-  install({ home, runtime, askFromWidget = false, fs: fsImpl }) {
+  // strip: which of ours to replace (see apply); every one when left out.
+  install({ home, runtime, askFromWidget = false, fs: fsImpl, strip: only }) {
     const file = configPath(home);
     if (Runtime.shellNeedsWrapper(runtime)) Runtime.ensureWrapper(runtime, fsImpl);
     const cur = Runtime.readJsonConfig(file, fsImpl);
@@ -257,7 +258,7 @@ module.exports = {
     // First time Buddy adds its deny rules to an existing settings file, keep
     // a copy of the file as it was.
     if (!hasDenyRules(cur, rules) && Object.keys(cur).length) Runtime.backupOnce(file, fsImpl);
-    const next = apply(cur, runtime, { askFromWidget, home });
+    const next = apply(cur, runtime, { askFromWidget, home, strip: only });
     Runtime.writeJsonConfig(file, next, fsImpl);
     noteAddedDenyRules({ home, runtime, file, before: cur, after: next, fs: fsImpl });
     return { ok: true, file };

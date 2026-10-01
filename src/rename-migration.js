@@ -158,13 +158,15 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
   const assess = () => assessTarget(to, { fsImpl, isAlive });
   const skip = (reason) => { log(`[rename] not copying ${from} to ${to}: ${reason}`); return { copied: false, from, to, reason }; };
   const first = assess();
-  const tries = first.kind === 'retry' ? Number(first.state.attempts) || 1 : 0;
-  const retryLater = (reason) => {
+  const triedBefore = first.kind === 'retry' ? Number(first.state.attempts) : 0;
+  const tries = Number.isInteger(triedBefore) && triedBefore >= 0 ? triedBefore : 1;
+  // counted false: a lock Windows holds for a moment (EBUSY, EPERM on the swap) isn't a try.
+  const retryLater = (reason, counted = true) => {
     // Only onto a folder that is still free to mark: not one another launch has since migrated or is running on.
     const t = assess();
     const not = whyNot(t, name);
     if (not) return skip(not);
-    const attempts = tries + 1;
+    const attempts = counted ? tries + 1 : tries;
     const gaveUp = attempts >= MAX_TRIES;
     const state = gaveUp ? { status: 'kept', reason, attempts, at: now().toISOString(), pending: [] } : { status: 'retry', reason, attempts, at: now().toISOString() };
     try {
@@ -230,6 +232,14 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
       aside = `${to}.pre-migration-${stampOf(now())}`;
       if (fsImpl.existsSync(aside)) aside = `${aside}-${pid}`;
       fsImpl.renameSync(to, aside);
+      // Two launches can both have seen "retry": if the folder just set aside is
+      // one the other launch has migrated (or runs on), it goes back.
+      const moved = assessTarget(aside, { fsImpl, isAlive });
+      if (moved.kind === 'migrated' || moved.kind === 'live') {
+        fsImpl.renameSync(aside, to);
+        fsImpl.rmSync(tmp, { recursive: true, force: true });
+        return skip(whyNot(moved, name));
+      }
     }
     try { fsImpl.renameSync(tmp, to); } catch (err) {
       if (aside && fsImpl.existsSync(aside) && !fsImpl.existsSync(to)) fsImpl.renameSync(aside, to);
@@ -238,7 +248,7 @@ function copyUserData({ appData, userData, oldName = OLD.userDataName, fsImpl = 
     }
   } catch (err) {
     fsImpl.rmSync(tmp, { recursive: true, force: true });
-    return retryLater(err.message);
+    return retryLater(err.message, err.code !== 'EBUSY' && err.code !== 'EPERM');
   }
   let keptAside = null;
   if (aside) {
@@ -343,6 +353,42 @@ function quitOldInstance({ platform, home, listProcesses, kill = process.kill, i
   return { asked, running: still };
 }
 
+/**
+ * fn() once every pid in pids has exited (polled every everyMs, the first
+ * time after everyMs: never before the caller's own synchronous work, such as
+ * the rename's hooks step, which backs the files up first), or never if one
+ * is still running after maxMs. main.js re-installs the hooks then: the old
+ * app's own start-up install may have pointed them back at itself.
+ */
+function whenGone(pids, fn, { isAlive = alive, everyMs = 500, maxMs = 30000, setTimer = setTimeout } = {}) {
+  let waited = 0;
+  const later = () => setTimer(tick, everyMs)?.unref?.();
+  function tick() {
+    if (!pids.some(isAlive)) return fn();
+    waited += everyMs;
+    return waited > maxMs ? undefined : later();
+  }
+  later();
+}
+
+/**
+ * While the old app is installed its Open at Login can start it again:
+ * check() again 30 s after start-up and on wake or unlock. A wake fires
+ * resume and unlock-screen together, so a call within 5 s of the last is
+ * ignored (one process scan, one SIGTERM, one notice).
+ */
+function watchOldApp({ check, powerMonitor, setTimer = setTimeout, now = Date.now, laterMs = 30 * 1000, quietMs = 5000 }) {
+  let last = -Infinity;
+  setTimer(() => check(), laterMs)?.unref?.();
+  const onWake = () => {
+    if (now() - last < quietMs) return;
+    last = now();
+    check();
+  };
+  powerMonitor.on('resume', onWake);
+  powerMonitor.on('unlock-screen', onWake);
+}
+
 // Whether a hook command (or one part of the MCP entry) runs the old
 // installed app: its path; the hook wrapper while the wrapper still execs the
 // old app; or, for a Linux AppImage, a hooks copy of another version in the
@@ -365,6 +411,25 @@ function hookEntries(hooks) {
   return Object.entries(hooks && typeof hooks === 'object' ? hooks : {}).flatMap(([where, v]) => commandsIn(v).map((command) => ({ where, command })));
 }
 
+// Which hook commands a re-point replaces: Plexiform's own that run the old
+// app, and the current set. → { current, strip }
+function stripOf(adapter, { runtime, askFromWidget = false, home, isOld }) {
+  const current = new Set(hookEntries(adapter.apply({}, runtime, { askFromWidget, home }).hooks).map((e) => e.command));
+  return { current, strip: (c) => adapter.isOurs(c) && (isOld(c) || current.has(c)) };
+}
+
+/**
+ * The same predicate for an install made outside the hooks step (main.js's
+ * start-up install and 10-minute check while that step is pending, and the
+ * re-install once the old app has quit): a look-alike script of the person's
+ * own and a dev checkout's entry stay. opts: { runtime, askFromWidget, home }.
+ */
+function renameStrip(adapter, { runtime, askFromWidget = false, home, fsImpl = fs }) {
+  let wrapperText = null;
+  try { wrapperText = fsImpl.readFileSync(Runtime.wrapperPath(runtime), 'utf8'); } catch { /* no wrapper */ }
+  return stripOf(adapter, { runtime, askFromWidget, home, isOld: oldTest(runtime, wrapperText) }).strip;
+}
+
 function leftAloneReason(adapter, command, current) {
   if (adapter.isOurs(command)) {
     return current.has(command) ? 'already runs this app' : 'runs a Plexiform script name from somewhere other than the old app (a dev checkout, or a script of your own)';
@@ -385,10 +450,10 @@ function rewriteConfigText(adapter, text, { runtime, askFromWidget = false, home
   if (adapter.id === 'codex') return rewriteCodexText(adapter, text, runtime, isOld);
   const data = Runtime.parseJsonConfig(text, adapter.configPath(home));
   const opts = { askFromWidget, home };
-  const current = new Set(hookEntries(adapter.apply({}, runtime, opts).hooks).map((e) => e.command));
-  const strip = (c) => adapter.isOurs(c) && (isOld(c) || current.has(c));
+  const { current, strip } = stripOf(adapter, { runtime, askFromWidget, home, isOld });
   const entries = hookEntries(data.hooks);
-  const removed = entries.filter((e) => adapter.isOurs(e.command) && isOld(e.command));
+  // One already current stays out: on Windows it names the wrapper, which the wrapper step re-points.
+  const removed = entries.filter((e) => adapter.isOurs(e.command) && isOld(e.command) && !current.has(e.command));
   const leftAlone = entries.filter((e) => !strip(e.command)).map((e) => ({ ...e, reason: leftAloneReason(adapter, e.command, current) }));
   if (!removed.length) return { after: null, removed: [], added: [], leftAlone };
   const next = adapter.apply(data, runtime, { ...opts, strip });
@@ -515,7 +580,11 @@ function rewriteHooks({ home, runtime, askFromWidget = false, mcpEntry, adapters
   const plan = planHooks({ home, runtime, askFromWidget, mcpEntry, adapters, mcp, fsImpl });
   const results = [];
   if (plan.wrapper) {
-    try { Runtime.ensureWrapper(runtime, fsImpl); results.push({ id: 'wrapper', file: plan.wrapper.file, changed: true }); } catch (err) { results.push({ id: 'wrapper', file: plan.wrapper.file, changed: false, error: err.message }); }
+    try {
+      const backup = plan.wrapper.before == null ? null : backupFresh(plan.wrapper.file, now, fsImpl);
+      Runtime.ensureWrapper(runtime, fsImpl);
+      results.push({ id: 'wrapper', file: plan.wrapper.file, changed: true, ...(backup ? { backup } : {}) });
+    } catch (err) { results.push({ id: 'wrapper', file: plan.wrapper.file, changed: false, error: err.message }); }
   }
   const ctx = { runtime, askFromWidget, home, isOld: plan.isOld };
   for (const c of plan.configs) {
@@ -745,7 +814,7 @@ function planRename({ home, appData, newName, platform, runtime, mcpEntry, askFr
   const oldUserData = from;
   const procs = findOldProcesses({ platform, home, listProcesses: list, oldUserData, isAlive, fsImpl, log: () => {} });
   const hooks = planHooks({ home, runtime, askFromWidget, mcpEntry, adapters, mcp, fsImpl });
-  const backups = [...hooks.configs.filter((c) => c.after != null).map((c) => c.file), ...(hooks.mcp?.after ? [hooks.mcp.file] : [])].map((f) => backupName(f, now, fsImpl));
+  const backups = [...(hooks.wrapper && hooks.wrapper.before != null ? [hooks.wrapper.file] : []), ...hooks.configs.filter((c) => c.after != null).map((c) => c.file), ...(hooks.mcp?.after ? [hooks.mcp.file] : [])].map((f) => backupName(f, now, fsImpl));
   // What the files would hold once the hooks step has run.
   const after = new Map(hooks.configs.filter((c) => c.after != null).map((c) => [c.file, c.after]));
   if (hooks.wrapper) after.set(hooks.wrapper.file, hooks.wrapper.after);
@@ -756,8 +825,10 @@ function planRename({ home, appData, newName, platform, runtime, mcpEntry, askFr
   const runsHooks = steps.includes('hooks');
   const readText = (f) => (runsHooks && after.has(f) ? after.get(f) : fsImpl.readFileSync(f, 'utf8'));
   const stillNaming = findOldReferences({ home, runtime, adapters, mcp, fsImpl, readText });
-  // main.js's own start-up install for Claude Code runs when its hooks aren't current afterwards, and strips every entry of ours.
+  // main.js's own start-up install for Claude Code runs when its hooks aren't current afterwards, and strips every entry
+  // of ours; only what the rename would while the hooks step stays pending (a config it can't rewrite).
   const claude = adapters.list().find((a) => a.id === 'claude');
+  const narrow = runsHooks && (hooks.configs.some((c) => c.error) || !!hooks.mcp?.error);
   let startup = null;
   try {
     const file = claude.configPath(home);
@@ -765,7 +836,8 @@ function planRename({ home, appData, newName, platform, runtime, mcpEntry, askFr
     const settings = Runtime.parseJsonConfig(text, file);
     const current = claude.check(settings, runtime, { askFromWidget, home });
     const current2 = new Set(hookEntries(claude.apply({}, runtime, { askFromWidget, home }).hooks).map((e) => e.command));
-    startup = { file, runs: !current, removes: current ? [] : hookEntries(settings.hooks).filter((e) => claude.isOurs(e.command) && !current2.has(e.command)) };
+    const strip = narrow ? renameStrip(claude, { runtime, askFromWidget, home, fsImpl }) : claude.isOurs;
+    startup = { file, runs: !current, narrow, removes: current ? [] : hookEntries(settings.hooks).filter((e) => strip(e.command) && !current2.has(e.command)) };
   } catch (err) { startup = { error: err.message }; }
   const secretFile = path.join(rootDir, 'approval-secret.json');
   let sealed = false;
@@ -858,6 +930,7 @@ function formatPlan(plan) {
   else if (plan.oldProcess.via === 'lock') L.push(`   the process list failed; the old folder's SingletonLock names live pid ${procs[0].pid}: taken as running, never signalled, so no copy this launch`);
   else {
     for (const p of procs) L.push(`   would get ${plan.platform === 'win32' ? 'a close request (taskkill, no /F)' : 'SIGTERM'}: pid ${p.pid} ${p.command}`);
+    if (plan.platform === 'win32') L.push('   (unverified on Windows: whether taskkill without /F closes an app that shows only a tray icon)');
     L.push('   then waits up to 5 s; if it is still running, nothing is copied this launch and the next launch tries again');
   }
   L.push('');
@@ -866,7 +939,11 @@ function formatPlan(plan) {
   if (!plan.hooks.configs.length) L.push('   none present');
   for (const c of plan.hooks.configs) {
     L.push(`   ${tilde(c.file)} (${c.label})`);
-    if (c.error) { L.push(`     can't be read: ${c.error}; left alone, and the hooks step stays pending (Remove is not offered)`); continue; }
+    if (c.error) {
+      L.push(`     can't be read: ${c.error}; left alone, and the hooks step stays pending (Remove is not offered)`);
+      if (c.id === 'gemini') L.push("     (Gemini's settings.json may hold comments, which Plexiform can't keep: take them out, or re-point its entries by hand)");
+      continue;
+    }
     if (c.removed.length) {
       L.push(`     re-pointed: ${c.removed.length} of Plexiform's entries run the old app${c.after == null ? ' (the file text stays the same: the wrapper change below re-points them)' : ''}`);
       for (const e of c.removed) L.push(`       - ${e.where}: ${e.command}`);
@@ -931,6 +1008,10 @@ function formatPlan(plan) {
   else if (st.error) L.push(`   can't tell: ${st.error}`);
   else if (!st.runs) L.push('   would not run: the hooks are current afterwards');
   else if (!st.removes.length) L.push(`   WOULD run on ${tilde(st.file)}: it adds Plexiform's hooks and removes nothing else`);
+  else if (st.narrow) {
+    L.push(`   WOULD run on ${tilde(st.file)} while the hooks step stays pending, replacing only the old app's entries (a script of your own or a dev checkout's entry stays):`);
+    for (const e of st.removes) L.push(`     - ${e.where}: ${e.command}`);
+  }
   else {
     L.push(`   WOULD run on ${tilde(st.file)}, and it removes every entry that runs a script called set-status.js or delegate.js:`);
     for (const e of st.removes) L.push(`     - ${e.where}: ${e.command}`);
@@ -947,4 +1028,4 @@ function formatPlan(plan) {
   return `${L.join('\n')}\n`;
 }
 
-module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, MAX_TRIES, EPHEMERAL_PATH, listProcesses, planCopy, planRename, unifiedDiff, formatPlan, assessTarget, copyDecision, copyUserData, readState, pending, markDone, parsePs, parseTasklist, findOldProcesses, quitOldInstance, rewriteConfigText, planHooks, backupName, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };
+module.exports = { OLD, STATE_FILE, STEPS, SKIP, FRESH, MAX_TRIES, EPHEMERAL_PATH, listProcesses, planCopy, planRename, unifiedDiff, formatPlan, assessTarget, copyDecision, copyUserData, readState, pending, markDone, parsePs, parseTasklist, findOldProcesses, quitOldInstance, whenGone, watchOldApp, renameStrip, rewriteConfigText, planHooks, backupName, rewriteHooks, moveLoginItem, setAsideSealedSecret, oldAppInstalled, findOldReferences, oldAppPaths, offerRemoveOldApp, runFollowUp };

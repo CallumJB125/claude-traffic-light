@@ -566,11 +566,11 @@ test('old app: still installed (so its Open at Login can start it) is checked pe
   assert.ok(!M.STEPS.includes('quit-old'), 'quitting the old app is not a once-only step');
 
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const quit = src.slice(src.indexOf('function quitOldAppIfInstalled()'), src.indexOf('function renameFollowUp()'));
+  const quit = src.slice(src.indexOf('function quitOldAppIfInstalled('), src.indexOf('function renameFollowUp()'));
   assert.match(quit, /if \(!RenameMigration\.oldAppInstalled\(\{ platform: process\.platform, home: os\.homedir\(\) \}\)\) return;\s+const \{ asked \} = RenameMigration\.quitOldInstance\(/);
   assert.match(quit, /if \(asked\.length && Notification\.isSupported\(\)\) new Notification\(/, 'and says why');
   const fn = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('return RenameMigration.runFollowUp('));
-  assert.match(fn, /quitOldAppIfInstalled\(\);/);
+  assert.match(fn, /quitOldAppIfInstalled\(5000\);/);
   assert.match(src, /'remove-old-app': \(\) => !EPHEMERAL && RenameMigration\.offerRemoveOldApp\(/);
 });
 
@@ -925,13 +925,11 @@ test('login item: moveLoginItem says whether it turned Open at Login on, so the 
   assert.match(src, /if \(RenameMigration\.moveLoginItem\(\{[^}]*\}\) && Notification\.isSupported\(\)\) new Notification\(/);
 });
 
-test('main.js: the quit check on later launches does not wait for the old app, and runs again after start-up and on wake (L-2, L-3)', () => {
+test('main.js: the quit check after start-up and on wake does not wait for the old app (L-2, L-3; the ready path waits, R3 #1)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const fn = src.slice(src.indexOf('function quitOldAppIfInstalled()'), src.indexOf('function renameFollowUp()'));
-  assert.match(fn, /waitMs: 0/);
-  assert.match(src, /setTimeout\(quitOldAppIfInstalled, 30 \* 1000\)/);
-  assert.match(src, /powerMonitor\.on\('resume', quitOldAppIfInstalled\)/);
-  assert.match(src, /powerMonitor\.on\('unlock-screen', quitOldAppIfInstalled\)/);
+  const fn = src.slice(src.indexOf('function quitOldAppIfInstalled('), src.indexOf('function renameFollowUp()'));
+  assert.match(fn, /function quitOldAppIfInstalled\(waitMs = 0\)/);
+  assert.match(src, /RenameMigration\.watchOldApp\(\{ check: quitOldAppIfInstalled, powerMonitor \}\)/);
 });
 
 // The rename's rewrite is a swap in place: diffing the file before and after
@@ -1063,4 +1061,202 @@ test('hooks: Codex\'s notify swap touches only that line, keeping CRLF and the f
     }
   }
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── fix round 3 ─────────────────────────────────────────────────────────────
+
+const mainSrc = () => fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+
+test('main.js: only the ready path waits (5 s) for the old app; once it exits the hooks are put back if it rewrote them; the later checks never wait (R3 #1)', () => {
+  const src = mainSrc();
+  const fn = src.slice(src.indexOf('function quitOldAppIfInstalled('), src.indexOf('function renameFollowUp()'));
+  assert.match(fn, /quitOldInstance\(\{ \.\.\.quitOldOpts, waitMs \}\)/);
+  assert.match(fn, /function quitOldAppIfInstalled\(waitMs = 0\)/);
+  assert.match(fn, /RenameMigration\.whenGone\(asked, \(\) => \{ if \(AUTO_INSTALL_HOOKS && !areHooksInstalled\(\)\) installHooks\(\{ narrow: true \}\); \}\)/);
+  const follow = src.slice(src.indexOf('function renameFollowUp()'), src.indexOf('app.whenReady()'));
+  assert.match(follow, /quitOldAppIfInstalled\(5000\);/);
+  assert.match(src, /RenameMigration\.watchOldApp\(\{ check: quitOldAppIfInstalled, powerMonitor \}\)/);
+  assert.doesNotMatch(src, /powerMonitor\.on\('(resume|unlock-screen)', quitOldAppIfInstalled\)/);
+});
+
+test('main.js: while the rename\'s hooks step is pending, the start-up install and the 10-minute check replace only what the rename would (R3 #1)', () => {
+  const src = mainSrc();
+  const fn = src.slice(src.indexOf('function installHooks('), src.indexOf('const EPHEMERAL ='));
+  assert.match(fn, /function installHooks\(\{ narrow = RENAME_MIGRATES && RenameMigration\.pending\(app\.getPath\('userData'\)\)\.includes\('hooks'\) \} = \{\}\)/);
+  assert.match(fn, /strip: narrow \? RenameMigration\.renameStrip\(Adapters\.get\('claude'\), opts\) : undefined/);
+});
+
+test('whenGone: runs once every asked pid has exited, and never if one outlives the wait (R3 #1)', () => {
+  const runNow = (fn) => fn();
+  let live = new Set([1, 2]);
+  let polls = 0;
+  const calls = [];
+  M.whenGone([1, 2], () => calls.push('gone'), { isAlive: (p) => { polls += 1; if (polls > 4) live = new Set(); return live.has(p); }, setTimer: runNow, everyMs: 500, maxMs: 30000 });
+  assert.deepEqual(calls, ['gone']);
+  const never = [];
+  M.whenGone([3], () => never.push('gone'), { isAlive: () => true, setTimer: runNow, everyMs: 500, maxMs: 2000 });
+  assert.deepEqual(never, []);
+});
+
+test('renameStrip: an install while the rename is pending re-points the old app\'s entries in place and keeps a look-alike script and a dev checkout\'s entry (R3 #1)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const oldRt = runtimeAt(OLD_APP, dataDir);
+  const newRt = runtimeAt(NEW_APP, dataDir);
+  const s = Claude.apply({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'say done' }] }] } }, oldRt, { askFromWidget: true, home });
+  const lookAlike = 'node "/Users/me/scripts/set-status.js" stop';
+  const dev = 'node "/Users/me/Development/claude-traffic-light/hooks/set-status.js" notification';
+  s.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: lookAlike }] });
+  s.hooks.Notification.push({ matcher: '', hooks: [{ type: 'command', command: dev }] });
+  fs.mkdirSync(path.join(home, '.claude'));
+  const file = path.join(home, '.claude', 'settings.json');
+  fs.writeFileSync(file, JSON.stringify(s, null, 2));
+  const opts = { home, runtime: newRt, askFromWidget: true };
+  Claude.install({ ...opts, strip: M.renameStrip(Claude, opts) });
+  const cmds = commandsOf(JSON.parse(fs.readFileSync(file, 'utf8')));
+  assert.ok(cmds.includes(lookAlike) && cmds.includes(dev) && cmds.includes('say done'), cmds.join('\n'));
+  assert.ok(!cmds.some((c) => c.includes(OLD_APP)));
+  assert.equal(Claude.isInstalled(opts), true);
+  assert.equal(cmds.filter((c) => c.includes(NEW_APP)).length, Claude.HOOK_EVENTS.length + Claude.OPTIONAL_EVENTS.length, 'one current set');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('watchOldApp: checks again 30 s after start-up, and once per wake although resume and unlock-screen both fire (R3 #8, #10)', () => {
+  const { EventEmitter } = require('node:events');
+  const pm = new EventEmitter();
+  let t = 1000000;
+  const timers = [];
+  const calls = [];
+  M.watchOldApp({ check: (...a) => calls.push(a), powerMonitor: pm, setTimer: (fn, ms) => { timers.push([fn, ms]); return { unref() {} }; }, now: () => t });
+  assert.deepEqual(timers.map(([, ms]) => ms), [30000]);
+  timers[0][0]();
+  assert.equal(calls.length, 1);
+  pm.emit('resume', {});
+  pm.emit('unlock-screen', {});
+  t += 4000;
+  pm.emit('resume', {});
+  assert.equal(calls.length, 2, 'one run for the wake');
+  t += 6000;
+  pm.emit('unlock-screen', {});
+  assert.equal(calls.length, 3, 'a later unlock runs again');
+  assert.ok(calls.every((a) => a.length === 0), 'never passes the event on as a wait');
+});
+
+test('hooks: a command that is already current is not "removed", even when the wrapper it names runs the old app (R3 #2)', () => {
+  const home = tmpHome();
+  const dataDir = path.join(home, '.claude-traffic-light');
+  const newRt = runtimeAt(NEW_APP, dataDir);
+  const text = JSON.stringify(Claude.apply({}, newRt, { askFromWidget: true, home }), null, 2);
+  const r = M.rewriteConfigText(Claude, text, { runtime: newRt, askFromWidget: true, home, isOld: () => true });
+  assert.deepEqual(r.removed, []);
+  assert.equal(r.after, null);
+  assert.ok(r.leftAlone.every((e) => e.reason === 'already runs this app'));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('dry run: an unreadable Gemini settings file says comments are a likely cause; on Windows the close request is marked unverified (R3 #2, #7)', () => {
+  const plan = {
+    home: '/h', platform: 'win32', packaged: true, execPath: 'C:\\P\\Plexiform.exe', ephemeral: false, runtime: Runtime.make({ execPath: 'C:\\P\\Plexiform.exe', platform: 'win32', hooksDir: 'C:\\P\\hooks', dataDir: 'C:\\d' }),
+    steps: ['hooks'], userData: { from: '/a', to: '/b', fromIsDir: false, target: { kind: 'absent' }, wouldCopy: false, why: 'no old folder', copy: [], skip: [] },
+    oldProcess: { procs: [{ pid: 7, command: 'Claude Buddy.exe' }], via: 'list' },
+    hooks: { configs: [{ id: 'gemini', label: 'Gemini CLI', file: '/h/.gemini/settings.json', error: 'Unexpected token / in JSON at position 2' }], wrapper: null, mcp: null },
+    backups: [], stillNaming: [], startup: { runs: false }, login: { platform: 'win32' }, secret: { file: '/x', sealed: false }, oldApps: [],
+  };
+  const text = M.formatPlan(plan);
+  assert.match(text, /Gemini's settings\.json may hold comments/);
+  assert.match(text, /unverified on Windows/);
+});
+
+test('mcp: ~/.claude.json behind a dotfiles symlink stays a symlink, keeps its own indent and newline style, and a new one is 0600 (R3 #3)', () => {
+  const home = tmpHome();
+  const dots = path.join(home, 'dotfiles');
+  fs.mkdirSync(dots);
+  const real = path.join(dots, 'claude.json');
+  fs.writeFileSync(real, '{\n\t"numStartups": 3,\n\t"mcpServers": {}\n}');
+  fs.symlinkSync(real, path.join(home, '.claude.json'));
+  McpInstall.install({ home, entry: mcpEntryAt(NEW_APP) });
+  assert.ok(fs.lstatSync(path.join(home, '.claude.json')).isSymbolicLink(), 'still a symlink');
+  const text = fs.readFileSync(real, 'utf8');
+  assert.match(text, /^\{\n\t"numStartups": 3,/);
+  assert.ok(!text.endsWith('\n'), 'no final newline, as before');
+  assert.deepEqual(JSON.parse(text).mcpServers['claude-buddy'], mcpEntryAt(NEW_APP));
+  const fresh = tmpHome();
+  McpInstall.install({ home: fresh, entry: mcpEntryAt(NEW_APP) });
+  assert.equal(fs.statSync(path.join(fresh, '.claude.json')).mode & 0o777, 0o600);
+  assert.ok(fs.readFileSync(path.join(fresh, '.claude.json'), 'utf8').endsWith('}\n'));
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(fresh, { recursive: true, force: true });
+});
+
+test('main.js: the login step stays pending from a temporary copy or a disk image (R3 #4)', () => {
+  const src = mainSrc();
+  assert.match(src, /login: \(\) => \{\n\s*if \(EPHEMERAL\) return false;/);
+});
+
+test('writeTextAtomic refuses a read-only file instead of replacing it, so the hooks step stays pending (R3 #5)', () => {
+  const { home, settingsFile, before } = oldHooksProfile();
+  fs.chmodSync(settingsFile, 0o444);
+  assert.throws(() => Runtime.writeTextAtomic(settingsFile, '{}'), /read-only/);
+  const r = M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, path.join(home, '.claude-traffic-light')), askFromWidget: true, log: quiet });
+  assert.match(r.find((x) => x.id === 'claude').error, /read-only/);
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), before);
+  assert.equal(fs.statSync(settingsFile).mode & 0o777, 0o444);
+  assert.deepEqual(fs.readdirSync(path.dirname(settingsFile)).filter((n) => n.includes('buddy-tmp')), []);
+  fs.chmodSync(settingsFile, 0o644);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('copy: a folder another launch migrated between the check and the rename aside is put back, and this copy dropped (R3 #6)', () => {
+  const home = tmpHome();
+  const { appData, userData } = oldProfile(home);
+  fs.mkdirSync(userData);
+  fs.writeFileSync(path.join(userData, M.STATE_FILE), JSON.stringify({ status: 'retry', reason: 'x', attempts: 1 }));
+  const spy = { ...fs, renameSync: (a, b) => {
+    if (a === userData && b.includes('.pre-migration-')) fs.writeFileSync(path.join(userData, M.STATE_FILE), JSON.stringify({ from: 'the other launch', copiedAt: 'other', pending: [] }));
+    return fs.renameSync(a, b);
+  } };
+  const r = M.copyUserData({ appData, userData, fsImpl: spy, log: quiet, isAlive: () => false });
+  assert.equal(r.copied, false);
+  assert.equal(M.readState(userData).copiedAt, 'other', 'the other launch\'s folder is back in place');
+  assert.deepEqual(fs.readdirSync(appData).sort(), ['Plexiform', 'claude-buddy']);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('copy: EBUSY or EPERM from the swap is not counted as a try (R3 #7)', () => {
+  for (const code of ['EBUSY', 'EPERM']) {
+    const home = tmpHome();
+    const { appData, userData } = oldProfile(home);
+    fs.mkdirSync(userData);
+    fs.writeFileSync(path.join(userData, M.STATE_FILE), JSON.stringify({ status: 'retry', reason: 'x', attempts: 2 }));
+    const spy = { ...fs, renameSync: (a, b) => { if (a.includes('.migrating-')) throw Object.assign(new Error(`${code}: busy`), { code }); return fs.renameSync(a, b); } };
+    const r = M.copyUserData({ appData, userData, fsImpl: spy, log: quiet, isAlive: () => false });
+    assert.equal(r.retry, true, code);
+    assert.equal(M.readState(userData).attempts, 2, code);
+    assert.equal(M.readState(userData).status, 'retry', code);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('wrapper: rewritten atomically (never written in place), 0755, with a .pre-plexiform copy of the old one (R3 #9)', () => {
+  const { home, dataDir } = oldHooksProfile();
+  const wrapper = path.join(dataDir, 'bin', 'buddy-hook');
+  const oldText = fs.readFileSync(wrapper, 'utf8');
+  const direct = [];
+  const spy = { ...fs, writeFileSync: (f, ...a) => { if (f === wrapper) direct.push(f); return fs.writeFileSync(f, ...a); } };
+  const r = M.rewriteHooks({ home, runtime: runtimeAt(NEW_APP, dataDir), askFromWidget: true, fsImpl: spy, log: quiet });
+  assert.equal(r.find((x) => x.id === 'wrapper').error, undefined);
+  assert.deepEqual(direct, []);
+  assert.equal(fs.readFileSync(`${wrapper}.pre-plexiform`, 'utf8'), oldText);
+  assert.match(fs.readFileSync(wrapper, 'utf8'), /Plexiform\.app/);
+  assert.equal(fs.statSync(wrapper).mode & 0o777, 0o755);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('whenGone: never runs before the caller\'s own synchronous work (the hooks step backs up first) (R3 #1)', () => {
+  const timers = [];
+  const calls = [];
+  M.whenGone([1], () => calls.push('gone'), { isAlive: () => false, setTimer: (fn) => { timers.push(fn); return { unref() {} }; } });
+  assert.deepEqual(calls, [], 'not called synchronously');
+  timers.shift()();
+  assert.deepEqual(calls, ['gone']);
 });

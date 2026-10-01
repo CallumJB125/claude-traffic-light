@@ -47,8 +47,9 @@ function wrapperText(rt) {
   return `#!/bin/sh\n# Plexiform hook runner: the app's own binary, running as Node.\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(rt.execPath)} "$@"\n`;
 }
 
-// Written only when missing or different; returns the path, or null when the
-// runtime needs no wrapper (dev fallback).
+// Written only when missing or different, atomically: a hook firing mid-write
+// must never exec half a script. Returns the path, or null when the runtime
+// needs no wrapper (dev fallback).
 function ensureWrapper(rt, fsImpl = fs) {
   if (rt.node) return null;
   const file = wrapperPath(rt);
@@ -57,7 +58,7 @@ function ensureWrapper(rt, fsImpl = fs) {
   try { cur = fsImpl.readFileSync(file, 'utf8'); } catch { /* first write */ }
   if (cur !== text) {
     fsImpl.mkdirSync(pathFor(rt).dirname(file), { recursive: true });
-    fsImpl.writeFileSync(file, text, { mode: 0o755 });
+    writeTextAtomic(file, text, fsImpl, undefined, { newMode: 0o755 });
   }
   if (!isWin(rt)) { try { fsImpl.chmodSync(file, 0o755); } catch { /* best effort */ } }
   return file;
@@ -122,13 +123,16 @@ const mtimeOf = (file, fsImpl = fs) => { try { return fsImpl.statSync(file).mtim
 // config (dotfiles) is written through, never replaced by a plain file.
 // readAt (the mtime when it was read): if another program has written the
 // file since, nothing is written and this returns false, for the caller to
-// read it again.
-function writeTextAtomic(link, text, fsImpl = fs, readAt) {
+// read it again. A read-only file is refused (temp plus rename would replace
+// it regardless). newMode: the mode for a file that doesn't exist yet.
+function writeTextAtomic(link, text, fsImpl = fs, readAt, { newMode } = {}) {
   fsImpl.mkdirSync(path.dirname(link), { recursive: true });
   let file = link;
   try { file = fsImpl.realpathSync(link); } catch { /* new file */ }
-  let mode;
-  try { mode = fsImpl.statSync(file).mode & 0o777; } catch { /* new file: default mode */ }
+  let mode = newMode;
+  let exists = false;
+  try { mode = fsImpl.statSync(file).mode & 0o777; exists = true; } catch { /* new file */ }
+  if (exists && !(mode & 0o200)) throw new Error(`${file} is read-only`);
   const tmp = `${file}.buddy-tmp.${process.pid}.${Date.now().toString(36)}`;
   fsImpl.writeFileSync(tmp, text, mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
   try {

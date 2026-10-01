@@ -196,3 +196,17 @@ test('dry run: the settings.json diff shows only the swapped command lines', () 
   assert.doesNotMatch(text, /no final newline/);
   fs.rmSync(f.home, { recursive: true, force: true });
 });
+
+test('dry run: while a config the rename can\'t rewrite keeps the hooks step pending, the start-up install is shown replacing only the old app\'s entries (R3 #1)', () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: '', hooks: [{ type: 'command', command: DEV }] }] } }, null, 2));
+  fs.mkdirSync(path.join(f.home, '.gemini'));
+  fs.writeFileSync(path.join(f.home, '.gemini', 'settings.json'), '{\n  // mine\n  "theme": "dark"\n}\n');
+  const { plan, text } = run(f);
+  assert.equal(plan.startup.narrow, true);
+  assert.equal(plan.startup.runs, true);
+  assert.deepEqual(plan.startup.removes, [], 'the dev checkout\'s entry stays');
+  assert.match(text, /it adds Plexiform's hooks and removes nothing else/);
+  assert.match(text, /Gemini's settings\.json may hold comments/);
+  fs.rmSync(f.home, { recursive: true, force: true });
+});

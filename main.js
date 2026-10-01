@@ -358,9 +358,12 @@ function areHooksInstalled() {
 }
 
 // An unparsable settings.json is left alone rather than written over.
-// Returns the error message, or null.
-function installHooks() {
-  try { Adapters.get('claude').install(claudeHookOpts()); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
+// Returns the error message, or null. narrow: while the rename's hooks step
+// is pending (and once the old app has quit), only the old app's entries and
+// this app's are replaced, never a look-alike script or a dev checkout's.
+function installHooks({ narrow = RENAME_MIGRATES && RenameMigration.pending(app.getPath('userData')).includes('hooks') } = {}) {
+  const opts = claudeHookOpts();
+  try { Adapters.get('claude').install({ ...opts, strip: narrow ? RenameMigration.renameStrip(Adapters.get('claude'), opts) : undefined }); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
 }
 // Opened straight from Downloads, macOS runs a random read-only copy; run
 // from a mounted disk image, the app is gone once it is ejected. Hooks pinned
@@ -3728,18 +3731,21 @@ if (!gotLock) {
 }
 
 // While the old app is installed its Open at Login can start it again, and
-// the two would fight over the hooks: ask it to quit (without waiting for it),
-// and say why. Runs at start, 30 s later and on wake.
-function quitOldAppIfInstalled() {
+// the two would fight over the hooks: ask it to quit, and say why. Runs at
+// start (waiting up to 5 s, so it frees the signal port), 30 s later and on
+// wake (not waiting). Its own start-up install may have pointed the hooks back
+// at itself, so once it has gone they are put back.
+function quitOldAppIfInstalled(waitMs = 0) {
   if (!RenameMigration.oldAppInstalled({ platform: process.platform, home: os.homedir() })) return;
-  const { asked } = RenameMigration.quitOldInstance({ ...quitOldOpts, waitMs: 0 });
+  const { asked } = RenameMigration.quitOldInstance({ ...quitOldOpts, waitMs });
+  if (asked.length) RenameMigration.whenGone(asked, () => { if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks({ narrow: true }); });
   if (asked.length && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} was running`, body: `It is ${Brand.name} now, so the old app was asked to quit. Remove it, or turn off its Open at Login.`, silent: true }).show();
 }
 
 // src/rename-migration.js, after ready; each step runs until it succeeds.
 function renameFollowUp() {
   const home = os.homedir();
-  quitOldAppIfInstalled();
+  quitOldAppIfInstalled(5000);
   if (renameCopy?.retry && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings come across next launch`, body: `${RenameMigration.OLD.productName} was still running. Quit it, then open ${Brand.name} again.`, silent: true }).show();
   if (renameCopy?.gaveUp && Notification.isSupported()) new Notification({ title: `${RenameMigration.OLD.productName} settings did not come across`, body: `${Brand.name} stopped trying after ${RenameMigration.MAX_TRIES} launches (${renameCopy.reason}). Your old settings are still in ${OLD_USER_DATA}.`, silent: true }).show();
   return RenameMigration.runFollowUp({
@@ -3749,6 +3755,7 @@ function renameFollowUp() {
       // config that couldn't be rewritten still runs the old app: either way, try again next launch.
       hooks: () => (AUTO_INSTALL_HOOKS ? RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }).every((r) => !r.error) : false),
       login: () => {
+        if (EPHEMERAL) return false;
         if (RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }) && Notification.isSupported()) new Notification({ title: `${Brand.name} opens at login`, body: `As ${RenameMigration.OLD.productName} was set to. Turn it off from the tray menu if you'd rather it didn't.`, silent: true }).show();
       },
       // An ephemeral copy can't re-point the hooks, so the old app stays until it can.
@@ -3774,9 +3781,7 @@ app.whenReady().then(() => {
   // here. Its last step (offer to bin the old app) waits on the person.
   if (RENAME_MIGRATES && gotLock) {
     renameFollowUp().catch((err) => console.warn('[rename]', err.message));
-    setTimeout(quitOldAppIfInstalled, 30 * 1000).unref();
-    powerMonitor.on('resume', quitOldAppIfInstalled);
-    powerMonitor.on('unlock-screen', quitOldAppIfInstalled);
+    RenameMigration.watchOldApp({ check: quitOldAppIfInstalled, powerMonitor });
   }
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
