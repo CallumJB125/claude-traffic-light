@@ -23,12 +23,10 @@ const ACCT_ARGS = {
   renameTeam: ['string', 'string'], addBoard: ['string', 'string'],
   teamDeleteStart: ['string', 'string'], teamDeleteCode: ['string', 'string'], teamDeleteResend: ['string'], teamDeleteOAuth: ['string', 'string'], deleteTeam: ['string'],
   joinCode: ['string'], acceptCode: ['string'], accept: ['string'], notNow: [], acceptPending: ['string'], switchAccount: [], skipInvites: [], openTeam: ['string'], signOut: ['string'], deleteStart: ['string'],
-  deleteConfirm: ['string'], cancelDelete: [], deleteOAuth: ['string'], cancelDeleteOAuth: [], runner: ['string', 'boolean'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
+  deleteConfirm: ['string'], cancelDelete: [], deleteOAuth: ['string'], cancelDeleteOAuth: [], runner: ['string', 'boolean'], revokeRunner: ['string', 'string'], presence: ['string', 'boolean'], summaries: ['string', 'boolean'],
 };
 
 const TEAM_CHANGED = { ok: false, error: 'The team changed while this page was open. Look again, then try once more.' };
-// Runner states that mean the hub stopped accepting this Mac's token.
-const TOKEN_TROUBLE = new Set(['unauthenticated', 'revoked']);
 
 /** Providers that can confirm a deletion: those the hub offers, cut to the ones the account says it signs in with. */
 function deleteProviders(methods, account) {
@@ -115,7 +113,8 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
   function beginDeleteCheck(step, provider) {
     cancelDeleteRun();
     step.confirmed = null;
-    const run = startProviderSignIn({ client: clientFor(step.hub), provider, purpose: 'delete', openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
+    // A team's check names its team, so the hub spends it on that team only (and never on the account).
+    const run = startProviderSignIn({ client: clientFor(step.hub), provider, ...(step.team ? { purpose: 'delete_team', teamId: step.team.teamId } : { purpose: 'delete' }), openExternal: openBrowser, brand: BRAND.NAME, allowOrigins: oauthAllowOrigins, log, ...(oauthTimeoutMs ? { timeoutMs: oauthTimeoutMs } : {}) });
     const me = { hub: step.hub, step, provider, run };
     const screen = step.team ? 'team' : 'account';
     me.done = run.done.then((r) => {
@@ -183,9 +182,17 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     return me.done;
   }
 
+  // A fresh GET /api/account: the switcher's teams, and a runner only where this Mac may still run one.
+  function accountSeen(origin, r) {
+    accounts.set(origin, r);
+    store.setTeams(origin, r);
+    pruneDevices(origin);
+    ui.pushState();
+  }
+
   async function refreshAccount(origin) {
     const r = await clientFor(origin).me();
-    if (r.ok) { accounts.set(origin, r); store.setTeams(origin, r); ui.pushState(); }
+    if (r.ok) accountSeen(origin, r);
     return r;
   }
 
@@ -196,13 +203,29 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (e) return e.d;
     const d = makeDevice(ws, {
       onStatus: (st) => {
-        if (TOKEN_TROUBLE.has(st?.runner?.state)) checkSignedIn(ws.hub);
+        // 4401 may mean this install was signed out, 4403 that the team or our place in it changed: ask the hub.
+        if (st?.ended) checkSignedIn(ws.hub);
         ui.devicesChanged();
       },
     });
     d.setPresence(store.sharesPresence(ws.hub), lastSessions, { shareSummaries: store.sharesSummaries(ws.hub) });
     devices.set(ws.id, { hub: ws.hub, name: ws.name, d });
     return d;
+  }
+
+  /**
+   * A team that left the account (deleted, or we were removed) or where we are now a viewer: its runner
+   * stops and its sealed token goes, loaded this run or not. The hub has already revoked or refused it.
+   */
+  function pruneDevices(origin) {
+    const runs = (w) => w && w.kind === 'team' && w.hub === origin && w.role !== 'viewer';
+    for (const [id, e] of [...devices]) {
+      if (e.hub !== origin || runs(store.get(id))) continue;
+      devices.delete(id);
+      e.d.discard().catch((err) => log('runner stop failed', err.message));
+    }
+    discardDeviceFiles(origin, { keep: store.list().filter(runs).map((w) => w.teamId) });
+    ui.devicesChanged();
   }
 
   /**
@@ -256,7 +279,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (!signedIn(origin)) return Promise.resolve({ ok: false, signedOut: true });
     const p = (async () => {
       const r = await clientFor(origin).me();
-      if (r.ok) { accounts.set(origin, r); store.setTeams(origin, r); ui.pushState(); } else if (r.signedOut) await signedOutOf(origin, { tell: true });
+      if (r.ok) accountSeen(origin, r); else if (r.signedOut) await signedOutOf(origin, { tell: true });
       return r;
     })().finally(() => checks.delete(origin));
     checks.set(origin, p);
@@ -383,7 +406,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       if (del?.expired) base.notice = 'That check ran out. Type the name and confirm it’s you again.';
       const meId = userOf(ws.hub)?.id ?? null;
       const members = (m.members ?? []).map((x) => ({ id: String(x.member_id ?? x.id), name: String(x.display_name ?? ''), email: String(x.email ?? ''), role: String(x.role), you: meId != null && String(x.user_id) === String(meId) }));
-      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null, deleteVia: noMail ? 'provider' : 'email', deleteStep: del?.expired ? null : del }, canManage, isOwner: ws.role === 'owner', members, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
+      const en = await c.listEnrolments(ws.teamId);
+      // Who may revoke is the hub's rule (admins and owners, or your own); the page only hides what would be refused.
+      const runners = en.ok ? en.enrolments.filter((e) => !e.revoked).slice(0, 20).map((e) => ({ id: e.id, name: e.name, person: e.userName, online: e.online, lastSeenAt: e.lastSeenAt, current: e.current, canRevoke: canManage || (meId != null && e.userId === String(meId)) })) : null;
+      return { ...base, host: hostOf(ws.hub), team: { id: ws.id, name: ws.name, role: ws.role, slug: t.ok ? String(t.team?.slug ?? '') : null, boards: t.ok ? Number(t.counts?.boards ?? 0) : null, deleteVia: noMail ? 'provider' : 'email', deleteStep: del?.expired ? null : del }, canManage, isOwner: ws.role === 'owner', members, runners, invites: (inv.invites ?? []).map((i) => ({ id: String(i.id), email: String(i.email), role: String(i.role), expires: String(i.expires_at ?? '') })), error: m.ok ? (inv.ok ? null : inv.error) : m.error };
     }
     if (screen === 'account') {
       const check = acct.deleting ? deleteCheckState() : null;
@@ -397,7 +423,7 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
         summaries: store.wantsSummaries(h),
         teams: store.list().filter((w) => w.kind === 'team' && w.hub === h).map((w) => {
           const st = devices.has(w.id) || hasDeviceFile(w) ? deviceFor(w).status() : { enrolled: false, enabled: false, runner: { state: 'off' }, parked: 0 };
-          return { id: w.id, name: w.name, role: w.role, enabled: st.enabled, enrolled: st.enrolled, state: st.runner.state, detail: st.runner.detail, parked: st.parked, parkedPending: st.parkedPending ?? 0 };
+          return { id: w.id, name: w.name, role: w.role, enabled: st.enabled, enrolled: st.enrolled, state: st.runner.state, detail: st.runner.detail, ended: st.ended ?? null, parked: st.parked, parkedPending: st.parkedPending ?? 0 };
         }),
       }));
       return { ...base, hubs };
@@ -602,6 +628,11 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       }
       if (delStep === st) dropDeleteStep();
       minted.delete(ws.id);
+      // The hub revoked its runners; this Mac's stops now, not on the next look at the account.
+      const e = devices.get(ws.id);
+      devices.delete(ws.id);
+      if (e) await e.d.discard().catch((err) => log('runner stop failed', err.message));
+      else if (hasDeviceFile(ws)) await makeDevice(ws, { onStatus: () => {} }).discard().catch(() => {});
       await refreshAccount(ws.hub);
       show('account', { notice: `${ws.name} was deleted.` });
       return { ok: true };
@@ -750,13 +781,30 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
       return { ok: true };
     },
     async cancelDelete() { acct.deleting = false; dropDeleteStep(); return { ok: true }; },
+    /** The This Mac switch for a team: on enrols this install (POST enrol), off unenrols it (DELETE enrol). */
     async runner(wsId, on) {
       const ws = store.get(wsId);
       if (ws?.kind !== 'team' || !signedIn(ws.hub)) return { ok: false };
       if (on && ws.role === 'viewer') return { ok: false, error: 'Viewers can’t run cards.' };
       const d = deviceFor(ws);
-      if (on && !d.status().enrolled) return d.enroll({ name: deviceInfo().deviceName ?? 'Mac' });
-      return d.setEnabled(on);
+      const r = on ? await d.enable({ name: deviceInfo().deviceName ?? 'Mac' }) : await d.disable();
+      ui.pushState();
+      return r;
+    },
+    /** Remove one of the team's runners (the list on the team screen); this Mac's own stops here too. */
+    async revokeRunner(wsId, enrollmentId) {
+      const ws = renderedTeam(wsId);
+      if (!ws) return TEAM_CHANGED;
+      const c = clientFor(ws.hub);
+      const list = await c.listEnrolments(ws.teamId);
+      if (!list.ok) return list;
+      const row = list.enrolments.find((e) => e.id === enrollmentId && !e.revoked);
+      if (!row) return { ok: false, error: 'That runner is already gone.' };
+      const r = await c.revokeEnrolment(ws.teamId, enrollmentId);
+      if (!r.ok) return r;
+      if (row.current && (devices.has(ws.id) || hasDeviceFile(ws))) await deviceFor(ws).discard();
+      ui.devicesChanged();
+      return { ok: true, notice: row.current ? 'This Mac no longer runs cards for this team.' : `${row.name || 'That Mac'} no longer runs cards for this team.` };
     },
     async presence(host, on) {
       const origin = hubByHost(host);

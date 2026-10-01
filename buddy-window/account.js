@@ -273,6 +273,8 @@ const SCREENS = {
     });
     out.push(el('section', { class: 'acct-section' }, el('h2', {}, `Members (${s.members.length})`), el('ul', { class: 'acct-list' }, rows)));
 
+    if (s.runners) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Runners'), runnerRows(s)));
+
     if (s.canManage) {
       const rename = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', value: s.team.name, required: true, 'aria-label': 'Team name' })), submit: 'Rename', busy: 'Saving…', fn: (v) => act(api.renameTeam(team, v.name)) });
       const board = form({ fields: el('div', { class: 'acct-row-form' }, input({ name: 'name', type: 'text', maxlength: '60', placeholder: 'e.g. Marketing', required: true, 'aria-label': 'New board name' })), submit: 'Add board', busy: 'Adding…', fn: (v) => act(api.addBoard(team, v.name)) });
@@ -402,8 +404,10 @@ const SCREENS = {
         sums));
       for (const t of h.teams) {
         const viewer = t.role === 'viewer';
+        const ended = t.state === 'removed';
+        const again = ended && !viewer ? link('Turn on again', () => act(api.runner(t.id, true))) : null;
         sec.append(el('div', { class: 'acct-item acct-item-toggle' },
-          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : runnerText(t))),
+          el('div', { class: 'acct-who' }, el('span', { class: 'acct-name' }, `Run ${t.name} cards`), el('span', { class: 'acct-mail', 'data-state': t.state }, viewer ? 'Viewers can’t run cards.' : ended ? `This Mac isn’t sharing sessions with ${t.name} any more.` : runnerText(t)), again),
           toggle(t.enabled, `Run ${t.name} cards on this Mac`, (on) => act(api.runner(t.id, on)), { disabled: viewer })));
       }
       out.push(sec);
@@ -489,9 +493,36 @@ function deleteCheck(c, { host, intro, warn, submit, del, pick }) {
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
+// This team's runners, as text: name, who, online or last seen, "this Mac". Revoke only where the hub would allow it.
+function runnerRows(s) {
+  if (!s.runners.length) return el('p', { class: 'acct-hint' }, s.canManage ? 'No Macs run this team’s cards yet.' : 'You have no Macs running this team’s cards.');
+  return el('ul', { class: 'acct-list' }, s.runners.map((r) => el('li', { class: 'acct-item' },
+    el('div', { class: 'acct-who' },
+      el('span', { class: 'acct-name' }, r.name || 'A Mac', r.current ? el('span', { class: 'chip' }, 'this Mac') : null),
+      el('span', { class: 'acct-mail' }, [r.person, r.online ? 'Online' : lastSeen(r.lastSeenAt)].filter(Boolean).join(' · '))),
+    r.canRevoke ? el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': `Remove ${r.name || 'this runner'}`, onclick: (e) => {
+      const b = e.currentTarget;
+      if (b.dataset.armed) { act(api.revokeRunner(team, r.id)); return; }
+      b.dataset.armed = '1';
+      b.textContent = 'Confirm';
+      b.classList.add('btn-danger-text');
+    } }, 'Remove') : el('span', { class: 'acct-spacer' }))));
+}
+
+function lastSeen(iso) {
+  const ms = Date.now() - Date.parse(iso ?? '');
+  if (!Number.isFinite(ms)) return 'Not seen yet';
+  const min = Math.round(ms / 60_000);
+  if (min < 2) return 'Seen just now';
+  if (min < 60) return `Seen ${min} minutes ago`;
+  const h = Math.round(min / 60);
+  if (h < 48) return `Seen ${h} hour${h === 1 ? '' : 's'} ago`;
+  return `Seen ${Math.round(h / 24)} days ago`;
+}
+
 const RUNNER = {
   off: 'Off', starting: 'Starting…', connecting: 'Connecting…', connected: 'Running', backoff: 'Reconnecting…', restarting: 'Restarting…',
-  unauthenticated: 'Signed out. Turn it off and on again.', revoked: 'This Mac was removed from the team.', unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
+  unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
 };
 function runnerText(t) {
   const base = !t.enabled && t.state === 'off' ? 'Off' : (['missing', 'failed'].includes(t.state) ? (t.detail ?? 'Stopped') : (RUNNER[t.state] ?? t.state));

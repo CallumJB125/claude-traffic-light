@@ -20,7 +20,7 @@ const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, uti
 const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
-const { createAccountClient, bearerScope, bearerHeaders } = require('./accounts');
+const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const BRAND = require('./brand');
@@ -153,7 +153,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   function clientFor(origin) {
     let c = clients.get(origin);
     if (!c) {
-      c = createAccountClient({ origin, store: vault(origin), onSignedOut: () => { flow.signedOutOf(origin, { tell: true }).catch((e) => log('sign-out cleanup failed', e.message)); } });
+      c = createAccountClient({ origin, store: vault(origin), pin: (o) => pinnedTransport(o), onSignedOut: () => { flow.signedOutOf(origin, { tell: true }).catch((e) => log('sign-out cleanup failed', e.message)); } });
       clients.set(origin, c);
     }
     return c;
@@ -310,11 +310,13 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       onStatus,
     });
   }
-  function discardDeviceFiles(origin) {
+  // A hub's sealed runner tokens, except those of the teams in `keep`.
+  function discardDeviceFiles(origin, { keep = [] } = {}) {
     const prefix = `${fileKey(origin)}-`;
+    const kept = new Set(keep.map((t) => `${prefix}${t}.bin`));
     let names = [];
     try { names = fs.readdirSync(DEVICES_DIR); } catch { return; }
-    for (const n of names) if (n.startsWith(prefix) && n.endsWith('.bin')) fs.rmSync(path.join(DEVICES_DIR, n), { force: true });
+    for (const n of names) if (n.startsWith(prefix) && n.endsWith('.bin') && !kept.has(n)) fs.rmSync(path.join(DEVICES_DIR, n), { force: true });
   }
 
   // The team hub's storage after sign-out; its live page and connect window close first.

@@ -1,13 +1,17 @@
 // Buddy account client: one per team hub, Electron-free (main injects fetch
 // and a sealed token store, tests inject a mock hub). The device token lives
-// only in main; nothing here returns it to a caller except `accessToken()`,
-// which main uses for its own requests and the runner's config.
+// only in main and nothing here returns it to a caller; the board view's
+// header reads it from the store, and the runner never gets it (it has its
+// own per-team runner token, P4).
 //
 // Every endpoint path is in ROUTES so the hub's final paths are a one-line
 // change each (callumbaker-70's BOARD_AUTH=accounts, board/ACCOUNTS-API.md).
 'use strict';
 
 const crypto = require('node:crypto');
+const http = require('node:http'); // privacy-flow: team-hub-account
+const https = require('node:https'); // privacy-flow: team-hub-account
+const dns = require('node:dns'); // privacy-flow: team-hub-account
 const { SCHEMES } = require('./brand');
 
 const ROUTES = {
@@ -37,6 +41,8 @@ const ROUTES = {
   acceptInviteById: ['POST', '/api/account/invites/:invite/accept'],
   enrol: ['POST', '/api/teams/:team/enrol'],
   unenrol: ['DELETE', '/api/teams/:team/enrol'],
+  enrolments: ['GET', '/api/teams/:team/enrolments'],
+  revokeEnrolment: ['DELETE', '/api/teams/:team/enrolments/:enrollment'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -49,6 +55,8 @@ const INVITE_CODE_RE = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/;
 const ID_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 // The hub counts a verified delete flow as fresh for 5 minutes (D56).
 const STEP_UP_MS = 5 * 60_000;
+// Provider checks before a deletion: the account's, or one team's (which names that team at start).
+const STEP_UP_PURPOSES = ['delete', 'delete_team'];
 
 function routePath(name, params = {}) {
   return ROUTES[name][1].replace(/:(\w+)/g, (_m, k) => {
@@ -85,9 +93,9 @@ function codeText(attemptsLeft) {
   return Number.isInteger(n) && n > 0 ? `That code didn’t work. ${n} ${n === 1 ? 'try' : 'tries'} left.` : 'That code didn’t work. Send a new code.';
 }
 
-function waitText(retryAfterS) {
+function waitText(retryAfterS, lead = 'Too many tries.') {
   const m = Math.ceil((Number(retryAfterS) > 0 ? Number(retryAfterS) : 60) / 60);
-  return `Too many tries. Wait ${m <= 1 ? 'a minute' : `${m} minutes`} and try again.`;
+  return `${lead} Wait ${m <= 1 ? 'a minute' : `${m} minutes`} and try again.`;
 }
 
 function humanError(status, json, host) {
@@ -140,6 +148,20 @@ function oauthOutcome(r, provider, host) {
   return r;
 }
 
+// Enrolment caps (5 active per person per team, 20 per person) and its hourly limit, in words.
+function enrolOutcome(r) {
+  if (r.ok) return r;
+  if (r.code === 'QUOTA_EXCEEDED' && r.detail?.resource === 'runner_enrollments') {
+    const n = Number.isInteger(r.detail.limit) && r.detail.limit > 0 ? r.detail.limit : null;
+    return { ...r, error: n ? `You already have ${n} Macs running cards, the most allowed. Turn one off or remove one, then try again.` : 'You already have as many Macs running cards as allowed. Turn one off or remove one, then try again.' };
+  }
+  if (r.status === 429) return { ...r, error: waitText(r.detail?.retry_after_s, 'This Mac was turned on and off too often.') };
+  if (r.status === 403 && r.code === 'FORBIDDEN') return { ...r, error: 'Your role in this team can’t run cards.' };
+  return r;
+}
+
+const isoOrNull = (v) => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? v : null);
+
 function deleteOutcome(r, { again = 'Send a new code and do the check again.' } = {}) {
   if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: `That check timed out. ${again}` };
   const owned = Array.isArray(r.detail?.sole_owner_of) ? r.detail.sole_owner_of.map((t) => String(t?.name ?? '').slice(0, 60)).filter(Boolean) : [];
@@ -155,7 +177,7 @@ function deleteOutcome(r, { again = 'Send a new code and do the check again.' } 
  * Every method resolves `{ok:true, ...}` or `{ok:false, error:<sentence>, code?, signedOut?}`.
  * `store.load()` → `{hub, token, device_id, user}` or null.
  */
-function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {} }) {
+function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {}, pin = null }) {
   const host = new URL(origin).host;
   let flow = null; // {id, email, purpose:'signin'|'delete', at, verifiedAt?}: the email-code flow in progress
 
@@ -168,7 +190,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
   }
 
   // `token`: a token that must not be stored, sent in place of the saved one (the revoke of a cancelled sign-in).
-  async function call(name, { params, body, auth = true, token = null } = {}) {
+  // `via`: a transport for this one call in place of fetchImpl (a provider sign-in's pinned address).
+  async function call(name, { params, body, auth = true, token = null, via = null } = {}) {
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
@@ -182,7 +205,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     let res;
     try {
       const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(TIMEOUT_MS) : undefined;
-      res = await fetchImpl(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal, redirect: 'manual' }); // privacy-flow: team-hub-account
+      res = await (via ?? fetchImpl)(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal, redirect: 'manual' }); // privacy-flow: team-hub-account
     } catch {
       return { ok: false, error: `Couldn’t reach ${host}. Check the address and your connection.` };
     }
@@ -225,10 +248,6 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     origin,
     signedIn: () => !!saved(),
     user: () => saved()?.user ?? null,
-    /** For main's own requests and the runner's config; never for a page. */
-    accessToken: async () => saved()?.token ?? null,
-    /** The runner names this install to the hub with it (runner.config device_id). */
-    deviceId: () => saved()?.device_id ?? null,
 
     async startEmail(email, dev = {}) {
       const e = String(email ?? '').trim().toLowerCase();
@@ -264,16 +283,23 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
     /**
      * Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller.
-     * `purpose:'delete'` is the account-deletion check instead: it goes with the Bearer, and names no
-     * device because no token comes of it.
+     * `purpose:'delete'` is the account-deletion check instead, and `'delete_team'` with `teamId` the
+     * check for deleting that one team: they go with the Bearer, and name no device because no token
+     * comes of them. The hub spends a team's check only on that team, and never on the account.
      */
-    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin' } = {}) {
+    /** A transport pinned to one of the hub's addresses for a provider sign-in's start and exchange, or null. */
+    oauthTransport: () => (pin ? pin(origin).catch(() => null) : Promise.resolve(null)),
+
+    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin', teamId = null, transport = null } = {}) {
       if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
-      const stepUp = purpose === 'delete';
-      const body = stepUp
-        ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' }
-        : { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) };
-      const r = await call('oauthStart', { body, auth: stepUp });
+      const stepUp = STEP_UP_PURPOSES.includes(purpose);
+      if (purpose === 'delete_team' && !ID_RE.test(String(teamId ?? ''))) return { ok: false, error: 'That isn’t a valid team.' };
+      const body = !stepUp
+        ? { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) }
+        : purpose === 'delete_team'
+          ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose, team_id: String(teamId) }
+          : { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' };
+      const r = await call('oauthStart', { body, auth: stepUp, via: transport });
       if (!r.ok) return oauthOutcome(r, provider, host);
       // The hub mints the state: without one the loopback callback couldn't be checked.
       if (typeof r.flow_id !== 'string' || typeof r.url !== 'string' || typeof r.state !== 'string' || r.state.length < 16) return { ok: false, error: `${host} didn’t start a sign-in.` };
@@ -285,11 +311,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
      * `keep()` is asked once the hub has answered: false (the member cancelled, or another sign-in
      * replaced this one) and the new token is revoked on the hub without ever being stored.
      */
-    async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true } = {}) {
-      if (purpose === 'delete') {
+    async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true, transport = null } = {}) {
+      if (STEP_UP_PURPOSES.includes(purpose)) {
         // A deletion check proves who you are to the hub and nothing more: whatever else the answer
         // holds, only its expiry is read, and the vault is never touched.
-        const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier } });
+        const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier }, via: transport });
         if (!keep()) return { ok: false, cancelled: true };
         // The hub answers another person's provider account with the same INVALID_TOKEN as a bad code.
         if (!r.ok && r.code === 'INVALID_TOKEN') return { ...r, error: `That didn’t confirm it’s you. Use the ${PROVIDER_LABEL[provider] ?? 'account'} account you sign in with, and try again.` };
@@ -297,7 +323,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         if (r.stepup_until == null) return { ok: false, error: `${host} didn’t confirm it’s you. Try again.` };
         return { ok: true, flowId, stepupUntil: stepUpUntil(r.stepup_until) };
       }
-      const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false });
+      const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false, via: transport });
       if (!keep()) {
         if (r.ok && typeof r.device_token === 'string' && r.device_token) await call('signOut', { body: {}, token: r.device_token });
         return { ok: false, cancelled: true };
@@ -401,8 +427,35 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (!TOKEN_RE.test(t)) return { ok: false, gone: true, error: INVITE_GONE };
       return inviteOutcome(await call('acceptInvite', { body: { t } }));
     },
-    enrol: (team) => call('enrol', { params: { team }, body: {} }),
+    /**
+     * → {ok, enrollment_id, team_id, runner_token}: the token is shown once and goes only to the
+     * caller (device.js), which seals it. Enrolling again in the same team rotates it.
+     */
+    async enrol(team, { deviceName } = {}) {
+      const n = String(deviceName ?? '').trim().slice(0, 100);
+      return enrolOutcome(await call('enrol', { params: { team }, body: n ? { device_name: n } : {} }));
+    },
     unenrol: (team) => call('unenrol', { params: { team }, body: {} }),
+    /** This team's runners (admins and owners see all, others their own), cleaned for the page: no tokens exist here. */
+    async listEnrolments(team) {
+      const r = await call('enrolments', { params: { team } });
+      if (!r.ok) return r;
+      const list = Array.isArray(r.enrolments) ? r.enrolments : [];
+      return {
+        ok: true,
+        enrolments: list.slice(0, 200).filter((e) => e && ID_RE.test(String(e.id ?? ''))).map((e) => ({
+          id: String(e.id),
+          userId: String(e.user?.id ?? ''),
+          userName: String(e.user?.display_name ?? '').slice(0, 100),
+          name: String(e.name ?? '').slice(0, 100),
+          lastSeenAt: isoOrNull(e.last_seen_at),
+          revoked: e.revoked_at != null,
+          online: e.online === true,
+          current: e.current === true,
+        })),
+      };
+    },
+    revokeEnrolment: (team, enrollment) => call('revokeEnrolment', { params: { team, enrollment }, body: {} }),
 
     async signOut() {
       const r = saved() ? await call('signOut', { body: {} }) : { ok: true };
@@ -452,6 +505,39 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return { ok: true };
     },
   };
+}
+
+/**
+ * A fetch-shaped transport that connects only to the one address `origin`'s host resolved to now, for a
+ * provider sign-in's start and exchange: the hub binds the flow to the start's network (/24, IPv6 /48)
+ * and burns it on any failure, and a dual-stack Mac could otherwise start over IPv6 and exchange over
+ * IPv4. TLS still checks the certificate against the host name. → null when the host doesn't resolve.
+ * Answers {status, json()} like fetch; never follows a redirect.
+ */
+async function pinnedTransport(origin, { lookup = dns.promises.lookup, maxBytes = 1 << 20 } = {}) {
+  const u = new URL(origin);
+  const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
+  if (!mod) return null;
+  let addr;
+  try { addr = await lookup(u.hostname.replace(/^\[|\]$/g, '')); } catch { return null; }
+  if (!addr?.address || ![4, 6].includes(addr.family)) return null;
+  const fixed = (_host, opts, cb) => (opts?.all ? cb(null, [{ address: addr.address, family: addr.family }]) : cb(null, addr.address, addr.family));
+  return (url, init = {}) => new Promise((resolve, reject) => {
+    if (new URL(url).origin !== u.origin) { reject(new TypeError('not this hub')); return; }
+    const req = mod.request(url, { method: init.method ?? 'GET', headers: init.headers, signal: init.signal, lookup: fixed, family: addr.family }, (res) => { // privacy-flow: team-hub-account
+      const chunks = [];
+      let size = 0;
+      res.on('data', (d) => { size += d.length; if (size <= maxBytes) chunks.push(d); else res.destroy(); });
+      res.on('error', reject);
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, json: async () => JSON.parse(text) });
+      });
+    });
+    req.on('error', reject);
+    if (init.body !== undefined) req.write(init.body);
+    req.end();
+  });
 }
 
 // ── invite links ────────────────────────────────────────────────────────────
@@ -603,4 +689,4 @@ function bearerHeaders(requestHeaders, url, { scope, token }) {
   return headers;
 }
 
-module.exports = { createAccountClient, oauthOutcome, SLUG_MISMATCH, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
+module.exports = { createAccountClient, pinnedTransport, enrolOutcome, oauthOutcome, SLUG_MISMATCH, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
