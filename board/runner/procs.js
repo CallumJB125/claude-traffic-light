@@ -35,6 +35,13 @@ export function processTable() {
   return rows;
 }
 
+// Full command lines (for "is that session still open?"); null if ps fails.
+export function commandLines() {
+  try {
+    return execFileSync(PS, ['-axww', '-o', 'command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 << 20 }).split('\n'); // privacy-flow: runner-local
+  } catch { return null; }
+}
+
 export function descendants(pid, table = processTable()) {
   const kids = new Map();
   for (const r of table) {
