@@ -35,6 +35,7 @@ const HostApp = require('./hostapp.js');
 const Motion = require('./motion.js');
 const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
+const NativeBoard = require('./native-board/service');
 const Setup = require('./setup.js');
 const LeftoverShim = require('./src/leftover-shim.js');
 const Help = require('./help.js');
@@ -3766,6 +3767,37 @@ function mcpOpts() {
     entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
+let nativeBoardService = null;
+function nativeBoardDir() { return path.join(app.getPath('userData'), 'native-board'); }
+function getNativeBoard() {
+  if (!nativeBoardService) {
+    const storage = require('electron').safeStorage;
+    if (!storage.isEncryptionAvailable() || (process.platform === 'linux' && storage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('Secure account storage is unavailable on this computer.');
+    nativeBoardService = NativeBoard.createService({
+      dir: nativeBoardDir(), seal: (s) => storage.encryptString(s), unseal: (b) => storage.decryptString(b),
+      resolveWorkspace: (id) => getBuddy().nativeBoardContext(id), workspaces: () => getBuddy().nativeBoardWorkspaces(),
+      home: IS_DEV_RUN ? path.join(app.getPath('userData'), 'native-board-dev-home') : os.homedir(),
+      launchOptions: { execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath || __dirname },
+    });
+  }
+  return nativeBoardService;
+}
+const fromNativeBoardSettings = (e) => !!settingsWin && !settingsWin.isDestroyed() && e.sender === settingsWin.webContents && e.senderFrame === e.sender.mainFrame;
+const nativeBoardAction = (fn) => async (e, ...args) => {
+  if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
+  try { return await fn(getNativeBoard(), ...args); } catch (err) { return { ok: false, error: err.message }; }
+};
+ipcMain.handle('native-board-status', nativeBoardAction((s) => s.status()));
+ipcMain.handle('native-board-boards', nativeBoardAction((s, workspace) => {
+  if (typeof workspace !== 'string' || workspace.length > 350) return { ok: false, error: 'Choose a workspace.' };
+  return s.boards(workspace);
+}));
+ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((k) => !['target', 'workspaceId', 'boardIds', 'mode'].includes(k)) || !Array.isArray(input.boardIds) || input.boardIds.length > 32) return { ok: false, error: 'Choose the app, workspace and boards.' };
+  return s.connect(input);
+}));
+ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
+app.on('will-quit', () => { nativeBoardService?.stop().catch(() => {}); });
 ipcMain.handle('mcp-status', () => McpInstall.status(mcpOpts()));
 ipcMain.handle('mcp-set-enabled', (_e, on) => {
   try {
@@ -4158,6 +4190,10 @@ app.whenReady().then(() => {
   // An AppImage's copies for older versions go only once this is the one running instance.
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
+  if (fs.existsSync(path.join(nativeBoardDir(), 'connections.bin'))) {
+    try { getNativeBoard().start().catch(() => console.warn('[native-board] saved connections could not start')); }
+    catch { console.warn('[native-board] saved connections require reconnecting in Settings'); }
+  }
   // The rest of the rename migration, once, before the hook check below: a
   // running old copy is asked to quit and every agent config already points
   // here. Its last step (offer to bin the old app) waits on the person.

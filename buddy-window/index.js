@@ -741,6 +741,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   return {
     open,
+    // Account client stays in main. The broker checks the sealed grant's
+    // owner on every request and never sends this object to a renderer.
+    nativeBoardContext(workspaceId) {
+      const workspace = store.get(workspaceId);
+      if (!workspace || workspace.kind !== 'team' || !signedIn(workspace.hub)) return null;
+      const userId = userOf(workspace.hub)?.id;
+      return typeof userId === 'string' && userId ? { workspace, userId, client: clientFor(workspace.hub) } : null;
+    },
+    nativeBoardWorkspaces: () => store.list().filter((w) => w.kind === 'team').map((w) => ({ id: w.id, name: w.name })),
     openWithFragment,
     isOpen: () => !!win,
     select,

@@ -92,6 +92,7 @@
       "spend.js",
       "mcp-server.js",
       "mcp-install.js",
+      "native-board/**/*",
       "agents.js",
       "tray.html",
       "tray-preload.js",

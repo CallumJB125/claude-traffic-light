@@ -44,6 +44,11 @@ const ROUTES = {
   unenrol: ['DELETE', '/api/teams/:team/enrol'],
   enrolments: ['GET', '/api/teams/:team/enrolments'],
   revokeEnrolment: ['DELETE', '/api/teams/:team/enrolments/:enrollment'],
+  nativeSnapshot: ['GET', '/api/boards/:board'],
+  nativeCard: ['GET', '/api/cards/:card'],
+  nativeCreate: ['POST', '/api/boards/:board/cards'],
+  nativePatch: ['PATCH', '/api/cards/:card'],
+  nativeComment: ['POST', '/api/cards/:card/comments'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -376,6 +381,13 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call('createTeam', { body: { name: n, request_id: crypto.randomUUID() } });
     },
     getTeam: (team) => call('team', { params: { team } }),
+    // Main-only board broker: fixed routes and team header; never an arbitrary
+    // URL or bearer credential supplied by an MCP client.
+    nativeBoard(operation, params, body) {
+      const name = { snapshot: 'nativeSnapshot', card: 'nativeCard', create: 'nativeCreate', patch: 'nativePatch', comment: 'nativeComment' }[operation];
+      if (!name || !ID_RE.test(String(params?.team ?? ''))) return Promise.resolve({ ok: false, error: 'Invalid board operation.' });
+      return call(name, { params, body });
+    },
     renameTeam(team, name) {
       const n = String(name ?? '').trim();
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
