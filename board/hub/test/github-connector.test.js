@@ -406,3 +406,18 @@ test('N4: a push stores the new head; a late suite for the old head is dropped, 
   await run(ctx, 'check_suite', suite('failure', next));
   assert.deepEqual(statuses(ctx), [{ checks: 'failing' }]);
 });
+
+test('N3: every system event names the PR\'s repo, so bare #N evidence is checked against the card\'s own repo', async () => {
+  const ctx = stubCtx();
+  const events = [];
+  const raise = ctx.system.event;
+  ctx.system.event = (type, ev) => { events.push([type, ev.repo]); return raise(type, ev); };
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed' }), repository: repo, sender: { login: 'callum' } });
+  await run(ctx, 'pull_request', { action: 'reopened', pull_request: pr(), repository: repo });
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed', merged: true, merged_by: { login: 'tonde' } }), repository: repo });
+  assert.deepEqual(events, [['pr_closed', 'acme/app'], ['pr_merged', 'acme/app']]);
+  const { full_name: _, ...nameless } = repo;
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed', merged: true }), repository: nameless });
+  assert.equal(events.length, 2, 'a delivery with no repo name raises nothing');
+});
