@@ -172,6 +172,8 @@ its own requests (SigV4, no AWS SDK) and talks only to `email.<region>.amazonaws
   address, SES's message text, a header or a credential. The person signing in
   sees the same answer either way (the code just does not arrive).
 
+**Checking the mailer without the logs.** A sign-in email is sent in the background after the hub has already answered "started" (the same answer for every address), so a broken mailer shows the person "Check your email" and nothing arrives. `GET /api/health` on a hub with a mailer carries `mail: {last_error_at}`: the time a send last failed (any sign-in, invite or notice mail), `null` if none has since the hub started. It never says to whom or why; the reason is in the log line `sign-in mail failed` (a fixed error text, no address). A smoke test sends one real sign-in mail and checks that `last_error_at` did not move. With SES in the sandbox only verified addresses and domains receive mail, so a send to anyone else is accepted by the hub and refused by SES: it shows up here and in the log, not in the person's inbox.
+
 ## Deleting accounts and teams without a mailer
 
 Deleting an account or a team needs a step-up: an email code (a mailer) or a
