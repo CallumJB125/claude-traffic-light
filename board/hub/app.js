@@ -28,6 +28,7 @@ import { Clients } from './identity/clients.js';
 import { ClientArtifacts } from './identity/client-artifacts.js';
 import { ClientFeedback } from './identity/client-feedback.js';
 import { OAuth } from './identity/oauth.js';
+import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { oauthProviders } from './config.js';
 
@@ -58,6 +59,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.clientArtifacts = hub.clients ? new ClientArtifacts(hub) : null;
   hub.clientFeedback = hub.clients ? new ClientFeedback(hub) : null;
   hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
+  hub.oauthWeb = hub.oauth ? new WebOAuth(hub) : null;
   hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
   // Deleting an account or a team needs a step-up: an email code (a mailer)
   // or an OAuth re-authentication (a configured provider). Without either,

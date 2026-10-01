@@ -46,7 +46,7 @@ export function fakeProviders({ clock, clients }) {
       const u = new URL(url);
       const provider = u.origin === new URL(GOOGLE.authorize).origin ? 'google' : 'github';
       const code = over.code ?? `code-${rnd(16)}`;
-      codes.set(code, { provider, redirect_uri: u.searchParams.get('redirect_uri'), challenge: u.searchParams.get('code_challenge'), nonce: u.searchParams.get('nonce'), who, over, used: false });
+      codes.set(code, { provider, client_id: u.searchParams.get('client_id'), redirect_uri: u.searchParams.get('redirect_uri'), challenge: u.searchParams.get('code_challenge'), nonce: u.searchParams.get('nonce'), who, over, used: false });
       return { code, state: u.searchParams.get('state'), params: Object.fromEntries(u.searchParams) };
     },
     fetch: async (url, init = {}) => {
@@ -62,13 +62,14 @@ export function fakeProviders({ clock, clients }) {
         const c = codes.get(f.code);
         const bad = () => (provider === 'google' ? json(400, { error: 'invalid_grant' }) : json(200, { error: 'bad_verification_code' }));
         if (!c || c.used || c.provider !== provider) return bad();
-        if (f.client_id !== clients[`${provider}ClientId`] || f.client_secret !== clients[`${provider}ClientSecret`]) return json(401, { error: 'invalid_client' });
+        const mode = c.client_id === clients[`${provider}WebClientId`] ? 'Web' : '';
+        if (f.client_id !== c.client_id || f.client_id !== clients[`${provider}${mode}ClientId`] || f.client_secret !== clients[`${provider}${mode}ClientSecret`]) return json(401, { error: 'invalid_client' });
         if (f.redirect_uri !== c.redirect_uri || s256(f.code_verifier ?? '') !== c.challenge) return bad();
         c.used = true;
         if (provider === 'google') {
           const t = Math.floor(clock.wall() / 1000);
           const claims = {
-            iss: 'https://accounts.google.com', aud: clients.googleClientId, sub: c.who.sub, email: c.who.email, email_verified: true,
+            iss: 'https://accounts.google.com', aud: c.client_id, sub: c.who.sub, email: c.who.email, email_verified: true,
             name: c.who.name ?? null, iat: t, exp: t + 3600, nonce: c.nonce, ...(c.who.hd ? { hd: c.who.hd } : {}), ...(c.over.claims ?? {}),
           };
           const access = `${['ya29', 'x'].join('.')}${rnd(30)}`;

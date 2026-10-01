@@ -10,7 +10,7 @@
 import { createHash, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { HubError } from '../db.js';
 import { safeEqual, sha256hex } from '../auth.js';
-import { oauthProviders } from '../config.js';
+import { oauthProviders, webOauthProviders } from '../config.js';
 import { ipKey, limitOrThrow } from '../ratelimit.js';
 import { authoritativeVia, canonEmail, ipPrefix, publicUser, STEP_UP_MS } from './accounts.js';
 import { BRAND } from '../../shared/brand.js';
@@ -105,9 +105,9 @@ export class OAuth {
     });
   }
 
-  configured(provider) { return oauthProviders(this.hub.config).includes(provider); }
-  clientId(p) { return this.hub.config[`${p}ClientId`]; }
-  clientSecret(p) { return this.hub.config[`${p}ClientSecret`]; }
+  configured(provider, client = 'buddy_desktop') { return (client === 'web' ? webOauthProviders(this.hub.config) : oauthProviders(this.hub.config)).includes(provider); }
+  clientId(p, client = 'buddy_desktop') { return this.hub.config[`${p}${client === 'web' ? 'Web' : ''}ClientId`]; }
+  clientSecret(p, client = 'buddy_desktop') { return this.hub.config[`${p}${client === 'web' ? 'Web' : ''}ClientSecret`]; }
   subjectRef(provider, subject) { return createHash('sha256').update(this.kSub).update(`${provider}:${subject}`).digest('hex').slice(0, 16); }
 
   /** POST /api/auth/oauth/start → {flow_id, url, state, expires_in}. */
@@ -159,11 +159,11 @@ export class OAuth {
     return { flow_id: flowId, url: this.authorizeUrl(provider, { state, nonce, challenge: body.code_challenge, redirect }), state, expires_in: OAUTH_FLOW_TTL_MS / 1000 };
   }
 
-  authorizeUrl(provider, { state, nonce, challenge, redirect }) {
+  authorizeUrl(provider, { state, nonce, challenge, redirect, client = 'buddy_desktop' }) {
     // Never access_type=offline: no refresh token is ever asked for.
     const q = provider === 'google'
-      ? { client_id: this.clientId(provider), redirect_uri: redirect, response_type: 'code', scope: 'openid email profile', state, nonce, prompt: 'select_account', code_challenge: challenge, code_challenge_method: 'S256' }
-      : { client_id: this.clientId(provider), redirect_uri: redirect, scope: 'read:user user:email', state, allow_signup: 'true', code_challenge: challenge, code_challenge_method: 'S256' };
+      ? { client_id: this.clientId(provider, client), redirect_uri: redirect, response_type: 'code', scope: 'openid email profile', state, nonce, prompt: 'select_account', code_challenge: challenge, code_challenge_method: 'S256' }
+      : { client_id: this.clientId(provider, client), redirect_uri: redirect, scope: 'read:user user:email', state, allow_signup: 'true', code_challenge: challenge, code_challenge_method: 'S256' };
     return `${provider === 'google' ? GOOGLE.authorize : GITHUB.authorize}?${new URLSearchParams(q)}`;
   }
 
@@ -231,7 +231,7 @@ export class OAuth {
 
   tokenRequest(provider, f, code, verifier) {
     const form = new URLSearchParams({
-      grant_type: 'authorization_code', code, client_id: this.clientId(provider), client_secret: this.clientSecret(provider),
+      grant_type: 'authorization_code', code, client_id: this.clientId(provider, f.client), client_secret: this.clientSecret(provider, f.client),
       redirect_uri: f.redirect_uri, code_verifier: verifier,
     });
     return this.call(provider === 'google' ? GOOGLE.token : GITHUB.token, {
@@ -276,7 +276,7 @@ export class OAuth {
 
   async verifyIdToken(token, f) {
     try {
-      return await verifyRs256(token, { keyFor: this.jwks.keyFor, issuers: GOOGLE.issuers, audience: this.clientId('google'), nonce: f.nonce, nowS: this.hub.wallMs() / 1000, skewS: SKEW_S });
+      return await verifyRs256(token, { keyFor: this.jwks.keyFor, issuers: GOOGLE.issuers, audience: this.clientId('google', f.client), nonce: f.nonce, nowS: this.hub.wallMs() / 1000, skewS: SKEW_S });
     } catch (e) {
       if (e instanceof JwtInvalid) throw invalid();
       throw e;
@@ -401,5 +401,6 @@ export class OAuth {
     this.db.run('DELETE FROM oauth_flows WHERE expires_at < ? AND (stepup_until IS NULL OR stepup_until < ?)', this.accounts.at(-KEEP_FLOWS_MS), this.accounts.now());
     // A day past a 10-minute expiry is past the 24 h of wrong codes seedFailures re-reads.
     this.db.run('DELETE FROM login_flows WHERE expires_at < ?', this.accounts.at(-KEEP_FLOWS_MS));
+    this.hub.oauthWeb?.sweep();
   }
 }

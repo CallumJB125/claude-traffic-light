@@ -299,7 +299,7 @@ test('SES through Accounts: a failed sign-in mail logs the fixed text and the ma
   const mailer = sesMailer({ region: 'af-south-1', ...c, from: FROM, fetchImpl: ses.fetchImpl, now: CLOCK });
   const h = await startAccounts({ mailer, log });
   try {
-    assert.deepEqual((await h.call('GET', '/api/auth/methods')).body, { google: false, github: false, email: true }, 'an SES mailer turns email on');
+    assert.deepEqual((await h.call('GET', '/api/auth/methods')).body, { google: false, github: false, email: true, web: { google: false, github: false } }, 'an SES mailer turns email on');
     const s = await h.start('new-person@example.com');
     assert.equal(s.status, 200);
     for (let i = 0; i < 100 && !lines.some((l) => l.includes('sign-in mail failed')); i++) await new Promise((r) => setTimeout(r, 10));
@@ -419,7 +419,7 @@ test('configured SES: createApp builds it from config, /api/auth/methods says em
     assert.equal(app.hub.accounts.mailer.kind, 'ses');
     const addr = await app.listen(0, '127.0.0.1');
     const base = `http://127.0.0.1:${addr.port}`;
-    assert.deepEqual(await (await fetch(`${base}/api/auth/methods`)).json(), { google: false, github: false, email: true });
+    assert.deepEqual(await (await fetch(`${base}/api/auth/methods`)).json(), { google: false, github: false, email: true, web: { google: false, github: false } });
     const r = await fetch(`${base}/api/auth/email/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'jo@example.com', client: 'buddy_desktop' }) });
     assert.equal(r.status, 200);
     for (let i = 0; i < 100 && !calls.length; i++) await new Promise((res) => setTimeout(res, 10));

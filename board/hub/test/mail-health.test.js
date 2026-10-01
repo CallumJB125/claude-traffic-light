@@ -67,7 +67,7 @@ test('methods: five background sends failing in a row turn email off until one s
     const mid = await start(h, 'mid@example.com');
     await sendsDone(1);
     const code = /code: (\d{6})/.exec(out.last('mid@example.com').text)[1];
-    assert.deepEqual(await methods(), { google: false, github: false, email: true });
+    assert.deepEqual(await methods(), { google: false, github: false, email: true, web: { google: false, github: false } });
 
     fail = true;
     for (let i = 0; i < 4; i++) await start(h, `f${i}@example.com`);
@@ -76,7 +76,7 @@ test('methods: five background sends failing in a row turn email off until one s
     assert.equal((await health()).failing, false);
     await start(h, 'f4@example.com');
     await sendsDone(6);
-    assert.deepEqual(await methods(), { google: false, github: false, email: false }, 'five in a row, over five addresses: off, no new field');
+    assert.deepEqual(await methods(), { google: false, github: false, email: false, web: { google: false, github: false } }, 'five in a row, over five addresses: email off');
     const hm = await health();
     assert.equal(hm.failing, true);
     assert.deepEqual(Object.keys(hm).sort(), ['failing', 'last_error_at'], 'a boolean, no count');
