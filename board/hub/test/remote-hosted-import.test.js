@@ -12,6 +12,7 @@ test('hosted board-only source can import remote collaboration without any deskt
   const files=execFileSync('git',['ls-files','-z','--cached','--others','--exclude-standard','--','board'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean);
   for(const relative of files){const target=join(dir,relative);mkdirSync(dirname(target),{recursive:true});copyFileSync(join(root,relative),target);}
   assert.equal(existsSync(join(dir,'native-board')),false);
+  assert.ok(existsSync(join(root,'board/node_modules/@modelcontextprotocol/sdk/package.json')),'install the locked board dependencies before the hosted-only import gate');
   symlinkSync(join(root,'board/node_modules'),join(dir,'board/node_modules'),'dir');
   const module=pathToFileURL(join(dir,'board/hub/remote/actions.js')).href,shared=pathToFileURL(join(dir,'board/shared/collaboration-tools.cjs')).href,http=pathToFileURL(join(dir,'board/hub/remote/http.js')).href;
   const code='const a=await import(process.argv[1]);const s=await import(process.argv[2]);const h=await import(process.argv[3]);if(typeof a.RemoteActions!=="function"||s.default.listTools("collaborate").length!==11||typeof h.createRemoteHttp!=="function")process.exit(2);';

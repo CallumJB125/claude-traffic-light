@@ -65,6 +65,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            board/package-lock.json
 
       - name: Tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/')
@@ -77,6 +80,9 @@ jobs:
           fi
 
       - run: npm ci
+
+      - name: Install locked board dependencies
+        run: npm --prefix board ci
 
       # A beta build gets a prerelease version, so it follows the beta feed
       # (its updater picks the channel from the version).
