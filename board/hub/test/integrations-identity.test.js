@@ -44,9 +44,9 @@ function slkConnector(beh, { id = 'slk', iss = ISS, jwksUrl = JWKS_URL, hosts = 
         beh.prepared.push(args);
         return { secrets: { client_secret: CS }, settings: { ...APP }, match: { ...APP } };
       },
-      authorizeUrl: ({ state, config }) => `https://${hosts[0]}/oauth/v2/authorize?client_id=${encodeURIComponent(config.client_id)}&state=${encodeURIComponent(state)}`,
-      async exchange({ config }) {
-        return { external_id: beh.team ?? 'T1', display_name: 'Workspace', scopes: ['chat:write'], secrets: { bot_token: `bot${randomBytes(6).toString('hex')}` }, match: { app_id: config.app_id, client_id: config.client_id } };
+      authorizeUrl: ({ state, provider }) => `https://${hosts[0]}/oauth/v2/authorize?client_id=${encodeURIComponent(provider.client_id)}&state=${encodeURIComponent(state)}`,
+      async exchange({ provider }) {
+        return { external_id: beh.team ?? 'T1', display_name: 'Workspace', scopes: ['chat:write'], secrets: { bot_token: `bot${randomBytes(6).toString('hex')}` }, match: { app_id: provider.app_id, client_id: provider.client_id } };
       },
     },
     ...(identity ? {
@@ -471,7 +471,8 @@ test('a connection without a pinned client id cannot link (POLICY_DENIED): the a
   const { h, reg, beh, bob } = await setup();
   try {
     reg.register(slkConnector(beh, { id: 'nopin' }));
-    const c = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'nopin', external_id: 'N1', secrets: {}, settings: { config: { client_id: APP.client_id } } });
+    const c = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'nopin', external_id: 'N1', secrets: {} });
+    h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ config: { client_id: APP.client_id } }), c.id);
     const r = await start(h, bob, c.id);
     assert.equal(r.status, 403, r.text);
     assert.equal(r.body.error.code, 'POLICY_DENIED');

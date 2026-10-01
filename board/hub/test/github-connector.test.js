@@ -246,12 +246,14 @@ test('the connector declares only facts, all automatic, and reads GitHub only', 
 });
 
 test('the manifest form posts to github.com with the state, and never auto-submits', () => {
-  const f = github.connect.manifestForm({ state: 'st/1', redirectUri: 'https://app.plexiform.dev/cb', webhookUrl: 'https://app.plexiform.dev/integrations/c1/webhook', config: { org: 'acme' } });
+  const f = github.connect.manifestForm({ state: 'st/1', redirectUri: 'https://app.plexiform.dev/cb', webhookUrl: 'https://app.plexiform.dev/integrations/c1/webhook', provider: { org: 'acme' } });
   assert.equal(github.connect.formHost, 'github.com');
   assert.equal(new URL(f.action).host, github.connect.formHost);
   assert.equal(f.action, 'https://github.com/organizations/acme/settings/apps/new?state=st%2F1');
   assert.equal(JSON.parse(f.fields.manifest).hook_attributes.url, 'https://app.plexiform.dev/integrations/c1/webhook');
-  assert.equal(github.connect.manifestForm({ state: 's', redirectUri: 'r', config: { org: '../evil' } }).action, 'https://github.com/settings/apps/new?state=s');
+  assert.equal(github.connect.manifestForm({ state: 's', redirectUri: 'r', provider: { org: '../evil' } }).action, 'https://github.com/settings/apps/new?state=s');
+  // An admin's config is never where the app is made (D42 addendum C1): only the stored provider facts are.
+  assert.equal(github.connect.manifestForm({ state: 's', redirectUri: 'r', config: { org: 'acme' }, provider: {} }).action, 'https://github.com/settings/apps/new?state=s');
 });
 
 // Assembled at run time: no key- or secret-shaped literal in the source.
@@ -260,7 +262,7 @@ const pem = () => `${PEM_LINE('BEGIN')}\n${'M'.repeat(64)}\n${'Q'.repeat(40)}==\
 const hookSecret = () => randomBytes(20).toString('hex');
 const conversion = (over = {}) => ({ id: 77, slug: 'plexiform-acme-x1y2', name: 'Plexiform-acme-x1y2', owner: { id: 5, login: 'acme', type: 'Organization' }, pem: pem(), webhook_secret: hookSecret(),
   permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' }, events: ['pull_request', 'pull_request_review', 'check_suite'], ...over });
-const exchangeWith = (body, config = {}) => github.connect.exchange({ query: { code: 'abc123' }, config, fetch: async () => ({ ok: true, json: async () => body }) });
+const exchangeWith = (body, provider = {}, config = {}) => github.connect.exchange({ query: { code: 'abc123' }, provider, config, fetch: async () => ({ ok: true, json: async () => body }) });
 
 test('the manifest exchange seals the key and webhook secret and points at the install step', async () => {
   const fetch = async (url, init) => {
@@ -314,10 +316,11 @@ test('M4: each app is its own connection, shown under its owner, and a validated
   assert.equal(user.settings.org, undefined);
   assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: 'plexi-team' })).settings.org, 'plexi-team');
   assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: '../evil' })).settings.org, undefined);
+  assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), {}, { org: 'plexi-team' })).settings.org, undefined, 'never an admin\'s config');
 });
 
 test('M4: the default app name is unique per connect and fits GitHub\'s 34 characters', () => {
-  const nameOf = (config) => JSON.parse(github.connect.manifestForm({ state: 's', redirectUri: 'https://x/cb', webhookUrl: 'https://x/wh', config }).fields.manifest).name;
+  const nameOf = (provider) => JSON.parse(github.connect.manifestForm({ state: 's', redirectUri: 'https://x/cb', webhookUrl: 'https://x/wh', provider }).fields.manifest).name;
   const names = new Set();
   for (let i = 0; i < 50; i++) {
     const n = nameOf({ org: 'acme' });

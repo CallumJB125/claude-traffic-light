@@ -45,7 +45,7 @@ function slackish(beh, id = 'slackish') {
         return {
           external_id: beh.team ?? 'T1', display_name: 'Workspace', scopes: ['commands'], secrets: { bot_token: BOT },
           settings: { team_id: beh.teamInSettings ?? beh.team ?? 'T1', bot_user_id: 'UB1', app_id: 'EXCHANGE-SAYS', hub_url: EVIL, ...beh.exchangeSettings },
-          match: { app_id: args.config.app_id, client_id: args.config.client_id, ...beh.match },
+          match: { app_id: args.provider.app_id, client_id: args.provider.client_id, ...beh.match },
         };
       },
     },
@@ -105,9 +105,19 @@ const patchRaw = async (h, cookie, id, json) => {
 };
 const journal = (h, kind) => h.db.all('SELECT * FROM journal WHERE kind = ? ORDER BY seq', kind).map((r) => ({ ...r, payload: JSON.parse(r.payload) }));
 const hookIn = (reg, conn, payload, id = randomUUID()) => reg.webhook(conn.id, { headers: { 'x-ok': '1', 'x-id': id }, rawBody: Buffer.from(JSON.stringify(payload)) });
-const withProvider = (h, reg, provider, config = {}, external_id = 'T1') => reg.createConnection({
-  orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id, settings: { provider, config },
-});
+// createConnection takes provider and pinned only: an admin's config is added
+// the way PATCH stores it (provider unchanged, so the triggers allow it).
+const withProvider = (h, reg, provider, config = {}, external_id = 'T1') => {
+  const c = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id, settings: { provider } });
+  h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ ...stored(h, c.id), config }), c.id);
+  return c;
+};
+// A connection made before 026: exchange's values in config, no provider.
+const legacyWith = (h, reg, config, external_id, provider = 'slackish') => {
+  const c = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider, external_id });
+  h.db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify({ config }), c.id);
+  return c;
+};
 
 // ── C1: settings.provider ─────────────────────────────────────────────────
 
@@ -152,7 +162,7 @@ test('C1 trigger: settings.provider never changes after the insert: not changed,
     assert.throws(() => set(JSON.stringify({ provider: null })), /settings.provider never changes/);
     assert.throws(() => set(JSON.stringify({ provider: { app_id: 'A1', team_id: 'T1' } })), /settings.provider never changes/, 'reordered is a change');
     set(JSON.stringify({ provider: { team_id: 'T1', app_id: 'A1' }, config: { x: 1 } }));
-    const legacy = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id: 'T2', settings: { config: { team_id: 'T2' } } });
+    const legacy = legacyWith(h, reg, { team_id: 'T2' }, 'T2');
     assert.throws(() => set(JSON.stringify({ config: {}, provider: { team_id: 'T2' } }), legacy.id), /settings.provider never changes/, 'a legacy row never gains provider');
     assert.throws(() => set(JSON.stringify({ config: {}, provider: null }), legacy.id), /settings.provider never changes/, 'not even as JSON null');
     set(JSON.stringify({ config: { team_id: 'T2', x: 1 } }), legacy.id);
@@ -163,11 +173,12 @@ test('C1 trigger: settings.provider never changes after the insert: not changed,
   } finally { await h.close(); }
 });
 
-test('C1 createConnection takes settings autonomy, config, provider and pinned only, each an object; a provider over 2 KB is refused', async () => {
+test('C1 createConnection takes settings provider and pinned only, each an object (never autonomy or config: no caller can seed what PATCH validates); a provider over 2 KB is refused', async () => {
   const { h, reg } = await setup();
   try {
     const mk = (settings, ext = `T${randomBytes(3).toString('hex')}`) => () => reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id: ext, settings });
-    for (const bad of [{ team_id: 'T1' }, { Provider: {} }, { provider: 'x' }, { config: [] }, { pinned: 1 }, { hub_url: EVIL }]) {
+    for (const bad of [{ team_id: 'T1' }, { Provider: {} }, { provider: 'x' }, { config: [] }, { pinned: 1 }, { hub_url: EVIL },
+      { config: {} }, { config: { 'provider.team_id': 'T2' } }, { autonomy: { 'card.create': 'off' } }, { autonomy: {} }, { provider: { team_id: 'T1' }, config: { team_id: 'T2' } }]) {
       assert.throws(mk(bad), (e) => e.code === 'VALIDATION', JSON.stringify(bad));
     }
     assert.throws(mk({ provider: { blob: 'x'.repeat(3000) } }), (e) => e.code === 'VALIDATION');
@@ -193,20 +204,39 @@ test('C1 token connect: verifyToken\'s settings land in provider only; it can\'t
   } finally { await h.close(); }
 });
 
-test('C1 configFor (the reconnect hint) is {...config, ...provider}: provider values win; a legacy row without provider falls back to its config', async () => {
+test('C1 the reconnect hint: connectors get provider (the stored provider facts) and config (the admin\'s, declared configKeys only) apart; an admin\'s config never reaches provider; a legacy row\'s config is its provider', async () => {
   const { h, reg, beh } = await setup();
   try {
     const member = h.hub.member(h.ids.alice);
-    const legacy = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id: 'T7', settings: { config: { app_id: 'LEGACY', org: 'acme' } } });
+    const legacy = legacyWith(h, reg, { app_id: 'LEGACY', org: 'acme' }, 'T7');
     await reg.pendingCreate({ member, provider: 'slackish', input: { config_token: 'c1' }, publicUrl: 'http://127.0.0.1' });
-    assert.equal(beh.prepared.at(-1).config.app_id, 'LEGACY');
+    assert.deepEqual(beh.prepared.at(-1).provider, { app_id: 'LEGACY', org: 'acme' });
+    assert.deepEqual(beh.prepared.at(-1).config, {});
     reg.revokeConnection(legacy.id, h.ids.alice);
     h.db.run('DELETE FROM integration_pending');
-    withProvider(h, reg, { app_id: 'PROVIDER' }, { app_id: 'ADMIN', org: 'acme' }, 'T8');
+    // An admin set org and app_id in config; provider holds app_id only.
+    withProvider(h, reg, { app_id: 'PROVIDER' }, { app_id: 'ADMIN', org: 'evil-org' }, 'T8');
     await reg.pendingCreate({ member, provider: 'slackish', input: { config_token: 'c2' }, publicUrl: 'http://127.0.0.1' });
-    assert.equal(beh.prepared.at(-1).config.app_id, 'PROVIDER');
-    assert.equal(beh.prepared.at(-1).config.org, 'acme');
+    assert.deepEqual(beh.prepared.at(-1).provider, { app_id: 'PROVIDER' });
+    assert.deepEqual(beh.prepared.at(-1).config, { app_id: 'ADMIN', org: 'evil-org' });
   } finally { await h.close(); }
+  // Through a promotion: exchange sees the pending settings as provider, the admin's config apart.
+  const beh2 = newBeh({ configKeys: ['default_board_id'] });
+  const s2 = await setup({ beh: beh2 });
+  try {
+    const old = withProvider(s2.h, s2.reg, { team_id: 'T0', app_id: 'OLD' }, { default_board_id: 'b1', org: 'evil-org' }, 'T0');
+    s2.reg.revokeConnection(old.id, s2.h.ids.alice);
+    withProvider(s2.h, s2.reg, { team_id: 'T9', app_id: 'NEWER' }, { default_board_id: 'b2', org: 'evil-org' }, 'T9');
+    s2.h.db.run("UPDATE connections SET status = 'revoked' WHERE external_id = 'T9'");
+    const live = withProvider(s2.h, s2.reg, { team_id: 'T3', app_id: 'A3' }, { default_board_id: 'b3', org: 'evil-org' }, 'T3');
+    const c = await promote(s2.h, s2.reg);
+    const ex = beh2.exchanged.at(-1);
+    assert.deepEqual(ex.config, { default_board_id: 'b3' }, 'undeclared keys never reach a connector that declares configKeys');
+    assert.deepEqual(ex.provider, { team_id: 'T3', app_id: APP.app_id, client_id: APP.client_id }, 'the active row\'s facts overlaid with the pending settings');
+    assert.equal(beh2.prepared.at(-1).provider.org, undefined);
+    assert.equal(JSON.stringify(stored(s2.h, c.id)).includes('evil-org'), false);
+    assert.equal(stored(s2.h, live.id).config.org, 'evil-org', 'the stored config itself is untouched');
+  } finally { await s2.h.close(); }
 });
 
 // ── C1: PATCH merge ───────────────────────────────────────────────────────
@@ -379,7 +409,7 @@ test('C1 ctx.hubUrl: app.js passes BOARD_PUBLIC_URL at boot; a PATCH of config.h
     acc.hub.setVaultKey(randomBytes(32));
     const reg = acc.app.integrations;
     reg.register(slackish(newBeh()));
-    const c = reg.createConnection({ orgId: acc.ids.org, memberId: acc.ids.alice, provider: 'slackish', external_id: 'T1', settings: { config: {} } });
+    const c = reg.createConnection({ orgId: acc.ids.org, memberId: acc.ids.alice, provider: 'slackish', external_id: 'T1' });
     assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
     reg.setSettings(c.id, { config: { hub_url: EVIL } });
     assert.equal(reg.ctxFor(c.id).hubUrl, 'https://buddy.example.com');
@@ -412,7 +442,7 @@ test('C1 a hostile payload naming URLs never reaches a link; links come from ctx
 test('C1 fail closed through the real registry: a legacy connection (no provider) and a provider naming another workspace act on nothing; an admin\'s config can\'t fix either', async () => {
   const { h, reg, beh, alice } = await setup();
   try {
-    const legacy = reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'slackish', external_id: 'T1', settings: { config: { team_id: 'T1', app_id: 'A1' } } });
+    const legacy = legacyWith(h, reg, { team_id: 'T1', app_id: 'A1' }, 'T1');
     assert.equal((await hookIn(reg, legacy, { team_id: 'T1' })).status, 200);
     assert.equal((await patch(h, alice, legacy.id, { config: { team_id: 'T1' } })).status, 200, 'a legacy row has no provider key to protect');
     assert.equal((await hookIn(reg, legacy, { team_id: 'T1', n: 2 })).status, 200);
@@ -467,6 +497,101 @@ test('C1 migration 026 applies over a DB at 025 (024 reserved); a legacy row loa
   db.exec(`UPDATE connections SET settings = '{"config":{"app_id":2}}' WHERE id = 'ka'`);
   assert.throws(() => db.exec(`UPDATE connections SET settings = '{"provider":{"app_id":2}}' WHERE id = 'ka'`), /settings.provider never changes/);
   db.close();
+});
+
+// ── 026 follow-up: what SQLite and JS read is the same; rows stay ────────
+
+const insertConn = (h, row, over) => h.db.run('INSERT INTO connections (id, org_id, provider, external_id, status, settings, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  over.id ?? randomUUID(), row.org_id, row.provider, over.external_id ?? `T${randomBytes(3).toString('hex')}`, over.status ?? 'active', over.settings ?? '{}', row.created_by, row.created_at);
+
+test('026 connections.settings is strict JSON with no duplicate key at any depth: a duplicate (top level, nested, escaped), JSON5, a non-object or a JSONB blob aborts an UPDATE or INSERT; the registry\'s own writes pass', async () => {
+  const { h, reg, alice } = await setup();
+  try {
+    const c = await promote(h, reg);
+    const before = h.db.get('SELECT settings FROM connections WHERE id = ?', c.id).settings;
+    const { provider, pinned } = JSON.parse(before);
+    const P = JSON.stringify(provider);
+    const PIN = JSON.stringify(pinned);
+    const evil = `{"provider":${P},"pinned":${PIN},"provider":${JSON.stringify({ ...provider, team_id: 'T2' })},"pinned":${JSON.stringify({ ...pinned, app_id: 'EVIL' })}}`;
+    // The bypass: SQLite reads the first duplicate, JS the last.
+    assert.equal(h.db.get("SELECT json_extract(?, '$.provider.team_id') AS t", evil).t, 'T1');
+    assert.equal(JSON.parse(evil).provider.team_id, 'T2');
+    const bad = [
+      evil,
+      `{"provider":${P},"pinned":${PIN},"\\u0070rovider":{"team_id":"T2"}}`,
+      `{"provider":${P},"pinned":${PIN},"config":{"channel":"C1","channel":"C2"}}`,
+      `{"provider":${P},"pinned":${PIN},"config":{"deep":[{"a":1,"a":2}]}}`,
+      `{provider:${P},"pinned":${PIN}}`,
+      `{"provider":${P},"pinned":${PIN},}`,
+      `{"provider":${P},"pinned":${PIN} /* hi */}`,
+      `{"provider":${P},"pinned":${PIN},"config":{'channel':'C1'}}`,
+      `{"provider":${P},"pinned":${PIN},"config":{"n":0x10}}`,
+    ];
+    for (const b of bad) assert.throws(() => h.db.run('UPDATE connections SET settings = ? WHERE id = ?', b, c.id), /settings must be strict JSON without duplicate keys/, b);
+    assert.throws(() => h.db.run('UPDATE connections SET settings = jsonb(settings) WHERE id = ?', c.id), /strict JSON/, 'a JSONB blob');
+    assert.equal(h.db.get('SELECT settings FROM connections WHERE id = ?', c.id).settings, before);
+    const row = h.db.get('SELECT * FROM connections WHERE id = ?', c.id);
+    for (const b of [...bad, '[]', '"x"', 'null', '1']) assert.throws(() => insertConn(h, row, { settings: b }), /settings must be strict JSON without duplicate keys/, b);
+    assert.throws(() => h.db.run("INSERT INTO connections (id, org_id, provider, external_id, settings, created_by, created_at) VALUES (?, ?, 'slackish', 'TB', jsonb('{}'), ?, ?)", randomUUID(), row.org_id, row.created_by, row.created_at), /strict JSON/);
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM connections WHERE provider = 'slackish'").n, 1, 'nothing inserted');
+    // Ordinary JSON, as the registry writes it, still passes (repeated keys in sibling objects are not duplicates).
+    assert.equal((await patch(h, alice, c.id, { config: { channel: 'C1', list: [{ a: 1 }, { a: 2 }] }, autonomy: { 'card.note': 'auto' } })).status, 200);
+    assert.deepEqual(stored(h, c.id).config, { channel: 'C1', list: [{ a: 1 }, { a: 2 }] });
+    insertConn(h, row, { settings: JSON.stringify({ provider: { team_id: 'TX' }, config: { a: { b: 1 }, c: { b: 2 } } }) });
+  } finally { await h.close(); }
+});
+
+test('026 integration_pending match and settings are strict JSON too (insert and update): JS reads them for promotion', async () => {
+  const { h } = await setup();
+  try {
+    const t = h.hub.iso();
+    const exp = new Date(h.hub.wallMs() + 3_600_000).toISOString();
+    const ins = (id, match, settings = '{}') => h.db.run('INSERT INTO integration_pending (id, org_id, provider, created_by, match, settings, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, h.ids.org, 'slackish', h.ids.alice, match, settings, t, exp);
+    const dup = '{"app_id":"A1","client_id":"1.2","app_id":"EVIL"}';
+    for (const [m, st] of [[dup, '{}'], ['{}', dup], ['{app_id:"A1"}', '{}'], ['{}', '{"a":1,}'], ['[]', '{}'], ['{}', '{"x":{"y":1,"y":2}}']]) {
+      assert.throws(() => ins(randomUUID(), m, st), /strict JSON/, `${m} ${st}`);
+    }
+    const id = randomUUID();
+    ins(id, '{}');
+    for (const [col, v] of [['match', dup], ['settings', dup], ['match', '{"app_id":"A1" // c\n}'], ['settings', '{"needs_fields":["x"],}']]) {
+      assert.throws(() => h.db.run(`UPDATE integration_pending SET ${col} = ? WHERE id = ?`, v, id), /strict JSON/, `${col} ${v}`);
+    }
+    h.db.run('UPDATE integration_pending SET match = ?, settings = ? WHERE id = ?', '{"app_id":"A1","client_id":"1.2"}', '{"app_id":"A1"}', id);
+    assert.equal(h.db.get('SELECT match FROM integration_pending WHERE id = ?', id).match, '{"app_id":"A1","client_id":"1.2"}');
+  } finally { await h.close(); }
+});
+
+test('026 a connection row is never deleted (not by DELETE, nor by a REPLACE on its live key) and its id never changes; revoke and team deletion still keep it', async () => {
+  const { h, reg } = await setup();
+  try {
+    const c = withProvider(h, reg, { team_id: 'T1' });
+    const row = h.db.get('SELECT * FROM connections WHERE id = ?', c.id);
+    assert.throws(() => h.db.run('DELETE FROM connections WHERE id = ?', c.id), /a connection is never deleted/);
+    assert.throws(() => h.db.run('DELETE FROM connections'), /a connection is never deleted/);
+    assert.throws(() => h.db.run('UPDATE connections SET id = ? WHERE id = ?', randomUUID(), c.id), /a connection id never changes/);
+    h.db.run('UPDATE connections SET id = id, display_name = ? WHERE id = ?', 'same id', c.id);
+    // REPLACE deletes the conflicting row without firing delete triggers: refused before it gets there.
+    assert.throws(() => h.db.run('INSERT OR REPLACE INTO connections (id, org_id, provider, external_id, status, settings, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      randomUUID(), row.org_id, row.provider, row.external_id, 'active', JSON.stringify({ provider: { team_id: 'T9' } }), row.created_by, row.created_at), /a live connection is never replaced/);
+    reg.revokeConnection(c.id, h.ids.alice);
+    const again = withProvider(h, reg, { team_id: 'T1' });
+    assert.throws(() => h.db.run("UPDATE OR REPLACE connections SET status = 'active', revoked_at = NULL WHERE id = ?", c.id), /a live connection is never replaced/);
+    assert.equal(h.db.get('SELECT status FROM connections WHERE id = ?', again.id).status, 'active');
+    h.db.run('UPDATE orgs SET deleted_at = ? WHERE id = ?', h.hub.iso(), h.ids.org);
+    h.hub.revokeDeletedTeamConnections(h.hub.iso());
+    assert.deepEqual(h.db.all('SELECT id, status FROM connections ORDER BY created_at, rowid').map((r) => r.status), ['revoked', 'revoked']);
+  } finally { await h.close(); }
+});
+
+test('after every migration the 026 follow-up triggers exist', async () => {
+  const { h } = await setup();
+  try {
+    const names = h.db.all("SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger'").map((r) => `${r.tbl_name}.${r.name}`);
+    for (const t of ['connections.connections_settings_strict', 'connections.connections_settings_strict_ins', 'connections.connections_never_deleted', 'connections.connections_live_never_replaced',
+      'connections.connections_live_never_replaced_upd', 'connections.connections_id_fixed', 'integration_pending.integration_pending_json_strict', 'integration_pending.integration_pending_json_strict_ins']) {
+      assert.ok(names.includes(t), t);
+    }
+  } finally { await h.close(); }
 });
 
 // ── C2: actor scope, linkState, early-ack failure, card tokens ───────────
@@ -645,7 +770,7 @@ test('C2 early ack: a failed handler is audited and the delivery marked done (th
   } finally { await h.close(); }
 });
 
-test('C2 early ack: a handler that times out and later fails ends done; a late (non-early) delivery is still released so the provider retry runs (GitHub unchanged)', async () => {
+test('C2 early ack: a handler that times out is done at the timeout and stays done when it later fails; a late (non-early) delivery is still released so the provider retry runs (GitHub unchanged)', async () => {
   let gate;
   const { h, reg, beh, conn } = await actorSetup({
     over: { ackEarly: ({ payload }) => payload.early === true, onAckedFailure: (a) => { beh.codes.push(a.error_code); throw new Error('ignored'); } },
@@ -662,7 +787,7 @@ test('C2 early ack: a handler that times out and later fails ends done; a late (
     assert.equal((await hookIn(reg, conn, { early: true }, id)).status, 200);
     await h.hub.idle();
     assert.deepEqual(beh.codes, ['handler_timeout']);
-    assert.equal((await hookIn(reg, conn, { early: true }, id)).status, 503, 'still leased while it runs');
+    assert.deepEqual((await hookIn(reg, conn, { early: true }, id)).body, { ok: true, duplicate: true }, 'done at the timeout, while it still runs');
     gate.reject(new Error('late fail'));
     await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual([...new Set(h.db.all("SELECT state FROM inbound_dedupe WHERE provider = 'cmd'").map((r) => r.state))], ['done']);
@@ -679,6 +804,26 @@ test('C2 early ack: a handler that times out and later fails ends done; a late (
   const github = (await import('../integrations/github/index.js')).default;
   assert.equal(github.ackEarly, undefined, 'GitHub answers late: its failures stay released for its retries');
   assert.equal(github.onAckedFailure, undefined);
+});
+
+test('C2 early ack: a handler that never settles is done at the timeout; after lease_until the same bytes answer duplicate and never re-run', async () => {
+  const { h, reg, beh, conn } = await actorSetup({
+    over: { ackEarly: true },
+    reg: (hh) => createIntegrations({ hub: hh.hub, api: new Api(hh.hub), log: null, handlerTimeoutMs: 30 }),
+  });
+  try {
+    beh.handle = () => { beh.calls += 1; return new Promise(() => {}); };
+    const id = randomUUID();
+    assert.equal((await hookIn(reg, conn, { n: 1 }, id)).status, 200);
+    await h.hub.idle();
+    const rows = h.db.all("SELECT state, lease_until FROM inbound_dedupe WHERE provider = 'cmd'");
+    assert.ok(rows.length >= 1);
+    for (const r of rows) assert.deepEqual({ ...r }, { state: 'done', lease_until: null });
+    h.clock.advance(30 + 30_000 + 1_000);
+    assert.deepEqual((await hookIn(reg, conn, { n: 1 }, id)).body, { ok: true, duplicate: true });
+    await h.hub.idle();
+    assert.equal(beh.calls, 1);
+  } finally { await h.close(); }
 });
 
 test('C2 defineConnector: onAckedFailure is a function, only with ackEarly', () => {
@@ -850,6 +995,27 @@ test('C3 without ackBody: over the limit is 429 RATE_LIMITED with Retry-After ov
     const body = await r.json();
     assert.equal(body.error.code, 'RATE_LIMITED');
     assert.equal(JSON.stringify(body).includes(u), false);
+    assert.deepEqual(beh.ran, [1]);
+  } finally { await h.close(); }
+});
+
+test('C3 with ackBody but ackEarly() false for this delivery (a late one): over the limit is 429 RATE_LIMITED with Retry-After, never ackBody\'s 200; the lease is released', async () => {
+  const { h, beh, conn } = await cmdSetup({ over: { ackEarly: ({ payload }) => payload.early === true }, hubOpts: { config: { rateLimits: { integration_user_cmd: { capacity: 1, per_ms: 60_000 } } } } });
+  try {
+    const u = userOf();
+    const post = (body, id = randomUUID()) => fetch(`${h.base}/integrations/${conn.id}/webhook`, { method: 'POST', headers: { 'x-ok': '1', 'x-id': id, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await post({ user: u, n: 1 })).status, 200);
+    const id = randomUUID();
+    const r = await post({ user: u, n: 2 }, id);
+    assert.equal(r.status, 429);
+    assert.ok(Number(r.headers.get('retry-after')) >= 1);
+    assert.equal((await r.json()).error.code, 'RATE_LIMITED');
+    assert.equal(beh.acks.some((a) => a.rateLimited), false, 'ackBody is not asked for a late delivery');
+    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe WHERE dedupe_key = ?', `${conn.id}:${id}`).n, 0, 'the lease was released');
+    // An early one over the limit still gets ackBody's rateLimited answer.
+    const e = await post({ user: u, n: 3, early: true });
+    assert.equal(e.status, 200);
+    assert.deepEqual(await e.json(), { text: 'Slow down a little.' });
     assert.deepEqual(beh.ran, [1]);
   } finally { await h.close(); }
 });

@@ -206,20 +206,21 @@ export default defineConnector({
     // Creating the app is a POST form on github.com: one visible button, no
     // auto-submit. Reconnecting goes through the same form.
     formHost: 'github.com',
-    manifestForm({ state, redirectUri, webhookUrl, config }) {
-      const org = validLogin(config?.org);
+    // A reconnect reads the last app's owner from provider, never an admin's config.
+    manifestForm({ state, redirectUri, webhookUrl, provider }) {
+      const org = validLogin(provider?.org);
       const action = org ? `https://github.com/organizations/${org}/settings/apps/new?state=${encodeURIComponent(state)}` : `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`;
-      const name = appName(org ?? validLogin(config?.login));
+      const name = appName(org ?? validLogin(provider?.login));
       return { action, fields: { manifest: JSON.stringify(manifest({ redirectUri, webhookUrl, name })) } };
     },
     // The manifest callback: trade the one-time code for the app's credentials.
-    async exchange({ query, fetch, config }) {
+    async exchange({ query, fetch, provider }) {
       const code = String(query?.code ?? '');
       if (!/^[A-Za-z0-9]{1,100}$/.test(code)) throw new Error('bad manifest code');
       const res = await fetch(`${API}/app-manifests/${code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json' } }); // privacy-flow: integrations-hub
       if (!res.ok) throw new Error(`manifest conversion failed: ${res.status}`);
       const app = checkApp(await res.json());
-      const org = validLogin(config?.org) ?? (app.owner.type === 'Organization' ? app.owner.login : null);
+      const org = validLogin(provider?.org) ?? (app.owner.type === 'Organization' ? app.owner.login : null);
       return {
         // Each app is its own connection: a reconnect makes a new app, and
         // keying by owner collided with the old one (CONFLICT, orphaned app).

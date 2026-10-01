@@ -725,9 +725,10 @@ test('manifest callback: same state + bind; the connection takes the minted id; 
     assert.equal(h.db.get('SELECT org_id FROM connections WHERE id = ?', conn.id).org_id, h.ids.org);
     assert.equal(seen[1].webhookUrl, hook);
     assert.deepEqual(seen[1].config, {});
-    // A reconnect start hands the stored provider facts back to the connector as config.
+    // A reconnect start hands the stored provider facts back as provider, an admin's config apart.
     await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
-    assert.deepEqual(seen[2].config, { app_id: 12, app_slug: 'buddy-acme' });
+    assert.deepEqual(seen[2].provider, { app_id: 12, app_slug: 'buddy-acme' });
+    assert.deepEqual(seen[2].config, {});
   } finally { await h.close(); }
 });
 

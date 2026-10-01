@@ -45,13 +45,13 @@ function pendConnector(beh, id = 'pend') {
         }
         return { needs: { fields: ['app_id', 'client_id', 'client_secret', 'signing_secret'], create_url: beh.create_url ?? 'https://pend.example/apps?new_app=1' } };
       },
-      authorizeUrl: ({ state, config }) => `https://pend.example/authorize?client_id=${encodeURIComponent(config.client_id)}&state=${encodeURIComponent(state)}`,
+      authorizeUrl: ({ state, provider }) => `https://pend.example/authorize?client_id=${encodeURIComponent(provider.client_id)}&state=${encodeURIComponent(state)}`,
       async exchange(args) {
         beh.exchanged.push(args);
         if (beh.exchange) return beh.exchange(args);
         return {
           external_id: beh.team ?? 'T1', display_name: 'Pend workspace', scopes: ['chat:write'], secrets: { bot_token: BOT },
-          settings: { app_id: 'EXCHANGE-SAYS', bot_user_id: 'UB1' }, match: { app_id: args.config.app_id, client_id: args.config.client_id },
+          settings: { app_id: 'EXCHANGE-SAYS', bot_user_id: 'UB1' }, match: { app_id: args.provider.app_id, client_id: args.provider.client_id },
         };
       },
     },
@@ -149,7 +149,7 @@ test('prepare → url + bind + cookie; the callback promotes the row: same id, p
     assert.match(out.text, /data-connect="ok"/);
     const ex = beh.exchanged[0];
     assert.deepEqual(ex.secrets, { client_secret: CS, signing_secret: SS }, 'exchange gets the pending secrets');
-    assert.equal(ex.config.app_id, APP.app_id);
+    assert.equal(ex.provider.app_id, APP.app_id);
     assert.equal(ex.webhookUrl, args.webhookUrl);
 
     const c = h.db.get('SELECT * FROM connections WHERE id = ?', p.id);
@@ -587,10 +587,10 @@ test('match: a different app_id, a different recorded external_id or a replaced 
   const { h, reg, beh, alice } = await setup();
   try {
     const p = await ready(h, alice);
-    const base = (args) => ({ external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.config.app_id, client_id: args.config.client_id } });
+    const base = (args) => ({ external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.provider.app_id, client_id: args.provider.client_id } });
     const cases = [
       [(a) => ({ ...base(a), match: { ...base(a).match, app_id: 'A0OTHER' } }), /does not match/],
-      [(a) => ({ ...base(a), match: { app_id: a.config.app_id } }), /does not match/],
+      [(a) => ({ ...base(a), match: { app_id: a.provider.app_id } }), /does not match/],
       [(a) => ({ ...base(a), match: { ...base(a).match, extra: 1 } }), /does not match/],
       [(a) => ({ ...base(a), match: undefined }), /does not match/],
       [(a) => ({ ...base(a), secrets: { bot_token: BOT, signing_secret: 'replaced1' } }), /Could not save/],
@@ -624,7 +624,7 @@ test('workspaceUnique is checked inside the promotion transaction (a clash creat
     const p = await ready(h, alice);
     beh.exchange = (args) => {
       reg.createConnection({ orgId: o.org, memberId: o.id, provider: 'pend', external_id: 'T1' });
-      return { external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.config.app_id, client_id: args.config.client_id } };
+      return { external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.provider.app_id, client_id: args.provider.client_id } };
     };
     const out = await callback(h, p.state, p.cookie);
     assert.equal(out.status, 400);
@@ -643,7 +643,7 @@ test('two concurrent callbacks for one row make exactly one connection', async (
   try {
     const p = await ready(h, alice);
     const a = await authorize(h, alice, p.id);
-    beh.exchange = async (args) => { await new Promise((r) => setTimeout(r, 30)); return { external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.config.app_id, client_id: args.config.client_id } }; };
+    beh.exchange = async (args) => { await new Promise((r) => setTimeout(r, 30)); return { external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.provider.app_id, client_id: args.provider.client_id } }; };
     const outs = await Promise.all([callback(h, p.state, p.cookie), callback(h, stateOf(a), cookieOf(a))]);
     assert.deepEqual(outs.map((o) => o.status).sort(), [200, 400]);
     assert.equal(reg.list(h.ids.org).length, 1);
@@ -817,7 +817,7 @@ test('the creator demoted or removed while exchange runs: the promotion transact
     h.db.run("UPDATE members SET role = 'admin' WHERE id = ?", h.ids.bob);
     const bob = await h.login('bob');
     const p = await ready(h, bob);
-    const ok = (args) => ({ external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.config.app_id, client_id: args.config.client_id } });
+    const ok = (args) => ({ external_id: 'T1', display_name: 'W', scopes: [], secrets: { bot_token: BOT }, match: { app_id: args.provider.app_id, client_id: args.provider.client_id } });
     for (const change of ["UPDATE members SET role = 'member' WHERE id = ?", "UPDATE members SET removed_at = '2026-09-30T10:00:00.000Z' WHERE id = ?"]) {
       h.db.run("UPDATE members SET role = 'admin', removed_at = NULL WHERE id = ?", h.ids.bob);
       beh.exchange = (args) => { h.db.run(change, h.ids.bob); return ok(args); };
@@ -906,7 +906,8 @@ test('fresh DB after every migration: the id-exclusivity and pinned triggers exi
   try {
     const names = h.db.all("SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger'").map((r) => `${r.tbl_name}.${r.name}`);
     for (const t of ['connections.connection_id_not_pending', 'integration_pending.pending_id_not_connection', 'connections.connections_pinned_fixed', 'integration_pending.integration_pending_answer_once',
-      'connections.connections_provider_fixed', 'connections.connections_id_never_reused']) {
+      'connections.connections_provider_fixed', 'connections.connections_id_never_reused', 'connections.connections_settings_strict', 'connections.connections_settings_strict_ins',
+      'integration_pending.integration_pending_json_strict', 'integration_pending.integration_pending_json_strict_ins']) {
       assert.ok(names.includes(t), t);
     }
   } finally { await h.close(); }

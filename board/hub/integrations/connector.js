@@ -17,24 +17,26 @@
 //   // flow or a manual token. The registry makes and checks `state`.
 //   connect: {
 //     kind: 'oauth' | 'app_install' | 'token',
-//     authorizeUrl({ state, redirectUri, webhookUrl, config }) → string,   // oauth/app_install: a GET redirect
+//     authorizeUrl({ state, redirectUri, webhookUrl, provider, config }) → string,   // oauth/app_install: a GET redirect
 //     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
 //     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
-//     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
-//     async exchange({ query, redirectUri, webhookUrl, config, secrets, fetch }) →   // oauth/app_install callback
+//     manifestForm({ state, redirectUri, webhookUrl, provider, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
+//     async exchange({ query, redirectUri, webhookUrl, provider, config, secrets, fetch }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
 //         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored once as settings.provider: D42 addendum C1),
 //         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
 //         match?: {k: scalar} (required after prepare: exactly the pending match, D97) },
-//     (`webhookUrl` is this connection's future webhook URL; `config` is
-//     {...settings.config, ...settings.provider} of the org's newest active connection of
-//     this provider, else {}, overlaid with the pending settings after prepare; `secrets` is the pending
-//     row's unsealed secrets after prepare, else {}; exchange may add kinds, never replace one)
+//     (`webhookUrl` is this connection's future webhook URL; `provider` is settings.provider
+//     of the org's newest active connection of this provider (its config if it predates 026),
+//     else {}, overlaid with the pending settings after prepare; `config` is that connection's
+//     settings.config (an admin's; only the declared configKeys), else {}: never copy it into
+//     the settings you return; `secrets` is the pending row's unsealed secrets after prepare,
+//     else {}; exchange may add kinds, never replace one)
 //
 //     // Optional, oauth/app_install without manifestForm (D97): the app is
 //     // made from input an admin pastes (Slack: a configuration token).
 //     prepareInputs: ['config_token', 'app_id', …],  // 1–8 key names; only these keys of `input` reach prepare
-//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, config, fetch }) →
+//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, provider, config, fetch }) →
 //       { needs: { fields: [key of prepareInputs], create_url: 'https://<one of hosts>/…' } }   // ask for a paste
 //       | { secrets: {kind: string}, settings?: {k: scalar}, match: {k: scalar} (1–8), external_id? },
 //     (`input` values are strings of 1–4096 bytes, held only for this call: never
@@ -104,12 +106,13 @@
 //   // `challenge` string.
 //   ackBody({ payload, headers, rateLimited }) → undefined | string | { … },
 //   // (rateLimited: true when rateSubject's user is over integration_user_cmd
-//   // and nothing ran; absent for a normal early answer.)
+//   // and nothing ran, for an early delivery only; absent for a normal early answer.)
 //   // Optional (C3): the provider user a delivery is for, after verify(),
 //   // parseBody and a fresh lease; a throw or anything but a 1–128 char string
 //   // is null. Spends integration_user_cmd (30/min per connection and refHash
 //   // of it, never stored or logged) before webhook_conn and the handler; over
-//   // it nothing runs and the answer is ackBody's rateLimited one (else 429).
+//   // it nothing runs and an early delivery's answer is ackBody's rateLimited
+//   // one; without ackBody, or for a late delivery, 429 + Retry-After.
 //   rateSubject({ payload, headers }) → string | null,   // Slack: user_id / user.id; events null
 //   // Optional, only with ackEarly (C2): an acknowledged delivery's handler
 //   // failed or timed out. Called once, after the audit; `error_code` is a

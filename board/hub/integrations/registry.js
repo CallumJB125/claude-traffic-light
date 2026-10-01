@@ -34,7 +34,9 @@ const DEDUPE_KEEP_MS = 30 * 24 * 3600_000;
 const CONFIG_MAX_BYTES = 8 * 1024;
 const CONFIG_DEPTH = 4;
 const PROVIDER_MAX = 4096; // exchange ⊕ prepare (≤ 2 KB) plus the pinned match and hub_url
-const SETTINGS_NAMESPACES = ['autonomy', 'config', 'provider', 'pinned'];
+// What a connection is created with: autonomy and config are an admin's, set
+// later through setSettings and its validators only.
+const INSERT_NAMESPACES = ['provider', 'pinned'];
 const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
@@ -258,7 +260,7 @@ export function createIntegrations({
     const ext = String(external_id ?? '');
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
-    if (Object.entries(settings).some(([k, v]) => !SETTINGS_NAMESPACES.includes(k) || !isPlainObject(v))) throw new HubError('VALIDATION', 'bad connection settings');
+    if (Object.entries(settings).some(([k, v]) => !INSERT_NAMESPACES.includes(k) || !isPlainObject(v))) throw new HubError('VALIDATION', 'bad connection settings');
     const stored = { ...settings };
     // provider (D42 addendum C1): what the provider said, every pinned key, and
     // the hub's own origin; written here, in the insert, and never again (026).
@@ -1015,7 +1017,9 @@ export function createIntegrations({
       if (!t.ok) {
         release();
         rateRefused(c);
-        if (conn.ackBody) return { status: 200, ...earlyAck(conn, payload, headers, true) };
+        // ackBody's answer is a 200 the provider never retries: only for a
+        // delivery that would have been acknowledged early anyway.
+        if (conn.ackBody && isEarly(conn, payload, headers)) return { status: 200, ...earlyAck(conn, payload, headers, true) };
         const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
         throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
       }
@@ -1024,7 +1028,7 @@ export function createIntegrations({
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
     // Before the handler starts, so it can't see what the handler did to payload.
-    const early = conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
+    const early = isEarly(conn, payload, headers);
     const ack = early ? earlyAck(conn, payload, headers) : null;
     const asParsed = early && conn.onAckedFailure ? copyOf({ payload, headers }) : null;
     const controller = new AbortController();
@@ -1054,12 +1058,14 @@ export function createIntegrations({
       }
       if (early) deadLetter(c, e);
       if (e?.code === 'TIMEOUT') {
-        // The handler may still be running: the lease stays (a retry answers
-        // in_progress) and the row settles when it really ends, or the lease
-        // expires and a later retry takes it over. After an early ack it ends
-        // done either way: no provider retry is coming, and a captured copy
-        // must not re-run it.
-        running.then(done, early ? done : release);
+        // After an early ack: done now. No provider retry is coming, and a
+        // handler that never settles must not leave a lease that a captured
+        // copy could take over once it expires. Late: the handler may still be
+        // running, so the lease stays (a retry answers in_progress) and the
+        // row settles when it really ends, or the lease expires and a later
+        // retry takes it over.
+        if (early) done();
+        else running.then(done, release);
         setHealth(c.id, false, 'handler_timeout');
         warn('integration webhook handler timed out', c, e);
         return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
@@ -1093,6 +1099,7 @@ export function createIntegrations({
   function askEarly(conn, payload, headers) {
     try { return conn.ackEarly({ payload, headers }) === true; } catch { return false; }
   }
+  const isEarly = (conn, payload, headers) => conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
 
   // The early answer: the default JSON, or the connector's ackBody as an
   // empty body, short text or small JSON. Anything else, over ACK_MAX, or a
@@ -1168,12 +1175,18 @@ export function createIntegrations({
   const webhookFor = (publicUrl, id) => `${publicUrl}/integrations/${id}/webhook`;
   // The one place the identity callback URL is made (D97 prepare now, D98's identity flow later).
   const identityRedirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/identity/callback`;
-  // A reconnect hands the connector what it stored last time (app id, slug…):
-  // the org's newest active connection of that provider, its provider facts
-  // over an admin's config (a row from before 026 has config only).
+  // A reconnect hands the connector what it stored last time (app id, slug…),
+  // from the org's newest active connection of that provider: its provider
+  // facts as `provider` and an admin's config (the declared configKeys only)
+  // apart as `config`, so a connector can't mistake admin input for a provider
+  // fact. A row from before 026 kept exchange's answer in config: that is its
+  // only record of them, so it comes as `provider`.
   const configFor = (orgId, provider) => {
     const s = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {});
-    return { ...(isPlainObject(s?.config) ? s.config : {}), ...(isPlainObject(s?.provider) ? s.provider : {}) };
+    const config = isPlainObject(s?.config) ? s.config : {};
+    if (!isPlainObject(s?.provider)) return { provider: { ...config }, config: {} };
+    const keys = connectors.get(provider)?.configKeys;
+    return { provider: { ...s.provider }, config: keys ? Object.fromEntries(Object.entries(config).filter(([k]) => keys.includes(k))) : { ...config } };
   };
 
   // The web posts this form as a real <form>: its action may only be the
@@ -1227,7 +1240,7 @@ export function createIntegrations({
     // before the app (and so the connection) exists.
     const id = randomUUID();
     const { state, bind, cookie } = mintState(member, provider, id, publicUrl);
-    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), config: configFor(member.org_id, provider) };
+    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), ...configFor(member.org_id, provider) };
     if (conn.connect.manifestForm) return { form: manifestFormOf(conn, conn.connect.manifestForm(args)), bind, cookie };
     return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
@@ -1268,7 +1281,7 @@ export function createIntegrations({
     try {
       v = await conn.connect.exchange({
         query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i),
-        config: pending ? pendingConfig(pending) : configFor(member.org_id, provider), secrets: { ...held }, fetch: restrictedFetch(conn),
+        ...(pending ? pendingConfig(pending) : configFor(member.org_id, provider)), secrets: { ...held }, fetch: restrictedFetch(conn),
       });
     } catch (e) {
       warn('integration connect failed', conn, e);
@@ -1317,7 +1330,11 @@ export function createIntegrations({
 
   const livePending = (id) => (typeof id === 'string' ? db.get('SELECT * FROM integration_pending WHERE id = ? AND expires_at > ?', id, now()) : null);
   const publicPending = (p) => ({ id: p.id, provider: p.provider, status: 'pending', created_by: p.created_by, created_at: p.created_at, expires_at: p.expires_at, ready: p.match !== '{}' });
-  const pendingConfig = (p) => ({ ...configFor(p.org_id, p.provider), ...safeJson(p.settings, {}) });
+  // prepare's settings are provider facts of the app being made.
+  const pendingConfig = (p) => {
+    const c = configFor(p.org_id, p.provider);
+    return { provider: { ...c.provider, ...safeJson(p.settings, {}) }, config: c.config };
+  };
   const notAccepted = () => new HubError('VALIDATION', NOT_ACCEPTED);
   const pendingNotFound = () => new HubError('NOT_FOUND', 'no such integration');
   const preparing = new Set(); // pending ids whose prepare (first or second step) is at the provider
@@ -1430,12 +1447,12 @@ export function createIntegrations({
 
   const prepareArgs = (orgId, provider, id, input, publicUrl) => ({
     input, webhookUrl: webhookFor(publicUrl, id), redirectUri: redirectFor(publicUrl, provider),
-    identityRedirectUri: identityRedirectFor(publicUrl, provider), config: configFor(orgId, provider),
+    identityRedirectUri: identityRedirectFor(publicUrl, provider), ...configFor(orgId, provider),
   });
 
   function authorizeFor(conn, p, member, publicUrl) {
     const { state, bind, cookie } = mintState(member, p.provider, p.id, publicUrl, { pd: 1 });
-    const url = conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, p.provider), webhookUrl: webhookFor(publicUrl, p.id), config: pendingConfig(p) });
+    const url = conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, p.provider), webhookUrl: webhookFor(publicUrl, p.id), ...pendingConfig(p) });
     return { url, bind, cookie };
   }
 

@@ -35,9 +35,9 @@ function handSpec(beh, { id = 'hand', handshake, ackBody, prepare = true } = {})
           return { secrets: { client_secret: b.client_secret, signing_secret: b.signing_secret }, settings: { app_id: b.app_id, client_id: b.client_id }, match: { app_id: b.app_id, client_id: b.client_id } };
         },
       } : {}),
-      authorizeUrl: ({ state, config }) => `https://hand.example/authorize?client_id=${encodeURIComponent(config.client_id ?? '')}&state=${encodeURIComponent(state)}`,
-      async exchange({ config }) {
-        return { external_id: 'T1', display_name: 'Hand workspace', scopes: ['chat:write'], secrets: { bot_token: `bot${randomBytes(8).toString('hex')}` }, match: { app_id: config.app_id, client_id: config.client_id } };
+      authorizeUrl: ({ state, provider }) => `https://hand.example/authorize?client_id=${encodeURIComponent(provider.client_id ?? '')}&state=${encodeURIComponent(state)}`,
+      async exchange({ provider }) {
+        return { external_id: 'T1', display_name: 'Hand workspace', scopes: ['chat:write'], secrets: { bot_token: `bot${randomBytes(8).toString('hex')}` }, match: { app_id: provider.app_id, client_id: provider.client_id } };
       },
       ...(handshake === undefined ? { handshake: ({ payload }) => payload.type === 'url_verification' } : handshake ? { handshake } : {}),
     },

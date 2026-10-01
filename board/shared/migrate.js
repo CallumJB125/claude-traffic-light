@@ -21,8 +21,12 @@
 // A rebuild drops the table's triggers with it, including ones an earlier
 // migration put there for safety: one that rebuilds `connections` must
 // re-create connection_id_not_pending and connections_pinned_fixed (022, D97),
-// 023's connections_revoked_unlink and connections_identity_fixed (025, D98),
-// and one that rebuilds integration_pending its triggers too.
+// 023's connections_revoked_unlink, connections_identity_fixed (025, D98) and
+// 026's connections_provider_fixed, connections_id_never_reused,
+// connections_settings_strict(_ins), connections_never_deleted,
+// connections_live_never_replaced(_upd) and connections_id_fixed (D42
+// addendum C1, D41); one that rebuilds integration_pending, 022's triggers and
+// 026's integration_pending_json_strict(_ins).
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
