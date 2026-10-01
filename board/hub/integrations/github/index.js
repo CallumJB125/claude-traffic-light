@@ -48,7 +48,8 @@ function checkApp(app) {
 }
 
 // What the card face shows, in the registry's allowlisted words.
-const STATE = (f) => (f.kind === 'pr.merged' ? 'merged' : f.kind === 'pr.closed' ? 'closed' : f.draft ? 'draft' : 'open');
+// A PR's own state wins: an `edited` event on a merged PR must not show it as open again.
+const STATE = (f) => (f.kind === 'pr.merged' || f.merged ? 'merged' : f.kind === 'pr.closed' || f.open === false ? 'closed' : f.draft ? 'draft' : 'open');
 const CHECKS = { success: 'passing', failure: 'failing', pending: 'pending' };
 const REVIEW = { approved: 'approved', changes_requested: 'changes_requested', dismissed: 'none', commented: null };
 
@@ -114,7 +115,7 @@ export async function apply(ctx, facts) {
     switch (f.kind) {
       case 'pr.opened':
       case 'pr.updated':
-        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}) }, true);
+        await linkAndStatus(ctx, f, { state: STATE(f), ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}) }, f.open === true);
         break;
       case 'pr.review': {
         const review = REVIEW[f.review];

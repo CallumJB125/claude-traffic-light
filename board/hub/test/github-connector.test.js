@@ -9,7 +9,7 @@ import github, { apply, manifest } from '../integrations/github/index.js';
 import { factsOf } from '../integrations/github/webhook.js';
 
 const repo = { id: 501, full_name: 'acme/app', default_branch: 'main' };
-const pr = (over = {}) => ({ id: 991, number: 42, html_url: 'https://github.com/acme/app/pull/42', draft: false, merged: false,
+const pr = (over = {}) => ({ id: 991, number: 42, state: 'open', html_url: 'https://github.com/acme/app/pull/42', draft: false, merged: false,
   head: { ref: 'board/BDL-12-r3', sha: 'a'.repeat(40), repo }, base: { ref: 'main', repo }, requested_reviewers: [], ...over });
 
 function stubCtx({ branches = { 'acme/app board/BDL-12-r3': { card_id: 'card-12', base_ref: 'main' } } } = {}) {
@@ -311,4 +311,16 @@ test('M4: the default app name is unique per connect and fits GitHub\'s 34 chara
   assert.ok(long.length <= 34, long);
   assert.match(long, /^Plexiform-a{19}-[a-z0-9]{4}$/);
   assert.match(nameOf({ org: '<script>', appName: 'Plexiform' }), /^Plexiform-[a-z0-9]{4}$/);
+});
+
+test('N2: an edit to a merged PR keeps it merged, and a closed PR is never first-linked by an edit', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr({ state: 'open' }), repository: repo });
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: pr({ state: 'closed', merged: true, merged_by: { login: 'tonde' } }), repository: repo });
+  ctx.calls.length = 0;
+  await run(ctx, 'pull_request', { action: 'edited', pull_request: pr({ state: 'closed', merged: true }), repository: repo });
+  assert.deepEqual(ctx.calls.filter((c) => c[0] === 'status').map((c) => c[3].state), ['merged']);
+  const fresh = stubCtx();
+  await run(fresh, 'pull_request', { action: 'edited', pull_request: pr({ state: 'closed', merged: false }), repository: repo });
+  assert.deepEqual(fresh.calls.filter((c) => c[0] === 'link'), [], 'a closed PR is never first-linked');
 });

@@ -75,6 +75,9 @@ function prFacts(pr, repository) {
     base_ref: str(pr?.base?.ref, 250),
     head_sha: str(pr?.head?.sha, 40),
     draft: pr?.draft === true,
+    // GitHub sends `edited` and review events for closed PRs too.
+    open: pr?.state === 'open',
+    merged: pr?.merged === true,
   };
 }
 
