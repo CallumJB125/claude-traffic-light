@@ -117,6 +117,18 @@ with a letter is accepted. **Links to the hub** come only from `ctx.hubUrl` (the
 origin, read at boot; `null` when the hub has none or it is not an https origin, and then you send no link):
 never from `config`, `provider.hub_url` or anything in a payload.
 
+**Planned interface (not built yet; do not rely on it).** Two spec fields are specified in CONTRACT but
+not yet checked or honoured by `defineConnector` or the registry. `showsWebhookUrl: true` (Sentry slice S-A,
+D42 addendum "the Sentry connector"): for a `token` connector that takes webhooks, owners/admins get the
+connection's `webhook_url` in `GET /api/integrations` and in the token connect answer (members never do), so
+the admin can paste it into the provider after connecting; the URL is built from the connection id, which
+members already see, so it is not a secret and `verify()` stays the only gate. `signals: ['incident']`
+(S-C3, D99): inside `act()`, `s.signal(kind, {card_id})` for a card **this connection created** writes one
+journal row `integration.signal` `{connection_id, kind, card_id}` (ids only, never text), at most one per
+card and 6 a day per connection; it moves no card, dispatches nothing and notifies nobody by itself, and a
+consumer must re-read the card on the hub before acting. S-A also adds the rate rule
+`integration_card_day_conn` (100 new cards a day per connection, every connector).
+
 Tests: follow `hub/test/integrations-registry.test.js` and
 `hub/test/integrations-security.test.js`. Every connector needs a forged-signature test,
 a stale-timestamp test where the provider signs one, and recorded-fixture tests for each

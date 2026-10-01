@@ -160,6 +160,22 @@
 //   // through PATCH (1–32 names, ^[A-Za-z][A-Za-z0-9_-]{0,63}$). Undeclared: any such name.
 //   configKeys: ['default_board_id'],
 //
+//   // PLANNED, built in Sentry slice S-A (CONTRACT D42 addendum "the Sentry
+//   // connector"); defineConnector does not check it yet, so declaring it
+//   // today does nothing. A token connector that takes webhooks: admins (only)
+//   // get the connection's webhook_url in GET /api/integrations and in the
+//   // token connect answer, to paste into the provider. The URL is not a
+//   // secret (members see the connection id); verify() is the gate.
+//   showsWebhookUrl: true,
+//
+//   // PLANNED, built in S-C3 (CONTRACT D99); not checked or honoured yet.
+//   // The kinds s.signal(kind, {card_id}) may raise inside act() (a subset of
+//   // SIGNAL_KINDS, today 'incident'), only for a card this connection
+//   // created: one journal row integration.signal {connection_id, kind,
+//   // card_id}, at most one per card and 6/day per connection. A hint for
+//   // other consumers: it never moves a card, dispatches or notifies by itself.
+//   signals: ['incident'],
+//
 //   async health(ctx) → { ok, detail? },
 //
 //   // Pure reads a handler may use (org-scoped, nothing secret):
