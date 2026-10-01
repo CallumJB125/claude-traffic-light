@@ -86,7 +86,7 @@ jobs:
       - name: Check the inputs
         run: |
           printf '%s' "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' || { echo "::error::not a version"; exit 1; }
-          printf '%s' "$ROLLBACK_FROM" | grep -Eqx '([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)?(, *[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)*' || { echo "::error::rollback_from is not a comma-separated list of versions"; exit 1; }
+          printf '%s\n' "$ROLLBACK_FROM" | grep -Eqx '([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)?(, *[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)*' || { echo "::error::rollback_from is not a comma-separated list of versions"; exit 1; }
           if [ "$BETA" = true ]; then
             case "$VERSION" in *-beta.*) ;; *) echo "::error::the beta feed takes -beta versions only"; exit 1 ;; esac
             echo "CHANNEL=beta" >> "$GITHUB_ENV"; echo "R2_BETA=--beta" >> "$GITHUB_ENV"
