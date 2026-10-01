@@ -74,10 +74,10 @@ test('023 aborts, changing nothing, rather than delete a row it can\'t attribute
   }
 });
 
-test('after every migration the 023 triggers exist (a later rebuild of connections, members or external_identities must re-create them)', () => {
+test('after every migration the 023 and 025 triggers exist (a later rebuild of connections, members or external_identities must re-create them)', () => {
   const db = openDb(':memory:');
   const names = new Set(db.all("SELECT name FROM sqlite_master WHERE type = 'trigger'").map((r) => r.name));
-  for (const t of ['external_identities_ins', 'external_identities_no_update', 'members_removed_unlink', 'connections_revoked_unlink']) {
+  for (const t of ['external_identities_ins', 'external_identities_no_update', 'members_removed_unlink', 'connections_revoked_unlink', 'connections_identity_fixed']) {
     assert.ok(names.has(t), `trigger ${t} is missing`);
   }
 });
@@ -133,4 +133,34 @@ test('023 triggers: an insert needs an active connection of the same provider an
   assert.deepEqual(subjects(), ['U4']);
   run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE id = ?", NOW, cB);
   assert.deepEqual(subjects(), []);
+});
+
+test('025: a connection\'s org_id, provider and external_id never change (a link names the connection, so moving it would move its links); status, health and settings still update', () => {
+  const db = openDb(':memory:');
+  const run = (sql, ...a) => db.run(sql, ...a);
+  const [orgA, orgB, owner, conn] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  run('INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?), (?, ?, ?)', orgA, 'A', NOW, orgB, 'B', NOW);
+  run("INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES (?, ?, -5, 'o', 'o@x.test', 'o', 'owner', ?)", owner, orgA, NOW);
+  run("INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at) VALUES (?, ?, 'slack', 'T1', ?, ?)", conn, orgA, owner, NOW);
+  run("INSERT INTO external_identities (provider, workspace_id, subject, member_id, connection_id, verified_via, linked_at) VALUES ('slack', 'T1', 'U1', ?, ?, 'oauth_link', ?)", owner, conn, NOW);
+  for (const [sql, ...a] of [
+    ['UPDATE connections SET org_id = ? WHERE id = ?', orgB, conn],
+    ["UPDATE connections SET provider = 'github' WHERE id = ?", conn],
+    ["UPDATE connections SET external_id = 'T2' WHERE id = ?", conn],
+    ["UPDATE connections SET external_id = 'T2', provider = 'github', org_id = ? WHERE id = ?", orgB, conn],
+    ['UPDATE connections SET org_id = NULL WHERE id = ?', conn],
+  ]) assert.throws(() => run(sql, ...a), /connection identity never changes|NOT NULL/, sql);
+  assert.deepEqual({ ...db.get('SELECT org_id, provider, external_id FROM connections WHERE id = ?', conn) }, { org_id: orgA, provider: 'slack', external_id: 'T1' });
+  run("UPDATE connections SET org_id = ?, provider = 'slack', external_id = 'T1' WHERE id = ?", orgA, conn);
+  run("UPDATE connections SET health = '{}', settings = '{}', status = 'paused' WHERE id = ?", conn);
+  run("UPDATE connections SET status = 'revoked', revoked_at = ? WHERE id = ?", NOW, conn);
+  assert.equal(db.get('SELECT COUNT(*) AS n FROM external_identities').n, 0);
+});
+
+test('025 applies over a DB at 023 with 024 not shipped (a version gap)', () => {
+  const db = new DatabaseSync(':memory:');
+  migrate(db, { migrations: upTo(23) });
+  const applied = migrate(db, { migrations: loadMigrations() });
+  assert.ok(applied.includes(25) && !applied.includes(24), String(applied));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name = 'connections_identity_fixed'").get().n, 1);
 });
