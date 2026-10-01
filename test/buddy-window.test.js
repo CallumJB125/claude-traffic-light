@@ -96,6 +96,8 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   no({ frameName: 'buddy-connect' }, 'name');
   for (const url of ['http://github.com/login', 'https://127.0.0.1/x', 'https://10.1.2.3/', 'https://192.168.0.5/', 'https://169.254.169.254/latest', 'https://[::1]/', 'https://localhost/', 'https://intranet/']) no({ url }, 'url');
   assert.equal(connectUrlOk('https://slack.com/oauth/v2/authorize'), true);
+  // localhost. resolves to loopback; a trailing dot, an IP literal or a private-use suffix names nothing a provider uses.
+  for (const url of ['https://localhost./', 'https://foo.localhost./x', 'https://github.com./login', 'https://8.8.8.8/', 'https://0x7f000001/', 'https://printer.local/', 'https://metadata.google.internal/', 'https://router.home.arpa/', 'https://user:pw@github.com/', 'data:text/html,x', 'file:///etc/passwd', 'javascript:alert(1)']) assert.equal(connectUrlOk(url), false, url);
 });
 
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {

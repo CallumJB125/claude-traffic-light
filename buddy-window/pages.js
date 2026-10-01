@@ -94,13 +94,15 @@ function parseConnectName(name) {
   return PROVIDER_RE.test(provider) && BIND_RE.test(bind) ? { provider, bind } : null;
 }
 
-/** A provider's authorize page: https on a public name, never loopback, private or an IP literal we can't vet. */
+/** A provider's authorize page: https on a public name, never loopback, private, a private-use suffix or any IP literal. */
 function connectUrlOk(url) {
   let u;
   try { u = new URL(url); } catch { return false; }
   if (u.protocol !== 'https:' || u.username || u.password) return false;
   const h = u.hostname.toLowerCase();
-  return !(h.startsWith('[') || h === 'localhost' || h.endsWith('.localhost') || !h.includes('.') || isPrivateHost(h));
+  // `localhost.` is loopback too, so a trailing dot is refused before the suffix checks.
+  if (h.startsWith('[') || h.endsWith('.') || !h.includes('.') || /^[\d.]+$/.test(h) || isPrivateHost(h)) return false;
+  return !/(^|\.)(localhost|local|internal|home\.arpa)$/.test(h);
 }
 
 /**
