@@ -126,6 +126,8 @@ function commandRefusal(pattern) {
   const cmd = words[0];
   if (isWild(cmd) || cmd.includes('/') || cmd.includes('=')) return 'Start with the program’s plain name (no wildcards, paths or VAR=value).';
   if (broadRule({ toolName: 'Bash', ruleContent: pattern })) return `${cmd} runs any code it is given: always ask a person.`;
+  // Options before a subcommand (git -C, -c, --git-dir) change what it acts on or runs.
+  if (cmd in RISKY_SUBS && words[1] && words[1].startsWith('-')) return `Put the ${cmd} subcommand first: options before it can point ${cmd} somewhere else or run other code.`;
   const why = destructiveReason(words, RISKY_SUBS);
   if (why) return `${why}: always ask a person.`;
   if (CREDENTIAL_PATHS.test(pattern) || RUNS_CODE_LATER.test(pattern)) return 'That command names credentials, agent settings or files that run code later: always ask a person.';

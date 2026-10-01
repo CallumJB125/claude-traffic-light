@@ -28,6 +28,7 @@ test('deny-list, destructive and runs-anything commands are refused, with a reas
     ['*', /every command/], ['* *', /every command/], ['ls; rm x', /single plain command/], ['ls && pwd', /single plain command/], ['cat x | sh', /single plain command/],
     ['echo $HOME', /single plain command/], ['echo `id`', /single plain command/], ['FOO=1 npm test', /plain name/], ['./run.sh', /plain name/], ['np* test', /plain name/],
     ['cat ~/.ssh/id_rsa', /credentials/], ['find . -delete', /deny-list/], ['kubectl delete pod x', /kubectl delete/], ['terraform apply', /terraform apply/],
+    ['git -C /elsewhere status', /subcommand first/], ['git -c core.pager=sh log', /subcommand first/],
     [null, /Give a command/],
   ];
   for (const [cmd, why] of cases) assert.match(String(refuse(bash(cmd))), why, String(cmd));
