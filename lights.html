@@ -2,6 +2,8 @@
 <html>
 <head>
 <meta charset="utf-8" />
+<!-- WHY each source: no network, no plugins, no eval. 'self' covers the bundled scripts and CSS. 'unsafe-inline' for styles only: views set style attributes and inline <style>. img-src data: because cameo photos and the face editor's preview are data: URLs Usage export downloads a Blob via <a download>, which CSP does not gate. Sounds play in the main process, so no media-src. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Lights</title>
 <link rel="stylesheet" href="tokens.css" />
 <link rel="stylesheet" href="rig.css" />
@@ -1384,7 +1386,7 @@
   </form>
 </div>
 
-<script>window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno));</script>
+<script src="lights-errs.js"></script>
 <script src="motion.js"></script>
 <script src="characters/contract.js"></script>
 <script src="characters/builtin/core.js"></script>

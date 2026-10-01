@@ -3271,7 +3271,7 @@ ipcMain.on('set-bubble-height', (e, px) => {
 let bubbleAsked = 0;
 let bubbleAcked = null;
 function ackStrip() {
-  if (strip.kind !== 'bubble' || bubbleAcked === bubbleAsked || !win || win.isDestroyed()) return;
+  if (!WidgetStrip.shouldAck(strip, bubbleAsked, bubbleAcked, BUBBLE_MAX_PX) || !win || win.isDestroyed()) return;
   bubbleAcked = bubbleAsked;
   win.webContents.send('strip-applied', bubbleAsked);
 }
