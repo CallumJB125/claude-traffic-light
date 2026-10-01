@@ -206,12 +206,8 @@ test('link: start → {url, bind} + the D42 bind cookie; the callback verifies t
 test('domain separation: a connect state never verifies at the identity callback, nor an identity state at the connect callback', async () => {
   const { h, beh, alice, bob, conn } = await setup();
   try {
-    const c = await h.api(alice, 'POST', '/api/integrations/slk/start', { request_id: randomUUID() });
-    assert.equal(c.status, 200, c.text);
-    const connectState = new URL(c.body.url).searchParams.get('state');
-    const asId = await callback(h, connectState, bindOf(c));
-    assert.equal(asId.status, 400);
-    assert.match(asId.text, /not valid/);
+    // A prepare connector has no plain /start (a connect state needs its pending row), so the
+    // connect domain is exercised by re-signing a real identity state under it, below.
     const r = await start(h, bob, conn);
     const res = await fetch(`${h.base}/integrations/slk/callback?${new URLSearchParams({ state: stateOf(r), code: 'c' })}`, { headers: { cookie: bindOf(r) } });
     assert.equal(res.status, 400);
