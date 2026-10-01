@@ -27,8 +27,12 @@ describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the pro
 3. **Back up before every deploy** (a rollback cannot undo a migration): `sudo -u buddyhub node /opt/buddy-hub/board/deploy/pi/backup.mjs`
    (or let the nightly timer have run); confirm a fresh file in `/var/lib/buddy-hub/backups`.
 4. From the laptop: `PI="ssh …" board/deploy/pi/deploy.sh`.
-5. Tunnel: install the tunnel token and run cloudflared as a service. Add an Access **Bypass** only for `/api/health`
-   if you use `BOARD_TUNNEL_PROBE_URL`.
+5. Tunnel: install the tunnel token and run cloudflared as a service. **Remove the Cloudflare Access application from
+   the hostname at cutover**: an accounts hub has no Access in front of it (an Access login page in front of `/api`
+   breaks the app's sign-in, and `BOARD_TUNNEL_PROBE_URL` must reach `/api/health` directly).
+   Before exposing the hostname, list the Access-era member rows no account has claimed yet:
+   `sqlite3 /var/lib/buddy-hub/board.db "SELECT email FROM members WHERE user_id IS NULL AND removed_at IS NULL"`.
+   Each unlinked Access-era row can sign up (it counts as an invite): review or revoke each one before exposure.
 6. First account: sign in in the Plexiform app (Google, GitHub or an emailed code) with an address on `BOARD_SIGNUP_ALLOW`,
    create the team there, and invite the rest by link/code. (`BOARD_BOOTSTRAP*` is only for seeding a team on an empty
    DB; remove the lines after the first start.)
