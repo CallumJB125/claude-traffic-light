@@ -219,7 +219,7 @@ test('migration 008: tables exist; identities are unique per workspace subject a
   const now = new Date().toISOString();
   db.run("INSERT INTO orgs (id, name, created_at) VALUES ('o', 'O', ?)", now);
   db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c', 'o', 'slack', 'T1', ?)", now);
-  assert.throws(() => db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c2', 'o', 'slack', 'T1', ?)", now), /UNIQUE/);
+  assert.throws(() => db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c2', 'o', 'slack', 'T1', ?)", now), /UNIQUE|a live connection is never replaced/);
   assert.throws(() => db.run("INSERT INTO connections (id, org_id, provider, external_id, status, created_at) VALUES ('c3', 'o', 'slack', 'T2', 'bogus', ?)", now), /CHECK/);
   for (const t of ['connection_secrets', 'external_identities', 'external_links', 'routes', 'inbound_dedupe', 'bus_cursors']) {
     assert.ok(db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", t), t);

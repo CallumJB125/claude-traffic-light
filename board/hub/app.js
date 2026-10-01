@@ -74,7 +74,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   // Integrations (D40/D41): consumers read the journal through the bus.
   const bus = createBus({ db, log });
   hub.on('journal', () => bus.poke());
-  const integrations = createIntegrations({ hub, api, bus, log, fetchImpl });
+  const integrations = createIntegrations({ hub, api, bus, log, fetchImpl, publicUrl: config.publicUrl });
   for (const c of connectorsFor(config)) integrations.register(c);
   // Expired pending connections (D97) go with the reaper (the registry runs it at most once a minute).
   hub.sweepIntegrationsPending = () => integrations.sweepPending();

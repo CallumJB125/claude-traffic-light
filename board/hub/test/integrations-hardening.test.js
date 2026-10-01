@@ -223,7 +223,9 @@ test('M-2: ackEarly answers 200 before the handler runs, keeps the lease while i
     await h.hub.idle();
     const audit = h.db.all("SELECT action, decision, error, external_ref, detail FROM integration_audit WHERE connection_id = ? AND action = 'webhook'", conn.id).map((r) => ({ ...r }));
     assert.deepEqual(audit, [{ action: 'webhook', decision: 'failed', error: 'handler_failed', external_ref: null, detail: '{}' }]);
-    assert.equal(h.db.get('SELECT COUNT(*) AS n FROM inbound_dedupe WHERE provider = ?', 'm2b').n, 0, 'released: a manual redelivery runs it');
+    // D42 addendum C2: marked done, so a captured copy can't re-run it (a replay answers duplicate).
+    assert.deepEqual([...new Set(h.db.all('SELECT state FROM inbound_dedupe WHERE provider = ?', 'm2b').map((r) => r.state))], ['done']);
+    assert.deepEqual(await (await send('slack-evt-1')).json(), { ok: true, duplicate: true });
     assert.equal(h.app.integrations.get(conn.id).health.last_error, 'handler_failed');
     // Success settles the lease as done.
     const ok = send('slack-evt-2');

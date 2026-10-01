@@ -689,7 +689,7 @@ test('manifest: a form for an undeclared host, http, a port or credentials, or w
   } finally { await h.close(); }
 });
 
-test('manifest callback: same state + bind; the connection takes the minted id; settings land under config (never autonomy); next_url is one link', async () => {
+test('manifest callback: same state + bind; the connection takes the minted id; settings land under provider (never autonomy or config, D42 addendum C1); next_url is one link', async () => {
   const { h, reg } = await setup();
   try {
     const seen = [];
@@ -721,13 +721,14 @@ test('manifest callback: same state + bind; the connection takes the minted id; 
     assert.ok(!html.includes('pk_secret'));
     const [conn] = reg.list(h.ids.org).filter((c) => c.provider === 'fake-app');
     assert.equal(hook, `${h.base}/integrations/${conn.id}/webhook`);
-    assert.deepEqual(conn.settings, { config: { app_id: 12, app_slug: 'buddy-acme' } });
+    assert.deepEqual(conn.settings, { provider: { app_id: 12, app_slug: 'buddy-acme' } });
     assert.equal(h.db.get('SELECT org_id FROM connections WHERE id = ?', conn.id).org_id, h.ids.org);
     assert.equal(seen[1].webhookUrl, hook);
     assert.deepEqual(seen[1].config, {});
-    // A reconnect start hands the stored non-secret config back to the connector.
+    // A reconnect start hands the stored provider facts back as provider, an admin's config apart.
     await h.api(alice, 'POST', '/api/integrations/fake-app/start', { request_id: randomUUID() });
-    assert.deepEqual(seen[2].config, { app_id: 12, app_slug: 'buddy-acme' });
+    assert.deepEqual(seen[2].provider, { app_id: 12, app_slug: 'buddy-acme' });
+    assert.deepEqual(seen[2].config, {});
   } finally { await h.close(); }
 });
 

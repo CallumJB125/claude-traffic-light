@@ -45,6 +45,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   integration_conn: { capacity: 120, per_ms: 60_000 },      // actAs calls, per connection (never mutate_member)
   integration_card_conn: { capacity: 20, per_ms: 3_600_000 }, // actAs().createCard, per connection
   integration_card_subject: { capacity: 5, per_ms: 3_600_000 }, // … and per (connection, provider user) when act() names meta.subject
+  integration_user_cmd: { capacity: 30, per_ms: 60_000 },   // webhooks per (connection, provider user) a connector's rateSubject names (D42 addendum C3)
+  integration_rate_audit_conn: { capacity: 6, per_ms: 60_000 }, // … its refusals audited, per connection
   integration_prepare_member: { capacity: 5, per_ms: 3_600_000 },  // POST /api/integrations/:target/prepare (D97), per admin
   integration_prepare_org: { capacity: 10, per_ms: 86_400_000 },    // … per team
   integration_identity_member: { capacity: 10, per_ms: 3_600_000 }, // POST /api/integrations/:id/identity/start (D98), per member

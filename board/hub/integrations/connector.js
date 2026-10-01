@@ -17,24 +17,26 @@
 //   // flow or a manual token. The registry makes and checks `state`.
 //   connect: {
 //     kind: 'oauth' | 'app_install' | 'token',
-//     authorizeUrl({ state, redirectUri, webhookUrl, config }) → string,   // oauth/app_install: a GET redirect
+//     authorizeUrl({ state, redirectUri, webhookUrl, provider, config }) → string,   // oauth/app_install: a GET redirect
 //     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
 //     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
-//     manifestForm({ state, redirectUri, webhookUrl, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
-//     async exchange({ query, redirectUri, webhookUrl, config, secrets, fetch }) →   // oauth/app_install callback
+//     manifestForm({ state, redirectUri, webhookUrl, provider, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
+//     async exchange({ query, redirectUri, webhookUrl, provider, config, secrets, fetch }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
-//         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored as settings.config),
+//         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored once as settings.provider: D42 addendum C1),
 //         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
 //         match?: {k: scalar} (required after prepare: exactly the pending match, D97) },
-//     (`webhookUrl` is this connection's future webhook URL; `config` is the
-//     stored settings.config of the org's active connection of this provider, else {},
-//     overlaid with the pending settings after prepare; `secrets` is the pending
-//     row's unsealed secrets after prepare, else {}; exchange may add kinds, never replace one)
+//     (`webhookUrl` is this connection's future webhook URL; `provider` is settings.provider
+//     of the org's newest active connection of this provider (its config if it predates 026),
+//     else {}, overlaid with the pending settings after prepare; `config` is that connection's
+//     settings.config (an admin's; only the declared configKeys), else {}: never copy it into
+//     the settings you return; `secrets` is the pending row's unsealed secrets after prepare,
+//     else {}; exchange may add kinds, never replace one)
 //
 //     // Optional, oauth/app_install without manifestForm (D97): the app is
 //     // made from input an admin pastes (Slack: a configuration token).
 //     prepareInputs: ['config_token', 'app_id', …],  // 1–8 key names; only these keys of `input` reach prepare
-//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, config, fetch }) →
+//     async prepare({ input, webhookUrl, redirectUri, identityRedirectUri, provider, config, fetch }) →
 //       { needs: { fields: [key of prepareInputs], create_url: 'https://<one of hosts>/…' } }   // ask for a paste
 //       | { secrets: {kind: string}, settings?: {k: scalar}, match: {k: scalar} (1–8), external_id? },
 //     (`input` values are strings of 1–4096 bytes, held only for this call: never
@@ -51,7 +53,7 @@
 //     // challenge); anything else, and every other delivery, is the
 //     // unknown-connection 404. Nothing else runs (no handler, lease or audit).
 //     handshake({ payload, headers }) → boolean,   // Slack: payload.type === 'url_verification'
-//     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets }, // token
+//     async verifyToken({ token, fetch }) → { external_id, display_name, scopes, secrets, settings? }, // token (settings → settings.provider)
 //     (`fetch` here is restricted to `hosts`, with a timeout; errors never reach users)
 //   },
 //
@@ -60,8 +62,8 @@
 //   // checks state and nonce and verifies the id_token (RS256 against jwksUrl,
 //   // iss, aud = settings.pinned.client_id, exp/iat, nonce, workspaceClaim =
 //   // external_id, sub ~ subjectRe); the connector only builds the URL and
-//   // trades the code. `connection` is {external_id, settings} (take the client
-//   // id from settings.pinned, never settings.config); `redirectUri` is the
+//   // trades the code. `connection` is {external_id, settings: {pinned, provider}}
+//   // (frozen, never config: take the client id from settings.pinned); `redirectUri` is the
 //   // identityRedirectUri prepare got. Throw fixed text only: `secrets` holds
 //   // the app's client secret.
 //   identity: {
@@ -88,8 +90,9 @@
 //   // leased, then run handleWebhook (same lease, timeout and ctx). For a
 //   // provider that needs an answer within seconds (Slack: 3 s). A failure then
 //   // reaches no provider retry: it is audited (action 'webhook', 'failed' +
-//   // code) and the lease released, so a manual redelivery runs it. A hub
-//   // crash mid-handler loses the event until such a manual redelivery.
+//   // code) and the delivery marked done (a replay answers duplicate; D42
+//   // addendum C2). A hub crash mid-handler loses the event until a manual
+//   // redelivery once the lease expired.
 //   ackEarly: false,
 //   // …or per delivery: ackEarly({ payload, headers }) → boolean, called
 //   // synchronously after verify() and parseBody; only `true` is early, a
@@ -101,7 +104,22 @@
 //   // type or a throw → an empty 200. Synchronous; runs before the handler.
 //   // Never reflect request data in it, except a verified url_verification
 //   // `challenge` string.
-//   ackBody({ payload, headers }) → undefined | string | { … },
+//   ackBody({ payload, headers, rateLimited }) → undefined | string | { … },
+//   // (rateLimited: true when rateSubject's user is over integration_user_cmd
+//   // and nothing ran, for an early delivery only; absent for a normal early answer.)
+//   // Optional (C3): the provider user a delivery is for, after verify(),
+//   // parseBody and a fresh lease; a throw or anything but a 1–128 char string
+//   // is null. Spends integration_user_cmd (30/min per connection and refHash
+//   // of it, never stored or logged) before webhook_conn and the handler; over
+//   // it nothing runs and an early delivery's answer is ackBody's rateLimited
+//   // one; without ackBody, or for a late delivery, 429 + Retry-After.
+//   rateSubject({ payload, headers }) → string | null,   // Slack: user_id / user.id; events null
+//   // Optional, only with ackEarly (C2): an acknowledged delivery's handler
+//   // failed or timed out. Called once, after the audit; `error_code` is a
+//   // short code, never the error; `fetch` is the restricted fetch (no
+//   // retries, aborted after 10 s). For a fixed-text "couldn't do that" reply
+//   // (Slack: response_url). Errors are swallowed; the answer was already sent.
+//   async onAckedFailure({ payload, headers, error_code, fetch }) → void,
 //
 //   // Optional: the provider's published webhook source ranges (GitHub's
 //   // `hooks` from https://api.github.com/meta). A delivery from one of them
@@ -138,6 +156,10 @@
 //   // Applied only for the card's hub-verified PR (ctx.verifiedPr): pass its `pr` and `repo`.
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
+//   // Optional (D42 addendum C1): the settings.config keys an admin may set
+//   // through PATCH (1–32 names, ^[A-Za-z][A-Za-z0-9_-]{0,63}$). Undeclared: any such name.
+//   configKeys: ['default_board_id'],
+//
 //   async health(ctx) → { ok, detail? },
 //
 //   // Pure reads a handler may use (org-scoped, nothing secret):
@@ -145,6 +167,15 @@
 //   // {id, key, title, board_id, column_name} | null (never body or labels).
 //   // ctx.memberFor(subject) → member_id | null (linked on this connection and
 //   // able to write); ctx.subjectFor(member_id) → subject | null (a viewer's too).
+//   // ctx.linkState(subject) → 'active' | 'unavailable' | 'none' (this connection
+//   // only; never a member id). actAs for a linked member who can no longer act
+//   // throws { code: 'ACTOR_UNAVAILABLE', scope: 'member' } ('connection' for
+//   // created_by): answer the user with fixed text (D42 addendum C2).
+//   // ctx.hubUrl → the hub's https origin (BOARD_PUBLIC_URL, read at boot) | null:
+//   // the only base for a link to the hub (never config, provider.hub_url or a payload).
+//   // ctx.connection.settings.provider → what the provider said at connect time
+//   // (immutable; undefined on a connection made before migration 026: fail closed).
+//   // Read provider facts from it, settings.pinned or ctx.connection.external_id, never config.
 // })
 
 import { isIP } from 'node:net'; // privacy-flow: hub-server
@@ -154,6 +185,12 @@ const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9]
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
 const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const PREPARE_INPUTS_MAX = 8;
+const CONFIG_KEYS_MAX = 32;
+// A settings.config key an admin may write (D42 addendum C1): never a path, a
+// prototype key or the name of another settings namespace, in any case.
+export const CONFIG_KEY_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+export const RESERVED_CONFIG_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype', 'provider', 'pinned', 'autonomy', 'config']);
+export const configKeyOk = (k) => typeof k === 'string' && CONFIG_KEY_RE.test(k) && !RESERVED_CONFIG_KEYS.includes(k.toLowerCase());
 export const AUTONOMY = Object.freeze(['auto', 'ask', 'off']);
 // The only state-machine events an integration may raise as the system (D42):
 // facts from a code host about a PR linked to a card. Chat connectors raise none.
@@ -218,10 +255,18 @@ export function defineConnector(spec) {
   if (spec?.ackEarly !== undefined && (!['boolean', 'function'].includes(typeof spec.ackEarly) || !spec.handleWebhook)) errs.push('ackEarly is a boolean or a function ({payload, headers}) → boolean, for a connector that takes webhooks');
   if (spec?.ackBody !== undefined && (typeof spec.ackBody !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('ackBody is a function, for a connector that declares ackEarly');
   if (spec?.parseBody !== undefined && (typeof spec.parseBody !== 'function' || !spec.handleWebhook)) errs.push('parseBody is a function, for a connector that takes webhooks');
+  if (spec?.rateSubject !== undefined && (typeof spec.rateSubject !== 'function' || !spec.handleWebhook)) errs.push('rateSubject is a function ({payload, headers}) → string | null, for a connector that takes webhooks');
+  if (spec?.onAckedFailure !== undefined && (typeof spec.onAckedFailure !== 'function' || !spec.handleWebhook || !spec.ackEarly)) errs.push('onAckedFailure is a function ({payload, headers, error_code, fetch}), for a connector that declares ackEarly');
   if (spec?.ingressCidrs !== undefined && (!Array.isArray(spec.ingressCidrs) || (spec.ingressCidrs.length && (!spec.handleWebhook || spec.ingressCidrs.some((x) => !parseCidr(x)))))) {
     errs.push('ingressCidrs lists CIDR ranges (IPv4 /16 or narrower, IPv6 /32 or narrower), for a connector that takes webhooks');
   }
   if (spec?.workspaceUnique !== undefined && typeof spec.workspaceUnique !== 'boolean') errs.push('workspaceUnique is a boolean');
+  if (spec?.configKeys !== undefined) {
+    const k = spec.configKeys;
+    if (!Array.isArray(k) || !k.length || k.length > CONFIG_KEYS_MAX || new Set(k).size !== k.length || !k.every(configKeyOk)) {
+      errs.push(`configKeys lists 1–${CONFIG_KEYS_MAX} distinct config key names (^[A-Za-z][A-Za-z0-9_-]{0,63}$, not a prototype key or a settings namespace)`);
+    }
+  }
   if (spec?.identity !== undefined) {
     const idn = spec.identity;
     const onHosts = (u) => {
@@ -254,5 +299,6 @@ export function defineConnector(spec) {
   return Object.freeze({
     consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]),
     ...(spec.identity ? { identity: Object.freeze({ ...spec.identity }) } : {}),
+    ...(spec.configKeys ? { configKeys: Object.freeze([...spec.configKeys]) } : {}),
   });
 }

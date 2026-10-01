@@ -586,7 +586,7 @@ test('migration 008: journal accepts actor_kind integration and stays append-onl
   db.run("INSERT INTO connections (id, org_id, provider, external_id, status, created_at) VALUES ('c1', 'o1', 'slack', 'T1', 'revoked', ?)", t);
   db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c2', 'o1', 'slack', 'T1', ?)", t);
   db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c3', 'o2', 'slack', 'T1', ?)", t);
-  assert.throws(() => db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c4', 'o1', 'slack', 'T1', ?)", t), /UNIQUE/);
+  assert.throws(() => db.run("INSERT INTO connections (id, org_id, provider, external_id, created_at) VALUES ('c4', 'o1', 'slack', 'T1', ?)", t), /UNIQUE|a live connection is never replaced/);
   assert.throws(() => db.run("INSERT INTO integration_audit (id, connection_id, action, decision, at) VALUES ('a', 'c2', 'x', 'bogus', ?)", t), /CHECK/);
   db.run("INSERT INTO integration_audit (id, connection_id, action, decision, error, at) VALUES ('a', 'c2', 'x', 'failed', 'timeout', ?)", t);
 });

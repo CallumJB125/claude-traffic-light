@@ -17,7 +17,8 @@ import { limitOrThrow } from '../ratelimit.js';
 import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
-import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
+import { AUTONOMY, cleanLinkStatus, parseCidr, configKeyOk } from './connector.js';
+import { isLoopback } from '../config.js';
 import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
 import { createJwks, readCapped, verifyRs256 } from '../jwt.js';
@@ -31,6 +32,11 @@ const FETCH_TRIES = 4;
 const HANDLER_TIMEOUT_MS = 60_000;
 const DEDUPE_KEEP_MS = 30 * 24 * 3600_000;
 const CONFIG_MAX_BYTES = 8 * 1024;
+const CONFIG_DEPTH = 4;
+const PROVIDER_MAX = 4096; // exchange ⊕ prepare (≤ 2 KB) plus the pinned match and hub_url
+// What a connection is created with: autonomy and config are an admin's, set
+// later through setSettings and its validators only.
+const INSERT_NAMESPACES = ['provider', 'pinned'];
 const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
@@ -57,6 +63,8 @@ const LINK_STATUS_MAX = 512;
 const EXCHANGE_SETTINGS_MAX = 2048;
 const FORM_MAX = 64 * 1024;
 const ACK_MAX = 4096;
+const ACKED_FAILURE_MS = 10_000;
+const SHORT_CODE = /^[a-z0-9_]{1,40}$/;
 // A pending id's only answer (D97): Slack's challenge, nothing that could carry markup.
 const HANDSHAKE_ACK = /^[\x20-\x7e]{1,256}$/;
 // Keys the HMAC an id with no answering pending row runs over the body, as a
@@ -92,6 +100,8 @@ const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArra
 // instance is refused, so a forgotten `async` can't slip through).
 const isBareObject = (v) => isPlainObject(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
 const POISON_KEYS = ['__proto__', 'constructor', 'prototype'];
+// A structured copy, or null when it can't be copied (a function, a symbol…).
+const copyOf = (v) => { try { return structuredClone(v); } catch { return null; } };
 // An https URL on one of `hosts`, no port or credentials; else null.
 function urlOn(u, hosts) {
   let url;
@@ -128,15 +138,44 @@ function cleanStatus(v) {
   return out;
 }
 const shortRepo = (canon) => (canon.startsWith('github.com/') ? canon.slice('github.com/'.length) : canon);
+// ctx.hubUrl (D42 addendum C1): BOARD_PUBLIC_URL's origin when it is nothing
+// more than an https origin (http only on loopback for a dev/local hub); else null.
+function hubUrlOf(v, devHub) {
+  if (typeof v !== 'string' || /[?#]/.test(v)) return null;
+  let u;
+  try { u = new URL(v); } catch { return null; }
+  if (u.username || u.password || u.pathname !== '/') return null;
+  if (u.protocol === 'https:' || (u.protocol === 'http:' && devHub && isLoopback(u.hostname.replace(/^\[|\]$/g, '')))) return u.origin;
+  return null;
+}
+
+// An admin's settings.config value: JSON scalars, or lists and objects of
+// them a few levels deep, never a prototype key.
+function configValue(v, depth = 0) {
+  if (typeof v === 'string' || typeof v === 'boolean') return true;
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (depth >= CONFIG_DEPTH) return false;
+  if (Array.isArray(v)) return v.every((x) => x === null || configValue(x, depth + 1));
+  return isBareObject(v) && Object.entries(v).every(([k, x]) => !POISON_KEYS.includes(k) && (x === null || configValue(x, depth + 1)));
+}
+
 const safeEq = (a, b) => {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** The member an integration acts as was removed or can no longer write: retrying won't help. */
+/**
+ * The member an integration acts as was removed or can no longer write:
+ * retrying won't help. scope 'connection': connections.created_by (an admin
+ * must reconnect); 'member': a linked member (that act only, D42 addendum C2).
+ */
 export class ActorUnavailable extends Error {
-  constructor() { super('the member this integration acts as was removed or can no longer write'); this.code = 'ACTOR_UNAVAILABLE'; }
+  constructor(scope = 'connection') {
+    super('the member this integration acts as was removed or can no longer write');
+    this.code = 'ACTOR_UNAVAILABLE';
+    this.scope = scope === 'member' ? 'member' : 'connection';
+  }
 }
 
 const tagged = (message, healthCode) => Object.assign(new Error(message), { healthCode });
@@ -187,8 +226,10 @@ function auditRef(v) {
 
 export function createIntegrations({
   hub, api, bus = null, log, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), // privacy-flow: integrations-hub
-  handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random,
+  handlerTimeoutMs = HANDLER_TIMEOUT_MS, random = Math.random, publicUrl = null,
 }) {
+  // Read once: no setting, payload or request can move where links point.
+  const hubUrl = hubUrlOf(publicUrl, ['dev', 'local'].includes(hub.config?.auth));
   const connectors = new Map();
   const ingress = new Map(); // provider → BlockList of its ingressCidrs
   const db = hub.db;
@@ -219,6 +260,16 @@ export function createIntegrations({
     const ext = String(external_id ?? '');
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
+    if (Object.entries(settings).some(([k, v]) => !INSERT_NAMESPACES.includes(k) || !isPlainObject(v))) throw new HubError('VALIDATION', 'bad connection settings');
+    const stored = { ...settings };
+    // provider (D42 addendum C1): what the provider said, every pinned key, and
+    // the hub's own origin; written here, in the insert, and never again (026).
+    if (settings.provider !== undefined || settings.pinned !== undefined) {
+      const facts = exchangeConfig(Object.fromEntries(Object.entries(settings.provider ?? {}).filter(([k]) => k !== 'hub_url')));
+      if (facts === null) throw new HubError('VALIDATION', `${conn.name} returned settings this hub will not store`);
+      stored.provider = { ...facts, ...(settings.pinned ?? {}), ...(hubUrl ? { hub_url: hubUrl } : {}) };
+      if (Buffer.byteLength(JSON.stringify(stored.provider)) > PROVIDER_MAX) throw new HubError('VALIDATION', `${conn.name} returned settings this hub will not store`);
+    }
     for (const k of Object.keys(secrets)) if (!conn.secrets.includes(k)) throw new HubError('VALIDATION', `${provider} does not declare secret ${k}`);
     // Anything else would be sealed as its String() ("[object Object]"); the
     // message never carries the value, and nothing is written.
@@ -250,7 +301,7 @@ export function createIntegrations({
       if (pending) db.run('DELETE FROM integration_pending WHERE id = ?', id);
       db.insert('connections', {
         id, org_id: orgId, provider, external_id: ext, display_name: display_name == null ? null : String(display_name).slice(0, 200),
-        scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(settings), created_by: memberId, created_at: now(),
+        scopes: JSON.stringify(Array.isArray(scopes) ? scopes.map(String) : []), status: 'active', settings: JSON.stringify(stored), created_by: memberId, created_at: now(),
       });
       // Their AAD is `<id>|<kind>|<key_id>` already: they open here and nowhere else.
       for (const r of copied) db.insert('connection_secrets', { connection_id: id, kind: r.kind, key_id: r.key_id, nonce: r.nonce, ciphertext: r.ciphertext, created_at: now() });
@@ -373,6 +424,16 @@ export function createIntegrations({
       const m = l && hub.member(l.member_id);
       return m && m.org_id === c.org_id && !m.removed_at && hub.canWrite(m) ? m.id : null;
     }
+    // The member a subject is linked to on this connection, whatever their state.
+    const linkedMember = (subject) => (typeof subject === 'string' && subject && subject.length <= SUBJECT_MAX
+      ? db.get('SELECT member_id FROM external_identities WHERE connection_id = ? AND subject = ?', c.id, subject)?.member_id ?? null
+      : null);
+    // C2: what a connector may tell the user, never who the member is.
+    const linkState = (subject) => {
+      if (!linkedMember(subject)) return 'none';
+      return memberFor(subject) ? 'active' : 'unavailable';
+    };
+    const scopeOf = (memberId) => (memberId === c.created_by ? 'connection' : 'member');
     // …and back, for reaching a member (a viewer too) on the provider.
     function subjectFor(memberId) {
       const l = typeof memberId === 'string' ? db.get('SELECT subject FROM external_identities WHERE connection_id = ? AND member_id = ?', c.id, memberId) : null;
@@ -384,7 +445,7 @@ export function createIntegrations({
     function actor(memberId) {
       const m = hub.member(memberId);
       if (!m || m.org_id !== c.org_id) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
-      if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable();
+      if (m.removed_at || !hub.canWrite(m)) throw new ActorUnavailable(scopeOf(memberId));
       // Admin rights never pass to a tool (Api uses role for "involved" checks).
       return hub.isAdmin(m) ? { ...m, role: 'member' } : m;
     }
@@ -411,7 +472,20 @@ export function createIntegrations({
       // the member who connected it, never as some other linked member.
       // Checked again on every call.
       const bound = () => {
-        if (subject != null ? memberFor(subject) !== memberId : memberId !== c.created_by) throw new HubError('FORBIDDEN', 'this integration may not act as that member');
+        const forbidden = () => new HubError('FORBIDDEN', 'this integration may not act as that member');
+        if (subject == null) {
+          if (memberId !== c.created_by) throw forbidden();
+          return;
+        }
+        if (memberFor(subject) === memberId) return;
+        // Still that subject's member (or its link went with the member's
+        // removal, 023), who can't act now: unavailable, not someone else.
+        const m = typeof memberId === 'string' ? hub.member(memberId) : null;
+        const linked = linkedMember(subject);
+        if (m && m.org_id === c.org_id && (m.removed_at || !hub.canWrite(m)) && (linked === memberId || (linked == null && m.removed_at))) {
+          throw new ActorUnavailable(scopeOf(memberId));
+        }
+        throw forbidden();
       };
       bound();
       const first = actor(memberId);
@@ -439,7 +513,7 @@ export function createIntegrations({
         // The connection's own buckets, never mutate_member: a public source
         // (any Slack user, issues on a public repo) must not 429 the person's own browser.
         limitOrThrow(hub, 'integration_conn', c.id);
-        for (const [rule, key] of rules) limitOrThrow(hub, rule, key);
+        for (const [rule, key] of typeof rules === 'function' ? rules() : rules) limitOrThrow(hub, rule, key);
         let out;
         try {
           out = await hub.actVia(via, () => fn(member));
@@ -462,7 +536,10 @@ export function createIntegrations({
         member: { id: first.id, role: first.role },
         // A D8 replay answers with the first card whatever board it names: the
         // same request on another board is a conflict, not that card.
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), cardRules, boardOfOrg(boardId)).then((out) => {
+        // A request that already made its card (integration_requests) spends no
+        // card token: a repeat can't probe or drain a bucket (C2, F-2).
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)),
+          () => (db.get('SELECT 1 AS x FROM integration_requests WHERE connection_id = ? AND request_id = ?', c.id, body.request_id) ? [] : cardRules), boardOfOrg(boardId)).then((out) => {
           const on = hub.card(out?.card?.id)?.board_id;
           if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
           return out;
@@ -753,7 +830,7 @@ export function createIntegrations({
       })));
     }
 
-    return {
+    const ctx = {
       connection: { id: c.id, org_id: c.org_id, external_id: c.external_id, settings, created_by: c.created_by },
       system: conn.systemEvents.length ? { event: systemEvent } : null,
       secret: (kind) => secrets()[kind] ?? null,
@@ -767,6 +844,7 @@ export function createIntegrations({
       verifiedPr,
       memberFor,
       subjectFor,
+      linkState,
       linkedByCard,
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
@@ -782,6 +860,9 @@ export function createIntegrations({
       },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
+    // The only base for a link to the hub; a handler can't repoint it for later calls.
+    Object.defineProperty(ctx, 'hubUrl', { value: hubUrl, enumerable: true, writable: false, configurable: false });
+    return ctx;
   }
 
   // ── inbound webhooks ────────────────────────────────────────────────────
@@ -927,12 +1008,29 @@ export function createIntegrations({
     }
     const done = () => db.run("UPDATE inbound_dedupe SET state = 'done', lease_until = NULL WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?", c.provider, ...keys, lease.until);
     const release = () => db.run('DELETE FROM inbound_dedupe WHERE provider = ? AND dedupe_key IN (?, ?) AND lease_until = ?', c.provider, ...keys, lease.until);
+    // One provider user's commands (C3): only a fresh lease spends it, so a
+    // replayed capture can't drain a user's bucket; over it nothing runs and
+    // the lease goes, so the same bytes can run once the user is under it.
+    const subject = conn.rateSubject ? rateSubjectOf(conn, payload, headers) : null;
+    if (subject) {
+      const t = hub.limiter.take('integration_user_cmd', `${c.id}|${hub.refHash(subject)}`);
+      if (!t.ok) {
+        release();
+        rateRefused(c);
+        // ackBody's answer is a 200 the provider never retries: only for a
+        // delivery that would have been acknowledged early anyway.
+        if (conn.ackBody && isEarly(conn, payload, headers)) return { status: 200, ...earlyAck(conn, payload, headers, true) };
+        const s = Math.max(1, Math.ceil(t.retry_after_ms / 1000));
+        throw new HubError('RATE_LIMITED', `too many requests; retry in ${s} s`, { retry_after_s: s });
+      }
+    }
     // Spent only by verified deliveries that will run: whoever merely knows
     // the URL, or replays a finished delivery, can't drain it.
     try { limitOrThrow(hub, 'webhook_conn', c.id); } catch (e) { release(); throw e; }
     // Before the handler starts, so it can't see what the handler did to payload.
-    const early = conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
+    const early = isEarly(conn, payload, headers);
     const ack = early ? earlyAck(conn, payload, headers) : null;
+    const asParsed = early && conn.onAckedFailure ? copyOf({ payload, headers }) : null;
     const controller = new AbortController();
     // Aborted when the handler ends, not only on timeout: a ctx it stashed is dead after.
     const running = Promise.resolve().then(() => conn.handleWebhook({ headers, payload, ctx: ctxFor(c, controller.signal) }))
@@ -942,33 +1040,50 @@ export function createIntegrations({
       try {
         await withTimeout(running, handlerTimeoutMs, controller);
       } catch (e) {
-        if (early) deadLetter(c, e);
-        if (e?.code === 'TIMEOUT') {
-          // The handler may still be running: the lease stays (a retry answers
-          // in_progress) and the row settles when it really ends, or the lease
-          // expires and a later retry takes it over.
-          running.then(done, release);
-          setHealth(c.id, false, 'handler_timeout');
-          warn('integration webhook handler timed out', c, e);
-          return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
-        }
-        if (e instanceof ActorUnavailable) {
-          // An admin has to reconnect it; the provider's retries would fail the same way.
-          done();
-          setHealth(c.id, false, 'actor_unavailable');
-          warn('integration acts as a removed member', c, e);
-          return { status: 200, body: { ok: true, skipped: true } };
-        }
-        // Released: the provider's retry (or, after an early ack, a manual
-        // redelivery) gets another go.
-        release();
-        setHealth(c.id, false, errCode(e));
-        warn('integration webhook handler failed', c, e);
-        return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+        const out = failed(e);
+        if (early) await ackedFailure(conn, asParsed, e);
+        return out;
       }
       done();
       setHealth(c.id, true);
       return { status: 200, body: { ok: true } };
+    };
+    const failed = (e) => {
+      // A linked member who can't act (C2): that act was audited; the answer is
+      // a success's, and nothing marks the connection broken.
+      if (e instanceof ActorUnavailable && e.scope === 'member') {
+        done();
+        log?.info?.('integration act skipped', { integration: c.provider, connection_id: c.id, code: 'actor_unavailable' });
+        return { status: 200, body: { ok: true } };
+      }
+      if (early) deadLetter(c, e);
+      if (e?.code === 'TIMEOUT') {
+        // After an early ack: done now. No provider retry is coming, and a
+        // handler that never settles must not leave a lease that a captured
+        // copy could take over once it expires. Late: the handler may still be
+        // running, so the lease stays (a retry answers in_progress) and the
+        // row settles when it really ends, or the lease expires and a later
+        // retry takes it over.
+        if (early) done();
+        else running.then(done, release);
+        setHealth(c.id, false, 'handler_timeout');
+        warn('integration webhook handler timed out', c, e);
+        return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
+      }
+      if (e instanceof ActorUnavailable) {
+        // An admin has to reconnect it; the provider's retries would fail the same way.
+        done();
+        setHealth(c.id, false, 'actor_unavailable');
+        warn('integration acts as a removed member', c, e);
+        return { status: 200, body: { ok: true, skipped: true } };
+      }
+      // Late: released, so the provider's retry gets another go. Early: done
+      // (C2), so a replay within the provider's window can't run it again.
+      if (early) done();
+      else release();
+      setHealth(c.id, false, errCode(e));
+      warn('integration webhook handler failed', c, e);
+      return { status: 500, body: { error: { code: 'INTERNAL', message: 'handler failed' } } };
     };
     if (!early) return settle();
     // Acknowledged before the handler runs (a provider that needs an answer
@@ -984,21 +1099,56 @@ export function createIntegrations({
   function askEarly(conn, payload, headers) {
     try { return conn.ackEarly({ payload, headers }) === true; } catch { return false; }
   }
+  const isEarly = (conn, payload, headers) => conn.ackEarly === true || (typeof conn.ackEarly === 'function' && askEarly(conn, payload, headers));
 
   // The early answer: the default JSON, or the connector's ackBody as an
   // empty body, short text or small JSON. Anything else, over ACK_MAX, or a
   // throw is an empty 200 (the provider only needs the 200 in time).
-  function earlyAck(conn, payload, headers) {
+  function earlyAck(conn, payload, headers, rateLimited = false) {
     if (!conn.ackBody) return { body: { ok: true, accepted: true } };
     const empty = { raw: '', type: 'text/plain; charset=utf-8' };
     let v;
-    try { v = conn.ackBody({ payload, headers }); } catch { return empty; }
+    try { v = conn.ackBody(rateLimited ? { payload, headers, rateLimited: true } : { payload, headers }); } catch { return empty; }
     let out;
     if (typeof v === 'string') out = { raw: v, type: 'text/plain; charset=utf-8' };
     else if (isBareObject(v)) {
       try { out = { raw: JSON.stringify(v), type: 'application/json; charset=utf-8' }; } catch { return empty; }
     } else return empty;
     return typeof out.raw === 'string' && Buffer.byteLength(out.raw) <= ACK_MAX ? out : empty;
+  }
+
+  // rateSubject's answer when it is a usable subject; a throw or anything else is none.
+  function rateSubjectOf(conn, payload, headers) {
+    let s;
+    try { s = conn.rateSubject({ payload, headers }); } catch { return null; }
+    return typeof s === 'string' && s.length >= 1 && s.length <= SUBJECT_MAX ? s : null;
+  }
+
+  // Audited a few times a minute per connection, so a flood is no DB write per
+  // delivery; every refusal is one log line with a code (never the subject).
+  function rateRefused(c) {
+    if (hub.limiter.take('integration_rate_audit_conn', c.id).ok) {
+      db.insert('integration_audit', { id: randomUUID(), connection_id: c.id, action: 'webhook', decision: 'failed', error: 'rate_limited', card_id: null, external_ref: null, detail: '{}', undo: null, at: now() });
+    }
+    log?.info?.('integration webhook refused', { integration: c.provider, connection_id: c.id, code: 'rate_limited' });
+  }
+
+  // The connector's fixed-text "couldn't do that" (C2): a short code, never the
+  // error; the restricted fetch without retries, cut after 10 s; it can't
+  // change the answer, which was already sent.
+  async function ackedFailure(conn, parsed, e) {
+    if (!conn.onAckedFailure || !parsed) return;
+    const code = SHORT_CODE.test(errCode(e)) ? errCode(e) : 'handler_failed';
+    const controller = new AbortController();
+    const once = restrictedFetch(conn);
+    const fetch = (u, init = {}) => once(u, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal });
+    try {
+      await withTimeout(Promise.resolve().then(() => conn.onAckedFailure({ payload: parsed.payload, headers: parsed.headers, error_code: code, fetch })), ACKED_FAILURE_MS, controller);
+    } catch {
+      log?.warn?.('integration onAckedFailure failed', { integration: conn.id, err: 'connector_error' });
+    } finally {
+      controller.abort();
+    }
   }
 
   // A delivery acknowledged early whose handler failed: no provider retry is
@@ -1025,11 +1175,18 @@ export function createIntegrations({
   const webhookFor = (publicUrl, id) => `${publicUrl}/integrations/${id}/webhook`;
   // The one place the identity callback URL is made (D97 prepare now, D98's identity flow later).
   const identityRedirectFor = (publicUrl, provider) => `${publicUrl}/integrations/${provider}/identity/callback`;
-  // A reconnect hands the connector what it stored last time (app id, slug…):
-  // the non-secret config of the org's newest active connection of that provider.
+  // A reconnect hands the connector what it stored last time (app id, slug…),
+  // from the org's newest active connection of that provider: its provider
+  // facts as `provider` and an admin's config (the declared configKeys only)
+  // apart as `config`, so a connector can't mistake admin input for a provider
+  // fact. A row from before 026 kept exchange's answer in config: that is its
+  // only record of them, so it comes as `provider`.
   const configFor = (orgId, provider) => {
-    const cfg = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {})?.config;
-    return isPlainObject(cfg) ? cfg : {};
+    const s = safeJson(db.get("SELECT settings FROM connections WHERE org_id = ? AND provider = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1", orgId, provider)?.settings, {});
+    const config = isPlainObject(s?.config) ? s.config : {};
+    if (!isPlainObject(s?.provider)) return { provider: { ...config }, config: {} };
+    const keys = connectors.get(provider)?.configKeys;
+    return { provider: { ...s.provider }, config: keys ? Object.fromEntries(Object.entries(config).filter(([k]) => keys.includes(k))) : { ...config } };
   };
 
   // The web posts this form as a real <form>: its action may only be the
@@ -1047,7 +1204,7 @@ export function createIntegrations({
     return { action: url.href, fields };
   }
 
-  // exchange() may keep non-secret scalars (app id, slug) as settings.config;
+  // exchange() may keep non-secret scalars (app id, slug) as settings.provider;
   // never autonomy, which stays an admin's. null: over the cap.
   function exchangeConfig(v) {
     const out = {};
@@ -1083,7 +1240,7 @@ export function createIntegrations({
     // before the app (and so the connection) exists.
     const id = randomUUID();
     const { state, bind, cookie } = mintState(member, provider, id, publicUrl);
-    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), config: configFor(member.org_id, provider) };
+    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), ...configFor(member.org_id, provider) };
     if (conn.connect.manifestForm) return { form: manifestFormOf(conn, conn.connect.manifestForm(args)), bind, cookie };
     return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
@@ -1124,7 +1281,7 @@ export function createIntegrations({
     try {
       v = await conn.connect.exchange({
         query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i),
-        config: pending ? pendingConfig(pending) : configFor(member.org_id, provider), secrets: { ...held }, fetch: restrictedFetch(conn),
+        ...(pending ? pendingConfig(pending) : configFor(member.org_id, provider)), secrets: { ...held }, fetch: restrictedFetch(conn),
       });
     } catch (e) {
       warn('integration connect failed', conn, e);
@@ -1140,18 +1297,17 @@ export function createIntegrations({
       }
       if (isPlainObject(v?.secrets) && Object.keys(v.secrets).some((k) => Object.hasOwn(held, k))) return { ok: false, error: 'Could not save the connection.' };
     }
-    let config = v?.settings === undefined ? null : exchangeConfig(v.settings);
-    if (config === null && v?.settings !== undefined) return { ok: false, error: 'Could not save the connection.' };
+    let facts = v?.settings === undefined ? {} : exchangeConfig(v.settings);
     // The pending settings win: exchange can't move the app it was pinned to.
-    if (pending) config = exchangeConfig({ ...(config ?? {}), ...safeJson(pending.settings, {}) });
-    if (pending && config === null) return { ok: false, error: 'Could not save the connection.' };
+    if (pending && facts) facts = exchangeConfig({ ...facts, ...safeJson(pending.settings, {}) });
+    if (facts === null) return { ok: false, error: 'Could not save the connection.' };
     const next = v?.next_url == null ? null : urlOn(v.next_url, conn.hosts);
     if (v?.next_url != null && !next) warn('integration next_url refused', conn, 'not https on a declared host');
     try {
       // Named fields only: exchange() can't pick the id, org, member or autonomy.
       const connection = createConnection({
         external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {},
-        settings: { ...(config ? { config } : {}), ...(pending ? { pinned: safeJson(pending.match, {}) } : {}) },
+        settings: { provider: facts, ...(pending ? { pinned: safeJson(pending.match, {}) } : {}) },
         id: st.i, orgId: member.org_id, memberId: member.id, provider, pending,
       });
       return { ok: true, connection, provider_name: conn.name, next_url: next?.href ?? null };
@@ -1174,7 +1330,11 @@ export function createIntegrations({
 
   const livePending = (id) => (typeof id === 'string' ? db.get('SELECT * FROM integration_pending WHERE id = ? AND expires_at > ?', id, now()) : null);
   const publicPending = (p) => ({ id: p.id, provider: p.provider, status: 'pending', created_by: p.created_by, created_at: p.created_at, expires_at: p.expires_at, ready: p.match !== '{}' });
-  const pendingConfig = (p) => ({ ...configFor(p.org_id, p.provider), ...safeJson(p.settings, {}) });
+  // prepare's settings are provider facts of the app being made.
+  const pendingConfig = (p) => {
+    const c = configFor(p.org_id, p.provider);
+    return { provider: { ...c.provider, ...safeJson(p.settings, {}) }, config: c.config };
+  };
   const notAccepted = () => new HubError('VALIDATION', NOT_ACCEPTED);
   const pendingNotFound = () => new HubError('NOT_FOUND', 'no such integration');
   const preparing = new Set(); // pending ids whose prepare (first or second step) is at the provider
@@ -1223,7 +1383,8 @@ export function createIntegrations({
     if (!isPlainObject(m)) return null;
     const entries = Object.entries(m);
     if (!entries.length || entries.length > MATCH_MAX) return null;
-    const ok = ([k, x]) => MATCH_KEY.test(k) && ((typeof x === 'string' && x.length <= MATCH_STR_MAX) || (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean');
+    // hub_url is the registry's own provider key: a pinned one could not be copied there.
+    const ok = ([k, x]) => MATCH_KEY.test(k) && k !== 'hub_url' && ((typeof x === 'string' && x.length <= MATCH_STR_MAX) || (typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean');
     return entries.every(ok) ? Object.fromEntries(entries) : null;
   }
 
@@ -1286,12 +1447,12 @@ export function createIntegrations({
 
   const prepareArgs = (orgId, provider, id, input, publicUrl) => ({
     input, webhookUrl: webhookFor(publicUrl, id), redirectUri: redirectFor(publicUrl, provider),
-    identityRedirectUri: identityRedirectFor(publicUrl, provider), config: configFor(orgId, provider),
+    identityRedirectUri: identityRedirectFor(publicUrl, provider), ...configFor(orgId, provider),
   });
 
   function authorizeFor(conn, p, member, publicUrl) {
     const { state, bind, cookie } = mintState(member, p.provider, p.id, publicUrl, { pd: 1 });
-    const url = conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, p.provider), webhookUrl: webhookFor(publicUrl, p.id), config: pendingConfig(p) });
+    const url = conn.connect.authorizeUrl({ state, redirectUri: redirectFor(publicUrl, p.provider), webhookUrl: webhookFor(publicUrl, p.id), ...pendingConfig(p) });
     return { url, bind, cookie };
   }
 
@@ -1421,7 +1582,12 @@ export function createIntegrations({
   const credHash = (cred) => sha(`${cred.kind}:${cred.id}`);
   // The audience: the client id promotion pinned (D97), never admin-editable config.
   const pinnedClientId = (c) => { const v = safeJson(c.settings, {})?.pinned?.client_id; return typeof v === 'string' && v ? v : null; };
-  const linkConnection = (c) => Object.freeze({ external_id: c.external_id, settings: Object.freeze(safeJson(c.settings, {})) });
+  // Fixed namespaces only (their values are scalars, so a shallow freeze is deep): never config.
+  const linkConnection = (c) => {
+    const s = safeJson(c.settings, {}) ?? {};
+    const fixed = (v) => (isPlainObject(v) ? Object.freeze({ ...v }) : undefined);
+    return Object.freeze({ external_id: c.external_id, settings: Object.freeze({ pinned: fixed(s.pinned), provider: fixed(s.provider) }) });
+  };
   const jwksCaches = new Map(); // provider → its JWKS cache
 
   function jwksFor(conn) {
@@ -1628,6 +1794,11 @@ export function createIntegrations({
       } catch (e) {
         if (e?.code === 'TIMEOUT') entry.timedOut = true;
         const code = errCode(e);
+        // A linked member who can't act: that act was audited; the connection is fine.
+        if (e instanceof ActorUnavailable && e.scope === 'member') {
+          log?.info?.('integration act skipped', { integration: c.provider, connection_id: c.id, code });
+          return;
+        }
         setHealth(c.id, false, code);
         if (e instanceof ActorUnavailable) { warn('integration acts as a removed member', c, e); return; }
         throw new Error(`${code}: ${redact(e?.message ?? e)}`);
@@ -1679,27 +1850,66 @@ export function createIntegrations({
     async verifyToken(provider, token) {
       const c = connectors.get(provider);
       if (!c || c.connect.kind !== 'token') throw new HubError('NOT_FOUND', 'no such token integration');
-      return c.connect.verifyToken({ token, fetch: restrictedFetch(c) });
+      const v = await c.connect.verifyToken({ token, fetch: restrictedFetch(c) });
+      // Named fields only; its settings are provider facts, never autonomy, config or pinned.
+      const facts = v?.settings === undefined ? {} : exchangeConfig(v.settings);
+      if (facts === null) throw new Error('verifyToken settings over the cap');
+      return { external_id: v?.external_id, display_name: v?.display_name, scopes: v?.scopes, secrets: v?.secrets ?? {}, settings: { provider: facts } };
     },
-    setSettings(id, patch) {
-      const c = row(id);
-      if (!c || c.status === 'revoked') throw new HubError('NOT_FOUND', 'no such integration');
-      const conn = connectors.get(c.provider);
-      if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
+    /**
+     * PATCH (D42 addendum C1): `autonomy` and `config` merged key by key in one
+     * transaction (null deletes); provider and pinned are never reachable. One
+     * journal row names the changed keys, never a value.
+     */
+    setSettings(id, patch, { memberId = null } = {}) {
+      if (!isPlainObject(patch) || Object.keys(patch).some((k) => k !== 'autonomy' && k !== 'config')) throw new HubError('VALIDATION', 'settings take autonomy and config only');
       if (patch.autonomy !== undefined && !isPlainObject(patch.autonomy)) throw new HubError('VALIDATION', 'autonomy must be an object');
-      if (patch.config !== undefined) {
-        if (!isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
-        if (Buffer.byteLength(JSON.stringify(patch.config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
-      }
-      const cur = safeJson(c.settings, {});
-      // pinned names the app a pending connection was promoted for (D97): never patched.
-      const next = { ...cur, ...patch, pinned: cur.pinned };
-      for (const [a, m] of Object.entries(next.autonomy ?? {})) {
-        if (!Object.hasOwn(conn.actions, a)) throw new HubError('VALIDATION', `${conn.name} has no action ${a}`);
-        if (!AUTONOMY.includes(m)) throw new HubError('VALIDATION', 'autonomy must be auto, ask or off');
-      }
-      db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
-      return publicConnection(row(id));
+      if (patch.config !== undefined && !isPlainObject(patch.config)) throw new HubError('VALIDATION', 'config must be an object');
+      return hub.txn(() => {
+        const c = row(id);
+        if (!c || c.status === 'revoked') throw new HubError('NOT_FOUND', 'no such integration');
+        const conn = connectors.get(c.provider);
+        if (!conn) throw new HubError('NOT_FOUND', 'no such integration');
+        const cur = safeJson(c.settings, {}) ?? {};
+        const changed = { autonomy: [], config: [] };
+        const autonomy = isPlainObject(cur.autonomy) ? { ...cur.autonomy } : {};
+        for (const [a, m] of Object.entries(patch.autonomy ?? {})) {
+          if (POISON_KEYS.includes(a)) throw new HubError('VALIDATION', `${conn.name} has no such action`);
+          // Undeclared and null: nothing to reset, and no answer that differs from {}.
+          if (!Object.hasOwn(conn.actions, a)) {
+            if (m === null) continue;
+            throw new HubError('VALIDATION', `${conn.name} has no action ${a}`);
+          }
+          if (m === null) {
+            if (Object.hasOwn(autonomy, a)) { delete autonomy[a]; changed.autonomy.push(a); }
+            continue;
+          }
+          if (!AUTONOMY.includes(m)) throw new HubError('VALIDATION', 'autonomy must be auto, ask or off');
+          if (autonomy[a] !== m) { autonomy[a] = m; changed.autonomy.push(a); }
+        }
+        const config = isPlainObject(cur.config) ? { ...cur.config } : {};
+        const held = new Set(Object.keys(isPlainObject(cur.provider) ? cur.provider : {}).map((k) => k.toLowerCase()));
+        for (const [k, v] of Object.entries(patch.config ?? {})) {
+          if (!configKeyOk(k)) throw new HubError('VALIDATION', 'a config key is 1–64 letters, digits, _ or -, starting with a letter, and not a settings namespace');
+          if (held.has(k.toLowerCase())) throw new HubError('VALIDATION', `that value comes from ${conn.name} and can't be changed here`);
+          if (conn.configKeys && !conn.configKeys.includes(k)) {
+            if (v === null) continue;
+            throw new HubError('VALIDATION', `${conn.name} has no setting ${k}`);
+          }
+          if (v === null) {
+            if (Object.hasOwn(config, k)) { delete config[k]; changed.config.push(k); }
+            continue;
+          }
+          if (!configValue(v)) throw new HubError('VALIDATION', 'a config value is text, a number, true or false, or a list or object of those');
+          if (JSON.stringify(config[k]) !== JSON.stringify(v)) { config[k] = v; changed.config.push(k); }
+        }
+        if (patch.config !== undefined && Buffer.byteLength(JSON.stringify(config)) > CONFIG_MAX_BYTES) throw new HubError('VALIDATION', 'config is over 8 KB');
+        if (!changed.autonomy.length && !changed.config.length) return publicConnection(c);
+        const next = { ...cur, ...(changed.autonomy.length ? { autonomy } : {}), ...(changed.config.length ? { config } : {}) };
+        db.run('UPDATE connections SET settings = ? WHERE id = ?', JSON.stringify(next), id);
+        hub.journal({ board_id: null, actor_kind: memberId ? 'member' : 'system', actor_id: memberId, kind: 'integration.settings', payload: { connection_id: c.id, provider: c.provider, changed } });
+        return publicConnection(row(id));
+      });
     },
     audit: (id, { limit = 100 } = {}) => db.all('SELECT id, action, decision, error, card_id, external_ref, detail, undo, at FROM integration_audit WHERE connection_id = ? ORDER BY at DESC, rowid DESC LIMIT ?', id, Math.min(500, Math.max(1, Number(limit) || 100)))
       .map((a) => ({ ...a, detail: safeJson(a.detail, {}), undo: safeJson(a.undo, null) })),
