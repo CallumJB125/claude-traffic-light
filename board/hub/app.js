@@ -128,7 +128,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   }
 
   return {
-    hub, api, server, db, config, routes: handler.routes, devLoginSecret: hub.devLoginSecret, integrations, bus,
+    hub, api, server, db, config, routes: handler.routes, remoteState: handler.remoteState, devLoginSecret: hub.devLoginSecret, integrations, bus,
     listen(port = config.port, host = config.bind) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);

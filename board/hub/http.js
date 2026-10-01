@@ -28,6 +28,8 @@ import { WorkCapture } from './work-capture.js';
 import { Planning } from './planning.js';
 import { myDay } from './my-day.js';
 import { readOwnership, guardOwnership } from './ownership-view.js';
+import { createRemoteHttp } from './remote/http.js';
+import { strictJson } from './remote/validation.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -67,7 +69,7 @@ const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PRO
 const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html' };
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html', '/remote-consent': 'remote-consent.html', '/connections': 'remote-grants.html' };
 
 // A cookie-session mutation or WS upgrade in accounts mode (design §4.6): the
 // Origin must be present and be this hub; Sec-Fetch-Site, when sent, same-origin.
@@ -199,7 +201,7 @@ function readRaw(req, deadlineMs, max = MAX_BODY) {
 
 const sizeText = (max) => (max >= MAX_BODY ? `${max / MAX_BODY} MiB` : `${max / 1024} KiB`);
 
-async function readBody(req, { max, deadlineMs }) {
+async function readBody(req, { max, deadlineMs, parser = JSON.parse }) {
   if (Number(req.headers['content-length']) > max) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
   const got = await readRaw(req, deadlineMs, max);
   if (got.error === 413) throw new HubError('PAYLOAD_TOO_LARGE', `body over ${sizeText(max)}`);
@@ -207,7 +209,7 @@ async function readBody(req, { max, deadlineMs }) {
   if (got.error) throw new HubError('VALIDATION', 'body not received');
   if (!got.body.length) return {};
   try {
-    const v = JSON.parse(got.body.toString('utf8'));
+    const v = parser(parser === strictJson ? new TextDecoder('utf-8', { fatal: true }).decode(got.body) : got.body.toString('utf8'));
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object');
     return v;
   } catch {
@@ -235,6 +237,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   const communication = new TeamCommunication(hub);
   const workCapture = new WorkCapture(hub);
   const planning = new Planning(api);
+  const remote = createRemoteHttp(hub);
   // This query can only narrow current staff access. Desktop grants derive it
   // privately in main; remote grants additionally require their own guard.
   const communicationOptions = (query) => query.has('board_id') ? { boardIds: Object.freeze(query.getAll('board_id')) } : {};
@@ -292,10 +295,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   // Serialize cache-eligible requests sharing an actor and request ID until
   // their response is cached, including collisions across different routes.
   const requestsInFlight = new Map();
-  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, responseGuard = null } = {}) => {
+  const route = (method, pattern, handler, { auth = 'member', mutating = method !== 'GET', limit = null, replay = null, maxBody = null, collaboration = false, writeScope = null, strictBody = false, responseGuard = null } = {}) => {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:([a-z_]+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, responseGuard, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
+    routes.push({ method, re, keys, handler, auth, mutating, pattern, limit, replay, collaboration, writeScope, strictBody, responseGuard, maxBody: maxBody ?? (bigBodyRoute(pattern) ? MAX_BODY : limits.smallBodyMax) });
   };
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
@@ -312,6 +315,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     return { member: publicMember(m) };
   }, { auth: 'none' });
   if (config.auth === 'accounts') {
+    remote.management(route);
     const acc = hub.accounts;
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
@@ -625,7 +629,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }
 
   // The route table, for the tenancy suite's coverage assertion (D63).
-  handle.routes = routes.map(({ method, pattern, auth }) => ({ method, pattern, auth }));
+  handle.routes = [...routes.map(({ method, pattern, auth }) => ({ method, pattern, auth })), ...(remote?.routes ?? [])];
+  handle.remoteState = remote?.state ?? null;
   return handle;
 
   async function handle(req, res) {
@@ -638,6 +643,13 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (hsts) res.setHeader('strict-transport-security', 'max-age=31536000');
     if (loopbackOnly(config) && !devRequestOk(req)) return sendJson(res, 403, { error: { code: 'FORBIDDEN', message: `${config.auth} auth serves direct loopback requests only` } });
     if (config.auth === 'local' && !localCookieOk(hub, req)) return sendJson(res, 401, { error: { code: 'UNAUTHENTICATED', message: 'not signed in' } });
+    try {
+      remote?.guardManagement(req, url);
+      if (remote && await remote.handle(req, res, url)) return undefined;
+    } catch (error) {
+      if (error instanceof HubError) return sendJson(res, httpStatus(error.code), errorBody(error));
+      return sendJson(res, 500, { error: { code: 'INTERNAL', message: 'remote resource unavailable' } });
+    }
     // These two paths bypass Cloudflare Access (providers can't sign in):
     // the signed state and the webhook signature are their only auth.
     const cb = integrations && req.method === 'GET' ? /^\/integrations\/([a-z][a-z0-9-]{1,31})\/callback$/.exec(url.pathname) : null;
@@ -809,7 +821,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         clientUploads++; clientUploadSlot = true;
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
-      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      let body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs, parser: r.strictBody ? strictJson : JSON.parse }) : {};
       // Bind retries to the effective operation, whether strip came from
       // JSON or the existing query option. Equivalent forms remain a retry.
       if (r.method === 'DELETE' && r.pattern === '/api/boards/:board_id/labels/:name') body = { ...body, strip: body.strip === true || url.searchParams.get('strip') === '1' };
@@ -867,8 +879,11 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           out = errorBody(e);
         }
         if (out === undefined) return undefined;
-        if (status === 200 && r.responseGuard) r.responseGuard({ member, params, ident, req }, out);
         if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
+        if (status === 200 && r.responseGuard) {
+          const guarded = r.responseGuard({ req, res, member, params, body, query: url.searchParams, ident, ip }, out);
+          if (guarded?.then) throw new HubError('INTERNAL', 'response authority must be synchronous');
+        }
         if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };

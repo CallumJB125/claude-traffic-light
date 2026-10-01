@@ -10,6 +10,7 @@ import { json, HubError } from './db.js';
 import { cleanLinkStatus } from './integrations/connector.js';
 import { AI_LABELS, aiOfDispatch } from '../shared/ai.js';
 import { workCaptureView } from './work-capture-view.js';
+import { commentIdentity } from './remote/attribution.js';
 
 export const EMAIL_ONLY = 'email:';   // github_login placeholder of an email-only (Access OTP) member
 export const LOCAL_ONLY = 'local:';   // github_login placeholder of the BOARD_AUTH=local owner (D35)
@@ -221,7 +222,7 @@ export function cardDetail(hub, row, viewerId, feedEventOf) {
     } : null,
     handover: doc && (doc.version || runRow) ? { doc: doc.doc, ages: doc.ages, markdown: doc.markdown } : null,
     feed,
-    comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => ({
+    comments: hub.db.all('SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid', row.id).map((c) => commentIdentity(hub, {
       id: c.id, author_name: c.author_member_id ? hub.memberName(c.author_member_id) : `${hub.memberName(hub.run(c.author_run_id)?.on_behalf_of) ?? '?'}'s ${AI_LABELS[aiOfDispatch(hub.run(c.author_run_id))]}`,
       source: c.source, trusted: !!c.trusted, body: c.body, for_agent: !!c.for_agent, reply_to: c.reply_to,
       delivered_age_ms: hub.ageOf(c.delivered_at), created_age_ms: hub.ageOf(c.created_at),

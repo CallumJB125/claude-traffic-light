@@ -7,11 +7,21 @@ import { cardView, selectedContext } from '../views.js';
 import { redact } from '../../shared/scope.js';
 import { createRemoteContext } from './context.js';
 import { UUID, invalid } from './validation.js';
+import { commentIdentity } from './attribution.js';
+import { boundedResult } from './result.js';
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const unavailable = () => new HubError('NOT_FOUND', 'resource unavailable to this connection');
 const basicWrites = ['plexiform_create_card', 'plexiform_update_card', 'plexiform_add_comment'];
+// Only server-authored object identities carry a final delivery capability.
+// Its callback projects current data; it never executes or replays a mutation.
+const deliveries = new WeakMap();
+const sameActor = (current, initial) => current.grant.id === initial.grant.id
+  && current.tokenHash === initial.tokenHash && current.member.id === initial.member.id
+  && current.member.user_id === initial.member.user_id && current.member.org_id === initial.member.org_id
+  && current.member.role === initial.member.role && current.grant.client_id === initial.grant.client_id
+  && current.grant.family_id === initial.grant.family_id;
 // Remote material is never carried back into task narratives or returned data.
 function publicText(value) {
   if (typeof value === 'string') return redact(value, null);
@@ -26,10 +36,25 @@ export class RemoteActions {
   }
   catalog(token, kind = 'integration') {
     const scope = this.authority.authenticate(token, kind);
+    const result = this.catalogFor(scope);
+    deliveries.set(result, { owner: this, project: () => {
+      const current = this.authority.authenticate(token, kind);
+      if (!sameActor(current, scope)) throw unavailable();
+      return this.catalogFor(current);
+    } });
+    return result;
+  }
+  catalogFor(scope) {
     return native.listTools(scope.mode).map(tool => basicWrites.includes(tool.name) ? {
       ...tool, inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties,
         request_id: { type: 'string', pattern: UUID.source, maxLength: 36 } }, required: [...tool.inputSchema.required, 'request_id'] },
     } : tool);
+  }
+  deliver(result) {
+    const proof = result && deliveries.get(result);
+    if (!proof || proof.owner !== this) throw unavailable();
+    deliveries.delete(result);
+    return proof.project(); // synchronous: no authority gap before SDK serialization
   }
   validate(name, args) {
     try {
@@ -69,9 +94,7 @@ export class RemoteActions {
     }
   }
   commentIdentity(comment) {
-    const grant = this.db.get("SELECT g.application, g.user_id FROM remote_actions a JOIN remote_grants g ON g.id = a.grant_id WHERE a.tool = 'plexiform_add_comment' AND json_extract(a.response, '$.comment_id') = ? LIMIT 1", comment.id);
-    return grant ? { ...comment, identity_source: 'remote_grant', account_id: grant.user_id,
-      application: grant.application, application_verified: false } : comment;
+    return commentIdentity(this.hub, comment);
   }
   visibleCard(scope, id) {
     try { this.card(scope, id); return true; } catch { return false; }
@@ -95,28 +118,29 @@ export class RemoteActions {
       target: null, overlaps: [], pr: null, pr_link_status: null, evidence: null, device_kind: null });
     return result;
   }
-  projectMutation(name, args, result, scope) {
+  projectMutation(name, args, result, scope, mcpResponseId) {
+    const project = value => boundedResult(publicText(value), mcpResponseId);
     const receipt = this.pointer(name, args, result), row = this.card(scope, receipt.card_id);
     if (name === 'plexiform_create_card' ? row.board_id !== args.board_id : row.id !== args.card_id) throw unavailable();
     switch (name) {
       case 'plexiform_create_card': case 'plexiform_update_card':
-        return publicText({ card: this.cardProjection(scope, cardView(this.hub, row, scope.member.id)) });
+        return project({ card: this.cardProjection(scope, cardView(this.hub, row, scope.member.id)) });
       case 'plexiform_add_comment': {
         const comment = this.db.get('SELECT * FROM comments WHERE id = ? AND card_id = ?', receipt.comment_id, row.id);
         if (!comment) throw unavailable();
-        return publicText({ comment: this.commentIdentity({ id: comment.id, author_name: this.hub.memberName(comment.author_member_id),
+        return project({ comment: this.commentIdentity({ id: comment.id, author_name: this.hub.memberName(comment.author_member_id),
           source: comment.source, trusted: !!comment.trusted, body: comment.body, for_agent: !!comment.for_agent,
           reply_to: null, created_age_ms: this.hub.ageOf(comment.created_at) }) });
       }
       case 'plexiform_write_packet': {
         const packet = this.db.get('SELECT * FROM task_packets WHERE id = ? AND card_id = ?', receipt.packet_id, row.id);
         if (!packet || packet.repo_id !== row.repo_id) throw unavailable();
-        return publicText({ packet: this.communication.packetProjection(packet) });
+        return project({ packet: this.communication.packetProjection(packet) });
       }
       case 'plexiform_send_message': {
         const message = this.db.get('SELECT * FROM task_messages WHERE id = ? AND card_id = ?', receipt.message_id, row.id);
         if (!message || !this.communication.visibleMessage({ ...scope, row }, message)) throw unavailable();
-        return publicText({ message: this.communication.messageProjection({ ...scope, row }, message) });
+        return project({ message: this.communication.messageProjection({ ...scope, row }, message) });
       }
       default: throw invalid();
     }
@@ -140,7 +164,10 @@ export class RemoteActions {
     });
     return publicText(result);
   }
-  projectRead(name, args, result, scope) {
+  projectRead(name, args, result, scope, mcpResponseId) {
+    return boundedResult(this.readProjection(name, args, result, scope), mcpResponseId);
+  }
+  readProjection(name, args, result, scope) {
     switch (name) {
       case 'plexiform_list_boards': return publicText({ boards: scope.boardIds.map(id => {
         const board = this.hub.board(id); return { id, name: board.name, key_prefix: board.key_prefix, archived: false };
@@ -166,7 +193,7 @@ export class RemoteActions {
       default: throw invalid();
     }
   }
-  async call(token, kind, name, input) {
+  async call(token, kind, name, input, { signal = null, mcpResponseId } = {}) {
     if (this.hub.viaScope.getStore()) throw new HubError('FORBIDDEN', 'remote operations require their own authority');
     this.validate(name, input);
     const args = publicText(JSON.parse(JSON.stringify(input))); // immutable request choice across waits
@@ -174,6 +201,7 @@ export class RemoteActions {
     const bound = { grant: initial.grant.id, token: initial.tokenHash, user: initial.member.user_id,
       member: initial.member.id, org: initial.member.org_id, client: initial.grant.client_id, family: initial.grant.family_id };
     const authorize = write => {
+      if (signal?.aborted) throw new HubError('TIMEOUT', 'remote request ended');
       const scope = this.guard(token, kind, name, args, write);
       if (scope.grant.id !== bound.grant || scope.tokenHash !== bound.token || scope.member.user_id !== bound.user
         || scope.member.id !== bound.member || scope.member.org_id !== bound.org || scope.grant.client_id !== bound.client
@@ -195,7 +223,7 @@ export class RemoteActions {
         this.db.insert('remote_actions', { grant_id: scope.grant.id, request_id: args.request_id, request_hash: fingerprint,
           tool: name, response: JSON.stringify(this.pointer(name, args, result)), created_at: this.hub.iso() });
       },
-      project: (result, scope) => this.projectMutation(name, args, result, scope),
+      project: (result, scope) => this.projectMutation(name, args, result, scope, mcpResponseId),
     });
     const execute = async () => {
       const scope = authorize(false), member = scope.member;
@@ -213,7 +241,20 @@ export class RemoteActions {
         default: throw invalid();
       }
       const current = authorize(false);
-      return definition.read ? this.projectRead(name, args, result, current) : this.projectMutation(name, args, result, current);
+      const project = scope => definition.read ? this.projectRead(name, args, result, scope, mcpResponseId)
+        : this.projectMutation(name, args, result, scope, mcpResponseId);
+      const output = project(current);
+      const deliveredRow = definition.read ? null : this.card(current, this.pointer(name, args, result).card_id);
+      deliveries.set(output, { owner: this, project: () => {
+        const fresh = authorize(false);
+        if (!sameActor(fresh, initial)) throw unavailable();
+        if (deliveredRow) {
+          const row = this.card(fresh, deliveredRow.id);
+          if (row.board_id !== deliveredRow.board_id || row.repo_id !== deliveredRow.repo_id) throw unavailable();
+        }
+        return project(fresh);
+      } });
+      return output;
     };
     if (definition.read) return execute();
     // Do not wrap already queued API/033 methods in another board queue. Only
