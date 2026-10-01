@@ -326,7 +326,15 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
 
   // `mail` appears only on a hub that can send mail; it says when a send last failed, and whether
   // sends are failing in a row (email is then off in /api/auth/methods), never to whom or why.
-  route('GET', '/api/health', () => ({ ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth, ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt, failing: hub.accounts.mailFailing() } } : {}) }), { auth: 'none' });
+  route('GET', '/api/health', ({ req }) => {
+    // A tunnel also connects from loopback: proxy metadata excludes this
+    // local operator field. Never expose sizes, limits, paths or error text.
+    const direct = isLoopback(normalizeAddr(req.socket.remoteAddress)) && !Object.keys(req.headers).some(name =>
+      name === 'forwarded' || name.startsWith('x-forwarded-') || name.startsWith('cf-') || ['x-real-ip', 'true-client-ip', 'via', 'cdn-loop'].includes(name));
+    return { ok: true, protocol: PROTOCOL_VERSION, hub_epoch: hub.epoch, uptime_ms: Math.round(hub.uptime()), auth: config.auth,
+      ...(hub.accounts?.mailer ? { mail: { last_error_at: hub.accounts.mailLastErrorAt, failing: hub.accounts.mailFailing() } } : {}),
+      ...(direct && hub.storage?.enabled ? { storage: { paused: hub.storage.check() } } : {}) };
+  }, { auth: 'none' });
   // Registered only in dev mode (design §9.5): elsewhere it is "no such route".
   if (config.auth === 'dev') route('POST', '/api/dev/login', ({ req, body, res }) => {
     if (!isLoopback(normalizeAddr(req.socket.remoteAddress))) throw new HubError('NOT_FOUND', 'not found');

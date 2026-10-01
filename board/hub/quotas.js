@@ -2,6 +2,7 @@
 // archived cards count; observed runner outbox outcomes stay recordable.
 import { HubError } from './db.js';
 import { quotaFor } from './identity/teams.js';
+import { requireStorage } from './storage-watch.js';
 
 const COUNTS = Object.freeze({
   cards: 'SELECT COUNT(*) AS n FROM cards c JOIN boards b ON b.id=c.board_id WHERE b.org_id=?',
@@ -11,6 +12,7 @@ const COUNTS = Object.freeze({
 export function requireRows(hub, orgId, resource) {
   if (!Object.hasOwn(COUNTS, resource)) throw new Error('unknown row quota');
   if (!hub.db.depth) throw new Error('row quota requires its creation transaction');
+  requireStorage(hub);
   if (hub.config.auth !== 'accounts') return;
   const org = hub.db.get('SELECT plan FROM orgs WHERE id=? AND deleted_at IS NULL', orgId);
   if (!org) throw new HubError('NOT_FOUND', 'team not found');

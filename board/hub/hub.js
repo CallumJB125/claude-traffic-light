@@ -923,6 +923,7 @@ export class Hub extends EventEmitter {
     this.sweepRequestCache();
     this.sweepPendingCmds();
     this.limiter.sweep();
+    this.storage?.check();
     this.recheckBrowsers();
     this.enrolments?.recheck();
     this.oauth?.sweep();

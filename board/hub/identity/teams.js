@@ -10,6 +10,7 @@ import { HubError } from '../db.js';
 import { limitOrThrow } from '../ratelimit.js';
 import { emailOnlyIdentity } from '../views.js';
 import { can, canSetRole, ROLES } from '../permissions.js';
+import { requireStorage } from '../storage-watch.js';
 
 export const PURGE_AFTER_MS = 7 * 86_400_000;
 const NAME_MAX = 60;
@@ -168,6 +169,7 @@ export class Teams {
       ...emailOnlyIdentity(user.primary_email), joined_via: 'created_team', created_at: now,
     };
     this.hub.txn(() => {
+      requireStorage(this.hub);
       this.db.insert('orgs', org);
       this.db.insert('boards', board);
       this.db.insert('members', member);

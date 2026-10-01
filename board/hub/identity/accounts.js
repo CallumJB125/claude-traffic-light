@@ -13,6 +13,7 @@ import { oauthProviders, webOauthProviders, signupPolicy } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
+import { storagePaused } from '../storage-watch.js';
 
 export const SESSION_COOKIE = '__Host-buddy_session';
 export const FLOW_COOKIE = '__Host-buddy_flow';
@@ -188,6 +189,7 @@ export class Accounts {
   requireSignup(email, opts) {
     const via = this.signupVia(email, opts);
     if (!via) throw new HubError('SIGNUP_CLOSED', SIGNUP_CLOSED_TEXT);
+    if (storagePaused(this.hub)) throw new HubError('SIGNUP_PAUSED', 'New accounts are temporarily paused. Try again later.');
     return via;
   }
 
@@ -298,7 +300,9 @@ export class Accounts {
     // address asked recently). A dud never kills the flows the address already has.
     // A new address sign-up may not use (D104) is silenced before mailBudget: it spends no mail token.
     const quiet = !lim.take('auth_start_email', mine).ok || !lim.take('auth_start_email_hour', mine).ok || !lim.take('auth_start_email_all', box).ok
-      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email) && !this.signupAllowed(email) ? 'signup_closed' : !this.mailBudget(email) ? 'mail_cap' : null;
+      ? 'email_rate' : purpose === 'signin' && !this.hasAccount(email)
+        ? !this.signupAllowed(email) ? 'signup_closed' : storagePaused(this.hub) ? 'signup_paused' : !this.mailBudget(email) ? 'mail_cap' : null
+        : !this.mailBudget(email) ? 'mail_cap' : null;
     // A dud does the same work as a real start (a code and its HMAC, the same
     // statements), so the time a refusal takes doesn't tell it apart; its
     // update matches no row (it kills none of the address's flows) and its

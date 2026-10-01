@@ -32,6 +32,7 @@ import { WebOAuth } from './identity/oauth-web.js';
 import { Enrolments } from './identity/enrolments.js';
 import { oauthProviders } from './config.js';
 import { RemoteAuthority } from './remote/authority.js';
+import { StorageWatch } from './storage-watch.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -41,6 +42,7 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
     throw new Error('this database belongs to the desktop app (BOARD_AUTH=local)');
   }
   const hub = new Hub({ db, config, clock, log, github: gh });
+  hub.storage = new StorageWatch(hub);
   // Dev login needs this per-process secret (header Board-Dev-Secret), printed
   // at startup: a loopback bind alone does not prove who is asking.
   hub.devLoginSecret = config.auth === 'dev' ? (config.devLoginSecret ?? randomBytes(18).toString('base64url')) : null;
