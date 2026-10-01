@@ -301,6 +301,27 @@ test('M-3: concurrent duplicates of one request create one card', async () => {
   } finally { await h.close(); }
 });
 
+test('L2: a request_id over 200 chars is refused, never cut; the same request on another board is CONFLICT', async () => {
+  const h = await accessHub();
+  try {
+    const conn = connect(h, 'l2a');
+    const ctx = h.app.integrations.ctxFor(conn.id);
+    const create = (boardId, request_id, title = 'L2') => ctx.act('card.create', {}, (s) => s.actAs(h.ids.alice).createCard(boardId, { request_id, title }));
+    const head = 'r'.repeat(200);
+    await assert.rejects(create(h.ids.board, `${head}A`), (e) => e.code === 'VALIDATION');
+    await assert.rejects(create(h.ids.board, `${head}B`), (e) => e.code === 'VALIDATION');
+    assert.equal(cardsTitled(h, 'L2').length, 0);
+    const a = (await create(h.ids.board, head)).result.card;
+    assert.equal((await create(h.ids.board, head)).result.card.id, a.id, 'the same request on its board replays');
+    const other = randomUUID();
+    h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, 'Two', 'TWO')", other, h.ids.org);
+    await assert.rejects(create(other, head), (e) => e.code === 'CONFLICT', 'from the D8 cache');
+    h.hub.requestCache.clear();
+    await assert.rejects(create(other, head), (e) => e.code === 'CONFLICT', 'from integration_requests');
+    assert.equal(cardsTitled(h, 'L2').length, 1);
+  } finally { await h.close(); }
+});
+
 // ── M-3b ──────────────────────────────────────────────────────────────────
 
 test('M-3b: an integration’s card.create journal row, as a member reads it, carries keyed hashes of its external ids and only the via: label', async () => {

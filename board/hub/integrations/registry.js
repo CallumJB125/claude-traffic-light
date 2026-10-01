@@ -33,6 +33,7 @@ const CONFIG_MAX_BYTES = 8 * 1024;
 const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
+const REQUEST_ID_MAX = 200;
 const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
 const AUDIT_REF_MAX = 80;
 // An id (PR number, issue key, branch, sha, slug): never free text, which a
@@ -321,8 +322,10 @@ export function createIntegrations({
         const member = actor(first.id);
         // Required so a handler retried after a timeout replays instead of acting twice (D8).
         if (typeof body?.request_id !== 'string' || !body.request_id) throw new HubError('VALIDATION', 'request_id required');
+        // Never cut: two ids sharing 200 chars would be one request (integration_requests).
+        if (body.request_id.length > REQUEST_ID_MAX) throw new HubError('VALIDATION', `request_id is at most ${REQUEST_ID_MAX} chars`);
         // Namespaced per connection: never collides with the member's own browser request ids.
-        const rid = `int:${c.id}:${body.request_id.slice(0, 200)}`;
+        const rid = `int:${c.id}:${body.request_id}`;
         const hit = hub.cachedResponse(member.id, rid);
         if (hit) {
           if (hit.status >= 400) { const { code, message, ...extra } = hit.body.error; throw new HubError(code, message, extra); }
@@ -344,7 +347,13 @@ export function createIntegrations({
       };
       return {
         member: { id: first.id, role: first.role },
-        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn'),
+        // A D8 replay answers with the first card whatever board it names: the
+        // same request on another board is a conflict, not that card.
+        createCard: (boardId, body = {}) => call(body, (m) => api.createCard(m, boardId, cardBody(body)), 'integration_card_conn').then((out) => {
+          const on = hub.card(out?.card?.id)?.board_id;
+          if (on != null && on !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
+          return out;
+        }),
         comment: (cardId, body = {}) => {
           if (body.for_agent === true) throw new HubError('POLICY_DENIED', 'an integration never writes to the agent');
           return call(body, (m) => api.comment(m, cardId, { ...body, for_agent: false }));

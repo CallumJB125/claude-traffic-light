@@ -142,7 +142,7 @@ export class Api {
     // redelivery after a restart or a swept dedupe row returns the same card.
     const via = this.hub.viaScope.getStore();
     const once = via?.member_id === member.id && typeof body.request_id === 'string' && body.request_id
-      ? { connection_id: via.connection_id, request_id: body.request_id.slice(0, 200) } : null;
+      ? { connection_id: via.connection_id, request_id: body.request_id } : null;
     return this.hub.withBoard(boardId, () => {
       const id = randomUUID();
       const now = this.hub.iso();
@@ -177,6 +177,8 @@ export class Api {
         this.hub.feed(id, 'created', {}, { actor: member.id });
         this.hub.later(() => this.hub.broadcastCard(id));
       });
+      // The same request naming another board is not a replay of this one.
+      if (prior && this.hub.card(prior).board_id !== boardId) throw new HubError('CONFLICT', 'this request_id already created a card on another board');
       return { card: cardView(this.hub, this.hub.card(prior ?? id), member.id) };
     });
   }

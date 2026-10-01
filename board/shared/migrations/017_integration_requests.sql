@@ -7,7 +7,7 @@
 -- returns that card. Private: no route selects it.
 CREATE TABLE integration_requests (
   connection_id TEXT NOT NULL REFERENCES connections(id),
-  request_id TEXT NOT NULL,           -- the connector's request_id, first 200 chars
+  request_id TEXT NOT NULL,           -- the connector's request_id (≤ 200 chars; longer is refused)
   card_id TEXT NOT NULL REFERENCES cards(id),
   created_at TEXT NOT NULL,
   PRIMARY KEY (connection_id, request_id)
