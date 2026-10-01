@@ -150,7 +150,7 @@ function tabs(active, counts) {
 function tabPanel(tab, detail, model, elapsed) {
   const d = detail.data;
   if (tab === 'handover') {
-    if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. Claude writes one continuously once a run starts.');
+    if (!d.handover) return h('p', { class: 'muted' }, 'No handover yet. The agent can record progress and next steps during the run.');
     return h('div', null,
       syncStrip(detail, elapsed),
       h('div', { class: 'md handover' }, renderMarkdown(handoverBody(d.handover.markdown))),

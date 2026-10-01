@@ -12,6 +12,7 @@ import { parseTitles, needsConfirm, pendingCard } from './quickadd.js';
 import { installDnd, snapshotRects, playFlip } from './dnd-dom.js';
 import { boardScreen, loadingScreen, THEME_NEXT } from './render-board.js';
 import { paletteResults } from './palette.js';
+import { starterWorkflow } from './render-workflows.js';
 import { normalizeBg, normalizeTheme } from './themes.js';
 import { tableScreen } from './render-table.js';
 import { DEFAULT_SORT, nextSort } from './table.js';
@@ -1174,6 +1175,7 @@ async function submitGive(form) {
 
 async function submitDialogForm(form, submitter) {
   const kind = form.dataset.form;
+  if (kind === 'workflow-publish' || kind === 'workflow-apply') return submitWorkflow(form, kind);
   if (['new-board', 'rename-board', 'archive-board'].includes(kind)) return submitBoardDialog(form);
   if (kind === 'integ-token') return submitIntegrationToken(form);
   if (kind === 'integ-prepare') return submitPrepare(form);
@@ -1323,6 +1325,7 @@ function runPalette(item, { give = false } = {}) {
   switch (run.type) {
     case 'open-card': openDetail(run.id); break;
     case 'open-search': openSearchResult(run); break;
+    case 'workflows': openWorkflows(); break;
     case 'view': setView(run.view); break;
     case 'theme-next': setTheme(THEME_NEXT[state.theme]); break;
     case 'new-card': openNewCard(); break;
@@ -1370,6 +1373,47 @@ async function openSearchResult(run) {
     state.boards = result.boards;
     await switchBoard(run.boardId, { openCard: run.id, section: run.section });
   } catch (error) { if (current()) toast(errorText(error)); }
+}
+
+function workflowIntent(mode, extra = {}) { return { kind: 'workflows', mode, instance: {}, request_id: crypto.randomUUID(), ...extra }; }
+function workflowGuard(d) {
+  const generation = boardGeneration, memberId = state.me?.member?.id, org = currentOrg();
+  return () => generation === boardGeneration && memberId === state.me?.member?.id && org === currentOrg() && state.dialog?.kind === 'workflows' && state.dialog.instance === d.instance;
+}
+async function openWorkflows(id = null, { includeArchived = false } = {}) {
+  const d = workflowIntent(id ? 'detail' : 'library', { loading: true, includeArchived }); state.dialog = d; update();
+  const current = workflowGuard(d);
+  try {
+    const result = await (id ? api.workflow(id) : api.workflows(includeArchived));
+    if (current()) { state.dialog = { ...state.dialog, loading: false, ...(id ? { selected: result } : result) }; update(); }
+  } catch (error) { if (current()) { state.dialog = { ...d, loading: false, error: errorText(error) }; update(); } }
+}
+function workflowDraft(form) {
+  const fd = new FormData(form);
+  return { name: String(fd.get('name') ?? ''), description: String(fd.get('description') ?? ''), steps: state.dialog.draft.steps.map((s, i) => ({ title: String(fd.get(`title-${i}`) ?? ''), body: String(fd.get(`body-${i}`) ?? ''), acceptance: String(fd.get(`acceptance-${i}`) ?? ''), plan_approval: fd.get(`plan-${i}`) === 'on' })) };
+}
+async function submitWorkflow(form, kind) {
+  const d = state.dialog;
+  if (d?.kind !== 'workflows' || d.busy || boardReadOnly()) return;
+  const current = workflowGuard(d), fd = new FormData(form), selected = d.selected?.workflow;
+  const draft = kind === 'workflow-publish' ? workflowDraft(form) : null;
+  const version = kind === 'workflow-apply' ? d.selected.versions.find((v) => v.version === d.previewVersion) ?? selected : null;
+  state.dialog = { ...d, busy: true, error: null, ...(draft ? { draft } : {}), context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') }; update();
+  try {
+    const result = kind === 'workflow-publish'
+      ? await api.publishWorkflow(selected?.id ?? null, { request_id: d.request_id, ...(selected ? { expected_version: selected.version } : {}), definition: draft })
+      : await api.applyWorkflow(state.boardId, selected.id, { request_id: d.request_id, version: version.version, content_hash: version.content_hash, context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') });
+    if (!current()) return;
+    if (kind === 'workflow-publish') { toast(`Published workflow version ${result.workflow.version}.`); await openWorkflows(result.workflow.id); }
+    else { state.dialog = null; toast(`Created ${result.instance.steps.length} workflow tasks.`); update(); }
+  } catch (error) { if (current()) { state.dialog = { ...state.dialog, busy: false, error: errorText(error) }; update(); } }
+}
+async function archiveWorkflow() {
+  const d = state.dialog, w = d?.selected?.workflow;
+  if (!w || d.busy || boardReadOnly()) return;
+  const current = workflowGuard(d); state.dialog = { ...d, busy: true }; update();
+  try { const result = await api.archiveWorkflow(w.id, !w.archived_at); if (current()) { state.dialog = { ...state.dialog, busy: false, selected: result }; update(); } }
+  catch (error) { if (current()) { state.dialog = { ...state.dialog, busy: false, error: errorText(error) }; update(); } }
 }
 
 function paletteKeydown(e) {
@@ -1603,6 +1647,21 @@ function onClick(e) {
     case 'feedback-send': submitFeedback(); return;
     case 'palette': togglePalette(); return;
     case 'palette-run': { const hit = paletteNow()[Number(el.dataset.index)]; if (hit) runPalette(hit.item); return; }
+    case 'workflow-library': openWorkflows(); return;
+    case 'workflow-show-archived': openWorkflows(null, { includeArchived: !state.dialog.includeArchived }); return;
+    case 'workflow-select': openWorkflows(el.dataset.workflow); return;
+    case 'workflow-new': state.dialog = workflowIntent('edit', { draft: starterWorkflow() }); update(); return;
+    case 'workflow-edit': state.dialog = workflowIntent('edit', { selected: state.dialog.selected, draft: structuredClone(state.dialog.selected.workflow.definition) }); update(); return;
+    case 'workflow-preview': state.dialog = workflowIntent('preview', { selected: state.dialog.selected, previewVersion: state.dialog.selected.workflow.version }); update(); return;
+    case 'workflow-archive': archiveWorkflow(); return;
+    case 'workflow-add-step': case 'workflow-remove-step': {
+      const form = root.querySelector('[data-form="workflow-publish"]'); if (!form || state.dialog.busy) return;
+      const draft = workflowDraft(form);
+      if (action === 'workflow-add-step' && draft.steps.length < 8) draft.steps.push({ title: '', body: '', acceptance: '', plan_approval: true });
+      if (action === 'workflow-remove-step' && draft.steps.length > 1) draft.steps.splice(Number(el.dataset.position), 1);
+      state.dialog = { ...state.dialog, draft }; update(); return;
+    }
+    case 'workflow-open-card': closePalette(); openSearchResult({ id: el.dataset.card, boardId: el.dataset.board }); return;
     case 'quick-add': openQuickAdd(); return;
     case 'quick-add-submit': commitTitles(parseTitles(root.querySelector('.quickadd-input')?.value), false); return;
     case 'quick-add-cancel': closeQuickAdd(); return;
@@ -1697,6 +1756,10 @@ function onChange(e) {
   const el = e.target.closest('[data-change]');
   if (!el) return;
   const what = el.dataset.change;
+  if (what === 'workflow-version' && state.dialog?.kind === 'workflows') {
+    const fd = new FormData(root.querySelector('[data-form="workflow-apply"]'));
+    state.dialog = { ...state.dialog, previewVersion: Number(el.value), request_id: crypto.randomUUID(), context: String(fd.get('context') ?? ''), title_prefix: String(fd.get('title_prefix') ?? '') }; update(); return;
+  }
   if (what === 'board') { switchBoard(el.value); return; }
   if (what === 'integ-board') { setIntegrationBoard(el.dataset.conn, el.value); return; }
   if (what === 'give-target' && state.dialog?.kind === 'give') { state.dialog = { ...state.dialog, target: el.value }; loadPreview(); }

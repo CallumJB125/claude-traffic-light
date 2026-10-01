@@ -32,6 +32,9 @@ export const JOURNAL_KINDS = Object.freeze([
   'board.rename',       // {name: [before, after]}; keys and links never change
   'board.archive',      // {archived_at}; board becomes read-only
   'board.restore',      // {archived_at: null}
+  'workflow.publish',   // {recipe_id, version, content_hmac}; version content stays in the editable library
+  'workflow.archive',   // {recipe_id, archived}; instantiated tasks remain ordinary cards
+  'workflow.apply',     // {instance_id, recipe_id, version, content_hmac, context_hmac}
 ]);
 
 // The card fields a transition writes (states.CARD_FIELDS + the derived column).

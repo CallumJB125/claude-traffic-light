@@ -21,6 +21,7 @@ import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 import { searchWork } from './search.js';
+import { Workflows } from './workflows.js';
 
 const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
@@ -222,6 +223,7 @@ function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
 }
 
 export function createHttpHandler({ hub, api, config, integrations = null }) {
+  const workflows = new Workflows(hub);
   // Where providers send people back: the public URL, or (dev/local only) this loopback hub.
   const publicBase = (req) => {
     if (config.publicUrl) return config.publicUrl.replace(/\/+$/, '');
@@ -256,6 +258,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
+    if (params.workflow_id) return hub.db.get('SELECT r.org_id FROM workflow_recipes r JOIN orgs o ON o.id = r.org_id WHERE r.id = ? AND o.deleted_at IS NULL', params.workflow_id)?.org_id ?? null;
     if (r.pattern.startsWith('/api/client-items/:item_id')) return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/client-approval-requests/:approval_id')) return hub.db.get('SELECT p.workspace_id FROM client_approval_requests a JOIN client_items i ON i.id = a.item_id JOIN client_projects p ON p.id = i.project_id WHERE a.id = ?', params.approval_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/permission-requests/')) {
@@ -381,6 +384,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }
   route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
   route('GET', '/api/search', ({ member, query, ident }) => searchWork(hub, member, query, { cred: ident?.cred }), { limit: 'search_member' });
+  route('GET', '/api/workflows', ({ member, ident, query }) => workflows.list(member, ident?.cred, { includeArchived: query.get('include_archived') === '1' }));
+  route('POST', '/api/workflows', ({ member, body, ident }) => workflows.publish(member, null, body, ident?.cred), { replay: false });
+  route('GET', '/api/workflows/:workflow_id', ({ member, params, ident }) => workflows.detail(member, params.workflow_id, ident?.cred));
+  route('POST', '/api/workflows/:workflow_id/versions', ({ member, params, body, ident }) => workflows.publish(member, params.workflow_id, body, ident?.cred), { replay: false });
+  route('POST', '/api/workflows/:workflow_id/archive', ({ member, params, body, ident }) => workflows.archive(member, params.workflow_id, body, ident?.cred), { replay: false });
+  route('POST', '/api/boards/:board_id/workflows/:workflow_id/apply', ({ member, params, body, ident }) => workflows.apply(member, params.workflow_id, params.board_id, body, ident?.cred), { replay: false });
   route('POST', '/api/boards', ({ member, body }) => api.createBoard(member, body));
   route('PATCH', '/api/boards/:board_id', ({ member, params, body }) => api.updateBoard(member, params.board_id, body));
   route('POST', '/api/boards/:board_id/archive', ({ member, params }) => api.setBoardArchived(member, params.board_id, true));

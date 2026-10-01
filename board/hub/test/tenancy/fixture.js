@@ -72,6 +72,9 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   if (cb.status !== 200 || ca.status !== 200) throw new Error(`card create: ${cb.text} ${ca.text}`);
   B.card = cb.body.card.id;
   A.card = ca.body.card.id;
+  const wf = await as(users.ub, 'POST', '/api/workflows', { request_id: randomUUID(), definition: { name: `${MARK} workflow`, description: `${MARK} instructions`, steps: [{ title: `${MARK} step`, body: `${MARK} brief`, acceptance: '', plan_approval: true }] } });
+  if (wf.status !== 200) throw new Error(`workflow: ${wf.text}`);
+  B.workflow = wf.body.workflow.id; B.workflowHash = wf.body.workflow.content_hash;
   await as(users.ub, 'POST', `/api/cards/${B.card}/comments`, { request_id: randomUUID(), body: `${MARK} comment` });
   B.label = `${MARK}-label`;
   const lb = await as(users.ub, 'POST', `/api/boards/${B.board}/labels`, { request_id: randomUUID(), name: B.label, color: 'red' });
@@ -140,6 +143,10 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT id, org_id, role, removed_at, display_name FROM members WHERE org_id = ?', B.team),
       q('SELECT c.* FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.org_id = ?', B.team),
       q('SELECT * FROM comments WHERE card_id = ?', B.card),
+      q('SELECT * FROM workflow_recipes WHERE org_id = ?', B.team),
+      q('SELECT v.* FROM workflow_versions v JOIN workflow_recipes r ON r.id = v.recipe_id WHERE r.org_id = ?', B.team),
+      q('SELECT i.* FROM workflow_instances i JOIN workflow_recipes r ON r.id = i.recipe_id WHERE r.org_id = ?', B.team),
+      q('SELECT s.* FROM workflow_step_cards s JOIN workflow_instances i ON i.id = s.instance_id JOIN workflow_recipes r ON r.id = i.recipe_id WHERE r.org_id = ?', B.team),
       q('SELECT * FROM permission_requests WHERE card_id = ?', B.card),
       q('SELECT * FROM asks WHERE card_id = ?', B.card),
       q('SELECT * FROM devices WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),

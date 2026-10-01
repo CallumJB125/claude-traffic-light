@@ -331,11 +331,11 @@ export class Api {
     });
   }
 
-  // External integration/client feedback text never enters the permanent
+  // External integration/client feedback/workflow context never enters the permanent
   // journal in the clear, including when staff later edit its card (D41).
   externalCard(cardId) {
     return !!this.db.get(
-      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND (actor_kind = 'integration' OR json_extract(payload, '$.client_feedback_id') IS NOT NULL) LIMIT 1",
+      "SELECT 1 AS x FROM integration_requests WHERE card_id = ? UNION ALL SELECT 1 FROM journal WHERE card_id = ? AND kind = 'card.create' AND (actor_kind = 'integration' OR json_extract(payload, '$.client_feedback_id') IS NOT NULL OR json_extract(payload, '$.workflow_instance_id') IS NOT NULL) LIMIT 1",
       cardId, cardId);
   }
 

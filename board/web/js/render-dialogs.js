@@ -8,6 +8,7 @@ import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { LABEL_COLORS, labelClass, managerRows } from './labels.js';
 import { tackleChoices, readinessText } from './tackle.js';
+import { workflowDialog } from './render-workflows.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -268,6 +269,7 @@ export function dialog(model) {
     case 'labels': return labelsDialog(d, model);
     case 'feedback': return feedbackDialog(d, model);
     case 'boards': return boardsDialog(d, model);
+    case 'workflows': return workflowDialog(d, model);
     case 'new-board': case 'rename-board': case 'archive-board': return boardDialog(d);
     default: return null;
   }

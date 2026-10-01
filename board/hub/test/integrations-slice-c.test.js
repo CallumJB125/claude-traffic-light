@@ -491,7 +491,7 @@ test('C1 migration 026 applies over a DB at 025 (024 reserved); a legacy row loa
     INSERT INTO members (id, org_id, github_id, github_login, email, display_name, role, created_at) VALUES ('ma','oa',1,'a','a@x.io','A','owner','${NOW}');
     INSERT INTO connections (id, org_id, provider, external_id, created_by, created_at, settings) VALUES ('ka','oa','github','1','ma','${NOW}','{"config":{"app_id":1}}');
   `);
-  assert.deepEqual(migrate(db, { migrations: all }), [26, 28, 29, 31, 32, 34, 35]);
+  assert.deepEqual(migrate(db, { migrations: all }), [26, 28, 29, 31, 32, 34, 35, 37]);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN ('connections_provider_fixed', 'connections_id_never_reused')").get().n, 2);
   assert.equal(db.prepare("SELECT settings FROM connections WHERE id = 'ka'").get().settings, '{"config":{"app_id":1}}');
   db.exec(`UPDATE connections SET settings = '{"config":{"app_id":2}}' WHERE id = 'ka'`);

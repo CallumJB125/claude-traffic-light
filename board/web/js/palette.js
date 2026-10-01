@@ -70,6 +70,7 @@ export function commandItems({ view, readOnly, filters, hasGive }) {
   const items = [];
   for (const v of VIEWS) items.push(cmd(`view-${v.id}`, `Go to ${v.label}`, { type: 'view', view: v.id }, { hint: v.id === view ? 'current' : null, keywords: `switch view ${v.id}`, icon: v.icon }));
   items.push(cmd('search', 'Search all boards…', { type: 'scope-search' }, { keywords: 'project search comments handover artifacts', icon: 'search' }));
+  items.push(cmd('workflows', 'Reusable workflows…', { type: 'workflows' }, { keywords: 'templates recipes delivery repeat steps', icon: 'queue' }));
   items.push(cmd('theme', 'Toggle theme', { type: 'theme-next' }, { keywords: 'dark light system appearance', icon: 'auto' }));
   if (!readOnly) items.push(cmd('new', 'New card', { type: 'new-card' }, { hint: 'n', keywords: 'create add', icon: 'plus' }));
   if (!readOnly && hasGive) items.push(cmd('give', 'Tackle with AI…', { type: 'scope-give' }, { keywords: 'dispatch run assign codex ai', icon: 'person' }));
@@ -127,6 +128,6 @@ export function paletteResults(dlg, { entries, view, readOnly, filters }) {
   const commands = commandItems({ view, readOnly, filters, hasGive });
   const cards = cardItems(ordered);
   // With nothing typed, show a short command list and the top cards, not 40 of each.
-  if (!String(dlg.query ?? '').trim()) return [...commands.slice(0, 6), ...cards.slice(0, 4)].map((item) => ({ item, indices: [] }));
+  if (!String(dlg.query ?? '').trim()) return [...commands.slice(0, 8), ...cards.slice(0, 4)].map((item) => ({ item, indices: [] }));
   return rankItems([...commands, ...cards], dlg.query);
 }
