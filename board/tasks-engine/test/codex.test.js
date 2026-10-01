@@ -34,6 +34,8 @@ test('Codex default: real socket creates a worktree, observes edits/evidence, an
     assert.match(t.evidence.summary, /fixture edit/); assert.ok(t.touched.includes('codex-result.txt')); assert.equal(t.cost.budgetUsd, null);
     assert.equal(fs.existsSync(path.join(h.dataDir, 'run', id, 'ipc.sock')), false); assert.equal(fs.existsSync(path.join(h.dataDir, 'run', id, 'hook.token')), false);
     const started = h.log().find((x) => x.kind === 'start'); assert.ok(started.argv.includes('--ignore-user-config')); assert.ok(!('BOARD_DEVICE_TOKEN' in started.env));
+    assert.equal(t.gitRef, `refs/heads/${t.branch}`);
+    assert.ok(started.argv.some((s) => s.includes(`${JSON.stringify(path.join(h.repo.checkout, '.git', t.gitRef))}="write"`)));
   } finally { await h.cleanup(); }
 });
 
@@ -70,7 +72,26 @@ test('Codex terminal takeover and handback preserve the sandbox and actual sessi
     await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
     const r = await h.client.act(id, 'takeover', { mode: 'print' });
     assert.ok(r.takeover.argv.includes('resume')); assert.ok(r.takeover.argv.includes(h.task(id).sessionId)); assert.ok(r.takeover.argv.includes('--ignore-user-config')); assert.ok(r.takeover.argv.some((s) => s.includes('network.enabled=false'))); assert.ok(!JSON.stringify(r.takeover).includes('btk_'));
+    assert.ok(r.takeover.argv.some((s) => s.includes(`${JSON.stringify(path.join(h.repo.checkout, '.git', h.task(id).gitRef))}="write"`)));
     assert.equal(h.task(id).state, 'handed_over');
     await h.client.act(id, 'handback'); await waitFor(() => h.task(id)?.state === 'in_review');
+  } finally { await h.cleanup(); }
+});
+
+test('Codex in-place grant stays on its original branch after a user checkout and resume', async () => {
+  const h = await setup({ wait: true, waitFirstOnly: true });
+  try {
+    const { id } = await h.client.createTask({ text: 'Stay on the authorized branch', cwd: h.repo.checkout, workInPlace: true, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    assert.equal(h.task(id).gitRef, 'refs/heads/main');
+    await h.client.act(id, 'pause'); await waitFor(() => h.task(id)?.state === 'parked');
+    h.repo.git('checkout', '-qb', 'other');
+    await h.client.act(id, 'resume'); await waitFor(() => h.task(id)?.state === 'in_review');
+    const profile = h.log().filter((x) => x.kind === 'start').at(-1).argv.join('\n');
+    assert.ok(profile.includes(`${JSON.stringify(path.join(h.repo.checkout, '.git/refs/heads/main'))}="write"`));
+    assert.ok(!profile.includes(`${JSON.stringify(path.join(h.repo.checkout, '.git/refs/heads/other'))}="write"`));
+    assert.equal(h.task(id).gitRef, 'refs/heads/main');
+    const persisted = fs.readFileSync(h.eng.engine.store.tasksFile, 'utf8').trim().split('\n').map(JSON.parse).filter((r) => r.task.id === id).at(-1).task;
+    assert.equal(persisted.gitRef, 'refs/heads/main');
   } finally { await h.cleanup(); }
 });

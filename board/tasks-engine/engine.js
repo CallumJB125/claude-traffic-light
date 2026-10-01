@@ -488,6 +488,10 @@ export class TasksEngine extends EventEmitter {
         if (st.bavail * st.bsize < MIN_FREE_BYTES) throw new ApiError('DISK_FULL', 'not enough free disk space for a worktree');
       } catch (e) { if (e instanceof ApiError) throw e; }
     }
+    // Record the authorized branch once. A later user checkout or resumed
+    // terminal session must never expand this task's reference permissions.
+    const gitRef = branch ? `refs/heads/${branch}` : top
+      ? await this.git(top, ['symbolic-ref', '--quiet', 'HEAD']).then((s) => s.trim(), () => null) : null;
 
     const now = this.now();
     const originUserId = parent ? parent.originUserId ?? null : spec.sourceMeta?.userId ?? null;
@@ -498,7 +502,7 @@ export class TasksEngine extends EventEmitter {
       ai: { id: ai.id, reason: ai.reason, model: spec.model ?? null }, surface, permissionLevel: level,
       planFirst: remote || parentPlanning || !!spec.planFirst, planApproved: false, source, sourceMeta: spec.sourceMeta ?? {},
       awaitingConfirm: remoteNeedsAccept, repo: top ? { root: top, name: path.basename(top) } : null, branch, worktree, workInPlace,
-      worktreeCreated: false, gitDir: null, baseBranch, baseSha, sessionId: crypto.randomUUID(), sessionStarted: false, nonce: hex(8),
+      worktreeCreated: false, gitDir: null, gitRef, baseBranch, baseSha, sessionId: crypto.randomUUID(), sessionStarted: false, nonce: hex(8),
       cost: { usd: 0, budgetUsd: spec.budgetUsd ?? null }, numTurns: 0, turn: 0, createdAt: now, stateSince: now, lastSeq: 0,
       handover: null, evidence: null, pr: null, limitResetAt: null, resumeAtReset: false, openApprovals: [], openAsk: null, audit: [],
       lastActivity: null, touched: [], lastAssistant: null, tests: null, testCommand: null, run: null, pendingStart: null,
@@ -662,6 +666,17 @@ export class TasksEngine extends EventEmitter {
     return { runDir, socketPath };
   }
 
+  async #gitAccess(task) {
+    if (!task.repo) return {};
+    const commonGitDir = await this.git(task.repo.root, ['rev-parse', '--git-common-dir']).then((s) => fs.realpathSync(path.resolve(task.repo.root, s.trim())), () => null);
+    if (!commonGitDir) return {}; // Metadata discovery failure cannot grant a whole Git directory.
+    const gitDir = task.gitDir ?? await this.git(task.worktree, ['rev-parse', '--absolute-git-dir']).then((s) => fs.realpathSync(s.trim()), () => null);
+    // Legacy isolated tasks have a recorded branch. Legacy in-place tasks
+    // have no branch grant: fail closed until a new task records one.
+    const gitRef = Object.hasOwn(task, 'gitRef') ? task.gitRef : task.branch ? `refs/heads/${task.branch}` : null;
+    return { commonGitDir, gitDir, gitRef };
+  }
+
   /** settings.json, mcp.json and hook.token for a run (or a takeover) in the 0700 run dir. */
   #writeRunFiles(task, runDir, socketPath, token) {
     ensureDir(runDir);
@@ -714,8 +729,7 @@ export class TasksEngine extends EventEmitter {
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
-      dataDir: dataReal, cacheDir, gitDir: task.gitDir,
-      commonGitDir: task.repo ? await this.git(task.repo.root, ['rev-parse', '--git-common-dir']).then((s) => fs.realpathSync(path.resolve(task.repo.root, s.trim())), () => null) : null,
+      dataDir: dataReal, cacheDir, ...await this.#gitAccess(task),
     });
     run.backend = backend;
     this.#attach(task, run);
@@ -1278,8 +1292,7 @@ export class TasksEngine extends EventEmitter {
           if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
           env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
           const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,
-            dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), gitDir: task.gitDir,
-            commonGitDir: task.repo ? await this.git(task.repo.root, ['rev-parse', '--git-common-dir']).then((s) => fs.realpathSync(path.resolve(task.repo.root, s.trim())), () => null) : null,
+            dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), ...await this.#gitAccess(task),
             permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model };
           writeFileAtomic(path.join(runDir, 'codex-instructions.md'), this.#brief(task));
           return { takeover: { argv: [info.bin, ...new this.backends.codex(options).argv()], cwd: task.worktree,

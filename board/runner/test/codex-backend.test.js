@@ -56,3 +56,17 @@ test('Codex profile narrows writes, denies authority/auth files and never enable
  for (const p of ['/repo-wt/AGENTS.md','/repo/.git/config','/repo/.git/hooks']) assert.ok(c.includes(`${JSON.stringify(p)}="read"`));
  assert.ok(c.includes('network.enabled=false')); assert.ok(c.includes('dangerously_allow_all_unix_sockets=false')); assert.ok(!c.includes('"/tmp"="write"'));
 });
+
+test('Codex Git writes are restricted to objects, private metadata and the authorized branch', () => {
+ const opts = { cwd: '/repo-wt', cacheDir: '/tmp/task-cache', gitDir: '/repo/.git/worktrees/task', commonGitDir: '/repo/.git', gitRef: 'refs/heads/buddy/task' };
+ const profile = codexConfig(opts).join('\n');
+ for (const p of ['/repo/.git/objects', '/repo/.git/worktrees/task', '/repo/.git/refs/heads/buddy/task', '/repo/.git/refs/heads/buddy/task.lock', '/repo/.git/logs/refs/heads/buddy/task']) assert.ok(profile.includes(`${JSON.stringify(p)}="write"`), p);
+ assert.ok(profile.includes('"/repo/.git"="read"')); assert.ok(!profile.includes('"/repo/.git/refs"="write"')); assert.ok(!profile.includes('"/repo/.git/refs/heads/main"="write"'));
+ assert.ok(profile.includes('"/repo/.git/worktrees/task/config.worktree"="read"'));
+ const plan = codexConfig({ ...opts, readOnly: true }).join('\n');
+ assert.ok(!plan.includes('"/repo/.git/objects"="write"')); assert.ok(!plan.includes('"/repo/.git/refs/heads/buddy/task"="write"'));
+ for (const gitRef of ['refs/heads/../../config', 'refs/heads/main.lock', 'refs/heads/.hidden', 'refs/heads/main\n']) {
+  const invalid = codexConfig({ ...opts, gitRef }).join('\n');
+  assert.ok(!invalid.includes('"/repo/.git/refs/heads/'), gitRef);
+ }
+});

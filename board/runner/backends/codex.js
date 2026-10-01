@@ -14,20 +14,40 @@ export class NotAvailableError extends Error {
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const table = (entries) => `{${Object.entries(entries).map(([k, v]) => `${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`;
+const ownedRef = (ref) => typeof ref === 'string' && ref.startsWith('refs/heads/')
+  && !/[\x00-\x20\x7f~^:?*\[\\]/.test(ref) && !ref.includes('..') && !ref.includes('@{')
+  && ref.split('/').every((p) => p && !p.startsWith('.') && !p.endsWith('.') && !p.endsWith('.lock'));
 
 /** Same profile is used for new, resumed and user-owned terminal turns. */
-export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, readOnly = false, env = {}, instructionsFile }) {
+export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitRef, readOnly = false, env = {}, instructionsFile }) {
   const filesystem = { ':minimal': 'read', ':workspace_roots': readOnly ? 'read' : 'write' };
   // OS minimal permissions omit common installed tool runtimes. Grant read
   // only (never their caches/configuration or arbitrary home directories).
   for (const d of ['/opt/homebrew/bin', '/opt/homebrew/Cellar', '/opt/homebrew/lib', '/opt/homebrew/share', '/usr/local/bin', '/usr/local/lib', '/usr/local/Cellar', '/usr/local/share', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer']) filesystem[d] = 'read';
-  for (const d of [cacheDir, gitDir, commonGitDir]) if (d) filesystem[d] = readOnly && d !== cacheDir ? 'read' : 'write';
+  if (cacheDir) filesystem[cacheDir] = 'write';
+  // Shared Git refs belong to other tasks and user checkouts. Commits need
+  // object storage and only this task's authorized branch, never all refs.
+  if (commonGitDir) {
+    filesystem[commonGitDir] = 'read';
+    if (!readOnly) {
+      filesystem[path.join(commonGitDir, 'objects')] = 'write';
+      if (ownedRef(gitRef)) {
+        for (const rel of [gitRef, `${gitRef}.lock`, `logs/${gitRef}`, `logs/${gitRef}.lock`]) filesystem[path.join(commonGitDir, rel)] = 'write';
+      }
+      if (gitDir === commonGitDir) {
+        const localFiles = ['HEAD', 'index', 'logs/HEAD', 'COMMIT_EDITMSG', 'AUTO_MERGE', 'MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE', 'MERGE_RR', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'SQUASH_MSG', 'ORIG_HEAD'];
+        for (const rel of localFiles.flatMap((n) => [n, `${n}.lock`])) filesystem[path.join(gitDir, rel)] = 'write';
+      }
+    }
+  }
+  if (gitDir && gitDir !== commonGitDir) filesystem[gitDir] = readOnly ? 'read' : 'write';
   // Read-only exceptions prevent a shell from modifying its own policy or
   // trusted instructions. Nested rules narrow the enclosing writable root.
   for (const d of new Set([cwd, commonGitDir].filter(Boolean))) {
     const names = d === commonGitDir ? ['config', 'hooks'] : ['.git', '.codex', '.claude', '.mcp.json', 'AGENTS.md', 'CLAUDE.md'];
     for (const n of names) filesystem[path.join(d, n)] = 'read';
   }
+  if (gitDir) for (const n of ['config', 'config.worktree', 'hooks']) filesystem[path.join(gitDir, n)] = 'read';
   if (dataDir) filesystem[dataDir] = 'deny';
   for (const d of [env.CODEX_HOME || (env.HOME && path.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains'].map((n) => env.HOME && path.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
