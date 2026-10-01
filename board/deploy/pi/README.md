@@ -55,7 +55,7 @@ the restored state).
 
 Rollback caveats: (1) migrations are forward-only: the old code cannot run against a newer schema, so a rollback after a
 migration needs the pre-deploy backup restored too (step 3 above). (2) `node hub/admin.js revoke-legacy-devices` (the
-accounts cutover: it revokes every old runner device) is NOT undone by a rollback or a restore: runners must enrol again.
+accounts cutover: it revokes every old runner device) stores its revocation in the database. Restoring a snapshot from before that command can restore legacy device tokens. Keep Cloudflare Access in front while rolling back to Access mode. Accounts mode rejects legacy token types; before exposing an accounts hub after any restore, run `revoke-legacy-devices` again. Runners must enrol again for accounts mode.
 (3) `BOARD_SECRET` and `BOARD_ENC_KEY(_FILE)` must be the same ones the database was written with.
 
 Off-site backups: Litestream streams `/var/lib/buddy-hub/board.db` to the R2 bucket `plexiform-hub-backups`
