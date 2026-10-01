@@ -101,7 +101,9 @@ test('pause → parked{user} with a handover; resume continues the same session 
   assert.equal(p.task.state, 'parked');
   assert.equal(p.task.parkReason, 'user');
   const paused = await m.client.getTask(id);
-  assert.equal(paused.handover.version, previousVersion + 1, 'pause writes a new durable checkpoint after continuous progress');
+  assert.ok(paused.handover.version > previousVersion, 'pause writes a new durable checkpoint after any in-flight progress');
+  assert.equal(paused.handover.provenance, 'checkpoint_complete');
+  assert.equal(paused.checkpoint.version, paused.handover.version);
   assert.equal(p.task.reason, `paused by you · handover v${paused.handover.version}`);
   assert.ok(m.events.some((e) => e.taskId === id && e.type === 'state' && e.state === 'handing_over'));
   const sid = (await m.client.getTask(id)).sessionId;
