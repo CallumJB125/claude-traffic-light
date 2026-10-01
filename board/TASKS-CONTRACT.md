@@ -9,7 +9,7 @@ Sources, in precedence order:
 1. `board/CONTRACT.md` and `board/shared/` for everything they already define: state names, the transition rows, liveness and the green rule, fence tokens, handover model, error codes, the launch profile, scope/redaction. This file never redefines them; it maps onto them.
 2. This file, `tasks-api/schema.json` (JSON Schema draft 2020-12, **generated** by `tasks-api/scripts/build-schema.js` from `tasks-api/protocol.js` + `shared/states.js`), and `tasks-api/protocol.js`.
 3. The plan: `claude-traffic-light/.omc/plans/standalone-tasks-plan.md` (§ numbers below prefixed "plan §").
-4. Phase 0 spikes: `../claude-buddy-board-spikes-2026-09-30.md`.
+4. Phase 0 spikes: the Phase 0 spikes note (2026-09-30).
 
 To change the contract: edit this file **and** `protocol.js` (and run `npm run tasks:schema`) in the same commit. `tasks-api/test/schema.test.js` fails if `schema.json` differs from the generator output, if the schema uses a keyword the bundled validator doesn't implement, or if a method, action, event type, push kind, error code, park reason, MCP tool or CLI subcommand in `protocol.js` is not named here.
 
