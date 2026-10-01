@@ -1,21 +1,28 @@
-// May Enter allow this permission request? Only what the phone could approve
-// (the remote allow-list: read-only commands, edits inside the project, no
-// credentials) and nothing main flagged as dangerous. Everything else needs
-// a deliberate click.
-//
-// allowListReason lives in remote/src/allowlist.js on this branch; after
-// fix/deny-list-bypasses it is src/deny/allowlist.js. Repoint this one line.
-// remote/ isn't packaged: if it can't load, Enter never allows (fail closed).
+// May Enter allow this permission request? Only what the phone could approve:
+// the same compiled verdict (src/deny: the deny-list first, then the
+// allow-list of read-only commands, edits inside the project, no credentials),
+// and nothing main flagged as dangerous. Everything else needs a deliberate
+// click. src/deny ships with the app, so this works in a packaged build; if it
+// can't load, Enter never allows (fail closed).
 'use strict';
 
-let allowListReason = null;
-try { ({ allowListReason } = require('../remote/src/allowlist.js')); } catch { allowListReason = null; }
+const fs = require('fs');
+const os = require('os');
+
+let verdict = null;
+try {
+  const { remoteVerdict } = require('./deny/allowlist.js');
+  const { compileRules } = require('./deny/denylist.js');
+  const compiled = compileRules();
+  verdict = (args) => remoteVerdict(compiled, args, { home: os.homedir(), realpath: fs.realpathSync.native });
+} catch { verdict = null; }
 
 // → null when Enter may allow it, else why not.
 function enterBlockedReason(req) {
-  if (typeof allowListReason !== 'function') return 'the allow-list is not available here';
+  if (typeof verdict !== 'function') return 'the allow-list is not available here';
   try {
-    return allowListReason({ toolName: req && req.tool, toolInput: (req && req.toolInput) || {}, cwd: req && req.cwd });
+    const v = verdict({ toolName: req && req.tool, toolInput: (req && req.toolInput) || {}, cwd: (req && req.cwd) || null, repoLabels: [] });
+    return v && v.blocked === false ? null : (v && v.reason) || 'not on the allow-list';
   } catch {
     return 'it could not be checked';
   }
@@ -36,4 +43,4 @@ function gestureAllowTarget(pending, inputs) {
   return { req };
 }
 
-module.exports = { enterBlockedReason, gestureAllowTarget, available: () => typeof allowListReason === 'function' };
+module.exports = { enterBlockedReason, gestureAllowTarget, available: () => typeof verdict === 'function' };

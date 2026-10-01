@@ -192,15 +192,26 @@ const PROBES = [
   'npm install left-pad', 'pip install requests', 'pnpm dlx create-thing', 'uv run task.py', 'psql -c "DROP TABLE users"', 'aws s3 rm s3://bucket --recursive',
   'gcloud projects delete my-proj', 'heroku apps:destroy my-app', 'firebase deploy', 'supabase db reset', 'printenv',
 ];
-// The tokenizer/deny-list fixes for these land in fix/deny-list-bypasses.
-const PENDING_PROBES = ['env -S "rm -rf build"', 'git -c core.sshCommand="sh -c id" fetch', 'git -c core.pager="sh -c id" log', 'git -c core.fsmonitor="sh -c id" status', 'git -c core.hooksPath=/tmp/h status', 'cat .env'];
-for (const command of PROBES) {
-  test(`Enter needs a click: ${command}`, () => assert.equal(enterOk('Bash', { command }), false));
+// Formerly pending on fix/deny-list-bypasses (merged): the shared checks now catch them.
+const LATER_PROBES = ['env -S "rm -rf build"', 'git -c core.sshCommand="sh -c id" fetch', 'git -c core.pager="sh -c id" log', 'git -c core.fsmonitor="sh -c id" status', 'git -c core.hooksPath=/tmp/h status', 'cat .env',
+  'cat README.md\n2>/dev/null touch evil'];
+for (const command of PROBES.concat(LATER_PROBES)) {
+  test(`Enter needs a click: ${JSON.stringify(command)}`, () => assert.equal(enterOk('Bash', { command }), false));
 }
-for (const command of PENDING_PROBES) {
-  // enable after fix/deny-list-bypasses
-  test(`Enter needs a click: ${command}`, { todo: 'enable after fix/deny-list-bypasses' }, () => assert.equal(enterOk('Bash', { command }), false));
-}
+
+test('Enter: file tools by the shared allow-list (Grep scope, files that run code later, home given)', () => {
+  assert.equal(enterOk('Grep', { pattern: 'x', path: '~' }), false, 'Grep over home');
+  assert.equal(enterOk('Grep', { pattern: 'x', path: '~/.config' }), false, 'Grep over config');
+  assert.equal(enterOk('Grep', { pattern: 'x', path: 'src' }), true, 'Grep inside the project');
+  for (const f of ['CLAUDE.md', 'pyproject.toml']) assert.equal(enterOk('Write', { file_path: `/w/app/${f}`, content: 'x' }), false, f);
+  assert.equal(enterOk('Edit', { file_path: '/srv/app/src/a.js', old_string: 'a', new_string: 'b' }, '/srv/app'), true, 'a project outside home is fine');
+});
+
+test('Enter: an emoji in a commit message is not danger, but git commit still needs a click (not on the allow-list)', () => {
+  const req = { tool: 'Bash', toolInput: { command: 'git commit -m "fix: tidy ✨ the widget"' }, cwd: '/w/app' };
+  assert.equal(A.danger(req), null);
+  assert.equal(enterOk('Bash', req.toolInput), false);
+});
 
 test('N5: a gesture or click-rule "allow" answers only one allow-listed, unflagged permission', () => {
   const req = { id: 'r1', kind: 'permission' };

@@ -24,7 +24,7 @@ test('every page has a unique id, a title and a known kind', () => {
 });
 
 test('local pages name an app file and its preload, and both exist', () => {
-  const local = flat().filter((p) => p.kind === 'local');
+  const local = flat().filter((p) => p.kind === 'local' && !p.screen); // screen pages are the account page's
   assert.ok(local.some((p) => p.id === 'waiting'), 'Waiting on you is a local page');
   for (const p of local) {
     for (const f of [p.file, p.preload]) {

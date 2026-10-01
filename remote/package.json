@@ -2,7 +2,7 @@
   "name": "@claude-buddy/remote",
   "version": "0.1.0",
   "description": "Security core for Buddy on your phone: device pairing, signed remote permission decisions, remote deny-list, relay contract.",
-  "//": "src/{denylist,canonical,encoding,shell}.js re-export ../../src/deny/ (packaged with the app): keep that path when moving remote/.",
+  "//": "src/{allowlist,denylist,canonical,encoding,shell}.js re-export ../../src/deny/ (packaged with the app): keep that path when moving remote/.",
   "type": "module",
   "private": true,
   "license": "MIT",
