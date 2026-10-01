@@ -1189,3 +1189,8 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
   .budget-fill, .cchip-fill { transition: none; }
   .dash-spin { animation: none; }
 }
+.integ-status { font-weight: 600; margin: 0; }
+.localcard { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin: 8px 16px 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.localcard-text { flex: 1 1 240px; min-width: 0; }
+.localcard-title { margin: 0; font-size: var(--text-md); font-weight: 650; }
+.localcard-body { margin: 2px 0 0; }

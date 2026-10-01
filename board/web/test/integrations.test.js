@@ -139,7 +139,7 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
   const v = integrationsScreen(m({ local: true, manifest: { provider: 'github', action: 'https://github.com/settings/apps/new?state=s', fields: { manifest: '{}' } } }));
   const note = findAll(v, (n) => n.props?.class === 'integ-local muted');
   assert.equal(note.length, 1);
-  assert.equal(textOf(note[0]), 'Connect tools on a team hub: sign in and open your team’s board.');
+  assert.equal(textOf(note[0]), 'Integrations live on a team hub. Open Team in the sidebar to sign in, then create a team or join one.');
   assert.equal(note[0].tag, 'p');
   assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0);
   assert.equal(findAll(v, (n) => n.tag === 'form').length, 0);
@@ -147,6 +147,24 @@ test('local hub (no accounts): a plain note says where to connect, and no connec
   const team = integrationsScreen(m());
   assert.equal(findAll(team, (n) => n.props?.class === 'integ-local muted').length, 0, 'a team hub shows no note');
   assert.equal(byAttr(team, 'data-action', 'integ-connect').length, 1);
+});
+
+test('local hub: a grid of the six tools with a one-line value and a status in words; only GitHub is "Available after you join a team"', () => {
+  const v = integrationsScreen(m({ local: true }));
+  const cards = findAll(v, (n) => n.props?.['data-connector']);
+  assert.deepEqual(cards.map((c) => c.props['data-connector']), ['github', 'slack', 'sentry', 'linear', 'jira', 'google']);
+  const status = (id) => textOf(findAll(cards.find((c) => c.props['data-connector'] === id), (n) => n.props?.class === 'integ-status small')[0]);
+  assert.equal(status('github'), 'Available after you join a team');
+  for (const id of ['slack', 'sentry', 'linear', 'jira', 'google']) assert.equal(status(id), 'Coming soon', id);
+  assert.match(textOf(cards[0]), /Cards update when pull requests merge/);
+  assert.deepEqual(findAll(byAttr(v, 'data-grid', 'local-connectors')[0], (n) => n.tag === 'h3').map(textOf), ['GitHub', 'Slack', 'Sentry', 'Linear', 'Jira', 'Google'], 'tool names are headings');
+  assert.equal(byAttr(integrationsScreen(m()), 'data-grid', 'local-connectors').length, 0, 'a team hub shows no local grid');
+});
+
+test('the web list of tools: only the launch connectors are available', async () => {
+  const { LAUNCH_CONNECTORS, connectorStatus } = await import('../js/connectors.js');
+  assert.deepEqual([...LAUNCH_CONNECTORS], ['github']);
+  assert.deepEqual(['github', 'slack', 'sentry', 'linear', 'jira', 'google', 'x'].map(connectorStatus), ['available', 'soon', 'soon', 'soon', 'soon', 'soon', 'soon']);
 });
 
 test('the app tells the Integrations page it is on the local hub from /api/health’s auth', async () => {

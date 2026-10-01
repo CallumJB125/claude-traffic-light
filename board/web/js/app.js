@@ -34,6 +34,7 @@ const state = {
   authMode: null, // /api/health auth: 'dev' | 'access' | 'accounts' | 'local'
   authError: null,
   authBusy: false,
+  localCardDismissed: false,
   email: null,
   me: null,
   boardId: null,
@@ -72,6 +73,9 @@ let socket = null;
 
 // ── theme ────────────────────────────────────────────────────────────────────
 
+function loadLocalCard() {
+  try { state.localCardDismissed = localStorage.getItem('board-local-card') === 'dismissed'; } catch { state.localCardDismissed = false; }
+}
 function loadTheme() {
   try { state.theme = normalizeTheme(localStorage.getItem('board-theme')); } catch { state.theme = 'system'; }
   try { state.bg = normalizeBg(localStorage.getItem('board-bg')); } catch { state.bg = 'none'; }
@@ -336,6 +340,7 @@ function buildModel() {
     view: state.view,
     table: state.table,
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
+    localCard: state.authMode === 'local' && !state.localCardDismissed,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
     // Presence ages freeze at the drop, like card ages.
@@ -1276,6 +1281,11 @@ function onClick(e) {
       return;
     }
     case 'view': setView(el.dataset.view); return;
+    case 'local-card-dismiss':
+      state.localCardDismissed = true;
+      try { localStorage.setItem('board-local-card', 'dismissed'); } catch { /* private mode */ }
+      update();
+      return;
     case 'integ-reload': loadIntegrations(); return;
     case 'integ-connect': connectIntegration(el.dataset.provider, el.dataset.kind); return;
     case 'integ-token-cancel': state.integ = { ...state.integ, tokenFor: null }; update(); return;
@@ -1478,6 +1488,7 @@ setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
 
 loadTheme();
+loadLocalCard();
 loadView();
 loadFilters();
 takeDevSecretFromHash();
