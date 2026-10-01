@@ -116,6 +116,8 @@ const IS_DEV_RUN = !!DEMO || process.argv.includes('--shot') || process.argv.inc
 // that showed in the Dock left a stray Dock icon and LaunchServices entry
 // behind. A test run is unpackaged and passes `--demo visual`.
 const NO_DOCK = DEMO === 'visual' && !app.isPackaged;
+const { stayOnPage: stayOnOwnPage } = require('./src/nav-guard.js');
+const stayOnPage = (file) => stayOnOwnPage(__dirname, file);
 function showDock() { if (IS_MAC && !NO_DOCK) app.dock.show(); }
 
 // Every interval/timeout the app owns goes through these so --diag can count
@@ -1274,7 +1276,7 @@ function createUpdatesWindow() {
   updatesWin.setMenuBarVisibility(false);
   // Feed text lives on this page: it never opens a window or leaves updates.html.
   updatesWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const stay = (e, url) => { if (!/\/updates\.html(\?|#|$)/.test(url)) e.preventDefault(); };
+  const stay = stayOnPage('updates.html');
   updatesWin.webContents.on('will-navigate', stay);
   updatesWin.webContents.on('will-redirect', stay);
   updatesWin.loadFile('updates.html');
@@ -1340,7 +1342,7 @@ function createUsagePopWindow(from = 'tray') {
   usagePopWin = w;
   w.setAlwaysOnTop(true, 'floating', 1);
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const stay = (e, url) => { if (!/\/usage-pop\.html(\?|#|$)/.test(url)) e.preventDefault(); };
+  const stay = stayOnPage('usage-pop.html');
   w.webContents.on('will-navigate', stay);
   w.webContents.on('will-redirect', stay);
   const done = () => { if (usagePopWin === w) closeUsagePop(); else if (!w.isDestroyed()) w.close(); };
