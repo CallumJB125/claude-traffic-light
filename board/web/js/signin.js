@@ -12,7 +12,11 @@ let flowId = null;
 let email = '';
 let busy = false;
 let invite = null;
+let signinPhase = 'methods';
+let methodsIntent = 0;
 const asked = new Map(); // email → when this page asked for its codes
+
+function enterPhase(next) { signinPhase = next; methodsIntent++; }
 
 async function call(method, path, body, { csrf = null } = {}) {
   let res;
@@ -33,6 +37,7 @@ function showError(msg) {
 }
 
 function codeStep(lead) {
+  enterPhase('code');
   $('signin-lead').textContent = lead;
   $('email-form').hidden = true;
   $('oauth-options').hidden = true;
@@ -54,6 +59,7 @@ async function askForCode() {
 }
 
 async function continueSignedIn(data) {
+  enterPhase('continuing');
   if (invite) {
     const joined = await call('POST', '/api/invites/accept', { t: invite }, { csrf: data?.csrf_token });
     const team = joined.data?.team ?? (joined.data?.error?.code === 'ALREADY_MEMBER' ? joined.data.error.team : null);
@@ -71,6 +77,7 @@ async function continueSignedIn(data) {
 }
 
 async function verify(body) {
+  enterPhase('verifying');
   showError(null);
   const r = await call('POST', '/api/auth/email/verify', body);
   if (r.ok) {
@@ -78,9 +85,11 @@ async function verify(body) {
     return;
   }
   if (r.error?.code === 'CONFIRM_REQUIRED') {
+    enterPhase('confirm');
     $('email-form').hidden = true;
     $('code-form').hidden = true;
     $('code-foot').hidden = true;
+    $('oauth-options').hidden = true;
     $('confirm-text').textContent = `Sign in as ${r.error.email_masked}? This link was requested from another browser.`;
     $('confirm').hidden = false;
     $('confirm-yes').onclick = () => { $('confirm').hidden = true; verify({ ...body, confirm: true }); };
@@ -88,7 +97,8 @@ async function verify(body) {
   }
   showError(accountErrorText(errOf(r), 'verify'));
   // A magic link that failed leaves nothing to type into: start again from the email.
-  if (body.via === 'link') $('email-form').hidden = false;
+  if (body.via === 'link') { enterPhase('methods'); $('email-form').hidden = false; offerMethods(); }
+  else enterPhase('code');
 }
 
 async function guarded(fn) {
@@ -102,8 +112,10 @@ $('email-form').addEventListener('submit', (ev) => {
   guarded(async () => {
     showError(null);
     email = String($('email').value ?? '').trim();
+    enterPhase('email-start');
     // "Asked for", not "sent": the hub answers before it mails, so it can't know the mail went.
     if (await askForCode()) codeStep(`We’ve asked for a 6-digit code to be sent to ${email}. It works for 10 minutes.`);
+    else { enterPhase('methods'); offerMethods(); }
   });
 });
 
@@ -120,6 +132,7 @@ $('resend').addEventListener('click', () => {
 });
 
 $('other-email').addEventListener('click', () => {
+  enterPhase('methods');
   showError(null);
   flowId = null;
   $('code-form').hidden = true;
@@ -145,22 +158,26 @@ function oauthError(code) {
 }
 
 async function oauthStart(provider) {
+  enterPhase('oauth-start');
   showError(null);
+  const failed = (code) => { enterPhase('methods'); showError(oauthError(code)); offerMethods(); };
   const invitation = invite ? { kind: 'team', token: invite } : null;
   const r = await call('POST', '/api/auth/oauth/web/start', { provider, ...(invitation ? { invitation } : {}) });
-  if (!r.ok || typeof r.data?.url !== 'string') { showError(oauthError(r.error?.code)); return; }
+  if (!r.ok || typeof r.data?.url !== 'string') { failed(r.error?.code); return; }
   // The server supplies fixed provider URLs; reject a poisoned response too.
   let u;
-  try { u = new URL(r.data.url); } catch { showError(oauthError(null)); return; }
+  try { u = new URL(r.data.url); } catch { failed(null); return; }
   if (!((provider === 'google' && u.origin === 'https://accounts.google.com' && u.pathname === '/o/oauth2/v2/auth')
-    || (provider === 'github' && u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize'))) { showError(oauthError(null)); return; }
+    || (provider === 'github' && u.origin === 'https://github.com' && u.pathname === '/login/oauth/authorize'))) { failed(null); return; }
   location.assign(u.href);
 }
 for (const provider of ['google', 'github']) $(provider + '-signin').addEventListener('click', () => guarded(() => oauthStart(provider)));
 
 async function offerMethods() {
+  if (signinPhase !== 'methods') return;
+  const intent = ++methodsIntent;
   const r = await call('GET', '/api/auth/methods');
-  if (!r.ok) return;
+  if (!r.ok || signinPhase !== 'methods' || intent !== methodsIntent) return;
   $('email-form').hidden = r.data?.email === false;
   const google = r.data?.web?.google === true; const github = r.data?.web?.github === true;
   $('google-signin').hidden = !google; $('github-signin').hidden = !github;
@@ -171,6 +188,7 @@ async function offerMethods() {
   }
 }
 async function oauthFinish() {
+  enterPhase('oauth-result');
   $('email-form').hidden = true;
   const account = await call('GET', '/api/account');
   const r = await call('POST', '/api/auth/oauth/web/result', {}, { csrf: account.data?.csrf_token });
@@ -179,6 +197,7 @@ async function oauthFinish() {
     if (r.data?.ok === true && account.ok) { await continueSignedIn(account.data); return; }
   }
   showError(oauthError(r.data?.error?.code));
+  enterPhase('methods');
   await offerMethods();
 }
 if (frag.get('oauth') === 'web') {

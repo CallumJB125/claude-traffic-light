@@ -90,14 +90,18 @@ export class WebOAuth {
       p = this.cookie(req);
       f = this.db.get('SELECT * FROM oauth_web_flows WHERE id = ?', p.flow_id);
       if (p.phase !== 'start' || !f || f.used || !safeEqual(sha256hex(p.browser_nonce), f.browser_nonce_hash)) throw invalid();
+      const state = query.get('state'); const code = query.get('code'); const error = query.get('error');
+      // Lax cookies accompany cross-site top-level GETs. A forged callback
+      // must not spend the initiating browser's legitimate pending flow.
+      if (f.provider !== provider || query.getAll('state').length !== 1 || !RANDOM_RE.test(state ?? '') || !safeEqual(sha256hex(state), f.state_hash)
+        || !safeEqual(s256(p.verifier), f.code_challenge) || query.getAll('code').length > 1 || query.getAll('error').length > 1
+        || (query.has('code') === query.has('error')) || (query.has('code') ? typeof code !== 'string' || !/^[^\s\u0000-\u001f\u007f]{1,2048}$/u.test(code)
+          : typeof error !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(error))) throw invalid();
       claimed = this.db.run('UPDATE oauth_web_flows SET used = 1, used_at = ? WHERE id = ? AND used = 0', this.accounts.now(), f.id).changes === 1;
       if (!claimed) throw invalid();
-      const state = query.get('state'); const code = query.get('code'); const error = query.get('error');
-      if (f.provider !== provider || f.expires_at <= this.accounts.now() || f.session_epoch !== this.accounts.epoch() || f.ip_prefix !== ipPrefix(ip)
-        || f.redirect_uri !== this.redirect(provider) || query.getAll('state').length !== 1 || !RANDOM_RE.test(state ?? '') || !safeEqual(sha256hex(state), f.state_hash)
-        || !safeEqual(s256(p.verifier), f.code_challenge) || query.getAll('code').length > 1 || query.getAll('error').length > 1 || (!!code === !!error)) throw invalid();
+      if (f.expires_at <= this.accounts.now() || f.session_epoch !== this.accounts.epoch() || f.ip_prefix !== ipPrefix(ip)
+        || f.redirect_uri !== this.redirect(provider)) throw invalid();
       if (error) throw new HubError('PROVIDER_ERROR', 'sign-in was cancelled');
-      if (typeof code !== 'string' || !code.length || code.length > 2048) throw invalid();
       const flow = { ...f, client: 'web' };
       const who = provider === 'google' ? await this.oauth.google(flow, code, p.verifier) : await this.oauth.github(flow, code, p.verifier);
       proven = who;
