@@ -9,6 +9,7 @@ import { HubError } from './db.js';
 import { parseRunToken } from './auth.js';
 import { prBound, prNumberOf } from './github.js';
 import { limitOrThrow } from './ratelimit.js';
+import { runnerConnectionProblem } from './runner-authority.js';
 
 const EVIDENCE_KINDS = ['pr', 'commit', 'test_run', 'screenshot', 'log', 'url', 'no_tests_reason'];
 const clip = (s, n) => {
@@ -25,10 +26,7 @@ const planPath = (p) => relPath(p) && !/[\s<]/u.test(p);
 export function verifyRun(hub, device, msg, connection = null) {
   if (!device) throw new HubError('FORBIDDEN', 'runner device unavailable');
   if (connection) {
-    const enrollment = connection.enrollmentId && hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', connection.enrollmentId);
-    if (connection.closed || !connection.ready || connection.device_id !== device.id || hub.runners.get(device.id) !== connection
-      || (hub.config.auth === 'accounts' && !connection.enrollmentId)
-      || (connection.enrollmentId && (enrollment?.device_id !== device.id || hub.enrolments.problem(enrollment)))) throw new HubError('FORBIDDEN', 'runner connection no longer authorized');
+    if (connection.device_id !== device.id || runnerConnectionProblem(hub, connection)) throw new HubError('FORBIDDEN', 'runner connection no longer authorized');
   } else if (hub.config.auth === 'accounts') throw new HubError('FORBIDDEN', 'authenticated runner connection required');
   const tok = parseRunToken(hub.secret, msg.run_token);
   if (!tok || tok.run_id !== msg.run_id || tok.card_id !== msg.card_id) throw new HubError('UNAUTHENTICATED', 'bad run token');

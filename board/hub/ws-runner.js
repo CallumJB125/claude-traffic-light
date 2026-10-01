@@ -13,6 +13,7 @@ import { handleRpc, relPath } from './rpc.js';
 import { BAD_RUNNER_TOKEN, isRunnerToken } from './identity/enrolments.js';
 import { HANDOVER_WAIT_MS } from '../shared/liveness.js';
 import { runnerAis, aiOfDispatch, acceptsAi } from '../shared/ai.js';
+import { runnerConnectionProblem } from './runner-authority.js';
 
 const clip = (s, n) => {
   const t = String(s ?? '');
@@ -88,6 +89,15 @@ export class RunnerConn {
     this.send({ type: 'error', code, message, ...(re != null ? { re } : {}) });
   }
 
+  requireAuthorized() {
+    const problem = runnerConnectionProblem(this.hub, this);
+    if (problem) {
+      this.close(problem.close, problem.reason);
+      throw new HubError('FORBIDDEN', 'runner connection no longer authorized');
+    }
+    this.member = this.hub.activeMember(this.member_id);
+  }
+
   onClose() {
     this.closed = true;
     this.ready = false;
@@ -137,6 +147,9 @@ export class RunnerConn {
       this.error('VALIDATION', 'hello must be the first frame');
       return;
     }
+    // RPC reports its bounded failure before closing; its handler checks
+    // this same authority inside the queue and after network continuations.
+    if (msg.type !== 'hello' && msg.type !== 'rpc') this.requireAuthorized();
     switch (msg.type) {
       case 'hello': return this.onHello(msg);
       case 'advertise': return this.onAdvertise(msg);
@@ -163,12 +176,7 @@ export class RunnerConn {
     const hub = this.hub;
     // Revoked or removed after the upgrade (maybe before this socket was
     // registered, so nobody closed it): never (re)register.
-    const dev = hub.device(this.device_id);
-    if (!dev || dev.revoked_at || !hub.activeMember(dev.member_id)) {
-      this.close(WS_CLOSE.REVOKED, dev?.revoked_at ? 'device revoked' : 'member removed');
-      return;
-    }
-    const bad = this.enrollmentId && hub.enrolments?.problem(hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', this.enrollmentId));
+    const bad = runnerConnectionProblem(hub, this, { registered: false });
     if (bad) {
       this.close(bad.close, bad.reason);
       return;
@@ -265,6 +273,7 @@ export class RunnerConn {
   }
 
   onAdvertise(msg) {
+    this.requireAuthorized();
     const hub = this.hub;
     const allowed = new Set(this.allowlist().map((r) => r.repo_id));
     const ids = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []);
@@ -297,9 +306,7 @@ export class RunnerConn {
     const row0 = this.ownCard(msg.card_id);
     if (!row0) return lost();
     await hub.withBoard(row0.board_id, () => {
-      const device = hub.device(this.device_id);
-      const enrollment = this.enrollmentId && hub.db.get('SELECT * FROM runner_enrollments WHERE id = ?', this.enrollmentId);
-      if (this.closed || !this.ready || hub.runners.get(this.device_id) !== this || !device || device.revoked_at || !hub.activeMember(device.member_id) || (this.enrollmentId && hub.enrolments.problem(enrollment))) return lost('POLICY_DENIED', 'this runner is no longer authorized');
+      if (runnerConnectionProblem(hub, this)) return lost('POLICY_DENIED', 'this runner is no longer authorized');
       const row = hub.card(msg.card_id);
       const prior = hub.db.get('SELECT * FROM dispatches WHERE request_id = ? AND card_id = ?', msg.request_id, row.id);
       if (prior?.state === 'claimed' && prior.run_id) {
@@ -339,6 +346,7 @@ export class RunnerConn {
     const row0 = this.ownCard(msg.card_id);
     if (!row0) throw new HubError('NOT_FOUND', 'card not found');
     await hub.withBoard(row0.board_id, () => {
+      this.requireAuthorized();
       const d = hub.pendingDispatch(row0.id);
       if (!d || d.request_id !== msg.request_id) return;
       const res = hub.apply(row0.id, { type: 'decline', request_id: msg.request_id, reason: msg.reason ?? null }, {
@@ -350,6 +358,7 @@ export class RunnerConn {
 
   // ── heartbeats ────────────────────────────────────────────────────────────
   async onHb(msg) {
+    this.requireAuthorized();
     const hub = this.hub;
     const rx = hub.mono();
     const entries = [];
@@ -362,12 +371,14 @@ export class RunnerConn {
       }
       entries.push(await hub.withBoard(row.board_id, () => this.hbRun(r, rx)));
     }
+    this.requireAuthorized();
     hub.db.run('UPDATE devices SET last_seen_at = ? WHERE id = ?', hub.iso(), this.device_id);
     this.lastHbMono = rx;
     this.send({ type: 'hb.ack', seq_hb: msg.seq_hb, hub_epoch: hub.epoch, runs: entries });
   }
 
   hbRun(r, rx) {
+    this.requireAuthorized();
     const hub = this.hub;
     const run = hub.run(r.run_id);
     const row = hub.card(r.card_id);
@@ -398,6 +409,7 @@ export class RunnerConn {
       const row = r && this.ownCard(r.card_id);
       if (!row) continue;
       await this.hub.withBoard(row.board_id, () => {
+        this.requireAuthorized();
         const run = this.hub.run(r.run_id);
         if (!run || run.device_id !== this.device_id || run.card_id !== row.id) return;
         const res = this.hub.apply(row.id, { type: 'host_suspending', fence: r.fence });
@@ -408,6 +420,7 @@ export class RunnerConn {
 
   // ── outbox ────────────────────────────────────────────────────────────────
   async onOut(msg) {
+    this.requireAuthorized();
     if (msg.seq <= this.lastSeqAcked) {
       this.send({ type: 'ack', seq: this.lastSeqAcked });
       return;
@@ -435,6 +448,7 @@ export class RunnerConn {
       await this.applyOut(next);
     }
     const versions = this.ackVersions.splice(0);
+    this.requireAuthorized();
     this.send({ type: 'ack', seq: this.lastSeqAcked, ...(versions.length ? { versions } : {}) });
   }
 
@@ -444,6 +458,7 @@ export class RunnerConn {
   }
 
   async applyOut({ seq, delayed, msg: m }) {
+    this.requireAuthorized();
     const hub = this.hub;
     const run = hub.run(m.run_id);
     const row = this.ownCard(m.card_id);
@@ -457,6 +472,7 @@ export class RunnerConn {
       return;
     }
     await hub.withBoard(row.board_id, () => {
+      this.requireAuthorized();
       hub.txn(() => {
         const cur = hub.card(row.id);
         if (cur.fence !== m.fence) {
@@ -629,6 +645,8 @@ export class RunnerConn {
       if (!(e instanceof HubError)) this.hub.log.error('rpc failed', { method: msg.method, err: e });
       const code = e instanceof HubError ? e.code : 'INTERNAL';
       this.send({ type: 'rpc.result', re: msg.id, ok: false, error: { code, message: e instanceof HubError ? e.message : 'internal error', ...(e.extra ?? {}) } });
+      const problem = runnerConnectionProblem(this.hub, this);
+      if (problem) this.close(problem.close, problem.reason);
     }
   }
 
@@ -643,6 +661,7 @@ export class RunnerConn {
     if (msg.repo_id !== run.repo_id) throw new HubError('FORBIDDEN', 'salvage repo_id does not match the run (out of scope)');
     if (!['handover', 'snapshot', 'note'].includes(msg.kind)) throw new HubError('VALIDATION', 'kind must be handover|snapshot|note');
     await hub.withBoard(row0.board_id, () => {
+      this.requireAuthorized();
       const row = hub.card(row0.id);
       const latest = hub.latestRun(row.id);
       const promote = latest?.id === run.id && (row.active_run_id == null || row.active_run_id === run.id) && msg.kind !== 'note';

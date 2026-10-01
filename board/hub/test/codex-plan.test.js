@@ -44,10 +44,12 @@ test('plan grant follows active human authorization: downgrade/removal, device r
   h.db.run("UPDATE members SET role = 'member', removed_at = ? WHERE id = ?", h.hub.iso(), h.ids.bob);
   assert.equal((await runner.rpc(run, 'runner_plan_status')).result.decision, 'pending');
   h.db.run('UPDATE devices SET revoked_at = ? WHERE id = ?', h.hub.iso(), dev.device_id);
-  assert.equal((await runner.rpc(run, 'runner_plan_status')).error.code, 'FORBIDDEN');
+  runner.send({ type: 'rpc', id: 'revoked-plan', method: 'runner_plan_status', ...run, repo_id: h.ids.repo, params: {} });
+  assert.equal(await runner.closed(), 4403);
   h.db.run('UPDATE devices SET revoked_at = NULL WHERE id = ?', dev.device_id);
+  const current = await h.runner(dev);
   h.db.run('UPDATE cards SET fence = fence + 1 WHERE id = ?', run.card_id);
-  assert.equal((await runner.rpc(run, 'runner_plan_status')).error.code, 'FENCED');
+  assert.equal((await current.rpc(run, 'runner_plan_status')).error.code, 'FENCED');
 });
 test('plan status is denied cross-repo/run/device and a denied permission stays read-only', async (t) => {
   const { h, alice, bob, runner, run } = await rig(t);
