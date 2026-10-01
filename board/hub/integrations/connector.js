@@ -102,7 +102,15 @@
 //   // type or a throw → an empty 200. Synchronous; runs before the handler.
 //   // Never reflect request data in it, except a verified url_verification
 //   // `challenge` string.
-//   ackBody({ payload, headers }) → undefined | string | { … },
+//   ackBody({ payload, headers, rateLimited }) → undefined | string | { … },
+//   // (rateLimited: true when rateSubject's user is over integration_user_cmd
+//   // and nothing ran; absent for a normal early answer.)
+//   // Optional (C3): the provider user a delivery is for, after verify(),
+//   // parseBody and a fresh lease; a throw or anything but a 1–128 char string
+//   // is null. Spends integration_user_cmd (30/min per connection and refHash
+//   // of it, never stored or logged) before webhook_conn and the handler; over
+//   // it nothing runs and the answer is ackBody's rateLimited one (else 429).
+//   rateSubject({ payload, headers }) → string | null,   // Slack: user_id / user.id; events null
 //   // Optional, only with ackEarly (C2): an acknowledged delivery's handler
 //   // failed or timed out. Called once, after the audit; `error_code` is a
 //   // short code, never the error; `fetch` is the restricted fetch (no
