@@ -51,6 +51,7 @@ test('hook paths: materialize copies hooks and adapters, writes the MCP stub; pr
   assert.equal(fs.readFileSync(path.join(r.hooksDir, 'set-status.js'), 'utf8'), 'v2');
   assert.equal(fs.readFileSync(path.join(r.stableDir, 'adapters', 'runtime.js'), 'utf8'), 'rt');
   assert.equal(fs.readFileSync(path.join(r.stableDir, 'mcp-server.js'), 'utf8'), HookPaths.MCP_STUB);
+  assert.equal(fs.readFileSync(path.join(r.stableDir, 'native-board', 'server.js'), 'utf8'), HookPaths.NATIVE_BOARD_MCP_STUB);
   assert.deepEqual(fs.readdirSync(root).sort(), ['config.json', 'hooks-1.0.0', 'hooks-1.2.3', 'sessions'], 'resolve runs before the lock: it deletes nothing');
   HookPaths.prune(r);
   assert.deepEqual(fs.readdirSync(root).sort(), ['config.json', 'hooks-1.2.3', 'sessions']);
