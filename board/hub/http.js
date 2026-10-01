@@ -940,12 +940,16 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         if (member && r.limit) limitOrThrow(hub, r.limit, member.id);
         let status = 200;
         let out;
+        let cacheable = true;
         try {
           out = await r.handler({ req, res, member, params, body, query: url.searchParams, ident, ip });
         } catch (e) {
           if (!(e instanceof HubError)) throw e;
           status = httpStatus(e.code);
           out = errorBody(e);
+          // A storage refusal is transient admission, so the same bound
+          // request can recover without waiting for the response cache TTL.
+          cacheable = !(e.code === 'QUOTA_EXCEEDED' && e.extra?.resource === 'storage');
         }
         if (out === undefined) return undefined;
         if (r.collaboration) out = selectedContext(hub, out, communicationOptions(url.searchParams).boardIds);
@@ -953,7 +957,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
           const guarded = r.responseGuard({ req, res, member, params, body, query: url.searchParams, ident, ip }, out);
           if (guarded?.then) throw new HubError('INTERNAL', 'response authority must be synchronous');
         }
-        if (rid) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
+        if (rid && cacheable) hub.cacheResponse(actor, rid, r.replay?.status ?? status, r.replay?.body ?? out, binding);
         return sendJson(res, status, out, out?.error?.code === 'RATE_LIMITED' && out.error.retry_after_s ? { 'retry-after': String(out.error.retry_after_s) } : {});
       };
       if (!rid) return await runRequest();

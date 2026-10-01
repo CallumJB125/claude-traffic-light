@@ -5,7 +5,7 @@
 // An invite opened while signed out sends people here with #invite=<token>;
 // once signed in their explicit join resumes; failures return to /invite
 // with it (fragment only, never stored).
-import { accountErrorText, EMAIL_OFF, INVITE_TOKEN_RE, resendWaitS, resendWaitText } from './account-text.js';
+import { accountErrorText, EMAIL_OFF, INVITE_TOKEN_RE, resendWaitS, resendWaitText, SIGNUP_PAUSED } from './account-text.js';
 import { CLIENT_TOKEN_RE } from './client-api.js';
 
 const $ = (id) => document.getElementById(id);
@@ -167,6 +167,7 @@ if (CLIENT_TOKEN_RE.test(frag.get('client_invite') ?? '')) {
   $('signin-lead').textContent = 'Sign in to accept your client invitation.';
 }
 function oauthError(code) {
+  if (code === 'SIGNUP_PAUSED') return SIGNUP_PAUSED;
   if (code === 'SIGNUP_CLOSED') return 'Sign-up is invite-only right now. Ask a team owner for an invite.';
   if (code === 'RATE_LIMITED') return 'Too many sign-in attempts. Wait a few minutes and try again.';
   if (code === 'PROVIDER_UNAVAILABLE') return 'We couldn’t reach the sign-in provider. Try again shortly.';

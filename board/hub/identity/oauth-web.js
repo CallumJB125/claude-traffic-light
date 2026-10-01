@@ -12,7 +12,7 @@ export const WEB_OAUTH_COOKIE = '__Host-plexiform_oauth';
 const AAD = Buffer.from(`${WEB_OAUTH_COOKIE}:v1`);
 const RANDOM_RE = /^[A-Za-z0-9_-]{43}$/;
 const FLOW_RE = /^[A-Za-z0-9_-]{24}$/;
-const ERRORS = new Set(['INVALID_TOKEN', 'METHOD_DISABLED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR', 'EMAIL_UNVERIFIED', 'SIGNUP_CLOSED', 'RATE_LIMITED']);
+const ERRORS = new Set(['INVALID_TOKEN', 'METHOD_DISABLED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_ERROR', 'EMAIL_UNVERIFIED', 'SIGNUP_CLOSED', 'SIGNUP_PAUSED', 'RATE_LIMITED']);
 const invalid = () => new HubError('INVALID_TOKEN', 'that sign-in is invalid or has expired: start again');
 const random = (n = 32) => randomBytes(n).toString('base64url');
 const s256 = (v) => createHash('sha256').update(v).digest('base64url');

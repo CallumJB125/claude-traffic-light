@@ -220,3 +220,18 @@ test('invite acceptance failures return to the invite recovery page without pers
     assert.equal(p.calls.some((c) => c.path === '/api/account/setup'), false);
   }
 });
+
+test('email verification and browser OAuth admission pauses show the same truthful fixed message', async () => {
+  const error = { code: 'SIGNUP_PAUSED', message: '/private/board.db private pressure' };
+  const email = page({ routes: { ...start, '/api/auth/email/verify': { status: 503, body: { error } } } });
+  email.els.email.value = 'jo@example.com'; await email.submit('email-form'); email.els.code.value = '123456'; await email.submit('code-form');
+  const oauth = page({ hash: '#oauth=web', routes: {
+    '/api/account': { status: 401, body: {} },
+    '/api/auth/oauth/web/result': { status: 200, body: { ok: false, error, invitation: { kind: 'team', token: TOKEN } } },
+    '/api/auth/methods': { status: 200, body: { email: true, web: { google: true, github: true } } },
+  } });
+  await settle(); await settle(); await settle();
+  for (const p of [email, oauth]) { assert.equal(p.els['signin-error'].textContent, 'New sign-ups are temporarily paused. Try again later.'); assert.deepEqual(p.replaced, []); }
+  assert.equal(oauth.els['email-form'].hidden, false);
+  assert.ok(!oauth.calls.some(c => c.path === '/api/invites/accept' || c.path === '/api/account/setup'));
+});

@@ -140,6 +140,47 @@ test('queued central creation resamples before insert; nonaccounts mode also ref
   const refused = await h.api(cookie, 'POST', `/api/boards/${h.ids.board}/cards`, { title: 'Dev storage pressure', request_id: randomUUID() }); assert.equal(refused.status, 403); assert.equal(refused.body.error.resource, 'storage');
 });
 
+test('the same HTTP request recovers from storage refusal and concurrent retries add exactly one row', async t => {
+  const f = await tenancy(); t.after(() => f.h.close()); const change = pressure(f.h);
+  for (const kind of ['card', 'comment']) {
+    const marker = `Recovered ${kind} ${randomUUID()}`;
+    const route = kind === 'card' ? `/api/boards/${f.A.board}/cards` : `/api/cards/${f.A.card}/comments`;
+    const body = { request_id: randomUUID(), ...(kind === 'card' ? { title: marker } : { body: marker }) };
+    change(2 * MiB); const before = rows(f.db), key = f.h.hub.board(f.A.board).next_key;
+    const denied = await f.as(f.users.ua, 'POST', route, body);
+    assert.equal(denied.status, 403, denied.text); assert.equal(denied.body.error.resource, 'storage');
+    assert.equal(rows(f.db), before); assert.equal(f.h.hub.board(f.A.board).next_key, key);
+    change(0);
+    const [accepted, replay] = await Promise.all([f.as(f.users.ua, 'POST', route, body), f.as(f.users.ua, 'POST', route, body)]);
+    assert.equal(accepted.status, 200, accepted.text); assert.equal(replay.status, 200, replay.text); assert.deepEqual(replay.body, accepted.body);
+    assert.equal(f.db.get(kind === 'card' ? 'SELECT COUNT(*) n FROM cards WHERE title=?' : 'SELECT COUNT(*) n FROM comments WHERE body=?', marker).n, 1);
+    assert.equal(f.h.hub.board(f.A.board).next_key, key + (kind === 'card' ? 1 : 0));
+    const after = rows(f.db);
+    const altered = await f.as(f.users.ua, 'POST', route, { ...body, ...(kind === 'card' ? { title: 'Different request' } : { body: 'Different request' }) });
+    assert.equal(altered.status, 409); assert.equal(rows(f.db), after);
+  }
+});
+
+test('storage recovery does not permit a queued retry after its current membership is removed', async t => {
+  const f = await tenancy(); t.after(() => f.h.close()); const change = pressure(f.h);
+  const route = `/api/boards/${f.A.board}/cards`, body = { request_id: randomUUID(), title: 'Current authority on recovered retry' };
+  change(2 * MiB); assert.equal((await f.as(f.users.amember, 'POST', route, body)).body.error.resource, 'storage'); change(0);
+  const original = f.h.hub.withBoard.bind(f.h.hub); let release, entered, enqueued;
+  const gate = new Promise(r => { release = r; }), ready = new Promise(r => { entered = r; }), queued = new Promise(r => { enqueued = r; });
+  const held = original(f.A.board, async () => { entered(); await gate; }); await ready;
+  f.h.hub.withBoard = (id, fn) => { if (id === f.A.board) enqueued(); return original(id, fn); };
+  let timer, retry;
+  try {
+    retry = f.as(f.users.amember, 'POST', route, body);
+    await Promise.race([queued, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('retry did not enter the board queue')), 2000); })]);
+    const before = rows(f.db), key = f.h.hub.board(f.A.board).next_key;
+    f.db.run('UPDATE members SET removed_at=? WHERE id=?', f.h.hub.iso(), f.A.member);
+    release(); await held; const refused = await retry;
+    assert.equal(refused.status, 403, refused.text); assert.equal(refused.body.error.code, 'FORBIDDEN');
+    assert.equal(rows(f.db), before); assert.equal(f.h.hub.board(f.A.board).next_key, key);
+  } finally { clearTimeout(timer); release(); f.h.hub.withBoard = original; await held; if (retry) await retry; }
+});
+
 test('new coordination comments refuse without partial threads but observed running outcomes remain recordable', async t => {
   const f = await communicationRig(t); pressure(f.h)(2 * MiB); const before = rows(f.db);
   const refused = await f.sender.client.rpc(f.sender.run, 'board_send_message', taskMessage(f.recipient)); assert.equal(refused.ok, false); assert.equal(refused.error.code, 'QUOTA_EXCEEDED'); assert.equal(rows(f.db), before);
