@@ -86,3 +86,10 @@ test('the runner points the hook shim and the MCP server at app.asar.unpacked in
   assert.ok(HOOK_SHIM.endsWith(path.join('board', 'runner', 'hook-shim.js')) && fs.existsSync(HOOK_SHIM));
   assert.ok(MCP_SERVER.endsWith(path.join('board', 'mcp', 'server.js')) && fs.existsSync(MCP_SERVER));
 });
+
+test('the Dock stays hidden only for unpackaged visual-test runs; every show goes through showDock', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /const NO_DOCK = DEMO === 'visual' && !app\.isPackaged;/);
+  assert.match(src, /function showDock\(\) \{ if \(IS_MAC && !NO_DOCK\) app\.dock\.show\(\); \}/);
+  assert.equal((src.match(/app\.dock\.show\(\)/g) || []).length, 1, 'only showDock calls app.dock.show()');
+});
