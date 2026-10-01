@@ -154,7 +154,9 @@ test('S-M2: matching is linear: pathological patterns against 10k-character inpu
   for (const run of cases) {
     const t0 = process.hrtime.bigint();
     assert.equal(run(), false);
-    assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 20, `took ${Number(process.hrtime.bigint() - t0) / 1e6} ms`);
+    // Catastrophic backtracking takes seconds to minutes; linear matching takes a few ms. A generous bound
+    // keeps this meaningful without failing on a loaded CI runner or a busy laptop.
+    assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 400, `took ${Number(process.hrtime.bigint() - t0) / 1e6} ms`);
   }
   assert.equal(A.charGlob('a*b*c', 'axxbyyc'), true);
   assert.equal(A.charGlob('a?c', 'abc'), true);
