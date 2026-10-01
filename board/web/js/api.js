@@ -59,6 +59,7 @@ export const api = {
   setupAccount: () => mut('POST', '/api/account/setup'),
   boards: (includeArchived = false) => call('GET', `/api/boards${includeArchived ? '?include_archived=1' : ''}`),
   search: (q) => call('GET', `/api/search?${new URLSearchParams({ q })}`),
+  teamOverview: () => call('GET', '/api/team-overview'),
   workflows: (includeArchived = false) => call('GET', `/api/workflows${includeArchived ? '?include_archived=1' : ''}`),
   workflow: (id) => call('GET', `/api/workflows/${enc(id)}`),
   publishWorkflow: (id, body) => mut('POST', id ? `/api/workflows/${enc(id)}/versions` : '/api/workflows', body),

@@ -21,6 +21,7 @@ import { appendCookie } from './identity/accounts.js';
 import { BRAND } from '../shared/brand.js';
 import { CLIENT_UPLOAD_BODY_MAX } from './identity/client-artifacts.js';
 import { searchWork } from './search.js';
+import { teamOverview } from './team-overview.js';
 import { Workflows } from './workflows.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -384,6 +385,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   }
   route('GET', '/api/boards', ({ member, query }) => api.listBoards(member, { includeArchived: query.get('include_archived') === '1' }));
   route('GET', '/api/search', ({ member, query, ident }) => searchWork(hub, member, query, { cred: ident?.cred }), { limit: 'search_member' });
+  route('GET', '/api/team-overview', ({ member, query, ident }) => teamOverview(hub, member, query, { cred: ident?.cred }), { limit: 'overview_member' });
   route('GET', '/api/workflows', ({ member, ident, query }) => workflows.list(member, ident?.cred, { includeArchived: query.get('include_archived') === '1' }));
   route('POST', '/api/workflows', ({ member, body, ident }) => workflows.publish(member, null, body, ident?.cred), { replay: false });
   route('GET', '/api/workflows/:workflow_id', ({ member, params, ident }) => workflows.detail(member, params.workflow_id, ident?.cred));

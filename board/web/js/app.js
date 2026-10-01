@@ -75,6 +75,7 @@ const state = {
   archived: null, // id → {view, rx} while showArchived
   // team.presence (D37b). `stale` from a socket drop until the next frame.
   presence: { members: [], loaded: false, stale: false },
+  overview: { status: 'idle', data: null, error: null, updatedAt: null },
 };
 
 let socket = null;
@@ -130,7 +131,7 @@ function setView(v) {
   state.view = v;
   if (v === 'dashboard') loadJournal();
   if (v === 'integrations') loadIntegrations();
-  if (v === 'team' && state.board) presenceFallbackSoon();
+  if (v === 'team' && state.board) { presenceFallbackSoon(); loadTeamOverview(); }
   // Team pages are opened from the app sidebar; only board views are remembered.
   if (VIEWS.find((x) => x.id === v)?.switcher !== false) { try { localStorage.setItem('board-view', v); } catch { /* private mode */ } }
   try {
@@ -356,6 +357,7 @@ function buildModel() {
     invite: state.invite,
     integrations: state.view === 'integrations' ? { ...state.integ, nowMs: Date.now(), local: state.authMode === 'local' } : null,
     presence: { ...state.presence, stale: state.presence.stale || lost },
+    teamOverview: { ...state.overview, stale: lost || !!state.overview.error || (state.overview.updatedAt != null && Date.now() - state.overview.updatedAt > 45_000), ageMs: state.overview.updatedAt == null ? null : Date.now() - state.overview.updatedAt },
     // Presence ages freeze at the drop, like card ages.
     nowMs: lost && state.conn.lostAt ? state.conn.lostAt.getTime() : Date.now(),
   };
@@ -550,6 +552,7 @@ async function boot() {
   rememberBoard();
   resetDashboard();
   state.presence = { members: [], loaded: false, stale: false };
+  state.overview = { status: 'idle', data: null, error: null, updatedAt: null };
   socket?.close();
   socket = connectBoard({ boardId: state.boardId, org: currentOrg(), onMessage: (m) => { if (current()) onMessage(m); }, onStatus: (...args) => { if (current()) onStatus(...args); } });
   update();
@@ -761,6 +764,7 @@ function onMessage(msg) {
       if (state.view === 'dashboard' && state.dash.status === 'idle') loadJournal();
       if (state.view === 'integrations' && state.integ.status === 'idle') loadIntegrations();
       presenceFallbackSoon();
+      if (state.view === 'team' && state.overview.status === 'idle') loadTeamOverview();
       break;
     }
     case 'team.presence':
@@ -812,6 +816,20 @@ function onMessage(msg) {
 // The socket sends presence right after every snapshot; this is only the
 // fallback for a frame that never comes (the endpoint is rate limited), tried
 // once per board, never on a timer.
+let overviewIntent = null;
+async function loadTeamOverview() {
+  if (state.auth !== 'ok' || !state.me?.member || state.overview.status === 'loading') return;
+  const intent = overviewIntent = {}, generation = boardGeneration, memberId = state.me.member.id, org = currentOrg();
+  const current = () => intent === overviewIntent && generation === boardGeneration && memberId === state.me?.member?.id && org === currentOrg();
+  state.overview = { ...state.overview, status: 'loading', error: null }; update();
+  try {
+    const data = await api.teamOverview();
+    if (current()) { state.overview = { status: 'ok', data, error: null, updatedAt: Date.now() }; update(); }
+  } catch (error) {
+    if (current()) { state.overview = { ...state.overview, status: 'error', error: errorText(error) }; update(); }
+  }
+}
+
 let presenceFallbackFor = null;
 function presenceFallbackSoon() {
   if (state.view !== 'team' || presenceFallbackFor === state.boardId) return;
@@ -1615,6 +1633,8 @@ function onClick(e) {
     case 'restore-board': restoreBoard(el.dataset.board); return;
     case 'switch-board': switchBoard(el.dataset.board); return;
     case 'open': e.preventDefault(); openDetail(cardId, el.dataset.section ?? null); return;
+    case 'team-overview-refresh': loadTeamOverview(); return;
+    case 'team-open-card': openSearchResult({ id: cardId, boardId: el.dataset.board }); return;
     case 'watch': openDetail(cardId, 'activity'); return;
     case 'allow': case 'deny': case 'answer': case 'approve_plan': case 'resolve_conflict': case 'continue':
       openDetail(cardId, 'asks'); return;
@@ -1925,6 +1945,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => up
 // Ages advance between pushes (§5.1): re-derive every face once a second.
 setInterval(() => { if (state.auth === 'ok' && state.board) update(); }, 1000);
 setInterval(() => { if (state.view === 'dashboard' && state.board && document.visibilityState === 'visible') loadJournal(); }, DASH_REFRESH_MS);
+setInterval(() => { if (state.view === 'team' && document.visibilityState === 'visible') loadTeamOverview(); }, 15_000);
 
 loadTheme();
 loadLocalCard();

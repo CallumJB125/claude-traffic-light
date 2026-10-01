@@ -103,7 +103,7 @@ function deviceKind(hub, runRow) {
   return f === 'laptop' || f === 'desktop' ? f : null;
 }
 
-function runCost(hub, run) {
+export function runCost(hub, run) {
   // A database default of zero is not a cost observation. Codex does not
   // expose dollar telemetry through this adapter, including older rows.
   const observed = aiOfDispatch(run) !== 'codex' && (run.cost_cents > 0 ||

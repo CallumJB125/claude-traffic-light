@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textOf, byClass, byAttr } from '../js/h.js';
 import { displayFace } from '../js/view.js';
-import { teamRows, teamScreen, SCOPE_RULE } from '../js/render-team.js';
+import { teamRows, teamScreen, overviewPanel, SCOPE_RULE } from '../js/render-team.js';
 import { view, model, ALICE, BOB } from './fixtures.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -141,4 +141,18 @@ test('board work: running and assigned cards open the drawer; done cards and oth
 test('role shows for you when known; your card carries the you tag', () => {
   const v = teamScreen(teamModel([]));
   assert.match(textOf(byClass(v, 'team-member')[0]), /Alice.*you.*member/);
+});
+
+test('team overview keeps verification, reported tests and unavailable costs distinct, with safe cross-board links', () => {
+  const task = { id: 'elsewhere', key: 'WEB-2', title: '<img src=x onerror=alert(1)>', board: { id: 'other', name: 'Client delivery' }, owner: { name: 'Bob' }, ai_label: 'Codex', activity: 'idle', evidence: { verification: 'hub_verified', tests: 'pass' }, cost: { cost_usd: null }, attention: {}, overlap_count: 1 };
+  const data = { team: { name: 'Our team' }, board_count: 2, totals: { open: 3, attention: 1, review: 1, done: 2 }, boards: [], attention: { items: [] }, work: { items: [task] }, review: { items: [] }, recent: { items: [] } };
+  const panel = overviewPanel({ teamOverview: { status: 'ok', data } });
+  assert.match(textOf(panel), /Bob’s Codex.*Idle · task still open/);
+  assert.match(textOf(panel), /Change verified · Tests reported: pass · Cost unavailable/);
+  const button = byAttr(panel, 'data-action', 'team-open-card')[0];
+  assert.equal(button.props['data-card'], 'elsewhere'); assert.equal(button.props['data-board'], 'other');
+  assert.equal(byClass(panel, 'team-overview-task-title')[0].children[1].tag, '#text');
+  assert.match(textOf(overviewPanel({ teamOverview: { status: 'ok', data, stale: true } })), /Last snapshot: Idle/);
+  const pending = overviewPanel({ teamOverview: { status: 'loading', data: null } });
+  assert.equal(byClass(pending, 'team-overview-stat').length, 0);
 });

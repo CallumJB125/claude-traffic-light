@@ -106,6 +106,7 @@ const MATRIX = {
   'GET /api/boards': { kind: 'team' },
   'GET /api/search': { kind: 'cross', path: (fx) => `/api/search?q=secret&board_id=${fx.B.board}`, alt: (fx) => [`/api/search?q=secret&team=${fx.B.team}`] },
   'GET /api/workflows': { kind: 'team' },
+  'GET /api/team-overview': { kind: 'team' },
   'POST /api/workflows': { kind: 'team', body: { definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
   'GET /api/workflows/:workflow_id': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}` },
   'POST /api/workflows/:workflow_id/versions': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/versions`, body: { expected_version: 1, definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
