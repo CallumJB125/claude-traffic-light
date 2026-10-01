@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
@@ -677,6 +677,27 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     });
   }
 
+  /**
+   * Open a hub page with a URL fragment the page reads itself (the feedback sender hands its saved,
+   * scrubbed report over this way: no new IPC or preload into the hub view). Hub pages only, the
+   * fragment shape is checked, the URL is always the current team hub's own origin, and without a
+   * team hub nothing opens at all. A fragment-only change fires `hashchange` in the page.
+   */
+  async function openWithFragment(pageId, fragment) {
+    const page = pageById(pageId);
+    if (!page || page.kind !== 'hub' || !fragmentOk(fragment)) return { ok: false, why: 'invalid' };
+    if (!getTeamHub()) return { ok: false, why: 'no-team' };
+    open(pageId);
+    await showHubPage(page);
+    if (!win || selected !== page.id || !hubInfo || !hubView || !hubInfo.team) return { ok: false, why: 'unavailable' };
+    const view = hubView;
+    const url = hubPageUrl(hubInfo.url, page, { org: hubInfo.org, fragment });
+    if (new URL(url).origin !== hubInfo.origin) return { ok: false, why: 'unavailable' };
+    await view.webContents.loadURL(url).catch(() => {}); // privacy-flow: team-hub-account
+    if (win && view === hubView && !viewError) attach(view);
+    return { ok: true };
+  }
+
   function open(pageId = null) {
     if (win) {
       if (win.isMinimized()) win.restore();
@@ -716,6 +737,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
 
   return {
     open,
+    openWithFragment,
     isOpen: () => !!win,
     select,
     openInvite: (link) => flow.openInvite(link),
