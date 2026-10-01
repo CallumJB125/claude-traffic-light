@@ -22,8 +22,9 @@ import { BRAND } from '../shared/brand.js';
 
 const MAX_BODY = 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-// The prepare body carries an admin's pasted configuration token (D97): its
-// D8 replay entry is this, never the first answer.
+// The prepare body carries an admin's pasted configuration token (D97), and a
+// /start answer a signed state, bind and the org it was given: their D8 replay
+// entry is this, never the first answer.
 const PREPARE_REPLAY = Object.freeze({ status: 409, body: { error: { code: 'CONFLICT', message: 'This request was already sent. Reload the page.', reason: 'REPLAYED' } } });
 const SHARED_BROWSER = new Set(['states', 'liveness', 'fence', 'scope', 'overlap', 'cardface', 'handover', 'protocol', 'brand']);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; frame-ancestors 'none'";
@@ -169,7 +170,7 @@ const CONNECT_TITLE = { ok: 'Connected', error: 'Not connected' };
 function sendConnectPage(res, status, text, kind, headers = {}, next = null) {
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const after = next
-    ? `<p><a href="${esc(next.url)}" rel="noopener noreferrer">Continue on ${esc(next.name)}</a></p>`
+    ? `<p><a href="${esc(next.url)}" rel="noopener noreferrer">${esc(next.text)}</a></p>`
     : '<p>You can close this window and go back to Buddy.</p>';
   const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${CONNECT_TITLE[kind]} · Buddy</title><meta name="viewport" content="width=device-width"></head><body data-connect="${kind}"><h1>${CONNECT_TITLE[kind]}</h1><p>${esc(text)}</p>${after}</body></html>`;
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'", 'referrer-policy': 'no-referrer', 'board-protocol': String(PROTOCOL_VERSION), ...headers });
@@ -377,7 +378,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req), input: body.input });
       setBind(res, out.cookie);
       return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
-    });
+    }, { replay: PREPARE_REPLAY });
     // Pending connections (D97): a provider starts one, a pending id takes the pasted fields.
     // body.input goes to the registry and nowhere else (no log, no cache, no error text).
     route('POST', '/api/integrations/:target/prepare', async ({ member, params, body, req, res }) => {
@@ -510,8 +511,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
         try { bind = parseCookies(req.headers.cookie)[ck.name] ?? null; } catch { bind = null; }
         const out = await integrations.oauthCallback({ provider: cb[1], query: url.searchParams, publicUrl: base, bindCookie: bind });
         const clear = bind != null ? { 'set-cookie': `${ck.name}=; HttpOnly; SameSite=Lax; Path=${ck.path}; Max-Age=0${ck.secure ? '; Secure' : ''}` } : {};
-        if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear);
-        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear, out.next_url ? { url: out.next_url, name: out.provider_name } : null);
+        if (!out.ok) return sendConnectPage(res, 400, out.error, 'error', clear, out.link ?? null);
+        return sendConnectPage(res, 200, `${out.connection.display_name ?? 'The integration'} is connected.`, 'ok', clear, out.next_url ? { url: out.next_url, text: `Continue on ${out.provider_name}` } : null);
       } catch (e) {
         hub.log.error('integration callback failed', { provider: cb[1], err: redact(e?.message ?? e) });
         return sendConnectPage(res, 500, 'Something went wrong. Start again from Buddy.', 'error');

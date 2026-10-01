@@ -83,6 +83,8 @@ const MATCH_KEY = /^[a-z][a-z0-9_]{0,39}$/;
 const MATCH_STR_MAX = 200;
 const CREATE_URL_MAX = 8 * 1024;
 const NOT_ACCEPTED = 'That was not accepted. Check it and try again.';
+// exchange's coded NOT_OWNED (D42 addendum "start inputs"): this text, never the connector's.
+const notOwnedText = (name) => `${name} created this app under a different owner than the organization you named. Delete that app on ${name} and start again.`;
 const SETUP_EXPIRED = 'This setup has expired. Start again from Buddy.';
 // Identity links (D98).
 const JWKS_TTL_MS = 3_600_000;
@@ -1246,7 +1248,7 @@ export function createIntegrations({
       if (typeof v === 'string' && v && Buffer.byteLength(v) <= START_INPUT_MAX) {
         try { n = conn.connect.startInput(k, v); } catch { n = null; }
       }
-      if (typeof n !== 'string' || !n || n.length > START_INPUT_MAX) throw new HubError('VALIDATION', 'that value is not valid here: check it and try again');
+      if (typeof n !== 'string' || !n || Buffer.byteLength(n) > START_INPUT_MAX) throw new HubError('VALIDATION', 'that value is not valid here: check it and try again');
       out[k] = n;
     }
     return out;
@@ -1322,6 +1324,15 @@ export function createIntegrations({
       });
     } catch (e) {
       warn('integration connect failed', conn, e);
+      // Only after an owner was named at /start: the sentence says so. The app
+      // exists at the provider (webhook URL and all), so the admin is sent to delete it.
+      let notOwned = false;
+      let app = null;
+      try {
+        notOwned = e?.code === 'NOT_OWNED' && Object.keys(startInput).length > 0;
+        app = notOwned && typeof e.url === 'string' ? urlOn(e.url, conn.hosts) : null;
+      } catch { app = null; }
+      if (notOwned) return { ok: false, code: 'NOT_OWNED', error: notOwnedText(conn.name), ...(app ? { link: { url: app.href, text: `Open that app on ${conn.name}` } } : {}) };
       return { ok: false, error: 'The provider did not accept the connection. Try again.' };
     }
     if (pending) {

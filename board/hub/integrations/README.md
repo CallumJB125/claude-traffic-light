@@ -70,6 +70,15 @@ your rule for a value (keep it strict: it lands in a URL). The registry refuses 
 `VALIDATION`, passes the rest to `authorizeUrl`/`manifestForm` as `input` (check it again there), signs it into the state
 and hands it back to `exchange` as `startInput`, where you **must** check the provider's answer against it (GitHub: the
 app's owner is that organization) and refuse otherwise. Never store it as config; keep only what the provider says.
+An empty input is no preference: never fall back to an earlier connection's `provider` facts to choose one (GitHub:
+no org named is the signed-in account's own page). Both the raw and your normalized value must be 1–256 bytes (UTF-8).
+To refuse because the provider made the app under another owner than the one named, throw an error with
+`code: 'NOT_OWNED'` (its message is only logged): the callback page then shows the registry's fixed text, telling
+the admin to delete that app; add `url` (https on your `hosts`, built by you from a value you checked, never echoed
+from the answer) and the page shows it as one plain link to that app. `/start`'s replay of a `request_id` is a fixed
+`409 REPLAYED`, never the first answer. Read the code in `exchange` with `query.get('code')`: the registry hands over
+`URLSearchParams`, and `integrations-conformance.test.js` drives every registered connector through the real
+callbacks to check it.
 
 **Pending connections (D97).** A provider whose app must be created first (Slack, from a configuration
 token) declares `connect.prepareInputs: [...]` and `connect.prepare({input, webhookUrl, redirectUri,

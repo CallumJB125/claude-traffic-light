@@ -185,7 +185,7 @@ test('e2e M4: reconnecting makes a second app and a second connection, not a CON
     const conversion = (id, slug) => ({ id, slug, name: slug, owner: { id: 9100001, login: 'acme', type: 'Organization' },
       pem: `${pemLine('BEGIN')}\n${randomBytes(48).toString('base64')}\n${pemLine('END')}\n`, webhook_secret: randomBytes(20).toString('hex'),
       permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' }, events: ['pull_request', 'pull_request_review', 'check_suite'] });
-    const exchange = (body) => github.connect.exchange({ query: { code: 'abc' }, config: {}, fetch: async () => ({ ok: true, json: async () => body }) });
+    const exchange = (body) => github.connect.exchange({ query: new URLSearchParams({ code: 'abc' }), config: {}, fetch: async () => ({ ok: true, json: async () => body }) });
     // As the callback does: exchange's settings are provider facts (D42 addendum C1).
     const create = (v) => reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'github', ...v, settings: { provider: v.settings ?? {} } });
     const a = create(await exchange(conversion(801, 'plexiform-acme-aaaa')));
