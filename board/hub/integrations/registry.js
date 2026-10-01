@@ -79,6 +79,7 @@ const ID_TOKEN_MAX = 16 * 1024;
 const LINK_INVALID = 'This link is not valid. Start again from Buddy.';
 const LINK_GONE = 'This link can no longer be used. Start again from Buddy.';
 const LINK_FAILED = 'The provider did not confirm your account. Start again from Buddy.';
+const LINK_UNAVAILABLE = 'The provider could not be reached. Try again in a minute from Buddy.';
 
 const safeJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -1493,10 +1494,21 @@ export function createIntegrations({
     } catch { idToken = null; }
     if (!idToken) return refuse(LINK_FAILED, 'exchange_failed');
     let claims;
+    let outage = false;
+    const { keyFor } = jwksFor(conn);
     try {
-      claims = await verifyRs256(idToken, { keyFor: jwksFor(conn).keyFor, issuers: [conn.identity.issuer], audience: pinnedClientId(c), nonce: st.k, nowS: hub.wallMs() / 1000 });
+      claims = await verifyRs256(idToken, {
+        keyFor: (kid) => keyFor(kid).catch((e) => { outage = true; throw e; }),
+        issuers: [conn.identity.issuer], audience: pinnedClientId(c), nonce: st.k, nowS: hub.wallMs() / 1000,
+      });
     } catch { claims = null; }
     idToken = null;
+    // The provider's key set being unreachable is not the caller's failure:
+    // it spends nothing, so an outage can't lock members out of linking.
+    if (!claims && outage) {
+      log?.warn?.('integration identity link refused', { integration: provider, err: 'jwks_unavailable' });
+      return { ok: false, status: 503, error: LINK_UNAVAILABLE };
+    }
     if (!claims) return refuse(LINK_FAILED, 'id_token_refused');
     if (claims[conn.identity.workspaceClaim] !== c.external_id) return refuse('That account is in another workspace. Sign in to the connected workspace and start again.', 'other_workspace');
     const sub = claims.sub;

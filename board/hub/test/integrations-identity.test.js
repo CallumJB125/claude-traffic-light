@@ -367,14 +367,14 @@ test('JWKS: fetched through the restricted fetch; a flood of random-kid tokens c
   const big = await setup();
   try {
     big.beh.jwks = () => new Response(JSON.stringify({ keys: [], pad: 'x'.repeat(70 * 1024) }), { status: 200 });
-    assert.equal((await link(big.h, big.bob, big.conn)).status, 400);
+    assert.equal((await link(big.h, big.bob, big.conn)).status, 503, 'refused as an outage (spends no link_fail_ip)');
     assert.equal(links(big.h).length, 0);
   } finally { await big.h.close(); }
   const slow = await setup();
   try {
     slow.beh.jwks = (init) => new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
     const t0 = Date.now();
-    assert.equal((await link(slow.h, slow.bob, slow.conn)).status, 400);
+    assert.equal((await link(slow.h, slow.bob, slow.conn)).status, 503);
     const took = Date.now() - t0;
     assert.ok(took >= 4_500 && took < 9_000, `gave up after ${took} ms (≈ 5 s)`);
   } finally { await slow.h.close(); }
@@ -580,6 +580,38 @@ test('rate limit: integration_link_fail_ip refuses the callback (429 page) once 
     assert.equal(out.status, 429);
     assert.match(out.text, /Too many attempts/);
     assert.equal(links(h).length, 0);
+  } finally { await h.close(); }
+});
+
+test('rate limit: a JWKS outage (an error answer, a failed fetch, an oversized set) answers a fixed page and spends no integration_link_fail_ip; bad tokens still do', async () => {
+  const lines = [];
+  const { h, beh, bob, conn } = await setup({
+    config: { rateLimits: { ...ROOMY.rateLimits, integration_link_fail_ip: { capacity: 3, per_ms: 600_000 } } },
+    log: createLogger({ level: 'debug', sink: (l) => lines.push(l) }),
+  });
+  try {
+    const outages = [
+      () => new Response('{}', { status: 500 }),
+      () => { throw new TypeError('fetch failed'); },
+      () => new Response(JSON.stringify({ keys: [], pad: 'x'.repeat(70 * 1024) }), { status: 200 }),
+    ];
+    for (const outage of outages) {
+      beh.jwks = outage;
+      for (let i = 0; i < 5; i += 1) {
+        const out = await link(h, bob, conn);
+        assert.equal(out.status, 503, out.text);
+        assert.match(out.text, /could not be reached/);
+      }
+      h.clock.advance(60_000);
+    }
+    assert.equal(links(h).length, 0);
+    assert.ok(lines.some((l) => /jwks_unavailable/.test(JSON.stringify(l))));
+    beh.jwks = null;
+    assert.equal((await link(h, bob, conn)).status, 200, 'the bucket is untouched');
+    h.db.run('DELETE FROM external_identities');
+    beh.sign = { privateKey: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey };
+    for (let i = 0; i < 3; i += 1) assert.equal((await link(h, bob, conn)).status, 400);
+    assert.equal((await link(h, bob, conn)).status, 429, 'bad tokens spend it');
   } finally { await h.close(); }
 });
 

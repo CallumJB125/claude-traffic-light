@@ -19,17 +19,24 @@ const MIN_RSA_BITS = 2048;
  * the last attempt); an unknown kid refetches at most once per kidRefetchMs,
  * so tokens with made-up kids can't make every call a fetch. Concurrent
  * callers share one fetch. A stale set that still knows the kid answers when
- * the refetch fails. Only RSA keys of at least 2048 bits whose `use` (when
- * set) is `sig` and `alg` (when set) is `RS256` are kept.
+ * the refetch fails; while the last fetch failed, an unknown kid throws that
+ * failure rather than answering null. Only RSA keys of at least 2048 bits
+ * whose `use` (when set) is `sig` and `alg` (when set) is `RS256` are kept.
  */
 export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
   let keys = new Map();
   let fetchedAt = -Infinity;
   let triedAt = -Infinity;
   let running = null;
+  let failed = null;
 
   async function refresh() {
     triedAt = now();
+    try { await refreshKeys(); } catch (e) { failed = e; throw e; }
+    failed = null;
+  }
+
+  async function refreshKeys() {
     const doc = await load();
     if (!Array.isArray(doc?.keys)) throw new Error('not a key set');
     const next = new Map();
@@ -57,6 +64,8 @@ export function createJwks({ load, now, ttlMs, kidRefetchMs, retryMs = 0 }) {
         if (!keys.has(kid) || !Number.isFinite(fetchedAt)) throw e;
       }
     }
+    // A kid we can't check while the key set is unreachable is an outage, not a bad token.
+    if (!keys.has(kid) && failed) throw failed;
     return keys.get(kid) ?? null;
   }
 

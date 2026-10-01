@@ -155,3 +155,16 @@ test('verifyRs256: a header with crit is refused (we understand no extension), a
   assert.equal((await r.verify(jwt({ aud: [AUD], azp: AUD }))).sub, 'U123');
   assert.equal((await r.verify(jwt())).sub, 'U123');
 });
+
+test('JWKS: while the last fetch failed, an unknown kid throws that failure (an outage), never JwtInvalid (a bad token); once a fetch succeeds it is JwtInvalid again', async () => {
+  const r = rig();
+  r.fail = true;
+  for (let i = 0; i < 5; i += 1) {
+    await assert.rejects(r.verify(jwt({}, { kid: randomBytes(4).toString('hex') })), (e) => !(e instanceof JwtInvalid) && /down/.test(e.message));
+  }
+  assert.equal(r.loads, 1);
+  r.fail = false;
+  r.advance(60_000);
+  assert.equal((await r.verify(jwt())).sub, 'U123');
+  await assert.rejects(r.verify(jwt({}, { kid: 'nope' })), JwtInvalid);
+});
