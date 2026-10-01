@@ -18,6 +18,22 @@ function hangingGitHub() {
   return gh;
 }
 
+test('accepted heartbeat records only the server-issued current connection generation; replacement cannot inherit it', async () => {
+  const h = await startHub();
+  try {
+    const cookie = await h.login('alice'), dev = await h.enroll(cookie), runner = await h.runner(dev), run = await h.startRun(cookie, runner);
+    const old = h.hub.runners.get(dev.device_id), live = h.hub.lease(run.run_id);
+    assert.equal(live.hb_connection_generation, old.generation);
+    const replacement = await h.runner(dev, { runs: [{ ...runMsg(run), state: 'running' }] });
+    const current = h.hub.runners.get(dev.device_id); assert.notEqual(current.generation, old.generation);
+    assert.equal(live.hb_connection_generation, old.generation, 'old task state remains historical until this connection sends a heartbeat');
+    assert.notEqual(live.hb_connection_generation, current.generation);
+    const ack = await replacement.hb([runHb(run, { generation: old.generation, hb_connection_generation: old.generation })]);
+    assert.equal(ack.runs[0].current, true); assert.equal(live.hb_connection_generation, current.generation);
+    assert.match(current.generation, /^[0-9a-f-]{36}$/);
+  } finally { await h.destroy(); }
+});
+
 test('a hung GitHub evidence check does not hold up the heartbeats and outbox frames behind it', async () => {
   const h = await startHub({ github: hangingGitHub() });
   try {

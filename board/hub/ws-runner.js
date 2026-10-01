@@ -54,6 +54,7 @@ export class RunnerConn {
     this.ws = ws;
     this.device = device;
     this.enrollmentId = enrollmentId;   // accounts: the runner enrolment this socket authenticated with (D80)
+    this.generation = randomUUID();     // server-issued host connection identity, never from hello/HB data
     this.device_id = device.id;
     this.member_id = device.member_id;
     this.member = hub.member(device.member_id);
@@ -391,6 +392,7 @@ export class RunnerConn {
     if (run.ended_at || row.active_run_id !== run.id) return no('RUN_ENDED');
 
     hub.noteHeartbeat(run.id, r, rx);
+    hub.lease(run.id).hb_connection_generation = this.generation;
     const t = r.tool_in_flight;
     hub.db.run('UPDATE leases SET last_hb_at = ?, hub_epoch = ?, child_alive = ?, tool_in_flight = ?, tool_bound_ms = ? WHERE card_id = ?',
       hub.iso(), hub.epoch, r.child_alive === true, t ? JSON.stringify({ name: t.name, summary: t.summary ?? null, bash_timeout_ms: t.bash_timeout_ms ?? null }) : null, null, row.id);
