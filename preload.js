@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   resizeWindowBy: (factor) => ipcRenderer.send('resize-window-by', factor),
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
   openLights: () => ipcRenderer.invoke('open-lights'),
-  widgetMenu: () => ipcRenderer.invoke('widget-menu'),
+  widgetMenu: (menu) => ipcRenderer.invoke('widget-menu', { menu: menu === true }),
   openHelp: () => ipcRenderer.invoke('open-help'),
   onBurst: (cb) => ipcRenderer.on('burst', (e, ms) => cb(ms)),
   onAim: (cb) => ipcRenderer.on('aim', (e, a) => cb(a)),

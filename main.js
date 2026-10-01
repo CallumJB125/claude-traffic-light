@@ -2517,13 +2517,15 @@ function createTray() {
   updateTrayMode();
 }
 
-// Right-click on the widget: the tray's menu, built fresh from the same
-// template (the whole app plus the widget's own items), and on Linux the only
-// way to Quit where GNOME shows no tray. Before a tray exists: the Lights editor.
+// Right-click on the widget opens the Plexiform window: one app, on the page
+// last used (focused if already open). Shift/Option-right-click: the tray's
+// menu, built fresh from the same template, and on Linux the only way to Quit
+// where GNOME shows no tray. Before a tray exists: the Lights editor.
 let trayMenu = null;
 let buildWidgetMenu = null;
-ipcMain.handle('widget-menu', (e) => {
+ipcMain.handle('widget-menu', (e, opts) => {
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  if (!(opts && opts.menu === true)) { openBuddy(); return; }
   if (!buildWidgetMenu) { createLightsWindow(); return; }
   const menu = buildWidgetMenu('widget');
   if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_MENU_SPY === '1') { global.__buddyWidgetMenu = menu; return; } // specs read it: a native popup would block them
