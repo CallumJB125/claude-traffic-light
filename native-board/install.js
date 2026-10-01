@@ -50,6 +50,11 @@ async function cli(opts, args) {
   const home = opts.home ?? os.homedir();
   // Config commands only: no model invocation, inherited API key or app token.
   const env = { HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), PATH: process.env.PATH ?? '', ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) };
+  // Codex refuses an explicitly supplied CODEX_HOME that does not exist.
+  // Inspecting a fresh install must stay read-only; setup creates it only
+  // after the person has chosen Connect boards.
+  if (args[1] === 'get' && !fs.existsSync(env.CODEX_HOME)) return { stdout: 'null' };
+  if (args[1] === 'add') fs.mkdirSync(env.CODEX_HOME, { recursive: true, mode: 0o700 });
   try { return await (opts.exec ?? exec)(bin, args, { env, timeout: 10000, maxBuffer: 256 * 1024, windowsHide: true }); }
   catch (err) { if (args[1] === 'get' && /No MCP server|not found/i.test(err.stderr ?? '')) return { stdout: 'null' }; throw new Error('Codex could not update its MCP configuration. It was not replaced by Plexiform.'); }
 }

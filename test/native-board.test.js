@@ -160,6 +160,13 @@ test('real Codex configuration commands preserve other settings and Undo removes
   await Install.install(opts); assert.ok((await Install.status(opts)).installed);
   await Install.uninstall(opts); assert.equal((await Install.status(opts)).installed, false);
   const text = fs.readFileSync(file, 'utf8'); assert.match(text, /foreign-tool/); assert.match(text, /model = "gpt-6.1-sol"/); assert.doesNotMatch(text, /plexiform-board/);
+  const freshHome = path.join(home, 'fresh-home');
+  const fresh = { ...opts, home: freshHome, grantPath: path.join(freshHome, 'grant.json') };
+  fresh.entry = Install.launch({ execPath: process.execPath, appPath: path.join(__dirname, '..'), grantPath: fresh.grantPath });
+  assert.equal((await Install.status(fresh)).installed, false);
+  assert.equal(fs.existsSync(freshHome), false);
+  await Install.install(fresh); assert.equal((await Install.status(fresh)).installed, true);
+  await Install.uninstall(fresh); assert.equal((await Install.status(fresh)).installed, false);
 });
 
 test('real accounts hub enforces selected boards, role changes, version conflicts and device revocation through the broker', async (t) => {
