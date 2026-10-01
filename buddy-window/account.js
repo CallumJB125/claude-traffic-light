@@ -290,15 +290,7 @@ const SCREENS = {
       out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Pending invites'), inv.length ? el('ul', { class: 'acct-list' }, inv) : el('p', { class: 'acct-hint' }, 'No invites waiting.')));
     }
 
-    if (s.isOwner && s.team.slug) {
-      const del = form({
-        fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
-        submit: 'Delete team', busy: 'Deleting…', fn: (v) => api.deleteTeam(team, v.slug),
-      });
-      del.querySelector('.acct-go').classList.add('btn-danger');
-      out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Delete team'),
-        el('p', { class: 'acct-hint' }, `Everyone loses ${s.team.name}, its boards and its cards at once, and runners stop. This can’t be undone from the app.`), del));
-    }
+    if (s.isOwner && s.team.slug) out.push(el('section', { class: 'acct-section' }, el('h2', {}, 'Delete team'), teamDelete(s)));
     return out;
   },
 
@@ -365,7 +357,12 @@ const SCREENS = {
     for (const a of s.accounts) {
       const card = el('section', { class: 'acct-section' },
         el('div', { class: 'acct-who acct-who-lg' }, el('span', { class: 'acct-name' }, a.name || a.email), el('span', { class: 'acct-mail' }, a.email, ' · ', hostTag(a.host))));
-      if (s.deleting === a.host) {
+      if (s.deleting === a.host && s.deleteCheck) {
+        card.append(...deleteCheck(s.deleteCheck, {
+          host: a.host, intro: `To delete your account on ${a.host}, confirm it’s you first.`, warn: `You’ll leave every team on ${a.host}. This can’t be undone.`,
+          submit: 'Delete my account', del: () => api.deleteConfirm(''), pick: (id) => api.deleteOAuth(id),
+        }));
+      } else if (s.deleting === a.host) {
         card.append(
           el('p', { class: 'acct-hint' }, `We sent a code to ${a.email}. Enter it to delete your account on ${a.host}. You’ll leave every team there. This can’t be undone.`),
           form({
@@ -415,6 +412,83 @@ const SCREENS = {
   },
 };
 
+let tick = null; // the delete countdown's timer; each render starts fresh
+
+const cancelLink = () => link('Cancel', async () => { await api.cancelDelete(); render(); });
+
+// Deleting a team: type its slug, then an emailed code (or Google/GitHub on a hub without a mailer),
+// then Delete team while the check lasts. It is only ever for the team on screen.
+function teamDelete(s) {
+  const d = s.team.deleteStep;
+  const warn = `Everyone loses ${s.team.name}, its boards and its cards at once, and runners stop. This can’t be undone from the app.`;
+  if (!d) {
+    const f = form({
+      fields: field(`Type ${s.team.slug} to confirm`, input({ name: 'slug', type: 'text', autocomplete: 'off', required: true, placeholder: s.team.slug })),
+      submit: s.team.deleteVia === 'email' ? 'Send me a code' : 'Continue', busy: s.team.deleteVia === 'email' ? 'Sending…' : 'Checking…',
+      fn: async (v) => { const r = await api.teamDeleteStart(team, v.slug); if (r?.ok) render(); return r; },
+    });
+    return [el('p', { class: 'acct-hint' }, warn), f];
+  }
+  if (d.via === 'email' && d.phase === 'code') {
+    const f = form({
+      fields: input({ name: 'code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '12', placeholder: '123456', class: 'input input-code', 'aria-label': '6-digit code', autofocus: true }),
+      submit: 'Confirm', busy: 'Checking…', fn: async (v) => { const r = await api.teamDeleteCode(team, v.code); if (r?.ok) render(); return r; },
+      extra: el('p', { class: 'acct-foot' },
+        link('Send a new code', async () => { const r = await api.teamDeleteResend(team); flash(r.ok ? r.notice : r.error, !r.ok); }),
+        el('span', { class: 'acct-dot', 'aria-hidden': 'true' }, '·'),
+        cancelLink()),
+    });
+    return [el('p', { class: 'acct-hint' }, `We sent a code to ${d.email ?? 'your email'}. Enter it to confirm it’s you before deleting ${s.team.name}.`), f];
+  }
+  return deleteCheck(d, {
+    host: s.host, intro: `To delete ${s.team.name}, confirm it’s you first.`, warn, submit: 'Delete team',
+    del: () => api.deleteTeam(team), pick: (id) => api.teamDeleteOAuth(team, id),
+  });
+}
+
+// Google or GitHub confirms it's you (or, for a team, the emailed code did), then the delete button
+// works for the few minutes the hub allows. Provider names are text, never markup.
+function deleteCheck(c, { host, intro, warn, submit, del, pick }) {
+  if (c.phase === 'browser') {
+    return [
+      el('p', { class: 'acct-hint' }, `We opened ${c.provider} in your browser. Sign in there with the account you use for ${host}, then come back here.`),
+      el('p', { class: 'acct-hint', role: 'status' }, 'Waiting for your browser…'),
+      el('div', { class: 'acct-actions acct-actions-left' }, el('button', { type: 'button', class: 'btn', autofocus: true, onclick: async () => { await api.cancelDeleteOAuth(); render(); } }, 'Cancel')),
+    ];
+  }
+  if (c.phase === 'confirmed') {
+    const left = el('span', {}, clock(c.secondsLeft));
+    const end = Date.now() + c.secondsLeft * 1000;
+    tick = setInterval(() => {
+      const s = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+      left.textContent = clock(s);
+      if (s === 0) { clearInterval(tick); tick = null; render(); }
+    }, 1000);
+    const f = form({ fields: [], submit, busy: 'Deleting…', fn: del });
+    f.querySelector('.acct-go').classList.add('btn-danger');
+    f.addEventListener('failed', (e) => { if (e.detail?.stepUp) render().then(() => flash(e.detail.error, true)); });
+    return [
+      el('p', { class: 'acct-hint', role: 'status' }, `Confirmed with ${c.provider}. ${warn}`),
+      // The main area is a polite live region; a per-second tick there would be read out every second.
+      el('p', { class: 'acct-hint', 'aria-live': 'off' }, 'Delete within ', left, ', or confirm again.'),
+      f,
+      el('p', { class: 'acct-foot' }, cancelLink()),
+    ];
+  }
+  const buttons = c.providers.map((p) => {
+    const b = el('button', { type: 'button', class: `btn btn-provider btn-${p.id}` }, `Confirm it’s you with ${p.name}`);
+    b.addEventListener('click', async () => { b.disabled = true; const r = await pick(p.id); if (r?.ok) render(); else { b.disabled = false; flash(r?.error ?? 'Something went wrong. Try again.', true); } });
+    return b;
+  });
+  return [
+    el('p', { class: 'acct-hint' }, `${intro} ${warn}`),
+    el('div', { class: 'acct-providers' }, buttons),
+    el('p', { class: 'acct-foot' }, cancelLink()),
+  ];
+}
+
+const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
 const RUNNER = {
   off: 'Off', starting: 'Starting…', connecting: 'Connecting…', connected: 'Running', backoff: 'Reconnecting…', restarting: 'Restarting…',
   unauthenticated: 'Signed out. Turn it off and on again.', revoked: 'This Mac was removed from the team.', unavailable: 'Can’t reach the team hub right now.', stopping: 'Stopping…',
@@ -437,6 +511,7 @@ function expires(iso) {
 const WIDE = new Set(['team', 'account', 'thismac', 'invites']);
 
 async function render() {
+  if (tick) { clearInterval(tick); tick = null; }
   let s;
   try { s = await api.state(); } catch { s = null; }
   if (!s?.ok) return;

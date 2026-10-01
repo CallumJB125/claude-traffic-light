@@ -62,6 +62,7 @@ function routePath(name, params = {}) {
 // hub's message is written for developers; these are the sentences a person sees.
 const INVITE_GONE = 'This invite link isn’t valid any more. Ask for a new one.';
 const INVITE_CODE_GONE = 'That code didn’t work. Check it, or ask for a new invite.';
+const SLUG_MISMATCH = 'That doesn’t match the team’s name. Type it exactly as shown.';
 const CODE_TEXT = {
   LAST_OWNER: 'A team needs at least one owner. Make someone else an owner first.',
   FORBIDDEN: 'You don’t have permission to do that in this team.',
@@ -134,11 +135,13 @@ function oauthOutcome(r, provider, host) {
   if (r.code === 'EMAIL_UNVERIFIED') return { ...r, error: `${who} hasn’t verified that email address. Verify it with ${who}, or use an email code instead.` };
   if (r.code === 'PROVIDER_ERROR' || r.code === 'PROVIDER_UNAVAILABLE') return { ...r, error: `${who} didn’t answer. Try again in a minute.` };
   if (r.code === 'METHOD_DISABLED') return { ...r, error: `${who} sign-in is turned off on ${host}.` };
+  if (r.code === 'WRONG_ACCOUNT') return { ...r, error: `That isn’t the ${who} account you sign in with. Use that one.` };
+  if (r.code === 'STEP_UP_REQUIRED') return { ...r, stepUp: true, error: 'That check timed out. Confirm it’s you again.' };
   return r;
 }
 
-function deleteOutcome(r) {
-  if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: 'That check timed out. Send a new code and do the check again.' };
+function deleteOutcome(r, { again = 'Send a new code and do the check again.' } = {}) {
+  if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: `That check timed out. ${again}` };
   const owned = Array.isArray(r.detail?.sole_owner_of) ? r.detail.sole_owner_of.map((t) => String(t?.name ?? '').slice(0, 60)).filter(Boolean) : [];
   if (r.status === 409 && owned.length) {
     const names = owned.length === 1 ? owned[0] : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)}`;
@@ -199,6 +202,12 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
   }
 
   const need = (cond, error) => (cond ? null : { ok: false, error });
+  // The hub's expiry, but never past our own 5 minutes: a skewed hub clock can't stretch the window.
+  function stepUpUntil(v) {
+    const t = now();
+    const at = typeof v === 'string' ? Date.parse(v) : typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : NaN;
+    return Number.isFinite(at) && at > t ? Math.min(at, t + STEP_UP_MS) : t + STEP_UP_MS;
+  }
   function signedInWith(r) {
     if (typeof r.device_token !== 'string' || !r.device_token) return { ok: false, error: `${host} didn’t sign you in.` };
     try {
@@ -253,10 +262,18 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return r.ok ? { ok: true, google: r.google === true, github: r.github === true, email: r.email === true } : r;
     },
 
-    /** Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller. */
-    async startOAuth(provider, { challenge, redirectUri }, dev = {}) {
+    /**
+     * Provider sign-in, step 1: → {ok, flow_id, url}. The verifier stays with the caller.
+     * `purpose:'delete'` is the account-deletion check instead: it goes with the Bearer, and names no
+     * device because no token comes of it.
+     */
+    async startOAuth(provider, { challenge, redirectUri }, dev = {}, { purpose = 'signin' } = {}) {
       if (!PROVIDER_LABEL[provider]) return { ok: false, error: 'Pick Google or GitHub.' };
-      const r = await call('oauthStart', { body: { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) }, auth: false });
+      const stepUp = purpose === 'delete';
+      const body = stepUp
+        ? { provider, client: 'buddy_desktop', code_challenge: challenge, redirect_uri: redirectUri, purpose: 'delete' }
+        : { provider, code_challenge: challenge, redirect_uri: redirectUri, client: 'buddy_desktop', ...device(dev) };
+      const r = await call('oauthStart', { body, auth: stepUp });
       if (!r.ok) return oauthOutcome(r, provider, host);
       // The hub mints the state: without one the loopback callback couldn't be checked.
       if (typeof r.flow_id !== 'string' || typeof r.url !== 'string' || typeof r.state !== 'string' || r.state.length < 16) return { ok: false, error: `${host} didn’t start a sign-in.` };
@@ -268,7 +285,18 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
      * `keep()` is asked once the hub has answered: false (the member cancelled, or another sign-in
      * replaced this one) and the new token is revoked on the hub without ever being stored.
      */
-    async exchangeOAuth({ flowId, code, state, verifier, provider }, dev = {}, { keep = () => true } = {}) {
+    async exchangeOAuth({ flowId, code, state, verifier, provider, purpose = 'signin' }, dev = {}, { keep = () => true } = {}) {
+      if (purpose === 'delete') {
+        // A deletion check proves who you are to the hub and nothing more: whatever else the answer
+        // holds, only its expiry is read, and the vault is never touched.
+        const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier } });
+        if (!keep()) return { ok: false, cancelled: true };
+        // The hub answers another person's provider account with the same INVALID_TOKEN as a bad code.
+        if (!r.ok && r.code === 'INVALID_TOKEN') return { ...r, error: `That didn’t confirm it’s you. Use the ${PROVIDER_LABEL[provider] ?? 'account'} account you sign in with, and try again.` };
+        if (!r.ok) return oauthOutcome(r, provider, host);
+        if (r.stepup_until == null) return { ok: false, error: `${host} didn’t confirm it’s you. Try again.` };
+        return { ok: true, flowId, stepupUntil: stepUpUntil(r.stepup_until) };
+      }
       const r = await call('oauthExchange', { body: { flow_id: flowId, code, state, code_verifier: verifier, ...device(dev) }, auth: false });
       if (!keep()) {
         if (r.ok && typeof r.device_token === 'string' && r.device_token) await call('signOut', { body: {}, token: r.device_token });
@@ -293,10 +321,41 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (!n || n.length > 60) return Promise.resolve({ ok: false, error: 'Give the team a name (up to 60 characters).' });
       return call('renameTeam', { params: { team }, body: { name: n } });
     },
-    /** Owner only; the hub wants the team's slug typed back. */
-    async deleteTeam(team, confirmSlug) {
-      const r = await call('deleteTeam', { params: { team }, body: { confirm_slug: String(confirmSlug ?? '').trim() } });
-      return !r.ok && r.status === 400 && r.code === 'VALIDATION' ? { ok: false, error: 'That doesn’t match the team’s name. Type it exactly as shown.' } : r;
+    /**
+     * Owner only; the hub wants the team's slug typed back and a fresh step-up's flow_id (the emailed
+     * `delete_team` code, or a Google/GitHub check), which it spends only when the team is deleted.
+     */
+    async deleteTeam(team, { confirmSlug, flowId } = {}) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+      const r = await call('deleteTeam', { params: { team }, body: { confirm_slug: String(confirmSlug ?? '').trim(), flow_id: flowId } });
+      if (r.ok) return { ok: true };
+      if (r.status === 400 && r.code === 'VALIDATION') return { ok: false, error: SLUG_MISMATCH };
+      if (r.code === 'STEP_UP_REQUIRED') return { ok: false, stepUp: true, error: 'That check timed out or was already used. Confirm it’s you again to delete the team.' };
+      return r;
+    },
+    /**
+     * Team deletion, step 1 on a hub with a mailer: the hub emails a code to the signed-in address.
+     * Nothing is kept here: the flow_id goes back to the caller, so the account-deletion code path
+     * (`flow`) can never pick it up, nor this one an account code.
+     */
+    async startTeamDelete() {
+      const email = saved()?.user?.email ?? null;
+      const r = await call('emailStart', { body: { purpose: 'delete_team', client: 'buddy_desktop' } });
+      if (!r.ok) return r.code === 'METHOD_DISABLED' ? { ...r, error: `${host} can’t send email right now, so it can’t send the code.` } : r;
+      if (typeof r.flow_id !== 'string' || !r.flow_id) return { ok: false, error: `${host} didn’t send a code.` };
+      return { ok: true, flowId: r.flow_id, email };
+    },
+    /** Step 2: the emailed code. → {ok, stepupUntil}; the window never runs past 5 minutes from before the ask. */
+    async verifyTeamDelete(flowId, code) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Send a code first.' };
+      const c = String(code ?? '').replace(/\D/g, '');
+      if (c.length !== 6) return { ok: false, error: 'The code is 6 digits.' };
+      // From before the request: the hub starts its 5 minutes when it verifies, not when we hear back.
+      const t = now();
+      const r = await call('emailVerify', { body: { flow_id: flowId, code: c } });
+      if (!r.ok) return r;
+      const s = Number(r.step_up_expires_in);
+      return { ok: true, stepupUntil: t + (Number.isFinite(s) && s > 0 ? Math.min(s * 1000, STEP_UP_MS) : STEP_UP_MS) };
     },
     addBoard(team, name) {
       const n = String(name ?? '').trim();
@@ -378,6 +437,16 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         if (r.code === 'STEP_UP_REQUIRED') flow = null;
         return deleteOutcome(r);
       }
+      try { store.clear(); } catch { /* already gone */ }
+      flow = null;
+      return { ok: true };
+    },
+
+    /** Account deletion after a Google/GitHub check: the check's flow_id, which the hub spends once. */
+    async deleteAccountWith(flowId) {
+      if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
+      const r = await call('deleteAccount', { body: { flow_id: flowId } });
+      if (!r.ok) return deleteOutcome(r, { again: 'Confirm it’s you again.' });
       try { store.clear(); } catch { /* already gone */ }
       flow = null;
       return { ok: true };
@@ -534,4 +603,4 @@ function bearerHeaders(requestHeaders, url, { scope, token }) {
   return headers;
 }
 
-module.exports = { createAccountClient, oauthOutcome, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };
+module.exports = { createAccountClient, oauthOutcome, SLUG_MISMATCH, ROUTES, ROLES, parseInvite, routeInvite, maskEmail, inviteMailto, bearerScope, bearerHeaders, humanError, codeText, TOKEN_RE, INVITE_CODE_RE, INVITE_GONE };

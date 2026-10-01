@@ -13,7 +13,8 @@
 // `teamHeaders()` (X-Board-Team values seen), `setMethods({google, github,
 // email})`, `setOAuthIdentity(provider, {email, verified})`,
 // `oauthStarts()` (oauth/start bodies), `oauthCallback(url)` (the loopback
-// URL the fake provider page last redirected to).
+// URL the fake provider page last redirected to), `linkIdentity(email,
+// provider)`.
 //
 // Provider sign-in (the real hub's OAuth phase isn't built): oauth/start
 // keeps {challenge, redirect_uri, state} and answers a URL on this hub,
@@ -21,6 +22,19 @@
 // straight to the loopback with a one-time code and the app's state;
 // oauth/exchange checks sha256(verifier) = challenge, the state and the
 // code (single use, 10 minutes).
+//
+// The provider step-up for deleting an account (`purpose:'delete'`, for a hub
+// with no mailer): start and exchange need the Bearer; the exchange answers
+// `{stepup_until}` and never a token, and only when the provider identity is
+// one linked to the signed-in user (else the same INVALID_TOKEN as a bad
+// code). DELETE /api/account, or DELETE /api/teams/:id, then takes that
+// flow_id once, within 5 minutes.
+//
+// The emailed step-ups: `purpose:'delete'` for the account and
+// `purpose:'delete_team'` for a team, both sent to the signed-in account's own
+// address, verified by that same user only, their tries counted per user so
+// they never lock anyone out of email sign-in. Each is spent only by its own
+// action, once, within 5 minutes of the verify; a failed DELETE spends nothing.
 'use strict';
 
 const http = require('node:http'); // privacy-flow: local-board-hub
@@ -30,6 +44,7 @@ const { WebSocketServer } = require('ws'); // privacy-flow: local-board-hub
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
 const STEP_UP_MS = 5 * 60_000;
+const STEP_UPS = ['delete', 'delete_team'];
 const INVITE_TTL_MS = 7 * 24 * 3600_000;
 const VERIFY_PER_ADDRESS = 10; // per 15 minutes, right or wrong
 const VERIFY_WINDOW_MS = 15 * 60_000;
@@ -48,7 +63,8 @@ const firstName = (u) => String(u?.display_name ?? 'Someone').split(/\s+/)[0];
 function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), quotas = {}, methods = {} } = {}) {
   const limits = { ...QUOTAS, ...quotas };
   let signInMethods = { google: true, github: true, email: true, ...methods };
-  const oauthFlows = new Map(); // id → {provider, challenge, redirect, state, expires, codeHash, codeUsed, device_name}
+  const oauthFlows = new Map(); // id → {provider, purpose, user_id, challenge, redirect, state, expires, codeHash, codeUsed, device_name, stepupUntil, used}
+  const links = new Map(); // user id → Set of providers signed in with (the identities linked to that user)
   const oauthStarts = [];
   const identities = { google: { email: 'google-user@example.com', verified: true }, github: { email: 'github-user@example.com', verified: true } };
   let lastCallback = null;
@@ -103,6 +119,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   function account(user) {
     return {
       user: { id: user.id, display_name: user.display_name, email: user.email, email_verified: user.email_verified },
+      identities: [...(links.get(user.id) ?? [])].map((provider) => ({ provider })),
       teams: members.filter((m) => m.user_id === user.id && liveTeam(m.team_id)).map((m) => {
         const t = teams.get(m.team_id);
         return { id: t.id, name: t.name, slug: t.slug, plan: t.plan, role: m.role, member_id: m.id, boards: t.boards };
@@ -118,17 +135,17 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
     flows.set(id, { email, user_id: userId, codeHash: sha(code), expires: now() + CODE_TTL_MS, wrong: 0, purpose, dead: false, verifiedAt: null, used: false });
     codes.set(email, code);
-    log(`[mock-hub] ${purpose === 'delete' ? 'delete-account' : 'sign-in'} code for ${email}: ${code}`);
+    log(`[mock-hub] ${{ delete: 'delete-account', delete_team: 'delete-team' }[purpose] ?? 'sign-in'} code for ${email}: ${code}`);
     return id;
   }
 
-  // Every attempt counts against the address, right or wrong: over the limit
-  // even the right code is refused until the bucket refills.
-  function limited(email) {
+  // Every attempt counts against the address (a step-up's against its user), right or wrong: over
+  // the limit even the right code is refused until the bucket refills.
+  function limited(key) {
     const t = now();
-    const list = (verifies.get(email) ?? []).filter((x) => t - x < VERIFY_WINDOW_MS);
+    const list = (verifies.get(key) ?? []).filter((x) => t - x < VERIFY_WINDOW_MS);
     list.push(t);
-    verifies.set(email, list);
+    verifies.set(key, list);
     if (list.length <= VERIFY_PER_ADDRESS) return null;
     const retry = Math.ceil((list[0] + VERIFY_WINDOW_MS - t) / 1000);
     return { ...err(429, 'RATE_LIMITED', 'too many attempts for this address', { retry_after_s: retry }), headers: { 'retry-after': String(retry) } };
@@ -163,13 +180,14 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   }
 
   // One user signed in (email code or a provider): the same answer either way.
-  function signInUser(email, deviceName) {
+  function signInUser(email, deviceName, provider = null) {
     let user = users.get(byEmail.get(email));
     if (!user) {
       user = { id: rid('usr'), email, display_name: email.split('@')[0], email_verified: true };
       users.set(user.id, user);
       byEmail.set(user.email, user.id);
     }
+    if (provider) { if (!links.has(user.id)) links.set(user.id, new Set()); links.get(user.id).add(provider); }
     const token = `bdt_${crypto.randomBytes(32).toString('base64url')}`;
     const device_id = rid('udev');
     tokens.set(sha(token), { user_id: user.id, device_id, name: String(deviceName ?? ''), revoked: false });
@@ -214,13 +232,16 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     if (method === 'POST' && path === '/api/auth/oauth/start') {
       oauthStarts.push({ ...body });
       const provider = body.provider;
+      const purpose = body.purpose ?? 'signin';
+      if (!['signin', 'delete'].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
+      if (purpose === 'delete' && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
       if (!['google', 'github'].includes(provider) || !signInMethods[provider]) return err(400, 'VALIDATION', 'provider not enabled');
       if (!/^[A-Za-z0-9_-]{43}$/.test(String(body.code_challenge ?? ''))) return err(400, 'VALIDATION', 'bad code_challenge');
       if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/callback$/.test(String(body.redirect_uri ?? ''))) return err(400, 'VALIDATION', 'redirect_uri must be the loopback callback');
       // The hub mints the state (the app never sends one) and answers it with the flow.
       const id = crypto.randomBytes(18).toString('base64url');
       const state = crypto.randomBytes(32).toString('base64url');
-      oauthFlows.set(id, { provider, challenge: body.code_challenge, redirect: body.redirect_uri, state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name });
+      oauthFlows.set(id, { provider, purpose, user_id: purpose === 'delete' ? me.user.id : null, challenge: body.code_challenge, redirect: body.redirect_uri, state, expires: now() + CODE_TTL_MS, codeHash: null, codeUsed: false, device_name: body.device_name, stepupUntil: null, used: false });
       return ok({ flow_id: id, url: `${base}/dev/oauth/authorize?flow=${id}`, state, expires_in: Math.round(CODE_TTL_MS / 1000) });
     }
 
@@ -240,7 +261,9 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     if (method === 'POST' && path === '/api/auth/oauth/exchange') {
       const f = oauthFlows.get(String(body.flow_id ?? ''));
       const invalid = () => err(400, 'INVALID_TOKEN', 'invalid sign-in');
+      if (f?.purpose === 'delete' && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
       if (!f || f.expires <= now() || !f.codeHash || f.codeUsed) return invalid();
+      if (f.purpose === 'delete' && me.user.id !== f.user_id) return invalid();
       if (sha(String(body.code ?? '')) !== f.codeHash) return invalid();
       // A right code is spent whatever else is wrong: no second try with it.
       f.codeUsed = true;
@@ -249,17 +272,24 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (got !== f.challenge) return invalid();
       const who = identities[f.provider];
       if (!who.verified) return err(403, 'EMAIL_UNVERIFIED', 'the provider has not verified this email');
-      return signInUser(who.email, body.device_name ?? f.device_name);
+      if (f.purpose === 'delete') {
+        // Only the same provider identity the account signs in with; never a token.
+        if (!links.get(me.user.id)?.has(f.provider) || who.email !== me.user.email) return invalid();
+        f.stepupUntil = now() + STEP_UP_MS;
+        return ok({ stepup_until: iso(f.stepupUntil) });
+      }
+      return signInUser(who.email, body.device_name ?? f.device_name, f.provider);
     }
 
     if (method === 'POST' && path === '/api/auth/email/start') {
       starts.push({ ...body });
       const purpose = body.purpose ?? 'signin';
-      if (!['signin', 'delete'].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
-      if (purpose === 'delete') {
+      if (!['signin', ...STEP_UPS].includes(purpose)) return err(400, 'VALIDATION', 'bad purpose');
+      if (STEP_UPS.includes(purpose)) {
         // The code goes to the signed-in account's own address; email and client are ignored.
         if (!me) return err(401, 'UNAUTHENTICATED', 'not signed in');
-        return ok({ flow_id: startFlow(me.user.email, 'delete', me.user.id), expires_in: CODE_TTL_MS / 1000 });
+        if (!signInMethods.email) return err(404, 'METHOD_DISABLED', 'this hub has no mailer');
+        return ok({ flow_id: startFlow(me.user.email, purpose, me.user.id), expires_in: CODE_TTL_MS / 1000 });
       }
       if (!signInMethods.email) return err(400, 'VALIDATION', 'email sign-in is off');
       const email = String(body.email ?? '').trim().toLowerCase();
@@ -271,11 +301,14 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
 
     if (method === 'POST' && path === '/api/auth/email/verify') {
       const f = flows.get(String(body.flow_id ?? ''));
-      if (f) { const rl = limited(f.email); if (rl) return rl; }
-      if (f?.purpose === 'delete' && me?.user.id !== f.user_id) return err(401, 'UNAUTHENTICATED', 'sign in as that account');
+      const stepUp = STEP_UPS.includes(f?.purpose);
+      if (stepUp && !me) return err(401, 'UNAUTHENTICATED', 'not signed in');
+      // Someone else's step-up is just an invalid code: nothing tried, nothing counted.
+      if (stepUp && me.user.id !== f.user_id) return err(400, 'INVALID_TOKEN', 'invalid or expired code');
+      if (f) { const rl = limited(stepUp ? `user:${f.user_id}` : f.email); if (rl) return rl; }
       const bad = checkCode(f, body.code);
       if (bad) return bad;
-      if (f.purpose === 'delete') {
+      if (stepUp) {
         f.verifiedAt = now();
         return ok({ ok: true, flow_id: body.flow_id, step_up_expires_in: STEP_UP_MS / 1000 });
       }
@@ -293,10 +326,12 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
 
     if (method === 'DELETE' && path === '/api/account') {
       if (needMe()) return needMe();
-      const f = flows.get(String(body.flow_id ?? ''));
-      if (!f || f.purpose !== 'delete' || f.user_id !== me.user.id || f.used || !f.verifiedAt || now() - f.verifiedAt > STEP_UP_MS) {
-        return err(401, 'STEP_UP_REQUIRED', 'verify a fresh delete flow first', { max_age_s: STEP_UP_MS / 1000 });
-      }
+      const id = String(body.flow_id ?? '');
+      const f = flows.get(id);
+      const emailOk = f && f.purpose === 'delete' && f.user_id === me.user.id && !f.used && f.verifiedAt && now() - f.verifiedAt <= STEP_UP_MS;
+      const o = oauthFlows.get(id);
+      const oauthOk = o && o.purpose === 'delete' && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
+      if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete' });
       const sole = [];
       for (const mm of members.filter((x) => x.user_id === me.user.id && x.role === 'owner')) {
         const owners = members.filter((x) => x.team_id === mm.team_id && x.role === 'owner');
@@ -304,12 +339,13 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
         if (owners.length === 1 && others.length) sole.push({ id: mm.team_id, name: teams.get(mm.team_id).name });
       }
       if (sole.length) return err(409, 'CONFLICT', 'sole owner of a team with members', { sole_owner_of: sole });
-      f.used = true;
+      (emailOk ? f : o).used = true;
       for (const [h, t] of tokens) if (t.user_id === me.user.id) revoke(h);
       for (const e of enrolments) if (e.user_id === me.user.id) e.revoked = true;
       for (let i = members.length - 1; i >= 0; i -= 1) if (members[i].user_id === me.user.id) members.splice(i, 1);
       users.delete(me.user.id);
       byEmail.delete(me.user.email);
+      links.delete(me.user.id);
       return ok({ ok: true });
     }
 
@@ -358,6 +394,14 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
         if (method === 'DELETE') {
           if (myRole !== 'owner') return err(403, 'FORBIDDEN', 'owners only');
           if (body.confirm_slug !== team.slug) return err(400, 'VALIDATION', 'confirm_slug does not match');
+          // The emailed `delete_team` step-up (never the account's `delete` code), or a provider check.
+          const id = String(body.flow_id ?? '');
+          const f = flows.get(id);
+          const emailOk = f && f.purpose === 'delete_team' && f.user_id === me.user.id && !f.used && f.verifiedAt && now() - f.verifiedAt <= STEP_UP_MS;
+          const o = oauthFlows.get(id);
+          const oauthOk = o && o.purpose === 'delete' && o.user_id === me.user.id && !o.used && o.stepupUntil && now() <= o.stepupUntil;
+          if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete_team' });
+          (emailOk ? f : o).used = true;
           team.deleted = true;
           for (const e of enrolments) if (e.team_id === teamId) e.revoked = true;
           return ok({ ok: true, purge_after: iso(now() + 7 * 24 * 3600_000) });
@@ -539,6 +583,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     setOAuthIdentity: (provider, who) => { identities[provider] = { verified: true, ...who, email: String(who.email).toLowerCase() }; },
     oauthStarts: () => oauthStarts.slice(),
     oauthCallback: () => lastCallback,
+    linkIdentity: (email, provider) => { const id = byEmail.get(String(email).toLowerCase()); if (!id) return; if (!links.has(id)) links.set(id, new Set()); links.get(id).add(provider); },
     liveTokens: () => [...tokens.values()].filter((t) => !t.revoked).length,
     revokeAll: (email) => { const id = byEmail.get(email); for (const [h, t] of tokens) if (t.user_id === id) revoke(h); },
     enrolments: () => enrolments.slice(),
