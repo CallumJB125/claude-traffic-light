@@ -78,12 +78,12 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_GITHUB_CLIENT_SECRET` | — | `accounts`: that app's client secret. Removed from the environment once read |
 | `BOARD_ACCOUNTS_DEV` | off | `accounts`, loopback bind only: allow running with no `BOARD_PUBLIC_URL` (a local try-out and tests) |
 | `BOARD_RESEND_API_KEY` | — | `accounts`, optional: Resend API key (sending access); with it the hub mails email sign-in codes and invites. Removed from the environment once read. Unset: no mailer, `/api/auth/email/*` answer `404 METHOD_DISABLED` and invites are shared by the inviter (D66) |
-| `BOARD_MAIL_PROVIDER` | — | `accounts`, optional: `resend` or `ses`. Unset: Resend when `BOARD_RESEND_API_KEY` is set, else no mailer. Anything else, a provider without its settings, or a `BOARD_SES_*` variable without `ses`, refuses to start (D66 addendum) |
+| `BOARD_MAIL_PROVIDER` | — | `accounts`, optional: `resend` or `ses`. Unset: Resend when `BOARD_RESEND_API_KEY` is set, else no mailer. Anything else, a provider without its settings, a `BOARD_SES_*` variable (`BOARD_SES_FROM_FORMAT` included) without `ses`, or `ses` together with `BOARD_RESEND_API_KEY`, refuses to start (D66 addendum) |
 | `BOARD_SES_REGION` | — | With `ses`: the SES region, e.g. `af-south-1` (`^[a-z]{2}(-[a-z]+)+-[0-9]$`). Mail goes only to `https://email.<region>.amazonaws.com` |
 | `BOARD_SES_ACCESS_KEY_ID` | — | With `ses`: the IAM access key id (`^[A-Z0-9]{16,128}$`) |
 | `BOARD_SES_SECRET_ACCESS_KEY` | — | With `ses`: its secret (1–256 printable characters). Removed from the environment once read, never logged or serialised |
-| `BOARD_SES_SESSION_TOKEN` | — | With `ses`, optional: a session token for temporary credentials (sent as `x-amz-security-token`). Removed from the environment once read |
-| `BOARD_SES_FROM_FORMAT` | `display` | With `ses`: `display` sends `BOARD_MAIL_FROM` as given (`Name <addr>`); `bare` sends only the address inside the angle brackets |
+| `BOARD_SES_SESSION_TOKEN` | — | With `ses`, optional: a session token for temporary credentials (sent as `x-amz-security-token`). Never refreshed: sends fail with `ExpiredToken` once it expires. Removed from the environment once read |
+| `BOARD_SES_FROM_FORMAT` | `display` | With `ses`: `display` sends `BOARD_MAIL_FROM` as given (`Name <addr>`, the name plain ASCII or RFC 2047 words, or a quoted string without quotes or backslashes inside); `bare` sends only the address inside the angle brackets |
 | `BOARD_CONSOLE_MAILER` | off | `accounts`, loopback bind and not exposed only: print mails to stderr instead (a local try-out) |
 | `BOARD_AUTH_FAIL_BUDGET` | `20` | `accounts`: wrong email codes per address per 24 h before it is locked out (the lockout doubles on each exhaustion, up to 24 h); 1–100 |
 | `BOARD_MAIL_DAILY_CAP` | `2000` | `accounts`: sign-in, invite and notice mails the hub sends per day, all addresses together, at most half of them to addresses without an account; over it, sign-in starts are silent and invites are not mailed |
@@ -144,9 +144,16 @@ its own requests (SigV4, no AWS SDK) and talks only to `email.<region>.amazonaws
 
 - The credentials go in the hub's environment file on the hub host (mode 600),
   never in the repository, a compose file that is committed, or a ticket.
-- Least privilege: an IAM user (or role) allowed only `ses:SendEmail` on the
-  sending identity's ARN (`arn:aws:ses:<region>:<account>:identity/<domain>`),
-  ideally with a `ses:FromAddress` condition naming the From address.
+- The supported setup is a long-lived IAM user access key allowed only
+  `ses:SendEmail` on the sending identity's ARN
+  (`arn:aws:ses:<region>:<account>:identity/<domain>`), with a
+  `ses:FromAddress` condition naming the From address. The hub never refreshes
+  a `BOARD_SES_SESSION_TOKEN`: with temporary (STS) credentials every send fails
+  with `SES answered 403 (ExpiredToken)` once they expire, until the operator
+  sets fresh ones and restarts the hub.
+- Addresses are ASCII only (SES's own rule): a recipient with a non-ASCII
+  character, a quoted local part, a comment or an address literal gets no mail,
+  and the person signing in sees the same answer as anyone else.
 - The sender domain needs a verified SES identity in that region, with its DKIM
   CNAME records published in DNS.
 - A new SES account starts in the sandbox: it sends only to verified addresses and
@@ -159,7 +166,9 @@ its own requests (SigV4, no AWS SDK) and talks only to `email.<region>.amazonaws
   with `mailer: "ses"` and a fixed `err` text: `SES answered <status>`, plus a
   short tag such as `(MessageRejected)`, `(MailFromDomainNotVerified)`,
   `(AccountSuspended)`, `(SendingPaused)`, `(Throttling)` or `(TooManyRequests)`
-  when SES names one; `SES request timed out`; `SES request failed`. Never the
+  when SES names one; `(RequestExpired)` means the hub host's clock is off by
+  more than a few minutes; `SES request timed out`; `SES request failed`;
+  `SES answer was not understood`. Never the
   address, SES's message text, a header or a credential. The person signing in
   sees the same answer either way (the code just does not arrive).
 

@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
 import { validateConfig, loadConfig, mailProvider, sesFromAddress } from '../config.js';
 import { sesMailer, createMailer, deriveSigningKey, signV4, resendMailer } from '../identity/mailer.js';
+import * as mailerModule from '../identity/mailer.js';
 import { createApp } from '../app.js';
 import { createLogger, silentLogger } from '../log.js';
 import { seedDev } from '../seed.js';
@@ -194,6 +196,7 @@ async function fakeSes() {
         case 'malformed': res.writeHead(200, { 'content-type': 'application/json' }); return res.end(`{"MessageId": ${s}`);
         case 'no-id': return json(200, { Other: s });
         case 'reset': return req.socket.destroy();
+        case 'custom': res.on('error', () => {}); return state.custom(res, s);
         default: return json(418, {});
       }
     });
@@ -330,7 +333,7 @@ test('config: provider selection; SES secrets leave the environment and never se
   const cfg = loadConfig(env);
   assert.equal(mailProvider(cfg), 'ses');
   assert.equal(cfg.sesRegion, 'af-south-1');
-  assert.equal(cfg.sesFromFormat, 'display');
+  assert.equal(cfg.sesFromFormat, null, 'kept raw: the display default is applied where it is used');
   assert.equal(cfg.sesSecretAccessKey, c.secretAccessKey, 'readable by the mailer factory');
   assert.equal(cfg.sesSessionToken, token);
   assert.equal(env.BOARD_SES_SECRET_ACCESS_KEY, undefined, 'removed from the environment');
@@ -347,8 +350,8 @@ test('config: provider selection; SES secrets leave the environment and never se
   assert.equal(mailProvider(accountsBase()), null);
   assert.equal(mailProvider(accountsBase({ mailProvider: 'resend', resendApiKey: 're_x', mailFrom: 'a@b.dev' })), 'resend');
   assert.equal(createMailer(accountsBase({ mailProvider: 'resend', resendApiKey: 're_x', mailFrom: 'a@b.dev' })).kind, 'resend');
-  // ses chosen even with a Resend key present
-  assert.equal(createMailer(sesBase({ resendApiKey: 're_x' }), { fetchImpl: async () => new Response('{}') }).kind, 'ses');
+  // A Resend key next to ses is a misconfiguration, refused at boot.
+  assert.throws(() => validateConfig(sesBase({ resendApiKey: 're_x' })), /^Error: BOARD_RESEND_API_KEY is set but BOARD_MAIL_PROVIDER is ses$/);
   // The console mailer is still loopback-only, and never chosen over SES.
   assert.equal(createMailer(sesBase({ consoleMailer: true }), { fetchImpl: async () => new Response('{}') }).kind, 'ses');
   // An SES provider whose secret did not survive (a spread config) fails closed.
@@ -466,4 +469,250 @@ test('Resend is unchanged: same request, idempotency header, error text', async 
   const m = resendMailer({ apiKey: 're_test', from: FROM, fetchImpl: async (url, init) => { calls.push({ url, init }); return new Response('{"id":"em_1"}'); } });
   assert.deepEqual(await m.send({ to: 'a@b.dev', subject: 'S', text: 'T', idempotencyKey: 'f1' }), { id: 'em_1' });
   assert.equal(calls[0].init.headers['idempotency-key'], 'f1');
+});
+
+// ── review fixes: bounded reads, From and address shapes, config ───────────
+
+// Wraps each fetch answer so the test sees how many (already decompressed)
+// bytes the mailer pulled from the body and whether it cancelled it.
+function counted(fetchImpl) {
+  const seen = [];
+  const wrapped = async (url, init) => {
+    const r = await fetchImpl(url, init);
+    const s = { bytes: 0, cancelled: 0, ended: false };
+    seen.push(s);
+    if (!r.body) return r;
+    const up = r.body.getReader();
+    const body = new ReadableStream({
+      async pull(ctl) {
+        const { done, value } = await up.read();
+        if (done) { s.ended = true; ctl.close(); return; }
+        s.bytes += value.byteLength;
+        ctl.enqueue(value);
+      },
+      cancel(reason) { s.cancelled++; return up.cancel(reason); },
+    }, { highWaterMark: 0 });
+    return new Response(body, { status: r.status, headers: r.headers });
+  };
+  return { fetchImpl: wrapped, seen };
+}
+
+async function streamBody(res, status, prefix, total, suffix) {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.write(prefix);
+  const chunk = Buffer.alloc(64 * 1024, 0x78);
+  for (let sent = 0; sent < total && !res.destroyed; sent += chunk.length) {
+    if (!res.write(chunk)) await new Promise((r) => { res.once('drain', r); res.once('close', r); });
+  }
+  if (!res.destroyed) res.end(suffix);
+}
+
+test('SES bounded reads: oversized, streamed and gzip-bomb answers are cut at the cap and cancelled; a tagged error or a 3xx is never read', async () => {
+  const ses = await fakeSes();
+  const c = creds();
+  ses.creds = c;
+  const { fetchImpl, seen } = counted(ses.fetchImpl);
+  const m = sesMailer({ region: 'af-south-1', ...c, from: FROM, fetchImpl, now: CLOCK });
+  const pad = (n) => 'x'.repeat(n);
+  const bomb = (head) => gzipSync(Buffer.concat([Buffer.from(`${head},"pad":"`), Buffer.alloc(32 * 1024 * 1024, 0x30), Buffer.from('"}')]));
+  const okBomb = bomb('{"MessageId":"ses-msg-1"');
+  const errBomb = bomb('{"__type":"MessageRejected"');
+  assert.ok(okBomb.length < 256 * 1024, 'the bomb is small on the wire');
+  const json = (res, status, text, extra = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...extra }); res.end(text); };
+  const cases = [
+    ['200, 64 KiB with a MessageId', (res) => json(res, 200, JSON.stringify({ MessageId: 'ses-msg-1', pad: pad(64 * 1024) })), 'SES answer was not understood', { cancelled: 1 }],
+    ['200, 16 MiB streamed', (res) => streamBody(res, 200, '{"MessageId":"ses-msg-1","pad":"', 16 * 1024 * 1024, '"}'), 'SES answer was not understood', { cancelled: 1, under: 1024 * 1024 }],
+    ['200, gzip bomb (32 MiB inflated)', (res) => { res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' }); res.end(okBomb); }, 'SES answer was not understood', { cancelled: 1, under: 1024 * 1024 }],
+    ['500, gzip bomb', (res) => { res.writeHead(500, { 'content-type': 'application/json', 'content-encoding': 'gzip' }); res.end(errBomb); }, 'SES answered 500', { cancelled: 1, under: 1024 * 1024 }],
+    ['400, 64 KiB untagged', (res) => json(res, 400, JSON.stringify({ __type: 'MessageRejected', pad: pad(64 * 1024) })), 'SES answered 400', { cancelled: 1 }],
+    ['400, 16 MiB streamed untagged', (res) => streamBody(res, 400, '{"__type":"MessageRejected","pad":"', 16 * 1024 * 1024, '"}'), 'SES answered 400', { cancelled: 1, under: 1024 * 1024 }],
+    ['400 tagged by header, 64 KiB body', (res) => json(res, 400, JSON.stringify({ message: pad(64 * 1024) }), { 'x-amzn-errortype': 'MessageRejectedException' }), 'SES answered 400 (MessageRejected)', { cancelled: 1, bytes: 0 }],
+    ['302 with a 64 KiB body', (res) => { res.writeHead(302, { location: 'https://evil.example/' }); res.end(pad(64 * 1024)); }, 'SES answered 302', { cancelled: 1, bytes: 0 }],
+    ['400, small JSON body tag still read', (res) => json(res, 400, JSON.stringify({ __type: 'com.amazonaws.sesv2#MessageRejectedException' })), 'SES answered 400 (MessageRejected)', {}],
+    ['200, small answer still read', (res) => json(res, 200, JSON.stringify({ MessageId: 'ses-msg-1' })), null, {}],
+  ];
+  try {
+    ses.mode = 'custom';
+    for (const [what, handler, text, want] of cases) {
+      ses.custom = handler;
+      const out = await m.send({ to: 'jo@example.com', subject: 'S', text: 'T' }).then((r) => r, (e) => e);
+      if (text === null) assert.deepEqual(out, { id: 'ses-msg-1' }, what);
+      else assert.equal(out?.message, text, what);
+      const s = seen.at(-1);
+      if ('cancelled' in want) assert.equal(s.cancelled, want.cancelled, `${what}: body cancelled`);
+      if ('bytes' in want) assert.equal(s.bytes, want.bytes, `${what}: body never read`);
+      if ('under' in want) assert.ok(s.bytes < want.under, `${what}: read ${s.bytes} bytes`);
+      assert.equal(s.ended, text === null || what.includes('small'), `${what}: read to the end only when small`);
+    }
+  } finally {
+    await ses.close();
+  }
+});
+
+test('SES bounded reads: body cancel spied on the tag path and the 3xx path (fake fetch)', async () => {
+  for (const [status, headers, text] of [[400, { 'x-amzn-errortype': 'ThrottlingException' }, 'SES answered 400 (Throttling)'], [301, {}, 'SES answered 301'], [307, {}, 'SES answered 307']]) {
+    let cancels = 0;
+    let pulls = 0;
+    const fetchImpl = async () => {
+      const res = new Response(new ReadableStream({ pull(ctl) { pulls++; ctl.enqueue(new Uint8Array(1024)); } }, { highWaterMark: 0 }), { status, headers });
+      const cancel = res.body.cancel.bind(res.body);
+      res.body.cancel = (r) => { cancels++; return cancel(r); };
+      return res;
+    };
+    const m = sesMailer({ region: 'af-south-1', ...creds(), from: FROM, fetchImpl, now: CLOCK });
+    const err = await Promise.race([m.send({ to: 'jo@example.com', subject: 'S', text: 'T' }).then(() => null, (e) => e), new Promise((r) => setTimeout(() => r(new Error('hung')), 3000))]);
+    assert.equal(err?.message, text);
+    assert.equal(cancels, 1, `${status}: cancel called`);
+    assert.equal(pulls, 0, `${status}: body never pulled`);
+  }
+});
+
+test('SES bounded reads: readBounded caps decompressed bytes, cancels at the cap, and a stalled body is cut by the signal', async () => {
+  const { readBounded } = mailerModule;
+  assert.equal(typeof readBounded, 'function', 'mailer.js exports readBounded');
+  const bytes = (n) => new Uint8Array(n).fill(0x61);
+  assert.equal(await readBounded(new Response('{"a":1}'), 8192), '{"a":1}');
+  assert.equal(await readBounded(new Response(bytes(8192)), 8192), 'a'.repeat(8192), 'exactly the cap is fine');
+  assert.equal(await readBounded(new Response(bytes(8193)), 8192), null, 'one byte over is not');
+  assert.equal(await readBounded(new Response(null), 8192), '', 'no body');
+  let cancelled = 0;
+  let pulled = 0;
+  const endless = new ReadableStream({ pull(ctl) { pulled += 1024; ctl.enqueue(bytes(1024)); }, cancel() { cancelled++; } });
+  assert.equal(await readBounded(new Response(endless), 8192), null);
+  assert.equal(cancelled, 1, 'cancelled at the cap');
+  assert.ok(pulled <= 16 * 1024, `pulled ${pulled}`);
+  // A body that never ends: the signal bounds it and the body is cancelled.
+  let stalledCancel = 0;
+  const stalled = new ReadableStream({ start(ctl) { ctl.enqueue(bytes(10)); }, cancel() { stalledCancel++; } });
+  const t0 = Date.now();
+  const err = await readBounded(new Response(stalled), 8192, AbortSignal.timeout(50)).then(() => null, (e) => e);
+  assert.equal(err?.name, 'TimeoutError');
+  assert.ok(Date.now() - t0 < 5000);
+  assert.equal(stalledCancel, 1, 'the stalled body is cancelled');
+  const pre = AbortSignal.abort(new DOMException('t', 'TimeoutError'));
+  assert.equal((await readBounded(new Response(new ReadableStream({})), 8192, pre).then(() => null, (e) => e))?.name, 'TimeoutError', 'an already-fired signal');
+});
+
+test('SES bounded reads: through the mailer a stalled body is bounded by the send timeout on both paths', async () => {
+  const orig = AbortSignal.timeout;
+  AbortSignal.timeout = () => orig.call(AbortSignal, 50);
+  try {
+    for (const [status, text] of [[200, 'SES request timed out'], [500, 'SES answered 500']]) {
+      let cancels = 0;
+      const fetchImpl = async () => new Response(new ReadableStream({ start(ctl) { ctl.enqueue(new Uint8Array(4)); }, cancel() { cancels++; } }), { status });
+      const m = sesMailer({ region: 'af-south-1', ...creds(), from: FROM, fetchImpl, now: CLOCK });
+      const err = await Promise.race([m.send({ to: 'jo@example.com', subject: 'S', text: 'T' }).then(() => null, (e) => e), new Promise((r) => setTimeout(() => r(new Error('hung')), 3000))]);
+      assert.equal(err?.message, text, String(status));
+      assert.equal(cancels, 1, `${status}: stalled body cancelled`);
+    }
+  } finally {
+    AbortSignal.timeout = orig;
+  }
+});
+
+test('SES error tags: RequestExpired (clock skew) is allowlisted, from the header or the body', async () => {
+  for (const res of [
+    () => new Response('{}', { status: 400, headers: { 'x-amzn-errortype': 'RequestExpired:http://internal' } }),
+    () => new Response(JSON.stringify({ __type: 'com.amazonaws.sesv2#RequestExpiredException' }), { status: 400 }),
+  ]) {
+    const m = sesMailer({ region: 'af-south-1', ...creds(), from: FROM, fetchImpl: async () => res(), now: CLOCK });
+    assert.equal((await m.send({ to: 'jo@example.com', subject: 'S', text: 'T' }).then(() => null, (e) => e))?.message, 'SES answered 400 (RequestExpired)');
+  }
+});
+
+test('config: BOARD_SES_FROM_FORMAT counts as a BOARD_SES_* variable; ses with a Resend key is refused', () => {
+  const c = creds();
+  const notSes = /^Error: BOARD_SES_\* is set but BOARD_MAIL_PROVIDER is not ses$/;
+  for (const v of ['junk', 'display', 'bare']) {
+    assert.throws(() => validateConfig(accountsBase({ sesFromFormat: v })), notSes, v);
+    assert.throws(() => validateConfig(accountsBase({ mailProvider: 'resend', resendApiKey: 're_x', mailFrom: 'a@b.dev', sesFromFormat: v })), notSes, `resend + ${v}`);
+  }
+  const noSes = Object.fromEntries(Object.entries(sesEnv(c)).filter(([name]) => !/^BOARD_(SES_|MAIL_PROVIDER)/.test(name)));
+  assert.throws(() => loadConfig({ ...noSes, BOARD_SES_FROM_FORMAT: 'junk' }), notSes);
+  // resend + the other SES variables still errors as before
+  assert.throws(() => validateConfig(accountsBase({ mailProvider: 'resend', resendApiKey: 're_x', mailFrom: 'a@b.dev', sesRegion: 'af-south-1' })), notSes);
+  // The default still applies where it is used.
+  const cfg = loadConfig(sesEnv(c));
+  assert.equal(cfg.sesFromFormat, null);
+  assert.doesNotThrow(() => validateConfig(cfg));
+  // ses + a Resend key: refused at boot with a fixed text that never repeats it.
+  const key = ['re', randomBytes(12).toString('hex')].join('_');
+  const err = (() => { try { loadConfig(sesEnv(c, { BOARD_RESEND_API_KEY: key })); } catch (e) { return e; } return null; })();
+  assert.match(String(err), /^Error: BOARD_RESEND_API_KEY is set but BOARD_MAIL_PROVIDER is ses$/);
+  assert.ok(!String(err).includes(key));
+});
+
+test('createMailer: an unset From format means display', async () => {
+  const c = creds();
+  const calls = [];
+  const cfg = loadConfig(sesEnv(c));
+  const m = createMailer(cfg, { fetchImpl: async (u, init) => { calls.push(init); return new Response('{"MessageId":"x"}'); }, now: CLOCK });
+  await m.send({ to: 'jo@example.com', subject: 'S', text: 'T' });
+  assert.equal(JSON.parse(calls[0].body).FromEmailAddress, FROM);
+});
+
+test('addresses: strict ASCII shape for SES (apostrophe allowed); dot rules on the local part; the mailer refuses the rest before sending', async () => {
+  const { isMailAddress } = await import('../config.js');
+  const good = ["o'brien@example.com", 'first.last+tag@sub.example.co.za', 'a_b-c@x-y.io', 'UPPER@EXAMPLE.COM', "!#$%&'*+/=?^_`{|}~-@example.com", 'a@b.co'];
+  const bad = [
+    'jö@example.com', 'jo@exämple.com', 'jo@例え.jp', 'a(b)@x.com', 'a@[1.2.3.4]', 'a..b@example.com', '.a@example.com', 'a.@example.com', '.@example.com',
+    'a@localhost', 'a@-x.com', 'a@x-.com', 'a@x..com', 'a@x.com.', 'a@.x.com', '"q"@b.dev', 'a b@x.com', 'a<b@x.com', 'a>b@x.com', 'a,b@x.com', 'a;b@x.com', 'a\\b@x.com',
+    'a:b@x.com', '@x.com', 'a@', 'a@b@c.com', 'a\t@x.com', 'a@x.com\n', 'a @x.com', `${'a'.repeat(250)}@b.dev`, '', null, 7,
+  ];
+  for (const a of good) assert.equal(isMailAddress(a), true, JSON.stringify(a));
+  for (const a of bad) assert.equal(isMailAddress(a), false, JSON.stringify(a));
+  let fetched = 0;
+  const m = sesMailer({ region: 'af-south-1', ...creds(), from: FROM, fetchImpl: async () => { fetched++; return new Response('{"MessageId":"x"}'); }, now: CLOCK });
+  assert.deepEqual(await m.send({ to: "o'brien@example.com", subject: 'S', text: 'T' }), { id: 'x' });
+  for (const to of ['jö@example.com', 'a(b)@x.com', 'a@[1.2.3.4]', 'a..b@example.com']) {
+    assert.equal((await m.send({ to, subject: 'S', text: 'T' }).then(() => null, (e) => e))?.message, 'SES mail refused: bad recipient', to);
+  }
+  assert.equal(fetched, 1);
+});
+
+test('addresses through the sign-in route: the same 200 for an address SES takes and one it refuses (no enumeration); only the first is mailed', async () => {
+  const ses = await fakeSes();
+  ses.mode = 'ok';
+  const lines = [];
+  const log = createLogger({ level: 'debug', sink: (l) => lines.push(l) });
+  const mailer = sesMailer({ region: 'af-south-1', ...creds(), from: FROM, fetchImpl: ses.fetchImpl, now: CLOCK });
+  const h = await startAccounts({ mailer, log });
+  const sendable = ["o'brien@example.com", 'jo@example.com', 'alice@dev.local'];
+  const refused = ['jö@example.com', 'a(b)@x.com', 'a@[1.2.3.4]', 'a..b@example.com'];
+  try {
+    const shapes = new Set();
+    for (const email of [...sendable, ...refused]) {
+      const r = await h.start(email);
+      assert.equal(r.status, 200, email);
+      shapes.add(JSON.stringify({ keys: Object.keys(r.body).sort(), expires: r.body.expires_in, cookies: r.cookies.length, type: r.headers.get('content-type') }));
+    }
+    assert.equal(shapes.size, 1, 'one answer shape for every address');
+    const failed = () => lines.filter((l) => l.includes('sign-in mail failed'));
+    for (let i = 0; i < 200 && (ses.requests.length < sendable.length || failed().length < refused.length); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(ses.requests.map((q) => JSON.parse(q.body).Destination.ToAddresses[0]).sort(), [...sendable].sort());
+    assert.equal(failed().length, refused.length);
+    for (const l of failed()) assert.equal(JSON.parse(l).err, 'SES mail refused: bad recipient');
+    for (const a of refused) assert.ok(!lines.join('\n').includes(a), 'the refused address is not logged');
+  } finally {
+    await h.close();
+    await ses.close();
+  }
+});
+
+test('From display: the address inside <…> passes the same check, and the name must be plain ASCII or a clean quoted string', () => {
+  assert.equal(sesFromAddress(FROM, 'display'), FROM, 'our configured From');
+  for (const ok of ['"Plexiform, Inc." <no-reply@plexiform.dev>', '=?UTF-8?B?UGzDq3hpZm9ybQ==?= <no-reply@plexiform.dev>', "O'Brien Mail <o'brien@plexiform.dev>", '<no-reply@plexiform.dev>', 'Plexiform<no-reply@plexiform.dev>', 'no-reply@plexiform.dev']) {
+    assert.equal(sesFromAddress(ok, 'display'), ok, ok);
+  }
+  for (const bad of ['Plëxiform <no-reply@plexiform.dev>', 'A "B" <x@y.dev>', '"A\\"B" <x@y.dev>', '"A\\B" <x@y.dev>', 'A,B <x@y.dev>', 'A: B <x@y.dev>', 'A <a(b)@x.com>', 'A <jö@x.com>', 'A <a@[1.2.3.4]>', 'A <a..b@x.com>',
+    'Plexiform no-reply@plexiform.dev', 'a(b)@x.com', 'A <b@c.dev> <e@f.dev>', 'A <b@c.dev> trailing', 'A <>']) {
+    assert.equal(sesFromAddress(bad, 'display'), null, bad);
+  }
+  assert.throws(() => validateConfig(sesBase({ mailFrom: 'Plëxiform <no-reply@plexiform.dev>' })), /^Error: BOARD_MAIL_FROM display name must be plain ASCII or RFC 2047 words$/);
+  assert.throws(() => validateConfig(sesBase({ mailFrom: 'A "B" <x@y.dev>' })), /^Error: BOARD_MAIL_FROM display name must be plain ASCII or RFC 2047 words$/);
+  assert.throws(() => validateConfig(sesBase({ mailFrom: 'A <a(b)@x.com>' })), /^Error: BOARD_MAIL_FROM is not a usable From address$/);
+  assert.throws(() => validateConfig(sesBase({ mailFrom: 'A <a(b)@x.com>', sesFromFormat: 'bare' })), /^Error: BOARD_MAIL_FROM is not a usable From address$/);
+  assert.doesNotThrow(() => validateConfig(sesBase({ mailFrom: 'Plëxiform <no-reply@plexiform.dev>', sesFromFormat: 'bare' })), 'bare never sends the name');
+  assert.doesNotThrow(() => loadConfig(sesEnv(creds())), 'Plexiform <no-reply@plexiform.dev> passes at boot');
+  assert.throws(() => sesMailer({ region: 'af-south-1', ...creds(), from: 'Plëxiform <no-reply@plexiform.dev>', fetchImpl: async () => new Response('{}'), now: CLOCK }), /^Error: SES mailer: bad From$/);
 });

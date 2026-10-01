@@ -44,8 +44,10 @@ const hmac = (key, s) => createHmac('sha256', key).update(s).digest();
 // so nothing SES or a middlebox says reaches the log verbatim.
 const SES_ERROR_TAGS = new Set([
   'AccessDenied', 'AccountSuspended', 'BadRequest', 'ExpiredToken', 'InvalidClientTokenId', 'InvalidSignature', 'LimitExceeded',
-  'MailFromDomainNotVerified', 'MessageRejected', 'NotFound', 'SendingPaused', 'SignatureDoesNotMatch', 'Throttling', 'TooManyRequests', 'UnrecognizedClient',
+  'MailFromDomainNotVerified', 'MessageRejected', 'NotFound', 'RequestExpired', 'SendingPaused', 'SignatureDoesNotMatch', 'Throttling', 'TooManyRequests', 'UnrecognizedClient',
 ]);
+// An SES answer is a few hundred bytes; anything past this is not SES and is not read.
+const SES_READ_MAX = 8192;
 const SUBJECT_BAD = /[\p{C}\u2028\u2029]/u;
 const MESSAGE_ID = /^[\x21-\x7e]{1,256}$/;
 
@@ -75,11 +77,60 @@ const sesTag = (v) => {
   const name = v.split(':')[0].split('#').pop().replace(/Exception$/, '');
   return SES_ERROR_TAGS.has(name) ? name : null;
 };
-async function sesErrorTag(res) {
-  const tag = sesTag(res.headers?.get?.('x-amzn-errortype'));
-  if (tag) return tag;
+// Not awaited: a body whose cancel never settles must not hold the send open.
+const discard = (res) => { res?.body?.cancel?.().catch(() => {}); };
+
+/**
+ * The body as text, or null past `max` bytes. The cap counts the bytes the
+ * stream yields, which fetch has already decompressed: that is what bounds a
+ * gzip bomb. Past the cap, on an error or when `signal` fires, the body is
+ * cancelled; the signal also bounds a body that never ends whatever fetchImpl
+ * did with it.
+ */
+export async function readBounded(res, max, signal = null) {
+  const body = res?.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const stop = () => { reader.cancel().catch(() => {}); };
+  let onAbort = null;
+  const aborted = signal && new Promise((_, reject) => {
+    onAbort = () => reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  aborted?.catch(() => {});
+  const chunks = [];
+  let size = 0;
   try {
-    const body = JSON.parse((await res.text()).slice(0, 4096));
+    for (;;) {
+      const { done, value } = await (aborted ? Promise.race([reader.read(), aborted]) : reader.read());
+      if (done) return Buffer.concat(chunks, size).toString('utf8');
+      if (!(value instanceof Uint8Array)) throw new TypeError('body chunk is not bytes');
+      size += value.byteLength;
+      if (size > max) {
+        stop();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch (e) {
+    stop();
+    throw e;
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function sesErrorTag(res, signal) {
+  const tag = sesTag(res.headers?.get?.('x-amzn-errortype'));
+  if (tag) {
+    discard(res);
+    return tag;
+  }
+  try {
+    const text = await readBounded(res, SES_READ_MAX, signal);
+    if (text == null) return null;
+    const body = JSON.parse(text);
     return sesTag(body?.__type) ?? sesTag(body?.code);
   } catch {
     return null;
@@ -120,24 +171,26 @@ export function sesMailer({ region, accessKeyId, secretAccessKey, sessionToken =
         ...(sessionToken ? { 'x-amz-security-token': sessionToken } : {}),
       };
       const { authorization } = signV4({ method: 'POST', path: SES_PATH, headers: { ...headers, host }, payloadHash, amzDate, region, service: 'ses', accessKeyId, secret: secretAccessKey });
+      const signal = AbortSignal.timeout(SEND_TIMEOUT_MS);
       let res;
       try {
-        res = await fetchImpl(url, { method: 'POST', headers: { ...headers, authorization }, body, redirect: 'manual', signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }); // privacy-flow: hub-server
+        res = await fetchImpl(url, { method: 'POST', headers: { ...headers, authorization }, body, redirect: 'manual', signal }); // privacy-flow: hub-server
       } catch (e) {
         throw new Error(timedOut(e) ? 'SES request timed out' : 'SES request failed');
       }
       const status = Number.isInteger(res?.status) ? res.status : 0;
       if (status < 200 || status > 299) {
-        const tag = status >= 400 ? await sesErrorTag(res) : null;
-        if (status < 400) await res?.body?.cancel?.().catch(() => {});
+        const tag = status >= 400 ? await sesErrorTag(res, signal) : null;
+        if (status < 400) discard(res);
         throw new Error(`SES answered ${status}${tag ? ` (${tag})` : ''}`);
       }
       let raw;
       try {
-        raw = await res.text();
+        raw = await readBounded(res, SES_READ_MAX, signal);
       } catch (e) {
         throw new Error(timedOut(e) ? 'SES request timed out' : 'SES request failed');
       }
+      if (raw == null) throw new Error('SES answer was not understood');
       let id = null;
       try { id = JSON.parse(raw)?.MessageId; } catch { /* below */ }
       if (typeof id !== 'string' || !MESSAGE_ID.test(id)) throw new Error('SES answer was not understood');

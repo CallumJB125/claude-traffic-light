@@ -42,7 +42,8 @@ export function loadConfig(env = process.env) {
     mailFrom: env.BOARD_MAIL_FROM || null,
     mailProvider: env.BOARD_MAIL_PROVIDER || null,
     sesRegion: env.BOARD_SES_REGION || null,
-    sesFromFormat: env.BOARD_SES_FROM_FORMAT || 'display',
+    // Raw, so a stray value without BOARD_MAIL_PROVIDER=ses is caught; 'display' is applied where it is used.
+    sesFromFormat: env.BOARD_SES_FROM_FORMAT || null,
     downloadUrl: env.BOARD_DOWNLOAD_URL || null,
     consoleMailer: flag(env.BOARD_CONSOLE_MAILER),
     signinMethods: (env.BOARD_SIGNIN_METHODS || '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -100,7 +101,13 @@ export const SES_REGION = /^[a-z]{2}(-[a-z]+)+-[0-9]$/;
 export const SES_ACCESS_KEY_ID = /^[A-Z0-9]{16,128}$/;
 export const PRINTABLE_256 = /^[\x21-\x7e]{1,256}$/;
 export const PRINTABLE_4096 = /^[\x21-\x7e]{1,4096}$/;
-const MAIL_ADDRESS = /^[^\s@<>,;"'\p{C}]+@[^\s@<>,;"'\p{C}]+$/u;
+// ASCII only, dot-atom local part, hostname labels: what SES takes, with no
+// room for a parsing differential between the hub and SES (no quoted local
+// part, comment or address literal).
+const MAIL_ADDRESS = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+// A From display name: plain atext and spaces (RFC 2047 encoded words fit), or one quoted string without quotes or backslashes inside.
+const DISPLAY_NAME = /^(?:[A-Za-z0-9!#$%&'*+\/=?^_`{|}~ -]*| *"[\x20\x21\x23-\x5b\x5d-\x7e]*" *)$/;
+const NAME_ADDR = /^([^<>]*)<([^<>]+)>$/;
 
 /** The mailer the config asks for: 'resend', 'ses' or null. Unset BOARD_MAIL_PROVIDER keeps D66: Resend when its key is set. */
 export function mailProvider(cfg) {
@@ -109,29 +116,40 @@ export function mailProvider(cfg) {
 }
 
 export function isMailAddress(s) {
-  return typeof s === 'string' && s.length <= 254 && MAIL_ADDRESS.test(s);
+  if (typeof s !== 'string' || s.length > 254 || !MAIL_ADDRESS.test(s)) return false;
+  const local = s.slice(0, s.indexOf('@'));
+  return !local.startsWith('.') && !local.endsWith('.') && !local.includes('..');
+}
+
+/** False when a `Name <addr>` From has a name SES and mail clients might read differently (not plain ASCII, not one clean quoted string). */
+export function isDisplayName(from) {
+  const m = NAME_ADDR.exec(from);
+  return !m || DISPLAY_NAME.test(m[1]);
 }
 
 /**
  * SES FromEmailAddress for BOARD_MAIL_FROM, or null when unusable. 'display'
- * sends it as given; 'bare' only the address inside "Name <addr>", for an IAM
- * ses:FromAddress condition that may compare against the bare address.
+ * sends it as given (after checking the address and the name); 'bare' only the
+ * address inside "Name <addr>", for an IAM ses:FromAddress condition that may
+ * compare against the bare address.
  */
 export function sesFromAddress(from, format) {
   if (typeof from !== 'string' || !from || from.length > 320 || /[\p{C}\u2028\u2029]/u.test(from)) return null;
-  if (format === 'display') return from;
-  if (format !== 'bare') return null;
+  if (format !== 'display' && format !== 'bare') return null;
   if (!from.includes('<') && !from.includes('>')) return isMailAddress(from) ? from : null;
-  const m = /^[^<>]*<([^<>]+)>$/.exec(from);
-  return m && isMailAddress(m[1]) ? m[1] : null;
+  const m = NAME_ADDR.exec(from);
+  if (!m || !isMailAddress(m[2])) return null;
+  if (format === 'bare') return m[2];
+  return isDisplayName(from) ? from : null;
 }
 
 // Fixed texts only: a value here may be a credential.
 function validateMail(cfg) {
-  const sesSet = cfg.sesRegion || cfg.sesAccessKeyId || cfg.sesSecretAccessKey || cfg.sesSessionToken;
+  const sesSet = cfg.sesRegion || cfg.sesAccessKeyId || cfg.sesSecretAccessKey || cfg.sesSessionToken || cfg.sesFromFormat;
   if (cfg.mailProvider && !MAIL_PROVIDERS.includes(cfg.mailProvider)) throw new Error(`BOARD_MAIL_PROVIDER takes ${MAIL_PROVIDERS.join(' or ')}`);
   if (sesSet && cfg.mailProvider !== 'ses') throw new Error('BOARD_SES_* is set but BOARD_MAIL_PROVIDER is not ses');
   if (cfg.mailProvider === 'resend' && !cfg.resendApiKey) throw new Error('BOARD_MAIL_PROVIDER=resend needs BOARD_RESEND_API_KEY');
+  if (cfg.mailProvider === 'ses' && cfg.resendApiKey) throw new Error('BOARD_RESEND_API_KEY is set but BOARD_MAIL_PROVIDER is ses');
   if (cfg.mailProvider !== 'ses') return;
   if (!cfg.sesRegion || !cfg.sesAccessKeyId || !cfg.sesSecretAccessKey) throw new Error('BOARD_MAIL_PROVIDER=ses needs BOARD_SES_REGION, BOARD_SES_ACCESS_KEY_ID and BOARD_SES_SECRET_ACCESS_KEY');
   if (!cfg.mailFrom) throw new Error('BOARD_MAIL_PROVIDER=ses needs BOARD_MAIL_FROM');
@@ -141,6 +159,7 @@ function validateMail(cfg) {
   if (cfg.sesSessionToken != null && (typeof cfg.sesSessionToken !== 'string' || !PRINTABLE_4096.test(cfg.sesSessionToken))) throw new Error('BOARD_SES_SESSION_TOKEN must be 1 to 4096 printable characters');
   const format = cfg.sesFromFormat ?? 'display';
   if (format !== 'display' && format !== 'bare') throw new Error('BOARD_SES_FROM_FORMAT takes display or bare');
+  if (format === 'display' && typeof cfg.mailFrom === 'string' && !isDisplayName(cfg.mailFrom)) throw new Error('BOARD_MAIL_FROM display name must be plain ASCII or RFC 2047 words');
   if (!sesFromAddress(cfg.mailFrom, format)) throw new Error('BOARD_MAIL_FROM is not a usable From address');
 }
 
