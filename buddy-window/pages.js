@@ -58,14 +58,23 @@ function pageById(id, pages = PAGES) {
 
 // The hub page URL for a board view. The web app reads ?view= on load, and
 // ?org= picks the team on a hub where the member is in several.
-function hubPageUrl(base, page, { org = null } = {}) {
+function hubPageUrl(base, page, { org = null, fragment = null } = {}) {
   const u = new URL(base);
   u.pathname = '/';
   u.search = '';
   if (org) u.searchParams.set('org', org);
   if (page?.view && page.view !== 'board') u.searchParams.set('view', page.view);
+  if (fragment !== null) {
+    if (!fragmentOk(fragment)) throw new Error('bad fragment');
+    u.hash = fragment;
+  }
   return u.toString();
 }
+
+// A fragment never leaves the browser (the server never sees it), so the desktop can hand a hub page
+// a small payload without any bridge into the sandboxed view. Only the one named key, base64url.
+const FRAGMENT_RE = /^plexiform-feedback=[A-Za-z0-9_-]{1,32768}$/;
+const fragmentOk = (f) => typeof f === 'string' && FRAGMENT_RE.test(f);
 
 const orgOfUrl = (url) => { try { return new URL(url).searchParams.get('org'); } catch { return null; } };
 
@@ -287,4 +296,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
