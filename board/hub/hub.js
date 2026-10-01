@@ -1209,7 +1209,9 @@ export class Hub extends EventEmitter {
   }
 
   cacheResponse(memberId, requestId, status, body, binding = null) {
-    this.requestCache.set(`${memberId}|${requestId}`, { status, body, binding, exp: this.mono() + REQUEST_CACHE_MS });
+    const entry = { status, body, exp: this.mono() + REQUEST_CACHE_MS };
+    if (binding != null) entry.binding = binding;
+    this.requestCache.set(`${memberId}|${requestId}`, entry);
   }
 
   sweepRequestCache() {
