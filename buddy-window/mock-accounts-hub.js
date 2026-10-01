@@ -14,7 +14,17 @@
 // email})`, `setOAuthIdentity(provider, {email, verified})`,
 // `oauthStarts()` (oauth/start bodies), `oauthCallback(url)` (the loopback
 // URL the fake provider page last redirected to), `linkIdentity(email,
-// provider)`.
+// provider)`, `closeRunner(enrollment_id, 4401|4403)` (also `POST
+// /__mock/runner-close {enrollment_id, code}`: closes that enrolment's runner
+// sockets as the hub would), `runnerSockets(enrollment_id)`.
+//
+// Runner enrolment (P4): POST/DELETE /api/teams/:id/enrol with the device
+// token only (a cookie gets 403), a brt_ runner token shown once and kept as
+// its sha256, re-enrolling the same install rotates (the old socket closes
+// 4403), the caps (5 live per person per team, 20 per person, 30 an hour),
+// GET /enrolments wrapped and role-filtered, DELETE /enrolments/:id, and
+// /ws/runner (Bearer brt_ + Board-Team; 4401 for an unknown token or team,
+// 4403 once revoked, removed, demoted to viewer or the team is deleted).
 //
 // Provider sign-in (the real hub's OAuth phase isn't built): oauth/start
 // keeps {challenge, redirect_uri, state} and answers a URL on this hub,
@@ -51,7 +61,8 @@ const VERIFY_WINDOW_MS = 15 * 60_000;
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
 const RANK = { owner: 4, admin: 3, member: 2, viewer: 1 };
 const WS_UNAUTHENTICATED = 4401;
-const QUOTAS = { teams: 10, boards: 10, members: 25 };
+const WS_REVOKED = 4403;
+const QUOTAS = { teams: 10, boards: 10, members: 25, enrolPerTeam: 5, enrolTotal: 20, enrolPerHour: 30 };
 // The invite's typed code: no 0/O or 1/I/L to misread.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -83,7 +94,9 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   const members = []; // {id, team_id, user_id, role, joined_at}
   const invites = new Map(); // id → {id, team_id, email, role, tokenHash, codeHash, expires_at, inviter_id, used_by, revoked}
   const inviteCodes = new Map(); // email → last plain invite code (test hook only)
-  const enrolments = [];
+  const enrolments = []; // {id, enrollment_id, team_id, user_id, device_id, name, tokenHash, runner_device_id, created_at, last_seen_at, revoked, revoked_at}
+  const enrolTimes = new Map(); // user id → [enrol times], for the hourly limit
+  const runnerSockets = new Map(); // enrolment id → Set<ws>
   const teamHeaders = [];
 
   const err = (status, code, message, extra = {}) => ({ status, body: { error: { code, message, ...extra } } });
@@ -97,6 +110,16 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     return users.get(t.user_id) ? { ...t, user: users.get(t.user_id), tokenHash: sha(m[1]) } : null;
   }
 
+  function closeRunner(id, code) {
+    for (const ws of runnerSockets.get(id) ?? []) { try { ws.close(code, 'runner closed'); } catch { /* gone */ } }
+    runnerSockets.delete(id);
+  }
+
+  function revokeEnrolment(e, code) {
+    if (!e.revoked) { e.revoked = true; e.revoked_at = iso(now()); }
+    closeRunner(e.id, code);
+  }
+
   function revoke(tokenHash) {
     const t = tokens.get(tokenHash);
     if (t) t.revoked = true;
@@ -104,7 +127,19 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       try { ws.send(JSON.stringify({ type: 'session.revoked' })); ws.close(WS_UNAUTHENTICATED, 'revoked'); } catch { /* gone */ }
     }
     sockets.delete(tokenHash);
+    // Signing an install out (or revoking it) ends its runner enrolments.
+    if (t) for (const e of enrolments) if (e.device_id === t.device_id) revokeEnrolment(e, WS_UNAUTHENTICATED);
   }
+
+  /** Why a runner socket may not stay open now: 4401, 4403, or null. */
+  function runnerRefusal(e) {
+    const t = [...tokens.values()].find((x) => x.device_id === e.device_id);
+    if (!t || t.revoked || !users.get(e.user_id)) return WS_UNAUTHENTICATED;
+    if (e.revoked || !liveTeam(e.team_id)) return WS_REVOKED;
+    const role = roleIn(e.team_id, e.user_id);
+    return !role || role === 'viewer' ? WS_REVOKED : null;
+  }
+  const recheckRunners = () => { for (const e of enrolments) { const code = runnerSockets.has(e.id) ? runnerRefusal(e) : null; if (code) closeRunner(e.id, code); } };
 
   const roleIn = (teamId, userId) => (teams.get(teamId)?.deleted ? null : members.find((m) => m.team_id === teamId && m.user_id === userId)?.role ?? null);
   const canManage = (teamId, userId) => ['owner', 'admin'].includes(roleIn(teamId, userId));
@@ -341,7 +376,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       if (sole.length) return err(409, 'CONFLICT', 'sole owner of a team with members', { sole_owner_of: sole });
       (emailOk ? f : o).used = true;
       for (const [h, t] of tokens) if (t.user_id === me.user.id) revoke(h);
-      for (const e of enrolments) if (e.user_id === me.user.id) e.revoked = true;
+      for (const e of enrolments) if (e.user_id === me.user.id) revokeEnrolment(e, WS_UNAUTHENTICATED);
       for (let i = members.length - 1; i >= 0; i -= 1) if (members[i].user_id === me.user.id) members.splice(i, 1);
       users.delete(me.user.id);
       byEmail.delete(me.user.email);
@@ -366,7 +401,16 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       return ok({ team: teamView(team), board });
     }
 
-    if ((m = /^\/api\/teams\/([^/]+)(?:\/(members|invites|enrol|boards)(?:\/([^/]+)(?:\/(resend))?)?)?$/.exec(path))) {
+    if (method === 'POST' && path === '/__mock/runner-close') {
+      const code = Number(body.code);
+      if (![WS_UNAUTHENTICATED, WS_REVOKED].includes(code)) return err(400, 'VALIDATION', 'code is 4401 or 4403');
+      closeRunner(String(body.enrollment_id ?? ''), code);
+      return ok({ ok: true });
+    }
+
+    if ((m = /^\/api\/teams\/([^/]+)(?:\/(members|invites|enrol|enrolments|boards)(?:\/([^/]+)(?:\/(resend))?)?)?$/.exec(path))) {
+      // Enrolment is for the desktop app's device token only: a browser's cookie session is refused.
+      if (m[2] === 'enrol' && !req.headers.authorization && req.headers.cookie) return err(403, 'FORBIDDEN', 'enrolment needs the desktop device token');
       if (needMe()) return needMe();
       const [, teamId, what, sub, verb] = m;
       const named = req.headers['x-board-team'];
@@ -403,7 +447,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
           if (!emailOk && !oauthOk) return err(401, 'STEP_UP_REQUIRED', 'confirm it is you first', { max_age_s: STEP_UP_MS / 1000, purpose: 'delete_team' });
           (emailOk ? f : o).used = true;
           team.deleted = true;
-          for (const e of enrolments) if (e.team_id === teamId) e.revoked = true;
+          for (const e of enrolments) if (e.team_id === teamId) revokeEnrolment(e, WS_REVOKED);
           return ok({ ok: true, purge_after: iso(now() + 7 * 24 * 3600_000) });
         }
         return err(404, 'NOT_FOUND', 'not found');
@@ -434,10 +478,16 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
         const owners = members.filter((x) => x.team_id === teamId && x.role === 'owner');
         const demotes = target.role === 'owner' && (method === 'DELETE' || body.role !== 'owner');
         if (demotes && owners.length === 1) return err(409, 'CONFLICT', 'a team needs an owner', { reason: 'LAST_OWNER' });
-        if (method === 'DELETE') { members.splice(members.indexOf(target), 1); return ok({ ok: true }); }
+        if (method === 'DELETE') {
+          members.splice(members.indexOf(target), 1);
+          for (const e of enrolments) if (e.team_id === teamId && e.user_id === target.user_id) revokeEnrolment(e, WS_REVOKED);
+          return ok({ ok: true });
+        }
         if (!ROLES.includes(body.role)) return err(400, 'VALIDATION', 'bad role');
         if (body.role === 'owner' && myRole !== 'owner') return err(403, 'FORBIDDEN', 'only an owner can make an owner');
         target.role = body.role;
+        // A viewer's enrolment stays but its socket is refused until the role comes back.
+        recheckRunners();
         return ok({ member: { member_id: target.id, role: target.role } });
       }
       if (what === 'invites' && !sub && method === 'GET') {
@@ -476,14 +526,50 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       }
       if (what === 'enrol' && !sub && method === 'POST') {
         if (myRole === 'viewer') return err(403, 'FORBIDDEN', 'viewers cannot run cards');
+        const name = body.device_name === undefined ? me.name : String(body.device_name);
+        if (name.length > 100) return err(400, 'VALIDATION', 'device_name too long');
+        const t = now();
+        const times = (enrolTimes.get(me.user.id) ?? []).filter((x) => t - x < 3600_000);
+        if (times.length >= limits.enrolPerHour) {
+          const retry = Math.ceil((times[0] + 3600_000 - t) / 1000);
+          return { ...err(429, 'RATE_LIMITED', 'too many enrolments', { retry_after_s: retry }), headers: { 'retry-after': String(retry) } };
+        }
         let e = enrolments.find((x) => x.team_id === teamId && x.device_id === me.device_id && !x.revoked);
-        if (!e) { e = { enrollment_id: rid('enr'), team_id: teamId, user_id: me.user.id, device_id: me.device_id, revoked: false }; enrolments.push(e); }
-        return ok({ enrollment_id: e.enrollment_id, team_id: teamId });
+        if (!e) {
+          const live = enrolments.filter((x) => x.user_id === me.user.id && !x.revoked);
+          if (live.filter((x) => x.team_id === teamId).length >= limits.enrolPerTeam) return err(403, 'QUOTA_EXCEEDED', 'runner enrolment limit', { resource: 'runner_enrollments', limit: limits.enrolPerTeam });
+          if (live.length >= limits.enrolTotal) return err(403, 'QUOTA_EXCEEDED', 'runner enrolment limit', { resource: 'runner_enrollments', limit: limits.enrolTotal });
+          const id = rid('enr');
+          e = { id, enrollment_id: id, team_id: teamId, user_id: me.user.id, device_id: me.device_id, name, tokenHash: null, runner_device_id: rid('dev'), created_at: iso(t), last_seen_at: null, revoked: false, revoked_at: null };
+          enrolments.push(e);
+        } else {
+          // Rotation: the old token stops at once; the runner keeps its hub-side device.
+          closeRunner(e.id, WS_REVOKED);
+          e.name = name;
+        }
+        times.push(t);
+        enrolTimes.set(me.user.id, times);
+        const runnerToken = `brt_${crypto.randomBytes(32).toString('base64url')}`;
+        e.tokenHash = sha(runnerToken);
+        return ok({ enrollment_id: e.id, team_id: teamId, runner_token: runnerToken });
       }
       if (what === 'enrol' && !sub && method === 'DELETE') {
         const e = enrolments.find((x) => x.team_id === teamId && x.device_id === me.device_id && !x.revoked);
         if (!e) return err(404, 'NOT_FOUND', 'this device is not a runner here');
-        e.revoked = true;
+        revokeEnrolment(e, WS_REVOKED);
+        return ok({ ok: true });
+      }
+      if (what === 'enrolments' && !sub && method === 'GET') {
+        const list = enrolments.filter((x) => x.team_id === teamId && (admin || x.user_id === me.user.id)).reverse().slice(0, 200);
+        return ok({ enrolments: list.map((x) => ({
+          id: x.id, user: { id: x.user_id, display_name: users.get(x.user_id)?.display_name ?? 'Deleted user' }, name: x.name, created_at: x.created_at, last_seen_at: x.last_seen_at, revoked_at: x.revoked_at, online: !!runnerSockets.get(x.id)?.size, current: x.device_id === me.device_id,
+        })) });
+      }
+      if (what === 'enrolments' && sub && !verb && method === 'DELETE') {
+        const e = enrolments.find((x) => x.id === sub && x.team_id === teamId && !x.revoked);
+        if (!e) return err(404, 'NOT_FOUND', 'no such enrolment');
+        if (!admin && e.user_id !== me.user.id) return onlyAdmins();
+        revokeEnrolment(e, WS_REVOKED);
         return ok({ ok: true });
       }
       return err(404, 'NOT_FOUND', 'not found');
@@ -556,6 +642,7 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
     const refuse = (code, text) => { socket.end(`HTTP/1.1 ${code} ${text}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`); };
+    if (url.pathname === '/ws/runner') { runnerUpgrade(req, socket, head); return; }
     if (url.pathname !== '/ws/board') { refuse(404, 'Not Found'); return; }
     if (req.headers.origin && req.headers.origin !== base) { refuse(403, 'Forbidden'); return; }
     const me = authed(req);
@@ -567,6 +654,24 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
       ws.send(JSON.stringify({ type: 'welcome', protocol: 1, member: null, user: { id: me.user.id, display_name: me.user.display_name } }));
     });
   });
+
+  // /ws/runner: the socket opens, then closes 4401 (one reason for every bad token or team) or 4403.
+  function runnerUpgrade(req, socket, head) {
+    const m = /^Bearer (brt_\S+)$/.exec(req.headers.authorization ?? '');
+    const team = req.headers['board-team'];
+    const e = m ? enrolments.find((x) => x.tokenHash === sha(m[1])) : null;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      if (!e || !team || team !== e.team_id) { ws.close(WS_UNAUTHENTICATED, 'unauthenticated'); return; }
+      const code = runnerRefusal(e);
+      if (code) { ws.close(code, code === WS_REVOKED ? 'revoked' : 'unauthenticated'); return; }
+      if (!runnerSockets.has(e.id)) runnerSockets.set(e.id, new Set());
+      runnerSockets.get(e.id).add(ws);
+      e.last_seen_at = iso(now());
+      ws.on('close', () => runnerSockets.get(e.id)?.delete(ws));
+      const member = members.find((x) => x.team_id === e.team_id && x.user_id === e.user_id);
+      ws.send(JSON.stringify({ type: 'welcome', protocol: 1, device_id: e.runner_device_id, member_id: member?.id ?? null }));
+    });
+  }
 
   return {
     listen(port = 0) {
@@ -586,7 +691,9 @@ function createMockAccountsHub({ log = () => {}, now: clock = () => Date.now(), 
     linkIdentity: (email, provider) => { const id = byEmail.get(String(email).toLowerCase()); if (!id) return; if (!links.has(id)) links.set(id, new Set()); links.get(id).add(provider); },
     liveTokens: () => [...tokens.values()].filter((t) => !t.revoked).length,
     revokeAll: (email) => { const id = byEmail.get(email); for (const [h, t] of tokens) if (t.user_id === id) revoke(h); },
-    enrolments: () => enrolments.slice(),
+    enrolments: () => enrolments.map((e) => ({ ...e })),
+    closeRunner: (id, code) => closeRunner(id, code),
+    runnerSockets: (id) => runnerSockets.get(id)?.size ?? 0,
   };
 }
 
