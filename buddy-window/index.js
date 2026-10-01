@@ -434,10 +434,11 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
     let gestureAt = 0;
     wc.on('input-event', (_e, ev) => { if (GESTURES.has(ev.type)) gestureAt = Date.now(); });
-    wc.setWindowOpenHandler(({ url, frameName, referrer }) => {
+    wc.setWindowOpenHandler(({ url, frameName, referrer, postBody }) => {
       const d = openDecision({ url, frameName }, { hubOrigin: h.origin, accessTeam: h.accessTeam });
       if (d === 'connect') {
-        const c = connectDecision({ url, frameName, referrer: referrer?.url ?? '', pageUrl: wc.getURL(), hubOrigin: h.origin, signedIn: !!h.bearer && signedIn(h.origin) && hubInfo?.origin === h.origin, gestureAt });
+        // A form POST (GitHub's App manifest) is judged here too; only its fixed reason is ever logged.
+        const c = connectDecision({ url, frameName, referrer: referrer?.url ?? '', postBody, pageUrl: wc.getURL(), hubOrigin: h.origin, signedIn: !!h.bearer && signedIn(h.origin) && hubInfo?.origin === h.origin, gestureAt });
         // One click, one window: a second open needs a second gesture.
         gestureAt = 0;
         if (c.ok) openConnect(url, h, c).catch((e) => log('connect window failed', e.message));
@@ -484,7 +485,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // and an empty window.name, so the bind in the name never reaches the provider.
   let connectWin = null;
   let connectOpening = false;
-  async function openConnect(url, h, { provider, bind }) {
+  async function openConnect(url, h, { provider, bind, post = null }) {
     // One at a time: swapping windows would let the old one's close handler remove the new bind cookie.
     if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }
     if (connectOpening) return;
@@ -496,7 +497,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       cookie = bindCookie(h.origin, provider, bind);
       await ses.cookies.set(cookie); // privacy-flow: integration-connect
     } finally { connectOpening = false; }
-    const authorizeHost = new URL(url).host;
+    const authorizeHost = new URL(post?.url ?? url).host;
     const w = new BrowserWindow({
       width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',
       webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: false },
@@ -540,7 +541,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       // The hub's callback clears it too; a window closed early must not leave it behind.
       ses.cookies.remove(cookie.url, cookie.name).catch(() => {}); // privacy-flow: integration-connect
     });
-    w.loadURL(url).catch(() => {}); // privacy-flow: integration-connect
+    // The manifest POST is this window's first and only POST from us: connectDecision rebuilt its URL and body.
+    (post ? w.loadURL(post.url, { postData: post.postData, extraHeaders: post.extraHeaders }) : w.loadURL(url)).catch(() => {}); // privacy-flow: integration-connect
   }
 
   async function showHubPage(page) {

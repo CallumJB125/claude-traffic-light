@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -211,6 +211,143 @@ test('connect window guardrails pinned: hub-view opener only, neutral name, own 
   }
   assert.equal(connectNavOk(undefined, hub), false);
   assert.equal(isConnectCallback(`${hub}/integrations/github/callback`, undefined), false);
+});
+
+// ── GitHub App-manifest POST into the connect window ─────────────────────
+
+const MF_HUB = 'https://app.plexiform.dev';
+const MF_STATE = `${'P'.repeat(40)}.${'m_-'.repeat(14)}`;
+const MF_HOOK = `${MF_HUB}/integrations/0b6f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e/webhook`;
+async function githubForm(config = {}) {
+  const gh = (await import('../board/hub/integrations/github/index.js')).default;
+  return gh.connect.manifestForm({ state: MF_STATE, redirectUri: `${MF_HUB}/integrations/github/callback`, webhookUrl: MF_HOOK, config });
+}
+const formBody = (fields, contentType = 'application/x-www-form-urlencoded') => ({ contentType, data: [{ type: 'rawData', bytes: Buffer.from(new URLSearchParams(Object.entries(fields)).toString()) }] });
+const mfBase = (over = {}) => ({ url: `https://github.com/settings/apps/new?state=${MF_STATE}`, frameName: 'plexiform-connect|github|bnd1', referrer: `${MF_HUB}/?org=t1&view=integrations`, pageUrl: `${MF_HUB}/?org=t1&view=integrations`, hubOrigin: MF_HUB, signedIn: true, gestureAt: 1000, now: 2000, ...over });
+
+test('manifest POST: the GitHub connector’s own form (user and org) is accepted, its body re-encoded from the checked manifest', async () => {
+  for (const config of [{}, { org: 'acme-co' }]) {
+    const f = await githubForm(config);
+    assert.deepEqual(Object.keys(f.fields), ['manifest'], 'the form the hub serves has one field');
+    const c = connectDecision(mfBase({ url: f.action, postBody: formBody(f.fields) }));
+    assert.equal(c.ok, true, JSON.stringify(c));
+    assert.equal(c.provider, 'github');
+    assert.equal(c.post.url, f.action);
+    assert.equal(c.post.extraHeaders, 'Content-Type: application/x-www-form-urlencoded');
+    assert.equal(c.post.postData.length, 1);
+    assert.equal(c.post.postData[0].type, 'rawData');
+    const sent = new URLSearchParams(c.post.postData[0].bytes.toString());
+    assert.deepEqual([...sent.keys()], ['manifest']);
+    assert.deepEqual(JSON.parse(sent.get('manifest')), JSON.parse(f.fields.manifest));
+  }
+  const org = await githubForm({ org: 'acme-co' });
+  assert.match(org.action, /^https:\/\/github\.com\/organizations\/acme-co\/settings\/apps\/new\?state=/);
+});
+
+test('manifest POST: a GET to the same page still takes the GET path (no body, no post)', () => {
+  const c = connectDecision(mfBase());
+  assert.deepEqual(c, { ok: true, provider: 'github', bind: 'bnd1' });
+  assert.deepEqual(connectDecision(mfBase({ postBody: undefined })), { ok: true, provider: 'github', bind: 'bnd1' });
+});
+
+test('manifest POST: only github.com’s two manifest pages over https with a sane state and nothing else; anything else is refused', async () => {
+  const f = await githubForm();
+  const body = formBody(f.fields);
+  const no = (url, why) => assert.deepEqual(connectDecision(mfBase({ url, postBody: body })), { ok: false, reason: why === 'url' ? 'url' : 'post-url' }, url);
+  const q = `?state=${MF_STATE}`;
+  for (const url of [
+    `https://github.com.evil/settings/apps/new${q}`, `https://api.github.com/settings/apps/new${q}`, `https://gist.github.com/settings/apps/new${q}`, `https://evilgithub.com/settings/apps/new${q}`,
+    `https://github.com/settings/apps/new/${q}`, `https://github.com/settings/apps${q}`, `https://github.com/settings/apps/new/x${q}`, `https://github.com/x/settings/apps/new${q}`,
+    `https://github.com/organizations/-acme/settings/apps/new${q}`, `https://github.com/organizations/${'a'.repeat(40)}/settings/apps/new${q}`, `https://github.com/organizations/ac%2Fme/settings/apps/new${q}`, `https://github.com/organizations//settings/apps/new${q}`,
+    `https://github.com/login/oauth/authorize${q}`,
+    'https://github.com/settings/apps/new', 'https://github.com/settings/apps/new?state=', 'https://github.com/settings/apps/new?state=short', `https://github.com/settings/apps/new?state=${'a'.repeat(1025)}`, 'https://github.com/settings/apps/new?state=has%20space%20in%20it%20ok',
+    `https://github.com/settings/apps/new${q}&x=1`, `https://github.com/settings/apps/new${q}&state=${MF_STATE}`, `https://github.com/settings/apps/new?x=1&state=${MF_STATE}`, `https://github.com/settings/apps/new${q}#frag`,
+    `https://github.com:8443/settings/apps/new${q}`,
+  ]) no(url);
+  for (const url of [`http://github.com/settings/apps/new${q}`, `https://u:p@github.com/settings/apps/new${q}`, `https://u@github.com/settings/apps/new${q}`, `https://localhost./settings/apps/new${q}`, `https://github.com./settings/apps/new${q}`, `https://127.0.0.1/settings/apps/new${q}`]) no(url, 'url');
+  // Another provider’s window name never carries a manifest POST.
+  assert.deepEqual(connectDecision(mfBase({ frameName: 'plexiform-connect|slack|b', url: f.action, postBody: body })), { ok: false, reason: 'post-provider' });
+  // The opener rules still come first.
+  for (const [over, reason] of [[{ signedIn: false }, 'signed-out'], [{ gestureAt: 0 }, 'gesture'], [{ pageUrl: `${MF_HUB}/?view=board` }, 'opener'], [{ frameName: 'buddy-connect' }, 'name']]) {
+    assert.deepEqual(connectDecision(mfBase({ url: f.action, postBody: body, ...over })), { ok: false, reason });
+  }
+});
+
+test('manifest POST: the body must be the hub’s form exactly: urlencoded, capped, one manifest field of JSON naming this hub', async () => {
+  const f = await githubForm();
+  const good = JSON.parse(f.fields.manifest);
+  const try_ = (postBody) => connectDecision(mfBase({ url: f.action, postBody }));
+  const bad = (postBody, reason, label) => assert.deepEqual(try_(postBody), { ok: false, reason }, label);
+  const withManifest = (m) => formBody({ manifest: typeof m === 'string' ? m : JSON.stringify(m) });
+  assert.equal(try_(withManifest(good)).ok, true);
+  // shape of the body
+  bad(formBody(f.fields, 'multipart/form-data; boundary=x'), 'post-body', 'multipart');
+  bad(formBody(f.fields, 'text/plain'), 'post-body', 'text/plain');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'file', filePath: '/etc/passwd' }] }, 'post-body', 'file part');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: 'manifest=%7B%7D' }] }, 'post-body', 'bytes not a buffer');
+  bad({ contentType: 'application/x-www-form-urlencoded' }, 'post-body', 'no data');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [] }, 'post-body', 'empty');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.from([0x6d, 0xff, 0xfe]) }] }, 'post-body', 'not utf-8');
+  bad(formBody({ ...f.fields, extra: '1' }), 'post-body', 'extra field');
+  bad(formBody({ manifesto: f.fields.manifest }), 'post-body', 'wrong field');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.from(`${new URLSearchParams(f.fields)}&${new URLSearchParams(f.fields)}`) }] }, 'post-body', 'field twice');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.alloc(64 * 1024 + 1, 0x61) }] }, 'post-body', 'oversize body');
+  bad({ contentType: 'application/x-www-form-urlencoded', data: [{ type: 'rawData', bytes: Buffer.alloc(40 * 1024, 0x61) }, { type: 'rawData', bytes: Buffer.alloc(40 * 1024, 0x61) }] }, 'post-body', 'oversize across parts');
+  // the manifest itself
+  bad(withManifest('not json'), 'manifest', 'non-JSON');
+  bad(withManifest('[1]'), 'manifest', 'array');
+  bad(withManifest('null'), 'manifest', 'null');
+  bad(withManifest({ ...good, name: 'x'.repeat(20 * 1024) }), 'manifest', 'oversize manifest');
+  for (const extra of ['setup_url', 'description', 'request_oauth_on_install', 'setup_on_update', '__proto__', 'constructor']) {
+    bad(withManifest(`{${JSON.stringify(extra)}:"https://evil.example/x",${JSON.stringify(good).slice(1)}`), 'manifest', `unexpected key ${extra}`);
+  }
+  for (const k of ['name', 'url', 'hook_attributes', 'redirect_url']) { const m = { ...good }; delete m[k]; bad(withManifest(m), 'manifest', `missing ${k}`); }
+  for (const redirect_url of ['https://evil.example/integrations/github/callback', 'https://app.plexiform.dev.evil/integrations/github/callback', 'http://app.plexiform.dev/integrations/github/callback', `${MF_HUB}/integrations/slack/callback`, `${MF_HUB}/integrations/github/callback/`, `${MF_HUB}/integrations/github/callback?x=1`, `${MF_HUB}/`, `https://u@app.plexiform.dev/integrations/github/callback`, `${MF_HUB}:443/integrations/github/callback`]) {
+    bad(withManifest({ ...good, redirect_url }), 'manifest', redirect_url);
+  }
+  bad(withManifest({ ...good, callback_urls: ['https://evil.example/cb'] }), 'manifest', 'callback_urls off hub');
+  bad(withManifest({ ...good, callback_urls: [] }), 'manifest', 'callback_urls empty');
+  for (const url of ['https://evil.example/hook', `${MF_HUB}/integrations/github/callback`, `${MF_HUB}/integrations/not-a-uuid/webhook`, `http://app.plexiform.dev/integrations/0b6f1c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e/webhook`, `${MF_HOOK}?x=1`, `${MF_HOOK}#x`]) {
+    bad(withManifest({ ...good, hook_attributes: { ...good.hook_attributes, url } }), 'manifest', `hook ${url}`);
+  }
+  bad(withManifest({ ...good, hook_attributes: { ...good.hook_attributes, secret: 'x' } }), 'manifest', 'hook extra key');
+  bad(withManifest({ ...good, public: true }), 'manifest', 'public app');
+  bad(withManifest({ ...good, default_permissions: { ...good.default_permissions, contents: 'write' } }), 'manifest', 'write permission');
+  bad(withManifest({ ...good, default_permissions: { __proto__x: 'read' } }), 'manifest', 'odd permission name');
+  bad(withManifest({ ...good, default_events: ['push', 42] }), 'manifest', 'event not a string');
+  bad(withManifest({ ...good, url: 'http://plexiform.dev' }), 'manifest', 'homepage http');
+  bad(withManifest({ ...good, url: 'https://localhost./' }), 'manifest', 'homepage loopback');
+  bad(withManifest({ ...good, name: '<script>' }), 'manifest', 'name charset');
+  // Duplicate JSON keys: what is checked is what is sent.
+  const dup = `${JSON.stringify(good).slice(0, -1)},"redirect_url":"https://evil.example/cb"}`;
+  bad(withManifest(dup), 'manifest', 'duplicate key, last one wins and is checked');
+  const sent = JSON.parse(new URLSearchParams(try_(withManifest(` ${JSON.stringify(good)} `)).post.postData[0].bytes.toString()).get('manifest'));
+  assert.deepEqual(sent, good, 're-encoded from the parsed manifest, not forwarded');
+});
+
+test('manifest POST: a refusal carries a fixed reason only; nothing from the body or URL reaches the result or the log line', async () => {
+  const f = await githubForm();
+  const marker = ['LEAK', 'MARKER', 'x9'].join('_');
+  const outs = [
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ manifest: `{"name":"${marker}"` }) })),
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ manifest: JSON.stringify({ ...JSON.parse(f.fields.manifest), redirect_url: `https://${marker}.example/` }) }) })),
+    connectDecision(mfBase({ url: `https://github.com/settings/apps/new?state=${marker}${'a'.repeat(20)}&x=${marker}`, postBody: formBody(f.fields) })),
+    connectDecision(mfBase({ url: f.action, postBody: formBody({ [marker]: '1' }) })),
+  ];
+  for (const o of outs) {
+    assert.equal(o.ok, false);
+    assert.deepEqual(Object.keys(o), ['ok', 'reason']);
+    assert.ok(!JSON.stringify(o).includes(marker));
+  }
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const hubView = src.slice(src.indexOf('function makeHubView('), src.indexOf('async function openConnect'));
+  assert.match(hubView, /connectDecision\(\{ url, frameName, referrer: referrer\?\.url \?\? '', postBody,/);
+  assert.match(hubView, /else log\('connect window refused', c\.reason\);/);
+  assert.ok(!/log\([^)]*postBody/.test(src), 'the POST body is never logged');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(fn, /\(post \? w\.loadURL\(post\.url, \{ postData: post\.postData, extraHeaders: post\.extraHeaders \}\) : w\.loadURL\(url\)\)/);
+  assert.match(fn, /const authorizeHost = new URL\(post\?\.url \?\? url\)\.host;/);
+  assert.ok(!/postBody/.test(fn), 'the raw body never reaches the connect window');
 });
 
 // ── hub env ────────────────────────────────────────────────────────────────
