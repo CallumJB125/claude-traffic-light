@@ -217,6 +217,12 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
+  // macOS-first: Windows unit tests only report; mac and linux block on a tag
+  const coe = /name: Unit tests\n(?:.*\n)*? {8}continue-on-error: (.*)\n/.exec(jobs.build)[1];
+  assert.equal(coe, "${{ !startsWith(github.ref, 'refs/tags/') || matrix.platform == 'win' }}");
+  // on a tag the expression reduces to `matrix.platform == 'win'`: mac and linux have no other way to be non-blocking
+  assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
+  assert.equal((coe.match(/matrix\.platform == '(\w+)'/g) || []).join(), "matrix.platform == 'win'");
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // stage-beta runs its scripts from this workflow's own commit
   assert.match(jobs['stage-beta'], /ref: \$\{\{ github\.sha \}\}/);

@@ -32,6 +32,10 @@ on R2. Bump the version instead.
 To try the build without staging anything: Actions → Release → Run workflow
 (builds a ref, keeps the artifacts for 14 days).
 
+## Release checklist
+
+- Before promoting the first Windows installer: remove `continue-on-error` from the Windows Unit tests step; the Windows suite must be green. (The first release is macOS-first, so that step only reports on Windows; Mac and Linux block.)
+
 ## 2. Promote (make it live, and sign it)
 
 Actions → **Promote release** → version `1.2.0`, run from main. In order:
