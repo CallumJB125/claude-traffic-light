@@ -261,3 +261,63 @@ test('identity: admins list linked members by name, plain text, with Revoke per 
   assert.equal(findAll(v, (n) => n.tag === 'b').length, 0);
   assert.match(textOf(integrationsScreen(mi(false, 'admin', { linked: { c9: [] } }))), /Nobody has linked an account yet/);
 });
+
+// ── the GitHub organization at connect (D42 addendum "start inputs") ────────
+
+const ghStart = { ...available[0], start: ['org'] };
+const sm = (over = {}, role = 'owner') => m({ data: { available: [ghStart], connections: [], vault: true }, ...over }, role);
+
+test('start input: admins get an optional plain organization field with its help line, no value, no autocomplete; members get none', () => {
+  const v = integrationsScreen(sm());
+  const forms = byAttr(v, 'data-form', 'integ-start');
+  assert.equal(forms.length, 1);
+  assert.equal(forms[0].props['data-provider'], 'github');
+  const ins = findAll(forms[0], (n) => n.tag === 'input');
+  assert.equal(ins.length, 1);
+  const org = ins[0];
+  assert.equal(org.props.name, 'org');
+  assert.equal(org.props.type, 'text');
+  assert.equal(org.props.autocomplete, 'off');
+  assert.equal(org.props.spellcheck, 'false');
+  assert.equal(org.props.value, undefined, 'never a value from the model');
+  assert.ok(!org.props.required, 'optional');
+  const t = textOf(forms[0]);
+  assert.match(t, /GitHub organization \(optional\)/);
+  assert.match(t, /Leave empty to create the app under the GitHub account you're signed in as\. For a team's repositories, enter the organization name\./);
+  const submit = findAll(forms[0], (n) => n.tag === 'button');
+  assert.deepEqual(submit.map((b) => [b.props.type, textOf(b)]), [['submit', 'Connect GitHub']]);
+  assert.equal(byAttr(v, 'data-action', 'integ-connect').length, 0, 'the form is the connect');
+  for (const role of ['member', 'viewer']) {
+    const mv = integrationsScreen(sm({}, role));
+    assert.equal(byAttr(mv, 'data-form', 'integ-start').length, 0, role);
+    assert.equal(findAll(mv, (n) => n.tag === 'input').length, 0, role);
+  }
+  // A connector without start inputs keeps its plain Connect button.
+  assert.equal(byAttr(integrationsScreen(m({ data: { available, connections: [], vault: true } })), 'data-form', 'integ-start').length, 0);
+});
+
+test('start input: the manifest form says which owner the app will be created under (from its action), and replaces the start form', () => {
+  const at = (action) => integrationsScreen(sm({ manifest: { provider: 'github', action, fields: { manifest: '{}' }, target: '_blank' } }));
+  const org = at('https://github.com/organizations/acme-co/settings/apps/new?state=s.t');
+  assert.match(textOf(org), /The app will be created under the GitHub organization acme-co\./);
+  assert.equal(byAttr(org, 'data-form', 'integ-start').length, 0);
+  assert.match(textOf(at('https://github.com/settings/apps/new?state=s.t')), /The app will be created under the GitHub account you're signed in as\./);
+});
+
+test('start input: a connected app shows its owner to admins (organization or personal account), from the provider facts only', () => {
+  const owned = (provider, role = 'owner') => textOf(integrationsScreen(m({ data: { available: [ghStart], connections: [{ ...conn, display_name: provider.login, settings: { autonomy: {}, provider, config: { org: 'not-this' } } }], vault: true } }, role)));
+  assert.match(owned({ login: 'acme-co', org: 'acme-co' }), /Created under the GitHub organization acme-co/);
+  assert.match(owned({ login: 'callum' }), /Created under the GitHub account callum/);
+  assert.doesNotMatch(owned({ login: 'callum' }), /not-this/);
+  assert.doesNotMatch(owned({ login: '<b>x</b>' }), /Created under/, 'only a login-shaped owner');
+});
+
+test('start input: the typed org leaves the form at once and never enters state (takeInput), and goes only in the start body', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../js/api.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(kind === 'integ-start'\) return connectIntegration\(form\.dataset\.provider, 'app_install', takeInput\(form\)\);/);
+  assert.match(app, /api\.startConnect\(provider, input\)/);
+  assert.match(app, /manifest: \{ provider, \.\.\.res\.form, target: connectWindowTarget\(provider, res\.bind, navigator\.userAgent\) \}/);
+  assert.match(api, /startConnect: \(provider, input\) => mut\('POST', `\/api\/integrations\/\$\{enc\(provider\)\}\/start`, input && Object\.keys\(input\)\.length \? \{ input \} : undefined\),/);
+});

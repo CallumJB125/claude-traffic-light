@@ -314,7 +314,8 @@ test('M4: each app is its own connection, shown under its owner, and a validated
   assert.deepEqual(a.settings, { app_id: 77, app_slug: 'plexiform-acme-x1y2', login: 'acme', org: 'acme' });
   const user = await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }));
   assert.equal(user.settings.org, undefined);
-  assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: 'plexi-team' })).settings.org, 'plexi-team');
+  // provider.org is what GitHub says the owner is: a previous connection's org never sticks to a user-owned app.
+  assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: 'plexi-team' })).settings.org, undefined);
   assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: '../evil' })).settings.org, undefined);
   assert.equal((await exchangeWith(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), {}, { org: 'plexi-team' })).settings.org, undefined, 'never an admin\'s config');
 });
@@ -463,4 +464,58 @@ test('ingressCidrs: GitHub\'s published hook ranges, all accepted by the registr
   assert.deepEqual(github.ingressCidrs.slice(0, 4), ['192.30.252.0/22', '185.199.108.0/22', '140.82.112.0/20', '143.55.64.0/20']);
   assert.equal(github.ingressCidrs.length, 13);
   assert.ok(github.ingressCidrs.includes('2a0a:a447::/32') && github.ingressCidrs.includes('2606:50c0::/32'));
+});
+
+// ── the organization an admin names at connect (D42 addendum "start inputs") ──
+
+const exchangeFor = (body, startInput) => github.connect.exchange({ query: { code: 'abc123' }, provider: {}, config: {}, startInput, fetch: async () => ({ ok: true, json: async () => body }) });
+const formFor = (input, provider = {}) => github.connect.manifestForm({ state: 'st', redirectUri: 'https://x/cb', webhookUrl: 'https://x/wh', provider, config: {}, input });
+const BAD_ORGS = ['', '-acme', 'acme-', 'ac--me', 'a'.repeat(40), '../evil', 'ac/me', 'ac%2Fme', 'acme?x=1', 'acme#x', 'ac me', ' acme', 'acme\n', 'ácme', 'acme.co', 'ac_me', 42, null, {}, ['acme']];
+
+test('start input: GitHub declares org, validated as a GitHub login (no leading, trailing or doubled hyphen, at most 39)', () => {
+  assert.deepEqual([...github.connect.startInputs], ['org']);
+  assert.equal(typeof github.connect.startInput, 'function');
+  for (const ok of ['acme', 'Acme-Co', 'a', 'a1-b2-c3', 'x'.repeat(39), '0rg']) assert.equal(github.connect.startInput('org', ok), ok, ok);
+  for (const bad of BAD_ORGS) assert.equal(github.connect.startInput('org', bad), null, JSON.stringify(bad));
+  assert.equal(github.connect.startInput('owner', 'acme'), null, 'an undeclared name is never valid');
+  assert.equal(github.connect.startInput('__proto__', 'acme'), null);
+});
+
+test('start input: manifestForm posts to the named organization (it wins over the last connection\'s), and checks the org again', () => {
+  const f = formFor({ org: 'Acme-Co' });
+  assert.equal(f.action, 'https://github.com/organizations/Acme-Co/settings/apps/new?state=st');
+  assert.match(JSON.parse(f.fields.manifest).name, /^Plexiform-Acme-Co-[a-z0-9]{4}$/);
+  assert.equal(JSON.parse(f.fields.manifest).public, false);
+  assert.equal(formFor({ org: 'acme-co' }, { org: 'old-org', login: 'old-org' }).action, 'https://github.com/organizations/acme-co/settings/apps/new?state=st');
+  // No org named: as before (the last connection's org, else the signed-in account).
+  assert.equal(formFor({}).action, 'https://github.com/settings/apps/new?state=st');
+  assert.equal(formFor(undefined).action, 'https://github.com/settings/apps/new?state=st');
+  assert.equal(formFor({}, { org: 'old-org' }).action, 'https://github.com/organizations/old-org/settings/apps/new?state=st');
+  for (const bad of BAD_ORGS) assert.throws(() => formFor({ org: bad }), /not a GitHub organization/, JSON.stringify(bad));
+  assert.throws(() => formFor({ owner: 'acme' }), /not a GitHub organization/);
+  assert.throws(() => formFor('acme'), /not a GitHub organization/);
+});
+
+test('start input: exchange refuses an app not owned by the named organization (fixed text), and takes it in any letter case', async () => {
+  const orgApp = (login) => conversion({ owner: { id: 5, login, type: 'Organization' } });
+  const ok = await exchangeFor(orgApp('acme-co'), { org: 'Acme-Co' });
+  assert.equal(ok.display_name, 'acme-co');
+  assert.equal(ok.settings.org, 'acme-co', 'GitHub\'s spelling of the owner, never the typed one');
+  assert.equal(ok.settings.login, 'acme-co');
+  const refusals = [
+    [orgApp('other-org'), { org: 'acme-co' }],
+    [conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), { org: 'acme-co' }],
+    [conversion({ owner: { id: 9, login: 'acme-co', type: 'User' } }), { org: 'acme-co' }],
+    [conversion({ owner: { id: 9, login: 'acme-co' } }), { org: 'acme-co' }],
+    [orgApp('acme-co'), { org: '../acme-co' }],
+    [orgApp('acme-co'), { org: 'acme-co', owner: 'x' }],
+  ];
+  for (const [body, si] of refusals) {
+    await assert.rejects(exchangeFor(body, si), (e) => e.message === 'the app is not owned by the organization named at connect', JSON.stringify(si));
+  }
+  // No org named: the owner is whoever GitHub says, as before.
+  const user = await exchangeFor(conversion({ owner: { id: 9, login: 'callum', type: 'User' } }), {});
+  assert.equal(user.display_name, 'callum');
+  assert.equal(user.settings.org, undefined);
+  assert.equal((await exchangeFor(orgApp('acme-co'), undefined)).settings.org, 'acme-co');
 });
