@@ -3,9 +3,11 @@
 // with the hub's own environment:
 //   node hub/admin.js delete-user <email>
 //   node hub/admin.js delete-team <slug>
+//   node hub/admin.js revoke-legacy-devices
 // The same transaction as DELETE /api/account and DELETE /api/teams/:id,
-// without the email step-up: for a hub with no mailer (and, until the OAuth
-// re-auth step-up lands, no other way to confirm). It opens the database file
+// without the step-up: for a hub with neither a mailer nor an OAuth provider.
+// revoke-legacy-devices (the accounts cutover, H1) revokes every runner
+// device not made by enrolment (Access/dev-era device tokens). It opens the database file
 // directly: stop the hub first, or rely on its 5 s busy_timeout (sockets of a
 // running hub then close at their next credential check).
 
@@ -19,12 +21,13 @@ import { Accounts, canonEmail } from './identity/accounts.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
 
-const USAGE = 'usage: node hub/admin.js delete-user <email> | delete-team <slug>';
+const USAGE = 'usage: node hub/admin.js delete-user <email> | delete-team <slug> | revoke-legacy-devices';
+const ENROLMENT_HASH = 'enrolment:%';
 
 /** → exit code. `config` replaces loadConfig() (tests). */
 export function runAdmin(argv, { config = null, out = (s) => process.stdout.write(`${s}\n`), err = (s) => process.stderr.write(`${s}\n`) } = {}) {
   const [cmd, arg] = argv;
-  if (!['delete-user', 'delete-team'].includes(cmd) || !arg) { err(USAGE); return 2; }
+  if (!(['delete-user', 'delete-team'].includes(cmd) && arg) && !(cmd === 'revoke-legacy-devices' && arg == null)) { err(USAGE); return 2; }
   let cfg;
   try { cfg = config ?? loadConfig(); } catch (e) { err(`invalid configuration: ${e.message}`); return 2; }
   if (cfg.auth !== 'accounts') { err('admin.js works on a BOARD_AUTH=accounts hub only'); return 2; }
@@ -36,7 +39,18 @@ export function runAdmin(argv, { config = null, out = (s) => process.stdout.writ
     hub.accounts = new Accounts(hub, { mailer: null });
     hub.teams = new Teams(hub, { accounts: hub.accounts });
     hub.invites = new Invites(hub, { accounts: hub.accounts, teams: hub.teams });
-    if (cmd === 'delete-user') {
+    if (cmd === 'revoke-legacy-devices') {
+      const count = (sql) => db.get(`SELECT COUNT(*) AS n FROM devices WHERE ${sql}`, ENROLMENT_HASH).n;
+      const kept = count('revoked_at IS NULL AND token_hash LIKE ?');
+      const already = count('revoked_at IS NOT NULL AND token_hash NOT LIKE ?');
+      const now = new Date().toISOString();
+      const revoked = db.tx(() => {
+        const n = db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND token_hash NOT LIKE ?', now, ENROLMENT_HASH).changes;
+        db.insert('audit', { actor: 'operator', action: 'device.revoke_legacy', detail: JSON.stringify({ revoked: n }), at: now });
+        return n;
+      });
+      out(JSON.stringify({ ok: true, revoked, already_revoked: already, enrolled_kept: kept }));
+    } else if (cmd === 'delete-user') {
       const email = canonEmail(arg);
       const user = db.get(`SELECT u.* FROM users u WHERE u.deleted_at IS NULL AND (u.primary_email = ?
         OR u.id IN (SELECT user_id FROM identities WHERE provider = 'email' AND subject = ?))`, email, email);

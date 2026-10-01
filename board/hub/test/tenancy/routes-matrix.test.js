@@ -26,6 +26,8 @@ const MATRIX = {
   'GET /api/auth/methods': { kind: 'public', reason: 'the sign-in page asks before anyone is signed in' },
   'POST /api/auth/email/start': { kind: 'public', reason: 'starts a sign-in' },
   'POST /api/auth/email/verify': { kind: 'public', reason: 'finishes a sign-in' },
+  'POST /api/auth/oauth/start': { kind: 'public', reason: 'starts a Google/GitHub sign-in (a step-up needs the caller\'s own Bearer; oauth.test.js)' },
+  'POST /api/auth/oauth/exchange': { kind: 'public', reason: 'finishes a Google/GitHub sign-in; the flow, state and PKCE verifier are the credential (oauth.test.js)' },
   'POST /api/auth/signout': { kind: 'self' },
   'GET /api/account': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
@@ -62,6 +64,14 @@ const MATRIX = {
   // An invite addressed to someone else is as unknown as a made-up id: the one
   // generic INVALID_TOKEN (not 404), and nothing about it in the answer.
   'POST /api/account/invites/:invite_id/accept': { kind: 'cross', status: 400, path: (fx) => `/api/account/invites/${fx.B.invite}/accept` },
+  // Runner enrolment (P4, D79–D81): an install as a runner in the team in the URL.
+  'POST /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
+  'DELETE /api/teams/:team_id/enrol': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrol` },
+  'GET /api/teams/:team_id/enrolments': { kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments` },
+  'DELETE /api/teams/:team_id/enrolments/:enrollment_id': {
+    kind: 'cross', path: (fx) => `/api/teams/${fx.B.team}/enrolments/${fx.B.enrollment}`,
+    alt: (fx) => [`/api/teams/${fx.A.team}/enrolments/${fx.B.enrollment}`],
+  },
   'GET /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}` },
   'GET /api/boards/:board_id/alerts': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/alerts` },
   'GET /api/boards/:board_id/journal': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/journal` },
@@ -76,7 +86,6 @@ const MATRIX = {
   'GET /api/cards/:card_id/overlap-preview': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/overlap-preview` },
   'POST /api/permission-requests/:id/answer': { kind: 'cross', path: (fx) => `/api/permission-requests/${fx.B.permission}/answer`, body: { decision: 'allow' } },
   'GET /api/devices': { kind: 'team' },
-  'POST /api/devices': { kind: 'team', body: { name: 'pwned' } },
   'DELETE /api/devices/:id': { kind: 'cross', path: (fx) => `/api/devices/${fx.B.device}` },
   'GET /api/repos': { kind: 'team' },
   'POST /api/repos': { kind: 'team', body: { url: 'git@github.com:pwned/app.git' } },
@@ -87,6 +96,11 @@ const MATRIX = {
   'PATCH /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}`, body: { autonomy: {} } },
   'DELETE /api/integrations/:id': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}` },
   'GET /api/integrations/:id/audit': { kind: 'cross', path: (fx) => `/api/integrations/${fx.B.connection}/audit` },
+};
+
+// Not registered in accounts mode at all (a plain 404 "no such route"), with why.
+const REFUSED = {
+  'POST /api/devices': 'legacy runner device tokens: accounts mode mints runner credentials only by enrolment (D79, H1); GET/DELETE stay for cleanup',
 };
 
 // Handled before the route table (and before accounts auth): not in
@@ -112,6 +126,7 @@ test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matri
       if (MATRIX[key(r)].kind === 'public') assert.ok(MATRIX[key(r)].reason, `${key(r)} is public: give the reason`);
     }
     for (const [k, why] of Object.entries(PRE_ROUTE)) assert.ok(!live.includes(k) && why, k);
+    for (const [k, why] of Object.entries(REFUSED)) assert.ok(!live.includes(k) && why, `${k} must not be registered in accounts mode`);
   } finally {
     await fx.h.close();
   }

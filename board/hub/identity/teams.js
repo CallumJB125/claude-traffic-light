@@ -144,17 +144,18 @@ export class Teams {
 
   /**
    * DELETE /api/teams/:team_id {confirm_slug, flow_id} (owner, with a fresh
-   * purpose:'delete' step-up that this spends): soft delete. Every
+   * step-up that this spends: an email 'delete_team' code, or an OAuth
+   * re-authentication from this device, D78): soft delete. Every
    * route 404s at once, runner devices are revoked (their sockets close
    * 4403), pending invites die and browser sockets on the team close 4403.
    * The hard purge after 7 days is P5.
    */
-  remove(member, body, { ip }) {
+  remove(member, body, { ip, cred = null }) {
     if (!can(member, 'team.delete')) throw new HubError('FORBIDDEN', 'only an owner can delete the team');
     const o = this.org(member.org_id);
     if (body.confirm_slug !== o.slug) throw new HubError('VALIDATION', 'confirm_slug must be the team slug');
     // Like deleting the account: a fresh email code first (M4), of its own purpose (L-H).
-    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team');
+    const step = this.accounts.requireStepUp(member.user_id, body.flow_id, 'delete_team', cred, o.id);
     return this.deleteTeam(o, { member, ip, step });
   }
 
@@ -172,6 +173,7 @@ export class Teams {
       if (step) this.accounts.consumeStepUp(step);
       this.db.run('UPDATE orgs SET deleted_at = ?, purge_after = ? WHERE id = ?', now, purgeAfter, o.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
+      this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'team_deleted', token_hash = NULL WHERE org_id = ? AND revoked_at IS NULL", now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
       this.hub.revokeDeletedTeamConnections(now);
       this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });
@@ -267,6 +269,7 @@ export class Teams {
     this.hub.txn(() => {
       this.db.run('UPDATE members SET removed_at = ? WHERE id = ?', now, t.id);
       this.db.run('UPDATE devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL', now, t.id);
+      this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'member_removed', token_hash = NULL WHERE member_id = ? AND revoked_at IS NULL", now, t.id);
       this.hub.invites.revokeWhere('created_by', t.id, 'inviter_removed');
       this.audit(self ? 'member.leave' : 'member.remove', member, { ip, target: t.id, detail: { role: t.role } });
       this.hub.later(() => {

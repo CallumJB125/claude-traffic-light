@@ -177,3 +177,32 @@ test('untrusted board text is enveloped; an embedded closing tag cannot end the 
   assert.equal((first.match(/<\s*\/\s*untrusted_board_content/gi) ?? []).length, 1);
   assert.throws(() => untrusted('s', 'x'), /nonce/, 'no envelope without the run nonce');
 });
+
+test('packaged app (D82): under Electron the hook shim and the board MCP server run with ELECTRON_RUN_AS_NODE=1; plain node is unchanged', () => {
+  const plain = buildSettings({ worktree: '/wt', tmpdir: '/t' });
+  assert.ok(!JSON.stringify(plain).includes('ELECTRON_RUN_AS_NODE'));
+  assert.equal(buildMcpConfig({ socket: '/s', token: 'T' }).mcpServers.board.env.ELECTRON_RUN_AS_NODE, undefined);
+  Object.defineProperty(process.versions, 'electron', { value: '33.0.0', configurable: true, enumerable: true });
+  try {
+    const s = buildSettings({ worktree: '/wt', tmpdir: '/t' });
+    const cmds = Object.values(s.hooks).flatMap((h) => h.flatMap((x) => x.hooks.map((y) => y.command)));
+    assert.equal(cmds.length, 9);
+    for (const c of cmds) assert.ok(c.startsWith(`ELECTRON_RUN_AS_NODE=1 '${process.execPath}' '${HOOK_SHIM}' `), c);
+    const m = buildMcpConfig({ socket: '/s', token: 'T' });
+    assert.deepEqual(m.mcpServers.board, { type: 'stdio', command: process.execPath, args: [MCP_SERVER], env: { ELECTRON_RUN_AS_NODE: '1', BOARD_RUN_SOCKET: '/s', BOARD_RUN_TOKEN: 'T' } });
+    // The hook command, run by a shell as Claude runs it, hands the variable to the executable.
+    const dir = tmpDir();
+    try {
+      const fake = path.join(dir, 'Electron Helper');
+      fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s|%s' "$ELECTRON_RUN_AS_NODE" "$2" > '${path.join(dir, 'seen')}'\n`, { mode: 0o755 });
+      const cmd = buildSettings({ worktree: '/wt', tmpdir: '/t', node: fake }).hooks.Stop[0].hooks[0].command;
+      assert.equal(spawnSync('/bin/sh', ['-c', cmd], { env: { PATH: process.env.PATH } }).status, 0);
+      assert.equal(fs.readFileSync(path.join(dir, 'seen'), 'utf8'), '1|stop');
+    } finally {
+      rm(dir);
+    }
+  } finally {
+    delete process.versions.electron;
+  }
+  assert.equal(process.versions.electron, undefined);
+});

@@ -825,6 +825,8 @@ export class Hub extends EventEmitter {
     this.sweepPendingCmds();
     this.limiter.sweep();
     this.recheckBrowsers();
+    this.enrolments?.recheck();
+    this.oauth?.sweep();
     this.presence.sweep();
     await this.idle();
   }
@@ -861,6 +863,7 @@ export class Hub extends EventEmitter {
 
   memberChanged(memberId) {
     this.recheckBrowsers(memberId);
+    this.enrolments?.recheck();
     this.presence.changed();
   }
 
@@ -872,6 +875,8 @@ export class Hub extends EventEmitter {
       b.send({ type: 'session.revoked' });
       b.close(WS_CLOSE.UNAUTHENTICATED, reason);
     }
+    // Enrolled runners of a signed-out install go with it (D80).
+    this.enrolments?.recheck();
   }
 
   // ── browser broadcasts ────────────────────────────────────────────────────

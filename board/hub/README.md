@@ -40,7 +40,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | File | Role |
 |---|---|
 | `server.js` | Entry point: config, listen, SIGTERM/SIGINT → graceful shutdown |
-| `admin.js` | Operator erasure (accounts mode, on the hub host): `delete-user <email>`, `delete-team <slug>` without a step-up (ACCOUNTS-API.md `DELETE /api/account`) |
+| `admin.js` | Operator tools (accounts mode, on the hub host): `delete-user <email>`, `delete-team <slug>` without a step-up (ACCOUNTS-API.md `DELETE /api/account`); `revoke-legacy-devices` for the accounts cutover |
 | `app.js` | Wiring: DB → Hub → HTTP/WS → timers (reaper, merge poll, tunnel probe) → close |
 | `config.js` | Env → config, validation (dev auth only on loopback) |
 | `db.js` | `node:sqlite` wrapper (WAL, savepoint-nested `tx`, bind sanitising), `HubError` |
@@ -64,14 +64,18 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 | `BOARD_PORT` | `8787` | Listen port. `0` picks a free port; the log (and `board.listening`, below) reports the real one |
 | `BOARD_DATA_DIR` | `board/hub/data` (gitignored) | Directory for the DB (created if missing) |
 | `BOARD_DB` | `$BOARD_DATA_DIR/board.db` | SQLite file (WAL: `board.db-wal`, `board.db-shm` next to it) |
-| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT), `dev` (cookie stub, loopback bind only; startup fails otherwise), `local` (the hub embedded in the desktop app, D35: `BOARD_BIND` must be `127.0.0.1`, `::1` or `localhost`, and `BOARD_PUBLIC_URL`, `BOARD_TUNNEL_PROBE_URL` and `BOARD_DEV_SEED` must be unset) or `accounts` (the hub's own sign-in, desktop device tokens and web sessions, D51–D58, D66, `ACCOUNTS-API.md`: needs `BOARD_SECRET` and a `BOARD_PUBLIC_URL` (a loopback bind may do without only with `BOARD_ACCOUNTS_DEV=1`); once exposed (a public URL off loopback, or `BOARD_TUNNEL_PROBE_URL`) it needs an https URL, `BOARD_TRUST_CF_IP=1` and a sign-in method (`BOARD_SIGNIN_METHODS`, or a mailer for email codes), and refuses the console mailer) |
+| `BOARD_AUTH` | `access` | `access` (Cloudflare Access JWT), `dev` (cookie stub, loopback bind only; startup fails otherwise), `local` (the hub embedded in the desktop app, D35: `BOARD_BIND` must be `127.0.0.1`, `::1` or `localhost`, and `BOARD_PUBLIC_URL`, `BOARD_TUNNEL_PROBE_URL` and `BOARD_DEV_SEED` must be unset) or `accounts` (the hub's own sign-in, desktop device tokens and web sessions, D51–D58, D66, `ACCOUNTS-API.md`: needs `BOARD_SECRET` and a `BOARD_PUBLIC_URL` (a loopback bind may do without only with `BOARD_ACCOUNTS_DEV=1`); once exposed (a public URL off loopback, or `BOARD_TUNNEL_PROBE_URL`) it needs an https URL, `BOARD_TRUST_CF_IP=1` and a sign-in method (a configured Google or GitHub client, `BOARD_SIGNIN_METHODS`, or a mailer for email codes), and refuses the console mailer) |
 | `BOARD_LOCAL_SECRET` | random per start | With `BOARD_AUTH=local`, **tests only**: the `board_local` cookie value (≥ 32 bytes). Unset: 32 random bytes (hex) per launch, sent only in the parentPort `board.listening` message, never logged or printed |
 | `BOARD_ACCESS_TEAM` | — | Access team name: certs at `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Required for `access` |
 | `BOARD_ACCESS_AUD` | — | The Access application AUD tag. Required for `access` |
 | `BOARD_SECRET` | generated | ≥ 32 bytes. Signs run tokens and dev cookies. If unset, a secret is generated once and stored in `hub_meta` |
 | `BOARD_PUBLIC_URL` | — | Public origin, e.g. `https://board.example.com`. Accepted as a same-origin `Origin` for mutations and WS upgrades |
 | `BOARD_TRUST_CF_IP` | off | `accounts` only, loopback bind only: take the client IP for rate limits from `CF-Connecting-IP` (cloudflared on the same host). Required once the hub is exposed |
-| `BOARD_SIGNIN_METHODS` | — | `accounts`: comma list of the configured external sign-in methods, `google`, `github` (D66; the OAuth phase fills them in). `GET /api/auth/methods` reports them |
+| `BOARD_SIGNIN_METHODS` | — | `accounts`, optional: comma list `google`, `github` (D66). Since D76 `GET /api/auth/methods` reports the providers whose client id and secret are set, and a configured provider is a sign-in method on its own; this list still counts as one for the exposure check |
+| `BOARD_GOOGLE_CLIENT_ID` | — | `accounts`: the Google OAuth *Desktop* client id. With `BOARD_GOOGLE_CLIENT_SECRET`, turns on Google sign-in and the Google re-authentication step-up (D76–D78) |
+| `BOARD_GOOGLE_CLIENT_SECRET` | — | `accounts`: that client's secret. Removed from the environment once read |
+| `BOARD_GITHUB_CLIENT_ID` | — | `accounts`: the GitHub OAuth App client id (callback `http://127.0.0.1/callback`, device flow off). With `BOARD_GITHUB_CLIENT_SECRET`, turns on GitHub sign-in and step-up (D76–D78) |
+| `BOARD_GITHUB_CLIENT_SECRET` | — | `accounts`: that app's client secret. Removed from the environment once read |
 | `BOARD_ACCOUNTS_DEV` | off | `accounts`, loopback bind only: allow running with no `BOARD_PUBLIC_URL` (a local try-out and tests) |
 | `BOARD_RESEND_API_KEY` | — | `accounts`, optional: Resend API key (sending access); with it the hub mails email sign-in codes and invites. Removed from the environment once read. Unset: no mailer, `/api/auth/email/*` answer `404 METHOD_DISABLED` and invites are shared by the inviter (D66) |
 | `BOARD_CONSOLE_MAILER` | off | `accounts`, loopback bind and not exposed only: print mails to stderr instead (a local try-out) |
@@ -126,9 +130,10 @@ the +1000 fence bump, so a zombie runner holding a pre-restore fence is always F
 
 ## Deleting accounts and teams without a mailer
 
-Deleting an account or a team needs an email-code step-up, so a `BOARD_AUTH=accounts`
-hub with no mailer (and no OAuth sign-in method) logs a warning at start and the
-operator erases on the hub host, with the hub's environment:
+Deleting an account or a team needs a step-up: an email code (a mailer) or a
+Google/GitHub re-authentication (a configured provider). A `BOARD_AUTH=accounts` hub
+with neither logs a warning at start, and the operator erases on the hub host, with
+the hub's environment:
 
 ```sh
 node hub/admin.js delete-user <email>
@@ -137,8 +142,26 @@ node hub/admin.js delete-team <slug>
 
 The same transaction as `DELETE /api/account` / `DELETE /api/teams/:id`, without the
 step-up (audit `by: "operator"`). It opens the database directly: stop the hub
-first, or rely on its 5 s `busy_timeout`. The OAuth re-auth step-up (next phase)
-removes the need for it.
+first, or rely on its 5 s `busy_timeout`.
+
+## Cutover to `BOARD_AUTH=accounts`: runner credentials
+
+In accounts mode runners connect only with an enrolment's runner token (`brt_…`,
+`POST /api/teams/:id/enrol`, CONTRACT D79–D81). Device tokens minted the old way
+(`POST /api/devices` under Access or dev, or by `board-runner enroll`) are refused
+with `4401`, and accounts mode does not serve `POST /api/devices`. When switching a
+hub to accounts, after the first start on the new version (migrations applied),
+revoke the old runner devices so none is left live in the table:
+
+```sh
+node hub/admin.js revoke-legacy-devices
+# → {"ok":true,"revoked":N,"already_revoked":M,"enrolled_kept":K}
+```
+
+It sets `revoked_at` on every device whose token hash is not an enrolment's, writes an
+`audit` row (`device.revoke_legacy`, by the operator) and prints the counts. It runs
+only against a `BOARD_AUTH=accounts` configuration. Each person then enrols their
+install from the app (one enrolment per team).
 
 ## Additive routes (not in CONTRACT §5.2)
 

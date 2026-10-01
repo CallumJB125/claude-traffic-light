@@ -2,9 +2,11 @@
 // The runner under the desktop app (CONTRACT D37a): Electron utilityProcess
 // runs `runner/app-entry.js`; the app is the supervisor (no detaching). No
 // device file and no env secret is read: the app sends
-//   {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
+//   {type:'runner.config', hub_url, runner_token, team_id, data_dir}   (accounts P4, D80)
+// or {type:'runner.config', hub_url, device_id, device_token, cf_client_id?, cf_client_secret?, data_dir}
 // over process.parentPort and the credentials stay in memory, used only for
 // the hub WS connect. data_dir replaces BOARD_HOME (runs, worktrees, outbox).
+// An enrolled runner sends `Authorization: Bearer brt_…` + `Board-Team`.
 // Replies: runner.ready, runner.status {state, detail?}, runner.fatal {message},
 // runner.stopped {parked, parked_pending, orphaned}. `runner.presence` feeds team presence
 // (D37b). SIGTERM/SIGINT → park every live run (bounded), exit 0.
@@ -33,9 +35,15 @@ export function configError(m) {
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return 'hub_url must be http(s) or ws(s)';
   // The device token rides this connection: cleartext only to this machine.
   if ((u.protocol === 'http:' || u.protocol === 'ws:') && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return 'hub_url must be https: or wss: unless it is localhost';
-  if (!str(m.device_id)) return 'device_id required';
-  if (!str(m.device_token)) return 'device_token required';
-  if ((m.cf_client_id != null || m.cf_client_secret != null) && !(str(m.cf_client_id) && str(m.cf_client_secret))) return 'cf_client_id and cf_client_secret go together';
+  if (m.runner_token != null || m.team_id != null) {
+    if (!str(m.runner_token) || !m.runner_token.startsWith('brt_')) return 'runner_token required (brt_…)';
+    if (typeof m.team_id !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(m.team_id)) return 'team_id required';
+    if (m.device_id != null || m.device_token != null || m.cf_client_id != null || m.cf_client_secret != null) return 'runner_token goes without device_id, device_token and cf_* fields';
+  } else {
+    if (!str(m.device_id)) return 'device_id required';
+    if (!str(m.device_token)) return 'device_token required';
+    if ((m.cf_client_id != null || m.cf_client_secret != null) && !(str(m.cf_client_id) && str(m.cf_client_secret))) return 'cf_client_id and cf_client_secret go together';
+  }
   if (!str(m.data_dir) || !path.isAbsolute(m.data_dir)) return 'data_dir must be an absolute path';
   return null;
 }
@@ -69,10 +77,12 @@ function status(state, detail) {
 async function start(m) {
   const bad = configError(m);
   if (bad) { fatal(`bad runner.config: ${bad}`, 2); return; }
-  const device = {
-    hub: m.hub_url, device_id: m.device_id, device_token: m.device_token,
-    ...(m.cf_client_id ? { cf_client_id: m.cf_client_id, cf_client_secret: m.cf_client_secret } : {}),
-  };
+  const device = m.runner_token
+    ? { hub: m.hub_url, runner_token: m.runner_token, team_id: m.team_id }
+    : {
+      hub: m.hub_url, device_id: m.device_id, device_token: m.device_token,
+      ...(m.cf_client_id ? { cf_client_id: m.cf_client_id, cf_client_secret: m.cf_client_secret } : {}),
+    };
   try {
     ensurePrivateDir(m.data_dir);
     sup = new Supervisor({ home: m.data_dir, device, log });

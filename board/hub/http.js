@@ -181,6 +181,9 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('GET', '/api/auth/methods', ({ ip }) => acc.methods({ ip }), { auth: 'none' });
     route('POST', '/api/auth/email/start', ({ body, ip, ident, req, res }) => acc.start(body, { ip, ident, req, res }), { auth: 'optional' });
     route('POST', '/api/auth/email/verify', ({ body, ip, ident, req, res }) => acc.verify(body, { ip, ident, req, res }), { auth: 'optional' });
+    // Google / GitHub through the desktop app's loopback listener (D76–D78).
+    route('POST', '/api/auth/oauth/start', ({ body, ip, ident }) => hub.oauth.start(body, { ip, ident }), { auth: 'optional' });
+    route('POST', '/api/auth/oauth/exchange', ({ body, ip, ident }) => hub.oauth.exchange(body, { ip, ident }), { auth: 'optional' });
     route('POST', '/api/auth/signout', ({ ident, ip, res }) => acc.signout(ident, { ip, res }), { auth: 'user' });
     route('GET', '/api/account', ({ ident }) => acc.account(ident), { auth: 'user' });
     route('DELETE', '/api/account', ({ ident, body, ip }) => acc.deleteAccount(ident, body, { ip }), { auth: 'user' });
@@ -201,7 +204,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
-    route('DELETE', '/api/teams/:team_id', ({ member, body, ip }) => teams.remove(member, body, { ip }));
+    route('DELETE', '/api/teams/:team_id', ({ member, body, ip, ident }) => teams.remove(member, body, { ip, cred: ident.cred }));
     route('POST', '/api/teams/:team_id/boards', ({ member, body, ip }) => teams.createBoard(member, body, { ip }));
     route('GET', '/api/teams/:team_id/members', ({ member }) => teams.listMembers(member));
     route('PATCH', '/api/teams/:team_id/members/:member_id', ({ member, params, body, ip }) => teams.setRole(member, params.member_id, body, { ip }));
@@ -216,6 +219,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     route('POST', '/api/invites/preview', ({ body, ip }) => inv.preview(body, { ip }), { auth: 'none' });
     route('POST', '/api/invites/accept', ({ ident, body, ip }) => inv.accept(ident, body, { ip }), { auth: 'user' });
     route('POST', '/api/account/invites/:invite_id/accept', ({ ident, params, ip }) => inv.accept(ident, { invite_id: params.invite_id }, { ip }), { auth: 'user' });
+    // Runner enrolment (P4, D79–D81): this install as a runner in the team in the URL.
+    const enr = hub.enrolments;
+    route('POST', '/api/teams/:team_id/enrol', ({ member, ident, body, ip }) => enr.enrol(member, ident, body, { ip }));
+    route('DELETE', '/api/teams/:team_id/enrol', ({ member, ident, ip }) => enr.unenrol(member, ident, { ip }));
+    route('GET', '/api/teams/:team_id/enrolments', ({ member, ident }) => enr.list(member, ident));
+    route('DELETE', '/api/teams/:team_id/enrolments/:enrollment_id', ({ member, params, ip }) => enr.revoke(member, params.enrollment_id, { ip }));
   } else {
     route('GET', '/api/me', ({ member }) => api.me(member));
   }
@@ -241,7 +250,8 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
   route('GET', '/api/cards/:card_id/overlap-preview', ({ member, params, query }) => api.overlapPreview(member, params.card_id, query.get('target_member_id')));
   route('POST', '/api/permission-requests/:id/answer', ({ member, params, body }) => api.answerPermission(member, params.id, body));
   route('GET', '/api/devices', ({ member }) => api.listDevices(member));
-  route('POST', '/api/devices', ({ member, body }) => api.createDevice(member, body));
+  // Accounts mode mints runner credentials only by enrolment (D79, H1); listing and revoking stay for cleanup.
+  if (config.auth !== 'accounts') route('POST', '/api/devices', ({ member, body }) => api.createDevice(member, body));
   route('DELETE', '/api/devices/:id', ({ member, params }) => api.revokeDevice(member, params.id));
   route('GET', '/api/repos', ({ member }) => api.listRepos(member));
   route('POST', '/api/repos', ({ member, body }) => api.createRepo(member, body));
@@ -537,10 +547,10 @@ export function createUpgradeHandler({ hub, config, wss, authenticate }) {
       });
     }
     if (pathname === WS_PATHS.runner) {
-      const auth = await authenticateRunner(hub, req);
+      const auth = await authenticateRunner(hub, req, { ip: clientIp(req, config) });
       return wss.handleUpgrade(req, socket, head, (ws) => {
         if (auth.close) { ws.close(auth.close, auth.reason); return; }
-        new RunnerConn(hub, ws, auth.device);
+        new RunnerConn(hub, ws, auth.device, { enrollmentId: auth.enrollmentId ?? null });
       });
     }
     return refuse(socket, 404, 'Not Found');

@@ -4,7 +4,7 @@
 // Both teams link the SAME canonical repo URL (separate repo rows), and B holds
 // content in every table a route can reach: a card with a comment, a run with
 // an open permission request, a runner device, an ask, a pending invite, an
-// integration connection (the fake connector). N is signed in and in no team. Everything B holds carries the marker `B-SECRET`.
+// integration connection (the fake connector), an enrolled runner. N is signed in and in no team. Everything B holds carries the marker `B-SECRET`.
 
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { startAccounts } from '../accounts-helpers.js';
@@ -93,6 +93,11 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   h.app.integrations.register(fake);
   const v = await fake.connect.verifyToken({ token: 'fake_abcdef123456' });
   B.connection = h.app.integrations.createConnection({ ...v, display_name: `${MARK} workspace`, orgId: B.team, memberId: B.owner, provider: 'fake' }).id;
+  // B's owner's install enrolled as a runner in B (P4).
+  const eb = await as(users.ub, 'POST', `/api/teams/${B.team}/enrol`, { device_name: `${MARK} runner` });
+  if (eb.status !== 200) throw new Error(`enrol: ${eb.text}`);
+  B.enrollment = eb.body.enrollment_id;
+  B.runnerToken = eb.body.runner_token;
 
   /** Everything team B owns, as one string: equal before and after = untouched. */
   function snapshotB() {
@@ -110,6 +115,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM invites WHERE org_id = ?', B.team),
       q('SELECT * FROM connections WHERE org_id = ?', B.team),
       q('SELECT * FROM connection_secrets WHERE connection_id = ?', B.connection),
+      q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
     ].join('\n');
   }
 
@@ -140,4 +146,6 @@ export const INVARIANTS = {
   runner_repos: `SELECT rr.device_id FROM runner_repos rr JOIN devices d ON d.id = rr.device_id JOIN members m ON m.id = d.member_id JOIN repos r ON r.id = rr.repo_id WHERE r.org_id != m.org_id`,
   journal: `SELECT j.seq FROM journal j JOIN cards c ON c.id = j.card_id WHERE j.board_id IS NOT c.board_id`,
   invites: `SELECT i.id FROM invites i JOIN members c ON c.id = i.created_by LEFT JOIN members m ON m.id = i.member_id WHERE c.org_id != i.org_id OR m.org_id != i.org_id`,
+  runner_enrollments: `SELECT e.id FROM runner_enrollments e JOIN members m ON m.id = e.member_id JOIN devices d ON d.id = e.device_id JOIN members dm ON dm.id = d.member_id
+    WHERE m.org_id != e.org_id OR dm.org_id != e.org_id OR m.user_id != e.user_id`,
 };

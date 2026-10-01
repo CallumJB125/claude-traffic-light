@@ -179,7 +179,7 @@ class Peer {
         }
       }
     });
-    ws.on('close', (code) => { this.closeCode = code; for (const w of this.closeWaiters ?? []) w(code); });
+    ws.on('close', (code, reason) => { this.closeCode = code; this.closeReason = String(reason ?? ''); for (const w of this.closeWaiters ?? []) w(code); });
     return new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
   }
 
@@ -223,8 +223,9 @@ export class FakeRunner extends Peer {
     this.n = 0;
   }
 
+  // dev.team: an enrolled runner (accounts P4) also names its team.
   open() {
-    return this.attach(new WebSocket(this.url, { headers: { authorization: `Bearer ${this.dev.device_token}` } }));
+    return this.attach(new WebSocket(this.url, { headers: { authorization: `Bearer ${this.dev.device_token}`, ...(this.dev.team ? { 'board-team': this.dev.team } : {}) } }));
   }
 
   async hello(runs = [], { outbox_head_seq = this.seq, outbox_id, outbox_acked_seq } = {}) {

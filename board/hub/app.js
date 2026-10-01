@@ -24,6 +24,9 @@ import { Accounts } from './identity/accounts.js';
 import { createMailer } from './identity/mailer.js';
 import { Teams } from './identity/teams.js';
 import { Invites } from './identity/invites.js';
+import { OAuth } from './identity/oauth.js';
+import { Enrolments } from './identity/enrolments.js';
+import { oauthProviders } from './config.js';
 
 export function createApp(config, { clock = defaultClock, log = createLogger({ level: config.logLevel }), github = null, fetchImpl = globalThis.fetch, timers = true, mailer } = {}) { // privacy-flow: hub-server
   const db = openDb(config.dbPath, { now: () => new Date(clock.wall()).toISOString() });
@@ -48,9 +51,12 @@ export function createApp(config, { clock = defaultClock, log = createLogger({ l
   hub.accounts = config.auth === 'accounts' ? new Accounts(hub, { mailer: mailer !== undefined ? mailer : createMailer(config, { fetchImpl }) }) : null;
   hub.teams = hub.accounts ? new Teams(hub, { accounts: hub.accounts }) : null;
   hub.invites = hub.accounts ? new Invites(hub, { accounts: hub.accounts, teams: hub.teams }) : null;
-  // Deleting an account or a team needs a step-up the hub can't send without
-  // a mailer (or, next, an OAuth re-auth): say so, and how an operator erases.
-  if (hub.accounts && !hub.accounts.mailer && !config.signinMethods?.length && db.get('SELECT 1 AS x FROM users WHERE deleted_at IS NULL LIMIT 1')) {
+  hub.oauth = hub.accounts ? new OAuth(hub, { accounts: hub.accounts, fetchImpl }) : null;
+  hub.enrolments = hub.accounts ? new Enrolments(hub, { accounts: hub.accounts }) : null;
+  // Deleting an account or a team needs a step-up: an email code (a mailer)
+  // or an OAuth re-authentication (a configured provider). Without either,
+  // say so, and how an operator erases.
+  if (hub.accounts && !hub.accounts.mailer && !oauthProviders(config).length && db.get('SELECT 1 AS x FROM users WHERE deleted_at IS NULL LIMIT 1')) {
     log.warn('account and team deletion is unavailable: no mailer and no OAuth sign-in method for the step-up; an operator can erase with `node hub/admin.js delete-user <email>` or `delete-team <slug>`');
   }
   if (config.devSeed) seedDev(hub, { repoUrl: config.devRepo });

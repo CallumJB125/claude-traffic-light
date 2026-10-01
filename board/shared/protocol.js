@@ -40,6 +40,8 @@ export const ERRORS = Object.freeze({
   RATE_LIMITED: 429,
   INTERNAL: 500,
   ACCESS_UNAVAILABLE: 503,  // Access signing keys unreachable: retry, the credential may be fine
+  PROVIDER_ERROR: 502,      // accounts: the OAuth provider refused the sign-in code (D77)
+  PROVIDER_UNAVAILABLE: 503, // accounts: the OAuth provider (or its signing keys) could not be reached (D77)
   // hub-internal guard outcomes (reaper retries later; never sent to clients)
   BOOT_GRACE: 503,
   TUNNEL_DOWN: 503,

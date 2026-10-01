@@ -31,6 +31,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   mail_global_new: { capacity: 1000, per_ms: 86_400_000 },    // … of which mail to addresses without an account (half the cap; M-C)
   signup_ip: { capacity: 10, per_ms: 86_400_000 },            // new users per IP
   team_create_user: { capacity: 3, per_ms: 86_400_000 },      // POST /api/teams (design §9.1)
+  oauth_start_ip: { capacity: 20, per_ms: 3_600_000 },        // POST /api/auth/oauth/start, per /64 (D77)
+  oauth_exchange_ip: { capacity: 30, per_ms: 3_600_000 },     // POST /api/auth/oauth/exchange, per /64 (D77)
+  runner_enrol_user: { capacity: 30, per_ms: 3_600_000 },     // POST /api/teams/:id/enrol, per user (D79)
   invite_team: { capacity: 20, per_ms: 86_400_000 },          // invites sent (create + resend), per team
   invite_user: { capacity: 50, per_ms: 86_400_000 },          // … per inviting user
   invite_ip: { capacity: 50, per_ms: 3_600_000 },             // … per client IP

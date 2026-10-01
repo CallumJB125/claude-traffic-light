@@ -9,6 +9,7 @@ import { isIP } from 'node:net'; // privacy-flow: hub-server
 import { HubError } from '../db.js';
 import { bearer, newDeviceToken, parseCookies, safeEqual, sha256hex } from '../auth.js';
 import { FailureBudget, ipKey, limitOrThrow, netKey, v6groups } from '../ratelimit.js';
+import { oauthProviders } from '../config.js';
 import { EMAIL_ONLY } from '../views.js';
 import { backfillSlugs, PURGE_AFTER_MS } from './teams.js';
 import { BRAND } from '../../shared/brand.js';
@@ -45,7 +46,11 @@ export function ipPrefix(ip) {
  * The one form an address is compared and stored in (L7): trimmed, lower-cased
  * by JS (full Unicode), never by SQLite's ASCII-only lower().
  */
-export const canonEmail = (v) => String(v).trim().toLowerCase();
+export const canonEmail = (v) => String(v).normalize('NFKC').trim().toLowerCase();
+
+/** Who proved a primary address so that an address match may link to it (D83): an email code, an authoritative Google account, or (NULL) the pre-OAuth paths. */
+export const AUTHORITATIVE_VIA = Object.freeze([null, 'email', 'google']);
+export const authoritativeVia = (u) => AUTHORITATIVE_VIA.includes(u?.primary_email_via ?? null);
 
 export function normalizeEmail(v) {
   if (typeof v !== 'string') throw new HubError('VALIDATION', 'email required');
@@ -146,10 +151,10 @@ export class Accounts {
     return LOOPBACK_HOST.test(host) ? `http://${host}` : null;
   }
 
-  /** GET /api/auth/methods (no auth): which sign-in buttons to show (D66). Booleans only. */
+  /** GET /api/auth/methods (no auth): which sign-in buttons to show (D66, D76). Booleans only. */
   methods({ ip }) {
     limitOrThrow(this.hub, 'auth_methods_ip', ipKey(ip));
-    const m = this.hub.config.signinMethods ?? [];
+    const m = oauthProviders(this.hub.config);
     return { google: m.includes('google'), github: m.includes('github'), email: !!this.mailer };
   }
 
@@ -299,14 +304,8 @@ export class Accounts {
       this.linkMembers(user.id, f.email);
       const base = { user: publicUser(user), teams: this.teams(user.id) };
       if (device) {
-        const token = newDeviceToken();
-        const id = randomUUID();
-        this.db.insert('user_devices', {
-          id, user_id: user.id, name: device.name, client: 'buddy_desktop', platform: device.platform, form_factor: device.form_factor,
-          token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip), session_epoch: this.epoch(),
-        });
-        this.audit('auth.signin', { user: user.id, target: id, detail: { method: 'email', client: 'buddy_desktop' }, ip });
-        out = { ...base, device_token: token, device_id: id };
+        const d = this.issueDevice(user.id, device, { ip, method: 'email' });
+        out = { ...base, device_token: d.token, device_id: d.id };
       } else {
         const s = this.createSession(user.id, { ip, ua: req?.headers?.['user-agent'] });
         cookie = sessionCookie(s.value, SESSION_ABS_MS / 1000);
@@ -319,6 +318,19 @@ export class Accounts {
       appendCookie(res, `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
     }
     return out;
+  }
+
+  /** A desktop device token (`bdt_…`, shown once, stored as sha256) for a user who just signed in, inside the caller's transaction. */
+  issueDevice(userId, device, { ip, method, subjectRef = null }) {
+    const now = this.now();
+    const token = newDeviceToken();
+    const id = randomUUID();
+    this.db.insert('user_devices', {
+      id, user_id: userId, name: device.name, client: 'buddy_desktop', platform: device.platform, form_factor: device.form_factor,
+      token_hash: sha256hex(token), created_at: now, last_seen_at: now, last_ip_prefix: ipPrefix(ip), session_epoch: this.epoch(),
+    });
+    this.audit('auth.signin', { user: userId, target: id, detail: { method, client: 'buddy_desktop', ...(subjectRef ? { subject_ref: subjectRef } : {}) }, ip });
+    return { id, token };
   }
 
   // An address with an account hears (at most once a day) that someone is
@@ -347,8 +359,15 @@ export class Accounts {
     const now = this.now();
     const byIdentity = this.db.get("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = 'email' AND i.subject = ? AND u.deleted_at IS NULL", email);
     let user = byIdentity ?? this.db.get('SELECT * FROM users WHERE primary_email = ? AND deleted_at IS NULL', email);
+    // An address a GitHub (or non-authoritative Google) sign-in put there is
+    // not proof that its holder owns the mailbox: the code just proved it, so
+    // the address moves to a new account, never into that one (D83).
+    if (user && !byIdentity && !authoritativeVia(user)) {
+      this.releasePrimary(user, { ip });
+      user = null;
+    }
     if (!user) {
-      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, avatar_url: null, created_at: now, deleted_at: null };
+      user = { id: randomUUID(), display_name: email.split('@')[0].slice(0, 100), primary_email: email, primary_email_verified_at: now, primary_email_via: 'email', avatar_url: null, created_at: now, deleted_at: null };
       this.db.insert('users', user);
       this.audit('user.create', { user: user.id, detail: { method: 'email' }, ip });
     } else if (!user.primary_email_verified_at && user.primary_email === email) {
@@ -356,8 +375,14 @@ export class Accounts {
       user = this.liveUser(user.id);
     }
     if (byIdentity) this.db.run("UPDATE identities SET last_used_at = ? WHERE provider = 'email' AND subject = ?", now, email);
-    else this.db.insert('identities', { id: randomUUID(), user_id: user.id, provider: 'email', subject: email, email, email_verified: 1, created_at: now, last_used_at: now });
+    else this.db.insert('identities', { id: randomUUID(), user_id: user.id, provider: 'email', subject: email, email, email_verified: 1, created_at: now, last_used_at: now, verified_at: now });
     return user;
+  }
+
+  /** A non-authoritative primary address yields to someone who proved the mailbox (D83). */
+  releasePrimary(user, { ip }) {
+    this.db.run('UPDATE users SET primary_email = NULL, primary_email_verified_at = NULL, primary_email_via = NULL WHERE id = ?', user.id);
+    this.audit('user.email_released', { user: user.id, detail: { via: user.primary_email_via }, ip });
   }
 
   // Member rows an admin added with this address before accounts (Access
@@ -469,10 +494,12 @@ export class Accounts {
     return rows.map((t) => ({ ...t, boards: this.db.all('SELECT id, name, key_prefix FROM boards WHERE org_id = ? ORDER BY name', t.id) }));
   }
 
-  /** GET /api/account → {user, teams, pending_invites} (invites for the user's verified addresses, P3). */
+  /** GET /api/account → {user, identities, teams, pending_invites} (invites for the user's verified addresses, P3). */
   account(ident) {
     return {
       user: publicUser(ident.user),
+      // The sign-in methods this account has proven (provider names only, D78): the app offers these for a step-up.
+      identities: this.db.all("SELECT DISTINCT provider FROM identities WHERE user_id = ? AND verified_at IS NOT NULL AND provider IN ('email','google','github') ORDER BY provider", ident.user.id),
       teams: this.teams(ident.user.id),
       pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
@@ -494,6 +521,7 @@ export class Accounts {
     if (!d) throw new HubError('NOT_FOUND', 'device not found');
     this.hub.txn(() => {
       this.db.run('UPDATE user_devices SET revoked_at = ?, token_hash = NULL, revoke_reason = ? WHERE id = ?', this.now(), reason, id);
+      this.hub.enrolments?.revokeForUserDevice(id, reason);
       this.audit(reason === 'signout' ? 'auth.signout' : 'device.revoke', { user: ident.user.id, target: id, detail: { kind: 'device' }, ip });
       this.hub.later(() => this.hub.closeCredSockets({ kind: 'device', id }, reason === 'signout' ? 'signed out' : 'device revoked'));
     });
@@ -514,20 +542,39 @@ export class Accounts {
   /**
    * The step-up that deleting an account ('delete') or a team ('delete_team')
    * needs: a flow of that purpose this user started and verified in the last
-   * 5 minutes, not used yet. → the flow, or STEP_UP_REQUIRED.
+   * 5 minutes, not used yet; or (D78) an OAuth re-authentication of this user
+   * from this same device token whose 5-minute window is open (`flow_id` names
+   * it, or is left out). For a team (`teamId`) the OAuth step-up must name
+   * that team (L6); for the account it must name none. → the flow, or STEP_UP_REQUIRED.
    */
-  requireStepUp(userId, flowId, purpose = 'delete') {
+  requireStepUp(userId, flowId, purpose = 'delete', cred = null, teamId = null) {
+    const o = this.oauthStepUp(userId, flowId, purpose, cred, teamId);
+    if (o) return o;
     const f = typeof flowId === 'string' ? this.db.get('SELECT * FROM login_flows WHERE id = ?', flowId) : null;
     const age = f?.verified_at ? this.hub.ageOf(f.verified_at) : null;
     if (!f || f.purpose !== purpose || f.user_id !== userId || f.consumed_at || age == null || age > STEP_UP_MS) {
-      throw new HubError('STEP_UP_REQUIRED', `confirm with a fresh email code first (start + verify with purpose '${purpose}')`, { max_age_s: STEP_UP_MS / 1000, purpose });
+      throw new HubError('STEP_UP_REQUIRED', `confirm it is you first: a fresh email code, or Google/GitHub again (purpose '${purpose}')`, { max_age_s: STEP_UP_MS / 1000, purpose });
     }
     return f;
   }
 
+  oauthStepUp(userId, flowId, purpose, cred, teamId = null) {
+    if (cred?.kind !== 'device') return null;
+    const purposes = purpose === 'delete_team' ? ['delete', 'delete_team'] : ['delete'];
+    const team = purpose === 'delete_team' ? teamId : null;
+    const now = this.now();
+    const rows = typeof flowId === 'string'
+      ? [this.db.get('SELECT * FROM oauth_flows WHERE id = ?', flowId)]
+      : this.db.all('SELECT * FROM oauth_flows WHERE user_id = ? AND stepup_until > ? AND consumed_at IS NULL ORDER BY stepup_until DESC', userId, now);
+    const f = rows.find((r) => r && r.user_id === userId && r.cred_id === cred.id && purposes.includes(r.purpose) && (r.team_id ?? null) === team
+      && !r.consumed_at && r.stepup_until && r.stepup_until > now);
+    return f ? { ...f, oauth: true } : null;
+  }
+
   /** Spend a step-up (inside the caller's transaction): single use. */
   consumeStepUp(f) {
-    if (!this.db.run('UPDATE login_flows SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL', this.now(), f.id).changes) {
+    const table = f.oauth ? 'oauth_flows' : 'login_flows';
+    if (!this.db.run(`UPDATE ${table} SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL`, this.now(), f.id).changes) {
       throw new HubError('STEP_UP_REQUIRED', 'that confirmation was already used', { max_age_s: STEP_UP_MS / 1000 });
     }
   }
@@ -537,8 +584,8 @@ export class Accounts {
    * in the last 5 minutes (design §10.2, minimal), then eraseUser.
    */
   deleteAccount(ident, body, { ip }) {
-    this.requireStepUp(ident.user.id, body.flow_id);
-    return this.eraseUser(ident.user, { ip });
+    const step = this.requireStepUp(ident.user.id, body.flow_id, 'delete', ident.cred);
+    return this.eraseUser(ident.user, { ip, step });
   }
 
   /**
@@ -546,7 +593,7 @@ export class Accounts {
    * soft-remove and pseudonymise every membership (journal rows keep pointing
    * at member ids). Also the operator's `hub/admin.js delete-user` (by: 'operator').
    */
-  eraseUser(user, { ip = null, by = null } = {}) {
+  eraseUser(user, { ip = null, by = null, step = null } = {}) {
     const soleOwner = this.db.all(`SELECT o.id, o.name FROM members m JOIN orgs o ON o.id = m.org_id
       WHERE m.user_id = ? AND m.role = 'owner' AND m.removed_at IS NULL AND o.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM members x WHERE x.org_id = m.org_id AND x.id != m.id AND x.role = 'owner' AND x.removed_at IS NULL)
@@ -565,10 +612,14 @@ export class Accounts {
     ];
     const runnerDevices = this.db.all('SELECT d.id FROM devices d JOIN members m ON m.id = d.member_id WHERE m.user_id = ? AND d.revoked_at IS NULL', user.id);
     this.hub.txn(() => {
+      if (step) this.consumeStepUp(step);
       this.db.run(`UPDATE user_devices SET revoked_at = COALESCE(revoked_at, ?), token_hash = NULL, revoke_reason = COALESCE(revoke_reason, 'account_deleted'),
         name = 'Deleted device', platform = NULL, last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       this.db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
       this.db.run(`DELETE FROM login_flows WHERE user_id = ? OR email IN ${inAddresses}`, user.id, ...addresses);
+      this.db.run('DELETE FROM oauth_flows WHERE user_id = ?', user.id);
+      this.db.run(`UPDATE runner_enrollments SET revoked_at = COALESCE(revoked_at, ?), revoked_reason = COALESCE(revoked_reason, 'account_deleted'), token_hash = NULL,
+        name = 'Deleted device', last_ip_prefix = NULL WHERE user_id = ?`, now, user.id);
       // Invites to them: pending ones are withdrawn, then every invite they
       // accepted or that names one of their addresses forgets the address.
       this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'

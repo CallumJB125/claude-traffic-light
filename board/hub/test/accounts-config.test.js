@@ -30,6 +30,12 @@ test('accounts refuses to start without a secret, a public URL (loopback try-out
   const env = { BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_RESEND_API_KEY: 're_secret', BOARD_MAIL_FROM: 'a@b.co', BOARD_ACCOUNTS_DEV: '1' };
   assert.equal(loadConfig(env).resendApiKey, 're_secret');
   assert.equal(env.BOARD_RESEND_API_KEY, undefined);
+  // So are the OAuth client secrets (D76).
+  const oenv = { BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_ACCOUNTS_DEV: '1', BOARD_GOOGLE_CLIENT_ID: 'g-id', BOARD_GOOGLE_CLIENT_SECRET: 'g-sec', BOARD_GITHUB_CLIENT_ID: 'gh-id', BOARD_GITHUB_CLIENT_SECRET: 'gh-sec' };
+  const oc = loadConfig(oenv);
+  assert.deepEqual([oc.googleClientId, oc.googleClientSecret, oc.githubClientId, oc.githubClientSecret], ['g-id', 'g-sec', 'gh-id', 'gh-sec']);
+  assert.equal(oenv.BOARD_GOOGLE_CLIENT_SECRET, undefined);
+  assert.equal(oenv.BOARD_GITHUB_CLIENT_SECRET, undefined);
   assert.deepEqual(loadConfig({ BOARD_AUTH: 'accounts', BOARD_SECRET: 's'.repeat(40), BOARD_PUBLIC_URL: 'https://b.example.com', BOARD_TRUST_CF_IP: '1', BOARD_SIGNIN_METHODS: 'google, github' }).signinMethods, ['google', 'github']);
 });
 
@@ -37,6 +43,9 @@ test('H1/D66: an exposed accounts hub needs https, BOARD_TRUST_CF_IP and a sign-
   const exposed = (over = {}) => base({ publicUrl: 'https://buddy.example.com', trustCfIp: true, signinMethods: ['google'], accountsDev: false, ...over });
   assert.doesNotThrow(() => validateConfig(exposed()), 'Google only, no mailer');
   assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], resendApiKey: 're_x', mailFrom: 'a@b.co' })), 'a mailer is a sign-in method');
+  // D76: a configured OAuth provider (client id AND secret) is a sign-in method: BOARD_SIGNIN_METHODS becomes optional.
+  assert.doesNotThrow(() => validateConfig(exposed({ signinMethods: [], githubClientId: 'gh-id', githubClientSecret: ['s', 'x'].join('') })), 'GitHub configured');
+  assert.throws(() => validateConfig(exposed({ signinMethods: [], githubClientId: 'gh-id' })), /needs a sign-in method/, 'an id without its secret is not a method');
   assert.throws(() => validateConfig(exposed({ trustCfIp: false })), /needs BOARD_TRUST_CF_IP=1/);
   assert.throws(() => validateConfig(exposed({ signinMethods: [] })), /needs a sign-in method/);
   assert.throws(() => validateConfig(exposed({ consoleMailer: true })), /BOARD_CONSOLE_MAILER is for a loopback hub that is not exposed/);
@@ -59,7 +68,8 @@ test('D66: no mailer: email sign-in is 404 METHOD_DISABLED and silent, methods s
   process.stderr.write = (c, ...a) => { writes.push(String(c)); return orig.call(process.stderr, c, ...a); };
   let h;
   try {
-    h = await startAccounts({ mailer: null, config: { signinMethods: ['google'] } });
+    // D76: methods reports the providers with a client id AND secret; BOARD_SIGNIN_METHODS alone turns none on.
+    h = await startAccounts({ mailer: null, config: { signinMethods: ['google'], googleClientId: 'id-x', googleClientSecret: ['sec', 'ret'].join('-') } });
     const m = await h.call('GET', '/api/auth/methods');
     assert.equal(m.status, 200);
     assert.deepEqual(m.body, { google: true, github: false, email: false });
@@ -179,7 +189,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
 
   const fresh = new DatabaseSync(':memory:');
   migrate(fresh, { migrations: all });
-  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(fresh.prepare('SELECT version FROM schema_migrations WHERE version >= 7 ORDER BY version').all().map((r) => r.version), [7, 8, 9, 10, 11, 12, 13, 14, 15]);
   assert.deepEqual(triggers(fresh), want);
   fresh.close();
 
@@ -194,7 +204,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
     INSERT INTO comments (id, card_id, author_member_id, source, trusted, body, created_at) VALUES ('k1','c1','m1','web',1,'hi','${NOW}');
     INSERT INTO journal (board_id, card_id, at_hub, actor_kind, actor_id, kind) VALUES ('b1','c1','${NOW}','member','m1','card.create');
   `);
-  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(migrate(old, { migrations: all }), [7, 8, 9, 10, 11, 12, 13, 14, 15]);
   assert.deepEqual(triggers(old), want);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM comments').get().n, 1);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM journal').get().n, 1);
@@ -203,7 +213,7 @@ test('007–012 in order: a fresh DB and a populated 006 DB end with every xteam
   // Accounts first (a DB that skipped the integrations merge): the rebuild in 008 must not run.
   const skipped = new DatabaseSync(':memory:');
   migrate(skipped, { migrations: all.filter((m) => m.version !== 7 && m.version !== 8) });
-  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 13/);
+  assert.throws(() => migrate(skipped, { migrations: all }), /008_integrations rebuilds tables and cannot be applied after version 15/);
   assert.equal(skipped.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get().n, 0);
   assert.deepEqual(triggers(skipped), want);
   skipped.close();
