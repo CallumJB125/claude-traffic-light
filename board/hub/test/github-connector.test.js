@@ -369,16 +369,30 @@ test('N1: the card\'s verified PR takes the slot from a PR that is still open; a
   assert.equal(ctx.linked('pr', '990'), null);
 });
 
-test('N1: verified evidence in another repo, or a closed event, never relinks', async () => {
+test('N1: verified evidence in another repo never relinks; a closed-unmerged event never relinks', async () => {
   const ctx = stubCtx({ verified: { 'card-12': { number: 43, repo: 'acme/other' } } });
   await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
   const next = pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' });
   await run(ctx, 'pull_request', { action: 'opened', pull_request: next, repository: repo });
   assert.equal(ctx.linked('pr', '992'), null);
-  ctx.verified['card-12'] = { number: 43 };
   await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...next, state: 'closed', merged: true }, repository: repo });
-  assert.equal(ctx.linked('pr', '992'), null, 'a closed event is never a link');
+  assert.equal(ctx.linked('pr', '992'), null, 'evidence in another repo: a merge never relinks');
+  ctx.verified['card-12'] = { number: 43 };
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...next, state: 'closed', merged: false }, repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null, 'a closed-unmerged event is never a link');
   assert.ok(!ctx.calls.some((c) => c[0] === 'relink' || c[0] === 'system'));
+});
+
+test('N1: the merge of the card\'s verified PR takes the slot even if it opened before it was verified', async () => {
+  const ctx = stubCtx();
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: pr(), repository: repo });
+  const real = pr({ id: 992, number: 43, html_url: 'https://github.com/acme/app/pull/43' });
+  await run(ctx, 'pull_request', { action: 'opened', pull_request: real, repository: repo });
+  assert.equal(ctx.linked('pr', '992'), null, 'not verified yet: no relink');
+  ctx.verified['card-12'] = { number: 43 };
+  await run(ctx, 'pull_request', { action: 'closed', pull_request: { ...real, state: 'closed', merged: true, merged_by: { login: 'tonde' } }, repository: repo });
+  assert.equal(ctx.linked('pr', '992'), 'card-12');
+  assert.deepEqual(ctx.calls.at(-1).slice(0, 3), ['system', 'pr_merged', '992']);
 });
 
 test('N1: CONFLICT, NOT_FOUND and VALIDATION from s.relink are answers, other errors are not', async () => {

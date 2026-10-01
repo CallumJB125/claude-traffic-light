@@ -79,25 +79,29 @@ function boardCard(ctx, f) {
   return card && typeof base === 'string' && base ? { card, base } : null;
 }
 
-// The card a fact belongs to: its existing link, or (firstLink, only for a PR
+// The card a fact belongs to: its existing link, or (mode, only for a PR
 // from a board branch in the same repo into that branch's base) the card
 // whose run made that branch. A card that already has another PR gets this
 // one only as a relink, and only when this PR is the card's verified PR or
 // the old one has ended (closed or merged); the registry checks both again.
-function cardFor(ctx, f, firstLink) {
+// mode: 'first' may link or relink (an open PR); 'verified' may only relink
+// to the card's hub-verified PR (its merge: the PR may have opened before the
+// hub verified it, while another PR held the slot); otherwise existing links only.
+function cardFor(ctx, f, mode) {
   const linked = f.pr_id ? ctx.linked('pr', f.pr_id) : null;
   if (linked) return { card: linked, linked: true };
-  if (!firstLink) return null;
+  if (mode !== 'first' && mode !== 'verified') return null;
   const b = boardCard(ctx, f);
   if (!b || f.base_ref !== b.base) return null;
   const have = typeof ctx.linkedByCard === 'function' ? ctx.linkedByCard(b.card, 'pr') : null;
-  if (have == null) return { card: b.card, linked: false };
+  if (have == null) return mode === 'first' ? { card: b.card, linked: false } : null;
   if (typeof ctx.linkStatusFor !== 'function' || !f.url) return null;
   const v = typeof ctx.verifiedPr === 'function' ? ctx.verifiedPr(b.card) : null;
   // Evidence that names no repo is bound to the card's own repo, which only
   // the registry knows: it refuses the relink if f.url is another repo.
   const verified = !!v && v.number === f.number && (!v.repo || v.repo.toLowerCase() === String(f.repo).toLowerCase());
   const ended = ['closed', 'merged'].includes(ctx.linkStatusFor(b.card, 'pr')?.state);
+  if (mode === 'verified') return verified ? { card: b.card, linked: false, relink: have } : null;
   return verified || ended ? { card: b.card, linked: false, relink: have } : null;
 }
 
@@ -106,8 +110,8 @@ function cardFor(ctx, f, firstLink) {
 // make GitHub redeliver it again and again.
 const SLOT_ANSWERS = new Set(['CONFLICT', 'NOT_FOUND', 'VALIDATION']);
 
-async function linkAndStatus(ctx, f, status, firstLink = false) {
-  const hit = cardFor(ctx, f, firstLink);
+async function linkAndStatus(ctx, f, status, mode = null) {
+  const hit = cardFor(ctx, f, mode);
   if (!hit) return null;
   try {
     await ctx.act(hit.linked ? 'pr.status' : 'pr.link', { external_ref: f.pr_id, detail: { pr: f.number } }, async (s) => {
@@ -133,7 +137,7 @@ export async function apply(ctx, facts) {
         await linkAndStatus(ctx, f, {
           state: STATE(f), ...(HEAD_SHA.test(f.head_sha ?? '') ? { head_sha: f.head_sha } : {}),
           ...(f.review_requested ? { review: 'requested' } : {}), ...(f.checks_pending ? { checks: 'pending' } : {}),
-        }, f.open === true);
+        }, f.open === true ? 'first' : null);
         break;
       case 'pr.review': {
         const review = REVIEW[f.review];
@@ -143,7 +147,9 @@ export async function apply(ctx, facts) {
       case 'pr.merged':
       case 'pr.closed': {
         // Never a first link: a PR the board never saw open can't close a card.
-        const hit = await linkAndStatus(ctx, f, { state: STATE(f) });
+        // A merge may take the slot from another PR only if it is the card's
+        // hub-verified PR (the registry binds that to its number and repo).
+        const hit = await linkAndStatus(ctx, f, { state: STATE(f) }, f.kind === 'pr.merged' ? 'verified' : null);
         if (!hit) break;
         // Its base may have been edited since it was linked.
         const b = boardCard(ctx, f);
