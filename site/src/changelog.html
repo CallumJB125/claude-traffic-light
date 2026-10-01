@@ -18,14 +18,14 @@
         <time datetime="2026-10">October 2026</time>
         <h2>The first beta build</h2>
         <ul>
-          <li><strong>A new name.</strong> The app is now called {{brand.name}}. The first time it starts it copies your settings and data from the old app and points Claude Code's hooks at the new one. It keeps <code>.pre-plexiform</code> backups of what it changes, and it leaves the old app installed unless you remove it.</li>
+          <li><strong>A new name.</strong> The app is now called {{brand.name}}. The first time it starts it copies your settings and data from the old app (copied, not moved; the old app's data is left in place) and points Claude Code's hooks at the new one. It keeps <code>.pre-plexiform</code> backups of what it changes. It offers to move the old app to the Bin; the default is to keep it.</li>
           <li><strong>Team and Integrations before you sign in.</strong> You can see what they do first.</li>
           <li><strong>Sign in, then a team.</strong> Sign in with Google or GitHub, or with an email code, then create or join a team. Teams have roles and invites by link or code.</li>
-          <li><strong>GitHub, end to end.</strong> Connecting GitHub now completes, with an option to use an organisation-owned GitHub app.</li>
+          <li><strong>GitHub.</strong> GitHub can be connected from Integrations once you've joined a team, including as an organisation-owned app. GitHub's own rules decide where a private app can be installed; if it won't install on your organisation, tell us.</li>
           <li><strong>Backups and restore.</strong> Your local settings can be backed up and restored from Settings, Backups.</li>
           <li><strong>Updates in the app.</strong> {{brand.name}} can check for a newer version and install it.</li>
-          <li><strong>Detached sessions.</strong> A fix for detached sessions swapping terminal tabs when you jump to them.</li>
-          <li><strong>Known limits.</strong> Slack and Sentry are not in this build. The beta is unsigned, so macOS may ask you to use the keychain; choose Always Allow. Email codes work only for verified addresses for now, and the Windows and Linux builds have not been tried on real machines yet.</li>
+          <li><strong>Detached sessions.</strong> Jumping to a session running in a detached tmux session no longer switches the terminal tab you are on. If the session's terminal can't be found, {{brand.name}} tells you and shows the command to attach.</li>
+          <li><strong>Known limits.</strong> Slack and Sentry are not in this build. The beta is unsigned, so macOS may ask you to use the keychain; choose Always Allow. Signing in by email needs your address verified until we move out of the email sandbox, and the Windows and Linux builds have not been tried on real machines yet.</li>
         </ul>
       </article>
       <article id="2026-09-30">
