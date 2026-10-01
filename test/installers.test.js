@@ -251,7 +251,7 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.equal(config.nsis.include, 'build/installer.nsh');
   const nsh = fs.readFileSync(path.join(__dirname, '..', config.nsis.include), 'utf8');
   // customUnInstall runs after $INSTDIR is deleted; customRemoveFiles runs before.
-  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR\s*!macroend/);
+  assert.match(nsh, /!macro customRemoveFiles[\s\S]*\$\{ifNot\} \$\{isUpdated\}\s*[\s\S]*--uninstall-hooks[\s\S]*RMDir \/r \$INSTDIR[\s\S]*!macroend/);
   assert.ok(!/!macro customUnInstall\b/.test(nsh));
   const at = config.deb.fpm.indexOf('--before-remove');
   assert.ok(at >= 0);
@@ -407,7 +407,11 @@ test('installer.nsh: the copied removal block is exactly electron-builder\'s def
   const norm = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
   const def = /!ifmacrodef customRemoveFiles\s*\n\s*!insertmacro customRemoveFiles\s*\n\s*!else\n([\s\S]*?)\n\s*!endif/.exec(tpl);
   assert.ok(def, 'electron-builder still has a default customRemoveFiles block');
-  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)!macroend/.exec(ours);
+  const start = "; ---- electron-builder's default block from here ----";
+  const end = "; ---- electron-builder's default block ends here ----";
+  assert.equal(ours.split(start).length, 2, 'one complete copied block starts');
+  assert.equal(ours.split(end).length, 2, 'one complete copied block ends');
+  const copy = /; ---- electron-builder's default block from here ----\n([\s\S]*?)\n\s*; ---- electron-builder's default block ends here ----/.exec(ours);
   assert.ok(copy);
   assert.equal(norm(copy[1]), norm(def[1]));
   assert.match(ours, /nsExec::Exec \/TIMEOUT=\d+ '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --uninstall-hooks'/);
