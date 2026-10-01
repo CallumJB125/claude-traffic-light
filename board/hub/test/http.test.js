@@ -94,8 +94,8 @@ test('request_id replay, PATCH version conflict, column moves only without a run
     const noRepo = await h.api(alice, 'POST', url, { request_id: randomUUID(), title: 'no repo' });
     const nr = await h.action(alice, noRepo.body.card.id, 'dispatch');
     assert.equal(nr.body.error.code, 'NO_REPO');
-    const codex = await h.action(alice, noRepo.body.card.id, 'dispatch', { backend: 'codex_cli' });
-    assert.equal(codex.body.error.code, 'VALIDATION');
+    const codex = await h.action(alice, noRepo.body.card.id, 'dispatch', { backend: 'codex_cli', budget_usd: null });
+    assert.equal(codex.body.error.code, 'NO_REPO');
 
     await h.api(alice, 'POST', '/api/members', { request_id: randomUUID(), github_login: 'vic', github_id: -9, email: 'vic@dev.local', role: 'viewer' });
     const vic = await h.login('vic');
