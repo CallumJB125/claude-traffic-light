@@ -111,7 +111,7 @@ Raspberry Pi 5 (arm64). Node 22 prints an `ExperimentalWarning` for SQLite; that
 
 ### Request limits (D105)
 
-Fixed, no environment variable: the whole request within 30 s, its headers within 15 s, keep-alive idle 5 s; on `/api` the credential is checked before any body is read, a body is at most 1 MiB on card routes and 64 KiB elsewhere, and must arrive within 20 s (408). The webhook ingress keeps its own limits (`BOARD_WEBHOOK_READ_MS`). Tests override the numbers through `config.requestLimits` (`hub/http.js` `REQUEST_LIMITS`).
+Fixed, no environment variable: the whole request within 30 s, its headers within 15 s, keep-alive idle 120 s (longer than cloudflared's 90 s idle pool, so the tunnel always closes an idle origin connection first and never reuses one the hub is closing); an answer given before a body was read says `Connection: close`; on `/api` the credential is checked before any body is read, a body is at most 1 MiB on card routes and 64 KiB elsewhere, and must arrive within 20 s (408). The webhook ingress keeps its own limits (`BOARD_WEBHOOK_READ_MS`). Tests override the numbers through `config.requestLimits` (`hub/http.js` `REQUEST_LIMITS`).
 
 ## Cloudflare Access
 

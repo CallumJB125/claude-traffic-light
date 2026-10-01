@@ -56,14 +56,18 @@ function bytesAtAnswer(app) {
   return seen;
 }
 
-test('the server: request 30 s, headers 15 s, keep-alive 5 s by default', async () => {
+test('the server: request 30 s, headers 15 s, keep-alive 120 s (above cloudflared\'s 90 s idle pool) by default', async () => {
   const h = await startHub();
   try {
     assert.equal(REQUEST_LIMITS.requestTimeoutMs, 30_000);
     assert.equal(REQUEST_LIMITS.headersTimeoutMs, 15_000);
+    assert.equal(REQUEST_LIMITS.keepAliveTimeoutMs, 120_000);
     assert.equal(h.app.server.requestTimeout, 30_000);
     assert.equal(h.app.server.headersTimeout, 15_000);
-    assert.equal(h.app.server.keepAliveTimeout, 5_000);
+    assert.equal(h.app.server.keepAliveTimeout, 120_000);
+    const r = await fetch(`${h.base}/api/health`);
+    await r.text();
+    assert.match(r.headers.get('keep-alive') ?? '', /timeout=120\b/);
     assert.equal(REQUEST_LIMITS.smallBodyMax, 64 * KIB);
     assert.ok(REQUEST_LIMITS.bodyDeadlineMs > 0 && REQUEST_LIMITS.bodyDeadlineMs < REQUEST_LIMITS.requestTimeoutMs);
   } finally { await h.close(); }
@@ -236,6 +240,24 @@ test('a request whose body was read (or that has none) keeps its keep-alive conn
     c.write(reqHead(h.base, 'GET', '/api/health'));
     assert.ok(await c.until(() => c.answers() === 3), 'and serves the next request');
     assert.match(c.st.data.slice(c.st.data.lastIndexOf('HTTP/1.1')), /^HTTP\/1\.1 200/);
+    c.end();
+  } finally { await h.close(); }
+});
+
+test('an idle keep-alive connection is not cut by the headers or request timeout, only by the keep-alive timeout', async () => {
+  const h = await startHub({ config: { requestLimits: { headersTimeoutMs: 300, requestTimeoutMs: 600, keepAliveTimeoutMs: 2_500, checkIntervalMs: 50 } } });
+  try {
+    const c = conn(h.base);
+    await c.ready;
+    c.write(reqHead(h.base, 'GET', '/api/health'));
+    assert.ok(await c.until(() => c.answers() === 1), c.st.data);
+    // Idle for longer than both request deadlines: still pooled, and serves the next request.
+    await new Promise((r) => setTimeout(r, 1_200));
+    assert.equal(c.st.closed, false, 'open after 1.2 s idle');
+    c.write(reqHead(h.base, 'GET', '/api/health'));
+    assert.ok(await c.until(() => c.answers() === 2), c.st.data);
+    // Past the keep-alive timeout the hub closes it (cloudflared's pool drops idle origin connections first).
+    assert.ok(await c.until(() => c.st.closed, 5_000), 'closed after the keep-alive timeout');
     c.end();
   } finally { await h.close(); }
 });

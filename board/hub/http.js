@@ -24,8 +24,13 @@ const MAX_BODY = 1024 * 1024;
 // Every request's ceilings (D105); config.requestLimits overrides them (tests, no env).
 // The body deadline runs from when the API starts reading and ends before the
 // server's own request timeout, so a slow body gets the hub's 408 and a cut socket.
+// Keep-alive outlasts cloudflared's idle origin pool (90 s): the proxy, the only
+// client on loopback, always drops an idle connection before the hub does, so
+// it never sends a request down a socket the hub is closing (a 502). Node runs
+// the headers/request timeouts only while a request is in progress, never on
+// an idle connection, so they stay short.
 export const REQUEST_LIMITS = Object.freeze({
-  requestTimeoutMs: 30_000, headersTimeoutMs: 15_000, keepAliveTimeoutMs: 5_000, checkIntervalMs: 1_000,
+  requestTimeoutMs: 30_000, headersTimeoutMs: 15_000, keepAliveTimeoutMs: 120_000, checkIntervalMs: 1_000,
   bodyDeadlineMs: 20_000, smallBodyMax: 64 * 1024,
 });
 // Card bodies (create, patch, actions, comments, permission answers) keep 1 MiB; every other API body is capped at smallBodyMax.
