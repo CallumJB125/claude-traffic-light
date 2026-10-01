@@ -3,9 +3,11 @@
 // the landing site) reads from here, so a rename is an edit to this file.
 // Plain script for the renderers (window.Brand) and CommonJS for Node.
 //
-// Stage 1 of the rename (see .omc/plans/rename-plexiform.md): the user-facing
-// name only. Bundle ids, data directories, the CLI and MCP tool names are
-// Stage 2 and deliberately NOT here.
+// The installed app's identity (productName and appId in package.json) is
+// the same name; test/rename-identity.test.js keeps them in step. What the app
+// was called before, and how it moves an older install across, lives in
+// src/rename-migration.js. The ~/.claude-traffic-light data folder, the CLI
+// and the MCP server's name are not renamed yet.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Brand = factory();
@@ -19,6 +21,8 @@
 
   const brand = Object.freeze({
     name: 'Plexiform',
+    // macOS bundle id, Windows AppUserModelID and the installer's appId
+    appId: 'dev.plexiform.app',
     // where a shorter label is wanted (tray tooltip, a narrow title bar)
     shortName: 'Plexiform',
     tagline: 'One place for every AI coding agent you run.',

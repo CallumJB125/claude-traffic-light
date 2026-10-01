@@ -44,7 +44,7 @@ const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 function wrapperText(rt) {
   if (isWin(rt)) return `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${rt.execPath}" %*\r\n`;
-  return `#!/bin/sh\n# Claude Buddy hook runner: the app's own binary, running as Node.\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(rt.execPath)} "$@"\n`;
+  return `#!/bin/sh\n# Plexiform hook runner: the app's own binary, running as Node.\nELECTRON_RUN_AS_NODE=1 exec ${shQuote(rt.execPath)} "$@"\n`;
 }
 
 // Written only when missing or different; returns the path, or null when the

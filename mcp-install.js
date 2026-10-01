@@ -65,7 +65,7 @@ function install({ home, entry }) {
   return edit(home, (data) => {
     const servers = data.mcpServers && typeof data.mcpServers === 'object' ? data.mcpServers : {};
     const cur = servers[NAME];
-    if (cur && !isOurs(cur)) throw new Error(`an MCP server named "${NAME}" already exists and isn't Claude Buddy's`);
+    if (cur && !isOurs(cur)) throw new Error(`an MCP server named "${NAME}" already exists and isn't Plexiform's`);
     if (JSON.stringify(cur) === JSON.stringify(entry)) return { changed: false };
     data.mcpServers = { ...servers, [NAME]: entry };
     return { changed: true };

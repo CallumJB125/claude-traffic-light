@@ -75,7 +75,7 @@ if (DEMO === 'agents') {
   const since = new Date().toISOString();
   const agent = (id, name, kind, status) => ({ id, name, kind, status, since, parent: 'demo' });
   writeJsonAtomic(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions', 'demo-agents.json'), {
-    sessionId: 'demo', host: 'demo', cwd: '/demo/claude-buddy', signal: 'tool-use', tool: 'Agent',
+    sessionId: 'demo', host: 'demo', cwd: '/demo/plexiform', signal: 'tool-use', tool: 'Agent',
     workingSince: since, tasks: { created: 0, done: 0 }, mode: 'ralph', iteration: 7,
     agents: [
       agent('a1', 'executor', 'subagent', 'working'),
@@ -91,8 +91,8 @@ if (DEMO === 'agents') {
 // `--demo knock`: walk to the terminal's Dock icon and knock, once, then quit.
 if (DEMO === 'knock') {
   // Must NOT be the same directory as the demo's Chromium userData
-  // (claude-buddy-demo-knock) — sharing it wedges the app before `ready`.
-  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'claude-buddy-knock-home');
+  // (plexiform-demo-knock) — sharing it wedges the app before `ready`.
+  process.env.CLAUDE_TRAFFIC_LIGHT_HOME = path.join(os.tmpdir(), 'plexiform-knock-home');
   process.env.CLAUDE_TRAFFIC_LIGHT_PORT = '47181';
   fs.rmSync(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, { recursive: true, force: true });
   fs.mkdirSync(path.join(process.env.CLAUDE_TRAFFIC_LIGHT_HOME, 'sessions'), { recursive: true });
@@ -1049,7 +1049,7 @@ function createSettingsWindow() {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    title: 'Claude Buddy Preferences',
+    title: `${Brand.name} Preferences`,
     webPreferences: {
       spellcheck: false,
       preload: path.join(__dirname, 'settings-preload.js'),
@@ -2362,7 +2362,7 @@ function createTray() {
   refreshTrayMenu = rebuildTrayMenu;
   if (IS_DEV_RUN && !app.isPackaged) global.__buddyTrayMenu = trayMenu;
   if (!tray) { if (!win) createWindow(); win.showInactive(); return; }
-  tray.setToolTip('Claude Buddy');
+  tray.setToolTip(Brand.shortName);
   tray.setContextMenu(trayMenu);
   updateTrayMode();
 }
@@ -2595,7 +2595,7 @@ ipcMain.handle('export-stats', async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
-  const name = `claude-buddy-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
+  const name = `plexiform-stats-${Stats.dayKey(Date.now())}-${n}d.${csv ? 'csv' : 'json'}`;
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export stats',
     defaultPath: path.join(app.getPath('documents'), name),
@@ -3352,7 +3352,7 @@ ipcMain.handle('import-rules', async () => {
 // Dev runs register into a sandbox HOME.
 function mcpOpts() {
   return {
-    home: IS_DEV_RUN ? path.join(os.tmpdir(), 'claude-buddy-mcp-dev-home') : os.homedir(),
+    home: IS_DEV_RUN ? path.join(os.tmpdir(), 'plexiform-mcp-dev-home') : os.homedir(),
     entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
   };
 }
@@ -3554,7 +3554,7 @@ ipcMain.handle('cameos-remove', (_e, id) => {
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
 ipcMain.handle('setup-export', async (e) => {
-  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'claude-buddy-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'plexiform-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {
     const bundle = Setup.exportSetup({ config: loadConfig(), cameoIndex: Cameos.loadIndex(CAMEO_DIR), readPng: readCameoPng });
@@ -3632,7 +3632,7 @@ function maybePlayAlertSound() {
 // so the new process exited having printed nothing at all. That is the "the
 // test just does nothing" failure. A per-pid profile cannot collide, cannot
 // inherit a stale lock, and is deleted on the way out.
-const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `claude-buddy-dev-${process.pid}`) : null;
+const DEV_PROFILE = IS_DEV_RUN ? path.join(os.tmpdir(), `plexiform-dev-${process.pid}`) : null;
 if (DEV_PROFILE) {
   app.setPath('userData', DEV_PROFILE);
   const sweep = () => { try { fs.rmSync(DEV_PROFILE, { recursive: true, force: true }); } catch { /* already gone */ } };
@@ -3641,7 +3641,7 @@ if (DEV_PROFILE) {
   // Sweep profiles orphaned by a hard kill, so /tmp doesn't fill up.
   try {
     for (const d of fs.readdirSync(os.tmpdir())) {
-      const m = /^claude-buddy-dev-(\d+)$/.exec(d);
+      const m = /^plexiform-dev-(\d+)$/.exec(d);
       if (!m || Number(m[1]) === process.pid) continue;
       try { process.kill(Number(m[1]), 0); continue; } catch { /* that pid is gone */ }
       fs.rmSync(path.join(os.tmpdir(), d), { recursive: true, force: true });
@@ -3878,7 +3878,7 @@ app.whenReady().then(() => {
       // stderr, and a file: a GUI Electron process does not reliably deliver
       // stdout to a redirected shell.
       console.error('[demo knock]', JSON.stringify(report, null, 2));
-      try { fs.writeFileSync(path.join(os.tmpdir(), 'claude-buddy-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
+      try { fs.writeFileSync(path.join(os.tmpdir(), 'plexiform-knock-demo.json'), JSON.stringify(report, null, 2)); } catch { /* ignore */ }
       setTimeout(() => app.quit(), 2500);
     }, 2000);
   }

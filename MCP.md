@@ -1,18 +1,18 @@
 # Claude integration (MCP)
 
-Claude Buddy ships an MCP server, `mcp-server.js`, so any Claude Code session can ask what the widget is showing and why. You don't need to read `~/.claude-traffic-light/sessions/*.json` or `app.log` by hand.
+Plexiform ships an MCP server, `mcp-server.js`, so any Claude Code session can ask what the widget is showing and why. You don't need to read `~/.claude-traffic-light/sessions/*.json` or `app.log` by hand.
 
 ## Turning it on
 
-**Preferences → Claude integration → Enable Claude integration.** This writes one entry, `claude-buddy`, under the top-level `mcpServers` key of `~/.claude.json`. That is Claude Code's user scope, which every project sees ([docs](https://code.claude.com/docs/en/mcp)). Restart any open sessions afterwards. **Disable** removes that one entry. Nothing else in the file is touched.
+**Preferences → Claude integration → Enable Claude integration.** This writes one entry, `claude-buddy` (the server keeps its name from before the rename, so Claude's tool names stay the same), under the top-level `mcpServers` key of `~/.claude.json`. That is Claude Code's user scope, which every project sees ([docs](https://code.claude.com/docs/en/mcp)). Restart any open sessions afterwards. **Disable** removes that one entry. Nothing else in the file is touched.
 
 The packaged app registers itself like this:
 
 ```json
 "claude-buddy": {
   "type": "stdio",
-  "command": "/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy",
-  "args": ["/Applications/Claude Buddy.app/Contents/Resources/app.asar/mcp-server.js"],
+  "command": "/Applications/Plexiform.app/Contents/MacOS/Plexiform",
+  "args": ["/Applications/Plexiform.app/Contents/Resources/app.asar/mcp-server.js"],
   "env": { "ELECTRON_RUN_AS_NODE": "1" }
 }
 ```

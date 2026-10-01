@@ -250,7 +250,7 @@ function answer(intent, ctx = {}) {
 // nothing saved, no auto-memory, a hard spend cap. The question goes in on
 // stdin, never argv. Never another provider or key.
 const CLAUDE_MAX_BUDGET_USD = '0.05';
-const CLAUDE_SYSTEM = 'You are Claude Buddy, a desk widget that watches the user\'s Claude Code sessions. Answer the spoken question in at most two short sentences, plain words for text-to-speech, using only the JSON snapshot given. If the snapshot cannot answer it, say so.';
+const CLAUDE_SYSTEM = 'You are Plexiform, a desk widget that watches the user\'s Claude Code sessions. Answer the spoken question in at most two short sentences, plain words for text-to-speech, using only the JSON snapshot given. If the snapshot cannot answer it, say so.';
 function claudeArgs() {
   return ['-p', '--model', 'haiku', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--no-session-persistence', '--max-budget-usd', CLAUDE_MAX_BUDGET_USD, '--output-format', 'text', '--system-prompt', CLAUDE_SYSTEM];
 }

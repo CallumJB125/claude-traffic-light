@@ -144,13 +144,13 @@ export function buildEnv(parentEnv, { runDir, socket, supervisorPid, supervisorL
     BOARD_SUPERVISOR_PID: String(supervisorPid),
     BOARD_SUPERVISOR_LSTART: supervisorLstart ?? '',
   });
-  // Claude Buddy's ownership marker (hooks/owned.js): only set when a launch
+  // Plexiform's ownership marker (hooks/owned.js): only set when a launch
   // record was written for it, so the id always has a record behind it.
   if (buddyOwned) env.BUDDY_OWNED = buddyOwned;
   return env;
 }
 
-// Claude Buddy's home, when Buddy is installed on this machine.
+// Plexiform's home, when Plexiform is installed on this machine.
 export function buddyHomeOf(env) {
   return env.CLAUDE_TRAFFIC_LIGHT_HOME || (env.HOME ? path.join(env.HOME, '.claude-traffic-light') : null);
 }

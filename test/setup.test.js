@@ -96,10 +96,10 @@ test('config migration: an old config with router and delegation keys loads with
 test('import rejects what is not a setup', () => {
   const err = (t) => S.readSetup(t).error;
   assert.match(err('not json'), /not valid JSON/);
-  assert.match(err('[1,2]'), /Not a Claude Buddy/);
-  assert.match(err('{"hello":1}'), /Not a Claude Buddy/);
+  assert.match(err('[1,2]'), /Not a Plexiform/);
+  assert.match(err('{"hello":1}'), /Not a Plexiform/);
   assert.match(err(JSON.stringify({ kind: S.KIND, config: {} })), /no version/);
-  assert.match(err(JSON.stringify({ kind: S.KIND, v: S.SETUP_VERSION + 1, config: {} })), /newer Claude Buddy/);
+  assert.match(err(JSON.stringify({ kind: S.KIND, v: S.SETUP_VERSION + 1, config: {} })), /newer Plexiform/);
   assert.match(err(' '.repeat(S.MAX_BYTES + 1)), /over 32 MB/);
   assert.match(err(undefined), /Not a setup/);
 });

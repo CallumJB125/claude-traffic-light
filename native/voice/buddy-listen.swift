@@ -1,4 +1,4 @@
-// buddy-listen: push-to-talk speech-to-text for Claude Buddy, on device only.
+// buddy-listen: push-to-talk speech-to-text for Plexiform, on device only.
 //
 //   buddy-listen status                 permission + on-device support, never prompts
 //   buddy-listen listen [--hold-key N] [--max-ms MS] [--locale ID]

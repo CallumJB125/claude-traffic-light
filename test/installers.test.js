@@ -13,9 +13,9 @@ const pkg = require('../package.json');
 const R2 = require('../scripts/release-r2.js');
 const Smoke = require('../src/smoke.js');
 
-test('installer names say the brand; productName and appId wait for Stage 2', () => {
-  assert.equal(config.productName, pkg.build.productName);
-  assert.equal(config.appId, 'com.callumbaker.claude-buddy');
+test('installer names say the brand, and so do productName and appId', () => {
+  assert.equal(config.productName, Brand.name);
+  assert.equal(config.appId, Brand.appId);
   assert.match(config.artifactName, new RegExp(`^${Brand.name}-\\$\\{version\\}-\\$\\{os\\}-\\$\\{arch\\}\\.\\$\\{ext\\}$`));
   assert.equal(config.nsis.shortcutName, Brand.name);
   assert.equal(config.nsis.uninstallDisplayName, Brand.name);

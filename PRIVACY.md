@@ -56,7 +56,7 @@ Everything below lives in `~/.claude-traffic-light` on your computer:
 - `bin/buddy-hook` (`bin\buddy-hook.cmd` on Windows): a small launcher that Claude Code's hooks call.
 - `window-bounds.json`, `manual-override.json`, and first-run marker files.
 
-Electron (the framework Plexiform is built on) also keeps its own app data in `~/Library/Application Support/Claude Buddy` on macOS and `%APPDATA%\Claude Buddy` on Windows. That is browser-style housekeeping (cache, window state), not session data.
+Electron (the framework Plexiform is built on) also keeps its own app data in `~/Library/Application Support/Plexiform` on macOS, `%APPDATA%\Plexiform` on Windows and `~/.config/Plexiform` on Linux. That is browser-style housekeeping (cache, window state) plus the team sign-in, not session data. Before the rename that folder was called `claude-buddy`: the first time Plexiform starts it copies that folder across, leaves the original where it was, and leaves out the sign-in, which only the old app can read (you sign in again).
 
 ## What changes on your computer
 
@@ -177,7 +177,7 @@ Plexiform never deletes your settings for you (it only prunes old backups, as ab
 2. Remove the hooks it added to Claude Code (in `~/.claude/settings.json`, or `%USERPROFILE%\.claude\settings.json` on Windows), and the `claude-buddy` entry in `~/.claude.json` if you turned on the Claude integration. Hooks for Cursor, Codex and Gemini, if connected, are in those tools' own config.
 3. Delete the folder `~/.claude-traffic-light` (`%USERPROFILE%\.claude-traffic-light` on Windows), which includes `bin/buddy-hook`.
 4. Delete the backup folder (`~/Library/Application Support/Plexiform Backups`, `%APPDATA%\Plexiform Backups` on Windows) if you want your settings gone for good, since deleting step 3's folder leaves it behind on purpose.
-5. Delete Electron's app data: `~/Library/Application Support/Claude Buddy` on macOS, `%APPDATA%\Claude Buddy` on Windows.
+5. Delete Electron's app data: `~/Library/Application Support/Plexiform` on macOS, `%APPDATA%\Plexiform` on Windows, `~/.config/Plexiform` on Linux, and the same folders named `claude-buddy` if you used the app before the rename.
 6. Uninstall the app the usual way for your system: on macOS drag Plexiform from Applications to the Bin, on Windows use Settings → Apps. Turn off "Open at login" first if you enabled it.
 
 ## Your rights

@@ -5,7 +5,9 @@
 // invariants.
 const Rules = require('./rules.js');
 const Cameos = require('./cameos.js');
+const Brand = require('./brand.js');
 
+// The file format's own tag, from before the rename: exported setups carry it.
 const KIND = 'claude-buddy-setup';
 // Bump with an entry in UPGRADES when the bundle's shape changes. Rules carry
 // their own version (Rules.RULES_VERSION) and migrate through migrateRules.
@@ -122,13 +124,13 @@ function readSetup(text) {
   if (Buffer.byteLength(text) > MAX_BYTES) return { error: 'That file is over 32 MB — too big to be a setup.' };
   let raw;
   try { raw = JSON.parse(text); } catch { return { error: 'That file is not valid JSON.' }; }
-  if (!isObj(raw)) return { error: 'Not a Claude Buddy setup file.' };
+  if (!isObj(raw)) return { error: `Not a ${Brand.name} setup file.` };
   let from;
   if (raw.kind === KIND) from = Number.isInteger(raw.v) && raw.v >= 1 ? raw.v : null;
   else if (Array.isArray(raw.rules)) from = 0;
-  else return { error: 'Not a Claude Buddy setup file.' };
+  else return { error: `Not a ${Brand.name} setup file.` };
   if (from === null) return { error: 'That setup file has no version.' };
-  if (from > SETUP_VERSION) return { error: 'That setup was made by a newer Claude Buddy — update to import it.' };
+  if (from > SETUP_VERSION) return { error: `That setup was made by a newer ${Brand.name} — update to import it.` };
   let bundle = raw;
   for (let v = from; v < SETUP_VERSION; v += 1) bundle = UPGRADES[v](bundle);
   const rulesVersion = Number.isFinite(Number(bundle.rulesVersion)) ? Number(bundle.rulesVersion) : 0;

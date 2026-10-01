@@ -1,6 +1,6 @@
-# Claude Buddy
+# Plexiform
 
-Formerly *Claude Traffic Light*. A tiny pixel-Claude widget that floats on
+Formerly *Claude Buddy*, and before that *Claude Traffic Light*. A tiny pixel-Claude widget that floats on
 top of every app on your Mac and holds up a traffic-light sign showing what Claude Code is doing **across
 every live session at once**:
 
@@ -26,10 +26,10 @@ After a deal he walks off-screen for a hammock, strings it up, lights the joint 
 
 ```bash
 npm install
-npm run dist        # builds dist/mac-arm64/Claude Buddy.app
+npm run dist        # builds dist/mac-arm64/Plexiform.app
 ```
 
-Copy `dist/mac-arm64/Claude Buddy.app` to `/Applications` and double
+Copy `dist/mac-arm64/Plexiform.app` to `/Applications` and double
 click it. It's unsigned (no Apple Developer ID), so the first launch needs
 right-click → Open once to bypass Gatekeeper.
 
@@ -394,7 +394,7 @@ Right-click the tray icon (top menu bar) for:
 
 `npm run test:visual` drives the real Electron app with Playwright (`test-visual/`) and compares screenshots of the widget in each lamp state (idle/off, working/green, your-turn/amber, blocked/red), the widget under reduced motion, and the Lights, Settings and Help windows. `npm run test:visual:update` regenerates the baselines. `npm test` (node --test) does not touch these.
 
-Each run is hermetic: a temp `CLAUDE_TRAFFIC_LIGHT_HOME`, a free signal port and a temp Electron userData (via `--demo visual`, a dev-run flag), so it never reads the real `~/.claude-traffic-light` and coexists with an installed, running Claude Buddy.
+Each run is hermetic: a temp `CLAUDE_TRAFFIC_LIGHT_HOME`, a free signal port and a temp Electron userData (via `--demo visual`, a dev-run flag), so it never reads the real `~/.claude-traffic-light` and coexists with an installed, running Plexiform.
 
 Baselines in `test-visual/__screenshots__/` are macOS-rendered and carry a `-darwin` suffix; other platforms have no baselines and need their own `test:visual:update`. Regenerate them on the same display scale you compare on.
 

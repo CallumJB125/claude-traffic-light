@@ -279,7 +279,7 @@ test('mcp-install: creates the file when missing; never clobbers an unparsable f
   const taken = fs.mkdtempSync(path.join(os.tmpdir(), 'ctl-mcp-home-'));
   const theirs = { mcpServers: { 'claude-buddy': { command: 'someone-else' } } };
   fs.writeFileSync(path.join(taken, '.claude.json'), JSON.stringify(theirs));
-  assert.throws(() => McpInstall.install({ home: taken, entry }), /isn't Claude Buddy's/);
+  assert.throws(() => McpInstall.install({ home: taken, entry }), /isn't Plexiform's/);
   assert.equal(McpInstall.uninstall({ home: taken }).changed, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(taken, '.claude.json'), 'utf8')), theirs);
 });

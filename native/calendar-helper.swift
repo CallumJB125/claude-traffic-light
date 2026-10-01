@@ -1,7 +1,7 @@
 // buddy-calendar: the one thing Electron can't do, reading EventKit.
 //
 //   buddy-calendar status                 current permission, never prompts
-//   buddy-calendar request                asks once (the system prompt names Claude Buddy)
+//   buddy-calendar request                asks once (the system prompt names Plexiform)
 //   buddy-calendar events FROM TO [--titles]
 //                                         events overlapping [FROM, TO] (epoch ms)
 //
