@@ -150,6 +150,14 @@ const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
 
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
 
+// First launch after the rename from Claude Buddy: copy the old userData
+// across before anything opens it (the instance lock, safeStorage, the
+// updater, the team window). Only for the installed app in its own folder:
+// not dev runs, a checkout, or a --user-data-dir run such as the smoke test.
+const RenameMigration = require('./src/rename-migration.js');
+const RENAME_MIGRATES = app.isPackaged && !IS_DEV_RUN && app.getPath('userData') === path.join(app.getPath('appData'), app.getName());
+if (RENAME_MIGRATES) RenameMigration.copyUserData({ appData: app.getPath('appData'), userData: app.getPath('userData') });
+
 const DEFAULT_CONFIG = {
   workingStaleMinutes: 6,
   waitingStaleHours: 4,
@@ -3696,6 +3704,26 @@ if (!gotLock) {
   });
 }
 
+// src/rename-migration.js, after ready; each step runs once.
+function renameFollowUp() {
+  const home = os.homedir();
+  const psArgs = process.platform === 'darwin' ? ['-axo', 'pid=,comm='] : ['-eo', 'pid=,args='];
+  return RenameMigration.runFollowUp({
+    userData: app.getPath('userData'),
+    steps: {
+      'quit-old': () => { RenameMigration.quitOldInstance({ platform: process.platform, listProcesses: () => RenameMigration.parsePs(require('child_process').execFileSync('ps', psArgs, { encoding: 'utf8' })) }); },
+      // From a translocated copy the hooks would point at a temporary path: try again next launch.
+      hooks: () => { if (!AUTO_INSTALL_HOOKS) return false; RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }); },
+      login: () => { RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }); },
+      'remove-old-app': () => RenameMigration.offerRemoveOldApp({
+        platform: process.platform, home, name: Brand.name,
+        showDialog: (opts) => { app.focus({ steal: true }); return dialog.showMessageBox(opts); },
+        trashItem: (p) => shell.trashItem(p),
+      }),
+    },
+  });
+}
+
 app.whenReady().then(() => {
   if (DEMO || DIAG) console.error('[startup] ready');
   if (process.platform === 'darwin') app.dock.hide();
@@ -3704,6 +3732,10 @@ app.whenReady().then(() => {
   // An AppImage's copies for older versions go only once this is the one running instance.
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
+  // The rest of the rename migration, once, before the hook check below: a
+  // running old copy is asked to quit and every agent config already points
+  // here. Its last step (offer to bin the old app) waits on the person.
+  if (RENAME_MIGRATES && gotLock) renameFollowUp().catch((err) => console.warn('[rename]', err.message));
   // Dev runs share the machine with a real install: they must not rewrite the
   // user's hooks or claim Open at Login out from under it.
   if (AUTO_INSTALL_HOOKS && !areHooksInstalled()) installHooks();
