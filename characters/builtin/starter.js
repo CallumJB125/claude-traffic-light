@@ -10,35 +10,13 @@
 // Original designs, not any company's mascot.
 (function (root, factory) {
   const C = typeof module === 'object' && module.exports ? require('../contract.js') : root.BuddyCharacters;
-  const defs = factory();
+  const defs = factory(C);
   for (const d of defs) C.register(d, { builtin: true });
   C.sealBuiltins();
   if (typeof module === 'object' && module.exports) module.exports = defs;
-})(typeof self !== 'undefined' ? self : this, function () {
-  const U = 2;
-  // rows of letters -> merged rects. '.' is empty; a palette entry is a colour,
-  // or [colour, class] for a part the rig animates (a leg, a tentacle). The
-  // left edge is centred on x = 32 for a drawing `cols` pixels wide.
-  function px(rows, pal, oy, cols = rows[0].length) {
-    const ox = 32 - (cols * U) / 2;
-    const out = [];
-    rows.forEach((row, r) => {
-      if (row.length !== cols) throw new Error(`pixel row ${r} is ${row.length} wide, expected ${cols}: ${row}`);
-      let c = 0;
-      while (c < cols) {
-        const ch = row[c];
-        if (ch === '.') { c += 1; continue; }
-        let e = c;
-        while (e < cols && row[e] === ch) e += 1;
-        const p = pal[ch];
-        if (!p) throw new Error(`no colour for "${ch}" in row ${r}`);
-        const [fill, cls] = Array.isArray(p) ? p : [p];
-        out.push(`<rect x="${ox + c * U}" y="${oy + r * U}" width="${(e - c) * U}" height="${U}" fill="${fill}"${cls ? ` class="${cls}"` : ''} />`);
-        c = e;
-      }
-    });
-    return `<g shape-rendering="crispEdges">${out.join('')}</g>`;
-  }
+})(typeof self !== 'undefined' ? self : this, function (C) {
+  const { px: pixels } = C;
+  const px = (rows, pal, oy) => pixels(rows, pal, oy);
 
   // ── rubber duck: no hands (the sign floats), the bill is the mouth, waddles ──
   const DUCK = [
