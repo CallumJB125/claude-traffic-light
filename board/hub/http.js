@@ -371,9 +371,10 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // browser tab has it already; the desktop app's connect window (its own
     // session) gets `bind` through the window name and sets it itself.
     const setBind = (res, { name, value, path, secure, max_age_s }) => res.setHeader('set-cookie', `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${max_age_s}${secure ? '; Secure' : ''}`);
-    route('POST', '/api/integrations/:provider/start', ({ member, params, req, res }) => {
+    // body.input (D42 addendum "start inputs") goes to the registry only: never logged or kept.
+    route('POST', '/api/integrations/:provider/start', ({ member, params, body, req, res }) => {
       api.requireAdmin(member);
-      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req) });
+      const out = integrations.oauthStart({ member, provider: params.provider, publicUrl: publicBase(req), input: body.input });
       setBind(res, out.cookie);
       return out.form ? { form: out.form, bind: out.bind } : { url: out.url, bind: out.bind };
     });

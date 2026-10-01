@@ -20,8 +20,8 @@
 //     authorizeUrl({ state, redirectUri, webhookUrl, provider, config }) → string,   // oauth/app_install: a GET redirect
 //     // or, app_install only, a POSTed form (GitHub's App-manifest flow):
 //     formHost: 'github.com',                                          // one of `hosts`; the only host the form may post to
-//     manifestForm({ state, redirectUri, webhookUrl, provider, config }) → { action: 'https://<formHost>/…', fields: {name: string} },
-//     async exchange({ query, redirectUri, webhookUrl, provider, config, secrets, fetch }) →   // oauth/app_install callback
+//     manifestForm({ state, redirectUri, webhookUrl, provider, config, input }) → { action: 'https://<formHost>/…', fields: {name: string} },
+//     async exchange({ query, redirectUri, webhookUrl, provider, config, secrets, fetch, startInput }) →   // oauth/app_install callback
 //       { external_id, display_name, scopes: [...], secrets: {kind: value},
 //         settings?: {k: scalar} (non-secret, ≤ 2 KB, stored once as settings.provider: D42 addendum C1),
 //         next_url?: 'https://<one of hosts>/…' (the callback page's one "Continue on <name>" link),
@@ -32,6 +32,14 @@
 //     settings.config (an admin's; only the declared configKeys), else {}: never copy it into
 //     the settings you return; `secrets` is the pending row's unsealed secrets after prepare,
 //     else {}; exchange may add kinds, never replace one)
+//
+//     // Optional, oauth/app_install without prepare (D42 addendum "start inputs"):
+//     // plain text an admin may give at /start (GitHub: the organization).
+//     startInputs: ['org'],                    // 1–4 names; `input` at /start may hold only these
+//     startInput(name, value) → normalized string | null,   // your rule; null (or a throw) is a fixed VALIDATION
+//     (the normalized values reach authorizeUrl/manifestForm as `input` (always an object; check
+//     them again there), are signed into the state and come back to exchange as `startInput`
+//     ({} when none): check the provider's answer against them. Never store them as settings.)
 //
 //     // Optional, oauth/app_install without manifestForm (D97): the app is
 //     // made from input an admin pastes (Slack: a configuration token).
@@ -201,6 +209,7 @@ const HOST_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9]
 const CONNECT_KINDS = new Set(['oauth', 'app_install', 'token']);
 const PREPARE_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const PREPARE_INPUTS_MAX = 8;
+const START_INPUTS_MAX = 4;
 const CONFIG_KEYS_MAX = 32;
 // A settings.config key an admin may write (D42 addendum C1): never a path, a
 // prototype key or the name of another settings namespace, in any case.
@@ -264,6 +273,15 @@ export function defineConnector(spec) {
     }
     if (cn.kind === 'token' || cn.manifestForm !== undefined) errs.push('connect.prepare is for an oauth/app_install connector with authorizeUrl (not token, not manifestForm)');
   }
+  if (cn && (cn.startInputs !== undefined || cn.startInput !== undefined)) {
+    const keys = cn.startInputs;
+    if (typeof cn.startInput !== 'function') errs.push('connect.startInput(name, value) is a function, declared together with connect.startInputs');
+    if (!Array.isArray(keys) || !keys.length || keys.length > START_INPUTS_MAX || new Set(keys).size !== keys.length
+      || keys.some((k) => typeof k !== 'string' || !PREPARE_KEY_RE.test(k) || ['constructor', 'prototype'].includes(k))) {
+      errs.push(`connect.startInputs lists 1–${START_INPUTS_MAX} distinct input names (^[a-z][a-z0-9_]{0,39}$)`);
+    }
+    if (cn.kind === 'token' || cn.prepare !== undefined) errs.push('connect.startInputs is for an oauth/app_install connector without prepare');
+  }
   if (cn?.handshake !== undefined && (typeof cn.handshake !== 'function' || typeof cn.prepare !== 'function' || typeof spec.ackBody !== 'function')) {
     errs.push('connect.handshake is a function, for a connector that declares connect.prepare and ackBody');
   }
@@ -310,8 +328,12 @@ export function defineConnector(spec) {
     else if (!spec.actions?.[`system.${e}`]) errs.push(`systemEvents: declare the action system.${e} with its autonomy default`);
   }
   if (errs.length) throw new Error(`connector ${spec?.id ?? '?'}: ${errs.join('; ')}`);
-  // The registry filters pasted input by prepareInputs: a connector can't widen it later.
-  const connect = Array.isArray(cn?.prepareInputs) ? Object.freeze({ ...cn, prepareInputs: Object.freeze([...cn.prepareInputs]) }) : spec.connect;
+  // The registry filters pasted input by prepareInputs and startInputs: a connector can't widen them later.
+  const connect = Array.isArray(cn?.prepareInputs) || Array.isArray(cn?.startInputs) ? Object.freeze({
+    ...cn,
+    ...(Array.isArray(cn.prepareInputs) ? { prepareInputs: Object.freeze([...cn.prepareInputs]) } : {}),
+    ...(Array.isArray(cn.startInputs) ? { startInputs: Object.freeze([...cn.startInputs]) } : {}),
+  }) : spec.connect;
   return Object.freeze({
     consumes: [], actions: {}, systemEvents: [], ...spec, connect, hosts: Object.freeze([...spec.hosts]), ingressCidrs: Object.freeze([...(spec.ingressCidrs ?? [])]),
     ...(spec.identity ? { identity: Object.freeze({ ...spec.identity }) } : {}),

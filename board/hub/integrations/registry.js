@@ -76,6 +76,7 @@ const PENDING_TTL_MS = 3_600_000;
 const PENDING_SWEEP_MS = 60_000;
 const PREPARE_TIMEOUT_MS = 30_000;
 const PREPARE_INPUT_MAX = 4096;
+const START_INPUT_MAX = 256;
 const AUTHORIZE_MAX = 5;
 const MATCH_MAX = 8;
 const MATCH_KEY = /^[a-z][a-z0-9_]{0,39}$/;
@@ -1230,7 +1231,40 @@ export function createIntegrations({
     return { state: `${payload}.${mac(payload).toString('base64url')}`, bind, cookie: { ...bindCookie(provider, publicUrl), value: bind, max_age_s: STATE_TTL_MS / 1000 } };
   }
 
-  function oauthStart({ member, provider, publicUrl }) {
+  // D42 addendum "start inputs": the declared keys only, each through the
+  // connector's own rule; the fixed texts never repeat a value.
+  function startInputOf(conn, input) {
+    if (input === undefined) return {};
+    const noSuch = () => new HubError('VALIDATION', 'this connection takes no such input');
+    if (!isPlainObject(input)) throw noSuch();
+    const names = conn.connect.startInputs ?? [];
+    const out = {};
+    for (const k of Object.keys(input)) {
+      if (!names.includes(k)) throw noSuch();
+      const v = input[k];
+      let n = null;
+      if (typeof v === 'string' && v && Buffer.byteLength(v) <= START_INPUT_MAX) {
+        try { n = conn.connect.startInput(k, v); } catch { n = null; }
+      }
+      if (typeof n !== 'string' || !n || n.length > START_INPUT_MAX) throw new HubError('VALIDATION', 'that value is not valid here: check it and try again');
+      out[k] = n;
+    }
+    return out;
+  }
+
+  // A callback state's `si`: the MAC vouches for it, but the connector's rule
+  // must still take every value unchanged. null: refuse.
+  function signedStartInput(conn, si) {
+    if (si === undefined) return {};
+    if (!isPlainObject(si) || !Object.keys(si).length || !Array.isArray(conn.connect.startInputs)) return null;
+    for (const [k, v] of Object.entries(si)) {
+      if (!conn.connect.startInputs.includes(k) || typeof v !== 'string') return null;
+      try { if (conn.connect.startInput(k, v) !== v) return null; } catch { return null; }
+    }
+    return { ...si };
+  }
+
+  function oauthStart({ member, provider, publicUrl, input }) {
     const conn = connectors.get(provider);
     // A prepare connector connects only through its pending row (D97): the
     // plain flow would skip the match check and never pin the app.
@@ -1238,9 +1272,10 @@ export function createIntegrations({
     if (!hub.vault.available) throw new HubError('POLICY_DENIED', 'integrations need the hub encryption key first');
     // The connection id is minted now: a manifest must name its webhook URL
     // before the app (and so the connection) exists.
+    const si = startInputOf(conn, input);
     const id = randomUUID();
-    const { state, bind, cookie } = mintState(member, provider, id, publicUrl);
-    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), ...configFor(member.org_id, provider) };
+    const { state, bind, cookie } = mintState(member, provider, id, publicUrl, Object.keys(si).length ? { si } : {});
+    const args = { state, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, id), ...configFor(member.org_id, provider), input: { ...si } };
     if (conn.connect.manifestForm) return { form: manifestFormOf(conn, conn.connect.manifestForm(args)), bind, cookie };
     return { url: conn.connect.authorizeUrl(args), bind, cookie };
   }
@@ -1260,6 +1295,8 @@ export function createIntegrations({
     if (!st || st.p !== provider || typeof st.n !== 'string' || typeof st.b !== 'string' || !UUID_RE.test(st.i ?? '') || !(Date.now() <= st.e)) return { ok: false, error: 'This link has expired. Start again from Buddy.' };
     // A state from before the connector declared prepare, or minted by /start.
     if (conn.connect.prepare && st.pd !== 1) return invalid;
+    const startInput = signedStartInput(conn, st.si);
+    if (!startInput) return invalid;
     // Before the nonce is spent: a browser without the cookie can't burn the admin's attempt.
     if (typeof bindCookie !== 'string' || !safeEq(sha(bindCookie), st.b)) return { ok: false, error: 'Open this link in the window Plexiform opened. Start again.' };
     const first = db.run("INSERT OR IGNORE INTO inbound_dedupe (provider, dedupe_key, received_at, state) VALUES ('oauth_state', ?, ?, 'done')", st.n, now());
@@ -1281,7 +1318,7 @@ export function createIntegrations({
     try {
       v = await conn.connect.exchange({
         query, redirectUri: redirectFor(publicUrl, provider), webhookUrl: webhookFor(publicUrl, st.i),
-        ...(pending ? pendingConfig(pending) : configFor(member.org_id, provider)), secrets: { ...held }, fetch: restrictedFetch(conn),
+        ...(pending ? pendingConfig(pending) : configFor(member.org_id, provider)), secrets: { ...held }, fetch: restrictedFetch(conn), startInput,
       });
     } catch (e) {
       warn('integration connect failed', conn, e);
@@ -1823,7 +1860,7 @@ export function createIntegrations({
     register,
     /** Hosts a manifest connect form may post to (the web's CSP form-action). */
     formHosts: () => [...new Set([...connectors.values()].filter((c) => c.connect.manifestForm).map((c) => c.connect.formHost))],
-    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity })),
+    connectors: () => [...connectors.values()].map((c) => ({ id: c.id, name: c.name, scopes: c.scopes, connect: c.connect.kind, actions: c.actions, prepare: c.connect.prepareInputs ? [...c.connect.prepareInputs] : null, identity: !!c.identity, start: c.connect.startInputs ? [...c.connect.startInputs] : null })),
     list: (orgId) => db.all("SELECT * FROM connections WHERE org_id = ? AND status != 'revoked' ORDER BY created_at", orgId).map(publicConnection),
     get: (id) => { const c = row(id); return c ? publicConnection(c) : null; },
     orgOf: (id) => row(id)?.org_id ?? livePending(id)?.org_id ?? null,
