@@ -339,15 +339,32 @@ test('smoke: window-loaded waits for the widget page itself to finish loading', 
   const p = Smoke.windowLoaded(wc, { timeoutMs: 2000 }).then((v) => { settled = v; });
   await new Promise((r) => setImmediate(r));
   assert.equal(settled, null, 'blank and idle is not loaded');
-  wc.url = 'file:///x/app.asar/index.html';
   wc.loading = true;
   wc.emit('did-finish-load');
   await new Promise((r) => setImmediate(r));
-  assert.equal(settled, null, 'still loading');
-  wc.loading = false;
+  assert.equal(settled, null, 'a load event for no page yet');
+  wc.url = 'file:///x/app.asar/index.html';
   wc.emit('did-finish-load');
   await p;
-  assert.equal(settled, true);
+  assert.equal(settled, true, 'the page\'s own did-finish-load');
+  const idle = Object.assign(new EventEmitter(), { getURL: () => 'file:///x/index.html', isLoading: () => false });
+  assert.equal(await Smoke.windowLoaded(idle, { timeoutMs: 500, pollMs: 10 }), true, 'already loaded and idle');
   const other = Object.assign(new EventEmitter(), { getURL: () => 'https://example.com/index.html', isLoading: () => false });
   assert.equal(await Smoke.windowLoaded(other, { timeoutMs: 50 }), false);
+});
+
+// electron-builder 26 only runs build/sign.js when it has an identity.
+test('mac: ad-hoc identity until a certificate is given, so build/sign.js runs on electron-builder 26', () => {
+  const load = (env) => {
+    const saved = { CSC_LINK: process.env.CSC_LINK, CSC_NAME: process.env.CSC_NAME };
+    for (const k of Object.keys(saved)) delete process.env[k];
+    Object.assign(process.env, env);
+    delete require.cache[require.resolve('../electron-builder.config.js')];
+    try { return require('../electron-builder.config.js').mac.identity; } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+      delete require.cache[require.resolve('../electron-builder.config.js')];
+    }
+  };
+  assert.equal(load({}), '-');
+  assert.equal(load({ CSC_LINK: 'cert.p12' }), undefined);
 });

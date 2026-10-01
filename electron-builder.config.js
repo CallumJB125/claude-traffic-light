@@ -28,6 +28,11 @@ module.exports = {
 
   mac: {
     ...base.mac,
+    // Ad-hoc ('-') until a Developer ID is provided. electron-builder 26
+    // skips the custom sign hook (build/sign.js) when it finds no identity,
+    // which would leave only the linker's signature and the calendar helper
+    // without its narrow entitlements; 25 called the hook regardless.
+    identity: process.env.CSC_LINK || process.env.CSC_NAME ? undefined : '-',
     // The zip is what latest-mac.yml points at; the DMG is what people download.
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },
