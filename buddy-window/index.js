@@ -26,6 +26,7 @@ const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-fl
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
 const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
+const { createWorkCapture } = require('../src/work-capture');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -113,7 +114,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -195,6 +196,35 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     isPackaged: !isDev,
     log: (...a) => log('[hub]', ...a),
     onStatus,
+  });
+
+  const workCapture = createWorkCapture({
+    file: path.join(userData, 'work-capture.json'), host: os.hostname().split('.')[0],
+    ownedRoots: [path.join(userData, 'runner'), path.join(userData, 'tasks'), path.join(userData, 'plexiform-tasks')],
+    log: (message) => log('[work-capture]', message),
+    onChange() { if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed'); },
+    async getRoutes() {
+      const hubs = store.hubs().filter(signedIn);
+      const routes = []; let complete = hubs.length <= 8;
+      await Promise.all(hubs.slice(0, 8).map(async (hub) => {
+        const user = userOf(hub)?.id;
+        const response = await clientFor(hub).captureRoutes();
+        if (!response.ok || !user || user !== userOf(hub)?.id || !response.complete || response.truncated || !Array.isArray(response.routes) || response.routes.length > 200) { complete = false; return; }
+        for (const route of response.routes.slice(0, 200)) {
+          if (!route || !['owner','admin','member','viewer'].includes(route.role) || !['team_id','board_id','repo_id'].every(k => /^[A-Za-z0-9_.:-]{1,100}$/.test(route[k] ?? '')) || typeof route.canonical_url !== 'string' || route.canonical_url.length > 300) { complete = false; continue; }
+          routes.push({ ...route, hub, user_id: user, share_summaries: store.sharesSummaries(hub),
+            team_name: route.team_name ?? store.list().find(w => w.kind === 'team' && w.teamId === route.team_id && w.hub === hub)?.name ?? 'Team' });
+        }
+      }));
+      return { routes, complete };
+    },
+    sendLocal: (body) => supervisor.captureWork(body),
+    async sendTeam(destination, body) {
+      if (!signedIn(destination.hub) || userOf(destination.hub)?.id !== destination.user_id) return { ok: false };
+      const report = { ...body }; if (!store.sharesSummaries(destination.hub)) delete report.summary;
+      const result = await clientFor(destination.hub).captureWork(destination.team_id, destination.board_id, report);
+      return userOf(destination.hub)?.id === destination.user_id ? result : { ok: false };
+    },
   });
 
   // A page with a localScreen is the account page's explainer while the local board is active, not a hub page.
@@ -721,9 +751,21 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
       const types = ACCT_ARGS[op];
       if (args.length !== types.length || args.some((a, i) => typeof a !== types[i] || (typeof a === 'string' && a.length > 2048))) return { ok: false, error: 'Not allowed.' };
-      try { return await fn(...args); } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
+      try {
+        const result = await fn(...args);
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
+      } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
+  ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
+    if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
+    workCapture.setEnabled(on); return { ok: true };
+  });
+  ipcMain.handle('buddy:acct:captureDefault', async (e, repo, key) => {
+    if (!fromAccount(e) || typeof repo !== 'string' || typeof key !== 'string' || !captureEnabled) return { ok: false, error: 'Not allowed.' };
+    try { return await workCapture.choose(repo, key) ? { ok: true } : { ok: false, error: 'That board is no longer available. Try again.' }; }
+    catch { return { ok: false, error: 'Could not check your team boards. Try again.' }; }
+  });
 
   /**
    * Open a hub page with a URL fragment the page reads itself (the feedback sender hands its saved,
@@ -803,9 +845,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     /** Subscribe to validated runner events (`run.budget_reached`); returns the unsubscribe function. */
     onRunnerEvent(cb) { if (typeof cb !== 'function') return () => {}; runnerListeners.add(cb); return () => runnerListeners.delete(cb); },
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
-    sessionsChanged: (sessions) => flow.sessionsChanged(sessions),
+    sessionsChanged(sessions) { flow.sessionsChanged(sessions); if (captureEnabled) void workCapture.observe(sessions); },
     async stop() {
       const url = localUrl();
+      await workCapture.stop();
       await Promise.all([supervisor.stop({ final: true }), flow.stopDevices()]);
       // The secret dies with this hub; don't leave it in the cookie store.
       if (url) await session.fromPartition(partitionFor()).cookies.remove(url, 'board_local').catch(() => {}); // privacy-flow: local-board-hub

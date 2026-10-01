@@ -137,11 +137,21 @@ function readJson(file) {
 // failure). Everything the hooks and the app's pollers store on the file is
 // carried through, so a bare signal never wipes it; a held signal keeps its
 // tool too.
-function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp, fromSubagent = false }, nowIso = new Date().toISOString()) {
+function applyBareSignal(prev, { sessionId, host, source, cwd, signal, tool = null, hostApp, fromSubagent = false, taskId, taskTitle, taskSummary }, nowIso = new Date().toISOString()) {
   const p = prev || {};
   const t = Machine.step(prev, { signal, writer: 'bare', fromSubagent }, nowIso);
+  // Local reported task metadata. This conveys neither a destination nor
+  // execution authority, and the work-capture boundary scrubs text again.
+  const meta = {};
+  if (typeof taskId === 'string' && /^[A-Za-z0-9_.:-]{1,120}$/.test(taskId)) {
+    meta.taskId = taskId;
+    if (taskId !== p.taskId) { meta.taskTitle = null; meta.taskSummary = null; }
+  }
+  if (typeof taskTitle === 'string') meta.taskTitle = taskTitle.slice(0, 400);
+  if (typeof taskSummary === 'string') meta.taskSummary = taskSummary.slice(0, 4000);
   return {
     ...p,
+    ...meta,
     sessionId,
     host,
     source,

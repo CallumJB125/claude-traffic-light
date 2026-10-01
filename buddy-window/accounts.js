@@ -53,6 +53,8 @@ const ROUTES = {
   nativeWritePacket: ['POST', '/api/cards/:card/packet'],
   nativeMessages: ['GET', '/api/cards/:card/messages'],
   nativeSendMessage: ['POST', '/api/cards/:card/messages'],
+  captureRoutes: ['GET', '/api/work-capture/routes'],
+  captureWork: ['POST', '/api/boards/:board/work-capture'],
 };
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'];
@@ -390,6 +392,8 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return call('createTeam', { body: { name: n, request_id: crypto.randomUUID() } });
     },
     getTeam: (team) => call('team', { params: { team } }),
+    captureRoutes: () => call('captureRoutes'),
+    captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.
     nativeBoard(operation, params, body) {

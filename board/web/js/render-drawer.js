@@ -8,6 +8,7 @@ import { pill, budgetBar, cardActions, avatar, labelChips } from './render-board
 import { LABEL_COLORS, canArchive } from './labels.js';
 import { formatAge, repoBranch, isHumanOwned, COLUMNS, COLUMN_LABEL, fmtUsd } from './view.js';
 import { packetPanel, messagePanel } from './render-communication.js';
+import { captureBadge } from './render-capture.js';
 
 const ago = (ms) => (ms == null ? 'never' : `${formatAge(ms)} ago`);
 const add = (ms, e) => (ms == null ? null : ms + e);
@@ -292,11 +293,14 @@ export function drawer(model) {
 
     body.push(
       h('div', { class: 'drawer-status' },
-        pill(face, { size: 'lg' }),
+        view.capture && !view.run ? captureBadge(view, elapsed) : pill(face, { size: 'lg' }),
         face.state === 'running' && face.disagree ? h('p', { class: 'muted small' }, 'Waiting for the board and this browser to agree the run is alive.') : null,
         archived ? h('p', { class: 'archived-note', role: 'note' }, `Archived${view.archived.by_name ? ` by ${view.archived.by_name}` : ''}${view.archived.at_age_ms != null ? ` ${ago(view.archived.at_age_ms + elapsed)}` : ''}. Restore it to change anything.`) : null,
         model.readOnly ? null : h('div', { class: 'drawer-actions' }, archived ? null : cardActions({ ...face, actions: face.actions.filter((a) => !OPENS_DRAWER.has(a)) }, view, model.busy), extra)),
       whoBlock(view, face, model),
+      view.capture ? h('section', { class: 'dsec', 'aria-label': 'AI work report' }, h('h3', { class: 'dsec-title' }, 'AI work report'),
+        h('p', {}, 'This card follows activity reported by a local AI session. Your manual edits take priority.'),
+        h('p', { class: 'muted small' }, 'A finished report requests review; it does not verify completion or start an AI run.')) : null,
       view.client_feedback ? h('section', { class: 'dsec', 'aria-label': 'Client feedback source' }, h('h3', { class: 'dsec-title' }, 'Client feedback'), h('p', {}, `Feedback from ${view.client_feedback.source_name}`), h('p', {}, `Intake authorized by ${view.client_feedback.intake_name}`), h('p', { class: 'muted small' }, 'Feedback intake creates a task for human triage.')) : null,
       (asks.length || prs.length) ? h('section', { class: 'dsec dsec-asks', id: 'sec-asks' },
         h('h3', { class: 'dsec-title' }, openCount ? `Needs you · ${openCount}` : 'Requests'),

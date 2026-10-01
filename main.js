@@ -1503,6 +1503,7 @@ function getBuddy() {
       },
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
+      captureEnabled: !DEMO,
     });
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
@@ -2499,7 +2500,8 @@ function broadcastStatus() {
     // except for its waiting inputs, which it always hears about.
     const asks = askKey(st);
     if (statusPushWanted(widgetMotion.paused, asks, widgetAsksSent)) { widgetAsksSent = asks; win?.webContents.send('status-changed'); }
-    buddyWin?.sessionsChanged(st.sessions);
+    if (!DEMO && devMockReady && localSessions(st.sessions).length) getBuddy().sessionsChanged(localSessions(st.sessions));
+    else buddyWin?.sessionsChanged(localSessions(st.sessions));
     const recap = BusyWatch.observe(st.sessions);
     if (recap) { stateMemo = { at: 0, key: null, value: null }; showAwayRecap(recap); }
     maybeNotify(st);

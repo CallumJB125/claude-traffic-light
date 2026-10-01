@@ -5,7 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hubKey } = require('../buddy-window/workspaces');
 const { createBuddyWindow } = require('../buddy-window');
+// Electron treats this synthetic entry's directory as the app root. The
+// production components live one directory up, as they do in the real app.
+app.getAppPath = () => path.resolve(__dirname, '..');
 global.__clientTestLoads = [];
+global.__clientTestLogs = [];
 app.on('web-contents-created', (_e, wc) => {
   wc.on('did-fail-load', (_e, code, description, url) => global.__clientTestLoads.push({ code, description, url }));
 });
@@ -21,7 +25,7 @@ app.whenReady().then(async () => {
   const dir = path.join(app.getPath('userData'), 'buddy-accounts');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(dir, `${hubKey(origin)}.bin`), safeStorage.encryptString(JSON.stringify(saved)), { mode: 0o600 });
-  const buddy = createBuddyWindow({ isDev: true, devAccountsHub: origin, log: () => {} });
+  const buddy = createBuddyWindow({ isDev: true, devAccountsHub: origin, log: (...args) => global.__clientTestLogs.push(args) });
   global.__clientTestBuddy = buddy;
   buddy.open('account');
   global.__clientTestInit = { stage: 'connecting' };

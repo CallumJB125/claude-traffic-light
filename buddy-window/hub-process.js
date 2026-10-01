@@ -205,6 +205,22 @@ function createHubSupervisor(opts) {
 
   return {
     mode,
+    // Main-only automatic work reports use this launch's real local cookie.
+    // The destination is the embedded personal board, never a renderer URL.
+    async captureWork(body) {
+      if (mode !== 'local' || disposed) return { ok: false };
+      const current = await this.ensure();
+      const headers = { Accept: 'application/json', Cookie: `board_local=${current.localSecret}`, Origin: current.url };
+      const me = await fetchImpl(`${current.url}/api/me`, { headers, signal: AbortSignal.timeout(5000), redirect: 'manual' }); // privacy-flow: local-board-hub
+      const identity = me.ok ? await me.json() : null;
+      const board = identity?.boards?.find(b => !b.archived_at && b.name === 'My board') ?? identity?.boards?.find(b => !b.archived_at);
+      if (!board || !/^[A-Za-z0-9_.:-]{1,100}$/.test(board.id)) return { ok: false };
+      const result = await fetchImpl(`${current.url}/api/boards/${board.id}/work-capture`, { // privacy-flow: local-board-hub
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000), redirect: 'manual',
+      }); // privacy-flow: local-board-hub
+      const value = await result.json().catch(() => null);
+      return result.ok ? { ok: true, ...value } : { ok: false };
+    },
     ensure() {
       if (disposed) return Promise.reject(new Error('the app is quitting'));
       stopping = false;

@@ -50,5 +50,7 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   revokeRunner: (team, id) => call('revokeRunner', str(team), str(id)),
   presence: (host, on) => call('presence', str(host), !!on),
   summaries: (host, on) => call('summaries', str(host), !!on),
+  captureEnabled: (on) => call('captureEnabled', !!on),
+  captureDefault: (repo, key) => call('captureDefault', str(repo), str(key)),
   onChanged: (fn) => ipcRenderer.on('buddy:acct:changed', () => fn()),
 });

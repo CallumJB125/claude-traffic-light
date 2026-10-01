@@ -556,6 +556,33 @@ test('emit.js: a bare signal keeps agents, mode and cwd, and a failed turn ends 
   assert.deepEqual([d.signal, d.workingSince, d.mode, d.iteration, d.agents.length, d.cwd, d.touchedAt], ['turn-failed', null, 'team', 3, 1, '/w/proj', d0.touchedAt]);
 });
 
+test('emit.js: reported work metadata persists across progress, resets for a new task and never chooses a board', () => {
+  const home = tmpHome();
+  const emit = (...args) => {
+    const r = spawnSync(process.execPath, [EMIT, ...args, '--source', 'codex', '--session', 'work'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+    assert.equal(r.status, 0, r.stderr.toString());
+  };
+  const file = path.join(home, 'sessions', `${HOST}-codex-work.json`);
+  const state = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  emit('tool-use', '--cwd', '/work/app', '--task', 'build', '--title', 'Build app', '--summary', 'Updating routing');
+  assert.deepEqual([state().taskId, state().taskTitle, state().taskSummary], ['build', 'Build app', 'Updating routing']);
+  emit('stop');
+  assert.equal(state().taskSummary, 'Updating routing');
+  emit('tool-use', '--task', 'next', '--board', 'arbitrary-board', '--run', 'arbitrary-run');
+  assert.deepEqual([state().taskId, state().taskTitle, state().taskSummary], ['next', null, null]);
+  assert.equal(state().board_id, undefined); assert.equal(state().run_id, undefined);
+  emit('tool-use', '--task', '../bad'); assert.equal(state().taskId, 'next');
+});
+
+test('emit.js: bare source and session cannot select a file outside the sessions directory', () => {
+  const home = tmpHome();
+  const r = spawnSync(process.execPath, [EMIT, 'tool-use', '--source', 'codex/../../escape', '--session', '../../../outside'], { env: { ...process.env, CLAUDE_TRAFFIC_LIGHT_HOME: home }, input: '' });
+  assert.equal(r.status, 0, r.stderr.toString());
+  const files = fs.readdirSync(path.join(home, 'sessions'));
+  assert.equal(files.length, 1); assert.ok(files[0].startsWith(`${HOST}-custom-`));
+  assert.ok(!fs.existsSync(path.join(home, 'outside.json')));
+});
+
 test('emit.js: bare signals get the same guards — a late subagent-done keeps "finished", the idle nudge keeps a failure', () => {
   const home = tmpHome();
   const emit = (...args) => {

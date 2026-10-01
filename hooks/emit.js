@@ -2,6 +2,7 @@
 // Generic emitter for any agent, not just Claude Code:
 //
 //   emit.js <signal> [--source name] [--session id] [--cwd path] [--tool name]
+//                  [--task id] [--title text] [--summary text]
 //   emit.js --adapter <id> [event]      payload JSON on stdin, or (Codex) as the last arg
 //
 // signals: prompt-submit | tool-use | tool-done | tool-failed | stop |
@@ -91,10 +92,10 @@ if (!adapterId) {
   const signal = argv.find((a) => KNOWN.includes(a)) || null;
   if (!signal) process.exit(0);
   // Lower case, as the desktop's reporter check wants a source to be.
-  const source = /^[a-z]/.test(String(opt('source') || '').toLowerCase()) ? opt('source').toLowerCase() : 'custom';
+  const source = /^[a-z][a-z0-9_-]{0,23}$/.test(String(opt('source') || '').toLowerCase()) ? opt('source').toLowerCase() : 'custom';
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const sessionId = opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`;
-  const file = path.join(SESSIONS_DIR, `${HOST_TAG}-${source}-${sessionId}.json`);
+  const sessionId = SessionState.safeSessionId(opt('session') || process.env.CLAUDE_SESSION_ID || `${source}-${process.ppid}`);
+  const file = SessionState.sessionFileFor(SESSIONS_DIR, HOST_TAG, source, sessionId);
   let cwd = '';
   let seq = null;
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
@@ -105,7 +106,8 @@ if (!adapterId) {
     SessionState.withLock(file, () => {
       const prev = SessionState.readJson(file);
       cwd = opt('cwd') || prev?.cwd || process.cwd();
-      const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd, signal, tool: opt('tool') || null });
+      const next = SessionState.applyBareSignal(prev, { sessionId, host: HOST_TAG, source, cwd, signal, tool: opt('tool') || null,
+        taskId: opt('task'), taskTitle: opt('title'), taskSummary: opt('summary') });
       if (Remote) next.remoteSeq = seq = Remote.nextSeq(prev?.remoteSeq);
       SessionState.writeJsonAtomic(file, next);
     });

@@ -11,6 +11,7 @@ import { THEMES, BACKGROUNDS } from './themes.js';
 import { cardChips } from './chips.js';
 import { labelColor, labelClass, coverClass, canArchive, VIA_LABEL } from './labels.js';
 import { PILLS } from '../../shared/cardface.js';
+import { captureBadge } from './render-capture.js';
 import {
   COLUMNS, COLUMN_LABEL, ACTION_LABEL, groupColumns, isHumanOwned, repoBranch, clock, initials, hueOf,
   primaryAction, boardLamps, stripGlyph,
@@ -177,7 +178,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     avatarStack(people)),
   h('h3', { class: 'card-title', id: `t-${view.id}` },
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
-  pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
+  view.capture && !view.run ? captureBadge(view, elapsed_ms) : pill(chips.some((c) => c.id === 'proof') ? { ...face, reason: null } : face),
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
