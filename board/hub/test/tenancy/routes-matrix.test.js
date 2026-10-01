@@ -147,6 +147,8 @@ const MATRIX = {
   'POST /api/workflows/:workflow_id/versions': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/versions`, body: { expected_version: 1, definition: { name: 'pwned', steps: [{ title: 'pwned', plan_approval: true }] } } },
   'POST /api/workflows/:workflow_id/archive': { kind: 'cross', path: (fx) => `/api/workflows/${fx.B.workflow}/archive`, body: { archived: true } },
   'POST /api/boards/:board_id/workflows/:workflow_id/apply': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`, alt: (fx) => [`/api/boards/${fx.A.board}/workflows/${fx.B.workflow}/apply`], body: (fx) => ({ version: 1, content_hash: fx.B.workflowHash }) },
+  'POST /api/workflow-instances/:instance_id/preview': {kind:'cross',path:fx=>`/api/workflow-instances/${fx.B.workflowInstance}/preview`,body:fx=>fx.B.workflowPreview},
+  'GET /api/workflow-plans/:plan_id': {kind:'cross',path:fx=>`/api/workflow-plans/${fx.B.workflowPlan}`},
   'POST /api/boards': { kind: 'team', body: { name: 'pwned' } },
   'PATCH /api/boards/:board_id': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}`, body: { name: 'pwned' } },
   'POST /api/boards/:board_id/archive': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/archive` },
@@ -248,6 +250,14 @@ test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matri
 });
 
 async function sweep(fx, caller) {
+  const applied=await fx.as(fx.users.ub,'POST',`/api/boards/${fx.B.board}/workflows/${fx.B.workflow}/apply`,{request_id:randomUUID(),version:1,content_hash:fx.B.workflowHash});
+  assert.equal(applied.status,200,applied.text);fx.B.workflowInstance=applied.body.instance.id;
+  const step=applied.body.instance.steps[0],card=fx.h.hub.card(step.id);
+  const patched=await fx.as(fx.users.ub,'PATCH',`/api/cards/${card.id}`,{request_id:randomUUID(),version:card.version,repo_id:fx.B.repo});assert.equal(patched.status,200,patched.text);
+  const current=fx.h.hub.card(card.id);
+  fx.B.workflowPreview={request_id:randomUUID(),board_id:fx.B.board,repo_id:fx.B.repo,recipe_version:1,content_hash:fx.B.workflowHash,concurrency:1,
+   steps:[{position:0,card_id:current.id,version:current.version,fence:current.fence,ai:'codex',target_member_id:fx.B.owner,budget_usd:null,plan_approval:true}]};
+  const preview=await fx.as(fx.users.ub,'POST',`/api/workflow-instances/${fx.B.workflowInstance}/preview`,fx.B.workflowPreview);assert.equal(preview.status,200,preview.text);fx.B.workflowPlan=preview.body.plan.id;
   const payload={schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:MARK};
   const checked=validatePayload(payload);
   const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
