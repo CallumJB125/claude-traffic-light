@@ -17,6 +17,17 @@ describe (`BOARD_AUTH=access`, `BOARD_ACCESS_*`) is legacy and no longer the pro
 
 `BOARD_SECRET` is REQUIRED in accounts mode and must be at least 32 bytes (`openssl rand -base64 48`); the hub refuses to start without it. Keep it with the data: changing it signs everyone out.
 
+**Migration 032 backup requirement:** client deliverable bytes live in
+`DATA_DIR/client-artifacts/` (normally `/var/lib/buddy-hub/client-artifacts/`), outside
+the database. Before deploying 032 or restoring its data, retain a consistent copy
+of **both `board.db` and `client-artifacts/`**, with the same secret/encryption keys.
+Stop the hub while taking or restoring the paired copy and preserve ownership and
+file permissions. The existing `backup.mjs` timer and Litestream configuration
+below copy only the database; operators must add the artifact directory to their
+local and off-site backup procedure before enabling uploads. A database-only
+restore cannot recover deliverables: missing or changed bytes fail closed, and
+their approval hashes are never accepted as a substitute for the original files.
+
 ## First deploy
 
 1. Host prerequisites: Node ≥ 22, system user `buddyhub`, `/var/lib/buddy-hub` (buddyhub 0700),
@@ -51,7 +62,9 @@ production data dir). It never touches production's backup timer. Point a separa
 Rollback: `deploy.sh` keeps the previous tree at `/opt/buddy-hub/board.prev`; move it back and
 restart. Restore a snapshot by stopping the hub, copying it over `board.db` and starting with
 `BOARD_RESTORE=1` once (after a restore the hub bumps every card's fence so nothing that was live before can write over
-the restored state).
+the restored state). After migration 032, restore the paired `client-artifacts/`
+directory before starting the hub; its startup cleanup removes files absent from
+the restored database, so keep the original backup separate from the working copy.
 
 Rollback caveats: (1) migrations are forward-only: the old code cannot run against a newer schema, so a rollback after a
 migration needs the pre-deploy backup restored too (step 3 above). (2) `node hub/admin.js revoke-legacy-devices` (the

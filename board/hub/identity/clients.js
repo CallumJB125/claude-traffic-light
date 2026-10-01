@@ -13,15 +13,18 @@ import { BRAND } from '../../shared/brand.js';
 export const CLIENT_SCOPES = Object.freeze(['status.read', 'artifacts.read', 'feedback.create', 'approvals.decide']);
 const TOKEN_RE = /^clinv_[A-Za-z0-9_-]{43}$/;
 const invalid = () => new HubError('INVALID_TOKEN', 'this client invite is not valid: ask for a new invitation');
-const missing = () => new HubError('NOT_FOUND', 'client resource not found');
-const text = (v, max, required = false) => {
+export const clientMissing = () => new HubError('NOT_FOUND', 'client resource not found');
+const missing = clientMissing;
+export const clientText = (v, max, required = false) => {
   if (v == null && !required) return '';
   if (typeof v !== 'string' || v.length > max || /[\p{C}&&[^\n\t]]/v.test(v) || required && !v.trim()) throw new HubError('VALIDATION', 'invalid client text');
   return v.trim();
 };
-const only = (body, keys) => {
+const text = clientText;
+export const clientOnly = (body, keys) => {
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => !keys.includes(k))) throw new HubError('VALIDATION', 'unknown client field');
 };
+const only = clientOnly;
 
 export class Clients {
   constructor(hub) { this.hub = hub; this.db = hub.db; }
@@ -193,7 +196,8 @@ export class Clients {
   project(user, projectId) {
     const p = this.db.get('SELECT * FROM client_projects WHERE id = ?', projectId); if (!p) throw missing();
     const allowed = this.projects(user, p.workspace_id).projects.find((x) => x.id === p.id && x.scopes.includes('status.read')); if (!allowed) throw missing();
-    return { project: { id: p.id, name: p.name }, items: this.db.all('SELECT id, title, summary, status, updated_at FROM client_items WHERE project_id = ? AND unpublished_at IS NULL ORDER BY published_at, id', p.id) };
+    const items = this.db.all('SELECT id, title, summary, status, updated_at FROM client_items WHERE project_id = ? AND unpublished_at IS NULL ORDER BY published_at, id', p.id);
+    return { project: { id: p.id, name: p.name }, items: this.hub.clientArtifacts?.decorate(user, items) ?? items };
   }
   setGuest(member, id, body, { ip }) {
     this.staff(member); only(body, ['request_id', 'grants']);

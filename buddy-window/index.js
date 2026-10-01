@@ -16,7 +16,7 @@ const path = require('node:path');
 const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron'); // privacy-flow: team-hub-account
+const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -25,6 +25,7 @@ const { createDeviceController, defaultDeviceName } = require('./device');
 const { createAccountFlow, clearHubSessions, ACCT_ARGS } = require('./account-flow');
 const { createConnectLife } = require('./connect-life');
 const BRAND = require('./brand');
+const { clientArtifactTarget, clientExportTarget, saveClientArtifact, saveClientExport } = require('./client-download');
 
 const SIDEBAR_W = 216;
 const DIR = __dirname;
@@ -55,13 +56,17 @@ function devLogin(url, secret, login = 'alice') {
 
 // Once per partition: the board needs no OS permissions, devices or downloads.
 const hardened = new Set();
+const clientDownloads = new WeakMap();
 function hardenSession(ses) {
   if (hardened.has(ses)) return;
   hardened.add(ses);
   ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
   ses.setPermissionCheckHandler(() => false);
   ses.setDevicePermissionHandler(() => false);
-  ses.on('will-download', (e) => e.preventDefault());
+  ses.on('will-download', (e, item, wc) => {
+    e.preventDefault();
+    clientDownloads.get(ses)?.(item.getURL(), wc, item.hasUserGesture());
+  });
 }
 
 function dispose(view, win) {
@@ -469,6 +474,15 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     });
     view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
     const wc = view.webContents;
+    if (h.client) clientDownloads.set(hubSes, (url, sender, gesture) => {
+      const current = () => !!win && view === hubView && content === view && hubInfo?.client && hubInfo.origin === h.origin && signedIn(h.origin);
+      if (!gesture || sender !== wc || !current()) return;
+      const save = clientArtifactTarget(url, h.origin) ? saveClientArtifact : clientExportTarget(url, h.origin) ? saveClientExport : null;
+      if (!save) return;
+      save({ url, origin: h.origin, tokenFor, current, choose: (opts) => dialog.showSaveDialog(opts) }).then((r) => {
+        if (r.signedOut) flow.checkSignedIn(h.origin).catch(() => {});
+      }).catch((e) => log('client deliverable save failed', e.message));
+    });
     const decide = (url) => navDecision(url, { hubOrigin: h.origin, accessTeam: h.accessTeam });
     let gestureAt = 0;
     wc.on('input-event', (_e, ev) => { if (GESTURES.has(ev.type)) gestureAt = Date.now(); });

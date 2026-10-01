@@ -28,17 +28,19 @@ test('OAuth client without a mailer accepts and reads status in the scoped authe
     const made = await as('POST', '/api/client-workspaces', { name: 'Client app project', request_id: randomUUID() });
     const project = made.projects[0];
     const card = await as('POST', `/api/boards/${project.board_id}/cards`, { title: 'Internal repository details' });
-    await as('POST', `/api/boards/${project.board_id}/client-items`, { card_id: card.card.id, title: 'Published delivery', summary: 'Ready for review', status: 'review' });
-    await as('POST', `/api/teams/${made.workspace.id}/client-invites`, { email: 'client@gmail.com', grants: [{ project_id: project.id, scopes: ['status.read'] }] });
+    const published = await as('POST', `/api/boards/${project.board_id}/client-items`, { card_id: card.card.id, title: 'Published delivery', summary: 'Ready for review', status: 'review' });
+    await as('POST', `/api/client-items/${published.item.id}/artifacts`, { request_id: randomUUID(), name: 'desktop.txt', mime: 'text/plain', data_base64: Buffer.from('Exact native client deliverable').toString('base64') });
+    await as('POST', `/api/teams/${made.workspace.id}/client-invites`, { email: 'client@gmail.com', grants: [{ project_id: project.id, scopes: ['status.read', 'artifacts.read'] }] });
     const guest = await oauth('client@gmail.com', 'fake-client-guest');
     expect((await hub.call('GET', '/api/auth/methods')).body.email).toBe(false);
-    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), `--user-data-dir=${temp}`], env: { ...process.env, PLEXIFORM_CLIENT_TEST_HUB: hub.base, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: hub.base, token: guest.device_token, device_id: guest.device_id, user: guest.user }) } });
+    const savedArtifact = path.join(temp, 'saved-deliverable.txt');
+    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), `--user-data-dir=${temp}`], env: { ...process.env, PLEXIFORM_CLIENT_TEST_HUB: hub.base, PLEXIFORM_CLIENT_TEST_DOWNLOAD: savedArtifact, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: hub.base, token: guest.device_token, device_id: guest.device_id, user: guest.user }) } });
     await expect.poll(() => app.evaluate(() => global.__clientTestInit), { timeout: 15000 }).toMatchObject({ stage: 'connected', result: { ok: true }, status: { screen: 'clients' } });
     // BaseWindow's WebContentsViews are not Electron BrowserWindows. Follow
     // the actual production view rather than adding a window just for tests.
     const pane = (match, js) => app.evaluate(async ({ webContents }, [url, code]) => {
       const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(url));
-      return wc ? { found: true, value: await wc.executeJavaScript(code) } : { found: false, urls: webContents.getAllWebContents().map((w) => w.getURL()), status: global.__clientTestBuddy.status(), loads: global.__clientTestLoads };
+      return wc ? { found: true, value: await wc.executeJavaScript(code, true) } : { found: false, urls: webContents.getAllWebContents().map((w) => w.getURL()), status: global.__clientTestBuddy.status(), loads: global.__clientTestLoads };
     }, [match, js]);
     await expect.poll(() => pane('account.html?screen=clients', '!![...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects")'), { timeout: 15000 }).toEqual({ found: true, value: true });
     await pane('account.html?screen=clients', '[...document.querySelectorAll("button")].find(b => b.textContent === "Open client projects").click()');
@@ -54,6 +56,17 @@ test('OAuth client without a mailer accepts and reads status in the scoped authe
     expect(prefs.sandbox).toBe(true); expect(prefs.contextIsolation).toBe(true); expect(prefs.nodeIntegration).toBe(false); expect(prefs.preload ?? '').toBe('');
     const renderer = (await portal('({ bridge: typeof window.buddyAccount, token: [document.cookie, localStorage.getItem("token"), sessionStorage.getItem("token")].join(" ") })')).value;
     expect(renderer.bridge).toBe('undefined'); expect(renderer.token).not.toContain(guest.device_token);
+    await portal('document.querySelector("a[data-artifact]").click()');
+    await expect.poll(() => fs.existsSync(savedArtifact)).toBe(true);
+    expect(fs.readFileSync(savedArtifact, 'utf8')).toBe('Exact native client deliverable');
+    expect(await app.evaluate(() => global.__clientTestSaveDialogs)).toEqual([expect.objectContaining({ title: 'Save shared deliverable', defaultPath: 'deliverable-v1.txt' })]);
+    await portal('document.querySelector("a[href=\\"/api/account/client-export\\"]").click()');
+    const savedExport = path.join(temp, 'client-export.json');
+    await expect.poll(() => fs.existsSync(savedExport)).toBe(true);
+    const exported = fs.readFileSync(savedExport, 'utf8');
+    expect(JSON.parse(exported).projects[0].items[0].artifact.name).toBe('desktop.txt');
+    expect(exported).not.toContain(guest.device_token); expect(exported).not.toContain('Internal repository details');
+    expect(await app.evaluate(() => global.__clientTestSaveDialogs)).toHaveLength(2);
     await portal('document.querySelector("[data-action=signout]").click()');
     await expect.poll(async () => (await hub.call('GET', `/api/client/projects/${project.id}`, { token: guest.device_token })).status).toBe(401);
     await expect.poll(() => fs.readdirSync(path.join(temp, 'buddy-accounts')).length).toBe(0);

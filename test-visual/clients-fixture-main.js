@@ -1,6 +1,6 @@
 // Hermetic Electron fixture for the actual authenticated sandboxed client pane.
 // Fake hub/user credentials come only from this test process, never a real account.
-const { app, safeStorage } = require('electron');
+const { app, safeStorage, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { hubKey } = require('../buddy-window/workspaces');
@@ -11,6 +11,11 @@ app.on('web-contents-created', (_e, wc) => {
 });
 app.whenReady().then(async () => {
   global.__clientTestInit = { stage: 'sealing' };
+  global.__clientTestSaveDialogs = [];
+  if (process.env.PLEXIFORM_CLIENT_TEST_DOWNLOAD) dialog.showSaveDialog = async (options) => {
+    global.__clientTestSaveDialogs.push(options);
+    return { canceled: false, filePath: options.defaultPath.endsWith('.json') ? path.join(path.dirname(process.env.PLEXIFORM_CLIENT_TEST_DOWNLOAD), 'client-export.json') : process.env.PLEXIFORM_CLIENT_TEST_DOWNLOAD };
+  };
   const origin = process.env.PLEXIFORM_CLIENT_TEST_HUB;
   const saved = JSON.parse(process.env.PLEXIFORM_CLIENT_TEST_ACCOUNT);
   const dir = path.join(app.getPath('userData'), 'buddy-accounts');
