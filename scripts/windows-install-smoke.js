@@ -1,5 +1,5 @@
 'use strict';
-// Real NSIS/portable lifecycle acceptance on a disposable GitHub Windows runner.
+// Real NSIS/portable lifecycle acceptance on a GitHub-hosted Windows runner.
 // Source tests inject process execution; they do not count as Windows acceptance.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,7 +10,7 @@ const Smoke = require('./smoke-installed');
 const Uninstall = require('../adapters/uninstall-all');
 
 function allowedRunner(platform = process.platform, env = process.env) {
-  return platform === 'win32' && env.GITHUB_ACTIONS === 'true' && env.RUNNER_OS === 'Windows';
+  return platform === 'win32' && env.GITHUB_ACTIONS === 'true' && env.RUNNER_OS === 'Windows' && env.RUNNER_ENVIRONMENT === 'github-hosted';
 }
 
 function execute(exe, args, env, timeoutMs = 120000) {
@@ -93,7 +93,7 @@ async function runLifecycle({ installer, portable, root, actualAppData, env = pr
 }
 
 async function main() {
-  if (!allowedRunner()) throw new Error('Windows installer acceptance requires a disposable GitHub Actions Windows runner');
+  if (!allowedRunner()) throw new Error('Windows installer acceptance requires a GitHub-hosted Windows runner');
   if (!process.env.APPDATA) throw new Error('APPDATA is absent');
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'plexiform-windows-install-'));
   const evidence = path.join(__dirname, '..', 'work', 'windows-release');

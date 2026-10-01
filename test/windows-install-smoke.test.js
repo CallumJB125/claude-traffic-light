@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const vm = require('node:vm');
 const Lifecycle = require('../scripts/windows-install-smoke');
 const Adapters = require('../adapters');
 const Brand = require('../brand');
@@ -36,9 +37,37 @@ function rig(t, mutate = () => {}) {
   return { root, installer, portable, calls, run, smoke, runHook, actualAppData: path.join(root, 'appdata'), receipt: path.join(root, 'receipt.json') };
 }
 
-test('real installer acceptance refuses every environment except disposable GitHub Windows', () => {
-  assert.equal(Lifecycle.allowedRunner('win32', { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Windows' }), true);
-  for (const [platform, env] of [['darwin', { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Windows' }], ['win32', {}], ['win32', { GITHUB_ACTIONS: 'false', RUNNER_OS: 'Windows' }], ['win32', { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux' }]]) assert.equal(Lifecycle.allowedRunner(platform, env), false);
+test('real installer acceptance requires GitHub-hosted Windows and refuses missing or self-hosted provenance', () => {
+  const hosted = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Windows', RUNNER_ENVIRONMENT: 'github-hosted' };
+  assert.equal(Lifecycle.allowedRunner('win32', hosted), true);
+  for (const [platform, env] of [
+    ['darwin', hosted], ['win32', {}], ['win32', { ...hosted, GITHUB_ACTIONS: 'false' }],
+    ['win32', { ...hosted, RUNNER_OS: 'Linux' }],
+    ['win32', { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Windows' }],
+    ['win32', { ...hosted, RUNNER_ENVIRONMENT: 'self-hosted' }],
+    ['win32', { ...hosted, RUNNER_ENVIRONMENT: 'GitHub-Hosted' }],
+  ]) assert.equal(Lifecycle.allowedRunner(platform, env), false);
+});
+
+for (const provenance of ['self-hosted', undefined]) test(`actual CLI refuses ${provenance ?? 'missing'} runner provenance before touching files or processes`, async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../scripts/windows-install-smoke.js'), 'utf8');
+  const touches = [], messages = [], module = { exports: {} };
+  const forbidden = kind => () => { touches.push(kind); throw new Error('Synthetic unsafe operation refused'); };
+  const fakeRequire = id => {
+    if (id === 'node:fs') return new Proxy({}, { get: (_, name) => forbidden(`fs.${String(name)}`) });
+    if (id === 'node:path') return path;
+    if (id === 'node:os') return { tmpdir: forbidden('os.tmpdir') };
+    if (id === 'node:child_process') return { spawn: forbidden('spawn') };
+    return {};
+  };
+  fakeRequire.main = module;
+  const process = { platform: 'win32', env: { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Windows', ...(provenance ? { RUNNER_ENVIRONMENT: provenance } : {}), APPDATA: 'C:\\synthetic-profile' }, exitCode: 0 };
+  vm.runInNewContext(source, { require: fakeRequire, module, process, console: { log() {}, error: message => messages.push(message) }, __dirname: '/synthetic-repo/scripts', setTimeout, clearTimeout });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(touches, []);
+  assert.equal(process.exitCode, 1);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /requires.*GitHub-hosted Windows/);
 });
 
 test('source harness retains foreign configuration and binary data across install, upgrade mode and uninstall', async t => {
