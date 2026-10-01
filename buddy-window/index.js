@@ -168,6 +168,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   let hubView = null;
   let infoView = null;
   let accountView = null;
+  let accountLoad = Promise.resolve();
+  let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view, kept so a page keeps its state
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
@@ -311,7 +313,14 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       accountView.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(accountView);
     }
-    accountView.webContents.loadFile(path.join(DIR, 'account.html'), { query: { screen } }).catch(() => {});
+    // Flow changes can arrive while the initial account navigation is still
+    // loading. Serialize loads and skip superseded screens so an earlier
+    // navigation cannot leave its URL/renderer behind the current flow.
+    const view = accountView, generation = ++accountLoadGeneration;
+    accountLoad = accountLoad.catch(() => {}).then(async () => {
+      if (!win || view !== accountView || generation !== accountLoadGeneration || view.webContents.isDestroyed()) return;
+      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query: { screen } });
+    }).catch((e) => log('account page load failed', e.message));
     attach(accountView);
   }
 
