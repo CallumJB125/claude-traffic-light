@@ -166,6 +166,11 @@ function isConnectCallback(url, hubOrigin) {
   } catch { return false; }
 }
 
+/** May the connect window go here? A public https page (the provider's hops) or the hub's own callback, nothing else. */
+function connectNavOk(url, hubOrigin) {
+  return connectUrlOk(url) || isConnectCallback(url, hubOrigin);
+}
+
 /** Which sidebar entry does a hub URL correspond to (for in-page view switches)? */
 function pageForHubUrl(url) {
   let v = null;
@@ -174,4 +179,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

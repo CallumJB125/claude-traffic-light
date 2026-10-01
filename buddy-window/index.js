@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, pageById, hubPageUrl, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
@@ -489,10 +489,10 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       try { host = new URL(d.url).host; } catch { /* refused below */ }
       if (host !== authorizeHost) { log('connect window closed: first page not the authorize host'); wc.stop(); w.close(); }
     });
-    wc.setWindowOpenHandler(({ url: u }) => { if (/^https:/.test(u)) shell.openExternal(u); return { action: 'deny' }; }); // privacy-flow: open-link-in-browser
-    // Provider logins hop between https hosts freely; the callback is on the hub.
-    const ok = (u) => /^https:/.test(u) || isConnectCallback(u, w.hubOrigin);
-    const guard = (e, u) => { if (!ok(u)) e.preventDefault(); };
+    // A provider page could otherwise open any address in the system browser, unasked.
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // Provider logins hop between public https hosts freely; the callback is on the hub.
+    const guard = (e, u) => { if (!connectNavOk(u, w.hubOrigin)) e.preventDefault(); };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
     wc.on('will-attach-webview', (e) => e.preventDefault());

@@ -6,7 +6,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
+const { PAGES, flat, pageById, hubPageUrl, navDecision, openDecision, connectDecision, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl } = require('../buddy-window/pages');
 const { createHubSupervisor, hubEnv, MAX_RESTARTS } = require('../buddy-window/hub-process');
 
 // ── pages ──────────────────────────────────────────────────────────────────
@@ -98,6 +98,23 @@ test('connect guard: only the signed-in hub’s own Integrations page, right aft
   assert.equal(connectUrlOk('https://slack.com/oauth/v2/authorize'), true);
   // localhost. resolves to loopback; a trailing dot, an IP literal or a private-use suffix names nothing a provider uses.
   for (const url of ['https://localhost./', 'https://foo.localhost./x', 'https://github.com./login', 'https://8.8.8.8/', 'https://0x7f000001/', 'https://printer.local/', 'https://metadata.google.internal/', 'https://router.home.arpa/', 'https://user:pw@github.com/', 'data:text/html,x', 'file:///etc/passwd', 'javascript:alert(1)']) assert.equal(connectUrlOk(url), false, url);
+});
+
+test('connect window navigation: public https provider pages and the hub callback only; popups are refused', () => {
+  const hub = 'https://app.plexiform.dev';
+  for (const u of ['https://github.com/login', 'https://github.com/sessions/two-factor', 'https://slack.com/oauth/v2/authorize', `${hub}/integrations/github/callback?code=x&state=y`]) assert.equal(connectNavOk(u, hub), true, u);
+  for (const u of ['http://github.com/login', 'https://192.168.1.1/', 'https://localhost./', 'https://127.0.0.1:8080/', 'file:///etc/passwd', 'data:text/html,x', 'javascript:alert(1)', 'mailto:a@b.co', 'x-github-desktop://open', 'not a url', 'http://app.plexiform.dev/integrations/github/callback']) assert.equal(connectNavOk(u, hub), false, u);
+  const local = 'http://127.0.0.1:4100';
+  assert.equal(connectNavOk(`${local}/integrations/github/callback?code=x`, local), true, 'the local hub’s own callback');
+  assert.equal(connectNavOk(`${local}/`, local), false, 'nothing else on the local hub');
+  assert.equal(connectNavOk('http://127.0.0.1:4101/integrations/github/callback', local), false, 'exact origin, port included');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  assert.match(fn, /const guard = \(e, u\) => \{ if \(!connectNavOk\(u, w\.hubOrigin\)\) e\.preventDefault\(\); \};/);
+  assert.match(fn, /wc\.on\('will-navigate', guard\);/);
+  assert.match(fn, /wc\.on\('will-redirect', guard\);/);
+  assert.match(fn, /wc\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\);/);
+  assert.ok(!/openExternal/.test(fn), 'the provider page can’t open the system browser either');
 });
 
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
