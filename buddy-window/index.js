@@ -465,13 +465,19 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   // A fresh BrowserWindow, never the page's own window.open: it has no opener
   // and an empty window.name, so the bind in the name never reaches the provider.
   let connectWin = null;
+  let connectOpening = false;
   async function openConnect(url, h, { provider, bind }) {
-    // A new connect replaces any open one: each carries its own bind.
-    if (connectWin && !connectWin.isDestroyed()) connectWin.close();
-    const ses = session.fromPartition(integrationPartitionFor(h.origin));
-    hardenSession(ses);
-    const cookie = bindCookie(h.origin, provider, bind);
-    await ses.cookies.set(cookie); // privacy-flow: integration-connect
+    // One at a time: swapping windows would let the old one's close handler remove the new bind cookie.
+    if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }
+    if (connectOpening) return;
+    connectOpening = true;
+    let ses, cookie;
+    try {
+      ses = session.fromPartition(integrationPartitionFor(h.origin));
+      hardenSession(ses);
+      cookie = bindCookie(h.origin, provider, bind);
+      await ses.cookies.set(cookie); // privacy-flow: integration-connect
+    } finally { connectOpening = false; }
     const authorizeHost = new URL(url).host;
     const w = new BrowserWindow({
       width: 560, height: 720, title: BRAND.CONNECT_TITLE, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#ffffff',

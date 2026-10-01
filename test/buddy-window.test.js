@@ -117,6 +117,18 @@ test('connect window navigation: public https provider pages and the hub callbac
   assert.ok(!/openExternal/.test(fn), 'the provider page can’t open the system browser either');
 });
 
+test('connect window: one at a time; a second open while one is open (or still opening) is refused, never stacked or swapped', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const fn = src.slice(src.indexOf('async function openConnect'), src.indexOf('async function showHubPage'));
+  const refuse = fn.indexOf("if (connectWin && !connectWin.isDestroyed()) { connectWin.focus(); log('connect window refused', 'already open'); return; }");
+  const pending = fn.indexOf('if (connectOpening) return;');
+  assert.ok(refuse > 0 && pending > 0, 'both guards present');
+  assert.ok(Math.max(refuse, pending) < fn.indexOf('bindCookie('), 'refused before any cookie is set');
+  assert.ok(!/connectWin\.close\(\)/.test(fn), 'an open window is never closed to make room (its closed handler would remove the new bind cookie)');
+  assert.match(fn, /connectOpening = true;\n\s+let ses, cookie;\n\s+try \{\n/);
+  assert.match(fn, /await ses\.cookies\.set\(cookie\); \/\/ privacy-flow: integration-connect\n\s+\} finally \{ connectOpening = false; \}/);
+});
+
 test('bind cookie: __Host- on https hubs (Secure, Path=/, no Domain), plain on /integrations/ for http dev hubs; HttpOnly, Lax, 10 minutes', () => {
   const now = 1_700_000_000_000;
   const https = bindCookie('https://app.plexiform.dev', 'github', 'bnd', now);
