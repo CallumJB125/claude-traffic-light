@@ -18,7 +18,7 @@ import { redact } from '../log.js';
 import { httpStatus } from '../../shared/protocol.js';
 import { normalizeRemoteUrl, matchRepo } from '../../shared/scope.js';
 import { AUTONOMY, cleanLinkStatus, parseCidr } from './connector.js';
-import { BlockList, isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net'; // privacy-flow: hub-server
 import { prNumberOf } from '../github.js';
 
 const MAX_BODY = 1024 * 1024;
