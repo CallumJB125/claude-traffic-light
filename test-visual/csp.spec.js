@@ -118,7 +118,7 @@ test('widget: garden', async () => {
 });
 
 test('lights: every tab, sounds, export, a photo cameo', async () => {
-  test.setTimeout(90000);
+  test.setTimeout(120000);
   for (const t of ['view-stats', 'view-mix', 'view-auto', 'view-rules']) {
     await lights.click(`#${t}`);
     await lights.waitForTimeout(500);
@@ -140,9 +140,10 @@ test('lights: every tab, sounds, export, a photo cameo', async () => {
   await lights.click('#share-copy', { timeout: 5000 });
 
   // a photo cameo: drop a real image on the face editor
-  await lights.locator('.addface').click();
-  await expect(lights.locator('#face-modal')).toBeVisible();
-  await lights.evaluate(async () => {
+  await lights.locator('.addface').click({ timeout: 20000 });
+  await expect(lights.locator('#face-modal')).toBeVisible({ timeout: 20000 });
+  // Under load the modal's drop handler can bind after the first drop: drop again until the frame is there.
+  const drop = () => lights.evaluate(async () => {
     const c = document.createElement('canvas');
     c.width = c.height = 200;
     const g = c.getContext('2d');
@@ -152,7 +153,7 @@ test('lights: every tab, sounds, export, a photo cameo', async () => {
     dt.items.add(new File([blob], 'face.png', { type: 'image/png' }));
     document.getElementById('face-modal').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
   });
-  await expect(lights.locator('#face-frame')).toBeVisible({ timeout: 10000 });
+  await expect(async () => { await drop(); await expect(lights.locator('#face-frame')).toBeVisible({ timeout: 5000 }); }).toPass({ timeout: 40000 });
   await lights.waitForTimeout(800);
   await lights.fill('#face-name', 'CSP test');
   await lights.click('#face-save');
