@@ -14,6 +14,14 @@ const canonical = value => JSON.stringify(value, (_key, item) => item && typeof 
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const unavailable = () => new HubError('NOT_FOUND', 'resource unavailable to this connection');
 const basicWrites = ['plexiform_create_card', 'plexiform_update_card', 'plexiform_add_comment'];
+// Only server-authored object identities carry a final delivery capability.
+// Its callback projects current data; it never executes or replays a mutation.
+const deliveries = new WeakMap();
+const sameActor = (current, initial) => current.grant.id === initial.grant.id
+  && current.tokenHash === initial.tokenHash && current.member.id === initial.member.id
+  && current.member.user_id === initial.member.user_id && current.member.org_id === initial.member.org_id
+  && current.member.role === initial.member.role && current.grant.client_id === initial.grant.client_id
+  && current.grant.family_id === initial.grant.family_id;
 // Remote material is never carried back into task narratives or returned data.
 function publicText(value) {
   if (typeof value === 'string') return redact(value, null);
@@ -28,10 +36,25 @@ export class RemoteActions {
   }
   catalog(token, kind = 'integration') {
     const scope = this.authority.authenticate(token, kind);
+    const result = this.catalogFor(scope);
+    deliveries.set(result, { owner: this, project: () => {
+      const current = this.authority.authenticate(token, kind);
+      if (!sameActor(current, scope)) throw unavailable();
+      return this.catalogFor(current);
+    } });
+    return result;
+  }
+  catalogFor(scope) {
     return native.listTools(scope.mode).map(tool => basicWrites.includes(tool.name) ? {
       ...tool, inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties,
         request_id: { type: 'string', pattern: UUID.source, maxLength: 36 } }, required: [...tool.inputSchema.required, 'request_id'] },
     } : tool);
+  }
+  deliver(result) {
+    const proof = result && deliveries.get(result);
+    if (!proof || proof.owner !== this) throw unavailable();
+    deliveries.delete(result);
+    return proof.project(); // synchronous: no authority gap before SDK serialization
   }
   validate(name, args) {
     try {
@@ -218,7 +241,20 @@ export class RemoteActions {
         default: throw invalid();
       }
       const current = authorize(false);
-      return definition.read ? this.projectRead(name, args, result, current, mcpResponseId) : this.projectMutation(name, args, result, current, mcpResponseId);
+      const project = scope => definition.read ? this.projectRead(name, args, result, scope, mcpResponseId)
+        : this.projectMutation(name, args, result, scope, mcpResponseId);
+      const output = project(current);
+      const deliveredRow = definition.read ? null : this.card(current, this.pointer(name, args, result).card_id);
+      deliveries.set(output, { owner: this, project: () => {
+        const fresh = authorize(false);
+        if (!sameActor(fresh, initial)) throw unavailable();
+        if (deliveredRow) {
+          const row = this.card(fresh, deliveredRow.id);
+          if (row.board_id !== deliveredRow.board_id || row.repo_id !== deliveredRow.repo_id) throw unavailable();
+        }
+        return project(fresh);
+      } });
+      return output;
     };
     if (definition.read) return execute();
     // Do not wrap already queued API/033 methods in another board queue. Only

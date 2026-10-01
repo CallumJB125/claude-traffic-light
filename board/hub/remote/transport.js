@@ -10,6 +10,11 @@ import { toolResult, boundedRpcResult } from './result.js';
 // predate Streamable HTTP are not supported by this resource.
 export const PROTOCOLS = Object.freeze(SUPPORTED_PROTOCOL_VERSIONS.filter(version => version >= '2025-03-26'));
 const METHODS = new Set(['initialize', 'notifications/initialized', 'ping', 'tools/list', 'tools/call']);
+function toolError(error) {
+  const detail = error instanceof HubError ? { code: error.code, message: error.message }
+    : { code: 'INTERNAL', message: 'Remote collaboration unavailable.' };
+  return { content: [{ type: 'text', text: JSON.stringify({ error: detail }) }], isError: true };
+}
 export function validateRpc(body, protocol) {
   closed(body, ['jsonrpc', 'id', 'method', 'params'], ['jsonrpc', 'method']);
   if (body.jsonrpc !== '2.0' || typeof body.method !== 'string' || !METHODS.has(body.method)
@@ -33,14 +38,40 @@ export async function serveMcp({ req, res, body, token, actions, signal, state }
     // refuse after this request's disconnect/deadline, inside ordinary queues.
     server.close().catch(() => {});
   };
-  server.setRequestHandler(ListToolsRequestSchema, () => boundedRpcResult({ tools: actions.catalog(token, 'mcp') }, body.id));
+  let delivery;
+  // SDK handlers and result validation await before calling send. Guard at the
+  // actual JSON transport boundary, whose configured JSON path serializes
+  // synchronously (no event store, SSE, sessions or resumable responses).
+  const send = transport.send.bind(transport);
+  transport.send = (message, options) => {
+    if (message.id === body.id && Object.hasOwn(message, 'result')
+      && ['tools/list', 'tools/call'].includes(body.method) && !message.result?.isError) {
+      try {
+        if (signal.aborted) throw new HubError('TIMEOUT', 'remote request ended');
+        if (!delivery) throw new HubError('FORBIDDEN', 'remote result unavailable');
+        const result = delivery();
+        if (result?.then) throw new HubError('INTERNAL', 'remote result unavailable');
+        message = { ...message, result: boundedRpcResult(result, body.id) };
+      } catch (error) {
+        message = body.method === 'tools/call' ? { ...message, result: toolError(error) }
+          : { jsonrpc: '2.0', id: body.id, error: { code: -32603, message: 'Remote collaboration unavailable.' } };
+      }
+    }
+    return send(message, options);
+  };
+  server.setRequestHandler(ListToolsRequestSchema, () => {
+    const tools = actions.catalog(token, 'mcp');
+    delivery = () => ({ tools: actions.deliver(tools) });
+    return boundedRpcResult({ tools }, body.id);
+  });
   server.setRequestHandler(CallToolRequestSchema, async request => {
     try {
       const result = await actions.call(token, 'mcp', request.params.name, request.params.arguments ?? {}, { signal, mcpResponseId: body.id });
+      delivery = () => toolResult(actions.deliver(result));
       return toolResult(result);
     } catch (error) {
       if (!(error instanceof HubError)) throw new Error('Remote collaboration unavailable.');
-      return { content: [{ type: 'text', text: JSON.stringify({ error: { code: error.code, message: error.message } }) }], isError: true };
+      return toolError(error);
     }
   });
   state.transports.add(transport); signal.addEventListener('abort', close, { once: true });
