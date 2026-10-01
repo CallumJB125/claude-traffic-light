@@ -71,6 +71,12 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
       'mcp_servers.board.env_vars=[]', 'mcp_servers.board.required=true',
       'mcp_servers.board.startup_timeout_sec=10', 'mcp_servers.board.tool_timeout_sec=60',
       `mcp_servers.board.enabled_tools=${JSON.stringify(CODEX_BOARD_TOOLS)}`,
+      // The task dispatch authorizes these closed, per-run board tools.
+      // Codex exec cannot present an MCP approval prompt; without an exact
+      // tool policy it cancels writes before the fenced hub can validate them.
+      // Shell sandbox and recorded human plan grants remain independent.
+      'mcp_servers.board.default_tools_approval_mode="prompt"',
+      ...CODEX_BOARD_TOOLS.map((tool) => `mcp_servers.board.tools.${tool}.approval_mode="approve"`),
     ] : []), 'hooks={}', 'notify=[]',
     'features.apps=false', 'features.multi_agent=false', 'features.hooks=false',
     ...(instructionsFile ? [`model_instructions_file=${JSON.stringify(instructionsFile)}`] : []),
