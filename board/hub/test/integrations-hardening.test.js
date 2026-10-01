@@ -401,3 +401,37 @@ test('Low-d: with BOARD_ENC_KEY_PREVIOUS every vault row is re-sealed at once, i
     assert.deepEqual(h.hub.resealVault(), { resealed: 0, unopened: 1 }, 'idempotent');
   } finally { await h.close(); }
 });
+
+// ── Low-e: what createConnection seals ────────────────────────────────────
+
+test('Low-e: every secret must be a declared kind holding a non-empty string ≤ 16 KiB; nothing is written otherwise and the value is never echoed', async () => {
+  const h = await startHub();
+  try {
+    h.hub.setVaultKey(randomBytes(32));
+    const reg = h.app.integrations;
+    reg.register(probe('m6a', { secrets: ['app_private_key'] }));
+    const count = () => ['connections', 'connection_secrets', 'journal'].map((t) => h.db.get(`SELECT COUNT(*) AS n FROM ${t}`).n);
+    const before = count();
+    const marker = `marker-${randomUUID()}`;
+    const make = (secrets, external_id = randomUUID()) => () => reg.createConnection({ orgId: h.ids.org, memberId: h.ids.alice, provider: 'm6a', external_id, secrets });
+    for (const bad of [{ pem: marker }, [marker], 4242, null, '', marker.padEnd(16 * 1024 + 1, 'x'), true]) {
+      assert.throws(make({ app_private_key: bad }), (e) => e.code === 'VALIDATION' && !e.message.includes(marker) && !e.message.includes('4242'), JSON.stringify(bad)?.slice(0, 40));
+    }
+    assert.throws(make({ webhook_secret: marker }), (e) => e.code === 'VALIDATION' && !e.message.includes(marker));
+    assert.deepEqual(count(), before, 'no connection, secret or journal row');
+    // A PEM-sized key is fine and comes back intact.
+    const pem = ['-----BEGIN', 'PRIVATE KEY-----\n'].join(' ') + randomBytes(1200).toString('base64').replace(/.{64}/g, '$&\n') + ['\n-----END', 'PRIVATE KEY-----'].join(' ');
+    const conn = make({ app_private_key: pem })();
+    assert.equal(reg.ctxFor(conn.id).secret('app_private_key'), pem);
+    const max = 'k'.repeat(16 * 1024);
+    assert.equal(reg.ctxFor(make({ app_private_key: max })().id).secret('app_private_key'), max);
+    // Through the token route the admin sees the short validation message only.
+    reg.register(probe('m6b', { secrets: ['api_token'], connect: { kind: 'token', verifyToken: async () => ({ external_id: 'w9', secrets: { api_token: { leaked: marker } } }) } }));
+    const alice = await h.login('alice');
+    const r = await h.api(alice, 'POST', '/api/integrations/m6b/token', { request_id: randomUUID(), token: 'pasted-token-value' });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error.code, 'VALIDATION');
+    assert.ok(!JSON.stringify(r.body).includes(marker));
+    assert.equal(h.db.get("SELECT COUNT(*) AS n FROM connections WHERE provider = 'm6b'").n, 0);
+  } finally { await h.close(); }
+});

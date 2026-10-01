@@ -29,6 +29,7 @@ const FETCH_TRIES = 4;
 const HANDLER_TIMEOUT_MS = 60_000;
 const DEDUPE_KEEP_MS = 30 * 24 * 3600_000;
 const CONFIG_MAX_BYTES = 8 * 1024;
+const SECRET_MAX_BYTES = 16 * 1024; // a PEM private key fits
 const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
@@ -142,6 +143,11 @@ export function createIntegrations({
     if (!ext || ext.length > 200) throw new HubError('VALIDATION', 'the provider did not name the workspace');
     if (!isPlainObject(secrets) || !isPlainObject(settings)) throw new HubError('VALIDATION', 'bad connection data');
     for (const k of Object.keys(secrets)) if (!conn.secrets.includes(k)) throw new HubError('VALIDATION', `${provider} does not declare secret ${k}`);
+    // Anything else would be sealed as its String() ("[object Object]"); the
+    // message never carries the value, and nothing is written.
+    for (const v of Object.values(secrets)) {
+      if (typeof v !== 'string' || !v || Buffer.byteLength(v) > SECRET_MAX_BYTES) throw new HubError('VALIDATION', `${conn.name} returned a secret this hub will not store`);
+    }
     hub.txn(() => {
       // Unique per org among live rows (partial index); revoked rows stay for their audit history.
       if (db.get("SELECT id FROM connections WHERE org_id = ? AND provider = ? AND external_id = ? AND status != 'revoked'", orgId, provider, ext)) {
