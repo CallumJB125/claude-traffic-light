@@ -44,17 +44,49 @@ test('shared packet narrative, author names, reported paths and evidence return 
 
 test('message reads report host receipt only after the response, wrap participant text and leave agent acknowledgement explicit', async () => {
   await withRun('APP-94', async (run, hub) => {
-    const message = { id: 'message-1', body: EVIL[0], author: { name: EVIL[1] }, delivery: { receipt_id: '00000000-0000-4000-8000-000000000001', receipt_token: 'fixture-receipt', state: 'pending' } };
+    const message = { id: 'message-1', body: EVIL[0], author: { name: EVIL[1] }, delivery: { receipt_id: '00000000-0000-4000-8000-000000000001', receipt_token: `bmr1.00000000-0000-4000-8000-000000000001.${'A'.repeat(43)}`, state: 'pending' } };
     hub.rpcReply = (f) => ({ ok: true, result: f.method === 'board_list_messages' ? { inbox: [message], history: [], peers: [{ run_id: 'peer-1', name: EVIL[2], title: EVIL[0] }] } : { receipts: [{ message_id: message.id, state: 'received' }] } });
     const r = await run.tool('board_list_messages');
     assert.deepEqual(hub.of('rpc').map((f) => f.method), ['board_list_messages', 'runner_messages_received']);
-    assert.equal(r.inbox[0].delivery.state, 'received'); assert.equal(r.inbox[0].delivery.receipt_token, 'fixture-receipt');
+    assert.equal(r.inbox[0].delivery.state, 'received'); assert.equal(r.inbox[0].delivery.receipt_token, message.delivery.receipt_token);
     for (const s of [r.inbox[0].body, r.inbox[0].author.name, r.peers[0].name, r.peers[0].title]) { assert.ok(s.startsWith(`<untrusted_board_content_${run.nonce} `)); assert.equal(closes(s), 1); }
     assert.deepEqual(hub.of('rpc')[1].params, { receipts: [{ receipt_id: message.delivery.receipt_id, receipt_token: message.delivery.receipt_token }] });
     assert.equal(hub.of('rpc').filter((f) => f.method === 'board_ack_message').length, 0);
     hub.rpcReply = (f) => f.method === 'runner_messages_received' ? { ok: false, error: { code: 'FENCED', message: 'old connection' } }
       : { ok: true, result: { inbox: [message], history: [], peers: [] } };
     await assert.rejects(run.tool('board_list_messages'), (e) => e.code === 'FENCED');
+  });
+});
+
+test('receipt capabilities cannot escape through ordinary tools, outbox narratives or facts; explicit acknowledgement stays exact', async () => {
+  await withRun('APP-97', async (run, hub) => {
+    const receipt_id = '00000000-0000-4000-8000-000000000002';
+    const receipt_token = `bmr1.${receipt_id}.${'A'.repeat(42)}-`;
+    const copied = `copied ${receipt_token}`;
+    hub.rpcReply = () => ({ ok: true, result: {} });
+    await run.tool('board_update_status', { summary: copied });
+    await run.tool('board_append_progress', { text: copied });
+    await run.tool('board_comment', { text: copied });
+    await run.tool('board_write_handover', { patch: { hypothesis: copied, next: copied, done: [copied] } });
+    await run.tool('board_attach_evidence', { kind: 'test_run', ref: copied, summary: copied });
+    await run.tool('board_ask_human', { kind: 'question', text: copied, options: [copied] });
+    const tool_input = { command: `node --test # ${receipt_token}` };
+    await run.hook('pre', { tool_name: 'Bash', tool_input });
+    await run.hook('post', { tool_name: 'Bash', tool_input, tool_response: { stdout: copied } });
+    await run.hook('post', { tool_name: 'TodoWrite', tool_input: { todos: [{ content: copied, status: 'pending' }] } });
+    await run.hook('stop', { last_assistant_message: copied });
+    run.flushFacts();
+    for (let i = 0; i < 100 && !hub.facts('message').length; i++) await new Promise((r) => setTimeout(r, 20));
+    for (const kind of ['status.update', 'progress.append', 'comment.create', 'handover.write']) {
+      const out = hub.outs(kind).find((m) => JSON.stringify(m).includes('<redacted:message_receipt>'));
+      assert.ok(out, `sanitized ${kind} actually sent`);
+    }
+    for (const kind of ['tool_start', 'command', 'plan', 'message']) assert.ok(hub.facts(kind).some((f) => JSON.stringify(f).includes('<redacted:message_receipt>')), `sanitized ${kind} fact actually sent`);
+    assert.ok(!JSON.stringify(hub.frames).includes(receipt_token), 'no ordinary frame exports the capability');
+    await run.tool('board_ack_message', { receipt_id, receipt_token });
+    assert.deepEqual(hub.of('rpc').find((f) => f.method === 'board_ack_message').params, { receipt_id, receipt_token });
+    const ordinary = hub.frames.filter((f) => !(f.type === 'rpc' && f.method === 'board_ack_message'));
+    assert.ok(!JSON.stringify(ordinary).includes(receipt_token));
   });
 });
 

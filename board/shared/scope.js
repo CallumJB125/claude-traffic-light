@@ -135,6 +135,7 @@ export function filterPath(p, toplevel) {
 
 // Credential shapes that must never appear in a hub-bound byte (exit j).
 export const CREDENTIAL_PATTERNS = Object.freeze([
+  ['message_receipt', /bmr1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}/],
   ['anthropic_key', /sk-ant-[A-Za-z0-9_-]{8,}/],
   ['openai_key', /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/],
   ['aws_access_key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
@@ -154,6 +155,23 @@ export const CREDENTIAL_PATTERNS = Object.freeze([
 // x|/home/…, {/Users/…}) except one that continues a path segment, so a
 // repo-relative lib/tmp/x.js is not mistaken for /tmp/.
 const LOCAL_PATH = /(?<![\w.-])(?:\/Users\/|\/home\/|\/root\/|\/private\/|\/var\/folders\/|\/tmp\/|\/Volumes\/|~\/|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/])/;
+
+// A receipt capability travels only in the two private receipt RPCs. This
+// exception never covers narrative text, arbitrary nested RPCs or outbox data.
+function privateReceiptPaths(message) {
+  const paths = new Set();
+  if (message.type !== 'rpc') return paths;
+  const closed = (v, keys) => v && typeof v === 'object' && !Array.isArray(v)
+    && Object.keys(v).length === keys.length && keys.every((k) => Object.hasOwn(v, k));
+  const receipt = (v) => closed(v, ['receipt_id', 'receipt_token']) && typeof v.receipt_id === 'string'
+    && typeof v.receipt_token === 'string' && /^bmr1\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$/.test(v.receipt_token)
+    && v.receipt_token.startsWith(`bmr1.${v.receipt_id}.`);
+  if (message.method === 'board_ack_message' && receipt(message.params)) paths.add('$.params.receipt_token');
+  if (message.method === 'runner_messages_received' && closed(message.params, ['receipts'])
+    && Array.isArray(message.params.receipts) && message.params.receipts.length >= 1 && message.params.receipts.length <= 20
+    && message.params.receipts.every(receipt)) message.params.receipts.forEach((_, i) => paths.add(`$.params.receipts[${i}].receipt_token`));
+  return paths;
+}
 
 /**
  * Redact free text (command tails, agent-written text) before it enters the
@@ -195,11 +213,12 @@ export function assertNoForeignBytes(message, scope, { requireRepoId = false } =
   if ('repo_id' in message ? message.repo_id !== scope.repo_id : requireRepoId) {
     throw new ForeignBytesError(`repo_id ${message.repo_id} does not match scope ${scope.repo_id}`);
   }
+  const receipts = privateReceiptPaths(message);
   const walk = (v, where, depth) => {
     if (depth > 32) throw new ForeignBytesError('message too deep', where);
     if (typeof v === 'string') {
       if (LOCAL_PATH.test(v)) throw new ForeignBytesError('local absolute path', where);
-      for (const [kind, re] of CREDENTIAL_PATTERNS) if (re.test(v)) throw new ForeignBytesError(`credential pattern ${kind}`, where);
+      for (const [kind, re] of CREDENTIAL_PATTERNS) if (re.test(v) && !(kind === 'message_receipt' && receipts.has(where))) throw new ForeignBytesError(`credential pattern ${kind}`, where);
       return;
     }
     if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${where}[${i}]`, depth + 1)); return; }
