@@ -1,9 +1,9 @@
 // Where the hook commands and the MCP entry point. Normally that is the app
-// itself: its binary and the hooks/ it ships in Resources. A Linux AppImage is
+// itself: its binary and the hooks/ it ships in Resources. An AppImage or Windows portable copy is
 // different: it runs from a fresh /tmp/.mount_XXXX every launch, so a path into
 // it stops working the moment the app quits, and the agent configs would be
-// rewritten on every start. There the commands run the .AppImage file itself
-// ($APPIMAGE, which does not move) against a copy of hooks/ and adapters/ kept
+// rewritten on every start. There the commands run the original launcher
+// ($APPIMAGE or $PORTABLE_EXECUTABLE_FILE) against hooks/ and adapters/ kept
 // in the data folder, one copy per app version.
 const fs = require('fs');
 const path = require('path');
@@ -25,9 +25,10 @@ require(require('path').join(require('path').dirname(process.execPath), 'resourc
 // the dev fallback to plain node (adapters/runtime.js).
 function choose({ packaged, platform, env = {}, execPath, resourcesPath, appDir, appPath, rootDir, version }) {
   if (!packaged) return { execPath: null, hooksDir: path.join(appDir, 'hooks'), mcpAppPath: appPath, stableDir: null, copyFrom: null };
-  if (platform === 'linux' && env.APPIMAGE) {
+  const launcher = platform === 'linux' ? env.APPIMAGE : platform === 'win32' ? env.PORTABLE_EXECUTABLE_FILE : null;
+  if (launcher) {
     const stableDir = path.join(rootDir, `${STABLE_PREFIX}${version}`);
-    return { execPath: env.APPIMAGE, hooksDir: path.join(stableDir, 'hooks'), mcpAppPath: stableDir, stableDir, copyFrom: resourcesPath };
+    return { execPath: launcher, hooksDir: path.join(stableDir, 'hooks'), mcpAppPath: stableDir, stableDir, copyFrom: resourcesPath };
   }
   return { execPath, hooksDir: path.join(resourcesPath, 'hooks'), mcpAppPath: appPath, stableDir: null, copyFrom: null };
 }
@@ -72,7 +73,7 @@ function resolve(opts, fsImpl = fs, log = console.warn) {
     materialize(chosen, fsImpl);
     return chosen;
   } catch (err) {
-    log(`[hooks] could not copy the hooks out of the AppImage (${err.message}); using the mounted copy`);
+    log(`[hooks] could not copy the hooks out of the temporary app (${err.message}); using the mounted copy`);
     return choose({ ...opts, env: {} });
   }
 }

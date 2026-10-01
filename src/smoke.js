@@ -121,4 +121,4 @@ function windowLoaded(wc, { timeoutMs = 20000, page = 'index.html', pollMs = 250
   });
 }
 
-module.exports = { run, reportPathFrom, unsafeReason, firstHookCommand, windowLoaded };
+module.exports = { run, reportPathFrom, unsafeReason, firstHookCommand, windowLoaded, runHook };

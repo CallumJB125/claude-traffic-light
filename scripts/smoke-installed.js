@@ -30,44 +30,55 @@ function freePort() {
   });
 }
 
-async function main() {
-  const fromDist = !process.argv[2];
-  const exe = process.argv[2] || findExecutable();
-  if (!exe || !fs.existsSync(exe)) throw new Error(`no packaged app found (looked in ${DIST}); pass its path`);
-  const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'plexiform-smoke-'));
+function fixture(tmp) {
   const home = path.join(tmp, 'home');
   const data = path.join(home, '.claude-traffic-light');
   fs.mkdirSync(path.join(data, 'sessions'), { recursive: true });
   // First-run help would open a second window; the smoke test only needs the widget.
   fs.writeFileSync(path.join(data, '.help-shown'), new Date().toISOString());
-  const report = path.join(tmp, 'report.json');
+  return { tmp, home, data, userData: path.join(tmp, 'user-data') };
+}
+
+async function runPackagedSmoke({ exe, home, data, userData, report, extraEnv = {}, timeoutMs = TIMEOUT_MS }) {
+  if (!exe || !fs.existsSync(exe)) throw new Error(`no packaged app found (looked in ${DIST}); pass its path`);
 
   // Its own Electron profile and signal port, so it can never meet a real
   // install's single-instance lock, storage or port on the same machine.
-  const userData = path.join(tmp, 'user-data');
   const args = [`--smoke-test=${report}`, `--user-data-dir=${userData}`];
   // CI Linux has no setuid chrome-sandbox; this is the runner, not a shipped default.
   if (process.platform === 'linux') args.push('--no-sandbox');
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_TRAFFIC_LIGHT_HOME: data, CLAUDE_TRAFFIC_LIGHT_PORT: String(await freePort()), ELECTRON_ENABLE_LOGGING: '1' };
+  const env = { ...process.env, ...extraEnv, HOME: home, USERPROFILE: home, CLAUDE_TRAFFIC_LIGHT_HOME: data, CLAUDE_TRAFFIC_LIGHT_PORT: String(await freePort()), ELECTRON_ENABLE_LOGGING: '1', ELECTRON_LOG_FILE: `${report}.chromium.log` };
   delete env.ELECTRON_RUN_AS_NODE;
 
   console.log(`smoke: ${exe}`);
   const code = await new Promise((resolve) => {
     const child = spawn(exe, args, { env, stdio: 'inherit' });
-    const timer = setTimeout(() => { console.error('smoke: timed out'); child.kill(); resolve(124); }, TIMEOUT_MS);
+    const timer = setTimeout(() => { console.error('smoke: timed out'); child.kill(); resolve(124); }, timeoutMs);
     child.on('exit', (c) => { clearTimeout(timer); resolve(c ?? 1); });
     child.on('error', (err) => { clearTimeout(timer); console.error(err.message); resolve(1); });
   });
   const result = fs.existsSync(report) ? JSON.parse(fs.readFileSync(report, 'utf8')) : null;
   console.log(JSON.stringify(result, null, 2));
-  fs.rmSync(tmp, { recursive: true, force: true });
   if (code !== 0 || !result?.ok) {
-    console.error(`smoke: FAILED (exit ${code})`);
-    process.exit(1);
+    throw new Error(`smoke: FAILED (exit ${code}); diagnostic report ${report}`);
   }
   console.log('smoke: ok');
-  // A local run leaves no extra app registered with macOS (a no-op on CI).
-  if (fromDist) require('./forget-local-build.js').forgetLocalBuild({ dist: DIST });
+  return result;
 }
 
-main().catch((err) => { console.error(`smoke: ${err.message}`); process.exit(1); });
+async function main() {
+  const fromDist = !process.argv[2];
+  const temp = fixture(fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'plexiform-smoke-')));
+  try {
+    await runPackagedSmoke({ ...temp, exe: process.argv[2] || findExecutable(), report: path.join(temp.tmp, 'report.json') });
+    fs.rmSync(temp.tmp, { recursive: true, force: true });
+    // A local run leaves no extra app registered with macOS (a no-op on CI).
+    if (fromDist) require('./forget-local-build.js').forgetLocalBuild({ dist: DIST });
+  } catch (err) {
+    console.error(`smoke: retained failure diagnostics in ${temp.tmp}`);
+    throw err;
+  }
+}
+
+if (require.main === module) main().catch((err) => { console.error(`smoke: ${err.message}`); process.exitCode = 1; });
+module.exports = { fixture, runPackagedSmoke, findExecutable };

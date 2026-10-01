@@ -135,6 +135,12 @@ function register(ipcMain, service) {
 
 function backendFor({ app, fetch, platform, env, userData, dev }) {
   if (dev || !app.isPackaged) return null;
+  if (platform === 'win32' && env.PORTABLE_EXECUTABLE_FILE) return {
+    kind: 'portable', fileKind: 'nsis',
+    // Check the normal signed offer, then explain how to replace this copy.
+    // Never start NSIS from a portable copy or register an installed app.
+    preflight: () => new V.UpdateError('portable', `Download the latest portable copy from ${Brand.urls.download} and replace this executable after quitting Plexiform.`),
+  };
   if (platform === 'win32' || (platform === 'linux' && env.APPIMAGE)) return require('./electron-updater.js').create({ platform }); // privacy-flow: auto-update
   if (platform === 'linux') return require('./deb.js').create({ fetch, userData, downloadsDir: app.getPath('downloads') });
   if (platform === 'darwin') return MacSwap.create({ fetch, userData, execPath: process.execPath, quit: () => app.quit() });
@@ -177,4 +183,4 @@ const setRequired = (minVersion, hubName) => service?.setRequired(minVersion, hu
 const healthStatus = () => (service ? service.healthStatus() : { state: 'unknown', detail: 'not set up yet' });
 const markLaunched = ({ app }) => MacSwap.markLaunched({ userData: app.getPath('userData'), updatedFrom: launch.updatedFrom });
 
-module.exports = { start, setRequired, healthStatus, markLaunched, busyReason, register, loadShippedKeys, loadBuiltAt, policyFor, isAppPage, guardNavigation, APP_ROOT, KEY_FILES };
+module.exports = { start, setRequired, healthStatus, markLaunched, busyReason, register, loadShippedKeys, loadBuiltAt, policyFor, isAppPage, guardNavigation, backendFor, APP_ROOT, KEY_FILES };

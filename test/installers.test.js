@@ -23,10 +23,14 @@ test('installer names say the brand, and so do productName and appId', () => {
   assert.match(config.dmg.title, new RegExp(`^${Brand.name} `));
 });
 
-test('every platform builds what it can update from, and nothing that cannot', () => {
+test('every platform builds its update target; Windows portable has a distinct manual-download name', () => {
   assert.deepEqual(config.mac.target.map((t) => t.target), ['dmg', 'zip']);
   assert.deepEqual(config.mac.target[0].arch, ['arm64', 'x64']);
-  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis']);
+  assert.deepEqual(config.win.target.map((t) => t.target), ['nsis', 'portable']);
+  assert.ok(config.win.target.every(t => t.arch.length === 1 && t.arch[0] === 'x64'));
+  assert.equal(config.portable.artifactName, `${Brand.name}-\${version}-win-\${arch}-portable.exe`);
+  assert.notEqual(config.portable.artifactName, config.nsis.artifactName);
+  assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   assert.deepEqual(config.linux.target.map((t) => t.target), ['AppImage', 'deb']);
   assert.equal(config.publish[0].provider, 'generic');
   assert.match(config.publish[0].url, /^https:\/\//);
@@ -305,12 +309,13 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
-  // macOS-first: Windows only reports; Mac and Linux block for tags and candidates
-  const coe = /name: Unit tests\n(?:.*\n)*? {8}continue-on-error: (.*)\n/.exec(jobs.build)[1];
-  assert.equal(coe, "${{ matrix.platform == 'win' }}");
+  // Every platform blocks staging; artifacts/evidence remain for debugging.
+  assert.ok(!/continue-on-error:/.test(jobs.build));
   // No dispatch exception: a dry or beta candidate must not hide a Mac/Linux failure
   assert.deepEqual([...jobs.build.matchAll(/platform: (\w+)/g)].map((m) => m[1]), ['mac', 'win', 'linux']);
-  assert.equal((coe.match(/matrix\.platform == '(\w+)'/g) || []).join(), "matrix.platform == 'win'");
+  assert.match(jobs.build, /name: Windows installer lifecycle/);
+  assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
+  assert.match(jobs.build, /node --test --test-force-exit --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {
@@ -510,12 +515,9 @@ test('release.yml passes test files, never a bare directory, to node --test', ()
   assert.match(yml, /remote\/test\/\*\.test\.js/);
 });
 
-// A failing Windows smoke test must not fail the Windows job: stage needs every
-// build job, so it would block the macOS release while Windows doesn't ship.
-test('release.yml: the Mac/Windows smoke test only reports on Windows; Mac and Linux block', () => {
+test('release.yml: every smoke test blocks release staging, with explicit Windows lifecycle evidence', () => {
   const yml = readText('.github/workflows/release.yml');
-  const step = yml.slice(yml.indexOf('- name: Smoke test (Mac, Windows)'), yml.indexOf('- uses: actions/upload-artifact'));
-  assert.match(step, /continue-on-error: \$\{\{ matrix\.platform == 'win' \}\}/);
-  const linux = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Smoke test (Mac, Windows)'));
-  assert.doesNotMatch(linux, /continue-on-error/);
+  const step = yml.slice(yml.indexOf('- name: Smoke test (Linux)'), yml.indexOf('- name: Test and lifecycle evidence'));
+  assert.doesNotMatch(step, /continue-on-error/);
+  assert.match(step, /Windows installer lifecycle[\s\S]*timeout-minutes: 15[\s\S]*windows-install-smoke\.js/);
 });
