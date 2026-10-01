@@ -93,6 +93,10 @@
 //   systemEvents: ['pr_merged', 'pr_closed'],
 //
 //   async health(ctx) → { ok, detail? },
+//
+//   // Pure reads a handler may use (org-scoped, nothing secret):
+//   // ctx.boards() → [{id, title}] (≤ 100, by title); ctx.card(id) →
+//   // {id, key, title, board_id, column_name} | null (never body or labels).
 // })
 
 import { isIP } from 'node:net'; // privacy-flow: hub-server

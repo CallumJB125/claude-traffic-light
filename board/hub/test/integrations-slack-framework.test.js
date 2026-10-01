@@ -314,3 +314,30 @@ test('F8: act() meta.subject caps createCard at 5/h per (connection, provider us
     await h.close();
   }
 });
+
+// ── F5 read helpers ───────────────────────────────────────────────────────
+
+test('F5: ctx.boards() lists this team\'s boards (id, title; by title; at most 100) and ctx.card(id) a card\'s face; another team\'s or an unknown id is null', async () => {
+  const { h, reg } = await setup();
+  try {
+    const conn = connect(h, 'f5a');
+    const ctx = reg.ctxFor(conn.id);
+    const other = addOrg(h);
+    const own = h.db.get('SELECT id, name FROM boards WHERE id = ?', h.ids.board);
+    for (const name of ['beta', 'Alpha']) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix, settings) VALUES (?, ?, ?, 'XB', '{\"default_budget_usd\":5}')", randomUUID(), h.ids.org, name);
+    const boards = ctx.boards();
+    assert.ok(boards.every((b) => Object.keys(b).join() === 'id,title'));
+    assert.ok(!boards.some((b) => b.id === other.board), 'never another team\'s board');
+    assert.deepEqual(boards.map((b) => b.title), h.db.all('SELECT name FROM boards WHERE org_id = ? ORDER BY name, id', h.ids.org).map((b) => b.name));
+    assert.ok(boards.some((b) => b.id === own.id && b.title === own.name));
+    for (let i = 0; i < 120; i += 1) h.db.run("INSERT INTO boards (id, org_id, name, key_prefix) VALUES (?, ?, ?, 'XC')", randomUUID(), h.ids.org, `z-${String(i).padStart(3, '0')}`);
+    assert.equal(ctx.boards().length, 100);
+    // A card: its face only.
+    const { result } = await createIn(ctx, h.ids.board, { request_id: 'f5-1', title: 'Face only', body: 'private goal', acceptance: 'private acceptance', labels: ['secret-label'] });
+    assert.deepEqual(ctx.card(result.card.id), { id: result.card.id, key: result.card.key, title: 'Face only', board_id: h.ids.board, column_name: 'todo' });
+    const t = h.hub.iso();
+    const foreign = randomUUID();
+    h.db.run("INSERT INTO cards (id, board_id, key, title, created_by, created_at, updated_at) VALUES (?, ?, 'OTH-1', 'Theirs', ?, ?, ?)", foreign, other.board, other.admin, t, t);
+    for (const id of [foreign, randomUUID(), undefined, null, 7, { id: result.card.id }]) assert.equal(ctx.card(id), null);
+  } finally { await h.close(); }
+});

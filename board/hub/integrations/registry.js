@@ -35,6 +35,7 @@ const AUDIT_JSON_MAX = 2048;
 const AUDIT_STR_MAX = 128;
 const REQUEST_ID_MAX = 200;
 const SUBJECT_MAX = 128;
+const BOARDS_MAX = 100;
 const AUDIT_KEEP_MS = 90 * 24 * 3600_000;
 const AUDIT_REF_MAX = 80;
 // An id (PR number, issue key, branch, sha, slug): never free text, which a
@@ -697,6 +698,15 @@ export function createIntegrations({
       linkStatusFor,
       linked: (kind, externalId) => db.get('SELECT card_id FROM external_links WHERE connection_id = ? AND kind = ? AND external_id = ?', c.id, String(kind), String(externalId))?.card_id ?? null,
       boardIds: () => db.all('SELECT id FROM boards WHERE org_id = ?', c.org_id).map((b) => b.id),
+      // What a chat picker shows: never settings, repos or anything secret.
+      boards: () => db.all(`SELECT b.id, b.name FROM boards b JOIN orgs o ON o.id = b.org_id
+        WHERE b.org_id = ? AND o.deleted_at IS NULL ORDER BY b.name, b.id LIMIT ${BOARDS_MAX}`, c.org_id).map((b) => ({ id: b.id, title: b.name })),
+      // A card's face only: never its body, acceptance, labels or budget,
+      // which a connector would otherwise echo into a shared channel.
+      card: (cardId) => {
+        const card = typeof cardId === 'string' ? cardInOrg(cardId) : null;
+        return card ? { id: card.id, key: card.key, title: card.title, board_id: card.board_id, column_name: card.column_name } : null;
+      },
       log: (msg, extra = {}) => log?.info?.(msg, { integration: c.provider, connection_id: c.id, ...extra }),
     };
   }
