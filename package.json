@@ -157,7 +157,7 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "electron": "^44.3.0",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "26.16.1",
     "jsdom": "^30.0.1"
   },
   "dependencies": {
