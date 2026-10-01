@@ -187,3 +187,22 @@ test('settings: Preferences, Health and Backups run under the policy', async () 
   await collect(settings, 'settings');
   expect(violations).toEqual([]);
 });
+
+test('usage pop-out: renders under the policy, and an inline handler and a fetch are refused', async () => {
+  await h.app.evaluate(() => global.__buddyTrayMenu.items.find((i) => i.label === 'Open Usage…').click());
+  const pop = await windowByFile(h.app, 'usage-pop.html');
+  await pop.waitForLoadState('load');
+  await watch(pop, 'usage-pop');
+  await expect(pop.locator('#note')).not.toHaveText('', { timeout: 10000 });
+  await pop.evaluate(() => { const b = document.createElement('b'); b.setAttribute('onclick', 'window.__x = 1'); document.body.append(b); b.click(); fetch('https://example.invalid/').catch(() => {}); });
+  await pop.waitForTimeout(300);
+  expect(await pop.evaluate(() => window.__x)).toBeUndefined();
+  const seen = await pop.evaluate(() => window.__csp);
+  expect(seen.some((s) => s.startsWith('script-src'))).toBe(true);
+  expect(seen.some((s) => s.startsWith('connect-src'))).toBe(true);
+  await pop.evaluate(() => { window.__csp.length = 0; });
+  violations.length = 0;
+  await pop.waitForTimeout(200);
+  await collect(pop, 'usage-pop');
+  expect(violations).toEqual([]);
+});

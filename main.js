@@ -1133,6 +1133,70 @@ function createUpdatesWindow() {
   });
 }
 
+// The Usage pop-out: a small read-only glance (today, this week, top model)
+// next to whatever opened it. The full analytics page stays in the Lights
+// editor's Model mix view, behind the footer link and the sidebar's Usage.
+const USAGE_POP_SIZE = { width: 300, height: 260 };
+const USAGE_POP_REFRESH_MS = 30000;
+let usagePopWin = null;
+let usagePopTimer = null;
+async function usagePopSummary() {
+  return UsagePopView.build(await getUsageTurns(), { mode: Spend.normalize(loadConfig().spend).mode });
+}
+async function pushUsagePop() {
+  if (!usagePopWin || usagePopWin.isDestroyed()) return;
+  const summary = await usagePopSummary();
+  if (usagePopWin && !usagePopWin.isDestroyed()) usagePopWin.webContents.send('usage-pop:update', summary);
+}
+// Beside the widget when it opened this, under (or over) the tray icon otherwise.
+function usagePopBounds(from) {
+  const widgetB = win && !win.isDestroyed() ? win.getBounds() : null;
+  const trayB = tray && !tray.isDestroyed() && tray.getBounds().width ? tray.getBounds() : null;
+  const beside = from === 'widget' || !trayB;
+  const anchor = beside ? widgetB : trayB;
+  const { width, height } = USAGE_POP_SIZE;
+  if (!anchor) { const wa = screen.getPrimaryDisplay().workArea; return { x: wa.x + wa.width - width - 16, y: wa.y + 16, width, height }; }
+  const wa = screen.getDisplayMatching(anchor).workArea;
+  let x = beside ? anchor.x - width - 8 : Math.round(anchor.x + anchor.width / 2 - width / 2);
+  if (beside && x < wa.x) x = anchor.x + anchor.width + 8;
+  const y = beside ? anchor.y : anchor.y + anchor.height / 2 < wa.y + wa.height / 2 ? anchor.y + anchor.height + 4 : anchor.y - height - 4;
+  return { x: Math.min(Math.max(x, wa.x), wa.x + wa.width - width), y: Math.min(Math.max(y, wa.y), wa.y + wa.height - height), width, height };
+}
+function createUsagePopWindow(from = 'tray') {
+  if (usagePopWin && !usagePopWin.isDestroyed()) { usagePopWin.setBounds(usagePopBounds(from)); usagePopWin.show(); usagePopWin.focus(); pushUsagePop(); return; }
+  usagePopWin = new BrowserWindow({
+    ...usagePopBounds(from),
+    frame: false, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
+    alwaysOnTop: true, show: false, title: 'Usage', backgroundColor: '#1c1a1f',
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'usage-pop-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  const w = usagePopWin;
+  w.setAlwaysOnTop(true, 'floating', 1);
+  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const stay = (e, url) => { if (!/\/usage-pop\.html(\?|#|$)/.test(url)) e.preventDefault(); };
+  w.webContents.on('will-navigate', stay);
+  w.webContents.on('will-redirect', stay);
+  // Esc is also handled in the page; this one works before the page has focus.
+  w.webContents.on('before-input-event', (e, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { e.preventDefault(); w.close(); } });
+  // Click-away closes it, but only once it has really had focus: the menu that
+  // opened it hands focus back as it closes, which is not a click-away.
+  let focused = false;
+  w.on('focus', () => { focused = true; });
+  w.on('blur', () => { if (focused && !w.isDestroyed()) w.close(); });
+  // From the tray the app is not frontmost, and an unfocused pop-out could never see a click-away.
+  w.once('ready-to-show', () => { if (IS_MAC) app.focus({ steal: true }); w.show(); w.focus(); });
+  w.loadFile('usage-pop.html');
+  usagePopTimer = setInterval(pushUsagePop, USAGE_POP_REFRESH_MS);
+  w.on('closed', () => { clearInterval(usagePopTimer); usagePopTimer = null; usagePopWin = null; });
+}
+ipcMain.handle('usage-pop:get', (e) => (usagePopWin && e.sender === usagePopWin.webContents ? usagePopSummary() : null));
+ipcMain.handle('usage-pop:close', (e) => { if (usagePopWin && e.sender === usagePopWin.webContents) usagePopWin.close(); });
+ipcMain.handle('usage-pop:open-full', (e) => {
+  if (!usagePopWin || e.sender !== usagePopWin.webContents) return;
+  usagePopWin.close();
+  openLightsMix();
+});
+
 // The updater service (or, in a visual-test run, a fixture stand-in). The tray is rebuilt only when its update items change.
 let updaterService = null;
 let updaterTrayKey = null;
@@ -1164,9 +1228,11 @@ const { createBuddyWindow } = require('./buddy-window');
 const BRAND = require('./buddy-window/brand');
 const BuddyPages = require('./buddy-window/pages');
 const AppMenu = require('./src/app-menu.js');
+const UsagePopView = require('./src/usage-pop-view.js');
 // plexiform:// and the legacy claudebuddy:// open the same links.
 const DEEP_LINK_RE = new RegExp(`^(${BRAND.SCHEMES.join('|')}):`, 'i');
 let buddyWin = null;
+function openLightsMix() { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
 // Dev only (`--buddy-mock-accounts`): the loopback mock accounts hub. The
 // Buddy window reads its origin once, when created, so nothing may create the
 // window (a deep link, the tray, a second instance) until it is listening.
@@ -1181,7 +1247,7 @@ function getBuddy() {
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
         else if (which === 'settings') createSettingsWindow();
-        else if (which === 'mix') { createLightsWindow(); lightsWin?.webContents.once('did-finish-load', () => lightsWin?.webContents.send('show-view', 'mix')); lightsWin?.webContents.send('show-view', 'mix'); }
+        else if (which === 'mix') openLightsMix();
       },
       onClosed: () => { if (IS_MAC && !lightsWin && !settingsWin && !updatesWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
@@ -2357,9 +2423,9 @@ function createTray() {
       click: () => { if (!item.sessionId) return; WorkScope.setSessionScope(item.sessionId, item.checked ? 'auto' : 'personal'); scopeChanged(); },
     }, { type: 'separator' }];
   };
-  const buildMenu = () => Menu.buildFromTemplate([
+  const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: null }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: null, popOuts: { usage: () => createUsagePopWindow(from) } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -2435,7 +2501,7 @@ let buildWidgetMenu = null;
 ipcMain.handle('widget-menu', (e) => {
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   if (!buildWidgetMenu) { createLightsWindow(); return; }
-  const menu = buildWidgetMenu();
+  const menu = buildWidgetMenu('widget');
   if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_MENU_SPY === '1') { global.__buddyWidgetMenu = menu; return; } // specs read it: a native popup would block them
   menu.popup({ window: win });
 });
