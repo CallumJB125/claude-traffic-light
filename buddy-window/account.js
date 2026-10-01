@@ -139,6 +139,14 @@ function showInvite(inv, team) {
 // ── screens ───────────────────────────────────────────────────────────────
 
 const SCREENS = {
+  clients(s) {
+    return [heading('Your client projects', 'View the project updates shared with you. Invitations need your explicit acceptance.'),
+      ...(s.workspaces ?? []).map((w) => el('p', { class: 'acct-hint' }, w.name)),
+      ...(s.invitations ?? []).map((i) => el('p', { class: 'acct-hint' }, `${i.inviter_first_name} invited you to ${i.workspace_name}.`)),
+      el('button', { type: 'button', class: 'btn btn-primary', onclick: () => act(api.openClients()) }, 'Open client projects'),
+      el('p', { class: 'acct-hint' }, 'Your client access stays scoped to the projects shared with you.'),
+    ];
+  },
   hub(s) {
     return [
       heading(s.forInvite ? 'Where is your team?' : s.brand.copy.signInHeading, s.forInvite ? 'This invite doesn’t say which team hub it’s for. Enter the address your team uses.' : s.brand.copy.signInSub),

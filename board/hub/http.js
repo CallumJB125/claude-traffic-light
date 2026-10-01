@@ -56,7 +56,7 @@ const devRequestOk = (req) => LOOPBACK_HOST.test(req.headers.host ?? '') && !PRO
 const loopbackOnly = (config) => config.auth === 'dev' || config.auth === 'local' || (config.auth === 'accounts' && !isExposed(config));
 // Accounts mode: pages served without auth (their JS talks to /api/auth/*;
 // tokens ride in the URL fragment, which never reaches the server).
-const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html' };
+const ACCOUNT_PAGES = { '/signin': 'signin.html', '/auth/email': 'signin.html', '/invite': 'invite.html', '/clients': 'clients.html', '/client-invite': 'client-invite.html' };
 
 // A cookie-session mutation or WS upgrade in accounts mode (design §4.6): the
 // Origin must be present and be this hub; Sec-Fetch-Site, when sent, same-origin.
@@ -253,6 +253,7 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     if (params.team_id) return hub.db.get('SELECT id FROM orgs WHERE id = ? AND deleted_at IS NULL', params.team_id)?.id ?? null;
     if (params.board_id) return boardOrg(params.board_id);
     if (params.card_id) { const c = hub.card(params.card_id); return c ? boardOrg(c.board_id) : null; }
+    if (r.pattern === '/api/client-items/:item_id') return hub.db.get('SELECT p.workspace_id FROM client_items i JOIN client_projects p ON p.id = i.project_id WHERE i.id = ?', params.item_id)?.workspace_id ?? null;
     if (r.pattern.startsWith('/api/permission-requests/')) {
       const p = hub.db.get('SELECT card_id FROM permission_requests WHERE id = ?', params.id);
       const c = p && hub.card(p.card_id);
@@ -311,7 +312,24 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
     // Teams and members (P2, D59–D62). The team comes from the URL; the
     // caller's membership in it is resolved before the handler runs.
     const teams = hub.teams;
-    route('POST', '/api/account/setup', ({ ident, ip }) => teams.setup(ident, { ip }), { auth: 'user' });
+    route('POST', '/api/account/setup', ({ ident, ip }) => teams.setup(ident, { ip }), { auth: 'user', replay: false });
+    const clients = hub.clients;
+    route('POST', '/api/client-workspaces', ({ ident, body, ip }) => clients.create(ident, body, { ip }), { auth: 'user', replay: false });
+    route('GET', '/api/teams/:team_id/client-workspace', ({ member }) => clients.manage(member), { replay: false });
+    route('POST', '/api/teams/:team_id/client-invites', ({ member, body, ip, req }) => clients.invite(member, body, { ip, req }), { replay: false });
+    route('POST', '/api/teams/:team_id/client-invites/:invite_id/resend', ({ member, params, ip, req }) => clients.resend(member, params.invite_id, { ip, req }), { replay: false });
+    route('DELETE', '/api/teams/:team_id/client-invites/:invite_id', ({ member, params, ip }) => clients.revokeInvite(member, params.invite_id, { ip }), { replay: false });
+    route('PATCH', '/api/teams/:team_id/client-guests/:guest_id', ({ member, params, body, ip }) => clients.setGuest(member, params.guest_id, body, { ip }), { replay: false });
+    route('DELETE', '/api/teams/:team_id/client-guests/:guest_id', ({ member, params, ip }) => clients.revokeGuest(member, params.guest_id, { ip }), { replay: false });
+    route('POST', '/api/boards/:board_id/client-project', ({ member, params, body, ip, ident }) => clients.addProject(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('POST', '/api/boards/:board_id/client-items', ({ member, params, body, ip, ident }) => clients.publish(member, params.board_id, body, { ip, cred: ident.cred }), { replay: false });
+    route('DELETE', '/api/client-items/:item_id', ({ member, params, ip, ident }) => clients.unpublish(member, params.item_id, { ip, cred: ident.cred }), { replay: false });
+    route('POST', '/api/client-invites/preview', ({ body, ip }) => clients.preview(body, { ip }), { auth: 'none' });
+    route('POST', '/api/client-invites/accept', ({ ident, body, ip }) => clients.accept(ident, body, { ip }), { auth: 'user', replay: false });
+    route('GET', '/api/client/workspaces', ({ ident }) => ({ workspaces: clients.catalog(ident.user) }), { auth: 'user', replay: false });
+    route('GET', '/api/client/workspaces/:workspace_id/projects', ({ ident, params }) => clients.projects(ident.user, params.workspace_id), { auth: 'user', replay: false });
+    route('GET', '/api/client/projects/:project_id', ({ ident, params }) => clients.project(ident.user, params.project_id), { auth: 'user', replay: false });
+    route('GET', '/api/account/client-export', ({ ident }) => clients.export(ident.user), { auth: 'user', replay: false });
     route('POST', '/api/teams', ({ ident, body, ip }) => teams.create(ident, body, { ip }), { auth: 'user' });
     route('GET', '/api/teams/:team_id', ({ member }) => teams.get(member));
     route('PATCH', '/api/teams/:team_id', ({ member, body, ip }) => teams.update(member, body, { ip }));
@@ -723,8 +741,12 @@ export function createHttpHandler({ hub, api, config, integrations = null }) {
       }
       // Only now, so nobody unauthenticated can make the hub hold a body (D105).
       const body = r.mutating ? await readBody(req, { max: r.maxBody, deadlineMs: limits.bodyDeadlineMs }) : {};
+      if (ident && r.replay === false && !hub.accounts.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'sign in again');
       const actor = member?.id ?? (ident && r.auth === 'user' ? `user:${ident.user.id}` : null);
-      const rid = actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
+      // Client operations always pass through their live grant/role checks.
+      // Workspace creation and acceptance have durable transactional retries;
+      // an old response must not bypass later removal or guest revocation.
+      const rid = r.replay !== false && actor && r.mutating && typeof body.request_id === 'string' ? body.request_id : null;
       if (rid) {
         const hit = hub.cachedResponse(actor, rid);
         if (hit) return sendJson(res, hit.status, hit.body, { 'board-replayed': '1' });

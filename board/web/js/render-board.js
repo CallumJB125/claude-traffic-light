@@ -339,6 +339,7 @@ export function topBar(model, lamps) {
       h('span', { class: `conn conn-${conn}` }, h('span', { class: 'conn-dot', 'aria-hidden': 'true' }),
         conn === 'open' ? 'Live' : conn === 'lost' ? 'Offline' : 'Connecting')),
     h('div', { class: 'topbar-actions' },
+      model.accounts ? h('a', { class: 'btn btn-ghost btn-sm', href: '/clients' }, 'Clients') : null,
       ['owner', 'admin'].includes(m?.role) ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'manage-boards' }, 'Boards') : null,
       themeMenu(model),
       h('button', { type: 'button', class: 'btn btn-ghost btn-sm palette-open', 'data-action': 'palette', 'aria-keyshortcuts': 'Control+K Meta+K', 'aria-label': 'Search and commands' }, icon('search', 'icon-lead'), h('span', { class: 'palette-open-label' }, 'Search'), h('kbd', { class: 'kbd', 'aria-hidden': 'true' }, '⌘K')),

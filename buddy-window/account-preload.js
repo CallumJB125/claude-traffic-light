@@ -7,6 +7,7 @@ const str = (v) => String(v ?? '');
 
 contextBridge.exposeInMainWorld('buddyAccount', {
   state: () => call('state'),
+  openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
   hub: (address) => call('hub', str(address)),
   confirm: (yes) => call('confirm', !!yes),

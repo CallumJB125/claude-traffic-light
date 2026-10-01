@@ -179,7 +179,7 @@ export class Accounts {
       WHERE m.user_id IS NULL AND m.removed_at IS NULL AND m.email IS NOT NULL AND o.deleted_at IS NULL`).some((m) => canonEmail(m.email) === email);
     if (row) return 'member_row';
     const invites = this.db.all('SELECT * FROM invites WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?', email, this.now());
-    return invites.some((inv) => this.hub.invites?.usable(inv)) ? 'invite' : null;
+    return invites.some((inv) => this.hub.invites?.usable(inv)) || this.hub.clients?.admission(email) ? 'invite' : null;
   }
 
   signupAllowed(email, opts) { return this.signupVia(email, opts) != null; }
@@ -593,6 +593,8 @@ export class Accounts {
       identities: this.db.all("SELECT DISTINCT provider FROM identities WHERE user_id = ? AND verified_at IS NOT NULL AND provider IN ('email','google','github') ORDER BY provider", ident.user.id),
       teams: this.teams(ident.user.id),
       pending_invites: this.hub.invites?.pendingFor(ident.user) ?? [],
+      client_workspaces: this.hub.clients?.catalog(ident.user) ?? [],
+      pending_client_invites: this.hub.clients?.pendingFor(ident.user) ?? [],
       ...(ident.cred.kind === 'session' ? { csrf_token: this.csrfFor(ident.cred.id) } : {}),
     };
   }
@@ -716,6 +718,7 @@ export class Accounts {
       this.db.run(`UPDATE invites SET revoked_at = ?, revoke_reason = 'account_deleted'
         WHERE email IN ${inAddresses} AND accepted_at IS NULL AND revoked_at IS NULL`, now, ...addresses);
       this.db.run(`UPDATE invites SET email = 'deleted:' || id WHERE accepted_by_user = ? OR email IN ${inAddresses}`, user.id, ...addresses);
+      this.hub.clients?.deleteUser(user.id, addresses, now);
       this.db.run('DELETE FROM identities WHERE user_id = ?', user.id);
       this.db.run("UPDATE users SET display_name = 'Deleted user', primary_email = NULL, primary_email_verified_at = NULL, avatar_url = NULL, deleted_at = ? WHERE id = ?", now, user.id);
       for (const m of members) this.hub.dropMemberPending(m.id);

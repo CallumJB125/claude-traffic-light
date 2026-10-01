@@ -6,12 +6,14 @@
 // once signed in their explicit join resumes; failures return to /invite
 // with it (fragment only, never stored).
 import { accountErrorText, EMAIL_OFF, INVITE_TOKEN_RE, resendWaitS, resendWaitText } from './account-text.js';
+import { CLIENT_TOKEN_RE } from './client-api.js';
 
 const $ = (id) => document.getElementById(id);
 let flowId = null;
 let email = '';
 let busy = false;
 let invite = null;
+let clientInvite = null;
 const asked = new Map(); // email → when this page asked for its codes
 
 async function call(method, path, body, { csrf = null } = {}) {
@@ -56,6 +58,15 @@ async function verify(body) {
   showError(null);
   const r = await call('POST', '/api/auth/email/verify', body);
   if (r.ok) {
+    if (clientInvite) {
+      const joined = await call('POST', '/api/client-invites/accept', { t: clientInvite }, { csrf: r.data?.csrf_token });
+      if (joined.ok && joined.data?.workspace?.id) {
+        location.replace(`/clients?workspace=${encodeURIComponent(joined.data.workspace.id)}`);
+        return;
+      }
+      location.replace(`/client-invite#${clientInvite}`);
+      return;
+    }
     if (invite) {
       const joined = await call('POST', '/api/invites/accept', { t: invite }, { csrf: r.data?.csrf_token });
       const team = joined.data?.team ?? (joined.data?.error?.code === 'ALREADY_MEMBER' ? joined.data.error.team : null);
@@ -128,6 +139,10 @@ if (location.hash) history.replaceState(null, '', location.pathname);
 if (INVITE_TOKEN_RE.test(frag.get('invite') ?? '')) {
   invite = frag.get('invite');
   $('signin-lead').textContent = 'Sign in to accept your invite. We’ll email you a 6-digit code.';
+}
+if (CLIENT_TOKEN_RE.test(frag.get('client_invite') ?? '')) {
+  clientInvite = frag.get('client_invite');
+  $('signin-lead').textContent = 'Sign in to accept your client invitation. We’ll email you a 6-digit code.';
 }
 if (frag.get('f') && frag.get('c')) {
   $('email-form').hidden = true;

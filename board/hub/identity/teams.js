@@ -122,6 +122,7 @@ export class Teams {
 
   count(sql, ...args) { return this.db.get(sql, ...args).n; }
   activeMembers(orgId) { return this.count('SELECT COUNT(*) AS n FROM members WHERE org_id = ? AND removed_at IS NULL', orgId); }
+  activeSeats(orgId) { return this.activeMembers(orgId) + (this.hub.clients?.activeGuestCount(orgId) ?? 0); }
 
   // ── teams ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +136,8 @@ export class Teams {
       const account = this.accounts.account(ident);
       if (account.teams.length) return { ...account, setup: 'existing' };
       if (account.pending_invites.length) return { ...account, setup: 'invited' };
+      if (account.client_workspaces?.length) return { ...account, setup: 'client' };
+      if (account.pending_client_invites?.length) return { ...account, setup: 'client_invited' };
       this.create(ident, { name: personalTeamName(ident.user) }, { ip });
       return { ...this.accounts.account(ident), setup: 'created' };
     });
@@ -234,6 +237,7 @@ export class Teams {
       this.db.run('UPDATE devices SET revoked_at = ? WHERE revoked_at IS NULL AND member_id IN (SELECT id FROM members WHERE org_id = ?)', now, o.id);
       this.db.run("UPDATE runner_enrollments SET revoked_at = ?, revoked_reason = 'team_deleted', token_hash = NULL WHERE org_id = ? AND revoked_at IS NULL", now, o.id);
       this.hub.invites.revokeWhere('org_id', o.id, 'team_deleted');
+      this.hub.clients?.deleteTeam(o.id, now);
       this.hub.revokeDeletedTeamConnections(now);
       this.hub.dropDeletedTeamLabels();
       this.audit('team.delete', member ?? { org_id: o.id }, { ip, target: o.id, detail: { purge_after: purgeAfter, ...(member ? {} : { by: 'operator' }) } });

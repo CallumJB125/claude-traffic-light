@@ -368,6 +368,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     log,
     ui: {
       show: showScreen,
+      openClients: (origin) => showClientPage(origin),
       select: (id) => select(id),
       switchWorkspace: (id, opts) => switchWorkspace(id, opts),
       pushState: () => pushState(),
@@ -400,6 +401,25 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     // A 401 from the hub (the board web re-checks after its socket closes
     // 4401 on session.revoked): ask the hub once whether we're signed out.
     ses.webRequest.onCompleted({ urls: scope.urls }, (d) => { if (d.statusCode === 401 && scope.matches(d.url)) flow.checkSignedIn(origin); });
+  }
+
+  // A guest's client portal uses the already authenticated hub partition.
+  // It has no ordinary workspace, runner, preload or renderer-held token.
+  async function showClientPage(origin) {
+    if (!win || norm(origin) !== origin || !signedIn(origin)) throw new Error('client hub is not signed in');
+    forgetHub();
+    const current = gen;
+    flow.leftAccountPages();
+    selected = 'flow:clients';
+    installBearer(origin);
+    const h = { url: origin, origin, accessTeam: null, partition: teamPartition(origin), team: true, bearer: true, client: true, org: null };
+    hubInfo = h;
+    const view = makeHubView(h);
+    hubView = view;
+    await view.webContents.loadURL(`${origin}/clients`); // privacy-flow: team-hub-account
+    if (current !== gen || !win || selected !== 'flow:clients' || view !== hubView || !signedIn(origin)) return;
+    attach(view);
+    pushState();
   }
 
   async function resolveHub() {
@@ -604,6 +624,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
     if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
+    if (page.kind === 'hub' && hubInfo?.client) forgetHub();
     selected = id;
     pushState();
     if (page.kind === 'hub') showHubPage(page);

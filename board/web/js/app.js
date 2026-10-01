@@ -516,12 +516,16 @@ async function boot() {
   }
   state.auth = 'ok';
   setCsrf(state.me.csrf_token);
+  if (state.authMode === 'accounts' && !state.me.member && !state.me.pending_invites?.length && (state.me.client_workspaces?.length || state.me.pending_client_invites?.length)) {
+    location.replace('/clients'); return;
+  }
   if (state.authMode === 'accounts' && !state.me.member && !(state.me.pending_invites?.length)) {
     try {
       const setup = await api.setupAccount();
       if (!current()) return;
       if (setup.teams?.length) { setOrg(setup.teams[0].id); return boot(); }
       state.me.pending_invites = setup.pending_invites ?? [];
+      if (!state.me.pending_invites.length && (setup.client_workspaces?.length || setup.pending_client_invites?.length)) { location.replace('/clients'); return; }
     } catch (err) {
       if (!current()) return;
       // Preserve the existing create-or-join forms when a rate limit,

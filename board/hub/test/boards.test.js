@@ -211,12 +211,13 @@ test('migration029 refuses legacy duplicate prefixes atomically; read-only audit
     assert.equal(preview.ready, false);
     assert.deepEqual(preview.collisions[0].boards.map((b) => b.id), ['one', 'two']);
     assert.match(preview.collisions[0].options.join(' '), /preserve historical links/);
-    assert.throws(() => migrate(db), /duplicate board key prefixes.*board-prefix-audit/);
+    const through29 = migrations.filter((m) => m.version <= 29);
+    assert.throws(() => migrate(db, { migrations: through29 }), /duplicate board key prefixes.*board-prefix-audit/);
     assert.equal(JSON.stringify(db.prepare('SELECT * FROM boards').all()), before);
     assert.ok(!db.prepare("SELECT name FROM pragma_table_info('boards') WHERE name = 'archived_at'").get());
     assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 28);
     db.prepare('UPDATE boards SET key_prefix = ? WHERE id = ?').run('NEW', 'two');
-    assert.deepEqual(migrate(db), [29]);
+    assert.deepEqual(migrate(db, { migrations: through29 }), [29]);
     assert.equal(prefixAudit(db).ready, true);
   } finally { db.close(); }
 });

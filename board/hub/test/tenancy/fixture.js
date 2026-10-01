@@ -108,6 +108,20 @@ export async function tenancy({ config = {}, ...opts } = {}) {
   B.enrollment = eb.body.enrollment_id;
   B.runnerToken = eb.body.runner_token;
 
+  // The client boundary is separate from all ordinary memberships.
+  await user('bguest', 'client@beta.test');
+  db.insert('client_workspaces', { org_id: B.team, created_by_user: users.ub.id, created_at: now });
+  B.clientProject = randomUUID();
+  db.insert('client_projects', { id: B.clientProject, workspace_id: B.team, board_id: B.board, name: `${MARK} project`, created_at: now });
+  B.clientGuest = randomUUID();
+  db.insert('client_guests', { id: B.clientGuest, workspace_id: B.team, user_id: users.bguest.id, invited_by: B.owner, joined_at: now });
+  db.insert('client_grants', { guest_id: B.clientGuest, project_id: B.clientProject, scopes: JSON.stringify(['status.read']) });
+  B.clientItem = randomUUID();
+  db.insert('client_items', { id: B.clientItem, project_id: B.clientProject, card_id: B.card, title: `${MARK} published`, status: 'todo', published_by: B.owner, published_at: now, updated_at: now });
+  const clientInvite = await as(users.ub, 'POST', `/api/teams/${B.team}/client-invites`, { email: 'pending-client@beta.test', grants: [{ project_id: B.clientProject, scopes: ['status.read'] }] });
+  if (clientInvite.status !== 200) throw new Error(`client invite: ${clientInvite.text}`);
+  B.clientInvite = clientInvite.body.invite.id;
+
   /** Everything team B owns, as one string: equal before and after = untouched. */
   function snapshotB() {
     const q = (sql, ...a) => JSON.stringify(db.all(sql, ...a));
@@ -128,6 +142,12 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT * FROM external_identities WHERE member_id IN (SELECT id FROM members WHERE org_id = ?)', B.team),
       q('SELECT * FROM runner_enrollments WHERE org_id = ?', B.team),
       q('SELECT * FROM board_labels WHERE board_id = ?', B.board),
+      q('SELECT * FROM client_workspaces WHERE org_id = ?', B.team),
+      q('SELECT * FROM client_projects WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_guests WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_grants WHERE guest_id IN (SELECT id FROM client_guests WHERE workspace_id = ?)', B.team),
+      q('SELECT * FROM client_invites WHERE workspace_id = ?', B.team),
+      q('SELECT * FROM client_items WHERE project_id = ?', B.clientProject),
     ].join('\n');
   }
 
