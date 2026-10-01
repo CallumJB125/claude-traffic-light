@@ -85,7 +85,7 @@ settings, or any `-beta` build until the person picks a channel) read
 and the app's electron-updater back end all expect that.
 
 ## Local builds (your Mac)
-macOS registers every `.app` it sees with LaunchServices. Each packaged build left in a worktree, `/tmp` or the Bin therefore adds another "Plexiform" (or old "Claude Buddy") to Open With, Spotlight and the Dock, and a stale one can even be launched by a `plexiform://` link. Clean up after every local build:
+macOS registers every `.app` it sees with LaunchServices. Each packaged build left in a worktree, `/tmp` or the Bin therefore adds another "Plexiform" (or a copy of the app under its old name) to Open With, Spotlight and the Dock, and a stale one can even be launched by a `plexiform://` link. Clean up after every local build:
 - `npm run smoke` does it for you: after a passing smoke test of the app it found in `dist/`, it unregisters that app (helpers included) and moves it to the Bin. The DMG and zip in `dist/` stay. It never touches an app you pass by path, such as `/Applications/Plexiform.app`.
 - After `npm run dist` without a smoke test, run `npm run forget-build` (`scripts/forget-local-build.js`). It does the same for every `.app` under `dist/`.
 - By hand, for any other copy (look at the path first; in an interactive shell `rm` and `mv` may be aliases, so use `/bin/mv`):
@@ -94,7 +94,7 @@ macOS registers every `.app` it sees with LaunchServices. Each packaged build le
   /bin/mv "<path/to/App.app>" ~/.Trash/
   ```
 - Throwaway probe builds (sandboxed test apps with made-up names) must unregister themselves and every helper `.app` inside them when the probe ends.
-- To check what's registered: `lsregister -dump | grep -E '^path:.*(Plexiform|Claude Buddy).*\.app'` should list only `/Applications/Plexiform.app` (and its helpers).
+- To check what's registered: `lsregister -dump | grep -E '^path:.*Plexiform.*\.app'` should list only `/Applications/Plexiform.app` (and its helpers).
 - None of this matters on CI runners: `forget-build` does nothing there (`CI` is set).
 
 ## Who can release
