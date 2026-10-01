@@ -1,0 +1,26 @@
+case $- in *i*) ;; *) return;; esac
+HISTCONTROL=ignoreboth
+HISTSIZE=10000
+shopt -s histappend checkwinsize
+PS1='\u@\h:\w\$ '
+alias ls='ls --color=auto'
+alias ..='cd ..'
+alias grep='grep --color=auto'
+alias dbshell='mysql -u root --password=@@SEED:cli_secret_flag@@ -h @@IP@@'
+export EDITOR=vim
+export DATABASE_URL="postgres://app:@@SEED:url_credentials@@@localhost:5432/app_dev"
+export REDIS_URL=redis://:@@SEED:url_credentials@@@@@IP2@@:6379/0
+export API_BASE="https://api.acme.co.za/v2?token=@@SEED:url_query_secret@@&format=json"
+export NOTION_API_KEY=@@SEED:notion_token@@
+export PGPASSWORD=@@SEED:keyed@@
+export CF_ACCESS='CF-Access-Client-Secret: @@SEED:cf_access_secret@@'
+export TEAM_HOOK=@@SEED:discord_webhook@@
+# the password is @@SEED:said_password@@ (ask the team)
+api_call() {
+  curl -s -H "Authorization: Token @@SEED:auth_header@@" "https://api.acme.co.za/$1"
+}
+legacy_call() {
+  curl -s -H "Authorization: Basic @@SEED:basic_auth@@" "https://legacy.@@INTHOST@@/$1"
+}
+export VAULT_TOKEN=@@SEED:vault_token@@
+echo @@SEED:docker_pat@@ | docker login -u bot --password-stdin

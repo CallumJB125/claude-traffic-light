@@ -55,6 +55,14 @@ const ROUTES = {
   nativeSendMessage: ['POST', '/api/cards/:card/messages'],
   captureRoutes: ['GET', '/api/work-capture/routes'],
   myDay: ['GET', '/api/my-day'],
+  setupsList: ['GET','/api/teams/:team/setups'],
+  setupsPublish: ['POST','/api/teams/:team/setups'],
+  setupsRead: ['GET','/api/setup-profiles/:profile/versions/:version'],
+  setupsExport: ['GET','/api/setup-profiles/:profile/export'],
+  setupsUnpublish: ['DELETE','/api/setup-profiles/:profile'],
+  setupsActivity: ['GET','/api/setup-profiles/:profile/activity'],
+  setupsBaseline: ['PUT','/api/teams/:team/setup-baseline'],
+  setupsReceipt: ['POST','/api/setup-profiles/:profile/borrow-receipts'],
   captureWork: ['POST', '/api/boards/:board/work-capture'],
 };
 
@@ -228,7 +236,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
 
   // `token`: a token that must not be stored, sent in place of the saved one (the revoke of a cancelled sign-in).
   // `via`: a transport for this one call in place of fetchImpl (a provider sign-in's pinned address).
-  async function call(name, { params, body, auth = true, token = null, via = null } = {}) {
+  async function call(name, { params, body, auth = true, token = null, via = null, accountOwner = null, memberOwner = null } = {}) {
     const [method] = ROUTES[name];
     let url;
     try { url = origin + routePath(name, params); } catch { return { ok: false, error: 'That isn’t a valid id.' }; }
@@ -241,6 +249,12 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     const s = token ? { token } : auth ? saved() : null;
     if (auth && !s) return { ok: false, signedOut: true, error: 'Sign in first.' };
     if (s) headers.Authorization = `Bearer ${s.token}`;
+    if(name.startsWith('setups')) {
+      if(typeof accountOwner!=='string'||!ID_RE.test(accountOwner))return {ok:false,error:'Refresh your current account before using Setups.'};
+      if(typeof memberOwner!=='string'||!ID_RE.test(memberOwner))return {ok:false,error:'Refresh your current team membership before using Setups.'};
+      headers['X-Plexiform-Account']=accountOwner;
+      headers['X-Plexiform-Member']=memberOwner;
+    }
     // The team the call acts in; a URL id in another team makes the hub answer 404.
     if (params?.team) headers['X-Board-Team'] = String(params.team);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -252,7 +266,13 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       return { ok: false, error: `Couldn’t reach ${host}. Check the address and your connection.` };
     }
     let json = null;
-    try { json = await res.json(); } catch { json = null; }
+    try {
+      if(name.startsWith('setups') && res.body?.getReader) {
+        const reader=res.body.getReader(),parts=[];let size=0;
+        try {for(;;){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>3*1024*1024)throw new Error('Setups response too large');parts.push(Buffer.from(next.value));}json=JSON.parse(Buffer.concat(parts).toString('utf8'));}
+        catch(error){await reader.cancel().catch(()=>{});throw error;}
+      } else {json=await res.json();if(name.startsWith('setups')&&Buffer.byteLength(JSON.stringify(json))>3*1024*1024)json=null;}
+    } catch { json = null; }
     // STEP_UP_REQUIRED is also a 401, but only means "do the check again".
     if (res.status === 401 && s && (json?.error?.code ?? 'UNAUTHENTICATED') === 'UNAUTHENTICATED') {
       // No refresh in this model: a 401 on the device token means it was
@@ -395,6 +415,11 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     getTeam: (team) => call('team', { params: { team } }),
     captureRoutes: () => call('captureRoutes'),
     myDay: () => call('myDay'),
+    setups(op, team, {profile,version,body}={}, owner=saved()?.user?.id, memberOwner=null) {
+      const name={list:'setupsList',publish:'setupsPublish',read:'setupsRead',export:'setupsExport',unpublish:'setupsUnpublish',activity:'setupsActivity',baseline:'setupsBaseline',receipt:'setupsReceipt'}[op];
+      if(!name || typeof team!=='string' || !ID_RE.test(team)) return Promise.resolve({ok:false});
+      return call(name,{params:{team,profile,version},body:ROUTES[name][0]==='GET'?undefined:body,accountOwner:owner,memberOwner});
+    },
     captureWork: (team, board, body) => call('captureWork', { params: { team, board }, body }),
     // Main-only board broker: fixed routes and team header; never an arbitrary
     // URL or bearer credential supplied by an MCP client.

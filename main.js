@@ -1510,6 +1510,7 @@ function getBuddy() {
       if (typeof unsubscribe === 'function') app.once('will-quit', unsubscribe);
     }
     if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => settingsWin?.webContents.send('account-changed'));
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>SetupsNative.invalidate());
   }
   return buddyWin;
 }
@@ -1530,6 +1531,31 @@ function openBuddy(page = null) {
   showDock();
   buddyWin.open(page);
 }
+
+const SetupsNative = require('./src/setups-service.js').createSetupsService({
+  sources:()=>buddyWin?.setupSources()??Promise.resolve([]),home:os.homedir(),
+  machine:()=>({user:os.userInfo().username,hostname:os.hostname()}),
+  async confirm(summary) {
+    const answer=await dialog.showMessageBox({type:'warning',title:'Share reviewed setup',message:`Share ${summary.files} reviewed files and ${summary.items} inventory entries with ${summary.team}?`,detail:'All current staff in this team can read this setup. Review filenames, full text, notes and inventory for private information before sharing. This publishes configuration; it does not apply or run it.',buttons:['Cancel','Share reviewed setup'],defaultId:0,cancelId:0,noLink:true});
+    return answer.response===1;
+  },
+  async chooseExport() {
+    const result=await dialog.showSaveDialog({title:'Export your shared setup',defaultPath:'plexiform-setup.json',filters:[{name:'Reviewed setup',extensions:['json']}]});
+    if(result.canceled || !result.filePath) return null;
+    // This chosen path remains in main. Exclusive/no-follow creation protects
+    // existing files and links; no renderer-supplied destination is accepted.
+    return text=>{let fd;try{fd=fs.openSync(result.filePath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|(fs.constants.O_NOFOLLOW??0),0o600);fs.writeFileSync(fd,text,'utf8');fs.fsyncSync(fd);}finally{if(fd!==undefined)fs.closeSync(fd);}};
+  },
+});
+const setupsSender=e=>!!e.sender && e.sender===buddyWin?.pageWebContents('setups') && e.senderFrame===e.sender.mainFrame;
+ipcMain.handle('setups:state',e=>setupsSender(e)?SetupsNative.snapshot():null);
+ipcMain.handle('setups:read',(e,handle)=>setupsSender(e)?SetupsNative.read(handle):null);
+ipcMain.handle('setups:draft',(e,handle,input)=>setupsSender(e)?SetupsNative.draft(handle,input):null);
+ipcMain.handle('setups:edit',(e,handle,input)=>setupsSender(e)?SetupsNative.edit(handle,input):null);
+ipcMain.handle('setups:approve',(e,handle,file,hash)=>setupsSender(e)?SetupsNative.approve(handle,file,hash):null);
+ipcMain.handle('setups:publish',(e,handle,hash)=>setupsSender(e)?SetupsNative.publish(handle,hash):null);
+ipcMain.handle('setups:action',(e,handle,op,input)=>setupsSender(e)?SetupsNative.action(handle,op,input):null);
+ipcMain.handle('setups:export',(e,handle)=>setupsSender(e)?SetupsNative.export(handle):null);
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.

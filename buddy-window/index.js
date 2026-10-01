@@ -178,6 +178,7 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   let accountLoad = Promise.resolve();
   let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view, kept so a page keeps its state
+  const setupIdentityListeners=new Set();let setupIdentityMarkers=[];
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -227,6 +228,24 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
       return userOf(destination.hub)?.id === destination.user_id ? result : { ok: false };
     },
   });
+
+  async function setupSources() {
+    const rows=[];rows.partial=store.hubs().length>8;
+    for(const origin of store.hubs().slice(0,8)) {
+      const marker=vault(origin).load(), userId=marker?.user?.id;
+      const current=()=>store.hubs().includes(origin) && vault(origin).load()===marker && userOf(origin)?.id===userId;
+      if(typeof userId!=='string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(userId)) continue;
+      let me;try{me=await clientFor(origin).me();}catch{rows.partial=true;continue;}
+      if(!current() || !me?.ok || me.user?.id!==userId || !Array.isArray(me.teams) || me.teams.length>200) {rows.partial=true;continue;}
+      if(me.teams.length>32) rows.partial=true;
+      for(const team of me.teams.slice(0,32)) {
+        if(!team||typeof team!=='object') {rows.partial=true;continue;}
+        if(![team.id,team.member_id].every(id=>typeof id==='string'&&/^[A-Za-z0-9_.:-]{1,100}$/.test(id)) || !['owner','admin','member','viewer'].includes(team.role)) continue;
+        rows.push({name:`${String(team.name??'Team').slice(0,80)} · ${hostOf(origin)}`,userId,teamId:team.id,memberId:team.member_id,role:team.role,machine:{emails:typeof me.user.email==='string'?[me.user.email]:[]},current,call:(op,args)=>current()?clientFor(origin).setups(op,team.id,args,userId,team.member_id):Promise.resolve({ok:false})});
+      }
+    }
+    return rows;
+  }
 
   const myDayBroker = createMyDayBroker({
     async sources() {
@@ -314,6 +333,12 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   }
 
   function pushState() {
+    const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
+    if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
+      setupIdentityMarkers=markers;
+      for(const listener of setupIdentityListeners) listener();
+      const page=localViews.get('setups')?.webContents;if(page&&!page.isDestroyed())page.send('setups:changed');
+    }
     const myDayPage = localViews.get('myday')?.webContents;
     if (myDayPage && !myDayPage.isDestroyed()) myDayPage.send('myday:changed');
     if (!sidebar || sidebar.webContents.isDestroyed()) return;
@@ -868,6 +893,8 @@ function createBuddyWindow({ openWindow = () => {}, onClosed = () => {}, log = (
   return {
     open,
     myDay: () => myDayBroker.snapshot(),
+    setupSources,
+    onSetupsIdentityChange(listener) {if(typeof listener!=='function')return ()=>{};setupIdentityListeners.add(listener);return ()=>setupIdentityListeners.delete(listener);},
     openMyDayCard: handle => myDayBroker.open(handle),
     // Account client stays in main. The broker checks the sealed grant's
     // owner on every request and never sends this object to a renderer.

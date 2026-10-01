@@ -1,0 +1,28 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+add_newline = false
+format = """
+$directory$git_branch$git_status$nodejs$python
+$character"""
+
+[character]
+success_symbol = "[➜](bold green)"
+
+[directory]
+truncation_length = 3
+
+[hostname]
+ssh_only = false
+format = "on [$hostname](bold yellow) "
+
+[username]
+show_always = true
+
+[custom.notifs]
+command = "gh api notifications -H 'Authorization: token @@SEED:github_token@@' --jq length"
+when = true
+
+[custom.deploy]
+command = """
+curl -sS -H "Authorization: Bearer @@SEED:bearer@@" https://deploy.@@INTHOST@@/status
+"""
+shell = ["bash", "--noprofile", "--norc"]

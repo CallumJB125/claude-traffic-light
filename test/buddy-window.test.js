@@ -1387,7 +1387,7 @@ async function signIn(hub, origin, email, extra = {}) {
 
 test('ROUTES: every endpoint is one [method, path] row', () => {
   for (const [name, [method, p]] of Object.entries(ROUTES)) {
-    assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(method), name);
+    assert.ok(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method), name);
     assert.match(p, /^\/api\//, name);
   }
 });

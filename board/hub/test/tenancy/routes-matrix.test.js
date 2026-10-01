@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { tenancy, MARK } from './fixture.js';
 import { sign } from '../../integrations/fake/index.js';
+import { validatePayload } from '../../../shared/setups.js';
 
 // kind:
 //   cross    – names B's resources in the path; expect 404
@@ -52,6 +53,15 @@ const MATRIX = {
   'GET /api/account': { kind: 'self' },
   'GET /api/work-capture/routes': { kind: 'self' },
   'GET /api/my-day': { kind: 'self' },
+  'GET /api/teams/:team_id/setups': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setups`},
+  'POST /api/teams/:team_id/setups': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setups`},
+  'PUT /api/teams/:team_id/setup-baseline': {kind:'cross',path:fx=>`/api/teams/${fx.B.team}/setup-baseline`},
+  'GET /api/setup-profiles/:profile_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}`},
+  'GET /api/setup-profiles/:profile_id/versions/:version_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/versions/${fx.B.setupVersion}`},
+  'GET /api/setup-profiles/:profile_id/export': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/export`},
+  'DELETE /api/setup-profiles/:profile_id': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}`},
+  'GET /api/setup-profiles/:profile_id/activity': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/activity`},
+  'POST /api/setup-profiles/:profile_id/borrow-receipts': {kind:'cross',path:fx=>`/api/setup-profiles/${fx.B.setupProfile}/borrow-receipts`},
   'POST /api/account/setup': { kind: 'self' },
   'DELETE /api/account': { kind: 'self' },
   'GET /api/account/devices': { kind: 'self' },
@@ -235,6 +245,11 @@ test('T-ROUTES coverage: every hub route is in the tenancy matrix, and the matri
 });
 
 async function sweep(fx, caller) {
+  const payload={schema:1,files:[{id:randomUUID(),source_id:'git',relative_path:'.gitconfig',format:'gitconfig',content:'[alias]\n st = status\n',note:''}],items:[],note:MARK};
+  const checked=validatePayload(payload);
+  const setup=await fx.as(fx.users.ub,'POST',`/api/teams/${fx.B.team}/setups`,{request_id:randomUUID(),expected_version_id:null,payload,review:{schema:1,approved:true,content_hash:checked.content_hash,file_hashes:checked.file_hashes}},{'x-plexiform-account':fx.users.ub.id,'x-plexiform-member':fx.B.owner});
+  assert.equal(setup.status,200,setup.text);fx.B.setupProfile=setup.body.profile.id;fx.B.setupVersion=setup.body.version.id;
+  const setupsBefore=JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile));
   const before = fx.snapshotB();
   const leaks = [];
   let calls = 0;
@@ -258,6 +273,7 @@ async function sweep(fx, caller) {
   assert.deepEqual(leaks, []);
   assert.ok(calls >= 30, `only ${calls} cross-team calls made`);
   assert.equal(fx.snapshotB(), before, "team B's rows changed");
+  assert.equal(JSON.stringify(fx.db.all('SELECT * FROM setup_versions WHERE profile_id=?',fx.B.setupProfile)),setupsBefore,'foreign sealed setups are unchanged');
 }
 
 test('T-ROUTES: a team-A owner gets 404 and no B data from every route, with B ids or the B team header', async () => {

@@ -1,0 +1,38 @@
+[user]
+	name = @@NAME@@
+	email = @@EMAIL@@
+	signingkey = ~/.ssh/id_ed25519.pub
+[gpg]
+	format = ssh
+[commit]
+	gpgsign = true
+[core]
+	editor = nvim
+	excludesfile = ~/.gitignore_global
+	pager = delta
+[init]
+	defaultBranch = main
+[pull]
+	rebase = true
+[credential]
+	helper = osxkeychain
+[credential "https://git.@@INTHOST@@"]
+	helper = !f() { echo "username=@@USER@@"; echo "password=@@SEED:keyed@@"; }; f
+[url "https://x-access-token:@@SEED:github_token@@@github.com/"]
+	insteadOf = https://github.com/
+[url "git@github.com:"]
+	insteadOf = gh:
+[http "https://git.@@INTHOST@@/"]
+	extraheader = AUTHORIZATION: bearer @@SEED:bearer@@
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+[github]
+	user = @@USER@@
+	token = @@SEED:gitlab_token@@
+[alias]
+	st = status -sb
+	lg = log --oneline --graph --decorate --all
+[http "https://git.acme.co.za"]
+	extraheader = Authorization: Basic @@SEED:basic_auth_header@@
+[url "https://@@SEED:url_token_user@@@dev.azure.com/"]
+	insteadOf = https://dev.azure.com/

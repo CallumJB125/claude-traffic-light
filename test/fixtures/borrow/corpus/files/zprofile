@@ -1,0 +1,17 @@
+eval "$(/opt/homebrew/bin/brew shellenv)"
+export PATH="$HOME/.local/bin:$PATH"
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+export HOMEBREW_NO_ANALYTICS=1
+[[ -f "$HOME/.cargo/env" ]] && . "$HOME/.cargo/env"
+launchctl setenv OPENAI_API_KEY @@SEED:openai_key@@
+launchctl setenv HF_TOKEN @@SEED:huggingface_token@@
+launchctl setenv MY_DB_PASSWORD @@SEED:keyed_set@@
+export REPLICATE_API_TOKEN=@@SEED:replicate_token@@
+export SENDGRID_API_KEY="@@SEED:sendgrid_key@@"
+export TWILIO_API_KEY=@@SEED:twilio_key@@
+export LINEAR_API_KEY=@@SEED:linear_key@@
+export NPM_TOKEN=@@SEED:npm_token@@
+export MAIL_FROM="@@NAME@@ <@@EMAIL@@>"
+export WORKSPACE="@@HOME@@/dev"
+alias gcurl='curl -H "Authorization: Bearer @@SEED:google_access_token@@"'
+export LANGCHAIN_API_KEY=@@SEED:langsmith_key@@

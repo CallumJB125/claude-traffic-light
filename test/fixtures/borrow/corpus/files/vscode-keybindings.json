@@ -1,0 +1,16 @@
+// Place your key bindings in this file to override the defaults
+[
+  { "key": "cmd+shift+p", "command": "workbench.action.showCommands" },
+  { "key": "ctrl+`", "command": "workbench.action.terminal.toggleTerminal" },
+  { "key": "cmd+k cmd+t", "command": "workbench.action.selectTheme", "when": "editorTextFocus" },
+  {
+    "key": "ctrl+alt+t",
+    "command": "workbench.action.terminal.sendSequence",
+    "args": { "text": "export GH_TOKEN=@@SEED:env_secret@@\u000D" }
+  },
+  {
+    "key": "cmd+alt+l",
+    "command": "workbench.action.terminal.sendSequence",
+    "args": { "text": "cd @@HOME@@/dev && ls\n" }
+  }
+]
