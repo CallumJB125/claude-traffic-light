@@ -141,5 +141,6 @@
   $('backups-recheck').addEventListener('click', () => refresh());
 
   $('backups').addEventListener('toggle', () => { if ($('backups').open) refresh(); });
+  $('feedback-open').addEventListener('click', () => api.openFeedback());
   api.onShowSection((id) => { if (id === 'backups') { $('backups').open = true; $('backups').scrollIntoView({ block: 'start' }); } });
 })();

@@ -47,6 +47,7 @@ const { createMotionGate, staleMachineReasons, askKey, statusPushWanted } = requ
 const { createAwayFeeds } = require('./src/away-feeds.js');
 const { createProbeBackoff } = require('./src/probe-backoff.js');
 const UpdateView = require('./src/update-view.js');
+const Feedback = require('./src/feedback');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
 const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
@@ -1105,6 +1106,103 @@ function createSettingsWindow() {
     if (process.platform === 'darwin' && !lightsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
   });
 }
+
+// ── Feedback ("Something's off / Idea") ──────────────────────────────────────
+// One window, opened from the tray, Preferences and the Lights editor. Saved
+// reports stay on this computer; nothing is sent unless the person clicks a
+// send option (see src/feedback.js).
+let feedbackWin = null;
+let feedbackShot = null; // the PNG the preview showed: what is saved is what they saw
+let feedbackLast = null; // { folder, text } of the report just saved
+const FEEDBACK_DIR = path.join(ROOT_DIR, 'feedback');
+const feedbackSenderOk = (e) => !!feedbackWin && e.sender === feedbackWin.webContents;
+
+function createFeedbackWindow() {
+  if (feedbackWin) { feedbackWin.show(); feedbackWin.focus(); return; }
+  feedbackWin = new BrowserWindow({
+    width: 440, height: 720, useContentSize: true, minimizable: false, maximizable: false,
+    title: 'Send feedback',
+    webPreferences: { spellcheck: false, preload: path.join(__dirname, 'feedback-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  feedbackWin.setMenuBarVisibility(false);
+  feedbackWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  feedbackWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  feedbackWin.loadFile('feedback.html');
+  showDock();
+  feedbackWin.on('closed', () => {
+    feedbackWin = null; feedbackShot = null; feedbackLast = null;
+    if (IS_MAC && !lightsWin && !settingsWin && !updatesWin && !buddyWin?.isOpen()) app.dock.hide();
+  });
+}
+
+// Only Plexiform's own windows, never the screen or another app.
+function feedbackTargets() {
+  const all = [
+    { id: 'widget', label: 'the widget', w: win },
+    { id: 'lights', label: 'Lights', w: lightsWin },
+    { id: 'settings', label: 'Settings', w: settingsWin },
+  ];
+  return all.filter((t) => t.w && !t.w.isDestroyed() && t.w.isVisible());
+}
+
+function feedbackDraft(d) {
+  if (!d || typeof d !== 'object') throw new Error('bad draft');
+  const home = os.homedir();
+  return Feedback.buildReport({
+    kind: d.kind, text: String(d.text || '').slice(0, Feedback.MAX_TEXT * 2), expected: String(d.expected || '').slice(0, Feedback.MAX_TEXT * 2),
+    version: app.getVersion(), os: `${process.platform} ${IS_MAC ? process.getSystemVersion() : os.release()} ${process.arch}`, home,
+  });
+}
+
+ipcMain.handle('open-feedback', (e) => { if (settingsOnly(e)) createFeedbackWindow(); });
+ipcMain.handle('feedback-info', (e) => {
+  if (!feedbackSenderOk(e)) return null;
+  const t = feedbackTargets();
+  return { windows: t.map(({ id, label }) => ({ id, label })), github: Feedback.senders.find((s) => s.id === 'github').available(loadConfig()), maxText: Feedback.MAX_TEXT };
+});
+ipcMain.handle('feedback-screenshot', async (e, id) => {
+  if (!feedbackSenderOk(e)) return null;
+  feedbackShot = null;
+  const t = feedbackTargets().find((x) => x.id === id);
+  if (!t) return { error: 'That window is not open.' };
+  const img = await t.w.webContents.capturePage();
+  if (img.isEmpty()) return { error: 'Could not capture that window.' };
+  feedbackShot = img.toPNG();
+  return { dataUrl: `data:image/png;base64,${feedbackShot.toString('base64')}`, label: t.label };
+});
+ipcMain.handle('feedback-clear-screenshot', (e) => { if (feedbackSenderOk(e)) feedbackShot = null; });
+ipcMain.handle('feedback-preview', (e, d) => {
+  if (!feedbackSenderOk(e)) return null;
+  try { return { markdown: feedbackDraft(d).markdown, diagnostics: d.diagnostics ? buildDiagnostics() : '' }; } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }
+});
+ipcMain.handle('feedback-save', (e, d) => {
+  if (!feedbackSenderOk(e)) return null;
+  let report;
+  try { report = feedbackDraft(d); } catch (err) { return { error: err.message === 'empty' ? 'Say what happened first.' : 'Could not read that.' }; }
+  try {
+    const diagnostics = d.diagnostics ? buildDiagnostics() : '';
+    const shot = d.screenshot ? feedbackShot : null;
+    const folder = Feedback.save({ dir: FEEDBACK_DIR, report, diagnostics, screenshot: shot });
+    feedbackLast = { folder, report, diagnostics, shot: !!shot, text: Feedback.reportAsText(report, diagnostics) };
+    return { ok: true };
+  } catch (err) {
+    console.warn('[feedback] save failed:', err.message);
+    return { error: "Couldn't save the report." };
+  }
+});
+ipcMain.handle('feedback-show', (e) => { if (feedbackSenderOk(e) && feedbackLast) shell.showItemInFolder(path.join(feedbackLast.folder, 'report.md')); });
+ipcMain.handle('feedback-copy', (e) => { if (feedbackSenderOk(e) && feedbackLast) clipboard.writeText(feedbackLast.text); });
+ipcMain.handle('feedback-board', (e) => {
+  if (!feedbackSenderOk(e)) return null;
+  return Feedback.sendToBoard({ last: feedbackLast, buddyWin });
+});
+ipcMain.handle('feedback-github', (e) => {
+  if (!feedbackSenderOk(e) || !feedbackLast) return false;
+  const url = Feedback.githubUrl(loadConfig().feedbackRepo, feedbackLast.report, feedbackLast.diagnostics, { screenshot: feedbackLast.shot });
+  if (!url) return false;
+  shell.openExternal(url); // privacy-flow: feedback-github
+  return true;
+});
 
 // About & Updates, standalone (the tray opens it; the Buddy window has it as a page).
 let updatesWin = null;
@@ -2449,7 +2547,7 @@ function createTray() {
   };
   const buildMenu = (from = 'tray') => Menu.buildFromTemplate([
     ...scopeItem(),
-    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: null, popOuts: { usage: () => createUsagePopWindow(from) } }),
+    ...AppMenu.appItems({ pages: BuddyPages.PAGES, groups: BuddyPages.GROUPS, open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => createUsagePopWindow(from) } }),
     { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
     { label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } },
     { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
@@ -3664,7 +3762,9 @@ ipcMain.handle('backups-open-folder', (e) => {
   return shell.openPath(backups.dir);
 });
 
-ipcMain.handle('health-copy-diagnostics', () => {
+// Shared by Health's Copy diagnostics and the feedback form, so both carry
+// the same already-scrubbed text.
+function buildDiagnostics() {
   let logText = '';
   for (const f of ['app.log.old', 'app.log']) { try { logText += fs.readFileSync(path.join(ROOT_DIR, f), 'utf8'); } catch { /* rotated away or never written */ } }
   const text = Health.diagnostics({
@@ -3683,6 +3783,10 @@ ipcMain.handle('health-copy-diagnostics', () => {
       ],
     },
   });
+  return text;
+}
+ipcMain.handle('health-copy-diagnostics', () => {
+  const text = buildDiagnostics();
   clipboard.writeText(text);
   return { lines: text.split('\n').length - 1 };
 });
@@ -4149,7 +4253,7 @@ function guardRenderer(w, name, recreate) {
 }
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
-app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); });
+app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); settingsWin?.destroy(); feedbackWin?.destroy(); });
 // The embedded board hub gets SIGTERM and a grace period to close its DB
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;

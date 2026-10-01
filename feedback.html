@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+<title>Send feedback</title>
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  body { margin: 0; padding: var(--space-5) 22px 22px; background: var(--bg); color: var(--text); font: var(--text-base)/1.4 var(--font); }
+  h1 { font-size: var(--text-lg); margin: 0 0 14px; }
+  label, legend { display: block; font-weight: 600; margin: 14px 0 4px; padding: 0; }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  textarea, select { width: 100%; box-sizing: border-box; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); border-radius: var(--radius); padding: 8px; font: inherit; }
+  textarea { min-height: 84px; resize: vertical; }
+  .kinds { display: flex; gap: 8px; }
+  .kinds label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; padding: 6px 10px; border: 1px solid var(--line-input); border-radius: var(--radius); cursor: pointer; }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 12px 0 2px; }
+  .hint { font-size: var(--text-xs); color: var(--muted); }
+  #shot-wrap { margin: 8px 0 0 24px; }
+  #shot { display: block; max-width: 100%; max-height: 160px; border: 1px solid var(--line-input); border-radius: var(--radius); margin-top: 6px; }
+  #included { white-space: pre-wrap; max-height: 200px; overflow: auto; font: var(--text-xs)/1.4 ui-monospace, monospace; background: var(--panel-2); border: 1px solid var(--line-input); border-radius: var(--radius); padding: 8px; margin: 6px 0 0; }
+  .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  button { font: inherit; padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--line-input); background: var(--panel-2); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent, #3b82f6); color: #fff; border-color: transparent; }
+  #status { margin-top: 12px; font-size: var(--text-sm, 13px); }
+  #status[data-state="err"] { color: var(--danger-text); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>Send feedback</h1>
+  <div id="form">
+    <fieldset>
+      <legend>What kind?</legend>
+      <div class="kinds">
+        <label><input type="radio" name="kind" value="off" checked /> Something's off</label>
+        <label><input type="radio" name="kind" value="idea" /> Idea</label>
+      </div>
+    </fieldset>
+    <label for="text">What happened?</label>
+    <textarea id="text" maxlength="4000" required></textarea>
+    <label for="expected">What did you expect? <span class="hint">(optional)</span></label>
+    <textarea id="expected" maxlength="4000"></textarea>
+
+    <label class="check"><input type="checkbox" id="shot-on" /> Include a screenshot of Plexiform's windows</label>
+    <div id="shot-wrap" hidden>
+      <select id="shot-which" aria-label="Which window"></select>
+      <div class="hint" id="shot-caption"></div>
+      <img id="shot" alt="Preview of the screenshot that will be saved" hidden />
+    </div>
+
+    <label class="check"><input type="checkbox" id="diag-on" checked /> Include diagnostics</label>
+    <div class="hint" style="margin-left:24px">Versions, checks and recent warnings, with names, paths and secrets scrubbed. <button type="button" id="see" class="link" style="padding:0;border:0;background:none;text-decoration:underline;color:inherit">See what's included</button></div>
+    <pre id="included" hidden></pre>
+
+    <div class="row">
+      <button type="button" class="primary" id="save">Save report</button>
+    </div>
+  </div>
+  <div id="done" hidden>
+    <p><strong>Saved.</strong> <span class="hint">It's on this computer only; nothing was sent.</span></p>
+    <div class="row">
+      <button type="button" id="show">Show the report</button>
+      <button type="button" id="copy">Copy report</button>
+      <button type="button" id="board">Send to your team's board…</button>
+      <button type="button" id="github" hidden>Open a GitHub issue</button>
+    </div>
+  </div>
+  <div id="status" role="status" aria-live="polite"></div>
+  <script src="feedback.js"></script>
+</body>
+</html>
