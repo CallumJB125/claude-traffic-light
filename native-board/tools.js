@@ -23,6 +23,10 @@ async function callTool({ grant, workspace, client }, name, args) {
     if (!allowed.has(detail.card?.board_id)) return denied();
   }
   switch (name) {
+    case 'plexiform_get_work_context': {
+      const {board_id,...choice}=args;
+      return client.nativeBoard('workContext',{team,board:board_id,boardIds:[...allowed],...choice});
+    }
     case 'plexiform_list_cards': {
       const r = await client.nativeBoard('snapshot', { team, board: args.board_id, boardIds: [...allowed] });
       if (!r.ok) return r;

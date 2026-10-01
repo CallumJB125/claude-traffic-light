@@ -15,7 +15,7 @@ test('hosted board-only source can import remote collaboration without any deskt
   assert.ok(existsSync(join(root,'board/node_modules/@modelcontextprotocol/sdk/package.json')),'install the locked board dependencies before the hosted-only import gate');
   symlinkSync(join(root,'board/node_modules'),join(dir,'board/node_modules'),'dir');
   const module=pathToFileURL(join(dir,'board/hub/remote/actions.js')).href,shared=pathToFileURL(join(dir,'board/shared/collaboration-tools.cjs')).href,http=pathToFileURL(join(dir,'board/hub/remote/http.js')).href;
-  const code='const a=await import(process.argv[1]);const s=await import(process.argv[2]);const h=await import(process.argv[3]);if(typeof a.RemoteActions!=="function"||s.default.listTools("collaborate").length!==11||typeof h.createRemoteHttp!=="function")process.exit(2);';
+  const code='const a=await import(process.argv[1]);const s=await import(process.argv[2]);const h=await import(process.argv[3]);const tools=s.default.listTools("collaborate");if(typeof a.RemoteActions!=="function"||tools.length!==12||!tools.some(t=>t.name==="plexiform_get_work_context"&&t.annotations.readOnlyHint)||typeof h.createRemoteHttp!=="function")process.exit(2);';
   execFileSync(process.execPath,['--input-type=module','-e',code,module,shared,http],{cwd:dir,env:{PATH:process.env.PATH,NODE_NO_WARNINGS:'1'},stdio:'pipe',timeout:10000});
  }finally{rmSync(dir,{recursive:true,force:true});}
 });

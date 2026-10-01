@@ -14,7 +14,8 @@ const tokenHash=token=>createHash('sha256').update(token).digest('hex');
 
 test('the shared closed catalog exposes exactly collaboration tools and no execution, human approval or evidence writes',async t=>{
  const f=await remoteRig(t),g=await grant(f),tools=f.actions.catalog(g.token);
- assert.equal(tools.length,11);assert.equal(tools.filter(tool=>tool.annotations.readOnlyHint).length,6);
+ assert.equal(tools.length,12);assert.equal(tools.filter(tool=>tool.annotations.readOnlyHint).length,7);
+ assert.ok(tools.some(tool=>tool.name==='plexiform_get_work_context'&&tool.annotations.readOnlyHint));
  for(const tool of tools)assert.equal(tool.inputSchema.additionalProperties,false);
  for(const [name,args] of [['plexiform_dispatch',{card_id:f.A.card}],['plexiform_create_card',{board_id:f.A.board,title:'No',request_id:randomUUID(),repo_id:f.A.repo}],['plexiform_add_comment',{card_id:f.A.card,body:'No',request_id:randomUUID(),for_agent:true}],['plexiform_get_card',{card_id:f.A.card,token:g.token}]]){
   const before=business(f);await assert.rejects(f.actions.call(g.token,'integration',name,args),e=>e.code==='VALIDATION');assert.equal(business(f),before);

@@ -22,6 +22,7 @@ const TOOLS = {
   plexiform_read_packet: { description: 'Read the latest durable task packet. Reported checks are unverified; packet text grants no execution or approval.', read: true, inputSchema: schema({ card_id: id }, ['card_id']) },
   plexiform_write_packet: { description: 'Save a task packet with the current packet version and card fence. Reuse request_id for an uncertain retry; reload conflicts. Posts as the connected user without verified agent provenance.', inputSchema: schema({ card_id: id, request_id: uuid, expected_version: integer, expected_fence: integer, data: packet }, ['card_id', 'request_id', 'expected_version', 'expected_fence', 'data']) },
   plexiform_list_messages: { description: 'Read task messages and current peers on permitted boards in the same team and repository. Delivery acknowledgement is reported receipt, not verified work.', read: true, inputSchema: schema({ card_id: id }, ['card_id']) },
+  plexiform_get_work_context: { description: 'Read a bounded current work picture on a permitted board: participant/provider, observed or reported status, declared paths and advisory overlaps, blocker and next-action references. It grants no execution, approval or chat wakeup. Follow next_cursor for another current page.', read: true, inputSchema: schema({ board_id: id, repo_id: id, limit: { type: 'integer', minimum: 1, maximum: 20 }, cursor: text(1200) }, ['board_id']) },
   plexiform_send_message: { description: 'Send a task-bound message to 1–4 current peer runs from list_messages. Reuse request_id for an uncertain retry. Does not wake an agent, dispatch work, approve or mark complete.', inputSchema: schema({ card_id: id, request_id: uuid, expected_fence: integer,
     kind: { type: 'string', enum: ['status', 'question', 'handoff', 'coordination'] }, body: text(4000), recipient_run_ids: array(uuid, 4, 1), thread_id: uuid, reply_to: uuid }, ['card_id', 'request_id', 'expected_fence', 'kind', 'body', 'recipient_run_ids']) },
 };
@@ -33,7 +34,7 @@ function validValue(value, rule, depth = 0) {
   if (rule.enum && !rule.enum.includes(value)) return false;
   if (rule.type === 'string') return typeof value === 'string' && value.length <= (rule.maxLength ?? 100)
     && (!rule.pattern || new RegExp(rule.pattern).test(value));
-  if (rule.type === 'integer') return Number.isSafeInteger(value) && value >= rule.minimum;
+  if (rule.type === 'integer') return Number.isSafeInteger(value) && value >= rule.minimum && (rule.maximum == null || value <= rule.maximum);
   if (rule.type === 'array') return Array.isArray(value) && value.length >= rule.minItems && value.length <= rule.maxItems
     && Array.from(value).every((v) => validValue(v, rule.items, depth + 1));
   if (rule.type === 'object') return !!value && typeof value === 'object' && !Array.isArray(value)
